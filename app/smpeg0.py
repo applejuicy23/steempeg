@@ -66,6 +66,7 @@ class SteempegApp(QDialog):
 
     def scan_clips(self):
         self.ui.list_clips.clear()
+        
         # Look for folders starting with 'clip_'
         try:
             for item in os.listdir(self.clips_folder):
