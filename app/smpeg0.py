@@ -36,7 +36,7 @@ class SteempegApp(QDialog):
 
         self.ui.setWindowTitle("Steempeg - Extract Clips")
         
-        # Загружаем и устанавливаем логотип (testlogo.png)
+        # Download and install the logo (testlogo.png) 
         icon_path = resource_path("testlogo.png")
         if os.path.exists(icon_path):
             self.ui.setWindowIcon(QIcon(icon_path))
