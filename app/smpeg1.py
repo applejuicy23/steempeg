@@ -22,7 +22,8 @@ def get_save_directory():
 # BACKGROUND WORKER FOR RENDERING!
 class RenderThread(QThread):
     # Signal to send text to the status bar
-    progress_signal = Signal(str)  
+    progress_signal = Signal(str)
+    
     # Signal for completion: Success(bool), Error text, File path
     finished_signal = Signal(bool, str, str) 
 
