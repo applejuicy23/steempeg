@@ -233,6 +233,7 @@ class SteempegApp:
     def choose_destination(self):
         """ Allow user to pick a custom folder to save the rendered video """
         folder = QFileDialog.getExistingDirectory(self.ui, "Select Destination Folder")
+        
         if folder:
             self.custom_destination = folder
             # Update button text to show the selected path
