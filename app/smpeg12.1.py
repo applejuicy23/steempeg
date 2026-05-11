@@ -8,7 +8,6 @@ import json
 import logging
 from datetime import datetime
 
-# === 1. БРОНЕБОЙНЫЙ ФИКС ДЛЯ VLC (МЕНЯЕМ ПАПКУ ПРИ ЗАПУСКЕ) ===
 if getattr(sys, 'frozen', False):
     _base_dir = os.path.dirname(sys.executable)
 else:
@@ -23,7 +22,6 @@ if os.path.exists(_vlc_dir):
     if hasattr(os, 'add_dll_directory'):
         os.add_dll_directory(_vlc_dir)
         
-    # ВОТ ЭТА МАГИЯ, КОТОРУЮ ТЫ ЗАБЫЛА ДОБАВИТЬ В ФАЙЛ!
     _old_cwd = os.getcwd()
     os.chdir(_vlc_dir)
     try:
@@ -32,7 +30,6 @@ if os.path.exists(_vlc_dir):
         os.chdir(_old_cwd)
 else:
     import vlc
-# =============================================================
 
 from PySide6.QtCore import Qt, QFile, QThread, Signal, QTimer, QSize, QObject
 from PySide6.QtCore import QUrl, QEvent
@@ -41,7 +38,6 @@ from PySide6.QtWidgets import QTableWidgetItem, QHeaderView, QAbstractItemView
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtGui import QPixmap, QIcon
 
-# === 2. УМНЫЙ ПОИСК РЕСУРСОВ И FFMPEG ===
 def get_resource_path(relative_path):
     """ Умный поиск файлов для новой ZIP-сборки (--onedir) """
     if getattr(sys, 'frozen', False):
