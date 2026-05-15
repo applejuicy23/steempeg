@@ -830,7 +830,7 @@ class SteempegApp(QObject):
                 warn_icon.setPixmap(pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             warn_icon.hide() # Hidden by default
             
-            # ---> APPLY THE INSTANT TOOLTIP MAGIC HERE <---
+            # APPLY THE INSTANT TOOLTIP MAGIC HERE
             if hasattr(self, 'instant_tooltip'):
                 warn_icon.installEventFilter(self.instant_tooltip)
             
