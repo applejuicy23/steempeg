@@ -14,7 +14,7 @@ Crafted with a maniacal attention to detail: the app automatically fixes broken 
 
 You don't need to install Python or mess with the command line. It works out of the box.
 
-1. Go to [Releases](https://github.com/applejuicy23/steempeg/releases) and download the latest `Steempeg_v15.zip`.
+1. Go to [Releases](https://github.com/applejuicy23/steempeg/releases) and download the latest version in .zip.
 2. Extract the archive into any folder.
 3. Run `Steempeg.exe`.
 4. The app will automatically find your Steam clips folder. Select a video, tweak your quality, and hit **Start Render**!
