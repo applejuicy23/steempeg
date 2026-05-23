@@ -8,7 +8,7 @@
 
 Crafted with a maniacal attention to detail: the app automatically fixes broken recordings, calculates the perfect bitrate, and hardware-renders the video while you sip your tea.
 
-<img width="1279" height="1077" alt="image_2026-05-16_01-44-34" src="https://github.com/user-attachments/assets/0ff8b651-11c2-40f0-88cc-d1e662879b66" />
+<img width="1281" height="1332" alt="image" src="https://github.com/user-attachments/assets/bb700f1f-d4ba-4383-88e8-b41dfa83d30a" />
 
 ## 🚀 Getting Started
 
