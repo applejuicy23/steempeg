@@ -464,7 +464,7 @@ class SteempegApp(QObject):
                 else: 
                     original_parent_layout.addLayout(self.left_master_layout)
 
-            # 6. ✨ DYNAMIC TOGGLES UwU ✨
+            # 6. DYNAMIC TOGGLES UwU
             # Set initial view mode to 'List' instead of 'Grid'
             self.grid_clips.hide()
             self.ui.table_clips.show()
