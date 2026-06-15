@@ -1,0 +1,39 @@
+[project]
+name = "steempeg"
+version = "30.0"
+description = "Smart tool for recovering, trimming and rendering Steam Game Recording (DASH) clips"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "applejuicy23" },
+]
+keywords = ["steam", "game-recording", "dash", "ffmpeg", "mpv", "video", "clips"]
+
+dependencies = [
+    "PySide6",
+    "python-mpv",   # imported in code as: import mpv
+    "av",           # PyAV - i-frame preview
+    "psutil",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = ["ruff"]
+
+[project.urls]
+Repository = "https://github.com/applejuicy23/steempeg"
+Issues = "https://github.com/applejuicy23/steempeg/issues"
+
+[project.scripts]
+steempeg = "steempeg.app:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["steempeg*"]
+
+[tool.ruff]
+line-length = 100
