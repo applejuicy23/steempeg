@@ -2,6 +2,7 @@
 
 Pure filesystem helpers - no Qt.
 """
+from steempeg.core.dash import repair
 import os
 import re
 
@@ -31,3 +32,15 @@ def parse_duration_seconds(mpd_content):
     minutes = int(m.group(2)) if m.group(2) else 0
     seconds = float(m.group(3)) if m.group(3) else 0.0
     return hours * 3600 + minutes * 60 + seconds
+
+def find_mpd_paths(clip_path):
+    """Find every playable manifest under clip_path, fixing Steam's originals on the way.
+    Returns a sorted list of paths."""
+    mpd_paths = []
+    if os.path.exists(clip_path):
+        for root, _, files in os.walk(clip_path):
+            if "session.mpd" in files:
+                mpd_paths.append(repair.fix_steam_manifest(os.path.join(root, "session.mpd")))
+            elif "session_recovered.mpd" in files:
+                mpd_paths.append(os.path.join(root, "session_recovered.mpd"))
+    return sorted(mpd_paths)
