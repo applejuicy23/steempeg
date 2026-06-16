@@ -5,6 +5,7 @@ Pure helpers - no Qt. They call ffprobe by name and rely on it being on PATH
 """
 import subprocess
 import sys
+import re
 
 # CREATE_NO_WINDOW on Windows so ffprobe doesn't flash a console window.
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -43,3 +44,17 @@ def get_audio_bitrate_kbps(mpd_path, default=192):
     except Exception:
         pass
     return default
+
+def parse_duration_seconds(mpd_content):
+    """Parse clip duration in seconds from an .mpd's mediaPresentationDuration,
+    or None if absent. Pure - regex only."""
+    m = re.search(
+        r'mediaPresentationDuration="PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?"',
+        mpd_content,
+    )
+    if not m:
+        return None
+    hours = int(m.group(1)) if m.group(1) else 0
+    minutes = int(m.group(2)) if m.group(2) else 0
+    seconds = float(m.group(3)) if m.group(3) else 0.0
+    return hours * 3600 + minutes * 60 + seconds
