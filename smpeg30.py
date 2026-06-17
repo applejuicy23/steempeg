@@ -1,7 +1,6 @@
 from PySide6.QtCore import QPoint
 from steempeg.version import APP_VERSION_STR
 from steempeg.render import bitrate
-from steempeg.infra import cache
 from steempeg.infra.logging import global_exception_handler
 from steempeg.core.dash import mpd 
 from steempeg.core import games
@@ -19,7 +18,7 @@ from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.render_thread import RenderThread
 from steempeg.ui.updater_mixin import UpdaterMixin
-
+from steempeg.ui.settings.controller import SettingsMixin
 
 
 
@@ -82,7 +81,7 @@ from PySide6.QtCore import Qt, QDate
 
 
 
-class SteempegApp(UpdaterMixin, QObject):
+class SteempegApp(SettingsMixin, UpdaterMixin, QObject):
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
@@ -3961,21 +3960,7 @@ class SteempegApp(UpdaterMixin, QObject):
             self.ui.tab_audio.setEnabled(not checked) # Freeze entire Audio Tab
         self.update_final_setup()
     
-    def load_json_cache(self):
-        return cache.read_json(self.json_cache_path)
 
-    def save_json_cache(self):
-        cache.write_json(self.json_cache_path, self.game_names_cache)
-
-    def load_user_settings(self):
-        return cache.read_json(os.path.join(self.cache_dir, "settings.json"))
-
-    def save_user_settings(self, key, value):
-        """ Saves a specific preference to the settings file permanently """
-        path = os.path.join(self.cache_dir, "settings.json")
-        settings = cache.read_json(path)
-        settings[key] = value
-        cache.write_json(path, settings)
     
     def get_game_icon(self, app_id):
         app_id = str(app_id)
