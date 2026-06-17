@@ -5831,7 +5831,7 @@ class SteempegApp(QObject):
         if not output_file: 
             return # Empty Path Protection
             
-        ffmpeg_exe = get_resource_path("ffmpeg.exe")
+        ffmpeg_exe = os.path.join(_bin_dir, "ffmpeg.exe")
         if not os.path.exists(ffmpeg_exe):
             QMessageBox.critical(self.ui, "Error", "ffmpeg.exe not found!")
             return
