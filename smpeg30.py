@@ -1,6 +1,5 @@
 from PySide6.QtCore import QPoint
-from PySide6.QtWidgets import QFrame, QListWidget, QListWidgetItem
-from steempeg.version import APP_VERSION_STR, APP_VERSION_FLOAT
+from steempeg.version import APP_VERSION_STR
 from steempeg.render import bitrate
 from steempeg.infra import cache
 from steempeg.infra.logging import global_exception_handler
@@ -19,7 +18,6 @@ from steempeg.ui.player.controls.timeline import CustomTimelineWidget
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.render_thread import RenderThread
-from steempeg.services.updater import UpdateDownloadThread
 from steempeg.ui.updater_mixin import UpdaterMixin
 
 
