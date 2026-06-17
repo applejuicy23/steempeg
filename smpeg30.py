@@ -1,6 +1,5 @@
 from PySide6.QtCore import QPoint
 from steempeg.version import APP_VERSION_STR
-from steempeg.render import bitrate
 from steempeg.infra.logging import global_exception_handler
 from steempeg.core.dash import mpd 
 from steempeg.core import games
@@ -4039,10 +4038,7 @@ class SteempegApp(RenderMixin, SettingsMixin, UpdaterMixin, QObject):
 
     
     
-    def refresh_slider_if_needed(self):
-        """ Updates the monkeymeter if the user has switched FPS """
-        if hasattr(self.ui, 'size_slider') and self.ui.size_slider.isVisible():
-            self.on_slider_moved(self.ui.size_slider.value())
+
 
         
     
@@ -4348,91 +4344,11 @@ class SteempegApp(RenderMixin, SettingsMixin, UpdaterMixin, QObject):
             
 
 
-    def setup_dynamic_slider(self):
-        """ Generates strict slider steps and adds Lossless & Custom modes """
-        duration = self.get_effective_duration() 
-        if duration <= 0: return
-            
-        # Dynamically calculate the maximum MB for the current trimmed duration
-        orig_mb = (getattr(self, 'current_orig_bitrate', 10) * duration) / 8 
-        if orig_mb < 1: orig_mb = 1
-        
-        anchors = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000]
-        self.dynamic_stops = [size for size in anchors if size < orig_mb]
-        
-        self.dynamic_stops.append(int(orig_mb)) # Lossless
-        self.dynamic_stops.append(-1) # Custom
-        
-        self.ui.size_slider.blockSignals(True)
-        self.ui.size_slider.setMinimum(0)
-        self.ui.size_slider.setMaximum(len(self.dynamic_stops) - 1)
-        # Always snap to the new Lossless value when the trim changes
-        self.ui.size_slider.setValue(len(self.dynamic_stops) - 2) 
-        self.ui.size_slider.blockSignals(False)
-        
-        self.on_slider_moved(self.ui.size_slider.value())
+    
 
-    def calculate_strict_target(self, target_mb, is_lossless=False, is_custom=False):
-        """Read the controls, run the bitrate math, show the result."""
-        duration = self.get_effective_duration()
+    
 
-        # --- read inputs from the UI ---
-        orig_video_mbps = getattr(self, 'current_orig_bitrate', 10)
-
-        audio_text = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
-        if hasattr(self.ui, 'check_mute_audio') and self.ui.check_mute_audio.isChecked():
-            audio_kbps = 0
-        elif "Custom" in audio_text and hasattr(self, 'input_custom_abitrate'):
-            try:
-                audio_kbps = int(self.input_custom_abitrate.text())
-            except ValueError:
-                audio_kbps = getattr(self, 'current_orig_audio_bitrate', 192)
-        else:
-            match = re.search(r'(\d+)', audio_text)
-            audio_kbps = int(match.group(1)) if match else 192
-
-        fps_text = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else "60"
-        if "Custom" in fps_text and hasattr(self, 'input_custom_fps'):
-            try:
-                fps = int(self.input_custom_fps.text())
-            except ValueError:
-                fps = getattr(self, 'current_orig_fps', 60)
-        else:
-            try:
-                fps = int(re.search(r'(\d+)', fps_text).group(1))
-            except (AttributeError, ValueError):
-                fps = getattr(self, 'current_orig_fps', 60)
-
-        # --- run the pure math ---
-        plan = bitrate.plan_bitrate(duration, orig_video_mbps, target_mb, audio_kbps, fps,
-                                    is_lossless=is_lossless, is_custom=is_custom)
-        if plan is None:
-            return
-
-        # --- show the result ---
-        self.custom_target_height = plan.height
-        self.custom_target_bitrate = plan.video_kbps
-        custom_tag = "⚙️ Custom " if is_custom else ""
-        self.ui.label_target_size.setText(
-            f"Target: <b>{custom_tag}{plan.target_mb} MB</b> | Safe Bitrate: {plan.video_kbps} kbps<br>"
-            f"Quality: <span style='color:{plan.color}'><b>{plan.label}</b></span>"
-        )
-        self.update_final_setup()
-
-    def on_slider_moved(self, index):
-        """ Handles slider logic and reveals custom input if needed """
-        target_mb = self.dynamic_stops[index]
-        
-        if target_mb == -1:
-            self.input_custom_size.show()
-            if self.input_custom_size.text():
-                self.on_custom_size_changed(self.input_custom_size.text())
-            else:
-                self.ui.label_target_size.setText("Target: <b>--- MB</b> (Type specific size)<br>Quality: <span style='color:#aaaaaa'><b>Waiting for input...</b></span>")
-        else:
-            self.input_custom_size.hide()
-            if hasattr(self, 'warn_size'): self.warn_size.hide() 
-            self.calculate_strict_target(target_mb, is_lossless=(index == len(self.dynamic_stops) - 2))
+    
 
 
     def cancel_render(self):
