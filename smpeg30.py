@@ -1,7 +1,5 @@
-from PySide6.QtCore import QPoint
 from steempeg.version import APP_VERSION_STR
 from steempeg.infra.logging import global_exception_handler
-from steempeg.core import games
 from steempeg.infra import paths
 from steempeg.ui.player.surface import MPVWrapper
 from steempeg.ui.player.fullscreen import FullscreenEventFilter
@@ -2504,96 +2502,7 @@ class SteempegApp(LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObjec
             self.btn_theater.clearFocus()
             QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
 
-    def show_filter_menu(self):
-        """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
-        if not hasattr(self, 'btn_filter_pill'): return
-        
-        # 1. Forcefully destroy the old window to reset the Qt focus bug.
-        if hasattr(self, 'filter_menu') and self.filter_menu:
-            self.filter_menu.deleteLater()
-            
-        # 2. Creating a brand-new menu from scratch
-        self.filter_menu = FilterMenu(self.ui)
-        self.filter_menu.gather_statistics(self)
-        
-        # 3. Positioning and showcasing
-        button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
-        x_shift = self.filter_menu.width() - self.btn_filter_pill.width()
-        
-        self.filter_menu.move(button_bottom_left.x() - x_shift + 10, button_bottom_left.y() + 5)
-        self.filter_menu.show()
-
-    def apply_sorting(self):
-        """ FAST INDEPENDENT SORTING ENGINE """
-        if not hasattr(self.ui, 'table_clips'): return
-        table = self.ui.table_clips
-        sort_idx = self.combo_sort.currentIndex()
-        
-        import re
-        import os
-        from datetime import datetime
-        from PySide6.QtCore import Qt
-        
-        # Freezing graphics and signals for instant speed
-        table.setUpdatesEnabled(False)
-        table.blockSignals(True)
-        
-        all_data = []
-        for row in range(table.rowCount()):
-            is_hidden = table.isRowHidden(row)
-            row_items = [table.takeItem(row, col) for col in range(table.columnCount())]
-            all_data.append({ 'table_items': row_items, 'orig_row': row, 'hidden': is_hidden })
-            
-        
-        def get_sort_key(data):
-            r = data['table_items']
-            
-            if sort_idx == 0: 
-                # Read the actual modification date of the folder containing the clip
-                clip_path = r[0].data(Qt.UserRole)
-                if clip_path and os.path.exists(clip_path):
-                    return os.path.getmtime(clip_path)
-                return 0
-                
-            if sort_idx in (1, 2): # GAME NAME
-                txt = r[0].text().lower() if r[0] else ""
-                return re.sub(r'[^a-zа-я0-9]', '', txt)
-                
-            if sort_idx in (3, 4): # TYPE
-                txt = r[1].text().lower() if r[1] else ""
-                return re.sub(r'[^a-zа-я0-9]', '', txt)
-                
-            if sort_idx in (5, 6): # DATE
-                txt = re.sub(r'\s+', ' ', r[2].text().strip()) if r[2] else ""
-                try: return datetime.strptime(txt, "%d %B %Y %I:%M %p").timestamp()
-                except:
-                    try: return datetime.strptime(txt, "%d %B %Y").timestamp()
-                    except: return 0
-                    
-            if sort_idx in (7, 8): # DURATION
-                txt = r[3].text() if r[3] else ""
-                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-                return h * 3600 + m * 60 + s
-                
-            return data['orig_row']
-
-       
-        reverse = sort_idx in (0, 2, 4, 6, 8) 
-        all_data.sort(key=get_sort_key, reverse=reverse)
-        
-        for new_row, data in enumerate(all_data):
-            for col, item in enumerate(data['table_items']):
-                table.setItem(new_row, col, item)
-            table.setRowHidden(new_row, data['hidden'])
-            
-        table.blockSignals(False)
-        table.setUpdatesEnabled(True)
-        
-        
-        if hasattr(self, 'fast_sync_grid'):
-            self.fast_sync_grid()
+    
 
     
 
@@ -3525,18 +3434,7 @@ class SteempegApp(LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObjec
             paths.open_in_file_manager(self.current_log_file)
 
     
-    def get_game_name(self, app_id):
-        app_id = str(app_id)
-        # 1. сначала кэш
-        if app_id in self.game_names_cache:
-            return self.game_names_cache[app_id]
-        # 2. иначе спросить Steam один раз и запомнить
-        name = games.fetch_game_name(app_id)
-        if name:
-            self.game_names_cache[app_id] = name
-            self.save_json_cache()
-            return name
-        return f"Unknown Game ({app_id})"
+
     
 
 
@@ -3544,20 +3442,7 @@ class SteempegApp(LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObjec
     
 
     
-    def get_game_icon(self, app_id):
-        app_id = str(app_id)
-        # 1. RAM-кэш
-        if app_id in self.game_icons_cache:
-            return self.game_icons_cache[app_id]
-        # 2. диск-кэш, иначе скачиваем
-        icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
-        if not os.path.exists(icon_path):
-            if not games.download_icon(app_id, icon_path):
-                return QIcon()
-        # 3. строим Qt-иконку (это Qt -> остаётся тут) и кэшируем в RAM
-        icon = QIcon(QPixmap(icon_path))
-        self.game_icons_cache[app_id] = icon
-        return icon
+
 
     
     
