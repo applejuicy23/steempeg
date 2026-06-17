@@ -4043,78 +4043,9 @@ class SteempegApp(RenderMixin, SettingsMixin, UpdaterMixin, QObject):
         
     
     
-    def validate_custom_fps(self, text):
-        """ Validates FPS input and shows warning icon if boundaries are exceeded """
-        if not text.strip():
-            self.warn_fps.hide()
-            self.update_final_setup()
-            return
-            
-        try:
-            val = int(text)
-            orig_fps = getattr(self, 'current_orig_fps', 60)
-            max_allowed = min(60, orig_fps)
-            
-            if val > max_allowed:
-                self.warn_fps.setToolTip(f"The maximum FPS of the original video is {max_allowed} FPS. Higher values will be capped!")
-                self.warn_fps.show()
-            elif val < 1:
-                self.warn_fps.setToolTip("FPS cannot be less than 1.")
-                self.warn_fps.show()
-            else:
-                self.warn_fps.hide()
-        except:
-            self.warn_fps.hide()
-            
-        self.update_final_setup() # Live UI update
+    
 
-    def validate_custom_vbitrate(self, text):
-        """ Validates video bitrate input and shows warning icon if boundaries are exceeded """
-        if not text.strip():
-            self.warn_vbitrate.hide()
-            self.update_final_setup()
-            return
-            
-        try:
-            val = float(text.replace(',', '.'))
-            orig_v_bitrate = getattr(self, 'current_orig_bitrate', 10.0)
-            
-            if val > orig_v_bitrate:
-                self.warn_vbitrate.setToolTip(f"The maximum bitrate of the original video is {orig_v_bitrate:.1f} Mbps. Higher values will be capped!")
-                self.warn_vbitrate.show()
-            elif val < 0.1:
-                self.warn_vbitrate.setToolTip("Video bitrate cannot be less than 0.1 Mbps.")
-                self.warn_vbitrate.show()
-            else:
-                self.warn_vbitrate.hide()
-        except:
-            self.warn_vbitrate.hide()
-            
-        self.update_final_setup() # Live UI update
-
-    def validate_custom_abitrate(self, text):
-        """ Validates audio bitrate input and shows warning icon if boundaries are exceeded """
-        if not text.strip():
-            self.warn_abitrate.hide()
-            self.update_final_setup()
-            return
-            
-        try:
-            val = int(text)
-            orig_a_bitrate = getattr(self, 'current_orig_audio_bitrate', 192)
-            
-            if val > orig_a_bitrate:
-                self.warn_abitrate.setToolTip(f"The maximum audio bitrate of the original file is {orig_a_bitrate} kbps. Higher values will be capped!")
-                self.warn_abitrate.show()
-            elif val < 1:
-                self.warn_abitrate.setToolTip("Audio bitrate cannot be less than 1 kbps.")
-                self.warn_abitrate.show()
-            else:
-                self.warn_abitrate.hide()
-        except:
-            self.warn_abitrate.hide()
-            
-        self.update_final_setup() # Live UI update
+    
 
     def start_render_thread(self):
         """ Prepares parameters and starts the background rendering thread """
