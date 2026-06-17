@@ -532,3 +532,117 @@ class PlayerMixin:
             self.player_footer_frame.hide()   
         
         QToolTip.hideText()
+
+    def keyPressEvent(self, event):
+        """ Captures keyboard events. Exits fullscreen seamlessly if Escape key is pressed. """
+        if event.key() == Qt.Key_Escape and getattr(self, 'is_fullscreen', False):
+            self.toggle_fullscreen()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def toggle_trim_state(self):
+        """ Toggles between Trim mode and Normal mode seamlessly without interrupting playback """
+        if not hasattr(self, 'custom_timeline'): return
+
+        if self.custom_timeline.is_trim_mode:
+            # TURN OFF TRIM MODE
+            self.custom_timeline.disable_trim_mode()
+            
+            # Hide border on aspect_frame
+            if hasattr(self, 'aspect_frame'):
+                self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
+            
+            # Hide the interactive border instantly
+            if hasattr(self, 'video_overlay'):
+                self.video_overlay.show_border = False
+                self.video_overlay.update()
+
+            if hasattr(self, 'border_overlay'):
+                self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
+            
+            # Restore to default Trim button with custom scissors icon...
+            trim_icon_path = get_resource_path("trim_icon.png")
+            if os.path.exists(trim_icon_path):
+                self.btn_trim.setIcon(QIcon(trim_icon_path))
+                self.btn_trim.setText(" Trim")
+            else:
+                self.btn_trim.setIcon(QIcon())
+                self.btn_trim.setText("✂️ Trim")
+                
+            # Restore the slightly golden premium style
+            self.btn_trim.setStyleSheet("background-color: #cfa94a; color: black; border-radius: 15px; padding: 0 12px; font-weight: bold;")
+            
+
+            if hasattr(self, 'aspect_frame'):
+                self.aspect_frame.setStyleSheet("background-color: transparent;")
+            if hasattr(self, 'trim_tools_pill'):
+                self.trim_tools_pill.hide()
+        else:
+            # TURN ON TRIM MODE
+            self.custom_timeline.enable_trim_mode()
+            
+            # Transform into Cancel button with custom cancel icon
+            cancel_icon_path = get_resource_path("cancel.png")
+            if os.path.exists(cancel_icon_path):
+                self.btn_trim.setIcon(QIcon(cancel_icon_path))
+                self.btn_trim.setText(" Cancel")
+            else:
+                self.btn_trim.setIcon(QIcon()) 
+                self.btn_trim.setText("❌ Cancel")
+                
+            # Apply the red danger style
+            self.btn_trim.setStyleSheet("background-color: #ff4444; color: white; border-radius: 15px; padding: 0 12px; font-weight: bold;")
+
+            if hasattr(self, 'trim_tools_pill'):
+                self.trim_tools_pill.show()
+        # --- FORCE UI REFRESH ON TOGGLE ---
+        self.update_final_setup()
+        if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
+            self.setup_dynamic_slider()
+    def set_trim_start_to_playhead(self):
+        """ Sets the left end of the yellow strip with a UNO REVERSAL. """
+        if not hasattr(self, 'custom_timeline'): return
+        canvas = self.custom_timeline.canvas
+        pos = canvas.visual_ms
+        old_start = canvas.trim_start_ms
+        old_end = canvas.trim_end_ms
+        duration = old_end - old_start
+        
+        if pos >= old_end:
+            # UNO CARD! The scroller is positioned *after* the end. 
+            # We shift the entire segment as a whole: the scroller becomes the new start, and the end point flies further out! 
+            canvas.trim_start_ms = pos
+            canvas.trim_end_ms = min(pos + duration, canvas.duration_ms)
+        else:
+
+            canvas.trim_start_ms = pos
+            
+        self.custom_timeline.trim_changed.emit(int(canvas.trim_start_ms), int(canvas.trim_end_ms))
+        canvas.update()
+
+    def set_trim_end_to_playhead(self):
+        """ Sets the right end of the yellow strip with a U-turn. """
+        if not hasattr(self, 'custom_timeline'): return
+        canvas = self.custom_timeline.canvas
+        pos = canvas.visual_ms
+        old_start = canvas.trim_start_ms
+        old_end = canvas.trim_end_ms
+        duration = old_end - old_start
+        
+        if pos <= old_start:
+            # UNO CARD! The scroller is positioned before the start. 
+            # We shift the entire chunk: the scroller becomes the new end, while the original start flies backward!
+            canvas.trim_end_ms = pos
+            canvas.trim_start_ms = max(pos - duration, 0.0)
+        else:
+            # Standard Click
+            canvas.trim_end_ms = pos
+            
+        self.custom_timeline.trim_changed.emit(int(canvas.trim_start_ms), int(canvas.trim_end_ms))
+        canvas.update()
+
+    def jump_to_trim_start(self):
+        """ Simply teleports the scroller back to the start of the clipping. """
+        if not hasattr(self, 'custom_timeline'): return
+        self.custom_timeline.force_jump(self.custom_timeline.trim_start_ms)
