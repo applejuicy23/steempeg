@@ -1,7 +1,8 @@
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QFrame, QListWidget, QListWidgetItem
 from steempeg.render import bitrate
-from steempeg.infra import cache 
+from steempeg.infra import cache
+from steempeg.infra.logging import global_exception_handler
 from steempeg.core.dash import mpd 
 from steempeg.core import games
 from steempeg.core.dash import discovery

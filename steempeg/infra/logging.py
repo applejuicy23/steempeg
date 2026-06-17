@@ -1,0 +1,16 @@
+"""Crash logging: the global exception hook for uncaught, fatal errors.
+
+Application-wide logging configuration (level, handlers, log file) will join this
+module later, when it is lifted out of SteempegApp during the controller split.
+"""
+import logging
+import traceback
+
+
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    print(f"CRITICAL FATAL CRASH:\n{error_msg}")
+    try:
+        logging.critical(f"UNCAUGHT FATAL ERROR:\n{error_msg}")
+    except:  # noqa: E722  (last-ditch handler; never let logging failure mask the crash)
+        pass
