@@ -7,6 +7,7 @@ from steempeg.core import capabilities
 from steempeg.infra import paths
 from steempeg.core.dash import repair
 from steempeg.ui.player.surface import MPVWrapper
+from steempeg.ui.player.fullscreen import FullscreenEventFilter
 
 import sys
 import os
@@ -8306,44 +8307,7 @@ class ThumbnailPreviewWidget(QWidget):
 
 from PySide6.QtCore import QObject, QEvent, Qt
 
-# --- GLOBAL FULLSCREEN RADAR ---
-class FullscreenEventFilter(QObject):
-    """ Global radar for hotkeys and fullscreen control. """
-    def __init__(self, app_instance):
-        super().__init__()
-        self.app_instance = app_instance
 
-    def eventFilter(self, obj, event):
-        from PySide6.QtCore import QEvent, Qt
-        from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit
-
-        # Hide preview when minimizing the window
-        if event.type() == QEvent.Type.ApplicationStateChange:
-            if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
-                if hasattr(self.app_instance, 'custom_timeline') and hasattr(self.app_instance.custom_timeline, 'preview_widget'):
-                    self.app_instance.custom_timeline.preview_widget.hide()
-
-        # GLOBAL KEYBOARD INTERCEPTION (WORKS EVERYWHERE)
-        if event.type() == QEvent.Type.KeyPress:
-            # 1. SPACE: Play / Pause
-            if event.key() == Qt.Key_Space:
-                focus_w = QApplication.focusWidget()
-                # Protection: If the user is typing text (file name, marker), pass the space character to the text!
-                if not isinstance(focus_w, (QLineEdit, QTextEdit)):
-                    self.app_instance.toggle_play()
-                    return True # Consume the event to prevent accidental activation of the highlighted button
-                    
-            # 2. ESC: Exit full-screen mode
-            elif event.key() == Qt.Key_Escape and getattr(self.app_instance, 'is_fullscreen', False):
-                self.app_instance.toggle_fullscreen()
-                return True
-
-        # MOUSE LOGIC (FULLSCREEN ONLY)
-        if getattr(self.app_instance, 'is_fullscreen', False):
-            if event.type() == QEvent.Type.MouseMove:
-                self.app_instance.wake_up_fullscreen_controls()
-
-        return False
 
   
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QTimer
