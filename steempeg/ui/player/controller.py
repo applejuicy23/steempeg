@@ -5,6 +5,7 @@ volume and speed, the timeline and trim controls, fullscreen/theatre mode,
 screenshots and markers. They run on the application instance and reach its widgets
 and player through self.
 """
+import json
 import os
 import re
 import time
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
     QToolTip,
 )
 
-from steempeg.infra.paths import get_resource_path
+from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.thumbnails import ThumbnailBatchThread
 
 
@@ -956,3 +957,117 @@ class PlayerMixin:
                     self.ui.label_time.setText(new_time_text)
         except Exception as e:
             pass # Ignore random missing property errors during video switching
+
+    def add_user_marker(self, target_ms=None):
+        """ Sets a tag according to Gaben's GOST standard and saves it to JSON. """
+        
+        if not hasattr(self, 'custom_timeline'): return
+        canvas = self.custom_timeline.canvas
+        
+        markers_list = getattr(canvas, 'markers', None)
+        if markers_list is None: return
+
+        # FIX: The "clicked" signal of QPushButton passes a boolean (False). 
+        # We must ignore it so the marker doesn't fly to 0:00!
+        if isinstance(target_ms, bool) or target_ms is None:
+            current_time = int(canvas.visual_ms)
+        else:
+            current_time = int(target_ms)
+            
+        for m in markers_list:
+            if m.get('time_ms', -1) == current_time:
+                return 
+
+        # Generate a powerful, unique ID
+        new_id = str(int(time.time() * 1000))
+        
+        # 1. INTERNAL MARKER
+        internal_marker = {
+            'id': new_id,
+            'time_ms': current_time,
+            'icon_key': 'usermarker',
+            'is_round': False,
+            'title': '',
+            'desc': ''
+        }
+        markers_list.append(internal_marker)
+        markers_list.sort(key=lambda x: x.get('time_ms', 0))
+        canvas.update()
+        
+        # 2. Steam Format
+        json_path = getattr(canvas, 'current_json_path', None)
+        if not json_path or not os.path.exists(json_path):
+            return
+            
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+            if 'entries' not in data:
+                data['entries'] = []
+                
+            raw_time = current_time + getattr(canvas, 'current_offset_ms', 0)
+            
+            steam_marker = {
+                "id": new_id,
+                "time": str(raw_time),
+                "type": "usermarker",
+                "title": "",
+                "description": "",
+                "icon": "steam_marker",
+                "priority": 0
+            }
+            
+            data['entries'].append(steam_marker)
+            data['entries'].sort(key=lambda x: int(x.get('time', 0)))
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"Marker save error: {e}")
+    def take_screenshot(self, target_ms=None):
+        """ Takes a clean screenshot directly from MPV and saves it to the global folder. """
+        if not hasattr(self, 'player') or not self.player: return
+        
+        # Ensure the global folder exists (just in case)
+        if not hasattr(self, 'screenshots_dir') or not os.path.exists(self.screenshots_dir):
+            self.screenshots_dir = os.path.join(get_save_directory(), "Screenshots")
+            os.makedirs(self.screenshots_dir, exist_ok=True)
+            
+        # Get the clip name (if selected) to add to the file name
+        game_name = "Clip"
+        row = self.ui.table_clips.currentRow()
+        if hasattr(self.ui, 'table_clips') and row >= 0:
+            item = self.ui.table_clips.item(row, 0)
+            if item: 
+                # Trim extra spaces from the ends of the name
+                game_name = item.text().strip()
+                # Replace characters forbidden in filenames with underscores.
+                game_name = re.sub(r'[\\/*?:"<>|]', "_", game_name)
+
+        # Determine the time (if a marker was clicked, use its time; otherwise, use the player's time)
+        pos_ms = float(target_ms) if target_ms is not None else (getattr(self.player, 'time_pos', 0) * 1000)
+        
+        # Creating an attractive name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{game_name}_{int(pos_ms)}ms_{timestamp}.png"
+        filepath = os.path.join(self.screenshots_dir, filename).replace('\\', '/')
+        
+        need_seek = False
+        original_pos = getattr(self.player, 'time_pos', 0) * 1000
+        
+        # If we right-click far away from the slider, we need to jump there for a split second
+        if target_ms is not None and abs(target_ms - original_pos) > 200:
+            need_seek = True
+            self.player.seek(pos_ms / 1000.0, reference='absolute', precision='exact')
+            time.sleep(0.15) 
+            
+        try:
+            self.player.command('screenshot-to-file', filepath, 'video')
+            print(f"📸 Screenshot saved to: {filepath}")
+        except Exception as e:
+            print(f"Screenshot error: {e}")
+            
+        # We jump back in as if nothing had happened.
+        if need_seek:
+            self.player.seek(original_pos / 1000.0, reference='absolute', precision='exact')
