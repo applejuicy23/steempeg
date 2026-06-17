@@ -6,6 +6,9 @@ screenshots and markers. They run on the application instance and reach its widg
 and player through self.
 """
 import os
+import re
+import time
+from datetime import datetime
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QIcon, QPainterPath, QPixmap, QRegion
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.player.thumbnails import ThumbnailBatchThread
 
 
 class PlayerMixin:
@@ -713,3 +717,242 @@ class PlayerMixin:
         # 2. Recalculate slider sizes because shorter video = less Megabytes!
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
+
+    def generate_and_play_preview(self):
+        """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """ 
+        if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
+            return
+
+        # 1. STOP CURRENT PLAYBACK
+        self._is_switching = True
+        self._force_pause = False
+
+        
+        # 2. GET THE CLIP FOLDER PATH
+        clip_path = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
+        
+        # STEP 1: FIND THE VIDEO FOLDER
+        all_mpds = self.get_all_mpd_paths(clip_path)
+        if not all_mpds: 
+            return
+
+        mpd_path = all_mpds[0] 
+
+        # STEP 2: AUTO-SEARCH JSON TIMELINE
+        # STEP 2: AUTO-SEARCH JSON TIMELINE
+        offset_ms = 0
+        
+        def find_json_in_dir(directory):
+            if not directory or not os.path.isdir(directory): 
+                return None
+            # Searching for the Right Timeline
+            for root_dir, dirs, files in os.walk(directory):
+                for file in files:
+                    if file.startswith("timeline_") and file.endswith(".json"):
+                        return os.path.join(root_dir, file)
+            # Backup Option
+            for root_dir, dirs, files in os.walk(directory):
+                for file in files:
+                    if file.endswith(".json") and "settings" not in file and "games" not in file:
+                        return os.path.join(root_dir, file)
+            return None
+
+        # 1. Search strictly within the clip's own folder!
+        json_path = find_json_in_dir(clip_path)
+
+        # 2. If the clip is in the standard Steam folder (video/fg_123), look in the adjacent folder: timelines/fg_123.
+        if not json_path:
+            parent_dir = os.path.dirname(clip_path)
+            if os.path.basename(parent_dir).lower() == "video":
+                timelines_dir = os.path.join(os.path.dirname(parent_dir), "timelines")
+                clip_folder_name = os.path.basename(clip_path)
+                json_path = find_json_in_dir(os.path.join(timelines_dir, clip_folder_name))
+
+        # 3. Passing to the Engine
+        if hasattr(self, 'custom_timeline'):
+            if json_path:
+                print(f"Json was found successfully: {json_path}")
+                
+                json_name = os.path.basename(json_path) 
+                video_folder_name = os.path.basename(os.path.dirname(mpd_path))
+                
+                json_match = re.search(r'(\d{8})_(\d{6})', json_name)
+                video_match = re.search(r'(\d{8})_(\d{6})', video_folder_name)
+                
+                if json_match and video_match:
+                    try:
+                        j_str = json_match.group(1) + json_match.group(2)
+                        v_str = video_match.group(1) + video_match.group(2)
+                        
+                        json_dt = datetime.strptime(j_str, "%Y%m%d%H%M%S")
+                        video_dt = datetime.strptime(v_str, "%Y%m%d%H%M%S")
+                        
+                        offset_ms = int((video_dt - json_dt).total_seconds() * 1000)
+                    except Exception as e:
+                        print(f"Time Count Error: {e}")
+                        offset_ms = 0
+                        
+                print(f"Delay: {offset_ms} ms")
+                self.custom_timeline.canvas.load_timeline_json(json_path, offset_ms)
+                
+            else:
+                print(f"No JSON found for this clip: {clip_path}")
+                self.custom_timeline.canvas.markers.clear()
+                self.custom_timeline.canvas.update()
+
+
+        # 3. PREPARE THE CANVAS
+        self.ui.video_container.setStyleSheet("background-color: transparent;")
+        if hasattr(self, 'video_stack'): 
+            self.video_stack.setCurrentWidget(self.ui.video_container)
+        if hasattr(self, 'btn_close_clip'): 
+            self.btn_close_clip.show()
+        if hasattr(self, 'custom_timeline'): 
+            self.custom_timeline.setEnabled(True)
+
+        # 4. FEED THE RAW STEAM DASH FILE DIRECTLY TO MPV
+        print(f"---> Feeding MPD directly to MPV: {mpd_path}")
+        
+        # A Reliable Path for Windows:
+        abs_path = os.path.abspath(mpd_path).replace('\\', '/')
+        
+        # Start the video and unpause it.
+        self.player.play(abs_path) 
+        self.player.pause = False
+
+        # --- BACKGROUND THUMBNAIL BATCH GENERATION (THE MATRIX 2.0) ---
+        if hasattr(self, 'thumb_thread') and self.thumb_thread.isRunning():
+            self.thumb_thread.stop()
+            
+        # Launch the Batch Generator
+        self.thumb_thread = ThumbnailBatchThread(abs_path, self.current_clip_duration_sec, interval=3)
+        
+        if hasattr(self, 'custom_timeline'):
+            self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
+            self.custom_timeline.current_video_path = abs_path
+            
+            # A function that removes the shield and activates the timeline
+            def finish_switch():
+                self.custom_timeline.setEnabled(True)
+                self._is_switching = False 
+                
+            QTimer.singleShot(500, finish_switch)
+                
+        self.thumb_thread.start()
+
+        # --- IMMEDIATELY UPDATE PLAY BUTTON ICON TO PAUSE ---
+        if hasattr(self.ui, 'btn_play'):
+            icon_path = get_resource_path("icon_pause.png")
+            self.ui.btn_play.setIcon(QIcon(icon_path))
+        
+
+    def update_ui_from_vlc(self):
+        """ Updates UI and Timeline from MPV engine """
+        if not hasattr(self, 'player') or not self.player:
+            return
+            
+        # If the strip is off, prevent the timer from toggling it!
+        if hasattr(self, 'custom_timeline') and not self.custom_timeline.isEnabled():
+            return
+
+        # Safe check to prevent jumpiness after seeking
+        if time.time() < getattr(self, '_ignore_vlc_until', 0):
+            return
+
+        try:
+            duration_sec = getattr(self, 'current_clip_duration_sec', self.player.duration)
+            if duration_sec is None or duration_sec <= 0:
+                duration_sec = self.player.duration
+                if duration_sec is None: return
+                
+            time_sec = self.player.time_pos
+            
+
+            current_dw = getattr(self.player, 'dwidth', None)
+            if current_dw != getattr(self, '_last_video_width', None):
+                self._last_video_width = current_dw
+                if hasattr(self, 'recalculate_video_geometry'):
+                    self.recalculate_video_geometry()
+            
+            # If duration is missing, the video is not fully loaded yet
+            if duration_sec is None:
+                return
+                
+            duration_ms = int(duration_sec * 1000)
+            
+            # MPV sometimes returns None for time_pos at the exact moment the video ends
+            if time_sec is None:
+                if getattr(self.player, 'eof_reached', False):
+                    time_sec = duration_sec 
+                else:
+                    return
+                    
+            current_ms = int(time_sec * 1000)
+
+            # --- AUTO-REWIND AT THE END OF VIDEO (EOF) ---
+            # If MPV flags end-of-file, or we are within 100ms of the end
+            if getattr(self.player, 'eof_reached', False) or current_ms >= duration_ms - 5:
+                self.player.pause = True 
+                self.player.seek(0, reference='absolute', precision='exact') 
+                current_ms = 0 
+                
+                if hasattr(self, 'custom_timeline'):
+                    self.custom_timeline.force_jump(0)
+                    
+                # Change the pause button back to play
+                if hasattr(self.ui, 'btn_play'):
+                    icon_path = get_resource_path("icon_play.png")
+                    self.ui.btn_play.setIcon(QIcon(icon_path))
+
+            is_playing = not self.player.pause
+
+            # Send the data to our smooth custom timeline
+            if hasattr(self, 'custom_timeline'):
+                self.custom_timeline.set_duration(duration_ms)
+                self.custom_timeline.set_vlc_time(current_ms, is_playing)
+
+            # --- UPDATE TEXT TIMERS (00:00 / 00:00) ---
+            def format_time(ms):
+                """ Converts milliseconds into HH:MM:SS or MM:SS format """
+                s = ms // 1000
+                h = s // 3600
+                m = (s % 3600) // 60 
+                s = s % 60
+                
+                if h > 0:
+                    return f"{h:02d}:{m:02d}:{s:02d}"
+                return f"{m:02d}:{s:02d}"
+            
+            # --- YELLOW BORDER INDICATOR ---
+            if getattr(self, 'is_fullscreen', False):
+                if hasattr(self, 'aspect_frame'):
+                    self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
+            else:
+                if hasattr(self, 'custom_timeline') and self.custom_timeline.is_trim_mode:
+                    if self.custom_timeline.trim_start_ms <= current_ms <= self.custom_timeline.trim_end_ms:
+                        if hasattr(self, 'aspect_frame'):
+                            # Draw perfect yellow border
+                            self.aspect_frame.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
+                    else:
+                        if hasattr(self, 'aspect_frame'):
+                            # Remove border
+                            self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
+                else:
+                    if hasattr(self, 'aspect_frame'):
+                        # Remove border
+                        self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
+
+            # --- UPDATE TEXT TIMERS (00:00 / 00:00) ---
+
+            # Update the main timer label
+            # Check if your specific UI label exists and update it ONLY if the text changed!
+            if hasattr(self.ui, 'label_time'):
+                current_str = format_time(current_ms)
+                total_str = format_time(duration_ms)
+                new_time_text = f"{current_str} / {total_str}"
+                
+                # Prevent UI lag by updating text only once per second
+                if self.ui.label_time.text() != new_time_text:
+                    self.ui.label_time.setText(new_time_text)
+        except Exception as e:
+            pass # Ignore random missing property errors during video switching
