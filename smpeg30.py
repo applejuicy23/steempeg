@@ -5815,12 +5815,4 @@ if __name__ == "__main__":
             pass # If the logger has not yet been created
             
         QMessageBox.critical(None, "FATAL ERROR", f"APP ERROR:\n{error_text}")
-def global_exception_handler(exc_type, exc_value, exc_traceback):
-        import traceback
-        error_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-        print(f"CRITICAL FATAL CRASH:\n{error_msg}")
-        try:
-            import logging
-            logging.critical(f"UNCAUGHT FATAL ERROR:\n{error_msg}")
-        except: pass
 sys.excepthook = global_exception_handler
