@@ -2289,55 +2289,11 @@ class SteempegApp(PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, Updater
     
 
     
-    def on_timeline_press(self):
-        """ Triggered when the user clicks on the timeline track. """
-        if hasattr(self, 'player') and self.player:
-            # Check if video is playing (if pause is False, it means it is playing)
-            self.was_playing_before_drag = not self.player.pause
-            
-            # Pause the video while the user is dragging the playhead
-            self.player.pause = True
+    
 
-    def on_timeline_seek(self, position_ms):
-        """ Commands MPV to jump. """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): 
-            return
-            
-        if hasattr(self, 'player') and self.player:
-            if getattr(self.player, 'duration', None):
-                self.player.seek(position_ms / 1000.0, reference='absolute', precision='exact')
+    
 
-
-    def on_timeline_release(self):
-        """ Triggered when the user releases the mouse button after dragging. """
-        if hasattr(self, 'player') and self.player:
-            
-            # Restore playback state if it was playing before we clicked
-            if getattr(self, 'was_playing_before_drag', False):
-                self.player.pause = False
-                
-            # If you have a variable 'is_muted' in your scope, apply it to MPV like this:
-            # (Replace the old audio_set_mute line with this one)
-            if hasattr(self, 'is_muted'):
-                self.player.mute = self.is_muted
-
-    def skip_backward(self):
-        """ Rewind 15 seconds using the Independent Timeline Engine """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        new_time = self.custom_timeline.visual_ms - 15000
-        self.custom_timeline.force_jump(new_time)
-
-    def skip_forward(self):
-        """ Skips 15 seconds forward using the Independent Timeline Engine """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        new_time = self.custom_timeline.visual_ms + 15000
-        self.custom_timeline.force_jump(new_time)
-
-    def skip_back(self):
-        """ Skips 15 seconds backward using the Independent Timeline Engine """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        new_time = self.custom_timeline.visual_ms - 15000
-        self.custom_timeline.force_jump(new_time)
+    
         
 
     def generate_and_play_preview(self):
@@ -2898,21 +2854,7 @@ class SteempegApp(PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, Updater
             self.ui.btn_start.setEnabled(False)
 
 
-    def get_effective_duration(self):
-        """ Calculates the real duration of the video. If Trim is active, returns only the trimmed part! """
-        if hasattr(self, 'custom_timeline') and self.custom_timeline.is_trim_mode:
-            # Return duration of the yellow bar
-            return max(0.1, (self.custom_timeline.trim_end_ms - self.custom_timeline.trim_start_ms) / 1000.0)
-        return getattr(self, 'current_clip_duration_sec', 0)
-
-    def on_trim_changed(self, start_ms, end_ms):
-        """ Fires instantly when the user drags the yellow trim handles """
-        # 1. Update text info in Export Settings
-        self.update_final_setup()
-        
-        # 2. Recalculate slider sizes because shorter video = less Megabytes!
-        if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
-            self.setup_dynamic_slider()
+    
             
 
 
