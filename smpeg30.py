@@ -7,7 +7,6 @@ from steempeg.core import games
 from steempeg.core.dash import discovery
 from steempeg.core import capabilities
 from steempeg.infra import paths
-from steempeg.core.dash import repair
 from steempeg.ui.player.surface import MPVWrapper
 from steempeg.ui.player.fullscreen import FullscreenEventFilter
 from steempeg.ui.player.controls.audio import VolumeControlWidget
@@ -19,6 +18,7 @@ from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.render_thread import RenderThread
 from steempeg.ui.updater_mixin import UpdaterMixin
 from steempeg.ui.settings.controller import SettingsMixin
+from steempeg.ui.render_controller import RenderMixin
 
 
 
@@ -81,7 +81,7 @@ from PySide6.QtCore import Qt, QDate
 
 
 
-class SteempegApp(SettingsMixin, UpdaterMixin, QObject):
+class SteempegApp(RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
@@ -3915,15 +3915,7 @@ class SteempegApp(SettingsMixin, UpdaterMixin, QObject):
     def open_current_log(self):
         if hasattr(self, 'current_log_file'):
             paths.open_in_file_manager(self.current_log_file)
-        
-    def get_all_mpd_paths(self, clip_path):
-        return discovery.find_mpd_paths(clip_path)
 
-    def fix_steam_manifest(self, mpd_path):
-        return repair.fix_steam_manifest(mpd_path)
-
-    def recover_orphaned_clip(self, folder_path):
-        return repair.recover_orphaned_clip(folder_path)
     
     def get_game_name(self, app_id):
         app_id = str(app_id)
@@ -3996,12 +3988,6 @@ class SteempegApp(SettingsMixin, UpdaterMixin, QObject):
 
         self.current_clip_duration_str = duration_str
         return size_str, duration_str
-    
-    def get_fps_from_mpd(self, mpd_path):
-        return mpd.get_fps(mpd_path)
-
-    def get_audio_bitrate_from_mpd(self, mpd_path):
-        return mpd.get_audio_bitrate_kbps(mpd_path)
     
     def detect_gpu_and_set_encoder(self):
         """Probe the hardware encoders and fill the encoder dropdown."""
