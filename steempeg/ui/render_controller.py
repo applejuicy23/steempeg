@@ -18,10 +18,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from steempeg.core import capabilities
@@ -1314,3 +1317,46 @@ class RenderMixin:
             if hasattr(self.ui, 'progress_render'):
                 self.ui.progress_render.setValue(0)
                 self.ui.progress_render.setFormat("0%")
+
+    def inject_custom_input(self, combo_widget, placeholder):
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)  # Small gap between input and icon
+
+        combo_widget.parentWidget().layout().replaceWidget(combo_widget, container)
+
+        # Tell the ComboBox to aggressively expand and fill all available horizontal space!
+        combo_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        line_edit = QLineEdit()
+        line_edit.setPlaceholderText(placeholder)
+        # Make the input box exactly 70px wide (no more, no less) so it doesn't stretch
+        line_edit.setFixedWidth(70)
+        line_edit.hide()  # Hidden by default
+
+        warn_icon = QLabel()
+        warn_icon.setFixedSize(16, 16)
+
+        # Load the attention icon smoothly
+        pix_path = get_resource_path("attention.png")
+        if os.path.exists(pix_path):
+            pixmap = QPixmap(pix_path)
+            warn_icon.setPixmap(pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        warn_icon.hide()  # Hidden by default
+
+        # ---> APPLY THE INSTANT TOOLTIP MAGIC HERE <---
+        if hasattr(self, 'instant_tooltip'):
+            warn_icon.installEventFilter(self.instant_tooltip)
+
+        # Add widgets to layout.
+        layout.addWidget(combo_widget)
+        layout.addWidget(line_edit)
+        layout.addWidget(warn_icon)
+
+        # Show/hide logic
+        combo_widget.currentTextChanged.connect(lambda t: (
+            line_edit.setVisible("Custom" in t),
+            warn_icon.setVisible(False) if "Custom" not in t else None
+        ))
+        return line_edit, warn_icon

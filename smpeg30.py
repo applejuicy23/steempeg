@@ -2088,63 +2088,21 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         from PySide6.QtWidgets import QLineEdit, QLabel, QHBoxLayout, QWidget, QSizePolicy
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
         
-        # Helper function to inject custom input and warning icon next to ComboBox
-        def inject_custom_input(combo_widget, placeholder):
-            container = QWidget()
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(8) # Small gap between input and icon
-            
-            combo_widget.parentWidget().layout().replaceWidget(combo_widget, container)
-            
-            # Tell the ComboBox to aggressively expand and fill all available horizontal space!
-            combo_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            
-            line_edit = QLineEdit()
-            line_edit.setPlaceholderText(placeholder)
-            # Make the input box exactly 70px wide (no more, no less) so it doesn't stretch
-            line_edit.setFixedWidth(70) 
-            line_edit.hide() # Hidden by default
-            
-            warn_icon = QLabel()
-            warn_icon.setFixedSize(16, 16)
-            
-            # Load the attention icon smoothly
-            pix_path = get_resource_path("attention.png")
-            if os.path.exists(pix_path):
-                pixmap = QPixmap(pix_path)
-                warn_icon.setPixmap(pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            warn_icon.hide() # Hidden by default
-            
-            # ---> APPLY THE INSTANT TOOLTIP MAGIC HERE <---
-            if hasattr(self, 'instant_tooltip'):
-                warn_icon.installEventFilter(self.instant_tooltip)
-            
-            # Add widgets to layout. 
-            layout.addWidget(combo_widget)
-            layout.addWidget(line_edit)
-            layout.addWidget(warn_icon)
-            
-            # Show/hide logic
-            combo_widget.currentTextChanged.connect(lambda t: (
-                line_edit.setVisible("Custom" in t),
-                warn_icon.setVisible(False) if "Custom" not in t else None
-            ))
-            return line_edit, warn_icon
+        
     
         # Inject 3 inputs and unpack the labels
         if hasattr(self.ui, 'combo_fps'):
-            self.input_custom_fps, self.warn_fps = inject_custom_input(self.ui.combo_fps, "FPS")
+            self.input_custom_fps, self.warn_fps = self.inject_custom_input(self.ui.combo_fps, "FPS")
             self.input_custom_fps.setValidator(QIntValidator(1, 120))
             self.input_custom_fps.textChanged.connect(self.validate_custom_fps)
             
         if hasattr(self.ui, 'combo_bitrate'):
-            self.input_custom_vbitrate, self.warn_vbitrate = inject_custom_input(self.ui.combo_bitrate, "Mbps")
+            self.input_custom_vbitrate, self.warn_vbitrate = self.inject_custom_input(self.ui.combo_bitrate, "Mbps")
             self.input_custom_vbitrate.setValidator(QDoubleValidator(0.1, 200.0, 2))
             self.input_custom_vbitrate.textChanged.connect(self.validate_custom_vbitrate)
             
         if hasattr(self.ui, 'combo_audio_bitrate'):
-            self.input_custom_abitrate, self.warn_abitrate = inject_custom_input(self.ui.combo_audio_bitrate, "kbps")
+            self.input_custom_abitrate, self.warn_abitrate = self.inject_custom_input(self.ui.combo_audio_bitrate, "kbps")
             self.input_custom_abitrate.setValidator(QIntValidator(1, 500))
             self.input_custom_abitrate.textChanged.connect(self.validate_custom_abitrate)
     
