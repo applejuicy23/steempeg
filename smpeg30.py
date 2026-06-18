@@ -2185,20 +2185,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
     
 
     
-    def choose_folder(self):
-        """ Opens a dialog for selecting a clips folder and remembers the choice. """
-        target_path = getattr(self, 'clips_folder', "")
-        
-        if not target_path or not os.path.exists(target_path):
-            target_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
-            if not os.path.exists(target_path):
-                target_path = "C:\\"
 
-        folder = QFileDialog.getExistingDirectory(self.ui, "Select clips folder", target_path)
-        if folder:
-            self.clips_folder = folder
-            self.save_user_settings("last_clips_folder", folder) # Save permanently!
-            self.scan_clips()
     
             
     
