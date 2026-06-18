@@ -1977,31 +1977,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.size_slider.setVisible(False)
             self.ui.size_slider.valueChanged.connect(self.on_slider_moved)
 
-        # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
-        # Instead of stuffing multiple lines into one label, we create separate 
-        # widgets so the Qt layout engine handles the vertical spacing perfectly
-        if hasattr(self.ui, 'orig_res_label'):
-            from PySide6.QtWidgets import QLabel
-            
-            parent_layout = self.ui.orig_res_label.parentWidget().layout()
-            
-            # Find the exact index of orig_res_label to insert right below it
-            insert_index = -1
-            for i in range(parent_layout.count()):
-                if parent_layout.itemAt(i).widget() == self.ui.orig_res_label:
-                    insert_index = i
-                    break
-                    
-            if insert_index != -1:
-                # 1. Create the Video Bitrate label
-                self.ui.label_vbitrate = QLabel("Video Bitrate:")
-                self.ui.label_vbitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
-                parent_layout.insertWidget(insert_index + 1, self.ui.label_vbitrate)
-                
-                # 2. Create the Audio Bitrate label
-                self.ui.label_abitrate = QLabel("Audio Bitrate:")
-                self.ui.label_abitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
-                parent_layout.insertWidget(insert_index + 2, self.ui.label_abitrate)
+        self._setup_bitrate_labels()
 
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
         if hasattr(self.ui, 'label_target_size'):
@@ -2117,6 +2093,32 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.label_time.setText("00:00 / 00:00")
         
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
+    def _setup_bitrate_labels(self):
+        # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
+        # Instead of stuffing multiple lines into one label, we create separate
+        # widgets so the Qt layout engine handles the vertical spacing perfectly
+        if hasattr(self.ui, 'orig_res_label'):
+            from PySide6.QtWidgets import QLabel
+
+            parent_layout = self.ui.orig_res_label.parentWidget().layout()
+
+            # Find the exact index of orig_res_label to insert right below it
+            insert_index = -1
+            for i in range(parent_layout.count()):
+                if parent_layout.itemAt(i).widget() == self.ui.orig_res_label:
+                    insert_index = i
+                    break
+
+            if insert_index != -1:
+                # 1. Create the Video Bitrate label
+                self.ui.label_vbitrate = QLabel("Video Bitrate:")
+                self.ui.label_vbitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
+                parent_layout.insertWidget(insert_index + 1, self.ui.label_vbitrate)
+
+                # 2. Create the Audio Bitrate label
+                self.ui.label_abitrate = QLabel("Audio Bitrate:")
+                self.ui.label_abitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
+                parent_layout.insertWidget(insert_index + 2, self.ui.label_abitrate)
     
     
 
