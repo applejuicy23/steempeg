@@ -5,7 +5,6 @@ from steempeg.ui.player.surface import MPVWrapper
 from steempeg.ui.player.fullscreen import FullscreenEventFilter
 from steempeg.ui.player.controls.audio import VolumeControlWidget
 from steempeg.ui.player.controls.speed import SpeedControlWidget
-from steempeg.ui.player.thumbnails import ThumbnailBatchThread
 from steempeg.ui.player.controls.timeline import CustomTimelineWidget
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.updater_mixin import UpdaterMixin
@@ -21,11 +20,6 @@ from steempeg.ui.hide_watcher import HideWatcher
 
 import sys
 import os
-import subprocess
-import re
-import psutil
-import requests
-import time
 import logging
 from datetime import datetime
 
@@ -40,16 +34,13 @@ os.environ["PATH"] = _bin_dir + os.pathsep + _base_dir + os.pathsep + os.environ
 
 import mpv
 
-from PySide6.QtCore import Qt, QFile, QThread, Signal, QTimer, QSize, QObject
-from PySide6.QtCore import QUrl, QEvent
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
-from PySide6.QtWidgets import QTableWidgetItem, QHeaderView, QAbstractItemView
+from PySide6.QtCore import Qt, QFile, QTimer, QSize, QObject
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QHeaderView, QAbstractItemView
 from PySide6.QtUiTools import QUiLoader
-from PySide6.QtGui import QPixmap, QIcon
-from PySide6.QtWidgets import QWidget
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush
+from PySide6.QtGui import QIcon
 
-from steempeg.ui.widgets import FlowLayout, BlockCombo, ElidedLabel, SmartSliderFilter, FilterPillButton
+from steempeg.ui.widgets import ElidedLabel, FilterPillButton
 
 def get_resource_path(relative_path):
     return paths.get_resource_path(relative_path)
@@ -58,19 +49,16 @@ def get_resource_path(relative_path):
 def get_save_directory():
     return paths.get_save_directory()
 
-from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt
 
 
-from PySide6.QtWidgets import QPushButton
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import Qt
 
 
     
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QWidget, QCompleter
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt
 
 
 
@@ -859,7 +847,6 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 4. BINDING BUTTONS TO FUNCTIONS
         # --- UI INJECTION: COPY BUTTONS ---
         from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
-        from PySide6.QtGui import QClipboard
         
         copy_icon_path = get_resource_path("copyfile.png")
         
@@ -1194,7 +1181,6 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         
         # --- UI INJECTION: COPY BUTTONS ---
         from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
-        from PySide6.QtGui import QClipboard
         
         copy_icon_path = get_resource_path("copyfile.png")
         
@@ -2002,7 +1988,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
 
         # --- UI INJECTION: CUSTOM INPUTS ---
-        from PySide6.QtWidgets import QLineEdit, QLabel, QHBoxLayout, QWidget, QSizePolicy
+        from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget, QSizePolicy
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
         
         
@@ -2192,58 +2178,39 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
 
 import os
-import PySide6.QtWidgets as qtw
-import PySide6.QtCore as qtc
-import PySide6.QtGui as qtg
 
 
 # --- BACKGROUND WORKER: JIT THUMBNAIL SNIPER ---
-import hashlib
-import tempfile
-import shutil
-import subprocess
 import os
-import glob
-from PySide6.QtCore import QThread, Signal
 
 # --- SMART PREVIEW SNIPER 5.0 (RADAR RADIAL PRELOADER) ---
 import os
-import io
-import re
-import time
-import av
-import xml.etree.ElementTree as ET
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QImage, QPixmap
 
 
 
-from PySide6.QtCore import QObject, QEvent
+from PySide6.QtCore import QObject
 
 
 
 
 
-from PySide6.QtWidgets import QScrollArea, QSizePolicy
 
 
     
-from PySide6.QtWidgets import QLabel, QFrame, QVBoxLayout, QWidget
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt
 
 
 
-from PySide6.QtCore import QObject, QEvent, Qt
+from PySide6.QtCore import QObject, Qt
 
 
 
   
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSlider, QLabel
+from PySide6.QtCore import QTimer
 
 
 
-from PySide6.QtCore import QObject, QEvent
+from PySide6.QtCore import QObject
 
 
 
