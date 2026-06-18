@@ -27,7 +27,7 @@ from datetime import datetime
 if getattr(sys, 'frozen', False):
     _base_dir = os.path.dirname(sys.executable)
 else:
-    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _bin_dir = os.path.join(_base_dir, "bin")
 os.environ["PATH"] = _bin_dir + os.pathsep + _base_dir + os.pathsep + os.environ["PATH"]
@@ -2216,7 +2216,7 @@ from PySide6.QtCore import QObject
 
     
 
-if __name__ == "__main__":
+def main():
     import sys
     import os
     import argparse
@@ -2284,3 +2284,5 @@ if __name__ == "__main__":
             
         QMessageBox.critical(None, "FATAL ERROR", f"APP ERROR:\n{error_text}")
 sys.excepthook = global_exception_handler
+if __name__ == "__main__":
+    main()
