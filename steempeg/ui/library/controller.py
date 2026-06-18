@@ -402,7 +402,7 @@ class LibraryMixin:
 
             self.ui.table_clips.setSortingEnabled(True)
 
-            self.ui.table_clips.horizontalHeader().sectionClicked.connect(lambda: QTimer.singleShot(50, self.sync_grid_to_table))
+            self.ui.table_clips.horizontalHeader().sectionClicked.connect(lambda: QTimer.singleShot(50, self.fast_sync_grid))
 
             if hasattr(self, 'build_netflix_grid'):
                 self.build_netflix_grid()
@@ -604,10 +604,10 @@ class LibraryMixin:
     # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
     def get_game_name(self, app_id):
         app_id = str(app_id)
-        # 1. сначала кэш
+        # 1. Cache first
         if app_id in self.game_names_cache:
             return self.game_names_cache[app_id]
-        # 2. иначе спросить Steam один раз и запомнить
+        # 2. Otherwise, ask Steam once and remember
         name = games.fetch_game_name(app_id)
         if name:
             self.game_names_cache[app_id] = name
@@ -623,15 +623,15 @@ class LibraryMixin:
     
     def get_game_icon(self, app_id):
         app_id = str(app_id)
-        # 1. RAM-кэш
+        # 1. RAM cache
         if app_id in self.game_icons_cache:
             return self.game_icons_cache[app_id]
-        # 2. диск-кэш, иначе скачиваем
+        # 2. disk cache, otherwise download
         icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
         if not os.path.exists(icon_path):
             if not games.download_icon(app_id, icon_path):
                 return QIcon()
-        # 3. строим Qt-иконку (это Qt -> остаётся тут) и кэшируем в RAM
+        # 3. Build a Qt icon (this is Qt -> stays here) and cache it in RAM
         icon = QIcon(QPixmap(icon_path))
         self.game_icons_cache[app_id] = icon
         return icon
