@@ -9,6 +9,7 @@ fed by PreviewSniperWorker.
 import json
 import os
 import re
+import logging
 import time
 
 import PySide6.QtWidgets as qtw
@@ -295,11 +296,16 @@ class TimelineCanvas(QWidget):
         if getattr(self, 'is_hovering', False):
             hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
             current_target_sec = round((hover_ms // 1000) / 3.0) * 3
+            
+            logging.info(f"READY got_sec={sec} cur_target={current_target_sec} visible={self.preview_widget.isVisible() if hasattr(self,'preview_widget') else '?'}")
+            
             if int(sec) == int(current_target_sec):
                 if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
                     self.preview_widget.update_image_from_ram(pixmap)
 
     def trigger_sniper(self):
+        logging.info(f"TRIGGER pending={self.pending_sec} vpath={bool(self.current_video_path)}")
+        
         if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
             self.sniper.request_frame(self.current_video_path, self.pending_sec)
 
@@ -855,16 +861,19 @@ class TimelineCanvas(QWidget):
                     has_disk_thumb = True
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, current_thumb_dir)
             
+            if hasattr(self, 'sniper') and self.current_video_path:
+                self.pending_sec = sec
+                if hasattr(self, 'sniper_timer'):
+                    self.sniper_timer.start(120)
+
+            logging.info(f"HOVER sec={sec} disk={has_disk_thumb} has_sniper={hasattr(self,'sniper')} vpath={bool(self.current_video_path)}")
+
             if not has_disk_thumb:
                 target_sec = round(sec / 3.0) * 3
                 if hasattr(self, 'sniper') and target_sec in self.sniper.cache:
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
                     self.preview_widget.update_image_from_ram(self.sniper.cache[target_sec])
                 else:
-                    if hasattr(self, 'sniper') and self.current_video_path:
-                        self.pending_sec = sec
-                        if hasattr(self, 'sniper_timer'): self.sniper_timer.start(120) 
-                    
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
                     self.preview_widget.img_label.setPixmap(QPixmap())
                     self.preview_widget.img_label.setText("Generating...")
