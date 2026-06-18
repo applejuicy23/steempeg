@@ -1,5 +1,5 @@
 from steempeg.version import APP_VERSION_STR
-from steempeg.infra.logging import global_exception_handler
+from steempeg.infra.logging import global_exception_handler, setup_logging
 from steempeg.infra import paths
 from steempeg.ui.player.surface import MPVWrapper
 from steempeg.ui.player.fullscreen import FullscreenEventFilter
@@ -165,19 +165,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         
 
             
-        # Create a log file with the date and time of launch
-        log_filename = os.path.join(self.logs_dir, f"steempeg_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-        self.current_log_file = log_filename
-        logging.basicConfig(
-            filename=log_filename,
-            level=logging.DEBUG, # Everything here
-            format='[%(asctime)s] [%(levelname)s] %(message)s',
-            datefmt='%H:%M:%S',
-            encoding='utf-8'
-        )
-        logging.info("="*40)
-        logging.info(f"STEEMPEG {APP_VERSION_STR} RUNNING") 
-        logging.info("="*40)
+        self.current_log_file = setup_logging(self.logs_dir, APP_VERSION_STR)
 
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir) # Create a cache folder if it doesn't exist
