@@ -1979,54 +1979,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         self._setup_bitrate_labels()
 
-        # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
-        if hasattr(self.ui, 'label_target_size'):
-            from PySide6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QSizePolicy, QLabel, QToolTip
-            from PySide6.QtGui import QIntValidator, QPixmap
-            from PySide6.QtCore import QObject, QEvent
-            
-            self.size_container = QWidget() 
-            size_layout = QHBoxLayout(self.size_container)
-            size_layout.setContentsMargins(0, 0, 0, 0)
-            size_layout.setSpacing(6) 
-            
-            self.ui.label_target_size.parentWidget().layout().replaceWidget(self.ui.label_target_size, self.size_container)
-            self.ui.label_target_size.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-            
-            self.input_custom_size = QLineEdit()
-            self.input_custom_size.setPlaceholderText("MB")
-            self.input_custom_size.setFixedWidth(60)
-            self.input_custom_size.setValidator(QIntValidator(1, 999999))
-            self.input_custom_size.hide()
-            self.input_custom_size.textChanged.connect(self.on_custom_size_changed)
-            
-
-            self.warn_size = QLabel()
-            self.warn_size.setFixedSize(16, 16)
-            pix_path = get_resource_path("attention.png")
-            if os.path.exists(pix_path):
-                self.warn_size.setPixmap(QPixmap(pix_path).scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            self.warn_size.hide()
-            
-
-            class InstantTooltipFilter(QObject):
-                def eventFilter(self, obj, event):
-                    if event.type() == QEvent.Type.Enter:
-                        QToolTip.showText(event.globalPos(), obj.toolTip(), obj)
-                    elif event.type() == QEvent.Type.Leave:
-                        QToolTip.hideText()
-                    return False
-                    
-            self.instant_tooltip = InstantTooltipFilter()
-            self.warn_size.installEventFilter(self.instant_tooltip)
-            
-            size_layout.addWidget(self.ui.label_target_size)
-            size_layout.addWidget(self.input_custom_size)
-            size_layout.addWidget(self.warn_size)
-            size_layout.addStretch() 
-            
-            self.ui.label_target_size.setVisible(True)
-            self.size_container.setVisible(False)
+        self._setup_custom_target_size()
         
         if hasattr(self.ui, 'check_audio_only'):
             self.ui.check_audio_only.toggled.connect(self.on_audio_only_toggled)
@@ -2119,6 +2072,53 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.ui.label_abitrate = QLabel("Audio Bitrate:")
                 self.ui.label_abitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
                 parent_layout.insertWidget(insert_index + 2, self.ui.label_abitrate)
+    def _setup_custom_target_size(self):
+        # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
+        if hasattr(self.ui, 'label_target_size'):
+            from PySide6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QSizePolicy, QLabel, QToolTip
+            from PySide6.QtGui import QIntValidator, QPixmap
+            from PySide6.QtCore import QObject, QEvent
+
+            self.size_container = QWidget()
+            size_layout = QHBoxLayout(self.size_container)
+            size_layout.setContentsMargins(0, 0, 0, 0)
+            size_layout.setSpacing(6)
+
+            self.ui.label_target_size.parentWidget().layout().replaceWidget(self.ui.label_target_size, self.size_container)
+            self.ui.label_target_size.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+
+            self.input_custom_size = QLineEdit()
+            self.input_custom_size.setPlaceholderText("MB")
+            self.input_custom_size.setFixedWidth(60)
+            self.input_custom_size.setValidator(QIntValidator(1, 999999))
+            self.input_custom_size.hide()
+            self.input_custom_size.textChanged.connect(self.on_custom_size_changed)
+
+            self.warn_size = QLabel()
+            self.warn_size.setFixedSize(16, 16)
+            pix_path = get_resource_path("attention.png")
+            if os.path.exists(pix_path):
+                self.warn_size.setPixmap(QPixmap(pix_path).scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.warn_size.hide()
+
+            class InstantTooltipFilter(QObject):
+                def eventFilter(self, obj, event):
+                    if event.type() == QEvent.Type.Enter:
+                        QToolTip.showText(event.globalPos(), obj.toolTip(), obj)
+                    elif event.type() == QEvent.Type.Leave:
+                        QToolTip.hideText()
+                    return False
+
+            self.instant_tooltip = InstantTooltipFilter()
+            self.warn_size.installEventFilter(self.instant_tooltip)
+
+            size_layout.addWidget(self.ui.label_target_size)
+            size_layout.addWidget(self.input_custom_size)
+            size_layout.addWidget(self.warn_size)
+            size_layout.addStretch()
+
+            self.ui.label_target_size.setVisible(True)
+            self.size_container.setVisible(False)
     
     
 
