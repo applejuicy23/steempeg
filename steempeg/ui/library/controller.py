@@ -635,3 +635,22 @@ class LibraryMixin:
         icon = QIcon(QPixmap(icon_path))
         self.game_icons_cache[app_id] = icon
         return icon
+
+    def set_view_mode(self, mode):
+        if mode == "list":
+            self.grid_clips.hide()
+            self.ui.table_clips.show()
+            self.btn_view_list.setStyleSheet(self.toggle_style_active)
+            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+        else:
+            self.ui.table_clips.hide()
+            self.grid_clips.show()
+
+            # HARD GEOMETRY RECALCULATION (Pictures won't fly away anymore!)
+            self.grid_clips.doItemsLayout()
+
+            self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
+            self.btn_view_grid.setStyleSheet(self.toggle_style_active)
+
+            if self.grid_clips.selectedItems():
+                self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])

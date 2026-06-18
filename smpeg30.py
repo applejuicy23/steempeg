@@ -575,27 +575,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.btn_view_list.setStyleSheet(self.toggle_style_active)
             self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
 
-            def set_view_mode(mode):
-                if mode == "list":
-                    self.grid_clips.hide()
-                    self.ui.table_clips.show()
-                    self.btn_view_list.setStyleSheet(self.toggle_style_active)
-                    self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
-                else:
-                    self.ui.table_clips.hide()
-                    self.grid_clips.show()
+            
                     
-                    # HARD GEOMETRY RECALCULATION (Pictures won't fly away anymore!)
-                    self.grid_clips.doItemsLayout()
-                    
-                    self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
-                    self.btn_view_grid.setStyleSheet(self.toggle_style_active)
-                    
-                    if self.grid_clips.selectedItems():
-                        self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])
-                    
-            self.btn_view_list.clicked.connect(lambda: set_view_mode("list"))
-            self.btn_view_grid.clicked.connect(lambda: set_view_mode("grid"))
+            self.btn_view_list.clicked.connect(lambda: self.set_view_mode("list"))
+            self.btn_view_grid.clicked.connect(lambda: self.set_view_mode("grid"))
 
         # --- UI INJECTION: SORTING PANEL (NEXT TO FILTER BUTTON) ---
         from PySide6.QtWidgets import QLabel, QComboBox
