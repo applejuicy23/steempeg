@@ -14,6 +14,7 @@ from steempeg.ui.render_controller import RenderMixin
 from steempeg.ui.library.controller import LibraryMixin
 from steempeg.ui.player.controller import PlayerMixin
 from steempeg.ui.lifecycle import LifecycleMixin
+from steempeg.ui.hide_watcher import HideWatcher
 
 
 
@@ -1840,20 +1841,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 elif hasattr(self.ui, 'settings_tabs'):
                     bottom_v_layout.setStretchFactor(self.ui.settings_tabs, 1)
 
-                # 3. MAKE "HIDE" BUTTON COLLAPSE THE SPLITTER:
-                # This event filter watches your existing settings_tabs. 
-                # When your 'Hide' button hides the tabs, it snaps the splitter to 0!
-                class HideWatcher(QObject):
-                    def __init__(self, splitter):
-                        super().__init__()
-                        self.splitter = splitter
-                        
-                    def eventFilter(self, obj, event):
-                        if event.type() == QEvent.Type.Hide:
-                            self.splitter.setSizes([10000, 0]) # Collapse the bottom pane
-                        elif event.type() == QEvent.Type.Show:
-                            self.splitter.setSizes([750, 250]) # Expand the bottom pane back
-                        return False # Do not block the actual hide/show event
+
                 
                 self.hide_watcher = HideWatcher(self.main_v_splitter)
                 if hasattr(self.ui, 'settings_tabs'):
