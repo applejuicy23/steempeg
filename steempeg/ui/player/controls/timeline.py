@@ -233,16 +233,25 @@ class TimelineCanvas(QWidget):
                 })
 
             # --- Gamemode segments: menu/lobby/loading = hatching on the strip ---
-            gm = sorted(
-                (max(0, int(e.get('time', 0)) - offset_ms), int(e.get('mode', 0)))
+            # Offset-aware: entries before the clip start only set the mode the clip OPENS in,
+            # instead of collapsing to 0 (which smeared 'loading' across the whole gameplay).
+            raw_gm = sorted(
+                (int(e.get('time', 0)), int(e.get('mode', 0)))
                 for e in entries if e.get('type') == 'gamemode'
             )
-            if gm:
-                points = [(0, gm[0][1])] + gm   
-                for i, (t, m) in enumerate(points):
-                    end = points[i + 1][0] if i + 1 < len(points) else 10**12   
-                    if end > t:
-                        self.mode_segments.append((t, end, m))
+            start_mode = 0
+            gm = []
+            for raw_t, m in raw_gm:
+                t = raw_t - offset_ms
+                if t <= 0:
+                    start_mode = m          # last mode active before the clip begins
+                else:
+                    gm.append((t, m))
+            gm = [(0, start_mode)] + gm     # the clip opens in start_mode
+            for i, (t, m) in enumerate(gm):
+                end = gm[i + 1][0] if i + 1 < len(gm) else 10**12
+                if end > t:
+                    self.mode_segments.append((t, end, m))
 
             # --- Featured clip moments (possible_clip>=3): use each event's own duration ---
             CLIP_LEAD = 2000  # clip starts slightly before the event; tune to match Steam
