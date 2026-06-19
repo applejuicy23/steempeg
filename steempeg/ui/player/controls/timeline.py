@@ -244,15 +244,17 @@ class TimelineCanvas(QWidget):
                     if end > t:
                         self.mode_segments.append((t, end, m))
 
-            # --- Featured moments (possible_clip=3) -> ranges for dotted line ---
-            CLIP_WIN = 8000 
-            feat = sorted(
-                max(0, int(e.get('time', 0)) - offset_ms)
-                for e in entries
-                if e.get('type') == 'event' and int(e.get('possible_clip', 0) or 0) >= 3
-            )
-            for t in feat:
-                a, b = max(0, t - CLIP_WIN), t + CLIP_WIN
+            # --- Featured clip moments (possible_clip>=3): use each event's own duration ---
+            CLIP_LEAD = 2000  # clip starts slightly before the event; tune to match Steam
+            feat = []
+            for ev in entries:
+                if ev.get('type') == 'event' and int(ev.get('possible_clip', 0) or 0) >= 3:
+                    t = max(0, int(ev.get('time', 0)) - offset_ms - CLIP_LEAD)
+                    dur = int(ev.get('duration', 0) or 0)
+                    if dur > 0:
+                        feat.append((t, t + dur))
+            feat.sort()
+            for a, b in feat:
                 if self.clip_ranges and a <= self.clip_ranges[-1][1]:
                     self.clip_ranges[-1] = (self.clip_ranges[-1][0], max(self.clip_ranges[-1][1], b))
                 else:
@@ -445,14 +447,15 @@ class TimelineCanvas(QWidget):
             if ex - sx <= 0:
                 continue
             seg_rect = QRectF(sx, track_y, ex - sx, track_height)
-            painter.fillRect(seg_rect, QColor(20, 20, 26, 190))   
+            painter.fillRect(seg_rect, QColor(0, 0, 0, 55))     # slight dim, keeps the bar visible
             painter.save()
             painter.setClipRect(seg_rect)
-            painter.setPen(QPen(QColor(235, 235, 245, 140), 2))      
-            xx = int(sx) - int(track_height)
+            painter.setPen(QPen(QColor(255, 255, 255, 150), 2))
+            step = 7
+            xx = (int(sx) // step) * step - int(track_height)
             while xx < int(ex):
                 painter.drawLine(xx, int(track_y + track_height), xx + int(track_height), int(track_y))
-                xx += 7                                              
+                xx += step
             painter.restore()
 
         # --- Featured clips: yellow dotted line under the stripe ---
