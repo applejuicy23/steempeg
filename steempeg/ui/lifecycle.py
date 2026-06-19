@@ -21,7 +21,9 @@ from steempeg.version import APP_VERSION_STR
 
 class LifecycleMixin:
     def eventFilter(self, source, event):
-        
+        if getattr(self, '_is_closing', False):
+            return False
+
         if source == self.ui and event.type() == QEvent.Type.WindowStateChange:
             if not self.ui.isMaximized() and not getattr(self, 'is_fullscreen', False):
                 if getattr(self, 'needs_geometry_restore', False) and hasattr(self, 'true_normal_geom'):
@@ -86,7 +88,8 @@ class LifecycleMixin:
     def closeEvent(self, event):
         """ Triggered automatically when the window's red 'X' button is clicked """
         self._force_pause = True
-        
+        self._is_closing = True
+
         # 1. Kill the player if it is active.
         if hasattr(self, 'player') and self.player:
             self.player.pause = True 
@@ -114,6 +117,7 @@ class LifecycleMixin:
     
     def on_app_exit(self):
         """ Global Intercept: Triggers when the entire program closes. """
+        self._is_closing = True
         print("CLEANING BEFORE CLOSING...")
         if hasattr(self, 'player') and self.player:
             try:
@@ -178,22 +182,6 @@ class LifecycleMixin:
         
         self._about_is_open = False # Release the lock when closed
 
-    
-
-    
-
-    
-
-   
-
-    
-
-
-    
-    
-    
-    
-
 
     def open_logs_folder(self):
         if hasattr(self, 'logs_dir'):
@@ -203,19 +191,7 @@ class LifecycleMixin:
         if hasattr(self, 'current_log_file'):
             paths.open_in_file_manager(self.current_log_file)
 
-    
 
-    
-
-
-
-    
-
-    
-
-
-    
-    
     def clear_clip_state(self):
         """ Clears the interface when the clip is closed by clicking the X """
         

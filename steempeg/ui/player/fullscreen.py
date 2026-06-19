@@ -15,6 +15,9 @@ class FullscreenEventFilter(QObject):
         self.app_instance = app_instance
 
     def eventFilter(self, obj, event):
+        if getattr(self.app_instance, '_is_closing', False):
+            return False
+
         # Hide preview when minimizing the window
         if event.type() == QEvent.Type.ApplicationStateChange:
             if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
@@ -29,8 +32,8 @@ class FullscreenEventFilter(QObject):
                 # Protection: If the user is typing text (file name, marker), pass the space character to the text!
                 if not isinstance(focus_w, (QLineEdit, QTextEdit)):
                     self.app_instance.toggle_play()
-                    return True # Consume the event to prevent accidental activation of the highlighted button
-                    
+                    return True  # Consume the event to prevent accidental activation of the highlighted button
+
             # 2. ESC: Exit full-screen mode
             elif event.key() == Qt.Key_Escape and getattr(self.app_instance, 'is_fullscreen', False):
                 self.app_instance.toggle_fullscreen()
