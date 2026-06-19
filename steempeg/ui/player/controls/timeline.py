@@ -806,7 +806,8 @@ class TimelineCanvas(QWidget):
         found_marker = None
         for marker in getattr(self, 'markers', []):
             m_x = self.ms_to_x(marker['time_ms'])
-            pix = self.get_icon_pixmap(marker['icon_key'], marker['is_round'])
+            pix = self.get_icon_pixmap(marker)
+
             
             # DIVIDE THE WIDTH BY 2 (since the image in the cache is now 36px, while on the screen it is 18px).
             pw = (pix.width() / 2.0) if pix else 18.0
