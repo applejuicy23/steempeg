@@ -139,6 +139,7 @@ class TimelineCanvas(QWidget):
 
         # LABELS AND ICONS CS2
         self.markers = []
+        self.mode_segments = []
         self.hovered_marker = None
         self.cached_pixmaps = {}
         self.current_app_id = None
@@ -194,6 +195,7 @@ class TimelineCanvas(QWidget):
         self.current_app_id = m.group(1) if m else None
         
         self.markers.clear()
+        self.mode_segments = []
         if not os.path.exists(json_path): return
         
         try:
@@ -227,6 +229,19 @@ class TimelineCanvas(QWidget):
                     'title': title,
                     'desc': desc
                 })
+
+            # --- Gamemode segments: menu/lobby/loading = hatching on the strip ---
+            gm = sorted(
+                (max(0, int(e.get('time', 0)) - offset_ms), int(e.get('mode', 0)))
+                for e in entries if e.get('type') == 'gamemode'
+            )
+            if gm:
+                points = [(0, gm[0][1])] + gm   
+                for i, (t, m) in enumerate(points):
+                    end = points[i + 1][0] if i + 1 < len(points) else 10**12   
+                    if end > t:
+                        self.mode_segments.append((t, end, m))
+
             self.update()
         except Exception as e:
             print(f"Error loading JSON: {e}")
@@ -404,6 +419,16 @@ class TimelineCanvas(QWidget):
             painter.fillRect(QRectF(start_x, track_y, end_x - start_x, track_height), self.trim_body_color)
             painter.fillRect(QRectF(start_x, track_y - 2.0, 4.0, track_height + 4.0), self.trim_handle_color)
             painter.fillRect(QRectF(end_x - 4.0, track_y - 2.0, 4.0, track_height + 4.0), self.trim_handle_color)
+
+        # --- Gamemode: Shading non-game segments (menu / lobby / loading) ---
+        hatch = QBrush(QColor(210, 210, 220, 80), Qt.BDiagPattern)
+        for seg_start, seg_end, seg_mode in getattr(self, 'mode_segments', []):
+            if seg_mode == 1:  
+                continue
+            sx = (seg_start / self.duration_ms) * width
+            ex = (min(seg_end, self.duration_ms) / self.duration_ms) * width
+            if ex - sx > 0:
+                painter.fillRect(QRectF(sx, track_y, ex - sx, track_height), hatch)
 
         for marker in getattr(self, 'markers', []):
             if marker['is_round']:
