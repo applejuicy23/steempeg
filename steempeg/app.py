@@ -1,4 +1,5 @@
 from steempeg.version import APP_VERSION_STR
+from steempeg.ui.main_window import MainWindow
 from steempeg.infra.logging import global_exception_handler, setup_logging
 from steempeg.infra import paths
 from steempeg.ui.player.surface import MPVWrapper
@@ -34,10 +35,9 @@ os.environ["PATH"] = _bin_dir + os.pathsep + _base_dir + os.pathsep + os.environ
 
 import mpv
 
-from PySide6.QtCore import Qt, QFile, QTimer, QSize, QObject
+from PySide6.QtCore import Qt, QTimer, QSize, QObject
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtWidgets import QHeaderView, QAbstractItemView
-from PySide6.QtUiTools import QUiLoader
 from PySide6.QtGui import QIcon
 
 from steempeg.ui.widgets import ElidedLabel, FilterPillButton
@@ -68,15 +68,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
-        loader = QUiLoader()
-        ui_file_path = get_resource_path("smpegui13.ui")
-        ui_file = QFile(ui_file_path)
-        
-        if not ui_file.open(QFile.ReadOnly):
-            return
-            
-        self.ui = loader.load(ui_file)
-        ui_file.close()
+
+        self.ui = MainWindow()
+
 
         self.ui.setStyleSheet("""
             QDialog#Dialog { background-color: #1e1e1e; }
