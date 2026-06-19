@@ -2245,7 +2245,7 @@ def main():
         window = SteempegApp()
         
         if getattr(window, 'ui', None) is None:
-            QMessageBox.critical(None, "Interface Error", "Failed to load smpegui13.ui!")
+            QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
             sys.exit(1)
             
         if os.path.exists(icon_path): 
