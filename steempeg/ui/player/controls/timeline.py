@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.player.thumbnails import PreviewSniperWorker
+from steempeg.services.steam_markers import MarkerIconStore
 
 
 class TimelineCanvas(QWidget):
@@ -140,6 +141,8 @@ class TimelineCanvas(QWidget):
         self.markers = []
         self.hovered_marker = None
         self.cached_pixmaps = {}
+        self.current_app_id = None
+        self.marker_store = MarkerIconStore()
         
         # NEW FLOATING TOOLTIP (Will reside beneath the scrollbar)
         self.text_tooltip = QLabel()
@@ -186,7 +189,9 @@ class TimelineCanvas(QWidget):
         """ Reads JSON, adjusts chunk times, and populates the self.markers list. """
         
         self.current_json_path = json_path  
-        self.current_offset_ms = offset_ms  
+        self.current_offset_ms = offset_ms
+        m = re.search(r'clip_(\d+)_', json_path.replace('\\', '/'))
+        self.current_app_id = m.group(1) if m else None
         
         self.markers.clear()
         if not os.path.exists(json_path): return
@@ -216,8 +221,9 @@ class TimelineCanvas(QWidget):
                 self.markers.append({
                     'id': m_id,  # SAVING THE ID IN MEMORY!
                     'time_ms': time_ms,
+                    'icon': entry.get('icon', ''),
                     'icon_key': icon_key,
-                    'is_round': is_round, 
+                    'is_round': is_round,
                     'title': title,
                     'desc': desc
                 })
@@ -257,7 +263,7 @@ class TimelineCanvas(QWidget):
             
         return 'point', False 
 
-    def get_icon_pixmap(self, icon_key, is_round):
+    def _legacy_icon_pixmap(self, icon_key, is_round):
         """ Gets an icon or GLUES the round numbers (RETINA 2X RESOLUTION) """
         
         if icon_key in self.cached_pixmaps:
@@ -291,6 +297,17 @@ class TimelineCanvas(QWidget):
                 self.cached_pixmaps[icon_key] = pixmap
                 return pixmap
         return None
+    def get_icon_pixmap(self, marker):
+        """ Иконка метки: сначала реальный markers.svg, затем бандл-ассеты как фолбэк. """
+        icon = marker.get('icon', '')
+        app_id = self.current_app_id
+        # 1. Real icon from the game's markers.svg (works for any game/marker)
+        if icon and app_id and not icon.startswith('steam_'):
+            pix = self.marker_store.get_icon(app_id, icon, 36)
+            if pix is not None:
+                return pix
+        #2. Fallback: bundle assets / gluing numbers / steam_ (the old CS2 way)
+        return self._legacy_icon_pixmap(marker['icon_key'], marker['is_round'])
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0: return
         if getattr(self, 'is_hovering', False):
@@ -458,7 +475,7 @@ class TimelineCanvas(QWidget):
         
         def draw_marker(marker, is_hovered):
             m_x = self.ms_to_x(marker['time_ms'])
-            pix = self.get_icon_pixmap(marker['icon_key'], marker['is_round'])
+            pix = self.get_icon_pixmap(marker)
             if not pix: return
 
             # Visually Shrinking a Massive 36px Image Down to 18px
