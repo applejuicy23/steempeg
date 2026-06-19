@@ -140,6 +140,7 @@ class TimelineCanvas(QWidget):
         # LABELS AND ICONS CS2
         self.markers = []
         self.mode_segments = []
+        self.clip_ranges = []
         self.hovered_marker = None
         self.cached_pixmaps = {}
         self.current_app_id = None
@@ -196,6 +197,7 @@ class TimelineCanvas(QWidget):
         
         self.markers.clear()
         self.mode_segments = []
+        self.clip_ranges = []
         if not os.path.exists(json_path): return
         
         try:
@@ -241,6 +243,20 @@ class TimelineCanvas(QWidget):
                     end = points[i + 1][0] if i + 1 < len(points) else 10**12   
                     if end > t:
                         self.mode_segments.append((t, end, m))
+
+            # --- Featured moments (possible_clip=3) -> ranges for dotted line ---
+            CLIP_WIN = 8000 
+            feat = sorted(
+                max(0, int(e.get('time', 0)) - offset_ms)
+                for e in entries
+                if e.get('type') == 'event' and int(e.get('possible_clip', 0) or 0) >= 3
+            )
+            for t in feat:
+                a, b = max(0, t - CLIP_WIN), t + CLIP_WIN
+                if self.clip_ranges and a <= self.clip_ranges[-1][1]:
+                    self.clip_ranges[-1] = (self.clip_ranges[-1][0], max(self.clip_ranges[-1][1], b))
+                else:
+                    self.clip_ranges.append((a, b))
 
             self.update()
         except Exception as e:
@@ -421,14 +437,33 @@ class TimelineCanvas(QWidget):
             painter.fillRect(QRectF(end_x - 4.0, track_y - 2.0, 4.0, track_height + 4.0), self.trim_handle_color)
 
         # --- Gamemode: Shading non-game segments (menu / lobby / loading) ---
-        hatch = QBrush(QColor(210, 210, 220, 80), Qt.BDiagPattern)
         for seg_start, seg_end, seg_mode in getattr(self, 'mode_segments', []):
-            if seg_mode == 1:  
+            if seg_mode == 1:
                 continue
             sx = (seg_start / self.duration_ms) * width
             ex = (min(seg_end, self.duration_ms) / self.duration_ms) * width
-            if ex - sx > 0:
-                painter.fillRect(QRectF(sx, track_y, ex - sx, track_height), hatch)
+            if ex - sx <= 0:
+                continue
+            seg_rect = QRectF(sx, track_y, ex - sx, track_height)
+            painter.fillRect(seg_rect, QColor(20, 20, 26, 190))   
+            painter.save()
+            painter.setClipRect(seg_rect)
+            painter.setPen(QPen(QColor(235, 235, 245, 140), 2))      
+            xx = int(sx) - int(track_height)
+            while xx < int(ex):
+                painter.drawLine(xx, int(track_y + track_height), xx + int(track_height), int(track_y))
+                xx += 7                                              
+            painter.restore()
+
+        # --- Featured clips: yellow dotted line under the stripe ---
+        if getattr(self, 'clip_ranges', None):
+            painter.setPen(QPen(QColor(240, 200, 60), 2, Qt.DashLine))
+            dash_y = int(track_y + track_height + 1)
+            for a, b in self.clip_ranges:
+                ax = (a / self.duration_ms) * width
+                bx = (min(b, self.duration_ms) / self.duration_ms) * width
+                if bx - ax > 0:
+                    painter.drawLine(int(ax), dash_y, int(bx), dash_y)
 
         for marker in getattr(self, 'markers', []):
             if marker['is_round']:
