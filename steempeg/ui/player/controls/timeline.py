@@ -548,7 +548,10 @@ class TimelineCanvas(QWidget):
 
     def ms_to_x(self, ms):
         if self.duration_ms <= 0: return 0
-        return (ms / self.duration_ms) * self.width()
+        x = (ms / self.duration_ms) * self.width()
+        # Clamp to the canvas so out-of-range marker timestamps can't blow past
+        # Qt's 32-bit painter coords (drawLine/drawPixmap overflow at high zoom).
+        return max(0.0, min(x, float(self.width())))
 
     def x_to_ms(self, x):
         if self.width() <= 0: return 0
