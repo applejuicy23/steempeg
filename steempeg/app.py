@@ -687,7 +687,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     padding: 10px 15px; text-align: left; font-size: 14px; font-weight: 700;
                 }
                 QPushButton:hover { background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }
-                QPushButton:checked { background-color: #383838; border: 2px solid #8e7cc3; color: #ffffff; }
+                QPushButton:checked { background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }
             """
             
             self.neo_nav_buttons = []
