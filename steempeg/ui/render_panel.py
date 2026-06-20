@@ -85,6 +85,76 @@ class ResolutionLabel(StatValueLabel):
         StatValueLabel.setText(self, res_line)
 
 
+class SummaryLabel(QWidget):
+    """Renders render_controller's "Key: Value\\n…" render summary as a compact 2-column
+    key/value grid (sized to its content, not stretched). Exposes setText() so the controller
+    keeps writing to it exactly like the old QLabel did."""
+
+    _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 12px; " + _FONT
+    _VAL_QSS = "color: #ffffff; background: transparent; font-size: 12px; font-weight: bold; " + _FONT
+
+    def __init__(self):
+        super().__init__()
+        self._pairs = []
+        self._plain = None
+        self._cols = 2
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setVerticalSpacing(7)
+        self._grid.setHorizontalSpacing(10)
+
+    def setText(self, text):
+        norm = (text or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        pairs = []
+        for line in norm.split("\n"):
+            s = line.strip()
+            if not s:
+                continue
+            if ":" in s:
+                k, v = s.split(":", 1)
+                pairs.append((k.strip(), v.strip()))
+            else:
+                pairs.append(("", s))
+        # plain status line (e.g. "Waiting for clip selection…") -> show as-is
+        self._plain = norm.strip() if (len(pairs) <= 1 and (not pairs or pairs[0][0] == "")) else None
+        self._pairs = pairs
+        self._rebuild()
+
+    def _clear(self):
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _label(self, text, qss):
+        lbl = QLabel(text)
+        lbl.setStyleSheet(qss)
+        lbl.setTextFormat(Qt.PlainText)
+        return lbl
+
+    def _rebuild(self):
+        self._clear()
+        for col in (1, 2, 4):
+            self._grid.setColumnStretch(col, 0)
+            self._grid.setColumnMinimumWidth(col, 0)
+
+        if self._plain is not None:
+            self._grid.addWidget(self._label(self._plain, self._VAL_QSS), 0, 0)
+            return
+
+        cols = self._cols
+        for idx, (k, v) in enumerate(self._pairs):
+            r, c = idx // cols, idx % cols
+            base = c * 3  # left pair -> cols 0/1, right pair -> cols 3/4, col 2 is the gutter
+            self._grid.addWidget(self._label(k, self._KEY_QSS), r, base, Qt.AlignLeft | Qt.AlignVCenter)
+            self._grid.addWidget(self._label(v, self._VAL_QSS), r, base + 1, Qt.AlignLeft | Qt.AlignVCenter)
+
+        # No column stretch -> columns hug their content so the whole grid stays compact.
+        if cols == 2:
+            self._grid.setColumnMinimumWidth(2, 24)  # gutter between the two pairs
+
+
 class _OverlayPositioner(QObject):
     """Keeps an overlay chip glued over a combo's body (minus the drop-down arrow)."""
 
@@ -383,4 +453,87 @@ def restyle_source_page(ui):
     for i, (caption, name) in enumerate(specs):
         grid.addWidget(_stat_block(caption, getattr(ui, name)), i // 3, i % 3)
     root.addLayout(grid)
+    root.addStretch()
+
+
+def restyle_export_page(ui):
+    """Export tab: title + a 'Final Render Details' key/value card, then an Output Filename row
+    with a 'Save as…' button, then the destination path below.
+
+    label_detailed_summary is swapped for a SummaryLabel grid; render_controller keeps calling
+    .setText() with its "Key: Value\\n…" block, so its logic is untouched.
+    """
+    page = ui.tab_export
+
+    old_summary = getattr(ui, "label_detailed_summary", None)
+    old_text = old_summary.text() if old_summary is not None else ""
+
+    fname_cap = getattr(ui, "label_10", None)
+    fname_input = getattr(ui, "input_filename", None)
+    dest_btn = getattr(ui, "destination_button", None)
+    loc_label = getattr(ui, "label_location", None)
+
+    for w in (fname_cap, fname_input, dest_btn, loc_label):
+        if w is not None:
+            w.setParent(None)
+
+    grp = getattr(ui, "group_summary", None)
+    if old_summary is not None:
+        old_summary.setParent(None)
+        old_summary.deleteLater()
+    if grp is not None:
+        grp.setParent(None)
+        grp.deleteLater()
+
+    _drop_layout(page)
+
+    summary = SummaryLabel()
+    summary.setObjectName("label_detailed_summary")
+    ui.label_detailed_summary = summary
+
+    root = QVBoxLayout(page)
+    root.setContentsMargins(8, 8, 8, 8)
+    root.setSpacing(12)
+    root.addWidget(_page_title("Export Settings"))
+
+    card = QFrame()
+    card.setObjectName("summaryCard")
+    card.setStyleSheet("QFrame#summaryCard { background-color: #303030; border: 1px solid #3a3a3a;"
+                       " border-radius: 14px; }")
+    card_box = QVBoxLayout(card)
+    card_box.setContentsMargins(16, 12, 16, 14)
+    card_box.setSpacing(10)
+    cap = QLabel("Final Render Details")
+    cap.setStyleSheet("color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; " + _FONT)
+    card_box.addWidget(cap)
+    card_box.addWidget(summary)
+    card.setMaximumWidth(600)
+    card_row = QHBoxLayout()
+    card_row.setContentsMargins(0, 0, 0, 0)
+    card_row.addWidget(card)
+    card_row.addStretch()  # keep the card hugging its content instead of spanning the panel
+    root.addLayout(card_row)
+
+    summary.setText(old_text)
+
+    if fname_cap is not None:
+        fname_cap.setText("Output Filename")
+        fname_cap.setStyleSheet(_FIELD_LABEL_QSS)
+        root.addWidget(fname_cap)
+
+    name_row = QHBoxLayout()
+    name_row.setSpacing(8)
+    if fname_input is not None:
+        fname_input.setMaximumWidth(480)
+        name_row.addWidget(fname_input, 1)
+    if dest_btn is not None:
+        dest_btn.setText("Save as…")
+        name_row.addWidget(dest_btn)
+    name_row.addStretch()  # name field + button stay compact, don't span the panel
+    root.addLayout(name_row)
+
+    if loc_label is not None:
+        loc_label.setStyleSheet(_PATHBOX_QSS)
+        root.addWidget(loc_label)
+
     root.addStretch()

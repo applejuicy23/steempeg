@@ -63,14 +63,12 @@ class RenderMixin:
         folder = QFileDialog.getExistingDirectory(self.ui, "Select Destination Folder")
         if folder:
             self.custom_destination = folder
-            self.ui.destination_button.setText(f"Destination: {folder}")
         else:
             # If we change our minds and click Cancel, we return to our cool folder
             default_export_dir = os.path.join(get_save_directory(), "rendered_videos").replace('\\', '/')
             if not os.path.exists(default_export_dir):
                 os.makedirs(default_export_dir, exist_ok=True)
             self.custom_destination = default_export_dir
-            self.ui.destination_button.setText(f"Destination: {default_export_dir}")
 
         self.update_final_setup()
 
@@ -522,7 +520,8 @@ class RenderMixin:
         self.current_output_file = full_path
 
         if hasattr(self.ui, 'label_location'):
-            self.ui.label_location.setText(f"Output: {full_path}")
+            display_path = full_path.replace('\\', '/')
+            self.ui.label_location.setText(f"Output: {display_path}")
             
         if hasattr(self, 'btn_copy_loc') and full_path:
             self.btn_copy_loc.show()

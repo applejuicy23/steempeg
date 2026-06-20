@@ -825,10 +825,11 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 else:
                     parent_layout.addWidget(self.neo_wrapper)
         
-        from steempeg.ui.render_panel import restyle_video_page, restyle_audio_page, restyle_source_page
+        from steempeg.ui.render_panel import restyle_video_page, restyle_audio_page, restyle_source_page, restyle_export_page
         restyle_video_page(self.ui)
         restyle_audio_page(self.ui)
         restyle_source_page(self.ui)
+        restyle_export_page(self.ui)
         # Codec list
         if hasattr(self.ui, 'combo_codec'):
             self.ui.combo_codec.clear()
