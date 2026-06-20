@@ -449,7 +449,7 @@ class TimelineCanvas(QWidget):
 
         # --- Gamemode: Shading non-game segments (menu / lobby / loading) ---
         for seg_start, seg_end, seg_mode in getattr(self, 'mode_segments', []):
-            if seg_mode == 1:
+            if seg_mode in (0, 1): 
                 continue
             sx = (seg_start / self.duration_ms) * width
             ex = (min(seg_end, self.duration_ms) / self.duration_ms) * width
