@@ -661,19 +661,19 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             # 2. MAIN CONTAINER
             self.neo_wrapper = QWidget()
-            self.neo_wrapper.setStyleSheet("background: transparent;")
-            self.neo_wrapper.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.neo_wrapper.setObjectName("neo_wrapper")
+            self.neo_wrapper.setStyleSheet("QWidget#neo_wrapper { background-color: #2d2d2d; border-radius: 16px; border: 1px solid #383838; }")
             
             neo_layout = QHBoxLayout(self.neo_wrapper)
             neo_layout.setContentsMargins(0, 0, 0, 0)
-            neo_layout.setSpacing(15)
+            neo_layout.setSpacing(0)
             
             # 3. LEFT CIRCLE (Sidebar)
             sidebar_frame = QFrame()
             sidebar_frame.setFixedWidth(220)
             sidebar_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             sidebar_frame.setStyleSheet("""
-                QFrame { background-color: #2d2d2d; border-radius: 16px; border: 1px solid #383838; }
+                QFrame { background: transparent; border: none; border-right: 1px solid #383838; }
             """)
             sidebar_layout = QVBoxLayout(sidebar_frame)
             sidebar_layout.setAlignment(Qt.AlignTop)
@@ -720,9 +720,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             self.right_scroll.setStyleSheet("""
                 QScrollArea { 
-                    background-color: #2d2d2d; 
-                    border-radius: 16px; 
-                    border: 1px solid #383838;
+                    background: transparent; 
+                    border: none;
                 }
                 QWidget#qt_scrollarea_viewport {
                     background: transparent;
