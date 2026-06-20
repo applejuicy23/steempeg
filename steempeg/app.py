@@ -752,49 +752,48 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.settings_tabs.setStyleSheet("""
                 QTabWidget { background: transparent; border: none; }
                 QTabWidget::pane { border: none; background: transparent; }
-                QTabWidget QLabel { color: #cccccc; font-weight: bold; background: transparent; }
-                
-                
-                QTabWidget QPushButton {
-                    background-color: #383838; color: #ffffff; 
-                    border: 2px solid #444444; border-radius: 10px; 
-                    padding: 6px 15px; font-weight: bold;
+
+                QLabel { color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }
+
+                QComboBox, QLineEdit {
+                    background-color: #383838; color: #ffffff;
+                    border: 2px solid #4a4a4a; border-radius: 12px;
+                    padding: 7px 10px; font-size: 12px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;
                 }
-                QTabWidget QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
-                QTabWidget QPushButton:pressed { background-color: #2d2d2d; border: 2px solid #b29ae7; }
-                
-                
-                QTabWidget QComboBox, QTabWidget QLineEdit {
-                    background-color: #383838; color: #ffffff; border: 2px solid #444444; 
-                    border-radius: 12px; padding: 6px 14px; font-size: 12px; font-weight: bold;
+                QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
+                QComboBox:focus, QComboBox:on, QLineEdit:focus { border: 2px solid #b29ae7; }
+                QComboBox::drop-down {
+                    subcontrol-origin: padding; subcontrol-position: top right;
+                    width: 30px; background-color: #262626;
+                    border-left: 2px solid #4a4a4a;
+                    border-top-right-radius: 10px; border-bottom-right-radius: 10px;
                 }
-                QTabWidget QComboBox:hover, QTabWidget QLineEdit:hover { border: 2px solid #6b5a8e; background-color: #404040; }
-                QTabWidget QComboBox:focus, QTabWidget QLineEdit:focus { border: 2px solid #b29ae7; background-color: #3a324a; }
-                QTabWidget QComboBox::drop-down { border: none; width: 30px; }
-                QTabWidget QComboBox::down-arrow {
-                    image: none; border-left: 5px solid transparent; border-right: 5px solid transparent;
-                    border-top: 5px solid #b29ae7; margin-right: 10px;
+                QComboBox::down-arrow {
+                    width: 0; height: 0;
+                    border-left: 5px solid transparent; border-right: 5px solid transparent;
+                    border-top: 6px solid #cccccc;
                 }
-                QTabWidget QComboBox QAbstractItemView {
-                    background-color: #2d2d2d; color: #ffffff; border: 2px solid #b29ae7;
-                    border-radius: 8px; selection-background-color: #b29ae7; selection-color: #111111; outline: none;
+                QComboBox QAbstractItemView {
+                    background-color: #1e1e1e; color: #e0e0e0;
+                    border: 2px solid #4a4a4a; border-radius: 10px; padding: 4px; outline: none;
+                    selection-background-color: #4a4a4a; selection-color: #ffffff;
+                    font-family: 'Segoe UI', Arial, sans-serif;
                 }
-                
-               
-                QTabWidget QCheckBox { color: #cccccc; font-weight: bold; spacing: 8px; background: transparent; }
-                QTabWidget QCheckBox::indicator {
-                    width: 20px; height: 20px; border-radius: 10px; border: 2px solid #444444; background-color: #383838;
+                QComboBox QAbstractItemView::item {
+                    min-height: 28px; padding: 7px 10px; border-radius: 6px;
+                    margin: 2px 2px; background-color: #333333; color: #e0e0e0;
                 }
-                QTabWidget QCheckBox::indicator:hover { border: 2px solid #6b5a8e; }
-                QTabWidget QCheckBox::indicator:checked { background-color: #b29ae7; border: 2px solid #b29ae7; }
-                
-               
-                QTabWidget QRadioButton { color: #cccccc; font-weight: bold; spacing: 8px; background: transparent; }
-                QTabWidget QRadioButton::indicator {
-                    width: 18px; height: 18px; border-radius: 9px; border: 2px solid #444444; background-color: #383838;
+                QComboBox QAbstractItemView::item:hover {
+                    background-color: #4a4a4a; color: #ffffff;
                 }
-                QTabWidget QRadioButton::indicator:hover { border: 2px solid #6b5a8e; }
-                QTabWidget QRadioButton::indicator:checked { background-color: #b29ae7; border: 2px solid #b29ae7; }
+
+                QPushButton {
+                    background-color: #303030; color: #ffffff;
+                    border: 2px solid #3a3a3a; border-radius: 12px;
+                    padding: 7px 15px; font-weight: bold; font-family: 'Arial';
+                }
+                QPushButton:hover { background-color: #262626; border: 2px solid #6b5a8e; }
+                QPushButton:pressed { background-color: #141414; border: 2px solid #b29ae7; }
             """)
             
             # Place tabs in the scroll area
@@ -826,8 +825,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 else:
                     parent_layout.addWidget(self.neo_wrapper)
         
-        from steempeg.ui.render_panel import restyle_video_page
+        from steempeg.ui.render_panel import restyle_video_page, restyle_audio_page, restyle_source_page
         restyle_video_page(self.ui)
+        restyle_audio_page(self.ui)
+        restyle_source_page(self.ui)
         # Codec list
         if hasattr(self.ui, 'combo_codec'):
             self.ui.combo_codec.clear()
@@ -915,7 +916,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             QFrame { 
                 background-color: #2d2d2d; 
                 border-radius: 16px; 
-                border: 1px solid #383838; 
+                border: 1px solid #383838;
+                font-family: 'Segoe UI', Arial, sans-serif;
             }
         """
         
@@ -1982,27 +1984,28 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             
 
-        # --- UI INJECTION: CUSTOM INPUTS ---
-        from PySide6.QtWidgets import QLabel, QHBoxLayout, QWidget, QSizePolicy
+        # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
-        
-        
-    
-        # Inject 3 inputs and unpack the labels
-        if hasattr(self.ui, 'combo_fps'):
-            self.input_custom_fps, self.warn_fps = self.inject_custom_input(self.ui.combo_fps, "FPS")
-            self.input_custom_fps.setValidator(QIntValidator(1, 120))
-            self.input_custom_fps.textChanged.connect(self.validate_custom_fps)
-            
-        if hasattr(self.ui, 'combo_bitrate'):
-            self.input_custom_vbitrate, self.warn_vbitrate = self.inject_custom_input(self.ui.combo_bitrate, "Mbps")
-            self.input_custom_vbitrate.setValidator(QDoubleValidator(0.1, 200.0, 2))
-            self.input_custom_vbitrate.textChanged.connect(self.validate_custom_vbitrate)
-            
-        if hasattr(self.ui, 'combo_audio_bitrate'):
-            self.input_custom_abitrate, self.warn_abitrate = self.inject_custom_input(self.ui.combo_audio_bitrate, "kbps")
-            self.input_custom_abitrate.setValidator(QIntValidator(1, 500))
-            self.input_custom_abitrate.textChanged.connect(self.validate_custom_abitrate)
+
+        def _wire_custom(input_attr, warn_attr, validator, slot):
+            edit = getattr(self.ui, input_attr, None)
+            if edit is None:
+                return
+            warn = getattr(self.ui, warn_attr, None)
+            setattr(self, input_attr, edit)
+            setattr(self, warn_attr, warn)
+            edit.setValidator(validator)
+            edit.textChanged.connect(slot)
+            if warn is not None:
+                pix = QPixmap(get_resource_path("attention.png"))
+                if not pix.isNull():
+                    warn.setPixmap(pix.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                if hasattr(self, 'instant_tooltip'):
+                    warn.installEventFilter(self.instant_tooltip)
+
+        _wire_custom('input_custom_fps', 'warn_fps', QIntValidator(1, 120), self.validate_custom_fps)
+        _wire_custom('input_custom_vbitrate', 'warn_vbitrate', QDoubleValidator(0.1, 200.0, 2), self.validate_custom_vbitrate)
+        _wire_custom('input_custom_abitrate', 'warn_abitrate', QIntValidator(1, 500), self.validate_custom_abitrate)
     
         if hasattr(self, 'custom_timeline'):
                 self.custom_timeline.setEnabled(False) # Disable clicks into empty space
@@ -2019,6 +2022,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
         # Instead of stuffing multiple lines into one label, we create separate
         # widgets so the Qt layout engine handles the vertical spacing perfectly
+        return
         if hasattr(self.ui, 'orig_res_label'):
             from PySide6.QtWidgets import QLabel
 
