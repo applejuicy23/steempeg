@@ -23,6 +23,9 @@ class ElidedLabel(QLabel):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        # Draw inside contentsRect() (not rect()) so the stylesheet's padding/border are
+        # honoured — otherwise the text is jammed against the left edge of the box.
+        rect = self.contentsRect()
         metrics = self.fontMetrics()
-        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideMiddle, self.width())
-        painter.drawText(self.rect(), Qt.AlignLeft | Qt.AlignVCenter, elided)
+        elided = metrics.elidedText(self._full_text, Qt.TextElideMode.ElideMiddle, rect.width())
+        painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, elided)
