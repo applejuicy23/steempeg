@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
 )
 
+from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
@@ -28,6 +29,11 @@ _PATHBOX_QSS = ("QLabel { background-color: #252525; border-radius: 10px; paddin
 _STAT_CAP_QSS = "color: #8a8a8a; font-size: 10px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_VAL_QSS = "color: #ffffff; font-size: 14px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_FRAME_QSS = "QFrame { background-color: #303030; border: 1px solid #3a3a3a; border-radius: 12px; }"
+# Target-size readout ("Target: … | Safe Bitrate: … / Quality: …") — a readable info card,
+# not the tiny grey caption it used to borrow.
+_TARGET_READOUT_QSS = ("QLabel { background-color: #303030; border: 1px solid #3a3a3a;"
+                       " border-radius: 10px; padding: 9px 13px; color: #e0e0e0;"
+                       " font-size: 12px; font-weight: normal; " + _FONT + " }")
 
 # The overlay chip blends into the combo body and leaves the drop-down arrow uncovered.
 # (Combo QSS: 2px border, 30px drop-down cell + its 2px left border -> reserve 32px on the right.)
@@ -105,6 +111,19 @@ def _drop_layout(widget):
     old = widget.layout()
     if old is not None:
         QWidget().setLayout(old)
+
+
+def _promote_size_slider(old):
+    """Swap the plain Target-Size QSlider for the rainbow GradientSlider, keeping its range,
+    value and object name so the render_controller / app wiring is unaffected."""
+    new = GradientSlider(Qt.Horizontal)
+    new.setObjectName(old.objectName())
+    new.setMinimum(old.minimum())
+    new.setMaximum(old.maximum())
+    new.setValue(old.value())
+    new.setVisible(old.isVisible())
+    old.deleteLater()
+    return new
 
 
 def _page_title(text):
@@ -237,6 +256,8 @@ def restyle_video_page(ui):
     for w in keep:
         w.setParent(None)
 
+    ui.size_slider = _promote_size_slider(ui.size_slider)
+
     _drop_layout(page)
 
     root = QVBoxLayout(page)
@@ -249,7 +270,7 @@ def restyle_video_page(ui):
     grid.setVerticalSpacing(12)
     grid.addLayout(_field(ui.label_2, ui.combo_quality), 0, 0)
     grid.addLayout(_custom_field(ui, ui.label_5, ui.combo_fps, "input_custom_fps", "warn_fps", "FPS"), 0, 1)
-    ui.label_target_size.setStyleSheet(_FIELD_LABEL_QSS)
+    ui.label_target_size.setStyleSheet(_TARGET_READOUT_QSS)
     grid.addWidget(ui.label_target_size, 1, 0, 1, 2)
     grid.addWidget(ui.size_slider, 2, 0, 1, 2)
     grid.addLayout(_custom_field(ui, ui.label_4, ui.combo_bitrate, "input_custom_vbitrate", "warn_vbitrate", "Mbps"), 3, 0)
