@@ -30,6 +30,7 @@ Thumbs.db
 
 # --- Local dev scaffolding (dismantled during refactor) ---
 newver_compilator.py
+pacher.py
 
 # --- Engines live in ./bin, shipped via Releases ---
 bin/

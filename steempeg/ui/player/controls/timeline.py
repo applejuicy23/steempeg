@@ -47,7 +47,7 @@ class TimelineCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(52) 
+        self.setMinimumHeight(58)
         self.duration_ms = 0
         self.setMouseTracking(True)
         
@@ -427,22 +427,25 @@ class TimelineCanvas(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         
         width = float(self.width())
+        pad = 12.0
+        usable_w = width - (pad * 2)
+
         painter.fillRect(self.rect(), QColor("#1e1e1e"))
         
         track_height = 12.0 
-        track_y = 22.0 
+        track_y = 28.0
 
         ruler_y = track_y + track_height + 3.0
 
-        painter.fillRect(QRectF(0.0, track_y, width, track_height), self.track_color)
+        painter.fillRect(QRectF(pad, track_y, usable_w, track_height), self.track_color)
         if self.duration_ms <= 0: return
         
-        fill_width = (self.visual_ms / self.duration_ms) * width
-        painter.fillRect(QRectF(0.0, track_y, fill_width, track_height), self.fill_color)
+        fill_x_end = self.ms_to_x(self.visual_ms)
+        painter.fillRect(QRectF(pad, track_y, fill_x_end - pad, track_height), self.fill_color)
         
         if self.is_trim_mode:
-            start_x = (self.trim_start_ms / self.duration_ms) * width
-            end_x = (self.trim_end_ms / self.duration_ms) * width
+            start_x = self.ms_to_x(self.trim_start_ms)
+            end_x = self.ms_to_x(self.trim_end_ms)
             painter.fillRect(QRectF(start_x, track_y, end_x - start_x, track_height), self.trim_body_color)
             painter.fillRect(QRectF(start_x, track_y - 2.0, 4.0, track_height + 4.0), self.trim_handle_color)
             painter.fillRect(QRectF(end_x - 4.0, track_y - 2.0, 4.0, track_height + 4.0), self.trim_handle_color)
@@ -451,8 +454,8 @@ class TimelineCanvas(QWidget):
         for seg_start, seg_end, seg_mode in getattr(self, 'mode_segments', []):
             if seg_mode in (0, 1): 
                 continue
-            sx = (seg_start / self.duration_ms) * width
-            ex = (min(seg_end, self.duration_ms) / self.duration_ms) * width
+            sx = self.ms_to_x(seg_start)
+            ex = self.ms_to_x(min(seg_end, self.duration_ms))
             if ex - sx <= 0:
                 continue
             seg_rect = QRectF(sx, track_y, ex - sx, track_height)
@@ -472,8 +475,8 @@ class TimelineCanvas(QWidget):
             painter.setPen(QPen(QColor(240, 200, 60), 2, Qt.DashLine))
             dash_y = int(track_y + track_height + 1)
             for a, b in self.clip_ranges:
-                ax = (a / self.duration_ms) * width
-                bx = (min(b, self.duration_ms) / self.duration_ms) * width
+                ax = self.ms_to_x(a)
+                bx = self.ms_to_x(min(b, self.duration_ms))
                 if bx - ax > 0:
                     painter.drawLine(int(ax), dash_y, int(bx), dash_y)
 
@@ -484,7 +487,7 @@ class TimelineCanvas(QWidget):
                 # but BEFORE the white playhead bar is drawn at the end of the function!
                 painter.fillRect(QRectF(m_x - 1.0, track_y, 2.0, track_height), QColor(255, 255, 255, 140))
 
-        pixels_per_sec = width / (self.duration_ms / 1000.0)
+        pixels_per_sec = usable_w / (self.duration_ms / 1000.0) # Заменили width на usable_w
         
         # SMART SCALING
         if pixels_per_sec < 0.1: step = 900       # 15-minute step (for very long durations)
@@ -604,7 +607,7 @@ class TimelineCanvas(QWidget):
         # Hide the prediction (ghost) on icon hover.
         if getattr(self, 'is_hovering', False) and not getattr(self, 'is_hovering_trim_handle', False) and self.drag_state == 'none' and not getattr(self, 'hovered_marker', None):
             ghost_w = 4.0
-            ghost_x = max(0.0, min(self.hover_x - (ghost_w / 2.0), width - ghost_w))
+            ghost_x = max(pad, min(self.hover_x - (ghost_w / 2.0), width - pad - ghost_w))
             painter.fillRect(QRectF(ghost_x, track_y - 4.0, ghost_w, track_height + 8.0), QColor(255, 255, 255, 80))
 
         #  ULTRA SCROLLER ASSEMBLY 
@@ -612,7 +615,7 @@ class TimelineCanvas(QWidget):
             # Old white strip (if no images)
             handle_w = 4.0
             # Centering a standard white stick
-            handle_x = fill_width - (handle_w / 2.0) 
+            handle_x = fill_x_end - (handle_w / 2.0) 
             painter.fillRect(QRectF(handle_x, track_y - 4.0, handle_w, track_height + 8.0), self.handle_color)
         else:
             
@@ -620,7 +623,7 @@ class TimelineCanvas(QWidget):
             
             # FIX 1: Center the scroller image! 
             # Subtract exactly half the width (4px) so the needle points precisely at the time.
-            handle_x = fill_width - (handle_w / 2.0) 
+            handle_x = fill_x_end - (handle_w / 2.0) 
             handle_y = track_y - self.master_head_h
             
             painter.save() 
@@ -636,15 +639,18 @@ class TimelineCanvas(QWidget):
             painter.restore()
 
     def ms_to_x(self, ms):
-        if self.duration_ms <= 0: return 0
-        x = (ms / self.duration_ms) * self.width()
-        # Clamp to the canvas so out-of-range marker timestamps can't blow past
-        # Qt's 32-bit painter coords (drawLine/drawPixmap overflow at high zoom).
-        return max(0.0, min(x, float(self.width())))
+        pad = 12.0
+        usable_w = float(self.width()) - (pad * 2)
+        if self.duration_ms <= 0 or usable_w <= 0: return pad
+        x = pad + (ms / self.duration_ms) * usable_w
+        return max(pad, min(x, float(self.width()) - pad))
 
     def x_to_ms(self, x):
-        if self.width() <= 0: return 0
-        return (max(0, min(x, self.width())) / self.width()) * self.duration_ms
+        pad = 12.0
+        usable_w = float(self.width()) - (pad * 2)
+        if usable_w <= 0: return 0
+        relative_x = max(0.0, min(x - pad, usable_w))
+        return (relative_x / usable_w) * self.duration_ms
 
     def mousePressEvent(self, event):
         if self.duration_ms <= 0: return
@@ -670,7 +676,7 @@ class TimelineCanvas(QWidget):
         # Disable the other buttons if we are not on the icon.
         if event.button() != Qt.LeftButton: return
         
-        track_y, track_height = 22.0, 12.0 
+        track_y, track_height = 28.0, 12.0 
         is_outside_track = (y < track_y) or (y > track_y + track_height)
         
         if self.is_trim_mode and not is_outside_track:
@@ -1074,7 +1080,7 @@ class CustomTimelineWidget(QScrollArea):
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
 
-        canvas_h = 52     # Canvas height/divisions (TimelineCanvas)
+        canvas_h = 58     # Canvas height/divisions (TimelineCanvas)
         top_gap = 0    # Gap from divisions to strip (your distance to scales)
         bar_h = 13 # Height of the scrollbar itself
         bottom_gap = 5    # Gap from the bottom of the strip to the button panel (your distance to the buttons)
