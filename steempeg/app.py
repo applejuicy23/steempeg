@@ -612,13 +612,13 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             group_widget = QWidget()
             group_layout = QHBoxLayout(group_widget)
             group_layout.setContentsMargins(0, 0, 0, 0)
-            group_layout.setSpacing(14)
-            
+            group_layout.setSpacing(0)
+
             # 4.3. Placing elements into our new super-container
             group_layout.addWidget(lbl_sorting)
+            group_layout.addSpacing(14)
             group_layout.addWidget(self.combo_sort)
-            
-            
+            group_layout.addSpacing(2)
             group_layout.addWidget(filter_btn)
             
             # 4.4. Insert a spacer (Stretch) into the main layout to shift everything to the right.
@@ -761,7 +761,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     padding: 7px 10px; font-size: 12px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;
                 }
                 QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
-                QComboBox:focus, QComboBox:on, QLineEdit:focus { border: 2px solid #b29ae7; }
+                QComboBox:disabled, QLineEdit:disabled {
+                    background-color: #262626; color: #5a5a5a; border: 2px solid #333333;
+                }
+                QComboBox::drop-down:disabled { background-color: #1f1f1f; }
                 QComboBox::drop-down {
                     subcontrol-origin: padding; subcontrol-position: top right;
                     width: 30px; background-color: #262626;

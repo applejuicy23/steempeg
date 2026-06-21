@@ -303,6 +303,7 @@ def _stat_block(caption, value_label):
     cap = QLabel(caption)
     cap.setStyleSheet(_STAT_CAP_QSS)
     value_label.setStyleSheet(_STAT_VAL_QSS)
+    value_label.setWordWrap(True)  # long values (e.g. multiple resolutions) wrap instead of widening
     box.addWidget(cap)
     box.addWidget(value_label)
     return frame
@@ -451,7 +452,10 @@ def restyle_source_page(ui):
     grid = QGridLayout()
     grid.setSpacing(8)
     for i, (caption, name) in enumerate(specs):
-        grid.addWidget(_stat_block(caption, getattr(ui, name)), i // 3, i % 3)
+        block = _stat_block(caption, getattr(ui, name))
+        block.setFixedWidth(210)  # uniform, capped to the widest content -> no full-width sprawl
+        grid.addWidget(block, i // 3, i % 3)
+    grid.setColumnStretch(3, 1)  # extra panel width pools on the right, blocks stay put
     root.addLayout(grid)
     root.addStretch()
 
