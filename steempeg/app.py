@@ -263,6 +263,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     # Give the table 50 milliseconds to physically finish sorting the rows!
                     lambda *args: QTimer.singleShot(50, self.build_netflix_grid) if hasattr(self, 'build_netflix_grid') else None
                 )
+                # Disable clicking on column headers - custom sorting via combo_sort is used instead
+                self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
 
             # --- SMART RIGHT-CLICK (NO ROW SELECTION) ---
             self.ui.table_clips.viewport().installEventFilter(self)

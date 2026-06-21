@@ -401,8 +401,7 @@ class LibraryMixin:
                 self.ui.table_clips.setItem(row_position, 3, item_duration)
 
             self.ui.table_clips.setSortingEnabled(True)
-
-            self.ui.table_clips.horizontalHeader().sectionClicked.connect(lambda: QTimer.singleShot(50, self.fast_sync_grid))
+            self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
 
             if hasattr(self, 'build_netflix_grid'):
                 self.build_netflix_grid()
