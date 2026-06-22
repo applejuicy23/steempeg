@@ -31,7 +31,9 @@ from steempeg.core import capabilities
 from steempeg.core.dash import discovery, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
+from steempeg.render.queue import RenderQueue
 from steempeg.ui.render_panel import set_settings_panel_locked
+from steempeg.ui.render_job_builder import build_render_job_from_ui, resolve_render_params
 from steempeg.ui.render_thread import RenderThread
 
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
@@ -1033,6 +1035,20 @@ class RenderMixin:
             
         self.update_final_setup() # Live UI update
 
+    def add_clip_to_render_queue(self, clip_path: str):
+        """Snapshot current settings into a new queued job (stage 2+ UI will call this)."""
+        job = build_render_job_from_ui(self, clip_path)
+        if job is None:
+            return None
+        self.render_queue.add(job)
+        logging.info(
+            "Queued render job #%s: %s -> %s",
+            job.queue_index,
+            job.game_name,
+            job.output_file,
+        )
+        return job
+
     def start_render_thread(self):
         """ Prepares parameters and starts the background rendering thread """
         if getattr(self, '_is_rendering', False):
@@ -1043,109 +1059,22 @@ class RenderMixin:
             return
             
         clip_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
-        all_mpds = self.get_all_mpd_paths(clip_name)
-        
-        if not all_mpds:
+
+        job = build_render_job_from_ui(self, clip_name)
+        if job is None:
             QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
             return
 
-        save_dir = self.custom_destination if self.custom_destination else get_save_directory()
-        
-        # We take the protected file name that we generated in update_final_setup
-        output_file = getattr(self, 'current_output_file', "")
-        if not output_file: 
-            return # Empty Path Protection
-            
         ffmpeg_exe = os.path.join(_bin_dir, "ffmpeg.exe")
         if not os.path.exists(ffmpeg_exe):
             QMessageBox.critical(self.ui, "Error", "ffmpeg.exe not found!")
             return
 
-        # Read the basic video settings
-        quality_text = self.ui.combo_quality.currentText() if hasattr(self.ui, 'combo_quality') else "Original"
-        fps_text = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else "60"
-        bitrate_text = self.ui.combo_bitrate.currentText() if hasattr(self.ui, 'combo_bitrate') else "Original"
-        
-        # Get the codec and encoder
-        selected_encoder = self.ui.combo_encoder.currentData(Qt.UserRole) if hasattr(self.ui, 'combo_encoder') else "libx264"
-        if hasattr(self.ui, 'combo_codec') and "H.265" in self.ui.combo_codec.currentText():
-            selected_encoder = selected_encoder.replace("h264", "hevc").replace("libx264", "libx265")
+        params = resolve_render_params(job, ffmpeg_exe)
+        if params is None:
+            QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
+            return
 
-        # Read the audio settings
-        audio_only = self.ui.check_audio_only.isChecked() if hasattr(self.ui, 'check_audio_only') else False
-        mute_audio = self.ui.check_mute_audio.isChecked() if hasattr(self.ui, 'check_mute_audio') else False
-        audio_format = self.ui.combo_audio_format.currentText() if hasattr(self.ui, 'combo_audio_format') else "AAC"
-
-        # --- SMART TRIM EXTRACTION ---
-        trim_start_sec = -1.0
-        trim_duration_sec = -1.0
-        
-        if hasattr(self, 'custom_timeline') and self.custom_timeline.is_trim_mode:
-            trim_start_sec = self.custom_timeline.trim_start_ms / 1000.0
-            trim_duration_sec = (self.custom_timeline.trim_end_ms - self.custom_timeline.trim_start_ms) / 1000.0
-            logging.info(f"TRIM MODE ACTIVE: Start at {trim_start_sec}s, Duration: {trim_duration_sec}s")
-        
-        # --- SMART PARSING & CLAMPING ---
-        #1: Read and Protect FPS
-        fps_multiplier = 1.0
-        orig_fps = getattr(self, 'current_orig_fps', 60)
-        max_allowed_fps = min(60, orig_fps) # No higher than 60, no higher than the original!
-        
-        if "Custom" in fps_text:
-            try:
-                val = int(self.input_custom_fps.text().strip())
-                val = max(1, min(val, max_allowed_fps)) 
-                fps_text = f"{val} FPS"
-                fps_multiplier = val / orig_fps if orig_fps > 0 else 1.0
-            except: fps_text = f"{max_allowed_fps} FPS" # Foolproof protection
-        else:
-            try:
-                selected_fps = int(re.search(r'(\d+)', fps_text).group(1))
-                fps_multiplier = selected_fps / orig_fps if orig_fps > 0 else 1.0
-            except: pass
-
-        #2: Read and Protect Video Bitrate
-        video_bitrate = "12M"
-        orig_v_bitrate = getattr(self, 'current_orig_bitrate', 10.0)
-        target_scale_h = -1 
-
-        if "Target File Size" in quality_text:
-            video_bitrate = f"{getattr(self, 'custom_target_bitrate', 1500)}k"
-            target_scale_h = getattr(self, 'custom_target_height', -1)
-        elif "Custom" in bitrate_text:
-            try:
-                val_text = self.input_custom_vbitrate.text().replace(',', '.')
-                val = float(val_text.strip())
-                val = max(0.1, min(val, orig_v_bitrate)) 
-                final_bitrate = int(val * fps_multiplier * 1000)
-                if final_bitrate < 100: final_bitrate = 100
-                video_bitrate = f"{final_bitrate}k"
-            except: 
-                final_bitrate = int(orig_v_bitrate * fps_multiplier * 1000)
-                if final_bitrate < 100: final_bitrate = 100
-                video_bitrate = f"{final_bitrate}k"
-        elif "Original" not in bitrate_text:
-            match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
-            if match:
-                base_bitrate = float(match.group(1))
-                final_bitrate = int(base_bitrate * 1000)
-                if final_bitrate < 100: final_bitrate = 100 
-                video_bitrate = f"{final_bitrate}k"
-
-        #3: Read and Protect Audio Bitrate
-        audio_bitrate_kbps = "192k"
-        orig_a_bitrate = getattr(self, 'current_orig_audio_bitrate', 192)
-        
-        if "Custom" in self.ui.combo_audio_bitrate.currentText():
-            try:
-                val = int(self.input_custom_abitrate.text().strip())
-                val = max(1, min(val, orig_a_bitrate))
-                audio_bitrate_kbps = f"{val}k"
-            except: audio_bitrate_kbps = f"{orig_a_bitrate}k"
-        elif self.ui.combo_audio_bitrate.currentText():
-            audio_bitrate_kbps = self.ui.combo_audio_bitrate.currentText().split(' ')[0] + "k"
-
-        # Turn interface buttons on/off
         set_settings_panel_locked(self, True)
         self.ui.btn_start.setEnabled(False)
         if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(True)
@@ -1154,22 +1083,42 @@ class RenderMixin:
         self.update_status_indicator("Initializing...", "rendering")
         logging.info(f"--- RENDER STARTED ---")
 
-        # --- LOCK THE RENDER ENGINE ---
         self._is_rendering = True
+        self._active_render_job = job
 
         logging.info(f"Source: {clip_name}")
-        logging.info(f"Saving in: {output_file}")
-        logging.info(f"Settings: Quality={quality_text}, FPS={fps_text}, Bitrate={video_bitrate}, Codec={selected_encoder}, AudioOnly={audio_only}, Muted={mute_audio}")
+        logging.info(f"Saving in: {params.output_file}")
+        logging.info(
+            f"Settings: Quality={params.quality_text}, FPS={params.fps_text}, "
+            f"Bitrate={params.video_bitrate}, Codec={params.selected_encoder}, "
+            f"AudioOnly={params.audio_only}, Muted={params.mute_audio}"
+        )
 
         try:
-            self.thread = RenderThread(all_mpds, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h, trim_start_sec, trim_duration_sec)
-            # Use lambda to inject the 'rendering' state whenever the thread sends progress
+            self.thread = RenderThread(
+                params.all_mpds,
+                params.quality_text,
+                params.output_file,
+                params.ffmpeg_exe,
+                params.save_dir,
+                params.selected_encoder,
+                params.video_bitrate,
+                params.fps_text,
+                params.audio_only,
+                params.mute_audio,
+                params.audio_format,
+                params.audio_bitrate_kbps,
+                params.target_scale_h,
+                params.trim_start_sec,
+                params.trim_duration_sec,
+            )
             self.thread.progress_signal.connect(self._on_render_progress)
             self.thread.finished_signal.connect(self.on_render_finished)
             self.thread.start()
         except Exception as e:
             logging.error(f"Thread Start Error: {e}")
             self._is_rendering = False
+            self._active_render_job = None
             set_settings_panel_locked(self, False)
             self.update_status_indicator("Error!", "error")
             self.ui.btn_start.setEnabled(True)
@@ -1202,6 +1151,7 @@ class RenderMixin:
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
         self._is_rendering = False
+        self._active_render_job = None
         set_settings_panel_locked(self, False)
 
         # Unlocking the UI

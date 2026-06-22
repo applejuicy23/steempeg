@@ -120,6 +120,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
         self.current_orig_bitrate = 0 # Bitrate of the selected original clip
         self.current_clip_duration_sec = 0
+        self.render_queue = RenderQueue()
         
         # list of all supported resolutions for rendering
         self.all_qualities = [
