@@ -60,24 +60,37 @@ class LifecycleMixin:
         return super().eventFilter(source, event)
     
     def set_status(self, text):
-        """ Updates the status text and the progress bar """
+        """Updates the render status row (delegates to update_status_indicator when available)."""
+        if hasattr(self, 'update_status_indicator'):
+            state = "ready"
+            if text == "Error!":
+                state = "error"
+            elif text == "Success":
+                state = "success"
+            elif text == "Cancelled":
+                state = "error"
+            elif "%" in text or text.endswith(".."):
+                state = "rendering"
+            self.update_status_indicator(text, state)
+            return
+
         if hasattr(self.ui, 'label_status'):
             self.ui.label_status.setText(text.split('..')[0] + '..')
-            
+
         if hasattr(self.ui, 'progress_render'):
-            # 0
             if text in ["Ready", "Success", "Cancelled", "Error!"]:
                 self.ui.progress_render.setValue(0)
-                if hasattr(self, 'label_pct'): self.label_pct.setText("0%")
-                if text != "Error!": self.ui.label_status.setText(text)
-                
-            # Separating Logic: The bar consumes 0.1%, yet the text displays WHOLE numbers!
+                if hasattr(self, 'label_pct'):
+                    self.label_pct.setText("0%")
+                if text != "Error!":
+                    self.ui.label_status.setText(text)
+
             match = re.search(r'\(([\d.]+)%\)', text)
             if match:
                 val_float = float(match.group(1))
                 self.ui.progress_render.setValue(int(val_float * 10))
                 if hasattr(self, 'label_pct'):
-                    self.label_pct.setText(f"{int(val_float)}%") 
+                    self.label_pct.setText(f"{int(val_float)}%")
 
     def elide_path(self, path, max_len=75):
         """ Smart truncation of long paths (keeps start and end) """

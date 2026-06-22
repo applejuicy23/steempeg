@@ -541,3 +541,12 @@ def restyle_export_page(ui):
         root.addWidget(loc_label)
 
     root.addStretch()
+
+
+def set_settings_panel_locked(app, locked: bool):
+    """Freeze the render settings panel while an export job is running."""
+    root = getattr(app, 'neo_wrapper', None)
+    if root is None and hasattr(app, 'ui'):
+        root = getattr(app.ui, 'settings_tabs', None)
+    if root is not None:
+        root.setEnabled(not locked)
