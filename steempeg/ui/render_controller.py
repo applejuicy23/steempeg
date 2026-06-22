@@ -31,6 +31,13 @@ from steempeg.core import capabilities
 from steempeg.core.dash import discovery, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
+from steempeg.render.queue import (
+    JobStatus,
+    PREVIEW_BADGE_COLOR,
+    PREVIEW_BADGE_TEXT,
+    STATUS_COLORS,
+    STATUS_HEADER_LABELS,
+)
 from steempeg.ui.render_panel import set_settings_panel_locked
 from steempeg.ui.render_job_builder import build_render_job_from_ui, resolve_render_params
 from steempeg.ui.render_thread import RenderThread
@@ -227,6 +234,7 @@ class RenderMixin:
             # Set default empty states for our new widgets
             if hasattr(self.ui, 'label_vbitrate'): self.ui.label_vbitrate.setText("Video Bitrate:")
             if hasattr(self.ui, 'label_abitrate'): self.ui.label_abitrate.setText("Audio Bitrate:")
+            self.update_playback_badge()
             return
         if hasattr(self, 'grid_clips'):
             self.grid_clips.blockSignals(True) # To Avoid Conflicts
@@ -474,6 +482,9 @@ class RenderMixin:
             
         if hasattr(self, 'custom_icon_label'):
             self.custom_icon_label.setPixmap(game_icon.pixmap(24, 24))
+
+        self._selected_queue_job_id = None
+        self.update_playback_badge()
 
         # Automatically load and play the new clip. This overwrites the stuck frame of the previous clip!
         self.generate_and_play_preview()
@@ -1097,6 +1108,98 @@ class RenderMixin:
         )
         self.refresh_render_queue_panel()
 
+    def _current_header_clip_path(self):
+        job_id = getattr(self, "_selected_queue_job_id", None)
+        if job_id:
+            job = self.render_queue.get(job_id)
+            if job:
+                return job.clip_path
+        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+            if item:
+                return item.data(Qt.UserRole)
+        return None
+
+    def _queue_job_for_clip(self, clip_path):
+        if not clip_path:
+            return None
+        return self.render_queue.find_by_clip_path(clip_path)
+
+    def _playback_badge_for_context(self):
+        clip_path = self._current_header_clip_path()
+        if not clip_path:
+            return None, None
+
+        if getattr(self, "_is_rendering", False):
+            active = getattr(self, "_active_render_job", None)
+            if active and os.path.normpath(active.clip_path) == os.path.normpath(clip_path):
+                return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
+
+        job = None
+        if getattr(self, "_selected_queue_job_id", None):
+            job = self.render_queue.get(self._selected_queue_job_id)
+        if job is None:
+            job = self._queue_job_for_clip(clip_path)
+
+        if job:
+            if job.status == JobStatus.COMPLETED:
+                return STATUS_HEADER_LABELS[JobStatus.COMPLETED], STATUS_COLORS[JobStatus.COMPLETED]
+            if job.status == JobStatus.ERROR:
+                return STATUS_HEADER_LABELS[JobStatus.ERROR], STATUS_COLORS[JobStatus.ERROR]
+            if job.status == JobStatus.RENDERING:
+                return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
+            return f"In queue ({job.queue_index})", STATUS_COLORS[JobStatus.QUEUED]
+
+        return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
+
+    def update_playback_badge(self):
+        if not hasattr(self, "label_playback_badge"):
+            return
+
+        text, color = self._playback_badge_for_context()
+        if not text:
+            self.label_playback_badge.hide()
+            return
+
+        self.label_playback_badge.setText(text)
+        self.label_playback_badge.setStyleSheet(
+            f"color: {color}; font-weight: bold; font-size: 12px;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
+        )
+        self.label_playback_badge.show()
+
+    def _apply_header_from_job(self, job):
+        if not job or not hasattr(self, "custom_text_label"):
+            return
+        date_line = (job.clip_date or "").replace("\n", " • ")
+        meta = date_line
+        if job.clip_time and job.clip_time not in date_line:
+            meta = f"{date_line} • {job.clip_time}" if date_line else job.clip_time
+        header_html = (
+            f"<b>{job.game_name.strip()}</b>"
+            f" <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; {meta}</span>"
+        )
+        self.custom_text_label.setText(header_html)
+        if hasattr(self, "custom_icon_label"):
+            icon_path = job.game_icon_path
+            unknown = get_resource_path("unknown_icon.png")
+            path = icon_path if icon_path and os.path.exists(icon_path) else unknown
+            if path and os.path.exists(path):
+                self.custom_icon_label.setPixmap(QPixmap(path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _sync_queue_job_render_status(self, clip_path, success, error_msg):
+        job = self.render_queue.find_by_clip_path(clip_path)
+        if not job:
+            return
+        if success:
+            job.status = JobStatus.COMPLETED
+        elif "cancelled by user" in (error_msg or "").lower():
+            job.status = JobStatus.QUEUED
+            job.error_message = ""
+        else:
+            job.status = JobStatus.ERROR
+            job.error_message = (error_msg or "")[:240]
+
     def refresh_render_queue_panel(self):
         """Rebuild the right-side queue list from ``render_queue``."""
         if not hasattr(self, "render_queue_panel"):
@@ -1106,6 +1209,7 @@ class RenderMixin:
             getattr(self, "_selected_queue_job_id", None),
         )
         self._sync_queue_splitter_visibility()
+        self.update_playback_badge()
 
     def _sync_queue_splitter_visibility(self):
         if not hasattr(self, "right_h_splitter"):
@@ -1126,7 +1230,11 @@ class RenderMixin:
         job = self.render_queue.get(job_id)
         if job:
             logging.info("Queue selection: #%s %s", job.queue_index, job.game_name)
+            self._apply_header_from_job(job)
+            if hasattr(self, "btn_close_clip"):
+                self.btn_close_clip.show()
         self.refresh_render_queue_panel()
+        self.update_playback_badge()
 
     def start_render_thread(self):
         """ Prepares parameters and starts the background rendering thread """
@@ -1164,6 +1272,11 @@ class RenderMixin:
 
         self._is_rendering = True
         self._active_render_job = job
+        queue_job = self.render_queue.find_by_clip_path(clip_name)
+        if queue_job:
+            queue_job.status = JobStatus.RENDERING
+            self.refresh_render_queue_panel()
+        self.update_playback_badge()
 
         logging.info(f"Source: {clip_name}")
         logging.info(f"Saving in: {params.output_file}")
@@ -1229,9 +1342,15 @@ class RenderMixin:
 
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
+        active_job = getattr(self, "_active_render_job", None)
+        if active_job:
+            self._sync_queue_job_render_status(active_job.clip_path, success, error_msg)
+
         self._is_rendering = False
         self._active_render_job = None
         set_settings_panel_locked(self, False)
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
 
         # Unlocking the UI
         if hasattr(self.ui, 'btn_start'): self.ui.btn_start.setEnabled(True)

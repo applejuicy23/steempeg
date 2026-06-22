@@ -34,6 +34,9 @@ STATUS_HEADER_LABELS = {
     JobStatus.ERROR: "Error",
 }
 
+PREVIEW_BADGE_TEXT = "Preview"
+PREVIEW_BADGE_COLOR = "#ffffff"
+
 
 @dataclass
 class RenderJobSettings:
@@ -198,6 +201,13 @@ class RenderQueue:
     def contains_clip(self, clip_path: str) -> bool:
         norm = os.path.normpath(clip_path)
         return any(os.path.normpath(j.clip_path) == norm for j in self._jobs)
+
+    def find_by_clip_path(self, clip_path: str) -> Optional[RenderJob]:
+        norm = os.path.normpath(clip_path)
+        for job in self._jobs:
+            if os.path.normpath(job.clip_path) == norm:
+                return job
+        return None
 
     def _reindex(self) -> None:
         for i, job in enumerate(self._jobs, start=1):

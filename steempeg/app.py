@@ -1367,8 +1367,14 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         header_layout.addWidget(self.custom_text_label)
         header_layout.addStretch()
 
-        
-        
+        self.label_playback_badge = QLabel()
+        self.label_playback_badge.setStyleSheet(
+            "color: #ffffff; font-weight: bold; font-size: 12px;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
+        )
+        self.label_playback_badge.hide()
+        header_layout.addWidget(self.label_playback_badge)
+
         from PySide6.QtWidgets import QPushButton
         self.btn_close_clip = QPushButton("❌")
         self.btn_close_clip.setFixedSize(24, 24)

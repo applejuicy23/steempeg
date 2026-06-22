@@ -84,6 +84,8 @@ class PlayerMixin:
             self.custom_text_label.setText("Select a clip to preview...")
         if hasattr(self, 'custom_icon_label'):
             self.custom_icon_label.setPixmap(QIcon(get_resource_path("unknown_icon.png")).pixmap(24, 24))
+        if hasattr(self, 'update_playback_badge'):
+            self.update_playback_badge()
             
         # 5. Resetting the Time and the PLAY Button
         if hasattr(self.ui, 'label_time'):
@@ -811,6 +813,8 @@ class PlayerMixin:
             self.video_stack.setCurrentWidget(self.ui.video_container)
         if hasattr(self, 'btn_close_clip'): 
             self.btn_close_clip.show()
+        if hasattr(self, 'update_playback_badge'):
+            self.update_playback_badge()
         if hasattr(self, 'custom_timeline'): 
             self.custom_timeline.setEnabled(True)
 
