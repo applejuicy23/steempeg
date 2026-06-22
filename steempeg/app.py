@@ -11,6 +11,7 @@ from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.updater_mixin import UpdaterMixin
 from steempeg.ui.settings.controller import SettingsMixin
 from steempeg.ui.render_controller import RenderMixin
+from steempeg.render.queue import RenderQueue
 from steempeg.ui.library.controller import LibraryMixin
 from steempeg.ui.player.controller import PlayerMixin
 from steempeg.ui.lifecycle import LifecycleMixin
@@ -120,6 +121,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
         self.current_orig_bitrate = 0 # Bitrate of the selected original clip
         self.current_clip_duration_sec = 0
+        self.render_queue = RenderQueue()
+        self._selected_queue_job_id = None
 
         
         # list of all supported resolutions for rendering
@@ -1864,7 +1867,39 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 """)
 
                 # 7. Place the splitter back into the CLEAN right-hand panel.
-                right_layout.addWidget(self.main_v_splitter)
+                self.right_content_wrap = QWidget()
+                right_content_layout = QVBoxLayout(self.right_content_wrap)
+                right_content_layout.setContentsMargins(0, 0, 0, 0)
+                right_content_layout.setSpacing(0)
+                right_content_layout.addWidget(self.main_v_splitter)
+
+                from steempeg.ui.render_queue_panel import RenderQueuePanel
+
+                self.render_queue_panel = RenderQueuePanel()
+                self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
+
+                self.right_h_splitter = QSplitter(Qt.Horizontal)
+                self.right_h_splitter.setObjectName("right_h_splitter")
+                self.right_h_splitter.setHandleWidth(6)
+                self.right_h_splitter.setChildrenCollapsible(True)
+                self.right_h_splitter.setCollapsible(0, False)
+                self.right_h_splitter.setCollapsible(1, True)
+                self.right_h_splitter.setStyleSheet("""
+                    QSplitter::handle {
+                        background-color: #444444;
+                        width: 4px;
+                        margin: 8px 0;
+                        border-radius: 2px;
+                    }
+                    QSplitter::handle:hover {
+                        background-color: #b29ae7;
+                    }
+                """)
+                self.right_h_splitter.addWidget(self.right_content_wrap)
+                self.right_h_splitter.addWidget(self.render_queue_panel)
+                self.right_h_splitter.setSizes([1200, 0])
+
+                right_layout.addWidget(self.right_h_splitter)
 
                 # Saving the new index for Fullscreen
                 self.controls_layout_index = top_v_layout.indexOf(self.player_footer_frame)

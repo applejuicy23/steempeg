@@ -31,7 +31,6 @@ from steempeg.core import capabilities
 from steempeg.core.dash import discovery, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
-from steempeg.render.queue import RenderQueue
 from steempeg.ui.render_panel import set_settings_panel_locked
 from steempeg.ui.render_job_builder import build_render_job_from_ui, resolve_render_params
 from steempeg.ui.render_thread import RenderThread
@@ -1096,6 +1095,38 @@ class RenderMixin:
             len(failed),
             len(self.render_queue),
         )
+        self.refresh_render_queue_panel()
+
+    def refresh_render_queue_panel(self):
+        """Rebuild the right-side queue list from ``render_queue``."""
+        if not hasattr(self, "render_queue_panel"):
+            return
+        self.render_queue_panel.refresh(
+            self.render_queue.jobs,
+            getattr(self, "_selected_queue_job_id", None),
+        )
+        self._sync_queue_splitter_visibility()
+
+    def _sync_queue_splitter_visibility(self):
+        if not hasattr(self, "right_h_splitter"):
+            return
+        sizes = self.right_h_splitter.sizes()
+        total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
+        if len(self.render_queue) > 0:
+            queue_w = 280
+            self.render_queue_panel.show()
+            self.right_h_splitter.setSizes([max(total - queue_w, 500), queue_w])
+        else:
+            self._selected_queue_job_id = None
+            self.right_h_splitter.setSizes([total, 0])
+
+    def on_queue_job_selected(self, job_id: str):
+        """Highlight a queue card (preview wiring comes in stage 5)."""
+        self._selected_queue_job_id = job_id
+        job = self.render_queue.get(job_id)
+        if job:
+            logging.info("Queue selection: #%s %s", job.queue_index, job.game_name)
+        self.refresh_render_queue_panel()
 
     def start_render_thread(self):
         """ Prepares parameters and starts the background rendering thread """

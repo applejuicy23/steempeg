@@ -217,6 +217,12 @@ class PlayerMixin:
                 bottom_wrapper.setVisible(not self.is_theater)
         if hasattr(self, 'render_dashboard'):
             self.render_dashboard.setVisible(not self.is_theater)
+        if hasattr(self, 'render_queue_panel'):
+            self.render_queue_panel.setVisible(not self.is_theater)
+        if hasattr(self, 'right_h_splitter') and self.is_theater:
+            sizes = self.right_h_splitter.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else 1
+            self.right_h_splitter.setSizes([total, 0])
 
         if hasattr(self, 'btn_refresh'):
             browse_wrapper = self.btn_refresh.parentWidget()
@@ -254,11 +260,8 @@ class PlayerMixin:
             self.btn_theater.clearFocus()
             QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
 
-    
-
-    
-
-    # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
+        if not self.is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
+            self._sync_queue_splitter_visibility()
     def toggle_fullscreen(self):
         """ Completely isolates the video container with Anti-Spam Lock & Black Background """
         
