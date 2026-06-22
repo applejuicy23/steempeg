@@ -1049,6 +1049,54 @@ class RenderMixin:
         )
         return job
 
+    def add_clips_to_render_queue(self, clip_paths):
+        """Add one or more clips using the current render settings snapshot."""
+        added = 0
+        skipped = 0
+        failed = []
+
+        for clip_path in clip_paths:
+            if self.render_queue.contains_clip(clip_path):
+                skipped += 1
+                continue
+            job = self.add_clip_to_render_queue(clip_path)
+            if job is None:
+                failed.append(os.path.basename(clip_path))
+            else:
+                added += 1
+
+        if not added and not skipped and not failed:
+            return
+
+        if added:
+            lines = [f"Added {added} clip(s) to the render queue."]
+            if skipped:
+                lines.append(f"{skipped} already in queue.")
+            if failed:
+                lines.append(f"Could not queue: {', '.join(failed)}")
+            QMessageBox.information(self.ui, "Render Queue", "\n".join(lines))
+        elif skipped and not failed:
+            QMessageBox.information(
+                self.ui,
+                "Render Queue",
+                "All selected clips are already in the queue.",
+            )
+        elif failed:
+            QMessageBox.warning(
+                self.ui,
+                "Render Queue",
+                "Could not add the selected clip(s).\n"
+                + "\n".join(failed),
+            )
+
+        logging.info(
+            "Queue update: added=%s skipped=%s failed=%s total=%s",
+            added,
+            skipped,
+            len(failed),
+            len(self.render_queue),
+        )
+
     def start_render_thread(self):
         """ Prepares parameters and starts the background rendering thread """
         if getattr(self, '_is_rendering', False):

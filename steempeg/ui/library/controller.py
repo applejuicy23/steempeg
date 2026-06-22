@@ -11,7 +11,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -27,117 +27,182 @@ from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
 
 
+_LIBRARY_MENU_STYLE = """
+    QMenu {
+        background-color: #2d2d2d;
+        color: #ffffff;
+        border: 2px solid #444444;
+        border-radius: 8px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        font-weight: bold;
+    }
+    QMenu::item {
+        padding: 6px 24px 6px 24px;
+        border-radius: 4px;
+        margin: 2px 4px;
+    }
+    QMenu::item:selected {
+        background-color: #6b5a8e;
+    }
+    QMenu::separator {
+        height: 1px;
+        background-color: #444444;
+        margin: 4px 10px;
+    }
+"""
+
+
 class LibraryMixin:
-    def show_grid_context_menu(self, pos):
-        """ Pop-up menu for the grid """
-        
-        # 1. Check if we clicked on an image in the grid.
+    def _context_menu_clip_paths_table(self, pos) -> list:
+        item = self.ui.table_clips.itemAt(pos)
+        if not item:
+            return []
+
+        clicked_row = item.row()
+        selected_rows = {idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()}
+        if clicked_row in selected_rows and len(selected_rows) > 1:
+            rows = sorted(selected_rows)
+        else:
+            rows = [clicked_row]
+
+        paths = []
+        seen = set()
+        for row in rows:
+            cell = self.ui.table_clips.item(row, 0)
+            if not cell:
+                continue
+            path = cell.data(Qt.UserRole)
+            if not path:
+                continue
+            norm = os.path.normpath(path)
+            if norm in seen or not os.path.exists(path):
+                continue
+            seen.add(norm)
+            paths.append(path)
+        return paths
+
+    def _context_menu_clip_paths_grid(self, pos) -> list:
         item = self.grid_clips.itemAt(pos)
         if not item:
+            return []
+
+        clicked_path = item.data(Qt.UserRole + 1)
+        selected_items = self.grid_clips.selectedItems()
+        selected_paths = [
+            it.data(Qt.UserRole + 1) for it in selected_items if it.data(Qt.UserRole + 1)
+        ]
+
+        if clicked_path in selected_paths and len(selected_paths) > 1:
+            candidates = selected_paths
+        else:
+            candidates = [clicked_path]
+
+        paths = []
+        seen = set()
+        for path in candidates:
+            if not path:
+                continue
+            norm = os.path.normpath(path)
+            if norm in seen or not os.path.exists(path):
+                continue
+            seen.add(norm)
+            paths.append(path)
+        return paths
+
+    def _populate_library_context_menu(self, menu, clip_paths: list):
+        count = len(clip_paths)
+        if count == 0:
             return
 
-        # 2. Retrieve the video path from the hidden key
-        clip_path = item.data(Qt.UserRole + 1)
-        if not clip_path or not os.path.exists(clip_path):
+        queue_label = "📋 Add to queue" if count == 1 else f"📋 Add to queue ({count})"
+        action_queue = menu.addAction(queue_label)
+        action_queue.triggered.connect(lambda: self.add_clips_to_render_queue(clip_paths))
+
+        menu.addSeparator()
+        action_open = menu.addAction("📂 Open in folder")
+        action_delete = menu.addAction("🗑️ Delete Clip" if count == 1 else f"🗑️ Delete Clips ({count})")
+
+        if count == 1:
+            clip_path = clip_paths[0]
+            action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
+            action_delete.triggered.connect(lambda: self.delete_clip(clip_path))
+        else:
+            action_open.setEnabled(False)
+            action_delete.setEnabled(False)
+
+    def sync_grid_from_table_selection(self):
+        """Mirror multi-selection from the list into the grid."""
+        if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
 
-        # 3. Creating a menu and getting rid of the ugly Windows shadow
+        selected_rows = {idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()}
+
+        self.grid_clips.blockSignals(True)
+        self.grid_clips.clearSelection()
+        for i in range(self.grid_clips.count()):
+            item = self.grid_clips.item(i)
+            if item.data(Qt.UserRole) in selected_rows:
+                item.setSelected(True)
+        self.grid_clips.blockSignals(False)
+
+    def sync_table_from_grid_selection(self):
+        """Mirror multi-selection from the grid into the list."""
+        if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
+            return
+
+        selected_items = self.grid_clips.selectedItems()
+        if not selected_items:
+            return
+
+        rows = sorted({
+            item.data(Qt.UserRole)
+            for item in selected_items
+            if item.data(Qt.UserRole) is not None
+        })
+
+        table = self.ui.table_clips
+        selection = QItemSelection()
+        for row in rows:
+            if row < 0 or row >= table.rowCount():
+                continue
+            selection.select(
+                table.model().index(row, 0),
+                table.model().index(row, table.columnCount() - 1),
+            )
+
+        table.blockSignals(True)
+        table.selectionModel().clearSelection()
+        if not selection.isEmpty():
+            table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
+        table.blockSignals(False)
+
+    def show_grid_context_menu(self, pos):
+        """ Pop-up menu for the grid """
+        clip_paths = self._context_menu_clip_paths_grid(pos)
+        if not clip_paths:
+            return
+
         menu = QMenu(self.grid_clips)
         menu.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WA_TranslucentBackground)
-        
-        # Menu design
-        menu.setStyleSheet("""
-            QMenu { 
-                background-color: #2d2d2d; 
-                color: #ffffff; 
-                border: 2px solid #444444; 
-                border-radius: 8px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QMenu::item { 
-                padding: 6px 24px 6px 24px; 
-                border-radius: 4px;
-                margin: 2px 4px;
-            }
-            QMenu::item:selected { 
-                background-color: #6b5a8e; 
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #444444;
-                margin: 4px 10px;
-            }
-        """)
-        
-        action_open = menu.addAction("📂 Open in folder")
-        menu.addSeparator()
-        action_delete = menu.addAction("🗑️ Delete Clip")
-        
-        # 4. Linking to existing functions
-        action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
-        action_delete.triggered.connect(lambda: self.delete_clip(clip_path))
-        
-        # 5. Displaying the menu under the cursor
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+
+        self._populate_library_context_menu(menu, clip_paths)
         menu.exec(self.grid_clips.viewport().mapToGlobal(pos))
 
     def show_clip_context_menu(self, pos):
         """ Pop-up menu for a standard list (List/Table) """
-        
-        # 1. Check if we clicked on a valid row.
-        item = self.ui.table_clips.itemAt(pos)
-        if not item:
+        clip_paths = self._context_menu_clip_paths_table(pos)
+        if not clip_paths:
             return
 
-        # 2. Retrieve the video path from the first cell (column) of the selected row.
-        selected_row = item.row()
-        clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
-        
-        if not clip_path or not os.path.exists(clip_path):
-            return
-
-        # 3. Creating a menu and getting rid of the ugly Windows shadow
         menu = QMenu(self.ui.table_clips)
         menu.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         menu.setAttribute(Qt.WA_TranslucentBackground)
-        
-        # Your signature menu design
-        menu.setStyleSheet("""
-            QMenu { 
-                background-color: #2d2d2d; 
-                color: #ffffff; 
-                border: 2px solid #444444; 
-                border-radius: 8px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QMenu::item { 
-                padding: 6px 24px 6px 24px; 
-                border-radius: 4px;
-                margin: 2px 4px;
-            }
-            QMenu::item:selected { 
-                background-color: #6b5a8e; 
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #444444;
-                margin: 4px 10px;
-            }
-        """)
-        
-        action_open = menu.addAction("📂 Open in folder")
-        menu.addSeparator()
-        action_delete = menu.addAction("🗑️ Delete Clip")
-        
-        # 4. Linking to existing functions
-        action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
-        action_delete.triggered.connect(lambda: self.delete_clip(clip_path))
-        
-        # 5. Displaying the menu under the cursor
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+
+        self._populate_library_context_menu(menu, clip_paths)
         menu.exec(self.ui.table_clips.viewport().mapToGlobal(pos))
 
     def open_clip_folder(self, clip_path):
@@ -437,18 +502,12 @@ class LibraryMixin:
     
 
     def on_grid_selection_changed(self):
-        """ Select in Grid -> Quietly select in List -> List automatically updates the player """
-        selected_items = getattr(self, 'grid_clips', None) and self.grid_clips.selectedItems()
-        if not selected_items: return
-        
-        # In the Qt.UserRole card we have a ready-made string index (number)!
-        row_idx = selected_items[0].data(Qt.UserRole)
-        
-        if hasattr(self.ui, 'table_clips'):
-            # Check if this row is already selected
-            if self.ui.table_clips.currentRow() != row_idx:
-                # Just move the focus. The table itself will trigger the player exactly once!
-                self.ui.table_clips.selectRow(row_idx)
+        """Select in Grid -> quietly mirror selection in List."""
+        if not self.grid_clips.selectedItems():
+            return
+        self.sync_table_from_grid_selection()
+        if hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
+            self.update_quality_options()
 
     def build_netflix_grid(self):
         """ Transforms rows from a hidden table into vibrant cards. """

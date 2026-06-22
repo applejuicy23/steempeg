@@ -120,7 +120,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
         self.current_orig_bitrate = 0 # Bitrate of the selected original clip
         self.current_clip_duration_sec = 0
-        self.render_queue = RenderQueue()
+
         
         # list of all supported resolutions for rendering
         self.all_qualities = [
@@ -221,6 +221,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 }
             """)
             self.ui.table_clips.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.ui.table_clips.setSelectionMode(QAbstractItemView.ExtendedSelection)
             self.ui.table_clips.setEditTriggers(QAbstractItemView.NoEditTriggers)
             self.ui.table_clips.setShowGrid(False)
             self.ui.table_clips.verticalHeader().setVisible(False)
@@ -258,6 +259,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.table_clips.setColumnWidth(3, 100) # Duration
             
             self.ui.table_clips.itemSelectionChanged.connect(self.update_quality_options)
+            self.ui.table_clips.itemSelectionChanged.connect(self.sync_grid_from_table_selection)
             if hasattr(self.ui, 'table_clips'):
                 from PySide6.QtCore import QTimer 
                 self.ui.table_clips.horizontalHeader().sortIndicatorChanged.connect(
@@ -482,8 +484,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.grid_clips.viewport().installEventFilter(self)
             # We strictly fix the card sizes so they don't fly apart when hidden!
             self.grid_clips.setUniformItemSizes(True)
-            # We allow only ONE clip to be selected at a time (to avoid frame bugs)
-            self.grid_clips.setSelectionMode(qtw.QAbstractItemView.SingleSelection)
+            self.grid_clips.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)
             
             # Boomerang Effect (Drag & Snap Back)
             self.grid_clips.setDragDropMode(qtw.QAbstractItemView.DragOnly)
