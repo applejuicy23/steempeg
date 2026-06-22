@@ -31,6 +31,7 @@ from steempeg.core import capabilities
 from steempeg.core.dash import discovery, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
+from steempeg.ui.render_panel import set_settings_panel_locked
 from steempeg.ui.render_thread import RenderThread
 
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
@@ -108,6 +109,102 @@ class RenderMixin:
 
         # default to the first hardware encoder if there is one, otherwise CPU
         self.ui.combo_encoder.setCurrentIndex(1 if self.ui.combo_encoder.count() > 1 else 0)
+
+    def _on_render_progress(self, msg):
+        """Helper to safely receive thread signals on the main GUI thread."""
+        self.update_status_indicator(msg, "rendering")
+
+    @staticmethod
+    def _format_pct_label(percent):
+        percent = max(0.0, min(100.0, float(percent)))
+        if percent >= 100:
+            return "100%"
+        if percent <= 0:
+            return "0%"
+        rounded = round(percent, 1)
+        if rounded == int(rounded):
+            return f"{int(rounded)}%"
+        return f"{rounded:.1f}%"
+
+    def update_status_indicator(self, text, state="ready"):
+        """Update the macOS-style status dot, label, progress bar and percent label."""
+        if not hasattr(self.ui, 'label_status'):
+            return
+
+        colors = {
+            "ready": "#4CAF50",
+            "rendering": "#a871ff",
+            "paused": "#ffcc00",
+            "error": "#ff4444",
+            "success": "#4CAF50",
+        }
+        color = colors.get(state, "#a871ff")
+
+        display_text = str(text)
+        percent = None
+
+        pct_match = re.search(r'\((\d+(?:\.\d+)?)%\)', display_text)
+        if pct_match:
+            percent = max(0.0, min(100.0, float(pct_match.group(1))))
+            display_text = re.sub(r'\s*\(\d+(?:\.\d+)?%\)', '', display_text).strip()
+
+        if state == "rendering" and not display_text:
+            display_text = "Rendering"
+
+        if hasattr(self, 'status_dot'):
+            self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 4px;")
+
+        self.ui.label_status.setText(
+            f"<span style='font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;'>"
+            f"{display_text}</span>"
+        )
+
+        if state == "success":
+            percent = 100.0
+        elif state == "ready" or state == "error":
+            percent = 0.0
+        elif state == "paused" and "cancel" in display_text.lower():
+            percent = 0.0
+
+        if hasattr(self.ui, 'progress_render'):
+            if percent is not None:
+                self.ui.progress_render.setValue(int(percent * 10))
+            elif state == "success":
+                self.ui.progress_render.setValue(1000)
+            elif state in ("ready", "error") or (
+                state == "paused" and "cancel" in display_text.lower()
+            ):
+                self.ui.progress_render.setValue(0)
+            self.ui.progress_render.setTextVisible(False)
+
+            chunk = (
+                "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #6b5a8e, stop:1 #b29ae7)"
+                if state == "rendering"
+                else color
+            )
+            self.ui.progress_render.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: #414141;
+                    border: none;
+                    border-radius: 3px;
+                    min-height: 6px;
+                    max-height: 6px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {chunk};
+                    border-radius: 3px;
+                }}
+            """)
+
+        if hasattr(self, 'label_pct'):
+            if percent is not None:
+                self.label_pct.setText(self._format_pct_label(percent))
+            elif state == "success":
+                self.label_pct.setText("100%")
+            elif state in ("ready", "error") or (
+                state == "paused" and "cancel" in display_text.lower()
+            ):
+                self.label_pct.setText("0%")
 
     def open_rendered_folder(self, file_path):
         """ Opens Windows Explorer and automatically highlights the rendered file! """
@@ -480,8 +577,8 @@ class RenderMixin:
                 if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
-            if hasattr(self.ui, 'label_status'):
-                self.ui.label_status.setText("Ready")
+            if hasattr(self, 'update_status_indicator'):
+                self.update_status_indicator("Ready", "ready")
                 
             if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
             return
@@ -728,9 +825,9 @@ class RenderMixin:
                 self.place_text.setText(f"Ready to play: {game_name}") 
                 self.place_text.setStyleSheet("color: #a0a0a0; font-size: 15px; font-weight: bold; margin-top: 15px;")
             
-        if hasattr(self.ui, 'label_status'):
-            self.ui.label_status.setText("Ready")
-    
+        if not getattr(self, '_is_rendering', False):
+            self.update_status_indicator("Ready", "ready")
+
     def on_quality_mode_changed(self, text):
         """ Hides or shows the slider and target inputs depending on the mode """
         is_target_mode = "Target File Size" in text
@@ -1053,11 +1150,12 @@ class RenderMixin:
             audio_bitrate_kbps = self.ui.combo_audio_bitrate.currentText().split(' ')[0] + "k"
 
         # Turn interface buttons on/off
-        self.ui.btn_start.setEnabled(False) 
+        set_settings_panel_locked(self, True)
+        self.ui.btn_start.setEnabled(False)
         if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(True)
-        if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(True) 
+        if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(True)
 
-        self.set_status("Initializing...")
+        self.update_status_indicator("Initializing...", "rendering")
         logging.info(f"--- RENDER STARTED ---")
 
         # --- LOCK THE RENDER ENGINE ---
@@ -1069,12 +1167,15 @@ class RenderMixin:
 
         try:
             self.thread = RenderThread(all_mpds, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h, trim_start_sec, trim_duration_sec)
-            self.thread.progress_signal.connect(self.set_status)
+            # Use lambda to inject the 'rendering' state whenever the thread sends progress
+            self.thread.progress_signal.connect(self._on_render_progress)
             self.thread.finished_signal.connect(self.on_render_finished)
             self.thread.start()
         except Exception as e:
             logging.error(f"Thread Start Error: {e}")
-            self.set_status("Error!")
+            self._is_rendering = False
+            set_settings_panel_locked(self, False)
+            self.update_status_indicator("Error!", "error")
             self.ui.btn_start.setEnabled(True)
             if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
             if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
@@ -1083,7 +1184,7 @@ class RenderMixin:
         """ Cancel Button Handler """
         logging.warning("User cancelled rendering (Cancel)")
         if hasattr(self, 'thread') and self.thread.isRunning():
-            self.set_status("Cancelling... Please wait")
+            self.update_status_indicator("Cancelling... Please wait", "paused")
             if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
             if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
             self.thread.cancel() # Send a cancel signal to the thread
@@ -1097,34 +1198,28 @@ class RenderMixin:
             # Change the button text depending on the status
             if is_paused:
                 if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setText("Resume")
-                self.set_status("Paused...")
+                self.update_status_indicator("Paused...", "paused")
             else:
                 if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setText("Pause")
-                self.set_status("Process...")
+                self.update_status_indicator("Processing...", "rendering")
 
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
         self._is_rendering = False
-        
+        set_settings_panel_locked(self, False)
+
         # Unlocking the UI
         if hasattr(self.ui, 'btn_start'): self.ui.btn_start.setEnabled(True)
         if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
         if hasattr(self.ui, 'btn_pause'): 
             self.ui.btn_pause.setEnabled(False)
             self.ui.btn_pause.setText("Pause")
-            
-        self.update_final_setup()
         
         # Show the result to the user
         if success:
             logging.info("=== RENDER SUCCESS ===")
             
-            # 1. Set to 100% before the window appears
-            if hasattr(self.ui, 'progress_render'):
-                self.ui.progress_render.setValue(100)
-                self.ui.progress_render.setFormat("100%")
-            if hasattr(self.ui, 'label_status'):
-                self.ui.label_status.setText("Success!")
+            self.update_status_indicator("Success!", "success")
             
             # A CUSTOM SUCCESS WINDOW
             msg_box = QMessageBox(self.ui)
@@ -1147,27 +1242,17 @@ class RenderMixin:
                 file_path = os.path.abspath(output_file)
                 os.startfile(file_path)
 
-            # 2. RESET PROGRESS ONLY AFTER CLOSING THE WINDOW
-            if hasattr(self.ui, 'label_status'):
-                self.ui.label_status.setText("Ready")
-            if hasattr(self.ui, 'progress_render'):
-                self.ui.progress_render.setValue(0)
-                self.ui.progress_render.setFormat("0%")
-                
+            self.update_status_indicator("Ready", "ready")
+
         elif "cancelled by user" in error_msg.lower():
             logging.warning("=== RENDER CANCELED ===")
-            if hasattr(self.ui, 'label_status'): self.ui.label_status.setText("Cancelled")
+            self.update_status_indicator("Cancelled", "error")
             QMessageBox.information(self.ui, "Cancelled", "Render was cancelled.")
-            
-            # Reset to Ready after closing the cancellation window
-            if hasattr(self.ui, 'label_status'): self.ui.label_status.setText("Ready")
-            if hasattr(self.ui, 'progress_render'):
-                self.ui.progress_render.setValue(0)
-                self.ui.progress_render.setFormat("0%")
-            
+            self.update_status_indicator("Ready", "ready")
+
         else:
             logging.error(f"=== RENDER ERROR === \n{error_msg}")
-            if hasattr(self.ui, 'label_status'): self.ui.label_status.setText("Error!") 
+            self.update_status_indicator("Error!", "error")
             
             # --- STEEMPEG CUSTOM ERROR WINDOW ---
 
@@ -1311,11 +1396,9 @@ class RenderMixin:
 
             dialog.exec()
             
-            # --- RESTORING THE INTERFACE TO NORMAL ---
-            if hasattr(self.ui, 'label_status'): self.ui.label_status.setText("Ready")
-            if hasattr(self.ui, 'progress_render'):
-                self.ui.progress_render.setValue(0)
-                self.ui.progress_render.setFormat("0%")
+            self.update_status_indicator("Ready", "ready")
+
+        self.update_final_setup()
 
     def inject_custom_input(self, combo_widget, placeholder):
         container = QWidget()

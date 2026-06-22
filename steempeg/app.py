@@ -1087,30 +1087,32 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             dash_layout.setContentsMargins(18, 16, 18, 16)
             dash_layout.setSpacing(12)
 
-            # TOP ROW 
+            _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
+
+            header_block = qtw.QVBoxLayout()
+            header_block.setSpacing(12)
+
             top_row = qtw.QHBoxLayout()
-            
+            top_row.setSpacing(8)
+
             if hasattr(self.ui, 'label_short_summary'):
-                self.ui.label_short_summary.hide() 
-                
+                self.ui.label_short_summary.hide()
+
                 self.bottom_icon_label = qtw.QLabel()
                 self.bottom_icon_label.setFixedSize(24, 24)
-                
+
                 self.bottom_text_label = qtw.QLabel()
-                self.bottom_text_label.setStyleSheet("color: #e0e0e0; font-size: 13px;")
-                
+                self.bottom_text_label.setStyleSheet(f"color: #e0e0e0; font-size: 13px; {_status_font}")
+
                 top_row.addWidget(self.bottom_icon_label, 0, qtc.Qt.AlignVCenter)
                 top_row.addWidget(self.bottom_text_label, 0, qtc.Qt.AlignVCenter)
-                
-                # Instant reset generator function
+
                 def reset_bottom_summary():
                     css_icon = get_resource_path("unknown_icon.png").replace('\\', '/')
-                    
-                    # 1. Reset the bottom panel
+
                     self.bottom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
                     self.bottom_text_label.setText("<b>Select a clip to begin...</b>")
-                    
-                    # 2. Reset the top panel
+
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
                         self.custom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
                         self.custom_text_label.setText("Select a clip to preview...")
@@ -1120,34 +1122,58 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                         self.place_logo.setStyleSheet(f"image: url('{css_logo_main}'); background: transparent; border: none;")
                         self.place_text.setText("Please select a clip from the library")
                         self.place_text.setStyleSheet("color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;")
-                    
+
                 self.reset_bottom_summary = reset_bottom_summary
                 self.reset_bottom_summary()
-            
-            top_row.addStretch() 
-            
-            if hasattr(self.ui, 'label_status'):
-                self.ui.label_status.setStyleSheet("color: #b29ae7; font-family: 'Segoe UI'; font-weight: bold; font-size: 12px;")
-                self.ui.label_status.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
-                top_row.addWidget(self.ui.label_status)
-            dash_layout.addLayout(top_row)
 
-            # 2nd Row (6px Laser Line + Percentages)
-            mid_row = qtw.QHBoxLayout()
+            top_row.addStretch(1)
+
+            self.status_dot = qtw.QLabel()
+            self.status_dot.setFixedSize(8, 8)
+            self.status_dot.setStyleSheet("background-color: #4CAF50; border-radius: 4px;")
+
+            if hasattr(self.ui, 'label_status'):
+                self.ui.label_status.setStyleSheet(
+                    f"background: transparent; border: none; font-size: 12px; font-weight: bold; {_status_font}"
+                )
+                self.ui.label_status.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
+                top_row.addWidget(self.ui.label_status, 0, qtc.Qt.AlignVCenter)
+
+            dot_col = qtw.QWidget()
+            dot_col.setFixedWidth(40)
+            dot_col_layout = qtw.QHBoxLayout(dot_col)
+            dot_col_layout.setContentsMargins(0, 0, 0, 0)
+            dot_col_layout.addStretch()
+            dot_col_layout.addWidget(self.status_dot)
+            dot_col_layout.addStretch()
+            top_row.addWidget(dot_col, 0, qtc.Qt.AlignVCenter)
+
+            header_block.addLayout(top_row)
+
+            progress_row = qtw.QHBoxLayout()
+            progress_row.setSpacing(8)
+
             if hasattr(self.ui, 'progress_render'):
                 self.ui.progress_render.setTextVisible(False)
                 self.ui.progress_render.setRange(0, 1000)
+                self.ui.progress_render.setSizePolicy(qtw.QSizePolicy.Expanding, qtw.QSizePolicy.Fixed)
                 self.ui.progress_render.setStyleSheet("""
                     QProgressBar { background-color: #414141; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
                     QProgressBar::chunk { background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #6b5a8e, stop:1 #b29ae7); border-radius: 3px; }
                 """)
-                mid_row.addWidget(self.ui.progress_render)
-                
+                progress_row.addWidget(self.ui.progress_render, 1)
+
             if not hasattr(self, 'label_pct'):
                 self.label_pct = qtw.QLabel("0%")
-            self.label_pct.setStyleSheet("color: #ffffff; font-family: 'Segoe UI'; font-weight: bold; font-size: 13px; margin-left: 8px;")
-            mid_row.addWidget(self.label_pct)
-            dash_layout.addLayout(mid_row)
+            self.label_pct.setFixedWidth(40)
+            self.label_pct.setAlignment(qtc.Qt.AlignHCenter | qtc.Qt.AlignVCenter)
+            self.label_pct.setStyleSheet(
+                f"color: #ffffff; font-weight: bold; font-size: 13px; {_status_font}"
+            )
+            progress_row.addWidget(self.label_pct, 0)
+
+            header_block.addLayout(progress_row)
+            dash_layout.addLayout(header_block)
 
             # BOTTOM ROW: PERFECTLY ALIGNED, FULL-WIDTH BUTTONS
             btn_row = qtw.QHBoxLayout()
@@ -1176,7 +1202,13 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             # 4. Container Assembly
             if parent_widget and parent_widget.layout():
-                parent_widget.layout().addWidget(self.render_dashboard)
+                pl = parent_widget.layout()
+                pl.setContentsMargins(0, 0, 0, 0)
+                pl.setSpacing(0)
+                pl.addWidget(self.render_dashboard)
+
+            if hasattr(self, 'update_status_indicator'):
+                self.update_status_indicator("Ready", "ready")
 
         except Exception as e:
             print(f"Error building ultimate monolithic dashboard: {e}")
