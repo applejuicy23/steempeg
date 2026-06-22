@@ -13,8 +13,20 @@ keeps working untouched — we only expose the edit + warning icon on `ui`.
 """
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QAbstractButton,
+    QAbstractSpinBox,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QScrollArea,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
 )
+from PySide6.QtGui import QGuiApplication
 
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
@@ -543,10 +555,82 @@ def restyle_export_page(ui):
     root.addStretch()
 
 
+class _WheelToScrollFilter(QObject):
+    """Forward wheel events from locked controls to the settings scroll area."""
+
+    def __init__(self, scroll_area: QScrollArea):
+        super().__init__()
+        self._scroll = scroll_area
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel and self._scroll is not None:
+            vp = self._scroll.viewport()
+            if vp is not None:
+                QGuiApplication.sendEvent(vp, event)
+                return True
+        return False
+
+
+def _is_lockable_widget(widget: QWidget) -> bool:
+    if isinstance(widget, QLabel):
+        return False
+    if isinstance(widget, (QComboBox, QLineEdit, QSlider, QAbstractSpinBox)):
+        return True
+    return isinstance(widget, QAbstractButton)
+
+
+def _iter_settings_pages(app):
+    ui = getattr(app, 'ui', None)
+    if ui is None or not hasattr(ui, 'settings_tabs'):
+        return
+    tabs = ui.settings_tabs
+    for i in range(tabs.count()):
+        page = tabs.widget(i)
+        if page is not None:
+            yield page
+
+
 def set_settings_panel_locked(app, locked: bool):
-    """Freeze the render settings panel while an export job is running."""
-    root = getattr(app, 'neo_wrapper', None)
-    if root is None and hasattr(app, 'ui'):
-        root = getattr(app.ui, 'settings_tabs', None)
-    if root is not None:
-        root.setEnabled(not locked)
+    """Freeze render settings controls while keeping sidebar nav and scrolling usable."""
+    if locked:
+        disabled = []
+        seen = set()
+        scroll = getattr(app, 'right_scroll', None)
+        if scroll is not None and not hasattr(app, '_render_wheel_filter'):
+            app._render_wheel_filter = _WheelToScrollFilter(scroll)
+        wheel_filter = getattr(app, '_render_wheel_filter', None)
+
+        def lock_widget(widget):
+            if widget is None or id(widget) in seen:
+                return
+            seen.add(id(widget))
+            if not widget.isEnabled():
+                return
+            widget.setEnabled(False)
+            disabled.append(widget)
+            if wheel_filter is not None:
+                widget.installEventFilter(wheel_filter)
+
+        for page in _iter_settings_pages(app):
+            for child in page.findChildren(QWidget):
+                if _is_lockable_widget(child):
+                    lock_widget(child)
+
+        app._render_locked_widgets = disabled
+    else:
+        wheel_filter = getattr(app, '_render_wheel_filter', None)
+        for widget in getattr(app, '_render_locked_widgets', []):
+            if wheel_filter is not None:
+                widget.removeEventFilter(wheel_filter)
+            try:
+                widget.setEnabled(True)
+            except RuntimeError:
+                pass
+        app._render_locked_widgets = []
+
+    for btn in getattr(app, 'neo_nav_buttons', []):
+        btn.setEnabled(True)
+    if hasattr(app, 'right_scroll'):
+        app.right_scroll.setEnabled(True)
+    if hasattr(app, 'neo_wrapper'):
+        app.neo_wrapper.setEnabled(True)
