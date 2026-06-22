@@ -137,6 +137,8 @@ class RenderMixin:
             "paused": "#ffcc00",
             "error": "#ff4444",
             "success": "#4CAF50",
+            "cancelling": "#ff4444",
+            "cancelled": "#ff4444",
         }
         color = colors.get(state, "#a871ff")
 
@@ -163,17 +165,13 @@ class RenderMixin:
             percent = 100.0
         elif state == "ready" or state == "error":
             percent = 0.0
-        elif state == "paused" and "cancel" in display_text.lower():
-            percent = 0.0
 
         if hasattr(self.ui, 'progress_render'):
             if percent is not None:
                 self.ui.progress_render.setValue(int(percent * 10))
             elif state == "success":
                 self.ui.progress_render.setValue(1000)
-            elif state in ("ready", "error") or (
-                state == "paused" and "cancel" in display_text.lower()
-            ):
+            elif state in ("ready", "error"):
                 self.ui.progress_render.setValue(0)
             self.ui.progress_render.setTextVisible(False)
 
@@ -201,9 +199,7 @@ class RenderMixin:
                 self.label_pct.setText(self._format_pct_label(percent))
             elif state == "success":
                 self.label_pct.setText("100%")
-            elif state in ("ready", "error") or (
-                state == "paused" and "cancel" in display_text.lower()
-            ):
+            elif state in ("ready", "error"):
                 self.label_pct.setText("0%")
 
     def open_rendered_folder(self, file_path):
@@ -1184,7 +1180,7 @@ class RenderMixin:
         """ Cancel Button Handler """
         logging.warning("User cancelled rendering (Cancel)")
         if hasattr(self, 'thread') and self.thread.isRunning():
-            self.update_status_indicator("Cancelling... Please wait", "paused")
+            self.update_status_indicator("Cancelling... Please wait", "cancelling")
             if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
             if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
             self.thread.cancel() # Send a cancel signal to the thread
@@ -1246,7 +1242,7 @@ class RenderMixin:
 
         elif "cancelled by user" in error_msg.lower():
             logging.warning("=== RENDER CANCELED ===")
-            self.update_status_indicator("Cancelled", "error")
+            self.update_status_indicator("Cancelled", "cancelled")
             QMessageBox.information(self.ui, "Cancelled", "Render was cancelled.")
             self.update_status_indicator("Ready", "ready")
 
