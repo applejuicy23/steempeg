@@ -719,23 +719,28 @@ class PlayerMixin:
         """ Fires instantly when the user drags the yellow trim handles """
         # 1. Update text info in Export Settings
         self.update_final_setup()
+        if hasattr(self, '_sync_ui_to_selected_job'):
+            self._sync_ui_to_selected_job()
         
         # 2. Recalculate slider sizes because shorter video = less Megabytes!
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
 
-    def generate_and_play_preview(self):
-        """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """ 
-        if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
+    def generate_and_play_preview(self, clip_path=None):
+        """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
+        if clip_path is None:
+            if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
+                return
+            clip_path = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
+
+        if not clip_path or not os.path.isdir(clip_path):
             return
 
         # 1. STOP CURRENT PLAYBACK
         self._is_switching = True
         self._force_pause = False
 
-        
         # 2. GET THE CLIP FOLDER PATH
-        clip_path = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
         
         # STEP 1: FIND THE VIDEO FOLDER
         all_mpds = self.get_all_mpd_paths(clip_path)

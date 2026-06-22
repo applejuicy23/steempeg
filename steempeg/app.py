@@ -123,6 +123,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         self.current_clip_duration_sec = 0
         self.render_queue = RenderQueue()
         self._selected_queue_job_id = None
+        self._loading_queue_job = False
+        self._queue_batch_active = False
+        self.render_thread = None
 
         
         # list of all supported resolutions for rendering
@@ -1883,6 +1886,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
                 self.render_queue_panel = RenderQueuePanel()
                 self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
+                self.render_queue_panel.job_remove_requested.connect(self.remove_queue_job)
+                self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
+                self.render_queue_panel.clear_queue_requested.connect(self.clear_render_queue)
 
                 self.right_h_splitter = QSplitter(Qt.Horizontal)
                 self.right_h_splitter.setObjectName("right_h_splitter")
@@ -1906,6 +1912,13 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.right_h_splitter.setSizes([1200, 0])
 
                 right_layout.addWidget(self.right_h_splitter)
+
+                if hasattr(self, "_load_persisted_render_queue"):
+                    self._load_persisted_render_queue()
+                    self.refresh_render_queue_panel()
+                    self._update_start_button_label()
+                    if self._selected_queue_job_id:
+                        QTimer.singleShot(400, lambda: self.activate_queue_job(self._selected_queue_job_id))
 
                 # Saving the new index for Fullscreen
                 self.controls_layout_index = top_v_layout.indexOf(self.player_footer_frame)

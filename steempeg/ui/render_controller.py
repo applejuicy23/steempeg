@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -37,9 +37,16 @@ from steempeg.render.queue import (
     PREVIEW_BADGE_TEXT,
     STATUS_COLORS,
     STATUS_HEADER_LABELS,
+    load_queue_from_file,
+    save_queue_to_file,
 )
 from steempeg.ui.render_panel import set_settings_panel_locked
-from steempeg.ui.render_job_builder import build_render_job_from_ui, resolve_render_params
+from steempeg.ui.render_job_builder import (
+    apply_job_settings_to_ui,
+    build_render_job_from_ui,
+    resolve_render_params,
+    snapshot_settings_from_ui,
+)
 from steempeg.ui.render_thread import RenderThread
 
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
@@ -120,6 +127,8 @@ class RenderMixin:
 
     def _on_render_progress(self, msg):
         """Helper to safely receive thread signals on the main GUI thread."""
+        if getattr(self, "_queue_batch_active", False):
+            msg = f"({self._batch_current}/{self._batch_total}) {msg}"
         self.update_status_indicator(msg, "rendering")
 
     @staticmethod
@@ -224,6 +233,257 @@ class RenderMixin:
         except Exception as e:
             print(f"Failed to open folder: {e}")
 
+    def _queue_controls_preview(self) -> bool:
+        return bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+
+    def _active_preview_clip_path(self):
+        if self._queue_controls_preview():
+            job_id = getattr(self, "_selected_queue_job_id", None)
+            if job_id:
+                job = self.render_queue.get(job_id)
+                if job:
+                    return job.clip_path
+            jobs = self.render_queue.jobs
+            if jobs:
+                return jobs[0].clip_path
+        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+            if item:
+                return item.data(Qt.UserRole)
+        return None
+
+    def _queue_persist_path(self) -> str:
+        return os.path.join(self.cache_dir, "render_queue.json")
+
+    def _persist_render_queue(self) -> None:
+        try:
+            save_queue_to_file(self._queue_persist_path(), self.render_queue)
+        except OSError as exc:
+            logging.warning("Could not save render queue: %s", exc)
+
+    def _load_persisted_render_queue(self) -> None:
+        if not hasattr(self, "render_queue"):
+            return
+        loaded = load_queue_from_file(self._queue_persist_path())
+        if loaded:
+            self.render_queue = loaded
+            if self.render_queue.jobs:
+                self._selected_queue_job_id = self.render_queue.jobs[0].id
+
+    def _update_start_button_label(self) -> None:
+        if not hasattr(self.ui, "btn_start"):
+            return
+        pending = self.render_queue.pending_count() if hasattr(self, "render_queue") else 0
+        if pending > 0:
+            self.ui.btn_start.setText(f"🚩 Render Queue ({pending})")
+        else:
+            self.ui.btn_start.setText("🚩 START RENDER")
+
+    def _apply_trim_from_job_settings(self, settings) -> None:
+        if not hasattr(self, "custom_timeline"):
+            return
+        canvas = self.custom_timeline.canvas
+        if settings.is_trim_mode and settings.trim_end_ms > settings.trim_start_ms:
+            canvas.is_trim_mode = True
+            canvas.trim_start_ms = float(settings.trim_start_ms)
+            canvas.trim_end_ms = float(settings.trim_end_ms)
+            self.custom_timeline.trim_changed.emit(
+                int(settings.trim_start_ms), int(settings.trim_end_ms)
+            )
+        else:
+            canvas.is_trim_mode = False
+
+    def _sync_ui_to_selected_job(self) -> None:
+        if getattr(self, "_loading_queue_job", False):
+            return
+        job_id = getattr(self, "_selected_queue_job_id", None)
+        if not job_id:
+            return
+        job = self.render_queue.get(job_id)
+        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+            return
+        job.settings = snapshot_settings_from_ui(self)
+        job.refresh_output_path()
+
+    def _populate_quality_options_for_clip(self, clip_path: str) -> None:
+        """Fill render settings combos from clip metadata (no preview/header)."""
+        clip_path = os.path.normpath(clip_path)
+        current_quality = self.ui.combo_quality.currentText() if hasattr(self.ui, "combo_quality") else ""
+        current_fps = self.ui.combo_fps.currentText() if hasattr(self.ui, "combo_fps") else ""
+        current_bitrate = self.ui.combo_bitrate.currentText() if hasattr(self.ui, "combo_bitrate") else ""
+
+        clip_folder_name = os.path.basename(clip_path)
+        parts = clip_folder_name.split("_")
+        if len(parts) >= 2 and parts[1].isdigit():
+            self.current_game_icon = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
+        else:
+            self.current_game_icon = ""
+
+        if hasattr(self.ui, "input_filename"):
+            self.ui.input_filename.setText(f"{clip_folder_name}_rendered")
+
+        all_mpds = self.get_all_mpd_paths(clip_path)
+        if not all_mpds:
+            self.ui.source_label.setText("Source: No MPD files found")
+            self.ui.orig_res_label.setText("Original resolution: Unknown")
+            if hasattr(self.ui, "label_vbitrate"):
+                self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+            if hasattr(self.ui, "label_abitrate"):
+                self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
+            self.ui.combo_quality.clear()
+            if hasattr(self, "btn_copy_src"):
+                self.btn_copy_src.hide()
+            return
+
+        source_dirs = [os.path.dirname(m) for m in all_mpds]
+        unique_source_dirs = list(dict.fromkeys(source_dirs))
+        self.current_source_raw_paths = "\n".join(unique_source_dirs)
+
+        def elide_html_path(path, max_len=75):
+            if len(path) <= max_len:
+                return path
+            half = (max_len - 5) // 2
+            return path[:half] + "[...]" + path[-half:]
+
+        formatted_sources = "<br>".join(
+            [f"{i + 1}. {elide_html_path(p)}" for i, p in enumerate(unique_source_dirs)]
+        )
+        self.ui.source_label.setText(
+            f"Source:<br><span style='font-size:8pt; color:#aaaaaa;'>{formatted_sources}</span>"
+        )
+        if hasattr(self, "btn_copy_src"):
+            self.btn_copy_src.show()
+
+        orig_audio_bitrate = self.get_audio_bitrate_from_mpd(all_mpds[0]) if all_mpds else 192
+        self.current_orig_audio_bitrate = orig_audio_bitrate
+
+        if hasattr(self.ui, "combo_audio_bitrate"):
+            self.ui.combo_audio_bitrate.blockSignals(True)
+            self.ui.combo_audio_bitrate.clear()
+            bitrates = [
+                (320, "320 kbps (Best Quality)"),
+                (256, "256 kbps (High Quality)"),
+                (192, "192 kbps (Good Quality)"),
+                (128, "128 kbps (Standard)"),
+                (64, "64 kbps (Bad)"),
+                (32, "32 kbps (Very bad)"),
+            ]
+            self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
+            for val, text in bitrates:
+                if val <= orig_audio_bitrate + 15:
+                    self.ui.combo_audio_bitrate.addItem(text)
+            self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
+            self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
+            self.ui.combo_audio_bitrate.blockSignals(False)
+
+        unique_resolutions = set()
+        max_height = 0
+        self.current_orig_bitrate = 0
+
+        for mpd_path in all_mpds:
+            try:
+                with open(mpd_path, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    clip_full_path = os.path.dirname(mpd_path)
+                    size_str, duration_str = self.get_clip_size_and_duration(clip_full_path, content)
+                    if hasattr(self.ui, "label_size"):
+                        self.ui.label_size.setText(f"Size: {size_str}")
+                    if hasattr(self.ui, "label_duration"):
+                        self.ui.label_duration.setText(f"Time: {duration_str}")
+
+                    fps_match = re.search(r'\bframeRate="(\d+)(?:/\d+)?"', content)
+                    if fps_match:
+                        self.current_orig_fps = int(fps_match.group(1))
+                    else:
+                        self.current_orig_fps = self.get_fps_from_mpd(mpd_path)
+
+                    if hasattr(self.ui, "label_fps"):
+                        self.ui.label_fps.setText(f"FPS: {self.current_orig_fps}")
+
+                    height_match = re.search(r'\bheight="(\d+)"', content)
+                    width_match = re.search(r'\bwidth="(\d+)"', content)
+                    bandwidth_match = re.search(r'\bbandwidth="(\d+)"', content)
+
+                    if bandwidth_match:
+                        self.current_orig_bitrate = int(bandwidth_match.group(1)) / 1000000
+
+                    if height_match and width_match:
+                        h = int(height_match.group(1))
+                        w = int(width_match.group(1))
+                        unique_resolutions.add(f"{w}x{h}")
+                        if h > max_height:
+                            max_height = h
+            except Exception:
+                pass
+
+        if unique_resolutions:
+            res_text = ", ".join(sorted(list(unique_resolutions)))
+            audio_kbps = getattr(self, "current_orig_audio_bitrate", 192)
+            self.ui.orig_res_label.setText(f"Original resolution: {res_text}")
+            if hasattr(self.ui, "label_vbitrate"):
+                if hasattr(self, "current_orig_bitrate") and self.current_orig_bitrate > 0:
+                    rounded_bitrate = int(round(self.current_orig_bitrate))
+                    self.ui.label_vbitrate.setText(f"Video Bitrate: {rounded_bitrate} Mbps")
+                else:
+                    self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+            if hasattr(self.ui, "label_abitrate"):
+                self.ui.label_abitrate.setText(f"Audio Bitrate: {audio_kbps} kbps")
+        else:
+            self.ui.orig_res_label.setText("Original resolution: Unknown")
+            if hasattr(self.ui, "label_vbitrate"):
+                self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+            if hasattr(self.ui, "label_abitrate"):
+                self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
+            max_height = 1080
+
+        if hasattr(self.ui, "combo_quality"):
+            self.ui.combo_quality.clear()
+            if max_height > 0:
+                self.ui.combo_quality.addItem(f"Original (Lossless, {max_height}p)")
+            else:
+                self.ui.combo_quality.addItem("Original (Lossless)")
+            for preset_name, preset_height in self.all_qualities:
+                if preset_height <= max_height:
+                    self.ui.combo_quality.addItem(preset_name)
+            self.ui.combo_quality.setCurrentIndex(0)
+            self.ui.combo_quality.insertSeparator(self.ui.combo_quality.count())
+            self.ui.combo_quality.addItem("🎯 Target File Size...")
+            self.update_bitrate_options()
+
+        if hasattr(self.ui, "combo_fps"):
+            self.ui.combo_fps.clear()
+            fps_val = getattr(self, "current_orig_fps", 60)
+            if fps_val >= 60:
+                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
+                self.ui.combo_fps.addItem("30 FPS")
+                self.ui.combo_fps.addItem("15 FPS")
+            elif fps_val >= 30:
+                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
+                self.ui.combo_fps.addItem("15 FPS")
+            else:
+                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
+            self.ui.combo_fps.insertSeparator(self.ui.combo_fps.count())
+            self.ui.combo_fps.addItem("⚙️ Custom FPS...")
+            self.ui.combo_fps.setCurrentIndex(0)
+
+        if current_quality and hasattr(self.ui, "combo_quality"):
+            index = self.ui.combo_quality.findText(current_quality)
+            if index >= 0:
+                self.ui.combo_quality.setCurrentIndex(index)
+        if current_fps and hasattr(self.ui, "combo_fps"):
+            index = self.ui.combo_fps.findText(current_fps)
+            if index >= 0:
+                self.ui.combo_fps.setCurrentIndex(index)
+        if current_bitrate and hasattr(self.ui, "combo_bitrate"):
+            index = self.ui.combo_bitrate.findText(current_bitrate)
+            if index >= 0:
+                self.ui.combo_bitrate.setCurrentIndex(index)
+
+        if not getattr(self, "_is_rendering", False):
+            self.ui.btn_start.setEnabled(True)
+        self.ui.btn_start.setEnabled(True)
+        self.update_final_setup()
+
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
         if not hasattr(self.ui, 'table_clips'): return
@@ -247,249 +507,33 @@ class RenderMixin:
                 else:
                     item.setSelected(False)
             self.grid_clips.blockSignals(False)
-        
-        # --- 1. SAVE CURRENT USER SELECTION ---
-        current_quality = self.ui.combo_quality.currentText() if hasattr(self.ui, 'combo_quality') else ""
-        current_fps = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else ""
-        current_bitrate = self.ui.combo_bitrate.currentText() if hasattr(self.ui, 'combo_bitrate') else ""
-            
-        # Extract the FULL path (for FFmpeg)
-        clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
-        
 
-        
-        # Extract ONLY the folder NAME (for example, bg_3513350_20260508) for the text field
-        clip_folder_name = os.path.basename(clip_path)
-
-        parts = clip_folder_name.split("_")
-        if len(parts) >= 2 and parts[1].isdigit():
-            self.current_game_icon = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
-        else:
-            self.current_game_icon = ""
-
-        ## Automatically insert a neat file name
-        if hasattr(self.ui, 'input_filename'):
-            self.ui.input_filename.setText(f"{clip_folder_name}_rendered")
-            
-        # Search for mpd files by full path
-        all_mpds = self.get_all_mpd_paths(clip_path)
-
-        if not all_mpds:
-            self.ui.source_label.setText("Source: No MPD files found")
-            self.ui.orig_res_label.setText("Original resolution: Unknown")
-            # Update our new widgets
-            if hasattr(self.ui, 'label_vbitrate'): self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
-            if hasattr(self.ui, 'label_abitrate'): self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
-            self.ui.combo_quality.clear()
-            if hasattr(self, 'btn_copy_src'): self.btn_copy_src.hide()
+        if self._queue_controls_preview():
             return
 
-        # Update the label with the path to the sources
-        source_dirs = [os.path.dirname(m) for m in all_mpds]
-        unique_source_dirs = list(dict.fromkeys(source_dirs))
-        
-        # Save FULL raw paths to memory so our COPY button can copy them completely!
-        self.current_source_raw_paths = "\n".join(unique_source_dirs)
-        
-        # Local helper to cleanly cut long HTML paths
-        def elide_html_path(path, max_len=75):
-            if len(path) <= max_len: return path
-            half = (max_len - 5) // 2
-            return path[:half] + "[...]" + path[-half:]
-        
-        # Apply the cut [...] only for the visual UI
-        formatted_sources = "<br>".join([f"{i+1}. {elide_html_path(p)}" for i, p in enumerate(unique_source_dirs)])
-        self.ui.source_label.setText(f"Source:<br><span style='font-size:8pt; color:#aaaaaa;'>{formatted_sources}</span>")
-        
-        # Show the copy button now that we have a valid path!
-        if hasattr(self, 'btn_copy_src'): 
-            self.btn_copy_src.show()
+        clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
+        self._populate_quality_options_for_clip(clip_path)
 
-        # Reading bitrait
-        orig_audio_bitrate = self.get_audio_bitrate_from_mpd(all_mpds[0]) if all_mpds else 192
-        self.current_orig_audio_bitrate = orig_audio_bitrate
-
-        if hasattr(self.ui, 'combo_audio_bitrate'):
-            self.ui.combo_audio_bitrate.blockSignals(True)
-            self.ui.combo_audio_bitrate.clear()
-            
-            bitrates = [
-                (320, "320 kbps (Best Quality)"),
-                (256, "256 kbps (High Quality)"),
-                (192, "192 kbps (Good Quality)"),
-                (128, "128 kbps (Standard)"),
-                (64, "64 kbps (Bad)"),
-                (32, "32 kbps (Very bad)")
-            ]
-            
-            self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
-            
-            # We add to the list only those that do not exceed the original (with a small margin)
-            for val, text in bitrates:
-                if val <= orig_audio_bitrate + 15: 
-                    self.ui.combo_audio_bitrate.addItem(text)
-            
-            self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
-            self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
-
-            self.ui.combo_audio_bitrate.blockSignals(False)
-        
-        unique_resolutions = set()
-        max_height = 0
-        self.current_orig_bitrate = 0
-
-        # Parsing session.mpd to find the original resolution and bitrate
-        for mpd_path in all_mpds:
-            try:
-                with open(mpd_path, 'r', encoding='utf-8') as file:
-                    content = file.read()
-
-                    # Call our function to calculate the size and time
-                    clip_full_path = os.path.dirname(mpd_path)
-                    size_str, duration_str = self.get_clip_size_and_duration(clip_full_path, content)
-                    
-                    if hasattr(self.ui, 'label_size'):
-                        self.ui.label_size.setText(f"Size: {size_str}")
-                    if hasattr(self.ui, 'label_duration'):
-                        self.ui.label_duration.setText(f"Time: {duration_str}")
-
-                    #1. Trying to find FPS in an XML file (the fastest way)
-                    fps_match = re.search(r'\bframeRate="(\d+)(?:/\d+)?"', content)
-                    if fps_match:
-                        self.current_orig_fps = int(fps_match.group(1))
-                    else:
-                        # 2. Call ffprobe and let it READ THE MPD FILE!
-                        self.current_orig_fps = self.get_fps_from_mpd(mpd_path)
-                        
-                    #UPDATE YOUR LABEL
-                    if hasattr(self.ui, 'label_fps'):
-                        self.ui.label_fps.setText(f"FPS: {self.current_orig_fps}")
-                    
-                    height_match = re.search(r'\bheight="(\d+)"', content)
-                    width_match = re.search(r'\bwidth="(\d+)"', content)
-                    bandwidth_match = re.search(r'\bbandwidth="(\d+)"', content)
-                    
-                    if bandwidth_match:
-                        # Converting bitrate from bytes to mb
-                        self.current_orig_bitrate = int(bandwidth_match.group(1)) / 1000000
-                    
-                    if height_match and width_match:
-                        h = int(height_match.group(1))
-                        w = int(width_match.group(1))
-                        unique_resolutions.add(f"{w}x{h}")
-                        if h > max_height: max_height = h
-            except: pass
-
-        if unique_resolutions:
-            res_text = ", ".join(sorted(list(unique_resolutions)))
-            audio_kbps = getattr(self, 'current_orig_audio_bitrate', 192)
-            
-            # Keep only the resolution here
-            self.ui.orig_res_label.setText(f"Original resolution: {res_text}")
-            
-            # Populate Video Bitrate independently (Removed the '~' symbol!)
-            if hasattr(self.ui, 'label_vbitrate'):
-                if hasattr(self, 'current_orig_bitrate') and self.current_orig_bitrate > 0:
-                    rounded_bitrate = int(round(self.current_orig_bitrate))
-                    self.ui.label_vbitrate.setText(f"Video Bitrate: {rounded_bitrate} Mbps")
-                else:
-                    self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
-            
-            # Populate Audio Bitrate independently
-            if hasattr(self.ui, 'label_abitrate'):
-                self.ui.label_abitrate.setText(f"Audio Bitrate: {audio_kbps} kbps")
-                
-        else:
-            self.ui.orig_res_label.setText("Original resolution: Unknown")
-            if hasattr(self.ui, 'label_vbitrate'): self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
-            if hasattr(self.ui, 'label_abitrate'): self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
-            max_height = 1080
-
-        # Fill in the drop-down list of resolutions (cutting off those that are larger than the original)
-        if hasattr(self.ui, 'combo_quality'):
-            self.ui.combo_quality.clear()
-            
-            # Dynamic Original Title (eg: Original (Lossless, 1440p))
-            if max_height > 0:
-                self.ui.combo_quality.addItem(f"Original (Lossless, {max_height}p)")
-            else:
-                self.ui.combo_quality.addItem("Original (Lossless)")
-
-            for preset_name, preset_height in self.all_qualities:
-                if preset_height <= max_height:
-                    self.ui.combo_quality.addItem(preset_name)
-            
-            self.ui.combo_quality.setCurrentIndex(0)
-            self.ui.combo_quality.insertSeparator(self.ui.combo_quality.count())
-            self.ui.combo_quality.addItem("🎯 Target File Size...")
-            self.update_bitrate_options() # Calling a function to update bitrates
-        
-        if hasattr(self.ui, 'combo_fps'):
-            self.ui.combo_fps.clear()
-            
-            # Take FPS from the clip
-            fps_val = getattr(self, 'current_orig_fps', 60)
-            
-            if fps_val >= 60:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
-                self.ui.combo_fps.addItem("30 FPS")
-                self.ui.combo_fps.addItem("15 FPS")
-            elif fps_val >= 30:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
-                self.ui.combo_fps.addItem("15 FPS")
-            else:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
-
-            self.ui.combo_fps.insertSeparator(self.ui.combo_fps.count())
-            self.ui.combo_fps.addItem("⚙️ Custom FPS...")
-
-            self.ui.combo_fps.setCurrentIndex(0)
-        else:
-            print("ERROR: Widget combo_fps not found! Check objectName in Qt Designer.")
-        
-        # 2. RESTORE USER SELECTION (IF IT STILL EXISTS)
-        if current_quality and hasattr(self.ui, 'combo_quality'):
-            index = self.ui.combo_quality.findText(current_quality)
-            if index >= 0: self.ui.combo_quality.setCurrentIndex(index)
-            
-        if current_fps and hasattr(self.ui, 'combo_fps'):
-            index = self.ui.combo_fps.findText(current_fps)
-            if index >= 0: self.ui.combo_fps.setCurrentIndex(index)
-            
-        if current_bitrate and hasattr(self.ui, 'combo_bitrate'):
-            index = self.ui.combo_bitrate.findText(current_bitrate)
-            if index >= 0: self.ui.combo_bitrate.setCurrentIndex(index)
-
-        # Unlock start button safely
-        if not getattr(self, '_is_rendering', False):
-            self.ui.btn_start.setEnabled(True)
-
-        self.ui.btn_start.setEnabled(True)
-        self.update_final_setup()
-
-        # --- PLAYER HEADER DATA ---
         game_item = self.ui.table_clips.item(selected_row, 0)
         game_name = game_item.text()
         game_icon = game_item.icon()
-        
         clip_date = self.ui.table_clips.item(selected_row, 2).text()
         clip_time = self.ui.table_clips.item(selected_row, 3).text()
-        
-        # Updating our correct software panel
-        if hasattr(self, 'custom_text_label'):
-            header_html = f"<b>{game_name}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; {clip_date} &nbsp;&nbsp;•&nbsp;&nbsp; {clip_time}</span>"
+
+        if hasattr(self, "custom_text_label"):
+            header_html = (
+                f"<b>{game_name}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
+                f"{clip_date} &nbsp;&nbsp;•&nbsp;&nbsp; {clip_time}</span>"
+            )
             self.custom_text_label.setText(header_html)
-            
-        if hasattr(self, 'custom_icon_label'):
+        if hasattr(self, "custom_icon_label"):
             self.custom_icon_label.setPixmap(game_icon.pixmap(24, 24))
 
         self._selected_queue_job_id = None
         self.update_playback_badge()
-
-        # Automatically load and play the new clip. This overwrites the stuck frame of the previous clip!
         self.generate_and_play_preview()
-        
-    
+        self._update_start_button_label()
+
     def update_bitrate_options(self):
         """ Refreshes lists, applies FPS math visually, and freezes settings if Original is selected. """
         if not hasattr(self.ui, 'combo_bitrate') or not hasattr(self.ui, 'combo_quality'):
@@ -580,14 +624,14 @@ class RenderMixin:
     
     def update_final_setup(self):
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
-        if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
+        clip_path = self._active_preview_clip_path()
+        if not clip_path:
             if hasattr(self.ui, 'label_short_summary'):
                 if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
-                
             if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
             return
 
@@ -802,12 +846,20 @@ class RenderMixin:
         q_word = quality.split()[0] if quality.split() else "Unknown"
         
         game_name = "Steam Clip"
-        if hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
+        target_icon = getattr(self, 'current_game_icon', '')
+        if self._queue_controls_preview() and getattr(self, "_selected_queue_job_id", None):
+            job = self.render_queue.get(self._selected_queue_job_id)
+            if job:
+                game_name = job.game_name.strip()
+                if job.game_icon_path and os.path.exists(job.game_icon_path):
+                    target_icon = job.game_icon_path
+        elif hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
             game_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).text().strip()
-            
-        game_icon = getattr(self, 'current_game_icon', '')
+            target_icon = getattr(self, 'current_game_icon', '')
+
         unknown_icon_path = get_resource_path("unknown_icon.png")
-        target_icon = game_icon if (game_icon and os.path.exists(game_icon)) else unknown_icon_path
+        if not target_icon or not os.path.exists(target_icon):
+            target_icon = unknown_icon_path
 
         if audio_only:
             text_part = f"<span style='font-size: 14px;'><b>{game_name} &nbsp;•&nbsp; AUDIO ONLY: {audio_format} {audio_bitrate_clean}</b></span>"
@@ -835,6 +887,8 @@ class RenderMixin:
             
         if not getattr(self, '_is_rendering', False):
             self.update_status_indicator("Ready", "ready")
+
+        self._sync_ui_to_selected_job()
 
     def on_quality_mode_changed(self, text):
         """ Hides or shows the slider and target inputs depending on the mode """
@@ -1107,6 +1161,88 @@ class RenderMixin:
             len(self.render_queue),
         )
         self.refresh_render_queue_panel()
+        self._update_start_button_label()
+        self._persist_render_queue()
+
+        if added and self._queue_controls_preview():
+            if not getattr(self, "_selected_queue_job_id", None) and self.render_queue.jobs:
+                self.activate_queue_job(self.render_queue.jobs[0].id)
+
+    def activate_queue_job(self, job_id: str) -> None:
+        """Load preview, trim, and settings from a queue job snapshot."""
+        job = self.render_queue.get(job_id)
+        if not job:
+            return
+        self._selected_queue_job_id = job_id
+        self._loading_queue_job = True
+        try:
+            self._apply_header_from_job(job)
+            self._populate_quality_options_for_clip(job.clip_path)
+            apply_job_settings_to_ui(self, job.settings)
+            self._apply_trim_from_job_settings(job.settings)
+            if hasattr(self, "btn_close_clip"):
+                self.btn_close_clip.show()
+            self.generate_and_play_preview(job.clip_path)
+            self.update_final_setup()
+        finally:
+            self._loading_queue_job = False
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        self._update_start_button_label()
+
+    def remove_queue_job(self, job_id: str) -> None:
+        job = self.render_queue.get(job_id)
+        if not job:
+            return
+        if job.status == JobStatus.RENDERING:
+            return
+        was_selected = getattr(self, "_selected_queue_job_id", None) == job_id
+        self.render_queue.remove(job_id)
+        self._persist_render_queue()
+        if not self.render_queue:
+            self._on_queue_became_empty()
+            return
+        if was_selected:
+            nxt = self.render_queue.jobs[0]
+            self.activate_queue_job(nxt.id)
+        else:
+            self.refresh_render_queue_panel()
+            self._update_start_button_label()
+
+    def clear_render_queue(self) -> None:
+        if getattr(self, "_queue_batch_active", False):
+            QMessageBox.warning(self.ui, "Render Queue", "Stop the batch render before clearing the queue.")
+            return
+        if not len(self.render_queue):
+            return
+        reply = QMessageBox.question(
+            self.ui,
+            "Clear Queue",
+            f"Remove all {len(self.render_queue)} clip(s) from the render queue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.render_queue.clear()
+        self._on_queue_became_empty()
+
+    def reorder_queue_job(self, source_id: str, target_id: str) -> None:
+        if getattr(self, "_queue_batch_active", False):
+            return
+        if self.render_queue.reorder(source_id, target_id):
+            self.refresh_render_queue_panel()
+            self._persist_render_queue()
+
+    def _on_queue_became_empty(self) -> None:
+        self._selected_queue_job_id = None
+        self._sync_queue_splitter_visibility()
+        self._update_start_button_label()
+        self._persist_render_queue()
+        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            self.update_quality_options()
+        else:
+            self.update_playback_badge()
 
     def _current_header_clip_path(self):
         job_id = getattr(self, "_selected_queue_job_id", None)
@@ -1225,69 +1361,105 @@ class RenderMixin:
             self.right_h_splitter.setSizes([total, 0])
 
     def on_queue_job_selected(self, job_id: str):
-        """Highlight a queue card (preview wiring comes in stage 5)."""
-        self._selected_queue_job_id = job_id
-        job = self.render_queue.get(job_id)
-        if job:
-            logging.info("Queue selection: #%s %s", job.queue_index, job.game_name)
-            self._apply_header_from_job(job)
-            if hasattr(self, "btn_close_clip"):
-                self.btn_close_clip.show()
-        self.refresh_render_queue_panel()
-        self.update_playback_badge()
+        """Load preview and settings for the selected queue card."""
+        logging.info("Queue selection: %s", job_id)
+        self.activate_queue_job(job_id)
 
     def start_render_thread(self):
-        """ Prepares parameters and starts the background rendering thread """
+        """Prepares parameters and starts rendering (single clip or full queue)."""
         if getattr(self, '_is_rendering', False):
             return
-        
+
+        if self._queue_controls_preview() and self.render_queue.pending_count() > 0:
+            self.start_queue_batch_render()
+            return
+
         if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
             QMessageBox.warning(self.ui, "Error", "Please select a clip from the list first!")
             return
-            
-        clip_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
 
+        clip_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
         job = build_render_job_from_ui(self, clip_name)
         if job is None:
             QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
             return
+        self._start_render_job(job)
 
+    def start_queue_batch_render(self) -> None:
+        pending = self.render_queue.pending_count()
+        if pending <= 0:
+            QMessageBox.information(self.ui, "Render Queue", "No queued clips to render.")
+            return
+
+        self._queue_batch_active = True
+        self._batch_total = pending
+        self._batch_current = 0
+        self._sync_ui_to_selected_job()
+        set_settings_panel_locked(self, True)
+        self.ui.btn_start.setEnabled(False)
+        if hasattr(self.ui, 'btn_cancel'):
+            self.ui.btn_cancel.setEnabled(True)
+        if hasattr(self.ui, 'btn_pause'):
+            self.ui.btn_pause.setEnabled(True)
+        self.process_next_in_queue()
+
+    def process_next_in_queue(self) -> None:
+        if not getattr(self, '_queue_batch_active', False):
+            return
+        job = self.render_queue.next_queued()
+        if job is None:
+            self._finish_queue_batch()
+            return
+        self._batch_current += 1
+        self._selected_queue_job_id = job.id
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        self._start_render_job(job, batch_mode=True)
+
+    def _start_render_job(self, job, batch_mode: bool = False) -> None:
+        job.refresh_output_path()
         ffmpeg_exe = os.path.join(_bin_dir, "ffmpeg.exe")
         if not os.path.exists(ffmpeg_exe):
             QMessageBox.critical(self.ui, "Error", "ffmpeg.exe not found!")
+            if batch_mode:
+                self._stop_queue_batch()
             return
 
         params = resolve_render_params(job, ffmpeg_exe)
         if params is None:
             QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
+            if batch_mode:
+                self._stop_queue_batch()
             return
 
-        set_settings_panel_locked(self, True)
-        self.ui.btn_start.setEnabled(False)
-        if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(True)
-        if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(True)
+        if not batch_mode:
+            set_settings_panel_locked(self, True)
+            self.ui.btn_start.setEnabled(False)
+            if hasattr(self.ui, 'btn_cancel'):
+                self.ui.btn_cancel.setEnabled(True)
+            if hasattr(self.ui, 'btn_pause'):
+                self.ui.btn_pause.setEnabled(True)
 
-        self.update_status_indicator("Initializing...", "rendering")
-        logging.info(f"--- RENDER STARTED ---")
+        if batch_mode:
+            label = f"Rendering ({self._batch_current}/{self._batch_total})"
+        else:
+            label = "Initializing..."
+        self.update_status_indicator(label, "rendering")
+        logging.info("--- RENDER STARTED ---")
 
         self._is_rendering = True
         self._active_render_job = job
-        queue_job = self.render_queue.find_by_clip_path(clip_name)
+        queue_job = self.render_queue.find_by_clip_path(job.clip_path)
         if queue_job:
             queue_job.status = JobStatus.RENDERING
             self.refresh_render_queue_panel()
         self.update_playback_badge()
 
-        logging.info(f"Source: {clip_name}")
+        logging.info(f"Source: {job.clip_path}")
         logging.info(f"Saving in: {params.output_file}")
-        logging.info(
-            f"Settings: Quality={params.quality_text}, FPS={params.fps_text}, "
-            f"Bitrate={params.video_bitrate}, Codec={params.selected_encoder}, "
-            f"AudioOnly={params.audio_only}, Muted={params.mute_audio}"
-        )
 
         try:
-            self.thread = RenderThread(
+            self.render_thread = RenderThread(
                 params.all_mpds,
                 params.quality_text,
                 params.output_file,
@@ -1304,33 +1476,135 @@ class RenderMixin:
                 params.trim_start_sec,
                 params.trim_duration_sec,
             )
-            self.thread.progress_signal.connect(self._on_render_progress)
-            self.thread.finished_signal.connect(self.on_render_finished)
-            self.thread.start()
+            self.render_thread.progress_signal.connect(self._on_render_progress)
+            self.render_thread.finished_signal.connect(self.on_render_finished)
+            self.render_thread.start()
         except Exception as e:
             logging.error(f"Thread Start Error: {e}")
             self._is_rendering = False
             self._active_render_job = None
-            set_settings_panel_locked(self, False)
+            if not getattr(self, '_queue_batch_active', False):
+                set_settings_panel_locked(self, False)
             self.update_status_indicator("Error!", "error")
             self.ui.btn_start.setEnabled(True)
-            if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
-            if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
-            QMessageBox.critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
+            if hasattr(self.ui, 'btn_cancel'):
+                self.ui.btn_cancel.setEnabled(False)
+            if hasattr(self.ui, 'btn_pause'):
+                self.ui.btn_pause.setEnabled(False)
+            if batch_mode:
+                self._stop_queue_batch()
+            else:
+                QMessageBox.critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
+
+    def _finish_queue_batch(self) -> None:
+        completed = sum(1 for j in self.render_queue if j.status == JobStatus.COMPLETED)
+        errors = sum(1 for j in self.render_queue if j.status == JobStatus.ERROR)
+        self._queue_batch_active = False
+        set_settings_panel_locked(self, False)
+        if hasattr(self.ui, 'btn_start'):
+            self.ui.btn_start.setEnabled(True)
+        if hasattr(self.ui, 'btn_cancel'):
+            self.ui.btn_cancel.setEnabled(False)
+        if hasattr(self.ui, 'btn_pause'):
+            self.ui.btn_pause.setEnabled(False)
+            self.ui.btn_pause.setText("Pause")
+        self._update_start_button_label()
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        self._persist_render_queue()
+        self.update_status_indicator("Ready", "ready")
+        QMessageBox.information(
+            self.ui,
+            "Render Queue",
+            f"Batch finished.\nCompleted: {completed}\nErrors: {errors}",
+        )
+
+    def _stop_queue_batch(self, cancelled: bool = False) -> None:
+        self._queue_batch_active = False
+        set_settings_panel_locked(self, False)
+        if hasattr(self.ui, 'btn_start'):
+            self.ui.btn_start.setEnabled(True)
+        if hasattr(self.ui, 'btn_cancel'):
+            self.ui.btn_cancel.setEnabled(False)
+        if hasattr(self.ui, 'btn_pause'):
+            self.ui.btn_pause.setEnabled(False)
+            self.ui.btn_pause.setText("Pause")
+        self._update_start_button_label()
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        if cancelled:
+            self.update_status_indicator("Cancelled", "cancelled")
+            QMessageBox.information(self.ui, "Cancelled", "Queue render was cancelled.")
+        self.update_status_indicator("Ready", "ready")
+
+    def _prompt_batch_continue_after_error(self, error_msg: str) -> bool:
+        dialog = QDialog(self.ui)
+        dialog.setWindowTitle("Render Error")
+        dialog.setMinimumWidth(420)
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel("АЙ АЙ АЙ АЙ, краш! Продолжить?")
+        title.setStyleSheet("color: #ff4444; font-size: 16px; font-weight: bold;")
+        layout.addWidget(title)
+
+        detail = QLabel((error_msg or "Unknown error")[:400])
+        detail.setWordWrap(True)
+        detail.setStyleSheet("color: #cccccc; font-size: 12px;")
+        layout.addWidget(detail)
+
+        countdown = QLabel("Auto-continue in 10 s")
+        countdown.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(countdown)
+
+        btn_row = QHBoxLayout()
+        btn_ok = QPushButton("Продолжить")
+        btn_stop = QPushButton("Stop queue")
+        btn_row.addWidget(btn_ok)
+        btn_row.addWidget(btn_stop)
+        layout.addLayout(btn_row)
+
+        result = {"continue": True}
+        remaining = [10]
+
+        timer = QTimer(dialog)
+
+        def tick():
+            remaining[0] -= 1
+            countdown.setText(
+                f"Auto-continue in {remaining[0]} s" if remaining[0] > 0 else "Continuing..."
+            )
+            if remaining[0] <= 0:
+                timer.stop()
+                dialog.accept()
+
+        timer.timeout.connect(tick)
+        timer.start(1000)
+
+        btn_ok.clicked.connect(dialog.accept)
+        btn_stop.clicked.connect(lambda: (result.update({"continue": False}), dialog.reject()))
+
+        if dialog.exec() == QDialog.Rejected and not result["continue"]:
+            timer.stop()
+            return False
+        timer.stop()
+        return True
+
     def cancel_render(self):
         """ Cancel Button Handler """
         logging.warning("User cancelled rendering (Cancel)")
-        if hasattr(self, 'thread') and self.thread.isRunning():
+        if getattr(self, "render_thread", None) and self.render_thread.isRunning():
             self.update_status_indicator("Cancelling... Please wait", "cancelling")
             if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
             if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setEnabled(False)
-            self.thread.cancel() # Send a cancel signal to the thread
+            self.render_thread.cancel()
+            if getattr(self, '_queue_batch_active', False):
+                self._batch_cancel_requested = True
 
     def toggle_pause(self):
         """ Pause button handler """
         logging.info("User Paused/Resumed rendering")
-        if hasattr(self, 'thread') and self.thread.isRunning():
-            is_paused = self.thread.toggle_pause() # Send a pause signal to the thread
+        if getattr(self, "render_thread", None) and self.render_thread.isRunning():
+            is_paused = self.render_thread.toggle_pause()
             
             # Change the button text depending on the status
             if is_paused:
@@ -1348,18 +1622,32 @@ class RenderMixin:
 
         self._is_rendering = False
         self._active_render_job = None
-        set_settings_panel_locked(self, False)
         self.refresh_render_queue_panel()
         self.update_playback_badge()
+        self._persist_render_queue()
 
-        # Unlocking the UI
+        if getattr(self, "_queue_batch_active", False):
+            if success:
+                logging.info("=== BATCH RENDER SUCCESS === %s", output_file)
+                self.process_next_in_queue()
+                return
+            if "cancelled by user" in (error_msg or "").lower():
+                self._stop_queue_batch(cancelled=True)
+                return
+            if self._prompt_batch_continue_after_error(error_msg or ""):
+                self.process_next_in_queue()
+            else:
+                self._stop_queue_batch()
+            return
+
+        set_settings_panel_locked(self, False)
+
         if hasattr(self.ui, 'btn_start'): self.ui.btn_start.setEnabled(True)
         if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
-        if hasattr(self.ui, 'btn_pause'): 
+        if hasattr(self.ui, 'btn_pause'):
             self.ui.btn_pause.setEnabled(False)
             self.ui.btn_pause.setText("Pause")
-        
-        # Show the result to the user
+
         if success:
             logging.info("=== RENDER SUCCESS ===")
             

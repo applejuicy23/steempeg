@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
+from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -16,9 +19,10 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.render.queue import STATUS_COLORS, RenderJob
+from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_MIME_JOB_ID = "application/x-steempeg-queue-job"
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -28,12 +32,17 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 class QueueJobCard(QFrame):
     clicked = Signal(str)
+    remove_requested = Signal(str)
+    dropped_on = Signal(str, str)
 
     def __init__(self, job: RenderJob, selected: bool = False, parent=None):
         super().__init__(parent)
         self.setObjectName("QueueJobCard")
+        self._job = job
         self._job_id = job.id
+        self._drag_start = QPoint()
         self.setCursor(Qt.PointingHandCursor)
+        self.setAcceptDrops(job.status == JobStatus.QUEUED)
 
         color = STATUS_COLORS.get(job.status, "#ffcc00")
         r, g, b = _hex_to_rgb(color)
@@ -45,6 +54,11 @@ class QueueJobCard(QFrame):
                 border-radius: 12px;
             }}
             QLabel {{ background: transparent; border: none; {_FONT} }}
+            QPushButton#queueRemoveBtn {{
+                background: transparent; border: none; color: #888888;
+                font-size: 11px; font-weight: bold; padding: 0;
+            }}
+            QPushButton#queueRemoveBtn:hover {{ color: #ff6666; }}
         """)
 
         root = QHBoxLayout(self)
@@ -90,16 +104,75 @@ class QueueJobCard(QFrame):
         text_col.addWidget(meta)
         root.addLayout(text_col, 1)
 
+        if job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+            btn_remove = QPushButton("✕")
+            btn_remove.setObjectName("queueRemoveBtn")
+            btn_remove.setFixedSize(20, 20)
+            btn_remove.setToolTip("Remove from queue")
+            btn_remove.setCursor(Qt.PointingHandCursor)
+            btn_remove.clicked.connect(lambda: self.remove_requested.emit(self._job_id))
+            root.addWidget(btn_remove, 0, Qt.AlignTop)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self._job_id)
+            self._drag_start = event.position().toPoint()
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
+                self.clicked.emit(self._job_id)
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.LeftButton):
+            return
+        if self._job.status != JobStatus.QUEUED:
+            return
+        if (event.position().toPoint() - self._drag_start).manhattanLength() < QApplication.startDragDistance():
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_MIME_JOB_ID, self._job_id.encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_JOB_ID):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_JOB_ID):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        raw = event.mimeData().data(_MIME_JOB_ID)
+        if not raw:
+            return
+        source_id = bytes(raw).decode("utf-8")
+        if source_id and source_id != self._job_id:
+            self.dropped_on.emit(source_id, self._job_id)
+        event.acceptProposedAction()
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; }
+            QMenu::item:selected { background-color: #5a4b7a; }
+        """)
+        if self._job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+            act_remove = menu.addAction("Remove from queue")
+            act_remove.triggered.connect(lambda: self.remove_requested.emit(self._job_id))
+        menu.exec(event.globalPos())
 
 
 class RenderQueuePanel(QWidget):
     """Scrollable queue list with a Clips-Manager-style header pill."""
 
     job_selected = Signal(str)
+    job_remove_requested = Signal(str)
+    job_reorder_requested = Signal(str, str)
+    clear_queue_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,7 +197,7 @@ class RenderQueuePanel(QWidget):
             }
         """)
         pill_layout = QHBoxLayout(pill)
-        pill_layout.setContentsMargins(20, 8, 20, 8)
+        pill_layout.setContentsMargins(16, 8, 12, 8)
 
         self._title_label = QLabel("🎬 Render Queue")
         self._title_label.setStyleSheet(
@@ -134,9 +207,22 @@ class RenderQueuePanel(QWidget):
         self._count_label.setStyleSheet(
             f"color: #888888; font-weight: bold; font-size: 13px; {_FONT}"
         )
+
+        self._btn_clear = QPushButton("Clear")
+        self._btn_clear.setCursor(Qt.PointingHandCursor)
+        self._btn_clear.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
+                border-radius: 10px; padding: 2px 10px; font-size: 11px;
+            }
+            QPushButton:hover { background-color: #5a3535; color: #ffaaaa; }
+        """)
+        self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
+
         pill_layout.addWidget(self._title_label)
         pill_layout.addStretch()
         pill_layout.addWidget(self._count_label)
+        pill_layout.addWidget(self._btn_clear)
 
         header_row.addStretch()
         header_row.addWidget(pill)
@@ -179,11 +265,15 @@ class RenderQueuePanel(QWidget):
         self._jobs = list(jobs)
         self._selected_id = selected_id
         self._count_label.setText(str(len(jobs)))
+        self._btn_clear.setEnabled(len(jobs) > 0)
+
+        if self._empty_label.parent() is not None:
+            self._list_layout.removeWidget(self._empty_label)
 
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
             w = item.widget()
-            if w is not None:
+            if w is not None and w is not self._empty_label:
                 w.deleteLater()
         self._card_widgets.clear()
 
@@ -197,6 +287,8 @@ class RenderQueuePanel(QWidget):
         for job in jobs:
             card = QueueJobCard(job, selected=(job.id == selected_id))
             card.clicked.connect(self._on_card_clicked)
+            card.remove_requested.connect(self.job_remove_requested.emit)
+            card.dropped_on.connect(self.job_reorder_requested.emit)
             self._list_layout.addWidget(card)
             self._card_widgets.append(card)
         self._list_layout.addStretch()

@@ -5,11 +5,12 @@ per queue item before the batch runner starts (stage 2+ UI).
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class JobStatus(Enum):
@@ -209,6 +210,107 @@ class RenderQueue:
                 return job
         return None
 
+    def index_of(self, job_id: str) -> int:
+        for i, job in enumerate(self._jobs):
+            if job.id == job_id:
+                return i
+        return -1
+
+    def reorder(self, source_id: str, target_id: str) -> bool:
+        """Move a queued job before ``target_id`` (both must be movable)."""
+        src_idx = self.index_of(source_id)
+        tgt_idx = self.index_of(target_id)
+        if src_idx < 0 or tgt_idx < 0 or src_idx == tgt_idx:
+            return False
+        src = self._jobs[src_idx]
+        if src.status != JobStatus.QUEUED:
+            return False
+        tgt = self._jobs[tgt_idx]
+        if tgt.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+            return False
+        return self.move(src_idx, tgt_idx)
+
+    def to_json_list(self) -> List[Dict[str, Any]]:
+        return [job_to_dict(j) for j in self._jobs]
+
+    @classmethod
+    def from_json_list(cls, data: List[Dict[str, Any]]) -> "RenderQueue":
+        q = cls()
+        for item in data or []:
+            job = job_from_dict(item)
+            if job and os.path.isdir(job.clip_path):
+                q._jobs.append(job)
+        q._reindex()
+        return q
+
     def _reindex(self) -> None:
         for i, job in enumerate(self._jobs, start=1):
             job.queue_index = i
+
+
+def settings_to_dict(s: RenderJobSettings) -> Dict[str, Any]:
+    return asdict(s)
+
+
+def settings_from_dict(data: Dict[str, Any]) -> RenderJobSettings:
+    fields = asdict(RenderJobSettings())
+    for key, value in (data or {}).items():
+        if key in fields:
+            fields[key] = value
+    return RenderJobSettings(**fields)
+
+
+def job_to_dict(job: RenderJob) -> Dict[str, Any]:
+    return {
+        "id": job.id,
+        "clip_path": job.clip_path,
+        "game_name": job.game_name,
+        "clip_date": job.clip_date,
+        "clip_time": job.clip_time,
+        "game_icon_path": job.game_icon_path,
+        "settings": settings_to_dict(job.settings),
+        "status": job.status.value,
+        "queue_index": job.queue_index,
+        "output_file": job.output_file,
+        "error_message": job.error_message,
+    }
+
+
+def job_from_dict(data: Dict[str, Any]) -> Optional[RenderJob]:
+    if not data or not data.get("clip_path"):
+        return None
+    try:
+        status = JobStatus(data.get("status", JobStatus.QUEUED.value))
+    except ValueError:
+        status = JobStatus.QUEUED
+    settings = settings_from_dict(data.get("settings") or {})
+    return RenderJob(
+        clip_path=data["clip_path"],
+        game_name=data.get("game_name", ""),
+        clip_date=data.get("clip_date", ""),
+        clip_time=data.get("clip_time", ""),
+        game_icon_path=data.get("game_icon_path", ""),
+        settings=settings,
+        id=data.get("id") or uuid.uuid4().hex,
+        status=status,
+        queue_index=int(data.get("queue_index", 0)),
+        output_file=data.get("output_file", ""),
+        error_message=data.get("error_message", ""),
+    )
+
+
+def save_queue_to_file(path: str, queue: RenderQueue) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(queue.to_json_list(), f, indent=2)
+
+
+def load_queue_from_file(path: str) -> RenderQueue:
+    if not os.path.isfile(path):
+        return RenderQueue()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return RenderQueue.from_json_list(data if isinstance(data, list) else [])
+    except (OSError, json.JSONDecodeError, TypeError):
+        return RenderQueue()

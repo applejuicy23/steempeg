@@ -506,6 +506,8 @@ class LibraryMixin:
         if not self.grid_clips.selectedItems():
             return
         self.sync_table_from_grid_selection()
+        if getattr(self, '_queue_controls_preview', lambda: False)():
+            return
         if hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
             self.update_quality_options()
 

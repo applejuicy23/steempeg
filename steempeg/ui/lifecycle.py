@@ -124,6 +124,9 @@ class LifecycleMixin:
         except Exception as e:
             print(f"⚠️ Error with killing zombie pcorsalfgn: {e}")
 
+        if hasattr(self, "_persist_render_queue"):
+            self._persist_render_queue()
+
         event.accept()
 
     

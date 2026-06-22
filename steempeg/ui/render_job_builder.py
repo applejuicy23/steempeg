@@ -18,6 +18,96 @@ from steempeg.render.queue import (
     game_icon_path_for_clip,
 )
 
+
+def _set_combo_text(combo, text: str) -> None:
+    if not combo or not text:
+        return
+    idx = combo.findText(text)
+    if idx >= 0:
+        combo.setCurrentIndex(idx)
+
+
+def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> None:
+    """Restore a job's saved settings into the live settings panel."""
+    ui = app.ui
+    app.custom_target_bitrate = settings.custom_target_bitrate
+    app.custom_target_height = settings.custom_target_height
+    app.current_orig_fps = settings.orig_fps
+    app.current_orig_bitrate = settings.orig_video_mbps
+    app.current_orig_audio_bitrate = settings.orig_audio_kbps
+
+    if settings.save_dir:
+        app.custom_destination = settings.save_dir
+        if hasattr(ui, "destination_button"):
+            ui.destination_button.setText(f"Destination: {settings.save_dir}")
+
+    blockers = []
+    for name in (
+        "combo_quality",
+        "combo_fps",
+        "combo_bitrate",
+        "combo_codec",
+        "combo_encoder",
+        "combo_audio_format",
+        "combo_audio_bitrate",
+        "check_audio_only",
+        "check_mute_audio",
+        "input_filename",
+    ):
+        w = getattr(ui, name, None)
+        if w is not None and hasattr(w, "blockSignals"):
+            w.blockSignals(True)
+            blockers.append(w)
+
+    if hasattr(ui, "combo_quality") and settings.quality_text:
+        _set_combo_text(ui.combo_quality, settings.quality_text)
+        if hasattr(app, "on_quality_mode_changed"):
+            app.on_quality_mode_changed(settings.quality_text)
+        if hasattr(app, "update_bitrate_options"):
+            app.update_bitrate_options()
+
+    if hasattr(ui, "combo_fps") and settings.fps_text:
+        _set_combo_text(ui.combo_fps, settings.fps_text)
+    if hasattr(ui, "combo_bitrate") and settings.bitrate_text:
+        _set_combo_text(ui.combo_bitrate, settings.bitrate_text)
+    if hasattr(ui, "combo_codec") and settings.codec_text:
+        _set_combo_text(ui.combo_codec, settings.codec_text)
+
+    if hasattr(ui, "combo_encoder") and settings.encoder_codec:
+        matched = False
+        for i in range(ui.combo_encoder.count()):
+            data = ui.combo_encoder.itemData(i, Qt.UserRole)
+            if data and str(data) == settings.encoder_codec:
+                ui.combo_encoder.setCurrentIndex(i)
+                matched = True
+                break
+        if not matched and settings.encoder_display:
+            _set_combo_text(ui.combo_encoder, settings.encoder_display)
+
+    if hasattr(ui, "check_audio_only"):
+        ui.check_audio_only.setChecked(settings.audio_only)
+    if hasattr(ui, "check_mute_audio"):
+        ui.check_mute_audio.setChecked(settings.mute_audio)
+    if hasattr(ui, "combo_audio_format") and settings.audio_format:
+        _set_combo_text(ui.combo_audio_format, settings.audio_format)
+    if hasattr(ui, "combo_audio_bitrate") and settings.audio_bitrate_text:
+        _set_combo_text(ui.combo_audio_bitrate, settings.audio_bitrate_text)
+    if hasattr(ui, "input_filename") and settings.output_basename:
+        ui.input_filename.setText(settings.output_basename)
+
+    if hasattr(ui, "size_slider"):
+        ui.size_slider.setValue(settings.size_slider_index)
+
+    if settings.custom_fps is not None and hasattr(app, "input_custom_fps"):
+        app.input_custom_fps.setText(str(settings.custom_fps))
+    if settings.custom_vbitrate is not None and hasattr(app, "input_custom_vbitrate"):
+        app.input_custom_vbitrate.setText(str(settings.custom_vbitrate))
+    if settings.custom_abitrate is not None and hasattr(app, "input_custom_abitrate"):
+        app.input_custom_abitrate.setText(str(settings.custom_abitrate))
+
+    for w in blockers:
+        w.blockSignals(False)
+
 if TYPE_CHECKING:
     from steempeg.app import SteempegApp
 
