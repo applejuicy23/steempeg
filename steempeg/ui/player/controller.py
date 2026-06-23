@@ -287,12 +287,18 @@ class PlayerMixin:
         else:
             splitter.setSizes([0, total])
 
-    def _enter_immersive_layout(self):
-        """Hide chrome via splitters only — never touch Win32/Qt window state."""
+    def _set_hide_watcher_suppressed(self, suppressed: bool):
+        watcher = getattr(self, 'hide_watcher', None)
+        if watcher is not None:
+            watcher.set_suppressed(suppressed)
+
+    def _save_immersive_splitter_sizes(self):
         self._save_splitter_sizes(getattr(self.ui, 'main_splitter', None), '_immersive_main_splitter_sizes')
         self._save_splitter_sizes(getattr(self, 'main_v_splitter', None), '_immersive_v_splitter_sizes')
         self._save_splitter_sizes(getattr(self, 'right_h_splitter', None), '_immersive_h_splitter_sizes')
 
+    def _enter_immersive_layout(self):
+        """Collapse splitters only — sizes must be saved before panels are hidden."""
         self._collapse_splitter(getattr(self.ui, 'main_splitter', None), keep_index=1)
         self._collapse_splitter(getattr(self, 'main_v_splitter', None), keep_index=0)
         self._collapse_splitter(getattr(self, 'right_h_splitter', None), keep_index=0)
@@ -427,6 +433,7 @@ class PlayerMixin:
         if hasattr(self, 'fs_timer'):
             self.fs_timer.stop()
         self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+        self._set_hide_watcher_suppressed(True)
 
         if hasattr(self, 'player_footer_frame'):
             self.player_footer_frame.hide()
@@ -437,16 +444,6 @@ class PlayerMixin:
             self.mega_top_pill.setVisible(not is_t)
         if hasattr(self, 'library_views_container'):
             self.library_views_container.setVisible(not is_t)
-        if hasattr(self.ui, 'settings_tabs'):
-            self.ui.settings_tabs.setVisible(not is_t)
-        if hasattr(self, 'neo_wrapper'):
-            self.neo_wrapper.setVisible(not is_t)
-        if hasattr(self.ui, 'frame_status'):
-            self.ui.frame_status.setVisible(not is_t)
-        if hasattr(self, 'bottom_v_wrap'):
-            self.bottom_v_wrap.setVisible(not is_t)
-        if hasattr(self, 'render_dashboard'):
-            self.render_dashboard.setVisible(not is_t)
 
         if hasattr(self.ui, 'btn_start'):
             bw = self.ui.btn_start.parentWidget()
@@ -510,6 +507,19 @@ class PlayerMixin:
             v_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self._exit_immersive_layout(is_t)
+
+        if not is_t:
+            if hasattr(self, 'bottom_v_wrap'):
+                self.bottom_v_wrap.show()
+            if hasattr(self.ui, 'settings_tabs'):
+                self.ui.settings_tabs.show()
+            if hasattr(self, 'neo_wrapper'):
+                self.neo_wrapper.show()
+            if hasattr(self.ui, 'frame_status'):
+                self.ui.frame_status.show()
+            if hasattr(self, 'render_dashboard'):
+                self.render_dashboard.show()
+
         self._activate_window_layouts()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
@@ -525,6 +535,7 @@ class PlayerMixin:
             if hasattr(self, 'btn_theater'):
                 self.btn_theater.clearFocus()
                 QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
+            self._set_hide_watcher_suppressed(False)
             self._hide_immersive_transition_cover()
 
         QTimer.singleShot(0, finish_exit)
@@ -549,6 +560,9 @@ class PlayerMixin:
                     else:
                         self.btn_theater.setText("🎦")
             
+            self._set_hide_watcher_suppressed(True)
+            self._save_immersive_splitter_sizes()
+
             # Hide ALL old and NEW panels
             if hasattr(self.ui, 'left_panel'): self.ui.left_panel.hide()
             if hasattr(self, 'mega_top_pill'): self.mega_top_pill.hide()

@@ -10,10 +10,24 @@ class HideWatcher(QObject):
     def __init__(self, splitter):
         super().__init__()
         self.splitter = splitter
+        self._saved_sizes = None
+        self._suppressed = False
+
+    def set_suppressed(self, suppressed: bool):
+        self._suppressed = suppressed
 
     def eventFilter(self, obj, event):
+        if self._suppressed:
+            return False
         if event.type() == QEvent.Type.Hide:
-            self.splitter.setSizes([10000, 0])  # Collapse the bottom pane
+            sizes = self.splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._saved_sizes = sizes
+            total = sum(sizes) if sum(sizes) > 0 else max(self.splitter.height(), 1)
+            self.splitter.setSizes([int(total), 0])
         elif event.type() == QEvent.Type.Show:
-            self.splitter.setSizes([750, 250])  # Expand the bottom pane back
-        return False  # Do not block the actual hide/show event
+            if self._saved_sizes and len(self._saved_sizes) >= 2 and self._saved_sizes[1] > 0:
+                self.splitter.setSizes(self._saved_sizes)
+            else:
+                self.splitter.setSizes([750, 250])
+        return False
