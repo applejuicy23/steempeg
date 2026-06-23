@@ -1537,6 +1537,7 @@ class RenderMixin:
                 queue_w = 300
                 self.right_h_splitter.setSizes([max(total - queue_w, 500), queue_w])
         else:
+            self.render_queue_panel.show()
             if sizes[1] > 0:
                 self._selected_queue_job_id = None
                 self.right_h_splitter.setSizes([total, 0])

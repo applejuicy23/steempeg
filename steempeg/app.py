@@ -535,7 +535,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # 5. Putting It All Together
             self.left_master_layout = qtw.QVBoxLayout()
             self.left_master_layout.setContentsMargins(0, 0, 0, 0)
-            self.left_master_layout.setSpacing(4)
+            self.left_master_layout.setSpacing(5)
 
             self.left_master_layout.addLayout(cm_row)
             self.left_master_layout.addLayout(top_bar_layout)
@@ -1283,7 +1283,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 1. Give the right panel some breathing room
         right_layout = self.ui.right_panel.layout()
         if right_layout:
-            right_layout.setContentsMargins(12, 12, 12, 12) 
+            # Left/top/bottom inset for the player; no extra right inset — left_panel has none either.
+            right_layout.setContentsMargins(12, 12, 0, 12)
             right_layout.setSpacing(8)
 
         # 2: Taming MPV Player and creating a Border Wrapper
@@ -1877,8 +1878,11 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
                 # 7. Place the splitter back into the CLEAN right-hand panel.
                 self.right_content_wrap = QWidget()
+                self.right_content_wrap.setAttribute(Qt.WA_StyledBackground, True)
+                self.right_content_wrap.setStyleSheet("background: transparent;")
                 right_content_layout = QVBoxLayout(self.right_content_wrap)
-                right_content_layout.setContentsMargins(0, 0, 0, 0)
+                # Gutter before the queue splitter — same idea as top_v_wrap / bottom_v_wrap (10px).
+                right_content_layout.setContentsMargins(0, 0, 10, 0)
                 right_content_layout.setSpacing(0)
                 right_content_layout.addWidget(self.main_v_splitter)
 
@@ -1897,17 +1901,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.right_h_splitter.setChildrenCollapsible(True)
                 self.right_h_splitter.setCollapsible(0, False)
                 self.right_h_splitter.setCollapsible(1, True)
-                self.right_h_splitter.setStyleSheet("""
-                    QSplitter::handle {
-                        background-color: #444444;
-                        width: 4px;
-                        margin: 8px 2px 8px 14px;
-                        border-radius: 2px;
-                    }
-                    QSplitter::handle:hover {
-                        background-color: #b29ae7;
-                    }
-                """)
+                self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
                 self.right_h_splitter.addWidget(self.right_content_wrap)
                 self.right_h_splitter.addWidget(self.render_queue_panel)
                 self.right_h_splitter.setSizes([1200, 0])

@@ -23,6 +23,13 @@ from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
+_SPLITTER_GUTTER = 10
+_ROUNDED_LIST_BOX = (
+    "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
+)
+_HEADER_PILL_BOX = (
+    "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 16px; }"
+)
 _SCROLL_STYLE = """
     QScrollArea { background: transparent; border: none; }
     QWidget#queueListHost { background: transparent; }
@@ -263,7 +270,7 @@ class QueueListHost(QWidget):
 
 
 class RenderQueuePanel(QWidget):
-    """Scrollable queue list inside a Clips-Manager-style rounded container."""
+    """Render queue column — header pill + list box, mirroring Clips Manager layout."""
 
     job_selected = Signal(str)
     job_remove_requested = Signal(str)
@@ -274,38 +281,30 @@ class RenderQueuePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("render_queue_panel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background: transparent;")
         self._selected_id: str | None = None
         self._card_widgets: list[QueueJobCard] = []
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(2, 0, 8, 8)
-        outer.setSpacing(0)
+        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, 0)
+        outer.setSpacing(4)
 
-        self._container = QFrame()
-        self._container.setObjectName("queuePanelContainer")
-        self._container.setStyleSheet("""
-            QFrame#queuePanelContainer {
-                background-color: #2d2d2d;
-                border: 1px solid #353535;
-                border-radius: 12px;
-            }
-        """)
-        container_layout = QVBoxLayout(self._container)
-        container_layout.setContentsMargins(10, 10, 10, 10)
-        container_layout.setSpacing(10)
-
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(8)
+        header_pill = QFrame()
+        header_pill.setStyleSheet(_HEADER_PILL_BOX)
+        pill_layout = QHBoxLayout(header_pill)
+        pill_layout.setContentsMargins(16, 8, 16, 8)
+        pill_layout.setSpacing(8)
 
         self._title_label = QLabel("🎬 Render Queue")
         self._title_label.setStyleSheet(
-            f"color: #ffffff; font-weight: bold; font-size: 14px; {_FONT}"
+            f"color: #ffffff; font-weight: bold; font-size: 14px; border: none; background: transparent; {_FONT}"
         )
-        self._count_label = QLabel("0")
+
+        self._count_label = QLabel("(0)")
         self._count_label.setStyleSheet(
-            f"color: #888888; font-weight: bold; font-size: 13px; {_FONT}"
+            f"color: #888888; font-weight: bold; font-size: 13px; border: none; background: transparent; {_FONT}"
         )
 
         self._btn_clear = QPushButton("Clear")
@@ -319,11 +318,18 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
-        header_row.addWidget(self._title_label)
-        header_row.addStretch()
-        header_row.addWidget(self._count_label)
-        header_row.addWidget(self._btn_clear)
-        container_layout.addLayout(header_row)
+        pill_layout.addWidget(self._title_label)
+        pill_layout.addStretch()
+        pill_layout.addWidget(self._count_label)
+        pill_layout.addWidget(self._btn_clear)
+        outer.addWidget(header_pill)
+
+        self._list_container = QFrame()
+        self._list_container.setObjectName("queueListContainer")
+        self._list_container.setStyleSheet(_ROUNDED_LIST_BOX)
+        list_outer = QVBoxLayout(self._list_container)
+        list_outer.setContentsMargins(10, 10, 10, 10)
+        list_outer.setSpacing(10)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -343,11 +349,11 @@ class RenderQueuePanel(QWidget):
         self._empty_label.setStyleSheet(f"color: #666666; font-size: 12px; {_FONT}")
 
         self._scroll.setWidget(self._list_host)
-        container_layout.addWidget(self._scroll, 1)
+        list_outer.addWidget(self._scroll, 1)
 
-        outer.addWidget(self._container, 1)
+        outer.addWidget(self._list_container, 1)
 
-        self.setMinimumWidth(260)
+        self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def _clear_drop_highlights(self) -> None:
@@ -366,7 +372,7 @@ class RenderQueuePanel(QWidget):
     def refresh(self, jobs: list[RenderJob], selected_id: str | None = None) -> None:
         self._jobs = list(jobs)
         self._selected_id = selected_id
-        self._count_label.setText(str(len(jobs)))
+        self._count_label.setText(f"({len(jobs)})")
         self._btn_clear.setEnabled(len(jobs) > 0)
 
         if self._empty_label.parent() is not None:
