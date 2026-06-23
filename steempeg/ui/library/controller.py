@@ -175,6 +175,7 @@ class LibraryMixin:
         table.selectionModel().clearSelection()
         if not selection.isEmpty():
             table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
+            table.setCurrentCell(rows[0], 0)
         table.blockSignals(False)
 
     def show_grid_context_menu(self, pos):

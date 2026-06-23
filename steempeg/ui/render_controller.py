@@ -363,6 +363,7 @@ class RenderMixin:
             finally:
                 self._loading_queue_job = False
         else:
+            self._selected_queue_job_id = None
             self._populate_quality_options_for_clip(clip_path)
 
         if hasattr(self, "btn_close_clip"):
@@ -1301,11 +1302,11 @@ class RenderMixin:
         skipped = 0
         failed = []
 
+        self._flush_current_trim_state()
         for clip_path in clip_paths:
             if self.render_queue.contains_clip(clip_path):
                 skipped += 1
                 continue
-            self._flush_current_trim_state()
             job = self.add_clip_to_render_queue(clip_path)
             if job is None:
                 failed.append(os.path.basename(clip_path))
@@ -1346,10 +1347,6 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self._update_start_button_label()
         self._persist_render_queue()
-
-        if added and self._queue_is_active():
-            if not getattr(self, "_selected_queue_job_id", None) and self.render_queue.jobs:
-                self.activate_queue_job(self.render_queue.jobs[0].id)
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
@@ -1429,7 +1426,7 @@ class RenderMixin:
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
         self._preview_clip_path = None
-        self._sync_queue_splitter_visibility()
+        self.refresh_render_queue_panel()
         self._update_start_button_label()
         self._persist_render_queue()
         if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
@@ -1520,9 +1517,15 @@ class RenderMixin:
         """Rebuild the right-side queue list from ``render_queue``."""
         if not hasattr(self, "render_queue_panel"):
             return
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        preview_path = self._current_preview_clip_path()
+        if selected_id and preview_path:
+            job = self.render_queue.get(selected_id)
+            if job and os.path.normpath(job.clip_path) != os.path.normpath(preview_path):
+                selected_id = None
         self.render_queue_panel.refresh(
             self.render_queue.jobs,
-            getattr(self, "_selected_queue_job_id", None),
+            selected_id,
         )
         self._sync_queue_splitter_visibility()
         self.update_playback_badge()
@@ -1533,12 +1536,14 @@ class RenderMixin:
         sizes = self.right_h_splitter.sizes()
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
         if len(self.render_queue) > 0:
-            queue_w = 280
             self.render_queue_panel.show()
-            self.right_h_splitter.setSizes([max(total - queue_w, 500), queue_w])
+            if sizes[1] <= 0:
+                queue_w = 300
+                self.right_h_splitter.setSizes([max(total - queue_w, 500), queue_w])
         else:
-            self._selected_queue_job_id = None
-            self.right_h_splitter.setSizes([total, 0])
+            if sizes[1] > 0:
+                self._selected_queue_job_id = None
+                self.right_h_splitter.setSizes([total, 0])
 
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""

@@ -1903,7 +1903,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     QSplitter::handle {
                         background-color: #444444;
                         width: 4px;
-                        margin: 8px 0;
+                        margin: 8px 8px;
                         border-radius: 2px;
                     }
                     QSplitter::handle:hover {

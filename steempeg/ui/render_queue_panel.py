@@ -23,6 +23,14 @@ from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
+_SCROLL_STYLE = """
+    QScrollArea { background: transparent; border: none; }
+    QWidget#queueListHost { background: transparent; }
+    QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
+    QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }
+    QScrollBar::handle:vertical:hover { background: #b29ae7; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+"""
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -122,12 +130,12 @@ class QueueJobCard(QFrame):
         if self._drop_highlight:
             border = "2px dashed #b29ae7"
         elif self._selected:
-            border = "2px solid #8e7cc3"
+            border = "3px solid #b29ae7"
         else:
-            border = f"2px solid {color}"
+            border = "2px solid #444444"
         self.setStyleSheet(f"""
             QueueJobCard {{
-                background-color: rgba({r}, {g}, {b}, 0.12);
+                background-color: rgba({r}, {g}, {b}, 0.10);
                 border: {border};
                 border-radius: 12px;
             }}
@@ -255,7 +263,7 @@ class QueueListHost(QWidget):
 
 
 class RenderQueuePanel(QWidget):
-    """Scrollable queue list with a Clips-Manager-style header pill."""
+    """Scrollable queue list inside a Clips-Manager-style rounded container."""
 
     job_selected = Signal(str)
     job_remove_requested = Signal(str)
@@ -271,22 +279,25 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        outer.setContentsMargins(8, 0, 8, 8)
+        outer.setSpacing(0)
+
+        self._container = QFrame()
+        self._container.setObjectName("queuePanelContainer")
+        self._container.setStyleSheet("""
+            QFrame#queuePanelContainer {
+                background-color: #2d2d2d;
+                border: 1px solid #353535;
+                border-radius: 12px;
+            }
+        """)
+        container_layout = QVBoxLayout(self._container)
+        container_layout.setContentsMargins(10, 10, 10, 10)
+        container_layout.setSpacing(10)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
-
-        pill = QFrame()
-        pill.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border: 1px solid #353535;
-                border-radius: 16px;
-            }
-        """)
-        pill_layout = QHBoxLayout(pill)
-        pill_layout.setContentsMargins(16, 8, 12, 8)
+        header_row.setSpacing(8)
 
         self._title_label = QLabel("🎬 Render Queue")
         self._title_label.setStyleSheet(
@@ -308,61 +319,35 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
-        self._btn_remove = QPushButton("Remove")
-        self._btn_remove.setCursor(Qt.PointingHandCursor)
-        self._btn_remove.setEnabled(False)
-        self._btn_remove.setToolTip("Remove selected clip from queue")
-        self._btn_remove.setStyleSheet("""
-            QPushButton {
-                background-color: #4a2a2a; color: #ffcccc; border: 1px solid #884444;
-                border-radius: 10px; padding: 2px 10px; font-size: 11px;
-            }
-            QPushButton:hover:enabled { background-color: #6a3030; color: #ffffff; }
-            QPushButton:disabled { color: #666666; border-color: #444444; background: #333333; }
-        """)
-        self._btn_remove.clicked.connect(self._on_remove_selected_clicked)
-
-        pill_layout.addWidget(self._title_label)
-        pill_layout.addStretch()
-        pill_layout.addWidget(self._count_label)
-        pill_layout.addWidget(self._btn_remove)
-        pill_layout.addWidget(self._btn_clear)
-
+        header_row.addWidget(self._title_label)
         header_row.addStretch()
-        header_row.addWidget(pill)
-        header_row.addStretch()
-        outer.addLayout(header_row)
+        header_row.addWidget(self._count_label)
+        header_row.addWidget(self._btn_clear)
+        container_layout.addLayout(header_row)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setStyleSheet("""
-            QScrollArea { background: transparent; border: none; }
-            QWidget#queueListHost { background: transparent; }
-            QScrollBar:vertical {
-                background: transparent; width: 10px; margin: 4px 2px 4px 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #5a4b7a; min-height: 24px; border-radius: 4px;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
+        self._scroll.setStyleSheet(_SCROLL_STYLE)
 
         self._list_host = QueueListHost()
         self._list_host.dropped_at_end.connect(self._on_drop_at_end)
         self._list_layout = QVBoxLayout(self._list_host)
-        self._list_layout.setContentsMargins(4, 0, 4, 8)
-        self._list_layout.setSpacing(8)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(10)
 
-        self._empty_label = QLabel("Add clips via right-click → Add to queue\n✕ or Remove — delete a clip")
+        self._empty_label = QLabel("Right-click a clip → Add to queue\n✕ removes a clip from the queue")
         self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setWordWrap(True)
         self._empty_label.setStyleSheet(f"color: #666666; font-size: 12px; {_FONT}")
 
         self._scroll.setWidget(self._list_host)
-        outer.addWidget(self._scroll, 1)
+        container_layout.addWidget(self._scroll, 1)
 
-        self.setMinimumWidth(240)
+        outer.addWidget(self._container, 1)
+
+        self.setMinimumWidth(260)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def _clear_drop_highlights(self) -> None:
@@ -377,17 +362,6 @@ class RenderQueuePanel(QWidget):
         if last_queued is None or last_queued.id == source_id:
             return
         self.job_reorder_after_requested.emit(source_id, last_queued.id)
-
-    def _on_remove_selected_clicked(self) -> None:
-        if self._selected_id:
-            self.job_remove_requested.emit(self._selected_id)
-
-    def _update_header_actions(self) -> None:
-        can_remove = False
-        if self._selected_id:
-            job = next((j for j in self._jobs if j.id == self._selected_id), None)
-            can_remove = job is not None and _job_can_remove(job)
-        self._btn_remove.setEnabled(can_remove)
 
     def refresh(self, jobs: list[RenderJob], selected_id: str | None = None) -> None:
         self._jobs = list(jobs)
@@ -420,7 +394,6 @@ class RenderQueuePanel(QWidget):
             self._list_layout.addWidget(card)
             self._card_widgets.append(card)
         self._list_layout.addStretch()
-        self._update_header_actions()
 
     def _on_card_drop(self, source_id: str, target_id: str) -> None:
         self._clear_drop_highlights()
