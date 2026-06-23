@@ -502,12 +502,10 @@ class LibraryMixin:
     
 
     def on_grid_selection_changed(self):
-        """Select in Grid -> quietly mirror selection in List."""
+        """Select in Grid -> mirror selection in List, then preview like table selection."""
         if not self.grid_clips.selectedItems():
             return
         self.sync_table_from_grid_selection()
-        if getattr(self, '_queue_controls_preview', lambda: False)():
-            return
         if hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
             self.update_quality_options()
 

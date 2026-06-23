@@ -126,6 +126,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         self._loading_queue_job = False
         self._queue_batch_active = False
         self.render_thread = None
+        self._preview_clip_path = None
 
         
         # list of all supported resolutions for rendering

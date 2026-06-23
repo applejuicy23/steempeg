@@ -233,24 +233,79 @@ class RenderMixin:
         except Exception as e:
             print(f"Failed to open folder: {e}")
 
-    def _queue_controls_preview(self) -> bool:
+    def _queue_is_active(self) -> bool:
+        """True when the render queue has jobs (queue drives batch render)."""
         return bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
 
-    def _active_preview_clip_path(self):
-        if self._queue_controls_preview():
-            job_id = getattr(self, "_selected_queue_job_id", None)
-            if job_id:
-                job = self.render_queue.get(job_id)
-                if job:
-                    return job.clip_path
-            jobs = self.render_queue.jobs
-            if jobs:
-                return jobs[0].clip_path
+    def _queue_controls_preview(self) -> bool:
+        """Alias kept for library/grid hooks."""
+        return self._queue_is_active()
+
+    def _current_preview_clip_path(self):
+        """Path of the clip currently shown in the player."""
+        if getattr(self, "_preview_clip_path", None):
+            return self._preview_clip_path
         if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
             item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
             if item:
                 return item.data(Qt.UserRole)
+        job_id = getattr(self, "_selected_queue_job_id", None)
+        if job_id:
+            job = self.render_queue.get(job_id)
+            if job:
+                return job.clip_path
         return None
+
+    def _active_preview_clip_path(self):
+        return self._current_preview_clip_path()
+
+    def _apply_header_from_table_row(self, selected_row: int) -> None:
+        if selected_row < 0 or not hasattr(self.ui, "table_clips"):
+            return
+        game_item = self.ui.table_clips.item(selected_row, 0)
+        if not game_item:
+            return
+        game_name = game_item.text()
+        game_icon = game_item.icon()
+        clip_date = self.ui.table_clips.item(selected_row, 2)
+        clip_time = self.ui.table_clips.item(selected_row, 3)
+        date_text = clip_date.text() if clip_date else ""
+        time_text = clip_time.text() if clip_time else ""
+        if hasattr(self, "custom_text_label"):
+            header_html = (
+                f"<b>{game_name}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
+                f"{date_text} &nbsp;&nbsp;•&nbsp;&nbsp; {time_text}</span>"
+            )
+            self.custom_text_label.setText(header_html)
+        if hasattr(self, "custom_icon_label"):
+            self.custom_icon_label.setPixmap(game_icon.pixmap(24, 24))
+
+    def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
+        """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
+        clip_path = os.path.normpath(clip_path)
+        self._preview_clip_path = clip_path
+        self._apply_header_from_table_row(selected_row)
+
+        queue_job = self.render_queue.find_by_clip_path(clip_path)
+        if queue_job:
+            self._selected_queue_job_id = queue_job.id
+            self._loading_queue_job = True
+            try:
+                self._populate_quality_options_for_clip(clip_path)
+                apply_job_settings_to_ui(self, queue_job.settings)
+                self._apply_trim_from_job_settings(queue_job.settings)
+            finally:
+                self._loading_queue_job = False
+        else:
+            self._populate_quality_options_for_clip(clip_path)
+
+        if hasattr(self, "btn_close_clip"):
+            self.btn_close_clip.show()
+        self.generate_and_play_preview(clip_path)
+        self.update_final_setup()
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        self._update_start_button_label()
 
     def _queue_persist_path(self) -> str:
         return os.path.join(self.cache_dir, "render_queue.json")
@@ -301,6 +356,9 @@ class RenderMixin:
             return
         job = self.render_queue.get(job_id)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+            return
+        preview = self._current_preview_clip_path()
+        if not preview or os.path.normpath(preview) != os.path.normpath(job.clip_path):
             return
         job.settings = snapshot_settings_from_ui(self)
         job.refresh_output_path()
@@ -508,10 +566,13 @@ class RenderMixin:
                     item.setSelected(False)
             self.grid_clips.blockSignals(False)
 
-        if self._queue_controls_preview():
+        if self._queue_is_active():
+            clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
+            self._handle_clips_manager_selection_with_queue(clip_path, selected_row)
             return
 
         clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
+        self._preview_clip_path = clip_path
         self._populate_quality_options_for_clip(clip_path)
 
         game_item = self.ui.table_clips.item(selected_row, 0)
@@ -847,12 +908,16 @@ class RenderMixin:
         
         game_name = "Steam Clip"
         target_icon = getattr(self, 'current_game_icon', '')
-        if self._queue_controls_preview() and getattr(self, "_selected_queue_job_id", None):
-            job = self.render_queue.get(self._selected_queue_job_id)
-            if job:
-                game_name = job.game_name.strip()
-                if job.game_icon_path and os.path.exists(job.game_icon_path):
-                    target_icon = job.game_icon_path
+        preview_path = self._active_preview_clip_path()
+        if preview_path and hasattr(self.ui, "table_clips"):
+            for row in range(self.ui.table_clips.rowCount()):
+                item = self.ui.table_clips.item(row, 0)
+                if not item:
+                    continue
+                row_path = item.data(Qt.UserRole)
+                if row_path and os.path.normpath(row_path) == os.path.normpath(preview_path):
+                    game_name = item.text().strip()
+                    break
         elif hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
             game_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).text().strip()
             target_icon = getattr(self, 'current_game_icon', '')
@@ -1164,7 +1229,7 @@ class RenderMixin:
         self._update_start_button_label()
         self._persist_render_queue()
 
-        if added and self._queue_controls_preview():
+        if added and self._queue_is_active():
             if not getattr(self, "_selected_queue_job_id", None) and self.render_queue.jobs:
                 self.activate_queue_job(self.render_queue.jobs[0].id)
 
@@ -1174,6 +1239,7 @@ class RenderMixin:
         if not job:
             return
         self._selected_queue_job_id = job_id
+        self._preview_clip_path = job.clip_path
         self._loading_queue_job = True
         try:
             self._apply_header_from_job(job)
@@ -1236,6 +1302,7 @@ class RenderMixin:
 
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
+        self._preview_clip_path = None
         self._sync_queue_splitter_visibility()
         self._update_start_button_label()
         self._persist_render_queue()
@@ -1245,16 +1312,7 @@ class RenderMixin:
             self.update_playback_badge()
 
     def _current_header_clip_path(self):
-        job_id = getattr(self, "_selected_queue_job_id", None)
-        if job_id:
-            job = self.render_queue.get(job_id)
-            if job:
-                return job.clip_path
-        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
-            item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
-            if item:
-                return item.data(Qt.UserRole)
-        return None
+        return self._current_preview_clip_path()
 
     def _queue_job_for_clip(self, clip_path):
         if not clip_path:
@@ -1271,11 +1329,7 @@ class RenderMixin:
             if active and os.path.normpath(active.clip_path) == os.path.normpath(clip_path):
                 return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
 
-        job = None
-        if getattr(self, "_selected_queue_job_id", None):
-            job = self.render_queue.get(self._selected_queue_job_id)
-        if job is None:
-            job = self._queue_job_for_clip(clip_path)
+        job = self._queue_job_for_clip(clip_path)
 
         if job:
             if job.status == JobStatus.COMPLETED:
@@ -1370,7 +1424,7 @@ class RenderMixin:
         if getattr(self, '_is_rendering', False):
             return
 
-        if self._queue_controls_preview() and self.render_queue.pending_count() > 0:
+        if self._queue_is_active() and self.render_queue.pending_count() > 0:
             self.start_queue_batch_render()
             return
 
