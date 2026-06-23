@@ -249,6 +249,18 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
     settings = snapshot_settings_from_ui(app)
     settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
 
+    preview = getattr(app, "_preview_clip_path", None)
+    if not (preview and os.path.normpath(preview) == clip_path):
+        if hasattr(app, "_trim_state_for_clip"):
+            trim = app._trim_state_for_clip(clip_path)
+            settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
+            settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
+            settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
+        else:
+            settings.is_trim_mode = False
+            settings.trim_start_ms = 0
+            settings.trim_end_ms = 0
+
     icon_path = game_icon_path_for_clip(app.cache_dir, clip_path)
     if not icon_path or not os.path.exists(icon_path):
         icon_path = getattr(app, "current_game_icon", "") or icon_path

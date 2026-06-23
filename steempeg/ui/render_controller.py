@@ -282,18 +282,19 @@ class RenderMixin:
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
         """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
+        self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
         self._preview_clip_path = clip_path
         self._apply_header_from_table_row(selected_row)
 
         queue_job = self.render_queue.find_by_clip_path(clip_path)
+        trim_restore = self._trim_state_for_clip(clip_path)
         if queue_job:
             self._selected_queue_job_id = queue_job.id
             self._loading_queue_job = True
             try:
                 self._populate_quality_options_for_clip(clip_path)
                 apply_job_settings_to_ui(self, queue_job.settings)
-                self._apply_trim_from_job_settings(queue_job.settings)
             finally:
                 self._loading_queue_job = False
         else:
@@ -301,7 +302,7 @@ class RenderMixin:
 
         if hasattr(self, "btn_close_clip"):
             self.btn_close_clip.show()
-        self.generate_and_play_preview(clip_path)
+        self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self.update_final_setup()
         self.refresh_render_queue_panel()
         self.update_playback_badge()
@@ -334,19 +335,68 @@ class RenderMixin:
         else:
             self.ui.btn_start.setText("🚩 START RENDER")
 
-    def _apply_trim_from_job_settings(self, settings) -> None:
+    def _capture_trim_state(self) -> dict:
         if not hasattr(self, "custom_timeline"):
+            return {"is_trim_mode": False, "trim_start_ms": 0, "trim_end_ms": 0}
+        return {
+            "is_trim_mode": bool(self.custom_timeline.is_trim_mode),
+            "trim_start_ms": int(self.custom_timeline.trim_start_ms),
+            "trim_end_ms": int(self.custom_timeline.trim_end_ms),
+        }
+
+    def _write_trim_state(self, clip_path: str, trim: dict) -> None:
+        clip_path = os.path.normpath(clip_path)
+        job = self.render_queue.find_by_clip_path(clip_path)
+        if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+            job.settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
+            job.settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
+            job.settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
+        if not hasattr(self, "_clip_trim_memory"):
+            self._clip_trim_memory = {}
+        self._clip_trim_memory[clip_path] = trim
+
+    def _trim_state_for_clip(self, clip_path: str) -> dict:
+        clip_path = os.path.normpath(clip_path)
+        job = self.render_queue.find_by_clip_path(clip_path)
+        if job:
+            s = job.settings
+            return {
+                "is_trim_mode": bool(s.is_trim_mode),
+                "trim_start_ms": int(s.trim_start_ms),
+                "trim_end_ms": int(s.trim_end_ms),
+            }
+        mem = getattr(self, "_clip_trim_memory", {})
+        return mem.get(
+            clip_path,
+            {"is_trim_mode": False, "trim_start_ms": 0, "trim_end_ms": 0},
+        )
+
+    def _flush_current_trim_state(self) -> None:
+        clip_path = getattr(self, "_preview_clip_path", None)
+        if not clip_path:
             return
-        canvas = self.custom_timeline.canvas
-        if settings.is_trim_mode and settings.trim_end_ms > settings.trim_start_ms:
-            canvas.is_trim_mode = True
-            canvas.trim_start_ms = float(settings.trim_start_ms)
-            canvas.trim_end_ms = float(settings.trim_end_ms)
-            self.custom_timeline.trim_changed.emit(
-                int(settings.trim_start_ms), int(settings.trim_end_ms)
+        self._write_trim_state(clip_path, self._capture_trim_state())
+
+    def _persist_trim_for_current_clip(self) -> None:
+        clip_path = getattr(self, "_preview_clip_path", None)
+        if not clip_path:
+            if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+                item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+                if item:
+                    clip_path = item.data(Qt.UserRole)
+        if not clip_path:
+            return
+        self._write_trim_state(clip_path, self._capture_trim_state())
+        if self._queue_is_active():
+            self._persist_render_queue()
+
+    def _apply_trim_from_job_settings(self, settings) -> None:
+        if hasattr(self, "apply_trim_state"):
+            self.apply_trim_state(
+                settings.is_trim_mode,
+                settings.trim_start_ms,
+                settings.trim_end_ms,
             )
-        else:
-            canvas.is_trim_mode = False
 
     def _sync_ui_to_selected_job(self) -> None:
         if getattr(self, "_loading_queue_job", False):
@@ -571,8 +621,10 @@ class RenderMixin:
             self._handle_clips_manager_selection_with_queue(clip_path, selected_row)
             return
 
+        self._flush_current_trim_state()
         clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
         self._preview_clip_path = clip_path
+        trim_restore = self._trim_state_for_clip(clip_path)
         self._populate_quality_options_for_clip(clip_path)
 
         game_item = self.ui.table_clips.item(selected_row, 0)
@@ -592,7 +644,7 @@ class RenderMixin:
 
         self._selected_queue_job_id = None
         self.update_playback_badge()
-        self.generate_and_play_preview()
+        self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self._update_start_button_label()
 
     def update_bitrate_options(self):
@@ -1188,6 +1240,7 @@ class RenderMixin:
             if self.render_queue.contains_clip(clip_path):
                 skipped += 1
                 continue
+            self._flush_current_trim_state()
             job = self.add_clip_to_render_queue(clip_path)
             if job is None:
                 failed.append(os.path.basename(clip_path))
@@ -1238,17 +1291,18 @@ class RenderMixin:
         job = self.render_queue.get(job_id)
         if not job:
             return
+        self._flush_current_trim_state()
         self._selected_queue_job_id = job_id
         self._preview_clip_path = job.clip_path
+        trim_restore = self._trim_state_for_clip(job.clip_path)
         self._loading_queue_job = True
         try:
             self._apply_header_from_job(job)
             self._populate_quality_options_for_clip(job.clip_path)
             apply_job_settings_to_ui(self, job.settings)
-            self._apply_trim_from_job_settings(job.settings)
             if hasattr(self, "btn_close_clip"):
                 self.btn_close_clip.show()
-            self.generate_and_play_preview(job.clip_path)
+            self.generate_and_play_preview(job.clip_path, trim_restore=trim_restore)
             self.update_final_setup()
         finally:
             self._loading_queue_job = False
@@ -1448,6 +1502,7 @@ class RenderMixin:
         self._queue_batch_active = True
         self._batch_total = pending
         self._batch_current = 0
+        self._flush_current_trim_state()
         self._sync_ui_to_selected_job()
         set_settings_panel_locked(self, True)
         self.ui.btn_start.setEnabled(False)
@@ -1468,6 +1523,7 @@ class RenderMixin:
         self._selected_queue_job_id = job.id
         self.refresh_render_queue_panel()
         self.update_playback_badge()
+        job.refresh_output_path()
         self._start_render_job(job, batch_mode=True)
 
     def _start_render_job(self, job, batch_mode: bool = False) -> None:

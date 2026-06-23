@@ -551,27 +551,25 @@ class PlayerMixin:
         else:
             super().keyPressEvent(event)
 
-    def toggle_trim_state(self):
-        """ Toggles between Trim mode and Normal mode seamlessly without interrupting playback """
-        if not hasattr(self, 'custom_timeline'): return
-
-        if self.custom_timeline.is_trim_mode:
-            # TURN OFF TRIM MODE
-            self.custom_timeline.disable_trim_mode()
-            
-            # Hide border on aspect_frame
-            if hasattr(self, 'aspect_frame'):
-                self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
-            
-            # Hide the interactive border instantly
-            if hasattr(self, 'video_overlay'):
-                self.video_overlay.show_border = False
-                self.video_overlay.update()
-
-            if hasattr(self, 'border_overlay'):
-                self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
-            
-            # Restore to default Trim button with custom scissors icon...
+    def _set_trim_button_active(self, active: bool) -> None:
+        """Sync the Trim / Cancel button and tools pill with trim mode."""
+        if not hasattr(self, "btn_trim"):
+            return
+        if active:
+            cancel_icon_path = get_resource_path("cancel.png")
+            if os.path.exists(cancel_icon_path):
+                self.btn_trim.setIcon(QIcon(cancel_icon_path))
+                self.btn_trim.setText(" Cancel")
+            else:
+                self.btn_trim.setIcon(QIcon())
+                self.btn_trim.setText("❌ Cancel")
+            self.btn_trim.setStyleSheet(
+                "background-color: #ff4444; color: white; border-radius: 15px; "
+                "padding: 0 12px; font-weight: bold;"
+            )
+            if hasattr(self, "trim_tools_pill"):
+                self.trim_tools_pill.show()
+        else:
             trim_icon_path = get_resource_path("trim_icon.png")
             if os.path.exists(trim_icon_path):
                 self.btn_trim.setIcon(QIcon(trim_icon_path))
@@ -579,37 +577,79 @@ class PlayerMixin:
             else:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("✂️ Trim")
-                
-            # Restore the slightly golden premium style
-            self.btn_trim.setStyleSheet("background-color: #cfa94a; color: black; border-radius: 15px; padding: 0 12px; font-weight: bold;")
-            
-
-            if hasattr(self, 'aspect_frame'):
-                self.aspect_frame.setStyleSheet("background-color: transparent;")
-            if hasattr(self, 'trim_tools_pill'):
+            self.btn_trim.setStyleSheet(
+                "background-color: #cfa94a; color: black; border-radius: 15px; "
+                "padding: 0 12px; font-weight: bold;"
+            )
+            if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.hide()
-        else:
-            # TURN ON TRIM MODE
-            self.custom_timeline.enable_trim_mode()
-            
-            # Transform into Cancel button with custom cancel icon
-            cancel_icon_path = get_resource_path("cancel.png")
-            if os.path.exists(cancel_icon_path):
-                self.btn_trim.setIcon(QIcon(cancel_icon_path))
-                self.btn_trim.setText(" Cancel")
-            else:
-                self.btn_trim.setIcon(QIcon()) 
-                self.btn_trim.setText("❌ Cancel")
-                
-            # Apply the red danger style
-            self.btn_trim.setStyleSheet("background-color: #ff4444; color: white; border-radius: 15px; padding: 0 12px; font-weight: bold;")
+            if hasattr(self, "aspect_frame"):
+                self.aspect_frame.setStyleSheet(
+                    "border: 3px solid transparent; background-color: transparent;"
+                )
 
-            if hasattr(self, 'trim_tools_pill'):
-                self.trim_tools_pill.show()
-        # --- FORCE UI REFRESH ON TOGGLE ---
+    def apply_trim_state(self, is_trim_mode: bool, trim_start_ms: int = 0, trim_end_ms: int = 0) -> None:
+        """Restore per-clip trim handles and button state (does not toggle via enable_trim_mode)."""
+        if not hasattr(self, "custom_timeline"):
+            return
+        canvas = self.custom_timeline.canvas
+        duration = float(getattr(canvas, "duration_ms", 0) or 0)
+        if duration <= 0:
+            duration = float(getattr(self, "current_clip_duration_sec", 0) or 0) * 1000.0
+
+        if is_trim_mode and trim_end_ms > trim_start_ms and duration > 0:
+            start = max(0.0, min(float(trim_start_ms), duration - 1000.0))
+            end = max(start + 1000.0, min(float(trim_end_ms), duration))
+            canvas.is_trim_mode = True
+            canvas.trim_start_ms = start
+            canvas.trim_end_ms = end
+            self._set_trim_button_active(True)
+            self.custom_timeline.trim_changed.emit(int(start), int(end))
+        else:
+            canvas.disable_trim_mode()
+            self._set_trim_button_active(False)
+        canvas.update()
+
+    def _deferred_apply_trim_restore(self) -> None:
+        pending = getattr(self, "_pending_trim_restore", None)
+        if not pending:
+            return
+        if pending.get("is_trim_mode") and hasattr(self, "custom_timeline"):
+            duration = float(getattr(self.custom_timeline.canvas, "duration_ms", 0) or 0)
+            if duration <= 0:
+                QTimer.singleShot(300, self._deferred_apply_trim_restore)
+                return
+        self._pending_trim_restore = None
+        self.apply_trim_state(
+            pending.get("is_trim_mode", False),
+            pending.get("trim_start_ms", 0),
+            pending.get("trim_end_ms", 0),
+        )
+        if hasattr(self, "update_final_setup"):
+            self.update_final_setup()
+
+    def toggle_trim_state(self):
+        """ Toggles between Trim mode and Normal mode seamlessly without interrupting playback """
+        if not hasattr(self, 'custom_timeline'): return
+
+        if self.custom_timeline.is_trim_mode:
+            self.custom_timeline.disable_trim_mode()
+            if hasattr(self, 'video_overlay'):
+                self.video_overlay.show_border = False
+                self.video_overlay.update()
+            if hasattr(self, 'border_overlay'):
+                self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
+            self._set_trim_button_active(False)
+        else:
+            self.custom_timeline.enable_trim_mode()
+            self._set_trim_button_active(True)
+
         self.update_final_setup()
+        if hasattr(self, '_persist_trim_for_current_clip'):
+            self._persist_trim_for_current_clip()
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
+
     def set_trim_start_to_playhead(self):
         """ Sets the left end of the yellow strip with a UNO REVERSAL. """
         if not hasattr(self, 'custom_timeline'): return
@@ -721,12 +761,14 @@ class PlayerMixin:
         self.update_final_setup()
         if hasattr(self, '_sync_ui_to_selected_job'):
             self._sync_ui_to_selected_job()
+        if hasattr(self, '_persist_trim_for_current_clip'):
+            self._persist_trim_for_current_clip()
         
         # 2. Recalculate slider sizes because shorter video = less Megabytes!
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
 
-    def generate_and_play_preview(self, clip_path=None):
+    def generate_and_play_preview(self, clip_path=None, trim_restore=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
         if clip_path is None:
             if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
@@ -735,6 +777,8 @@ class PlayerMixin:
 
         if not clip_path or not os.path.isdir(clip_path):
             return
+
+        self._pending_trim_restore = trim_restore
 
         # 1. STOP CURRENT PLAYBACK
         self._is_switching = True
@@ -847,8 +891,10 @@ class PlayerMixin:
             # A function that removes the shield and activates the timeline
             def finish_switch():
                 self.custom_timeline.setEnabled(True)
-                self._is_switching = False 
-                
+                self._is_switching = False
+                if getattr(self, "_pending_trim_restore", None):
+                    QTimer.singleShot(150, self._deferred_apply_trim_restore)
+
             QTimer.singleShot(500, finish_switch)
                 
         self.thumb_thread.start()
