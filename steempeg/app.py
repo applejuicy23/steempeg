@@ -299,7 +299,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             #2. CREATE A BEAUTIFUL TABLET (Without a counter)
             cm_row = qtw.QHBoxLayout()
-            cm_row.setContentsMargins(0, 0, 0, 10) 
+            cm_row.setContentsMargins(0, 0, 0, 4)
             
             self.mega_top_pill = qtw.QFrame()
             self.mega_top_pill.setStyleSheet("""
@@ -326,13 +326,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             cm_row.addWidget(self.mega_top_pill)
             cm_row.addStretch()
 
-            # 4. INSERT IT INTO THE INTERFACE EXACTLY IN ITS PLACE
-            target_layout.insertLayout(insert_idx, cm_row)
-
             # 1. MEGA-CAPSULE (All elements within a single floating island)
             # Container for external padding
             top_bar_layout = qtw.QHBoxLayout()
-            top_bar_layout.setContentsMargins(12, 0, 12, 4) 
+            top_bar_layout.setContentsMargins(12, 0, 12, 0)
             
             mega_top_pill = qtw.QFrame()
             mega_top_pill.setStyleSheet("""
@@ -538,8 +535,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # 5. Putting It All Together
             self.left_master_layout = qtw.QVBoxLayout()
             self.left_master_layout.setContentsMargins(0, 0, 0, 0)
-            self.left_master_layout.setSpacing(16)
-            
+            self.left_master_layout.setSpacing(4)
+
+            self.left_master_layout.addLayout(cm_row)
             self.left_master_layout.addLayout(top_bar_layout)
             self.left_master_layout.addWidget(self.library_views_container)
             
@@ -1903,7 +1901,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     QSplitter::handle {
                         background-color: #444444;
                         width: 4px;
-                        margin: 8px 8px;
+                        margin: 8px 2px 8px 14px;
                         border-radius: 2px;
                     }
                     QSplitter::handle:hover {

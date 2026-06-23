@@ -279,7 +279,7 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 0, 8, 8)
+        outer.setContentsMargins(2, 0, 8, 8)
         outer.setSpacing(0)
 
         self._container = QFrame()

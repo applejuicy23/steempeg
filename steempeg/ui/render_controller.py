@@ -1425,14 +1425,10 @@ class RenderMixin:
 
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
-        self._preview_clip_path = None
         self.refresh_render_queue_panel()
         self._update_start_button_label()
         self._persist_render_queue()
-        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
-            self.update_quality_options()
-        else:
-            self.update_playback_badge()
+        self.update_playback_badge()
 
     def _current_header_clip_path(self):
         return self._current_preview_clip_path()
