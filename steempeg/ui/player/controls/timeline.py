@@ -136,6 +136,7 @@ class TimelineCanvas(QWidget):
             self.sniper_timer.setSingleShot(True)
             self.sniper_timer.timeout.connect(self.trigger_sniper)
         self.pending_sec = -1
+        self._hover_preview_bucket = -1
 
         # LABELS AND ICONS CS2
         self.markers = []
@@ -352,21 +353,41 @@ class TimelineCanvas(QWidget):
         return self._legacy_icon_pixmap(marker['icon_key'], marker['is_round'])
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0: return
-        if getattr(self, 'is_hovering', False):
-            hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
-            current_target_sec = round((hover_ms // 1000) / 3.0) * 3
-            
-            logging.info(f"READY got_sec={sec} cur_target={current_target_sec} visible={self.preview_widget.isVisible() if hasattr(self,'preview_widget') else '?'}")
-            
-            if int(sec) == int(current_target_sec):
-                if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
-                    self.preview_widget.update_image_from_ram(pixmap)
+        if not getattr(self, 'is_hovering', False):
+            return
+        hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
+        current_target_sec = round((hover_ms // 1000) / 3.0) * 3
+        if int(sec) != int(current_target_sec):
+            return
+        # Disk thumbs are authoritative for 3s buckets; sniper must not overwrite them.
+        thumb_dir = getattr(self, 'thumb_dir', None)
+        if thumb_dir and os.path.exists(thumb_dir):
+            index = (int(current_target_sec) // 3) + 1
+            if os.path.exists(os.path.join(thumb_dir, f"thumb_{index:04d}.jpg")):
+                return
+        if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
+            self.preview_widget.update_image_from_ram(pixmap)
 
     def trigger_sniper(self):
-        logging.info(f"TRIGGER pending={self.pending_sec} vpath={bool(self.current_video_path)}")
-        
         if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
             self.sniper.request_frame(self.current_video_path, self.pending_sec)
+
+    def _trim_handle_at(self, x, y):
+        """Return 'trim_l', 'trim_r', or None. Vertical grab zone matches paint + hover cursor."""
+        if not self.is_trim_mode:
+            return None
+        track_y, track_height = 28.0, 12.0
+        hit_tolerance = 10.0
+        vertical_pad = 10.0
+        if y < track_y - vertical_pad or y > track_y + track_height + vertical_pad:
+            return None
+        start_x = self.ms_to_x(self.trim_start_ms)
+        end_x = self.ms_to_x(self.trim_end_ms)
+        if abs(x - start_x) <= hit_tolerance:
+            return 'trim_l'
+        if abs(x - end_x) <= hit_tolerance:
+            return 'trim_r'
+        return None
 
     def set_duration(self, duration_ms):
         self.duration_ms = max(1, duration_ms)
@@ -676,21 +697,11 @@ class TimelineCanvas(QWidget):
         # Disable the other buttons if we are not on the icon.
         if event.button() != Qt.LeftButton: return
         
-        track_y, track_height = 28.0, 12.0 
-        is_outside_track = (y < track_y) or (y > track_y + track_height)
-        
-        if self.is_trim_mode and not is_outside_track:
-            start_x = self.ms_to_x(self.trim_start_ms)
-            end_x = self.ms_to_x(self.trim_end_ms)
-            hit_tolerance = 10 
-            
-            if abs(x - start_x) <= hit_tolerance:
-                self.drag_state = 'trim_l'
-                return
-            elif abs(x - end_x) <= hit_tolerance:
-                self.drag_state = 'trim_r'
-                return
-                
+        trim_handle = self._trim_handle_at(x, y)
+        if trim_handle:
+            self.drag_state = trim_handle
+            return
+
         self.drag_state = 'playhead'
         self.pause_requested.emit() 
         self.update_playhead(x)
@@ -930,13 +941,8 @@ class TimelineCanvas(QWidget):
         else:
             current_cursor = Qt.PointingHandCursor
             
-        track_y, track_height = 22.0, 12.0 
-        is_outside_trim_hitbox = (y < track_y - 10.0) or (y > track_y + track_height + 10.0)
-        
-        if self.is_trim_mode and not is_outside_trim_hitbox:
-            start_x, end_x = self.ms_to_x(self.trim_start_ms), self.ms_to_x(self.trim_end_ms)
-            if abs(x - start_x) <= 10 or abs(x - end_x) <= 10:
-                current_cursor, self.is_hovering_trim_handle = Qt.SizeHorCursor, True
+        if self._trim_handle_at(x, y):
+            current_cursor, self.is_hovering_trim_handle = Qt.SizeHorCursor, True
                 
         if self.drag_state in ['trim_l', 'trim_r']:
             current_cursor, self.is_hovering_trim_handle = Qt.SizeHorCursor, True
@@ -953,29 +959,40 @@ class TimelineCanvas(QWidget):
             current_thumb_dir = getattr(self, 'thumb_dir', None)
             has_disk_thumb = False
             
+            bucket_sec = round(sec / 3.0) * 3
             if current_thumb_dir and os.path.exists(current_thumb_dir):
-                index = (sec // 3) + 1
+                index = (bucket_sec // 3) + 1
                 img_path = os.path.join(current_thumb_dir, f"thumb_{index:04d}.jpg")
                 if os.path.exists(img_path):
                     has_disk_thumb = True
+
+            bucket_changed = bucket_sec != self._hover_preview_bucket
+            if bucket_changed:
+                self._hover_preview_bucket = bucket_sec
+                if has_disk_thumb:
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, current_thumb_dir)
-            
-            if hasattr(self, 'sniper') and self.current_video_path:
-                self.pending_sec = sec
-                if hasattr(self, 'sniper_timer'):
-                    self.sniper_timer.start(120)
-
-            logging.info(f"HOVER sec={sec} disk={has_disk_thumb} has_sniper={hasattr(self,'sniper')} vpath={bool(self.current_video_path)}")
-
-            if not has_disk_thumb:
-                target_sec = round(sec / 3.0) * 3
-                if hasattr(self, 'sniper') and target_sec in self.sniper.cache:
+                elif hasattr(self, 'sniper') and bucket_sec in self.sniper.cache:
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
-                    self.preview_widget.update_image_from_ram(self.sniper.cache[target_sec])
+                    self.preview_widget.update_image_from_ram(self.sniper.cache[bucket_sec])
                 else:
                     self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
                     self.preview_widget.img_label.setPixmap(QPixmap())
                     self.preview_widget.img_label.setText("Generating...")
+            else:
+                self.preview_widget.time_label.setText(time_str)
+                if is_in_trim:
+                    self.preview_widget.time_label.setStyleSheet(
+                        "background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: #ffcc00; font-weight: bold; font-size: 11px;"
+                    )
+                else:
+                    self.preview_widget.time_label.setStyleSheet(
+                        "background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: white; font-weight: bold; font-size: 11px;"
+                    )
+
+            if not has_disk_thumb and hasattr(self, 'sniper') and self.current_video_path and bucket_changed:
+                self.pending_sec = bucket_sec
+                if hasattr(self, 'sniper_timer'):
+                    self.sniper_timer.start(120)
 
             if self.parentWidget() and self.parentWidget().parentWidget():
                 target_x = event.globalPosition().x() - (self.preview_widget.width() // 2)
@@ -1029,6 +1046,7 @@ class TimelineCanvas(QWidget):
     def leaveEvent(self, event):
         self.is_hovering = False
         self.hover_x = -1.0
+        self._hover_preview_bucket = -1
         if hasattr(self, 'preview_widget'): self.preview_widget.hide()
         if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
         self.setCursor(Qt.ArrowCursor) 
@@ -1300,8 +1318,8 @@ class ThumbnailPreviewWidget(QWidget):
         
         if thumb_dir and os.path.exists(thumb_dir):
             sec = int(hover_ms // 1000)
-            # Math: 0-2s -> thumb_0001, 3-5s -> thumb_0002 (3 SECOND INTERVAL)
-            index = (sec // 3) + 1 
+            bucket_sec = round(sec / 3.0) * 3
+            index = (bucket_sec // 3) + 1
             img_path = os.path.join(thumb_dir, f"thumb_{index:04d}.jpg")
             
             if os.path.exists(img_path):
