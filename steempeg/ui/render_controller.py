@@ -1419,6 +1419,13 @@ class RenderMixin:
             self.refresh_render_queue_panel()
             self._persist_render_queue()
 
+    def reorder_queue_job_after(self, source_id: str, after_id: str) -> None:
+        if getattr(self, "_queue_batch_active", False):
+            return
+        if self.render_queue.reorder_after(source_id, after_id):
+            self.refresh_render_queue_panel()
+            self._persist_render_queue()
+
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
         self._preview_clip_path = None

@@ -30,6 +30,14 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def _job_accepts_drop(job: RenderJob) -> bool:
+    return job.status == JobStatus.QUEUED
+
+
+def _job_can_remove(job: RenderJob) -> bool:
+    return job.status != JobStatus.RENDERING
+
+
 class QueueJobCard(QFrame):
     clicked = Signal(str)
     remove_requested = Signal(str)
@@ -41,25 +49,11 @@ class QueueJobCard(QFrame):
         self._job = job
         self._job_id = job.id
         self._drag_start = QPoint()
+        self._selected = selected
+        self._drop_highlight = False
         self.setCursor(Qt.PointingHandCursor)
-        self.setAcceptDrops(job.status == JobStatus.QUEUED)
-
-        color = STATUS_COLORS.get(job.status, "#ffcc00")
-        r, g, b = _hex_to_rgb(color)
-        border = "2px solid #8e7cc3" if selected else f"2px solid {color}"
-        self.setStyleSheet(f"""
-            QueueJobCard {{
-                background-color: rgba({r}, {g}, {b}, 0.12);
-                border: {border};
-                border-radius: 12px;
-            }}
-            QLabel {{ background: transparent; border: none; {_FONT} }}
-            QPushButton#queueRemoveBtn {{
-                background: transparent; border: none; color: #888888;
-                font-size: 11px; font-weight: bold; padding: 0;
-            }}
-            QPushButton#queueRemoveBtn:hover {{ color: #ff6666; }}
-        """)
+        self.setAcceptDrops(_job_accepts_drop(job))
+        self._apply_card_style()
 
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -68,10 +62,7 @@ class QueueJobCard(QFrame):
         num = QLabel(str(job.queue_index))
         num.setFixedSize(26, 26)
         num.setAlignment(Qt.AlignCenter)
-        num.setStyleSheet(
-            f"color: #1a1a1a; font-weight: bold; font-size: 12px;"
-            f"background-color: {color}; border-radius: 13px;"
-        )
+        self._num_label = num
         root.addWidget(num, 0, Qt.AlignTop)
 
         icon = QLabel()
@@ -104,14 +95,64 @@ class QueueJobCard(QFrame):
         text_col.addWidget(meta)
         root.addLayout(text_col, 1)
 
-        if job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+        if _job_can_remove(job):
             btn_remove = QPushButton("✕")
             btn_remove.setObjectName("queueRemoveBtn")
-            btn_remove.setFixedSize(20, 20)
+            btn_remove.setFixedSize(24, 24)
             btn_remove.setToolTip("Remove from queue")
             btn_remove.setCursor(Qt.PointingHandCursor)
             btn_remove.clicked.connect(lambda: self.remove_requested.emit(self._job_id))
             root.addWidget(btn_remove, 0, Qt.AlignTop)
+
+        for label in self.findChildren(QLabel):
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self._refresh_num_style()
+
+    def _refresh_num_style(self) -> None:
+        color = STATUS_COLORS.get(self._job.status, "#ffcc00")
+        self._num_label.setStyleSheet(
+            f"color: #1a1a1a; font-weight: bold; font-size: 12px;"
+            f"background-color: {color}; border-radius: 13px;"
+        )
+
+    def _apply_card_style(self) -> None:
+        color = STATUS_COLORS.get(self._job.status, "#ffcc00")
+        r, g, b = _hex_to_rgb(color)
+        if self._drop_highlight:
+            border = "2px dashed #b29ae7"
+        elif self._selected:
+            border = "2px solid #8e7cc3"
+        else:
+            border = f"2px solid {color}"
+        self.setStyleSheet(f"""
+            QueueJobCard {{
+                background-color: rgba({r}, {g}, {b}, 0.12);
+                border: {border};
+                border-radius: 12px;
+            }}
+            QLabel {{ background: transparent; border: none; {_FONT} }}
+            QPushButton#queueRemoveBtn {{
+                background-color: rgba(120, 45, 45, 0.55);
+                border: 1px solid #aa4444;
+                color: #ffcccc;
+                font-size: 13px;
+                font-weight: bold;
+                border-radius: 12px;
+                padding: 0;
+            }}
+            QPushButton#queueRemoveBtn:hover {{
+                background-color: #cc3333;
+                color: #ffffff;
+                border: 1px solid #ff6666;
+            }}
+        """)
+
+    def set_drop_highlight(self, active: bool) -> None:
+        if self._drop_highlight == active:
+            return
+        self._drop_highlight = active
+        self._apply_card_style()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -131,21 +172,40 @@ class QueueJobCard(QFrame):
             return
         if (event.position().toPoint() - self._drag_start).manhattanLength() < QApplication.startDragDistance():
             return
+
         drag = QDrag(self)
         mime = QMimeData()
         mime.setData(_MIME_JOB_ID, self._job_id.encode("utf-8"))
         drag.setMimeData(mime)
+
+        pixmap = QPixmap(self.size())
+        pixmap.fill(Qt.GlobalColor.transparent)
+        self.render(pixmap)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(event.position().toPoint())
+
         drag.exec(Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, event):
+        if not _job_accepts_drop(self._job):
+            return
         if event.mimeData().hasFormat(_MIME_JOB_ID):
-            event.acceptProposedAction()
+            raw = event.mimeData().data(_MIME_JOB_ID)
+            source_id = bytes(raw).decode("utf-8") if raw else ""
+            if source_id and source_id != self._job_id:
+                self.set_drop_highlight(True)
+                event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self.set_drop_highlight(False)
+        super().dragLeaveEvent(event)
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat(_MIME_JOB_ID):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        self.set_drop_highlight(False)
         raw = event.mimeData().data(_MIME_JOB_ID)
         if not raw:
             return
@@ -160,10 +220,38 @@ class QueueJobCard(QFrame):
             QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; }
             QMenu::item:selected { background-color: #5a4b7a; }
         """)
-        if self._job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+        if _job_can_remove(self._job):
             act_remove = menu.addAction("Remove from queue")
             act_remove.triggered.connect(lambda: self.remove_requested.emit(self._job_id))
         menu.exec(event.globalPos())
+
+
+class QueueListHost(QWidget):
+    """Drop target for inserting at the end of the queue list."""
+
+    dropped_at_end = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("queueListHost")
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_JOB_ID):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(_MIME_JOB_ID):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        raw = event.mimeData().data(_MIME_JOB_ID)
+        if not raw:
+            return
+        source_id = bytes(raw).decode("utf-8")
+        if source_id:
+            self.dropped_at_end.emit(source_id)
+        event.acceptProposedAction()
 
 
 class RenderQueuePanel(QWidget):
@@ -172,6 +260,7 @@ class RenderQueuePanel(QWidget):
     job_selected = Signal(str)
     job_remove_requested = Signal(str)
     job_reorder_requested = Signal(str, str)
+    job_reorder_after_requested = Signal(str, str)
     clear_queue_requested = Signal()
 
     def __init__(self, parent=None):
@@ -219,9 +308,24 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
+        self._btn_remove = QPushButton("Remove")
+        self._btn_remove.setCursor(Qt.PointingHandCursor)
+        self._btn_remove.setEnabled(False)
+        self._btn_remove.setToolTip("Remove selected clip from queue")
+        self._btn_remove.setStyleSheet("""
+            QPushButton {
+                background-color: #4a2a2a; color: #ffcccc; border: 1px solid #884444;
+                border-radius: 10px; padding: 2px 10px; font-size: 11px;
+            }
+            QPushButton:hover:enabled { background-color: #6a3030; color: #ffffff; }
+            QPushButton:disabled { color: #666666; border-color: #444444; background: #333333; }
+        """)
+        self._btn_remove.clicked.connect(self._on_remove_selected_clicked)
+
         pill_layout.addWidget(self._title_label)
         pill_layout.addStretch()
         pill_layout.addWidget(self._count_label)
+        pill_layout.addWidget(self._btn_remove)
         pill_layout.addWidget(self._btn_clear)
 
         header_row.addStretch()
@@ -245,13 +349,13 @@ class RenderQueuePanel(QWidget):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
         """)
 
-        self._list_host = QWidget()
-        self._list_host.setObjectName("queueListHost")
+        self._list_host = QueueListHost()
+        self._list_host.dropped_at_end.connect(self._on_drop_at_end)
         self._list_layout = QVBoxLayout(self._list_host)
         self._list_layout.setContentsMargins(4, 0, 4, 8)
         self._list_layout.setSpacing(8)
 
-        self._empty_label = QLabel("Add clips via\nright-click → Add to queue")
+        self._empty_label = QLabel("Add clips via right-click → Add to queue\n✕ or Remove — delete a clip")
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setStyleSheet(f"color: #666666; font-size: 12px; {_FONT}")
 
@@ -260,6 +364,30 @@ class RenderQueuePanel(QWidget):
 
         self.setMinimumWidth(240)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
+    def _clear_drop_highlights(self) -> None:
+        for card in self._card_widgets:
+            card.set_drop_highlight(False)
+
+    def _on_drop_at_end(self, source_id: str) -> None:
+        last_queued = None
+        for job in self._jobs:
+            if job.status == JobStatus.QUEUED:
+                last_queued = job
+        if last_queued is None or last_queued.id == source_id:
+            return
+        self.job_reorder_after_requested.emit(source_id, last_queued.id)
+
+    def _on_remove_selected_clicked(self) -> None:
+        if self._selected_id:
+            self.job_remove_requested.emit(self._selected_id)
+
+    def _update_header_actions(self) -> None:
+        can_remove = False
+        if self._selected_id:
+            job = next((j for j in self._jobs if j.id == self._selected_id), None)
+            can_remove = job is not None and _job_can_remove(job)
+        self._btn_remove.setEnabled(can_remove)
 
     def refresh(self, jobs: list[RenderJob], selected_id: str | None = None) -> None:
         self._jobs = list(jobs)
@@ -288,10 +416,15 @@ class RenderQueuePanel(QWidget):
             card = QueueJobCard(job, selected=(job.id == selected_id))
             card.clicked.connect(self._on_card_clicked)
             card.remove_requested.connect(self.job_remove_requested.emit)
-            card.dropped_on.connect(self.job_reorder_requested.emit)
+            card.dropped_on.connect(self._on_card_drop)
             self._list_layout.addWidget(card)
             self._card_widgets.append(card)
         self._list_layout.addStretch()
+        self._update_header_actions()
+
+    def _on_card_drop(self, source_id: str, target_id: str) -> None:
+        self._clear_drop_highlights()
+        self.job_reorder_requested.emit(source_id, target_id)
 
     def _on_card_clicked(self, job_id: str) -> None:
         self._selected_id = job_id

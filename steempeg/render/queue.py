@@ -186,6 +186,8 @@ class RenderQueue:
         if from_index == to_index:
             return True
         job = self._jobs.pop(from_index)
+        if from_index < to_index:
+            to_index -= 1
         self._jobs.insert(to_index, job)
         self._reindex()
         return True
@@ -217,7 +219,7 @@ class RenderQueue:
         return -1
 
     def reorder(self, source_id: str, target_id: str) -> bool:
-        """Move a queued job before ``target_id`` (both must be movable)."""
+        """Move a queued job before ``target_id``."""
         src_idx = self.index_of(source_id)
         tgt_idx = self.index_of(target_id)
         if src_idx < 0 or tgt_idx < 0 or src_idx == tgt_idx:
@@ -226,9 +228,28 @@ class RenderQueue:
         if src.status != JobStatus.QUEUED:
             return False
         tgt = self._jobs[tgt_idx]
-        if tgt.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+        if tgt.status != JobStatus.QUEUED:
             return False
         return self.move(src_idx, tgt_idx)
+
+    def reorder_after(self, source_id: str, after_id: str) -> bool:
+        """Move a queued job to sit directly after ``after_id``."""
+        src_idx = self.index_of(source_id)
+        after_idx = self.index_of(after_id)
+        if src_idx < 0 or after_idx < 0 or src_idx == after_idx:
+            return False
+        src = self._jobs[src_idx]
+        if src.status != JobStatus.QUEUED:
+            return False
+        after = self._jobs[after_idx]
+        if after.status != JobStatus.QUEUED:
+            return False
+        job = self._jobs.pop(src_idx)
+        if src_idx < after_idx:
+            after_idx -= 1
+        self._jobs.insert(after_idx + 1, job)
+        self._reindex()
+        return True
 
     def to_json_list(self) -> List[Dict[str, Any]]:
         return [job_to_dict(j) for j in self._jobs]

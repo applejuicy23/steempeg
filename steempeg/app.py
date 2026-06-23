@@ -1890,6 +1890,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
                 self.render_queue_panel.job_remove_requested.connect(self.remove_queue_job)
                 self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
+                self.render_queue_panel.job_reorder_after_requested.connect(self.reorder_queue_job_after)
                 self.render_queue_panel.clear_queue_requested.connect(self.clear_render_queue)
 
                 self.right_h_splitter = QSplitter(Qt.Horizontal)
