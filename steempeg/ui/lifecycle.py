@@ -24,18 +24,15 @@ class LifecycleMixin:
         if getattr(self, '_is_closing', False):
             return False
 
-        if source == self.ui and event.type() == QEvent.Type.WindowStateChange:
-            if not self.ui.isMaximized() and not getattr(self, 'is_fullscreen', False):
-                if getattr(self, 'needs_geometry_restore', False) and hasattr(self, 'true_normal_geom'):
-                    
-                    def restore_geom():
-                        if not getattr(self, 'is_fullscreen', False) and not self.ui.isMaximized():
-                            self.ui.setGeometry(self.true_normal_geom)
-                            
-                    QTimer.singleShot(50, restore_geom)
-                    self.needs_geometry_restore = False
-
         # --- FLOATING PANEL RESIZE LOGIC ---
+        if source == self.ui and event.type() == QEvent.Type.Resize:
+            if getattr(self, 'is_fullscreen', False):
+                if hasattr(self, '_position_immersive_esc_hint'):
+                    self._position_immersive_esc_hint()
+                if hasattr(self, 'align_fullscreen_hud'):
+                    self.align_fullscreen_hud()
+            return False
+
         if hasattr(self, 'video_wrapper') and source == self.video_wrapper and event.type() == QEvent.Type.Resize:
             if getattr(self, 'is_fullscreen', False) and hasattr(self, 'player_footer_frame'):
                 self.align_fullscreen_hud()

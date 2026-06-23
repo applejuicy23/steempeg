@@ -11,15 +11,19 @@ import re
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, Qt, QPropertyAnimation, QTimer
 from PySide6.QtGui import QIcon, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QApplication,
+    QGraphicsOpacityEffect,
+    QLabel,
     QSizePolicy,
     QToolTip,
+    QWidget,
 )
 
 from steempeg.infra.paths import get_resource_path, get_save_directory
+from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.player.thumbnails import ThumbnailBatchThread
 
 
@@ -264,24 +268,278 @@ class PlayerMixin:
 
         if not self.is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
             self._sync_queue_splitter_visibility()
+
+    def _save_splitter_sizes(self, splitter, attr_name):
+        if splitter is None:
+            return
+        setattr(self, attr_name, splitter.sizes())
+
+    def _collapse_splitter(self, splitter, keep_index):
+        if splitter is None:
+            return
+        sizes = splitter.sizes()
+        total = sum(sizes) if sum(sizes) > 0 else (
+            splitter.width() if splitter.orientation() == Qt.Horizontal else splitter.height()
+        )
+        total = max(int(total), 1)
+        if keep_index == 0:
+            splitter.setSizes([total, 0])
+        else:
+            splitter.setSizes([0, total])
+
+    def _enter_immersive_layout(self):
+        """Hide chrome via splitters only — never touch Win32/Qt window state."""
+        self._save_splitter_sizes(getattr(self.ui, 'main_splitter', None), '_immersive_main_splitter_sizes')
+        self._save_splitter_sizes(getattr(self, 'main_v_splitter', None), '_immersive_v_splitter_sizes')
+        self._save_splitter_sizes(getattr(self, 'right_h_splitter', None), '_immersive_h_splitter_sizes')
+
+        self._collapse_splitter(getattr(self.ui, 'main_splitter', None), keep_index=1)
+        self._collapse_splitter(getattr(self, 'main_v_splitter', None), keep_index=0)
+        self._collapse_splitter(getattr(self, 'right_h_splitter', None), keep_index=0)
+
+        if hasattr(self, 'render_queue_panel'):
+            self.render_queue_panel.hide()
+
+    def _exit_immersive_layout(self, is_theater=False):
+        if hasattr(self.ui, 'main_splitter') and hasattr(self, '_immersive_main_splitter_sizes'):
+            self.ui.main_splitter.setSizes(self._immersive_main_splitter_sizes)
+        if hasattr(self, 'main_v_splitter') and hasattr(self, '_immersive_v_splitter_sizes'):
+            self.main_v_splitter.setSizes(self._immersive_v_splitter_sizes)
+        if hasattr(self, 'right_h_splitter') and hasattr(self, '_immersive_h_splitter_sizes'):
+            self.right_h_splitter.setSizes(self._immersive_h_splitter_sizes)
+        if not is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
+            self._sync_queue_splitter_visibility()
+
+    def _immersive_screen_geometry(self):
+        screen = self.ui.screen() or QApplication.primaryScreen()
+        return screen.geometry() if screen else self.ui.geometry()
+
+    def _enter_immersive_chrome(self):
+        enter_immersive_chrome(self.ui, self._immersive_screen_geometry())
+        self.ui.raise_()
+        self.ui.activateWindow()
+
+    def _show_immersive_transition_cover(self):
+        if getattr(self, '_immersive_transition_cover', None) is None:
+            cover = QWidget()
+            cover.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+            cover.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            cover.setStyleSheet("background-color: #1e1e1e;")
+            self._immersive_transition_cover = cover
+        cover = self._immersive_transition_cover
+        cover.setGeometry(self._immersive_screen_geometry())
+        cover.show()
+        cover.raise_()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _hide_immersive_transition_cover(self):
+        cover = getattr(self, '_immersive_transition_cover', None)
+        if cover is not None:
+            cover.hide()
+
+    def _activate_window_layouts(self):
+        for layout in (
+            self.ui.layout() if hasattr(self.ui, 'layout') else None,
+            self.ui.right_panel.layout() if hasattr(self.ui, 'right_panel') else None,
+            getattr(self, 'top_v_wrap', None) and self.top_v_wrap.layout(),
+            getattr(self, 'bottom_v_wrap', None) and self.bottom_v_wrap.layout(),
+        ):
+            if layout is not None:
+                layout.activate()
+        self.ui.updateGeometry()
+
+    def _get_immersive_esc_hint(self):
+        if getattr(self, '_immersive_esc_hint', None) is None:
+            hint = QLabel("Press ESC to exit full screen")
+            hint.setWindowFlags(
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+            hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            hint.setStyleSheet(
+                "QLabel {"
+                " background-color: rgba(15, 15, 15, 210);"
+                " color: #eeeeee;"
+                " padding: 12px 24px;"
+                " border-radius: 6px;"
+                " font-size: 15px;"
+                " font-family: 'Segoe UI', Arial, sans-serif;"
+                "}"
+            )
+            self._immersive_esc_hint = hint
+        return self._immersive_esc_hint
+
+    def _position_immersive_esc_hint(self):
+        hint = getattr(self, '_immersive_esc_hint', None)
+        if hint is None:
+            return
+        screen_geo = self._immersive_screen_geometry()
+        hint.adjustSize()
+        hint.move(
+            screen_geo.x() + max(0, (screen_geo.width() - hint.width()) // 2),
+            screen_geo.y() + 36,
+        )
+
+    def _show_immersive_esc_hint(self):
+        hint = self._get_immersive_esc_hint()
+        self._position_immersive_esc_hint()
+
+        effect = hint.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(hint)
+            hint.setGraphicsEffect(effect)
+        effect.setOpacity(1.0)
+
+        anim = getattr(self, '_immersive_hint_fade_anim', None)
+        if anim is not None:
+            anim.stop()
+
+        hint.show()
+        hint.raise_()
+
+        fade = QPropertyAnimation(effect, b"opacity", hint)
+        fade.setDuration(600)
+        fade.setStartValue(1.0)
+        fade.setEndValue(0.0)
+        fade.finished.connect(hint.hide)
+        self._immersive_hint_fade_anim = fade
+        QTimer.singleShot(2200, fade.start)
+
+    def _hide_immersive_esc_hint(self):
+        anim = getattr(self, '_immersive_hint_fade_anim', None)
+        if anim is not None:
+            anim.stop()
+        hint = getattr(self, '_immersive_esc_hint', None)
+        if hint is not None:
+            hint.hide()
+
+    def _exit_immersive_mode(self):
+        """Restore UI under a solid cover, then title bar — avoids MPV-only flash."""
+        is_t = getattr(self, 'is_theater', False)
+
+        self._show_immersive_transition_cover()
+        self._hide_immersive_esc_hint()
+        if hasattr(self, 'fs_timer'):
+            self.fs_timer.stop()
+        self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+
+        if hasattr(self, 'player_footer_frame'):
+            self.player_footer_frame.hide()
+
+        if hasattr(self.ui, 'left_panel'):
+            self.ui.left_panel.setVisible(not is_t)
+        if hasattr(self, 'mega_top_pill'):
+            self.mega_top_pill.setVisible(not is_t)
+        if hasattr(self, 'library_views_container'):
+            self.library_views_container.setVisible(not is_t)
+        if hasattr(self.ui, 'settings_tabs'):
+            self.ui.settings_tabs.setVisible(not is_t)
+        if hasattr(self, 'neo_wrapper'):
+            self.neo_wrapper.setVisible(not is_t)
+        if hasattr(self.ui, 'frame_status'):
+            self.ui.frame_status.setVisible(not is_t)
+        if hasattr(self, 'bottom_v_wrap'):
+            self.bottom_v_wrap.setVisible(not is_t)
+        if hasattr(self, 'render_dashboard'):
+            self.render_dashboard.setVisible(not is_t)
+
+        if hasattr(self.ui, 'btn_start'):
+            bw = self.ui.btn_start.parentWidget()
+            if bw and "Splitter" not in type(bw).__name__ and bw.objectName() != "centralwidget":
+                bw.setVisible(not is_t)
+        if hasattr(self, 'btn_refresh'):
+            rw = self.btn_refresh.parentWidget()
+            if rw:
+                rw.setVisible(not is_t)
+        if hasattr(self.ui, 'btn_about'):
+            self.ui.btn_about.setVisible(not is_t)
+        if hasattr(self.ui, 'btn_update_check'):
+            self.ui.btn_update_check.setVisible(not is_t)
+
+        if hasattr(self, 'player_header_frame'):
+            self.player_header_frame.show()
+        if hasattr(self.ui, 'main_splitter'):
+            self.ui.main_splitter.handle(1).setVisible(not is_t)
+        if hasattr(self, 'main_v_splitter'):
+            self.main_v_splitter.handle(1).setVisible(not is_t)
+
+        if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
+            margin_bottom = 0 if is_t else 10
+            self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
+        if hasattr(self, 'video_wrapper'):
+            self.video_wrapper.setStyleSheet("background-color: transparent; border: none;")
+
+        main_layout = self.ui.layout()
+        if main_layout and hasattr(self, 'original_main_margins'):
+            main_layout.setContentsMargins(self.original_main_margins)
+
+        right_layout = self.ui.right_panel.layout()
+        if right_layout and hasattr(self, 'original_right_margins'):
+            right_layout.setContentsMargins(self.original_right_margins)
+            right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
+
+        footer = self.player_footer_frame
+        footer.setWindowFlags(Qt.WindowType.Widget)
+        footer.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        footer.setParent(self.ui.right_panel)
+        footer.clearMask()
+        footer.setMinimumWidth(0)
+        footer.setMaximumWidth(16777215)
+        footer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+
+        idx = getattr(self, 'controls_layout_index', -1)
+        target_layout = getattr(self, 'top_v_wrap', self.ui.right_panel).layout()
+        if target_layout and idx >= 0:
+            target_layout.insertWidget(idx, footer)
+        elif target_layout:
+            target_layout.addWidget(footer)
+
+        footer.setObjectName("HudFrame")
+        footer.setStyleSheet(
+            "QFrame#HudFrame { background-color: #2d2d2d; border-radius: 6px; border: none; }"
+        )
+
+        v_container = getattr(self.ui, 'video_container', None)
+        if v_container:
+            v_container.setMinimumSize(1, 1)
+            v_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._exit_immersive_layout(is_t)
+        self._activate_window_layouts()
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+        def finish_exit():
+            exit_immersive_chrome(self.ui)
+            self._activate_window_layouts()
+            footer.show()
+            if right_layout:
+                right_layout.activate()
+            if hasattr(self, 'btn_fullscreen'):
+                self.btn_fullscreen.clearFocus()
+                QApplication.postEvent(self.btn_fullscreen, QEvent(QEvent.Type.Leave))
+            if hasattr(self, 'btn_theater'):
+                self.btn_theater.clearFocus()
+                QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
+            self._hide_immersive_transition_cover()
+
+        QTimer.singleShot(0, finish_exit)
+
     def toggle_fullscreen(self):
-        """ Completely isolates the video container with Anti-Spam Lock & Black Background """
+        """Immersive player mode: hide chrome inside the current window (no showFullScreen)."""
         
         if getattr(self, 'fullscreen_lock', False): return
         self.fullscreen_lock = True
-        
-
-        QTimer.singleShot(700, lambda: setattr(self, 'fullscreen_lock', False))
+        QTimer.singleShot(200, lambda: setattr(self, 'fullscreen_lock', False))
 
         self.is_fullscreen = not getattr(self, 'is_fullscreen', False)
         
         if self.is_fullscreen:
-            # --- ENTERING TRUE FULLSCREEN ---
-            self.window_maximized_before = self.ui.isMaximized()
-
-            if not getattr(self, 'needs_geometry_restore', False):
-                self.true_normal_geom = self.ui.normalGeometry()
-            
+            # --- ENTERING IMMERSIVE MODE (stay maximized / current window state) ---
             if getattr(self, 'is_theater', False):
                 self.is_theater = False
                 if hasattr(self, 'btn_theater'):
@@ -338,7 +596,8 @@ class PlayerMixin:
                 right_layout.setContentsMargins(0, 0, 0, 0)
                 right_layout.setSpacing(0)
 
-            self.ui.showFullScreen()
+            self._enter_immersive_layout()
+            self._enter_immersive_chrome()
 
             self.player_footer_frame.setParent(self.ui)
             self.player_footer_frame.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -362,112 +621,10 @@ class PlayerMixin:
                 self.wake_up_fullscreen_controls()
 
             QTimer.singleShot(50, self.align_fullscreen_hud)
+            self._show_immersive_esc_hint()
             
         else:
-            # --- EXITING FULLSCREEN ---
-            if hasattr(self, 'fs_timer'): 
-                self.fs_timer.stop()
-            self.ui.setCursor(Qt.ArrowCursor) 
-            
-            is_t = getattr(self, 'is_theater', False)
-            
-            # Restoring panel visibility
-            if hasattr(self.ui, 'left_panel'): self.ui.left_panel.setVisible(not is_t)
-            if hasattr(self, 'mega_top_pill'): self.mega_top_pill.setVisible(not is_t)
-            if hasattr(self, 'library_views_container'): self.library_views_container.setVisible(not is_t)
-            if hasattr(self.ui, 'settings_tabs'): self.ui.settings_tabs.setVisible(not is_t)
-            if hasattr(self, 'neo_wrapper'): self.neo_wrapper.setVisible(not is_t) 
-            if hasattr(self.ui, 'frame_status'): self.ui.frame_status.setVisible(not is_t)
-            if hasattr(self, 'bottom_v_wrap'): 
-                self.bottom_v_wrap.setVisible(not is_t)
-            if hasattr(self, 'render_dashboard'): self.render_dashboard.setVisible(not is_t)
-            
-            if hasattr(self.ui, 'btn_start'):
-                bw = self.ui.btn_start.parentWidget()
-                if bw and "Splitter" not in type(bw).__name__ and bw.objectName() != "centralwidget": bw.setVisible(not is_t)
-            if hasattr(self, 'btn_refresh'):
-                rw = self.btn_refresh.parentWidget()
-                if rw: rw.setVisible(not is_t)
-            if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(not is_t)
-            if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(not is_t)
-
-            if hasattr(self, 'player_header_frame'): self.player_header_frame.show()
-            if hasattr(self.ui, 'main_splitter'): self.ui.main_splitter.handle(1).setVisible(not is_t)
-            if hasattr(self, 'main_v_splitter'): 
-                self.main_v_splitter.handle(1).setVisible(not is_t)
-            
-            # Restoring margins and transparent background
-            if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
-                margin_bottom = 0 if is_t else 10
-                self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
-            if hasattr(self, 'video_wrapper'):
-                self.video_wrapper.setStyleSheet("background-color: transparent; border: none;")
-            
-            main_layout = self.ui.layout()
-            if main_layout and hasattr(self, 'original_main_margins'):
-                main_layout.setContentsMargins(self.original_main_margins)
-
-            right_layout = self.ui.right_panel.layout()
-            if right_layout and hasattr(self, 'original_right_margins'):
-                right_layout.setContentsMargins(self.original_right_margins)
-                right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
-
-            self.player_footer_frame.setWindowFlags(Qt.Widget)
-            self.player_footer_frame.setAttribute(Qt.WA_TranslucentBackground, False)
-            self.player_footer_frame.setParent(self.ui.right_panel)
-            self.player_footer_frame.clearMask()
-            
-            self.player_footer_frame.setMinimumWidth(0)
-            self.player_footer_frame.setMaximumWidth(16777215)
-            
-            self.player_footer_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-
-            idx = getattr(self, 'controls_layout_index', -1)
-            v_container = getattr(self.ui, 'video_container', None)
-            
-            def snap_to_cage():
-                if v_container:
-                    v_container.setMinimumSize(1, 1)
-                    v_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-                    v_container.updateGeometry()
-                    parent = v_container.parentWidget()
-                    if parent and parent.layout():
-                        parent.layout().activate()
-                        
-            QTimer.singleShot(50, snap_to_cage)
-
-            target_layout = getattr(self, 'top_v_wrap', self.ui.right_panel).layout()
-            if target_layout and idx >= 0:
-                target_layout.insertWidget(idx, self.player_footer_frame)
-            else:
-                if target_layout: target_layout.addWidget(self.player_footer_frame)
-
-            self.player_footer_frame.setObjectName("HudFrame")
-            self.player_footer_frame.setStyleSheet("QFrame#HudFrame { background-color: #2d2d2d; border-radius: 6px; border: none; }")
-            self.player_footer_frame.show()
-            
-            if right_layout: right_layout.activate()
-
-            if hasattr(self, 'btn_fullscreen'):
-                self.btn_fullscreen.clearFocus()
-                QApplication.postEvent(self.btn_fullscreen, QEvent(QEvent.Type.Leave))
-            if hasattr(self, 'btn_theater'):
-                self.btn_theater.clearFocus()
-                QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
-
-            if getattr(self, 'window_maximized_before', False):
-                screen_geom = self.ui.screen().availableGeometry()
-                self.ui.setMinimumSize(screen_geom.size())
-                self.ui.showNormal()
-                self.ui.move(screen_geom.topLeft())
-                self.ui.showMaximized()
-                self.ui.setMinimumSize(1000, 650)
-                self.needs_geometry_restore = True
-            else:
-                self.ui.showNormal()
-                self.ui.setMinimumSize(1000, 600)
-                if hasattr(self, 'true_normal_geom'):
-                    self.ui.setGeometry(self.true_normal_geom)
+            self._exit_immersive_mode()
 
     
     def align_fullscreen_hud(self):

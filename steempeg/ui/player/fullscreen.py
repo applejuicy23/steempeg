@@ -1,8 +1,8 @@
-"""A global event filter for fullscreen control and player hotkeys.
+"""A global event filter for immersive player mode and player hotkeys.
 
 Created with the application instance, it watches every event: Space toggles
-play/pause unless a text field has focus, Escape leaves fullscreen, mouse movement
-wakes the fullscreen controls, and minimizing the window hides the timeline preview.
+play/pause unless a text field has focus, Escape leaves immersive mode, mouse movement
+wakes the floating controls, and minimizing the window hides the timeline preview.
 """
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit
