@@ -28,7 +28,7 @@ class RenderThread(QThread):
         self.trim_duration_sec = trim_duration_sec
         self.mpd_paths = mpd_paths
         self.quality_text = quality_text
-        self.output_file = output_file 
+        self.output_file = output_file
         self.ffmpeg_exe = ffmpeg_exe
         self.save_dir = save_dir
         
@@ -72,6 +72,16 @@ class RenderThread(QThread):
 
     def run(self):
         """ Main thread loop """
+        if os.environ.get("STEEMPEG_DEBUG_RENDER_FAIL"):
+            self.progress_signal.emit("Part 1/1.. (0%)")
+            self.finished_signal.emit(
+                False,
+                "DEBUG: Simulated FFmpeg crash (STEEMPEG_DEBUG_RENDER_FAIL=1).\n"
+                "ffmpeg version N/A\nError: Invalid data found when processing input",
+                "",
+            )
+            return
+
         temp_files = []
         concat_file = None
         try:

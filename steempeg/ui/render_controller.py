@@ -49,6 +49,71 @@ from steempeg.ui.render_job_builder import (
 )
 from steempeg.ui.render_thread import RenderThread
 
+_RENDER_ERROR_DIALOG_STYLE = """
+    QDialog {
+        background-color: #202020;
+        border: 1px solid #444444;
+        border-radius: 8px;
+    }
+    QLabel#ErrorTitle {
+        color: #ff4444;
+        font-size: 18px;
+        font-weight: bold;
+    }
+    QLabel#ErrorDesc {
+        color: #cccccc;
+        font-size: 13px;
+    }
+    QTextEdit {
+        background-color: #141414;
+        color: #ff8888;
+        border: 1px solid #333333;
+        border-radius: 6px;
+        padding: 8px;
+        font-family: Consolas, monospace;
+        font-size: 11px;
+    }
+    QScrollBar:vertical { border: none; background: #141414; width: 12px; margin: 2px; border-radius: 4px; }
+    QScrollBar::handle:vertical { background: #444444; min-height: 20px; border-radius: 4px; }
+    QScrollBar::handle:vertical:hover { background: #666666; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+    QPushButton {
+        background-color: #333333;
+        color: white;
+        border: 1px solid #555555;
+        border-radius: 16px;
+        padding: 6px 20px;
+        font-weight: bold;
+        font-size: 12px;
+        min-height: 32px;
+        outline: none;
+    }
+    QPushButton:hover {
+        background-color: #444444;
+        border: 1px solid #777777;
+    }
+    QPushButton:pressed {
+        background-color: #222222;
+    }
+    QPushButton#LogBtn {
+        background-color: #4a2525;
+        border: 1px solid #7a3535;
+    }
+    QPushButton#LogBtn:hover {
+        background-color: #6a2e2e;
+        border: 1px solid #9a4545;
+    }
+    QPushButton#StopBtn {
+        background-color: #4a2525;
+        border: 1px solid #7a3535;
+    }
+    QPushButton#StopBtn:hover {
+        background-color: #6a2e2e;
+        border: 1px solid #9a4545;
+    }
+"""
+
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
 # PATH setup the application performs at startup.
 if getattr(sys, "frozen", False):
@@ -1647,57 +1712,139 @@ class RenderMixin:
             QMessageBox.information(self.ui, "Cancelled", "Queue render was cancelled.")
         self.update_status_indicator("Ready", "ready")
 
-    def _prompt_batch_continue_after_error(self, error_msg: str) -> bool:
+    def _show_steempeg_render_error_dialog(
+        self,
+        error_msg: str,
+        *,
+        batch_continue: bool = False,
+        auto_continue_seconds: int = 10,
+    ) -> bool:
+        """Frameless FFmpeg error dialog. Returns True to continue queue, False to stop."""
         dialog = QDialog(self.ui)
-        dialog.setWindowTitle("Render Error")
-        dialog.setMinimumWidth(420)
-        layout = QVBoxLayout(dialog)
+        dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        dialog.setFixedSize(780, 420)
+        dialog.setStyleSheet(_RENDER_ERROR_DIALOG_STYLE)
 
-        title = QLabel("АЙ АЙ АЙ АЙ, краш! Продолжить?")
-        title.setStyleSheet("color: #ff4444; font-size: 16px; font-weight: bold;")
-        layout.addWidget(title)
+        main_layout = QHBoxLayout(dialog)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
 
-        detail = QLabel((error_msg or "Unknown error")[:400])
-        detail.setWordWrap(True)
-        detail.setStyleSheet("color: #cccccc; font-size: 12px;")
-        layout.addWidget(detail)
+        pic_label = QLabel()
+        pixmap = QPixmap(get_resource_path("saderror.png"))
+        if not pixmap.isNull():
+            pic_label.setPixmap(pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation))
+        else:
+            pic_label.setText("Sad pic\nnot found =(")
+            pic_label.setStyleSheet("color: gray; font-size: 12px;")
+        pic_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        main_layout.addWidget(pic_label)
 
-        countdown = QLabel("Auto-continue in 10 s")
-        countdown.setStyleSheet("color: #888888; font-size: 11px;")
-        layout.addWidget(countdown)
+        content_layout = QVBoxLayout()
+        content_layout.setSpacing(15)
 
-        btn_row = QHBoxLayout()
-        btn_ok = QPushButton("Продолжить")
-        btn_stop = QPushButton("Stop queue")
-        btn_row.addWidget(btn_ok)
-        btn_row.addWidget(btn_stop)
-        layout.addLayout(btn_row)
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+
+        if batch_continue:
+            title_text = "Render Failed"
+            desc_text = (
+                "FFmpeg crashed while processing this clip. "
+                f"Auto-continuing in {auto_continue_seconds} s..."
+            )
+        else:
+            title_text = "Render Failed"
+            desc_text = "FFmpeg encountered a critical error during processing."
+
+        title_lbl = QLabel(title_text)
+        title_lbl.setObjectName("ErrorTitle")
+        desc_lbl = QLabel(desc_text)
+        desc_lbl.setObjectName("ErrorDesc")
+        title_layout.addWidget(title_lbl)
+        title_layout.addWidget(desc_lbl)
+        content_layout.addLayout(title_layout)
+
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        short_error = (error_msg or "Unknown error")[-2000:]
+        text_edit.setText(short_error)
+        content_layout.addWidget(text_edit)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        btn_log = QPushButton("📄 Open Log File")
+        btn_log.setObjectName("LogBtn")
+        btn_log.setCursor(Qt.CursorShape.PointingHandCursor)
 
         result = {"continue": True}
-        remaining = [10]
-
         timer = QTimer(dialog)
+        remaining = [auto_continue_seconds]
 
-        def tick():
-            remaining[0] -= 1
-            countdown.setText(
-                f"Auto-continue in {remaining[0]} s" if remaining[0] > 0 else "Continuing..."
-            )
-            if remaining[0] <= 0:
+        def open_log_file():
+            if hasattr(self, "current_log_file") and os.path.exists(self.current_log_file):
+                subprocess.Popen(["notepad.exe", os.path.abspath(self.current_log_file)])
+
+        if batch_continue:
+            btn_log.clicked.connect(open_log_file)
+        else:
+            btn_log.clicked.connect(lambda: (open_log_file(), dialog.accept()))
+        btn_layout.addWidget(btn_log)
+
+        if batch_continue:
+            btn_stop = QPushButton("Stop Queue")
+            btn_stop.setObjectName("StopBtn")
+            btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            btn_continue = QPushButton("Continue")
+            btn_continue.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            def tick():
+                remaining[0] -= 1
+                if remaining[0] > 0:
+                    desc_lbl.setText(
+                        "FFmpeg crashed while processing this clip. "
+                        f"Auto-continuing in {remaining[0]} s..."
+                    )
+                else:
+                    desc_lbl.setText("Continuing queue...")
+                    timer.stop()
+                    dialog.accept()
+
+            timer.timeout.connect(tick)
+            timer.start(1000)
+
+            def stop_queue():
+                result["continue"] = False
                 timer.stop()
-                dialog.accept()
+                dialog.reject()
 
-        timer.timeout.connect(tick)
-        timer.start(1000)
+            btn_continue.clicked.connect(dialog.accept)
+            btn_stop.clicked.connect(stop_queue)
+            btn_layout.addWidget(btn_stop)
+            btn_layout.addWidget(btn_continue)
+        else:
+            btn_ok = QPushButton("Close")
+            btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_ok.clicked.connect(dialog.accept)
+            btn_layout.addWidget(btn_ok)
 
-        btn_ok.clicked.connect(dialog.accept)
-        btn_stop.clicked.connect(lambda: (result.update({"continue": False}), dialog.reject()))
+        content_layout.addLayout(btn_layout)
+        main_layout.addLayout(content_layout)
 
-        if dialog.exec() == QDialog.Rejected and not result["continue"]:
+        if batch_continue:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
             timer.stop()
-            return False
-        timer.stop()
+            return accepted and result["continue"]
+
+        dialog.exec()
         return True
+
+    def _prompt_batch_continue_after_error(self, error_msg: str) -> bool:
+        return self._show_steempeg_render_error_dialog(
+            error_msg,
+            batch_continue=True,
+            auto_continue_seconds=10,
+        )
 
     def cancel_render(self):
         """ Cancel Button Handler """
@@ -1795,149 +1942,7 @@ class RenderMixin:
         else:
             logging.error(f"=== RENDER ERROR === \n{error_msg}")
             self.update_status_indicator("Error!", "error")
-            
-            # --- STEEMPEG CUSTOM ERROR WINDOW ---
-
-
-            dialog = QDialog(self.ui)
-            dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
-            # Make the window wider so that the image and logs fit comfortably.
-            dialog.setFixedSize(780, 420)
-            
-            dialog.setStyleSheet("""
-                QDialog { 
-                    background-color: #202020; 
-                    border: 1px solid #444444; 
-                    border-radius: 8px; 
-                }
-                QLabel#ErrorTitle { 
-                    color: #ff4444; 
-                    font-size: 18px; 
-                    font-weight: bold; 
-                }
-                QLabel#ErrorDesc { 
-                    color: #cccccc; 
-                    font-size: 13px; 
-                }
-                QTextEdit { 
-                    background-color: #141414; 
-                    color: #ff8888; 
-                    border: 1px solid #333333; 
-                    border-radius: 6px; 
-                    padding: 8px; 
-                    font-family: Consolas, monospace; 
-                    font-size: 11px; 
-                }
-                
-                QScrollBar:vertical { border: none; background: #141414; width: 12px; margin: 2px; border-radius: 4px; }
-                QScrollBar::handle:vertical { background: #444444; min-height: 20px; border-radius: 4px; }
-                QScrollBar::handle:vertical:hover { background: #666666; }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-                
-                QPushButton { 
-                    background-color: #333333; 
-                    color: white; 
-                    border: 1px solid #555555; 
-                    border-radius: 16px; 
-                    padding: 6px 20px; 
-                    font-weight: bold; 
-                    font-size: 12px; 
-                    min-height: 32px;
-                    outline: none;
-                }
-                QPushButton:hover { 
-                    background-color: #444444; 
-                    border: 1px solid #777777; 
-                }
-                QPushButton:pressed {
-                    background-color: #222222;
-                }
-                
-                QPushButton#LogBtn { 
-                    background-color: #4a2525; 
-                    border: 1px solid #7a3535; 
-                }
-                QPushButton#LogBtn:hover { 
-                    background-color: #6a2e2e; 
-                    border: 1px solid #9a4545; 
-                }
-            """)
-            
-            # --- MAIN LAYER (Horizontal) ---
-            main_layout = QHBoxLayout(dialog)
-            main_layout.setContentsMargins(20, 20, 20, 20)
-            main_layout.setSpacing(20)
-
-            # --- LEFT SIDE: Sad Image ---
-            pic_label = QLabel()
-            pixmap = QPixmap(get_resource_path("saderror.png"))
-            
-            if not pixmap.isNull():
-                # Shrinking a huge image to 240 pixels in width with beautiful anti-aliasing
-                scaled_pixmap = pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation)
-                pic_label.setPixmap(scaled_pixmap)
-            else:
-                pic_label.setText("Sad pic\nnot found =(")
-                pic_label.setStyleSheet("color: gray; font-size: 12px;")
-                
-            pic_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-            main_layout.addWidget(pic_label)
-
-            # --- RIGHT SIDE: Text, Logs, and Buttons ---
-            content_layout = QVBoxLayout()
-            content_layout.setSpacing(15)
-
-            # 1. HEADER (without the crooked icon—text only)
-            title_layout = QVBoxLayout()
-            title_layout.setSpacing(2)
-
-            title_lbl = QLabel("Render Failed")
-            title_lbl.setObjectName("ErrorTitle")
-            desc_lbl = QLabel("FFmpeg encountered a critical error during processing.")
-            desc_lbl.setObjectName("ErrorDesc")
-            
-            title_layout.addWidget(title_lbl)
-            title_layout.addWidget(desc_lbl)
-            content_layout.addLayout(title_layout)
-
-            # 2. LOGS FIELD
-            text_edit = QTextEdit()
-            text_edit.setReadOnly(True)
-            short_error = error_msg[-2000:] if len(error_msg) > 2000 else error_msg
-            text_edit.setText(short_error)
-            content_layout.addWidget(text_edit)
-
-            # 3. Control Buttons
-            btn_layout = QHBoxLayout()
-            btn_layout.addStretch()
-            
-            btn_log = QPushButton("📄 Open Log File")
-            btn_log.setObjectName("LogBtn")
-            btn_log.setCursor(Qt.CursorShape.PointingHandCursor)
-            
-            btn_ok = QPushButton("Close")
-            btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
-            
-            btn_layout.addWidget(btn_log)
-            btn_layout.addWidget(btn_ok)
-            
-            content_layout.addLayout(btn_layout)
-            
-           # Bringing Everything Together in the Main Window
-            main_layout.addLayout(content_layout)
-            
-            def open_log_and_close():
-                if hasattr(self, 'current_log_file') and os.path.exists(self.current_log_file):
-                    log_path = os.path.abspath(self.current_log_file)
-                    subprocess.Popen(["notepad.exe", log_path])
-                dialog.accept()
-                
-            btn_log.clicked.connect(open_log_and_close)
-            btn_ok.clicked.connect(dialog.accept)
-
-            dialog.exec()
-            
+            self._show_steempeg_render_error_dialog(error_msg or "")
             self.update_status_indicator("Ready", "ready")
 
         self.update_final_setup()
