@@ -224,8 +224,15 @@ class LibraryMixin:
             if mods & Qt.ControlModifier:
                 item.setSelected(not item.isSelected())
             elif mods & Qt.ShiftModifier:
-                anchor = getattr(self, '_grid_anchor_item', None) or item
-                lo, hi = sorted((grid.row(anchor), grid.row(item)))
+                anchor = getattr(self, '_grid_anchor_item', None)
+                try:
+                    anchor_row = grid.row(anchor) if anchor is not None else -1
+                except RuntimeError:
+                    anchor_row = -1  # anchor item was destroyed by a grid rebuild
+                if anchor_row < 0:
+                    anchor_row = grid.row(item)
+                    self._grid_anchor_item = item
+                lo, hi = sorted((anchor_row, grid.row(item)))
                 grid.clearSelection()
                 for i in range(lo, hi + 1):
                     row_item = grid.item(i)
@@ -608,7 +615,9 @@ class LibraryMixin:
         """ Transforms rows from a hidden table into vibrant cards. """
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
-            
+
+        # Items get destroyed below — drop the stale Shift anchor or range-select breaks.
+        self._grid_anchor_item = None
         self.grid_clips.clear()
         
         for row in range(self.ui.table_clips.rowCount()):
