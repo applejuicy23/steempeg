@@ -1,5 +1,8 @@
 """A clip card for the library grid: thumbnail, title, date and a type badge."""
+from __future__ import annotations
+
 import os
+from typing import Callable, Optional
 
 import PySide6.QtCore as qtc
 import PySide6.QtGui as qtg
@@ -7,62 +10,72 @@ import PySide6.QtWidgets as qtw
 
 
 class ClipCard(qtw.QWidget):
-    def __init__(self, title, date_str, badge_text, thumb_path, icon_path, row_idx, parent=None):
+    def __init__(
+        self,
+        title,
+        date_str,
+        badge_text,
+        thumb_path,
+        icon_path,
+        row_idx,
+        on_left_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
+        on_right_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.row_idx = row_idx
-        
+        self._on_left_click = on_left_click
+        self._on_right_click = on_right_click
+        self._selected = False
+        self.setObjectName("ClipCard")
+
         # Cell 260, border 3px. That means the inside is exactly 254 by 184!
-        self.setFixedSize(254, 184) 
-        self.setStyleSheet("QWidget { background: transparent; }")
+        self.setFixedSize(254, 184)
 
         layout = qtw.QVBoxLayout(self)
-        # Remove the fucking joystick, the picture will stick to the frame itself!
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # 1. --- THUMBNAIL AREA ---
         self.thumb_label = qtw.QLabel(self)
-        self.thumb_label.setFixedSize(254, 144) 
+        self.thumb_label.setFixedSize(254, 144)
         self.thumb_label.setStyleSheet("background-color: #1a1a1a; border-radius: 0px;")
-        
-        # Remove the old setScaledContents(True) and implement a nice, smooth downscale:
+
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
             if not pixmap.isNull():
-                # Scaling an image while preserving aspect ratio and applying smoothing
                 scaled_thumb = pixmap.scaled(
-                    254, 144, 
-                    qtc.Qt.KeepAspectRatioByExpanding, 
-                    qtc.Qt.SmoothTransformation
+                    254, 144,
+                    qtc.Qt.KeepAspectRatioByExpanding,
+                    qtc.Qt.SmoothTransformation,
                 )
                 self.thumb_label.setPixmap(scaled_thumb)
 
-        # 2. --- GAME LOGO (OVERLAY) ---
         self.icon_label = qtw.QLabel(self.thumb_label)
         self.icon_label.setFixedSize(24, 24)
         self.icon_label.move(8, 8)
         if icon_path and os.path.exists(icon_path):
-            self.icon_label.setPixmap(qtg.QPixmap(icon_path).scaled(24, 24, qtc.Qt.KeepAspectRatio, qtc.Qt.SmoothTransformation))
+            self.icon_label.setPixmap(
+                qtg.QPixmap(icon_path).scaled(24, 24, qtc.Qt.KeepAspectRatio, qtc.Qt.SmoothTransformation)
+            )
 
-        # 3. --- BADGE (OVERLAY) ---
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
-        self.badge_label.setStyleSheet("background-color: #b29ae7; color: black; font-weight: bold; font-size: 11px; border-radius: 4px; padding: 2px 6px;")
+        self.badge_label.setStyleSheet(
+            "background-color: #b29ae7; color: black; font-weight: bold; font-size: 11px;"
+            "border-radius: 4px; padding: 2px 6px;"
+        )
         self.badge_label.adjustSize()
         badge_w = self.badge_label.width()
-        # Move the badge to the new size
         self.badge_label.move(254 - badge_w - 6, 144 - 24)
 
-        # 4. --- TEXT AREA (BOTTOM OF CARD) ---
         text_widget = qtw.QWidget()
-        # Outer border radius of 12px, minus our padding of 3px = Perfect inner radius of 9px!
         text_widget.setStyleSheet("""
-            QWidget { 
-                background-color: #383838; 
-                border: none; 
-                border-top-left-radius: 0px; 
-                border-top-right-radius: 0px; 
-                border-bottom-left-radius: 9px; 
-                border-bottom-right-radius: 9px; 
+            QWidget {
+                background-color: #383838;
+                border: none;
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+                border-bottom-left-radius: 9px;
+                border-bottom-right-radius: 9px;
             }
         """)
 
@@ -70,10 +83,14 @@ class ClipCard(qtw.QWidget):
         text_layout.setContentsMargins(12, 0, 12, 0)
 
         title_lbl = qtw.QLabel(title)
-        title_lbl.setStyleSheet("QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }")
+        title_lbl.setStyleSheet(
+            "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
+        )
 
         date_lbl = qtw.QLabel(date_str)
-        date_lbl.setStyleSheet("QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }")
+        date_lbl.setStyleSheet(
+            "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
+        )
 
         text_layout.addWidget(title_lbl)
         text_layout.addStretch()
@@ -81,3 +98,40 @@ class ClipCard(qtw.QWidget):
 
         layout.addWidget(self.thumb_label)
         layout.addWidget(text_widget)
+
+        # Clicks must hit the card, not child labels — viewport filters never see child events.
+        for child in self.findChildren(qtw.QWidget):
+            if child is not self:
+                child.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self._apply_selection_style()
+
+    def set_selected(self, selected: bool) -> None:
+        if self._selected == selected:
+            return
+        self._selected = selected
+        self._apply_selection_style()
+
+    def _apply_selection_style(self) -> None:
+        border = "3px solid #b29ae7" if self._selected else "2px solid #444444"
+        self.setStyleSheet(f"""
+            ClipCard#ClipCard {{
+                background: transparent;
+                border: {border};
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+                border-bottom-left-radius: 12px;
+                border-bottom-right-radius: 12px;
+            }}
+        """)
+
+    def mousePressEvent(self, event: qtc.QMouseEvent) -> None:
+        if event.button() == qtc.Qt.MouseButton.RightButton and self._on_right_click is not None:
+            self._on_right_click(event)
+            event.accept()
+            return
+        if event.button() == qtc.Qt.MouseButton.LeftButton and self._on_left_click is not None:
+            self._on_left_click(event)
+            event.accept()
+            return
+        super().mousePressEvent(event)
