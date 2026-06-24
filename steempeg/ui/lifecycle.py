@@ -46,13 +46,17 @@ class LifecycleMixin:
                     self.show_clip_context_menu(click_pos)
                     return True
                     
-        # 2. Disable right-click selection in the Grid
+        # 2. Disable right-click selection in the Grid; handle LMB selection on cards manually
         if hasattr(self, 'grid_clips') and source == self.grid_clips.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
                     click_pos = event.position().toPoint()
                     self.show_grid_context_menu(click_pos)
                     return True
+                if event.button() == Qt.LeftButton and hasattr(self, '_handle_grid_viewport_press'):
+                    return self._handle_grid_viewport_press(event)
+            if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
+                return True
 
         return super().eventFilter(source, event)
     
@@ -123,6 +127,13 @@ class LifecycleMixin:
 
         if hasattr(self, "_persist_render_queue"):
             self._persist_render_queue()
+
+        if hasattr(self.ui, "main_splitter"):
+            self.save_layout_setting("main_splitter_sizes", self.ui.main_splitter.sizes())
+        if hasattr(self, "right_h_splitter"):
+            sizes = self.right_h_splitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self.save_layout_setting("queue_panel_width", sizes[1])
 
         event.accept()
 

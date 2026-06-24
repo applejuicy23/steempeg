@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QListWidgetItem,
     QMenu,
@@ -145,14 +146,29 @@ class LibraryMixin:
             if item.data(Qt.UserRole) in selected_rows:
                 item.setSelected(True)
         self.grid_clips.blockSignals(False)
+        self._sync_grid_card_visuals()
 
-    def sync_table_from_grid_selection(self):
+    def _sync_grid_card_visuals(self) -> None:
+        """Paint selection on ClipCard widgets — QListWidget item chrome is hidden underneath."""
+        if not hasattr(self, 'grid_clips'):
+            return
+        for i in range(self.grid_clips.count()):
+            item = self.grid_clips.item(i)
+            card = self.grid_clips.itemWidget(item)
+            if isinstance(card, ClipCard):
+                card.set_selected(item.isSelected())
+
+    def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
         """Mirror multi-selection from the grid into the list."""
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
 
         selected_items = self.grid_clips.selectedItems()
+        table = self.ui.table_clips
         if not selected_items:
+            table.blockSignals(True)
+            table.clearSelection()
+            table.blockSignals(False)
             return
 
         rows = sorted({
@@ -161,7 +177,6 @@ class LibraryMixin:
             if item.data(Qt.UserRole) is not None
         })
 
-        table = self.ui.table_clips
         selection = QItemSelection()
         for row in rows:
             if row < 0 or row >= table.rowCount():
@@ -175,8 +190,89 @@ class LibraryMixin:
         table.selectionModel().clearSelection()
         if not selection.isEmpty():
             table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
-            table.setCurrentCell(rows[0], 0)
+            current_row = table.currentRow()
+            if not keep_current_cell or current_row not in rows:
+                table.setCurrentCell(rows[0], 0)
         table.blockSignals(False)
+
+    def _publish_grid_selection(self, *, update_preview: bool = True) -> None:
+        """Mirror grid selection into the table; reload preview only on plain LMB clicks."""
+        if not self.grid_clips.selectedItems():
+            self.sync_table_from_grid_selection()
+            self._sync_grid_card_visuals()
+            return
+        self.sync_table_from_grid_selection(keep_current_cell=not update_preview)
+        self._sync_grid_card_visuals()
+        if update_preview and hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
+            self.update_quality_options()
+
+    def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
+        """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
+        grid = self.grid_clips
+        mods = QApplication.keyboardModifiers()
+        if event is not None:
+            mods |= event.modifiers()
+        if force_single:
+            mods = Qt.NoModifier
+
+        is_multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier)) and not force_single
+        update_preview = not is_multi
+
+        self._grid_select_in_progress = True
+        try:
+            grid.blockSignals(True)
+            if mods & Qt.ControlModifier:
+                item.setSelected(not item.isSelected())
+            elif mods & Qt.ShiftModifier:
+                anchor = getattr(self, '_grid_anchor_item', None) or item
+                lo, hi = sorted((grid.row(anchor), grid.row(item)))
+                grid.clearSelection()
+                for i in range(lo, hi + 1):
+                    row_item = grid.item(i)
+                    if row_item and not row_item.isHidden():
+                        row_item.setSelected(True)
+            else:
+                grid.clearSelection()
+                item.setSelected(True)
+                self._grid_anchor_item = item
+
+            if not (mods & (Qt.ControlModifier | Qt.ShiftModifier)):
+                self._grid_anchor_item = item
+
+            grid.blockSignals(False)
+        finally:
+            self._grid_select_in_progress = False
+
+        self._publish_grid_selection(update_preview=update_preview)
+
+    def _handle_grid_card_context_menu(self, item, event) -> None:
+        clicked_path = item.data(Qt.UserRole + 1)
+        selected_paths = [
+            it.data(Qt.UserRole + 1) for it in self.grid_clips.selectedItems() if it.data(Qt.UserRole + 1)
+        ]
+        if clicked_path not in selected_paths or len(selected_paths) <= 1:
+            if not (event.modifiers() & Qt.ControlModifier):
+                self._grid_select_item(item, event, force_single=True)
+
+        rect = self.grid_clips.visualItemRect(item)
+        self.show_grid_context_menu(rect.center())
+
+    def _handle_grid_viewport_press(self, event) -> bool:
+        if event.button() != Qt.LeftButton:
+            return False
+
+        pos = event.position().toPoint()
+        item = self.grid_clips.itemAt(pos)
+        if item is None:
+            if not (event.modifiers() & Qt.ControlModifier):
+                self.grid_clips.blockSignals(True)
+                self.grid_clips.clearSelection()
+                self.grid_clips.blockSignals(False)
+                self.sync_table_from_grid_selection()
+            return True
+
+        self._grid_select_item(item, event)
+        return True
 
     def show_grid_context_menu(self, pos):
         """ Pop-up menu for the grid """
@@ -503,12 +599,10 @@ class LibraryMixin:
     
 
     def on_grid_selection_changed(self):
-        """Select in Grid -> mirror selection in List, then preview like table selection."""
-        if not self.grid_clips.selectedItems():
+        """Qt signal fallback — custom card clicks publish selection manually."""
+        if getattr(self, '_grid_select_in_progress', False):
             return
-        self.sync_table_from_grid_selection()
-        if hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
-            self.update_quality_options()
+        self._publish_grid_selection()
 
     def build_netflix_grid(self):
         """ Transforms rows from a hidden table into vibrant cards. """
@@ -557,19 +651,29 @@ class LibraryMixin:
                                 break
 
             # Create the custom card
-            card = ClipCard(title, f"{date_str} • {time_str}", badge_text, thumb_path, icon_path, row)
-            
             item = QListWidgetItem(self.grid_clips)
             item.setSizeHint(QSize(260, 190))
+            item.setData(Qt.UserRole, row)
+            item.setData(Qt.UserRole + 1, clip_path)
 
-            item.setData(Qt.UserRole, row) # Save row index for selection logic
-            item.setData(Qt.UserRole + 1, clip_path) 
+            card = ClipCard(
+                title,
+                f"{date_str} • {time_str}",
+                badge_text,
+                thumb_path,
+                icon_path,
+                row,
+                on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
+                on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
+            )
             self.grid_clips.setItemWidget(item, card)
 
             
             # SYNC VISIBILITY WITH TABLE
             if self.ui.table_clips.isRowHidden(row):
                 item.setHidden(True)
+
+        self.sync_grid_from_table_selection()
 
     def show_filter_menu(self):
         """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
