@@ -377,12 +377,19 @@ def _quality_field(ui, label, combo):
         "Re-encoding usually fixes those timeline glitches."
     )
 
-    combo.setFixedWidth(_COMBO_W - help_btn.width() - row.spacing())
     row.addWidget(combo)
     row.addWidget(help_btn, 0, Qt.AlignVCenter)
 
     def _sync_help(text):
-        help_btn.setVisible("Original" in (text or ""))
+        show = "Original" in (text or "")
+        help_btn.setVisible(show)
+        # Keep the column's total width constant: shrink the combo to make room
+        # for the button only when it's visible, otherwise use the full width so
+        # the field lines up with the FPS column next to it.
+        if show:
+            combo.setFixedWidth(_COMBO_W - help_btn.width() - row.spacing())
+        else:
+            combo.setFixedWidth(_COMBO_W)
 
     combo.currentTextChanged.connect(_sync_help)
     _sync_help(combo.currentText())

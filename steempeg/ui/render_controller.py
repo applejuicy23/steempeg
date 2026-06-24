@@ -162,6 +162,7 @@ class RenderMixin:
 
         if hasattr(self.ui, 'tab_video'):
             self.ui.tab_video.setEnabled(not checked)  # Freeze entire Video Tab
+        self._sync_original_audio_controls()
         self.update_final_setup()
 
     def on_mute_audio_toggled(self, checked):
@@ -173,7 +174,27 @@ class RenderMixin:
 
         if hasattr(self.ui, 'tab_audio'):
             self.ui.tab_audio.setEnabled(not checked)  # Freeze entire Audio Tab
+        self._sync_original_audio_controls()
         self.update_final_setup()
+
+    def _sync_original_audio_controls(self):
+        """Freeze audio encode controls when Original is doing stream copy."""
+        quality_text = self.ui.combo_quality.currentText() if hasattr(self.ui, 'combo_quality') else ""
+        audio_only = self.ui.check_audio_only.isChecked() if hasattr(self.ui, 'check_audio_only') else False
+        is_original_copy = "Original" in quality_text and "Target File" not in quality_text and not audio_only
+
+        if is_original_copy and hasattr(self.ui, 'combo_audio_bitrate') and self.ui.combo_audio_bitrate.count() > 0:
+            self.ui.combo_audio_bitrate.setCurrentIndex(0)
+
+        tooltip = (
+            "Original preset uses stream copy: audio is copied as-is, without AAC/MP3 re-encoding."
+            if is_original_copy else ""
+        )
+        for name in ("label_audio_format", "combo_audio_format", "label_audio_bitrate", "combo_audio_bitrate"):
+            widget = getattr(self.ui, name, None)
+            if widget is not None:
+                widget.setEnabled(not is_original_copy)
+                widget.setToolTip(tooltip)
 
     def detect_gpu_and_set_encoder(self):
         """Probe the hardware encoders and fill the encoder dropdown."""
@@ -723,6 +744,7 @@ class RenderMixin:
         self.ui.combo_bitrate.blockSignals(True)
         self.ui.combo_bitrate.clear()
         quality_text = self.ui.combo_quality.currentText()
+        self._sync_original_audio_controls()
 
         if "Original" in quality_text:
             if hasattr(self, 'current_orig_bitrate') and self.current_orig_bitrate > 0:
@@ -919,6 +941,9 @@ class RenderMixin:
         elif mute_audio:
             sound_info = "None"
             other_info = ">> NO SOUND (MUTED)"
+        elif "Original" in quality and "Target File Size" not in quality:
+            sound_info = "Original audio (copy)"
+            other_info = "Original stream copy"
         else:
             sound_info = audio_bitrate
             other_info = "Normal Render"
@@ -967,6 +992,8 @@ class RenderMixin:
                 audio_bitrate_clean = f"⚙️ {val} kbps"
             except:
                 audio_bitrate_clean = f"{orig_a_bitrate} kbps"
+        elif "Original" in quality and "Target File Size" not in quality and not audio_only:
+            audio_bitrate_clean = "Original audio (copy)"
         else:
             # Clean up "(Original Copy)" just "192 kbps"
             audio_bitrate_clean = audio_bitrate.split('(')[0].strip() if audio_bitrate else "192 kbps"
@@ -1007,6 +1034,18 @@ class RenderMixin:
                 f"Codec: {codec}\n"
                 f"Encoder: {enc_clean}\n"
                 f"Other settings: >> NO SOUND (MUTED)\n"
+                f"Est. File Size: {size_str}"
+            )
+        elif "Original" in quality and "Target File Size" not in quality:
+            detailed_text = (
+                f"Clip time: {duration_str}\n"
+                f"Quality: {q_clean}\n"
+                f"FPS: {fps_display}\n"
+                f"Bitrate: {video_bitrate_display}\n"
+                f"Codec: Original copy\n"
+                f"Encoder: Not used\n"
+                f"Sound: Original audio (copy)\n"
+                f"Other settings: Original stream copy\n"
                 f"Est. File Size: {size_str}"
             )
         else:
@@ -1089,6 +1128,7 @@ class RenderMixin:
             
         if is_target_mode:
             self.setup_dynamic_slider()
+        self._sync_original_audio_controls()
 
     def on_custom_size_changed(self, text):
         """ Live updates when typing a custom MB value with idiot-proof protection """
