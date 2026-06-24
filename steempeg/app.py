@@ -852,34 +852,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
         
         copy_icon_path = get_resource_path("copyfile.png")
-        
-        # 1. Copy Button for Source
-        if hasattr(self.ui, 'source_label'):
-            src_container = QWidget()
-            src_layout = QHBoxLayout(src_container)
-            src_layout.setContentsMargins(0, 0, 0, 0)
-            src_layout.setSpacing(6)
-            
-            self.ui.source_label.parentWidget().layout().replaceWidget(self.ui.source_label, src_container)
-            
-            self.btn_copy_src = QPushButton()
-            self.btn_copy_src.setFixedSize(20, 20)
-            self.btn_copy_src.setToolTip("Copy raw source paths")
-            self.btn_copy_src.setStyleSheet("background: transparent; border: none;")
-            self.btn_copy_src.setCursor(Qt.PointingHandCursor)
-            
-            if os.path.exists(copy_icon_path): 
-                self.btn_copy_src.setIcon(QIcon(copy_icon_path))
-            else: 
-                self.btn_copy_src.setText("📋")
-                
-            self.btn_copy_src.clicked.connect(lambda: QApplication.clipboard().setText(getattr(self, 'current_source_raw_paths', "")))
-            self.btn_copy_src.hide() # Hidden by default
-            
-            self.ui.source_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-            src_layout.addWidget(self.ui.source_label)
-            src_layout.addWidget(self.btn_copy_src, alignment=Qt.AlignTop)
-            src_layout.addStretch()
+
+        # 1. Source paths now render as per-directory rows with their own copy buttons
+        #    (SourcePathsBox in render_panel) — no single wrapper button needed here.
 
         # 2. Copy Button for Rendered Video Location
         if hasattr(self.ui, 'label_location'):
@@ -1219,32 +1194,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
         
         copy_icon_path = get_resource_path("copyfile.png")
-        
-        # 1. Copy Button for Source
-        if hasattr(self.ui, 'source_label'):
-            src_container = QWidget()
-            src_layout = QHBoxLayout(src_container)
-            src_layout.setContentsMargins(0, 0, 0, 0)
-            src_layout.setSpacing(6) # Micro-gap between text and icon
-            
-            self.ui.source_label.parentWidget().layout().replaceWidget(self.ui.source_label, src_container)
-            
-            self.btn_copy_src = QPushButton()
-            self.btn_copy_src.setFixedSize(20, 20)
-            self.btn_copy_src.setToolTip("Copy raw source paths")
-            self.btn_copy_src.setStyleSheet("background: transparent; border: none;")
-            self.btn_copy_src.setCursor(Qt.PointingHandCursor)
-            
-            if os.path.exists(copy_icon_path): self.btn_copy_src.setIcon(QIcon(copy_icon_path))
-            else: self.btn_copy_src.setText("📋")
-                
-            self.btn_copy_src.clicked.connect(lambda: QApplication.clipboard().setText(getattr(self, 'current_source_raw_paths', "")))
-            self.btn_copy_src.hide() # Hidden by default (No clip = no button)
-            
-            self.ui.source_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-            src_layout.addWidget(self.ui.source_label)
-            src_layout.addWidget(self.btn_copy_src, alignment=Qt.AlignTop)
-            src_layout.addStretch() # MAGIC: Pushes everything to the left wall!
+
+        # 1. Source paths render as per-directory rows with their own copy buttons
+        #    (SourcePathsBox in render_panel) — no single wrapper button needed here.
 
         # 2. Copy Button for Rendered Video Location
         if hasattr(self.ui, 'label_location'):
