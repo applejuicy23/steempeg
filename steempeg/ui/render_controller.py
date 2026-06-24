@@ -501,28 +501,16 @@ class RenderMixin:
             if hasattr(self.ui, "label_abitrate"):
                 self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
             self.ui.combo_quality.clear()
-            if hasattr(self, "btn_copy_src"):
-                self.btn_copy_src.hide()
             return
 
         source_dirs = [os.path.dirname(m) for m in all_mpds]
         unique_source_dirs = list(dict.fromkeys(source_dirs))
         self.current_source_raw_paths = "\n".join(unique_source_dirs)
 
-        def elide_html_path(path, max_len=75):
-            if len(path) <= max_len:
-                return path
-            half = (max_len - 5) // 2
-            return path[:half] + "[...]" + path[-half:]
-
-        formatted_sources = "<br>".join(
-            [f"{i + 1}. {elide_html_path(p)}" for i, p in enumerate(unique_source_dirs)]
-        )
-        self.ui.source_label.setText(
-            f"Source:<br><span style='font-size:8pt; color:#aaaaaa;'>{formatted_sources}</span>"
-        )
-        if hasattr(self, "btn_copy_src"):
-            self.btn_copy_src.show()
+        if hasattr(self.ui.source_label, "set_sources"):
+            self.ui.source_label.set_sources(unique_source_dirs)
+        else:
+            self.ui.source_label.setText("Source:\n" + "\n".join(unique_source_dirs))
 
         orig_audio_bitrate = self.get_audio_bitrate_from_mpd(all_mpds[0]) if all_mpds else 192
         self.current_orig_audio_bitrate = orig_audio_bitrate
