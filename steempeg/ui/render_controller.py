@@ -353,18 +353,14 @@ class RenderMixin:
         self._apply_header_from_table_row(selected_row)
 
         queue_job = self.render_queue.find_by_clip_path(clip_path)
-        trim_restore = self._trim_state_for_clip(clip_path)
         if queue_job:
-            self._selected_queue_job_id = queue_job.id
-            self._loading_queue_job = True
-            try:
-                self._populate_quality_options_for_clip(clip_path)
-                apply_job_settings_to_ui(self, queue_job.settings)
-            finally:
-                self._loading_queue_job = False
-        else:
-            self._selected_queue_job_id = None
-            self._populate_quality_options_for_clip(clip_path)
+            # Clip is already queued -> behave exactly like clicking its queue card.
+            self.activate_queue_job(queue_job.id)
+            return
+
+        trim_restore = self._trim_state_for_clip(clip_path)
+        self._selected_queue_job_id = None
+        self._populate_quality_options_for_clip(clip_path)
 
         if hasattr(self, "btn_close_clip"):
             self.btn_close_clip.show()
@@ -686,6 +682,13 @@ class RenderMixin:
             self.grid_clips.blockSignals(False)
             if hasattr(self, '_sync_grid_card_visuals'):
                 self._sync_grid_card_visuals()
+
+        # Multi-select (Ctrl/Shift) builds a SET — don't thrash the preview on every click.
+        from PySide6.QtWidgets import QApplication
+        if QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier):
+            self.update_playback_badge()
+            self._update_start_button_label()
+            return
 
         if self._queue_is_active():
             clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
@@ -1373,9 +1376,47 @@ class RenderMixin:
             self.update_final_setup()
         finally:
             self._loading_queue_job = False
+        self._highlight_clip_in_library(job.clip_path)
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         self._update_start_button_label()
+
+    def _highlight_clip_in_library(self, clip_path: str) -> None:
+        """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
+        if not clip_path or not hasattr(self.ui, "table_clips"):
+            return
+        norm = os.path.normpath(clip_path)
+        table = self.ui.table_clips
+        target_row = -1
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item and os.path.normpath(item.data(Qt.UserRole) or "") == norm:
+                target_row = row
+                break
+        if target_row < 0:
+            return
+
+        table.blockSignals(True)
+        table.clearSelection()
+        table.selectRow(target_row)
+        table.setCurrentCell(target_row, 0)
+        table.blockSignals(False)
+
+        if hasattr(self, "grid_clips"):
+            self.grid_clips.blockSignals(True)
+            anchor_item = None
+            for i in range(self.grid_clips.count()):
+                gi = self.grid_clips.item(i)
+                is_match = gi.data(Qt.UserRole) == target_row
+                gi.setSelected(is_match)
+                if is_match:
+                    anchor_item = gi
+            self.grid_clips.blockSignals(False)
+            if anchor_item is not None:
+                self._grid_anchor_item = anchor_item
+                self.grid_clips.scrollToItem(anchor_item)
+            if hasattr(self, "_sync_grid_card_visuals"):
+                self._sync_grid_card_visuals()
 
     def remove_queue_job(self, job_id: str) -> None:
         job = self.render_queue.get(job_id)
