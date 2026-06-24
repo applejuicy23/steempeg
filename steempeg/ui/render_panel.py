@@ -61,6 +61,11 @@ _CUSTOM_EDIT_QSS = ("QLineEdit { background: transparent; border: none; color: #
                     " QLineEdit:hover, QLineEdit:focus { border: none; background: transparent; }")
 _GEAR_QSS = "color: #b29ae7; background: transparent; font-size: 13px;"
 _UNIT_QSS = "color: #8a8a8a; background: transparent; font-size: 11px; font-weight: bold; " + _FONT
+_HELP_BTN_QSS = (
+    "QPushButton { background-color: #3a3326; border: 1px solid #6b5a2a;"
+    " border-radius: 6px; font-size: 14px; padding: 0; " + _FONT + " }"
+    " QPushButton:hover { background-color: #4a4030; border-color: #f0c000; }"
+)
 
 
 class SourcePathsBox(QWidget):
@@ -343,6 +348,51 @@ def _field(label, combo):
     return box
 
 
+def _quality_field(ui, label, combo):
+    """Quality field with a contextual '?' warning for the Original copy preset.
+
+    The row keeps the same total width as normal combo fields, so the FPS column
+    does not shift when the help button is present.
+    """
+    box = QVBoxLayout()
+    box.setSpacing(4)
+    box.setContentsMargins(0, 0, 0, 0)
+
+    label.setStyleSheet(_FIELD_LABEL_QSS)
+
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+
+    help_btn = QPushButton("\u26a0\ufe0f")  # warning triangle emoji
+    help_btn.setFixedSize(26, 26)
+    help_btn.setCursor(Qt.PointingHandCursor)
+    help_btn.setStyleSheet(_HELP_BTN_QSS)
+    help_btn.setToolTip(
+        "\u26a0\ufe0f <b>Original preset warning</b><br>"
+        "Original uses fast stream copy / block merge without re-encoding.<br><br>"
+        "If Steam DASH chunks are slightly broken, the output duration can be wrong "
+        "(for example, a 3-second clip may become much longer).<br><br>"
+        "If that happens, use a normal re-encode preset such as 1440p/1080p. "
+        "Re-encoding usually fixes those timeline glitches."
+    )
+
+    combo.setFixedWidth(_COMBO_W - help_btn.width() - row.spacing())
+    row.addWidget(combo)
+    row.addWidget(help_btn, 0, Qt.AlignVCenter)
+
+    def _sync_help(text):
+        help_btn.setVisible("Original" in (text or ""))
+
+    combo.currentTextChanged.connect(_sync_help)
+    _sync_help(combo.currentText())
+    ui.btn_quality_original_help = help_btn
+
+    box.addWidget(label, alignment=Qt.AlignLeft)
+    box.addLayout(row)
+    return box
+
+
 def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     """Like _field, but when the combo's last item ('Custom …') is selected it reveals an
     opaque chip overlaid on the combo body: [gear | edit | unit], with a warning icon to the
@@ -464,7 +514,7 @@ def restyle_video_page(ui):
     grid = QGridLayout()
     grid.setHorizontalSpacing(16)
     grid.setVerticalSpacing(12)
-    grid.addLayout(_field(ui.label_2, ui.combo_quality), 0, 0)
+    grid.addLayout(_quality_field(ui, ui.label_2, ui.combo_quality), 0, 0)
     grid.addLayout(_custom_field(ui, ui.label_5, ui.combo_fps, "input_custom_fps", "warn_fps", "FPS"), 0, 1)
     ui.label_target_size.setStyleSheet(_TARGET_READOUT_QSS)
     grid.addWidget(ui.label_target_size, 1, 0, 1, 2)
