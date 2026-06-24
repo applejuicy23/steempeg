@@ -660,6 +660,8 @@ class RenderMixin:
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
+        if getattr(self, '_grid_select_in_progress', False):
+            return
         if not hasattr(self.ui, 'table_clips'): return
         selected_row = self.ui.table_clips.currentRow()
         if selected_row < 0:
@@ -671,16 +673,19 @@ class RenderMixin:
             self.update_playback_badge()
             return
         if hasattr(self, 'grid_clips'):
-            self.grid_clips.blockSignals(True) # To Avoid Conflicts
+            selected_rows = {
+                idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()
+            }
+            self.grid_clips.blockSignals(True)
             for i in range(self.grid_clips.count()):
                 item = self.grid_clips.item(i)
-                # Verify the card's hidden index against the selected row in the table.
-                if item.data(Qt.UserRole) == selected_row:
-                    item.setSelected(True)
-                    self.grid_clips.scrollToItem(item)# Automatically scroll to the desired tile!
-                else:
-                    item.setSelected(False)
+                row = item.data(Qt.UserRole)
+                item.setSelected(row in selected_rows)
+                if row == selected_row:
+                    self.grid_clips.scrollToItem(item)
             self.grid_clips.blockSignals(False)
+            if hasattr(self, '_sync_grid_card_visuals'):
+                self._sync_grid_card_visuals()
 
         if self._queue_is_active():
             clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
@@ -1509,7 +1514,7 @@ class RenderMixin:
             job.status = JobStatus.ERROR
             job.error_message = (error_msg or "")[:240]
 
-    def refresh_render_queue_panel(self):
+    def refresh_render_queue_panel(self, sync_splitter: bool = True):
         """Rebuild the right-side queue list from ``render_queue``."""
         if not hasattr(self, "render_queue_panel"):
             return
@@ -1523,7 +1528,8 @@ class RenderMixin:
             self.render_queue.jobs,
             selected_id,
         )
-        self._sync_queue_splitter_visibility()
+        if sync_splitter:
+            self._sync_queue_splitter_visibility()
         self.update_playback_badge()
 
     def _sync_queue_splitter_visibility(self):
@@ -1534,8 +1540,11 @@ class RenderMixin:
         if len(self.render_queue) > 0:
             self.render_queue_panel.show()
             if sizes[1] <= 0:
-                queue_w = 300
-                self.right_h_splitter.setSizes([max(total - queue_w, 500), queue_w])
+                from steempeg.ui.layout_defaults import DEFAULT_QUEUE_PANEL_WIDTH
+
+                queue_w = self.get_layout_setting("queue_panel_width", DEFAULT_QUEUE_PANEL_WIDTH)
+                queue_w = max(0, min(int(queue_w), total))
+                self.right_h_splitter.setSizes([total - queue_w, queue_w])
         else:
             self.render_queue_panel.show()
             if sizes[1] > 0:

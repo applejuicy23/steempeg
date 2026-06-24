@@ -490,9 +490,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # We strictly fix the card sizes so they don't fly apart when hidden!
             self.grid_clips.setUniformItemSizes(True)
             self.grid_clips.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)
-            
-            # Boomerang Effect (Drag & Snap Back)
-            self.grid_clips.setDragDropMode(qtw.QAbstractItemView.DragOnly)
+            self.grid_clips.setDragDropMode(qtw.QAbstractItemView.NoDragDrop)
             self.grid_clips.setMovement(qtw.QListView.Static)
             self.grid_clips.itemSelectionChanged.connect(self.on_grid_selection_changed)
             self.grid_clips.setStyleSheet("""
@@ -549,16 +547,11 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     original_parent_layout.addLayout(self.left_master_layout)
 
             # 6. ✨ DYNAMIC TOGGLES UwU ✨
-            # Set initial view mode to 'List' instead of 'Grid'
-            self.grid_clips.hide()
-            self.ui.table_clips.show()
-            self.btn_view_list.setStyleSheet(self.toggle_style_active)
-            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+            from steempeg.ui.layout_defaults import DEFAULT_LIBRARY_VIEW
 
-            
-                    
             self.btn_view_list.clicked.connect(lambda: self.set_view_mode("list"))
             self.btn_view_grid.clicked.connect(lambda: self.set_view_mode("grid"))
+            self.set_view_mode(DEFAULT_LIBRARY_VIEW)
 
         # --- UI INJECTION: SORTING PANEL (NEXT TO FILTER BUTTON) ---
         from PySide6.QtWidgets import QLabel, QComboBox
@@ -1531,25 +1524,25 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 v_layout.addSpacing(6)
                 # ROW 2: The Time Label AND Theater Button (Perfectly centered)
                 time_layout = QHBoxLayout()
-                
+
                 # --- IRONCLAD CENTERING (3 EQUAL BLOCKS) ---
-                
+
                 # 1. LEFT BLOCK (Volume & Speed)
                 left_wrap = QWidget()
                 lw = QHBoxLayout(left_wrap)
                 lw.setContentsMargins(0, 0, 0, 0)
                 lw.setSpacing(10) # Gap between volume and speed buttons
-                
+
                 self.volume_control = VolumeControlWidget(self.player_footer_frame)
                 self.volume_control.slider.valueChanged.connect(self.set_vlc_volume)
-                
+
                 self.speed_control = SpeedControlWidget(self.player_footer_frame)
                 self.speed_control.slider.valueChanged.connect(self.set_vlc_speed)
-                
+
                 lw.addWidget(self.volume_control, alignment=Qt.AlignLeft | Qt.AlignVCenter)
                 lw.addWidget(self.speed_control, alignment=Qt.AlignLeft | Qt.AlignVCenter)
                 lw.addStretch() # Pushes both buttons nicely to the left!
-                
+
                 # 2. CENTER BLOCK (Timer)
                 center_wrap = QWidget()
                 cw = QHBoxLayout(center_wrap)
@@ -1558,15 +1551,15 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.ui.label_time.setAlignment(Qt.AlignCenter)
                 self.ui.label_time.setStyleSheet("color: #cccccc; font-size: 13px; font-weight: bold; background: transparent;")
                 cw.addWidget(self.ui.label_time, alignment=Qt.AlignCenter)
-                
+
                 # 3. RIGHT BLOCK (Theater + trim buttons)
                 right_wrap = QWidget()
                 rw = QHBoxLayout(right_wrap)
                 rw.setContentsMargins(0, 0, 0, 0)
                 rw.setSpacing(10) # Space between buttons
-                
+
                 from PySide6.QtWidgets import QPushButton
-                
+
                 # --- TRIM BUTTON (DUAL PURPOSE) ---
                 self.btn_trim = QPushButton()
                 self.btn_trim.setParent(self.player_footer_frame)
@@ -1746,15 +1739,14 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 rw.addWidget(self.btn_trim, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.pill_container, alignment=Qt.AlignVCenter)
 
-                
                 # Remember original layout index for seamless restoring
                 self.controls_layout_index = controls_index
-                
+
                 # Glue the 3 blocks together with EQUAL weight (stretch=1) so the center is ABSOLUTE!
                 time_layout.addWidget(left_wrap, 1)
                 time_layout.addWidget(center_wrap, 1)
                 time_layout.addWidget(right_wrap, 1)
-                
+
                 v_layout.addLayout(time_layout)
                 
                 # ROW 3: The Playback Buttons (Centered horizontally)
@@ -1860,7 +1852,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 
                 self.main_v_splitter.setCollapsible(0, False) # The player is immortal
                 self.main_v_splitter.setCollapsible(1, True)  # Tabs can be collapsed/hidden
-                self.main_v_splitter.setSizes([750, 250])     # Initial sizes
+                from steempeg.ui.layout_defaults import DEFAULT_MAIN_V_SPLITTER_SIZES
+                self.main_v_splitter.setSizes(DEFAULT_MAIN_V_SPLITTER_SIZES)
                 # Beautiful modern splitter handle
                 
                 self.main_v_splitter.setStyleSheet("""
@@ -1904,16 +1897,16 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
                 self.right_h_splitter.addWidget(self.right_content_wrap)
                 self.right_h_splitter.addWidget(self.render_queue_panel)
-                self.right_h_splitter.setSizes([1200, 0])
+                from steempeg.ui.layout_defaults import DEFAULT_RIGHT_H_SPLITTER_SIZES
+                self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
 
                 right_layout.addWidget(self.right_h_splitter)
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
-                    self.refresh_render_queue_panel()
                     self._update_start_button_label()
-                    if self._selected_queue_job_id:
-                        QTimer.singleShot(400, lambda: self.activate_queue_job(self._selected_queue_job_id))
+                    self._startup_queue_job_id = getattr(self, "_selected_queue_job_id", None)
+                    self.refresh_render_queue_panel(sync_splitter=False)
 
                 # Saving the new index for Fullscreen
                 self.controls_layout_index = top_v_layout.indexOf(self.player_footer_frame)
@@ -2066,12 +2059,14 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
         if self.clips_folder:
             self.scan_clips()
-        
+
         if hasattr(self.ui, 'main_splitter'):
-            self.ui.main_splitter.setSizes([300, 1300]) 
-            
-            
-            
+            from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
+
+            self.ui.main_splitter.setSizes(
+                self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
+            )
+            self.ui.left_panel.setMinimumWidth(0)
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
@@ -2107,6 +2102,22 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.label_time.setText("00:00 / 00:00")
         
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
+
+    def _sync_startup_layout(self):
+        """Re-apply splitter sizes once the maximized window has real geometry."""
+        self._apply_startup_splitter_sizes()
+        self.refresh_render_queue_panel(sync_splitter=True)
+
+        job_id = getattr(self, "_startup_queue_job_id", None)
+        if job_id:
+            QTimer.singleShot(100, lambda jid=job_id: self.activate_queue_job(jid))
+
+    def _apply_startup_splitter_sizes(self):
+        from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
+
+        main_sizes = self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
+        if hasattr(self.ui, "main_splitter"):
+            self.ui.main_splitter.setSizes(main_sizes)
     def _setup_bitrate_labels(self):
         # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
         # Instead of stuffing multiple lines into one label, we create separate
@@ -2351,6 +2362,7 @@ def main():
         
     
         window.ui.showMaximized()
+        QTimer.singleShot(0, window._sync_startup_layout)
         
         if args.updated_from:
             QTimer.singleShot(1000, lambda: window.show_update_success(args.updated_from, args.backup_folder))
