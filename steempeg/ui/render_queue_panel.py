@@ -406,6 +406,7 @@ class RenderQueuePanel(QWidget):
             self._jobs = list(jobs)
             for card, job in zip(self._card_widgets, jobs):
                 card.apply_job(job, selected=(job.id == selected_id))
+            self._scroll_to_selected()
             return
 
         self._jobs = list(jobs)
@@ -435,6 +436,15 @@ class RenderQueuePanel(QWidget):
             self._list_layout.addWidget(card)
             self._card_widgets.append(card)
         self._list_layout.addStretch()
+        self._scroll_to_selected()
+
+    def _scroll_to_selected(self) -> None:
+        if not self._selected_id:
+            return
+        for card in self._card_widgets:
+            if card._job_id == self._selected_id:
+                self._scroll.ensureWidgetVisible(card)
+                break
 
     def _on_card_drop(self, source_id: str, target_id: str) -> None:
         self._clear_drop_highlights()
