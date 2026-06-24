@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
-from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtGui import QDrag, QPixmap, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -23,6 +23,8 @@ from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
+_DRAG_PIXMAP_MAX_W = 300
+_DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
@@ -124,6 +126,34 @@ class QueueJobCard(QFrame):
 
         self._refresh_num_style()
 
+    def apply_job(self, job: RenderJob, *, selected: bool) -> None:
+        """Update card visuals without rebuilding the widget."""
+        self._job = job
+        self._selected = selected
+        self._drop_highlight = False
+        self._num_label.setText(str(job.queue_index))
+        self.setAcceptDrops(_job_accepts_drop(job))
+        self._refresh_num_style()
+        self._apply_card_style()
+
+    def set_selected(self, selected: bool) -> None:
+        if self._selected == selected:
+            return
+        self._selected = selected
+        self._apply_card_style()
+
+    def _drag_preview_pixmap(self) -> QPixmap:
+        w = max(1, min(self.width(), _DRAG_PIXMAP_MAX_W))
+        h = max(1, min(self.height(), _DRAG_PIXMAP_MAX_H))
+        source = self.grab()
+        if source.isNull():
+            source = QPixmap(w, h)
+            source.fill(Qt.transparent)
+            painter = QPainter(source)
+            self.render(painter)
+            painter.end()
+        return source.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
     def _refresh_num_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
         self._num_label.setStyleSheet(
@@ -192,14 +222,11 @@ class QueueJobCard(QFrame):
         mime = QMimeData()
         mime.setData(_MIME_JOB_ID, self._job_id.encode("utf-8"))
         drag.setMimeData(mime)
-
-        pixmap = QPixmap(self.size())
-        pixmap.fill(Qt.GlobalColor.transparent)
-        self.render(pixmap)
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(event.position().toPoint())
+        drag.setPixmap(self._drag_preview_pixmap())
+        drag.setHotSpot(QPoint(min(event.position().toPoint().x(), _DRAG_PIXMAP_MAX_W // 2), 16))
 
         drag.exec(Qt.DropAction.MoveAction)
+        self.update()
 
     def dragEnterEvent(self, event):
         if not _job_accepts_drop(self._job):
@@ -370,10 +397,18 @@ class RenderQueuePanel(QWidget):
         self.job_reorder_after_requested.emit(source_id, last_queued.id)
 
     def refresh(self, jobs: list[RenderJob], selected_id: str | None = None) -> None:
-        self._jobs = list(jobs)
         self._selected_id = selected_id
         self._count_label.setText(f"({len(jobs)})")
         self._btn_clear.setEnabled(len(jobs) > 0)
+
+        job_ids = [j.id for j in jobs]
+        if job_ids and job_ids == [c._job_id for c in self._card_widgets]:
+            self._jobs = list(jobs)
+            for card, job in zip(self._card_widgets, jobs):
+                card.apply_job(job, selected=(job.id == selected_id))
+            return
+
+        self._jobs = list(jobs)
 
         if self._empty_label.parent() is not None:
             self._list_layout.removeWidget(self._empty_label)
@@ -407,5 +442,6 @@ class RenderQueuePanel(QWidget):
 
     def _on_card_clicked(self, job_id: str) -> None:
         self._selected_id = job_id
-        self.refresh(self._jobs, selected_id=job_id)
+        for card in self._card_widgets:
+            card.set_selected(card._job_id == job_id)
         self.job_selected.emit(job_id)
