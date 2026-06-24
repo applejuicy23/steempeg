@@ -11,7 +11,7 @@ Mbps / kbps) sits next to the drop-down arrow. The combo stays NON-editable, so
 currentText() still returns "Custom …" and every value-reading branch in render_controller
 keeps working untouched — we only expose the edit + warning icon on `ui`.
 """
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
@@ -21,12 +21,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSlider,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
+
+from steempeg.ui.widgets.elided_label import ElidedLabel
 
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
@@ -58,6 +61,116 @@ _CUSTOM_EDIT_QSS = ("QLineEdit { background: transparent; border: none; color: #
                     " QLineEdit:hover, QLineEdit:focus { border: none; background: transparent; }")
 _GEAR_QSS = "color: #b29ae7; background: transparent; font-size: 13px;"
 _UNIT_QSS = "color: #8a8a8a; background: transparent; font-size: 11px; font-weight: bold; " + _FONT
+
+
+class SourcePathsBox(QWidget):
+    """Source directories rendered as individual field-styled rows, each with its own
+    copy button on the right. render_controller calls set_sources([...]) with full
+    directory paths; legacy setText() resets/placeholders are still handled."""
+
+    _CAP_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
+    _ROW_QSS = "QFrame#srcRow { background-color: #252525; border-radius: 10px; }"
+    _PATH_QSS = ("color: #b29ae7; font-size: 11px; font-weight: bold;"
+                 " font-family: 'Consolas', monospace; background: transparent; border: none;")
+    _MSG_QSS = ("color: #8a8a8a; font-size: 11px; font-weight: bold;"
+                " background: transparent; border: none; " + _FONT)
+    _COPY_QSS = ("QPushButton { background: transparent; border: none; border-radius: 6px; }"
+                 " QPushButton:hover { background: rgba(255, 255, 255, 28); }"
+                 " QPushButton:pressed { background: rgba(255, 255, 255, 45); }")
+    _RESET_TEXTS = {"", "source:", "source: -", "source:-"}
+
+    def __init__(self):
+        super().__init__()
+        self._copy_icon = None
+        try:
+            import os as _os
+            from steempeg.infra.paths import get_resource_path
+
+            icon_path = get_resource_path("copyfile.png")
+            if _os.path.exists(icon_path):
+                self._copy_icon = QIcon(icon_path)
+        except Exception:
+            self._copy_icon = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+
+        self._caption = QLabel("Source:")
+        self._caption.setStyleSheet(self._CAP_QSS)
+        root.addWidget(self._caption)
+
+        self._rows_host = QWidget()
+        self._rows_layout = QVBoxLayout(self._rows_host)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(6)
+        root.addWidget(self._rows_host)
+
+    def _clear_rows(self):
+        while self._rows_layout.count():
+            item = self._rows_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def set_sources(self, paths):
+        self._clear_rows()
+        paths = [p for p in (paths or []) if p]
+        if not paths:
+            return
+        multi = len(paths) > 1
+        for i, full in enumerate(paths):
+            display = f"{i + 1}.  {full}" if multi else full
+            self._rows_layout.addWidget(self._make_path_row(display, full))
+
+    def setText(self, text):
+        """Legacy reset/placeholder entry point (lifecycle/player/controller)."""
+        self._clear_rows()
+        msg = (text or "").strip()
+        if msg.lower() in self._RESET_TEXTS:
+            return
+        shown = msg
+        if msg.lower().startswith("source:"):
+            shown = msg.split(":", 1)[1].strip() or msg
+        self._rows_layout.addWidget(self._make_message_row(shown))
+
+    def _make_message_row(self, text):
+        row = QFrame()
+        row.setObjectName("srcRow")
+        row.setStyleSheet(self._ROW_QSS)
+        h = QHBoxLayout(row)
+        h.setContentsMargins(12, 8, 12, 8)
+        lbl = QLabel(text)
+        lbl.setStyleSheet(self._MSG_QSS)
+        h.addWidget(lbl, 1)
+        return row
+
+    def _make_path_row(self, display_text, full_path):
+        row = QFrame()
+        row.setObjectName("srcRow")
+        row.setStyleSheet(self._ROW_QSS)
+        h = QHBoxLayout(row)
+        h.setContentsMargins(12, 6, 6, 6)
+        h.setSpacing(8)
+
+        path_lbl = ElidedLabel()
+        path_lbl.setStyleSheet(self._PATH_QSS)
+        path_lbl.setText(display_text)
+        h.addWidget(path_lbl, 1)
+
+        btn = QPushButton()
+        btn.setFixedSize(24, 24)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip("Copy this path")
+        btn.setStyleSheet(self._COPY_QSS)
+        if self._copy_icon is not None:
+            btn.setIcon(self._copy_icon)
+            btn.setIconSize(QSize(16, 16))
+        else:
+            btn.setText("📋")
+        btn.clicked.connect(lambda _=False, p=full_path: QGuiApplication.clipboard().setText(p))
+        h.addWidget(btn, 0, Qt.AlignVCenter)
+        return row
 
 
 class StatValueLabel(QLabel):
@@ -430,16 +543,19 @@ def restyle_source_page(ui):
         lbl = getattr(ui, name, None)
         old_texts[name] = lbl.text() if lbl is not None else ""
 
-    src = getattr(ui, "source_label", None)
+    old_src = getattr(ui, "source_label", None)
 
     for lbl in page.findChildren(QLabel):
-        if lbl is not src:
-            lbl.setParent(None)
-            lbl.deleteLater()
-    if src is not None:
-        src.setParent(None)
+        lbl.setParent(None)
+        lbl.deleteLater()
+    if old_src is not None:
+        old_src.setParent(None)
+        old_src.deleteLater()
 
     _drop_layout(page)
+
+    # New: each source directory becomes its own field-styled row with a copy button.
+    ui.source_label = SourcePathsBox()
 
     for _, name in specs:
         value = ResolutionLabel() if name == "orig_res_label" else StatValueLabel()
@@ -457,9 +573,12 @@ def restyle_source_page(ui):
     root.setContentsMargins(8, 8, 8, 8)
     root.setSpacing(10)
     root.addWidget(_page_title("Source Info"))
-    if src is not None:
-        src.setStyleSheet(_PATHBOX_QSS)
-        root.addWidget(src)
+
+    # Match the stat-block grid width below (3 * 210 + 2 * 8 spacing) so the source
+    # rows line up with the cards instead of sprawling to the panel edge.
+    stat_grid_w = 210 * 3 + 8 * 2
+    ui.source_label.setMaximumWidth(stat_grid_w)
+    root.addWidget(ui.source_label, alignment=Qt.AlignLeft)
 
     grid = QGridLayout()
     grid.setSpacing(8)
