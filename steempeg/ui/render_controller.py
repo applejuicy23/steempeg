@@ -594,6 +594,8 @@ class RenderMixin:
                 self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
             max_height = 1080
 
+        self.current_orig_height = max_height
+
         if hasattr(self.ui, "combo_quality"):
             self.ui.combo_quality.clear()
             if max_height > 0:
@@ -932,7 +934,13 @@ class RenderMixin:
         if "Target File Size" in quality:
             val_mbps = getattr(self, 'custom_target_bitrate', 1500) / 1000
             scale_h = getattr(self, 'custom_target_height', -1)
-            res_str = f"Auto: {scale_h}p" if scale_h > 0 else "Original"
+            native_h = getattr(self, 'current_orig_height', 0)
+            if scale_h > 0:
+                res_str = f"Auto: {scale_h}p"
+            elif native_h > 0:
+                res_str = f"{native_h}p"
+            else:
+                res_str = "Original res"
             clean_mbps = int(round(val_mbps))
             video_bitrate_display = f"{clean_mbps} Mbps ({res_str})"
         elif "Custom" in bitrate_text:
@@ -1175,8 +1183,10 @@ class RenderMixin:
                 fps = getattr(self, 'current_orig_fps', 60)
 
         # --- run the pure math ---
+        native_height = getattr(self, 'current_orig_height', 0)
         plan = bitrate.plan_bitrate(duration, orig_video_mbps, target_mb, audio_kbps, fps,
-                                    is_lossless=is_lossless, is_custom=is_custom)
+                                    is_lossless=is_lossless, is_custom=is_custom,
+                                    native_height=native_height)
         if plan is None:
             return
 
