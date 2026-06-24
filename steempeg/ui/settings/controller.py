@@ -25,3 +25,16 @@ class SettingsMixin:
         settings = cache.read_json(path)
         settings[key] = value
         cache.write_json(path, settings)
+
+    def _layout_remember_enabled(self) -> bool:
+        from steempeg.ui.layout_defaults import REMEMBER_LAYOUT_BETWEEN_SESSIONS
+        return REMEMBER_LAYOUT_BETWEEN_SESSIONS
+
+    def get_layout_setting(self, key: str, default):
+        if not self._layout_remember_enabled():
+            return default
+        return self.load_user_settings().get(key, default)
+
+    def save_layout_setting(self, key: str, value) -> None:
+        if self._layout_remember_enabled():
+            self.save_user_settings(key, value)
