@@ -7,6 +7,8 @@ caps a widget's height to a 16:9 ratio so black bars do not appear above and bel
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QWidget
 
+from steempeg.ui.player.loading_overlay import PlaybackLoadingOverlay
+
 
 class MPVWrapper(QWidget):
     def __init__(self, parent=None):
@@ -35,6 +37,9 @@ class MPVWrapper(QWidget):
             
         self.top_line, self.bottom_line, self.left_line, self.right_line = self.lines
 
+        self.loading_overlay = PlaybackLoadingOverlay(self)
+        self.loading_overlay.hide()
+
         self.setStyleSheet("background-color: transparent;")
 
     def setStyleSheet(self, style):
@@ -57,6 +62,8 @@ class MPVWrapper(QWidget):
                 line.hide()
             if getattr(self, 'hud_reference', None) and self.hud_reference.parent() == self:
                 self.hud_reference.hide()
+            if hasattr(self, 'loading_overlay'):
+                self.loading_overlay.hide()
             return
             
         # If the splitter is reopened, we bring everything back to life.
@@ -88,7 +95,10 @@ class MPVWrapper(QWidget):
         
         # 1. Embed the video
         self.mpv_screen.setGeometry(x + b, y + b, video_w, video_h)
-        
+        if hasattr(self, 'loading_overlay'):
+            self.loading_overlay.setGeometry(x + b, y + b, video_w, video_h)
+            self.loading_overlay.raise_()
+
         # 2. Place the frame (only if enabled)
         if getattr(self, '_is_border_active', False):
             self.top_line.setGeometry(x, y, total_w, b)

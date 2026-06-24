@@ -43,7 +43,8 @@ class PlayerMixin:
                 self.player.play("")
             except:
                 pass
-                
+
+        self._set_playback_loading(False)
         
         # 2. Clearing the Player Interface and Cache
         if hasattr(self.ui, 'video_container'):
@@ -148,6 +149,100 @@ class PlayerMixin:
             
     
 
+
+    def _ignore_playback_stall(self, seconds=0.5):
+        """Suppress stall detection briefly after seeks or clip switches."""
+        self._playback_ignore_stall_until = time.time() + seconds
+        self._playback_last_time_pos = None
+        self._playback_stall_since = None
+        self._playback_recover_at = None
+
+    def _set_playback_loading(self, active, message="Buffering…"):
+        wrapper = getattr(self, 'mpv_wrapper', None)
+        overlay = getattr(wrapper, 'loading_overlay', None) if wrapper else None
+        if overlay is None:
+            return
+        if active:
+            overlay.show_loading(message)
+            self._playback_loading_active = True
+            self._playback_recover_at = None
+        else:
+            overlay.hide_loading()
+            self._playback_loading_active = False
+            self._playback_recover_at = None
+            self._playback_stall_since = None
+
+    def _mpv_is_buffering(self):
+        if not hasattr(self, 'player') or not self.player:
+            return False
+        try:
+            cache_state = self.player['cache-buffering-state']
+            if cache_state is not None and int(cache_state) > 0:
+                return True
+        except Exception:
+            pass
+        try:
+            if self.player['paused-for-cache']:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _update_playback_loading_state(self):
+        """Show a loading overlay when MPV is buffering or playback time stalls."""
+        if not hasattr(self, 'player') or not self.player:
+            return
+
+        if getattr(self, '_is_switching', False):
+            return
+
+        now = time.time()
+        if now < getattr(self, '_playback_ignore_stall_until', 0):
+            return
+
+        timeline = getattr(self, 'custom_timeline', None)
+        if timeline is None or not timeline.isEnabled():
+            self._set_playback_loading(False)
+            return
+
+        if getattr(self.player, 'pause', True) or getattr(self, '_force_pause', False):
+            self._set_playback_loading(False)
+            self._playback_last_time_pos = None
+            return
+
+        try:
+            if self._mpv_is_buffering():
+                self._set_playback_loading(True, "Buffering…")
+                self._playback_last_time_pos = self.player.time_pos
+                return
+
+            time_sec = self.player.time_pos
+            if time_sec is None:
+                self._set_playback_loading(True, "Buffering…")
+                return
+
+            duration_sec = getattr(self, 'current_clip_duration_sec', None) or self.player.duration
+            if duration_sec and time_sec >= duration_sec - 0.05:
+                self._set_playback_loading(False)
+                return
+
+            last_pos = getattr(self, '_playback_last_time_pos', None)
+            if last_pos is None or abs(time_sec - last_pos) > 0.02:
+                self._playback_last_time_pos = time_sec
+                self._playback_stall_since = None
+                if getattr(self, '_playback_loading_active', False):
+                    if self._playback_recover_at is None:
+                        self._playback_recover_at = now
+                    elif now - self._playback_recover_at >= 0.2:
+                        self._set_playback_loading(False)
+                return
+
+            if self._playback_stall_since is None:
+                self._playback_stall_since = now
+            elif now - self._playback_stall_since >= 0.35:
+                self._set_playback_loading(True, "Buffering…")
+        except Exception:
+            pass
 
     # VIDEO PLAYER CONTROLS
     def toggle_play(self):
@@ -885,6 +980,7 @@ class PlayerMixin:
         if hasattr(self, 'player') and self.player:
             if getattr(self.player, 'duration', None):
                 self.player.seek(position_ms / 1000.0, reference='absolute', precision='exact')
+                self._ignore_playback_stall(0.6)
 
 
     def on_timeline_release(self):
@@ -1043,6 +1139,10 @@ class PlayerMixin:
         
         # A Reliable Path for Windows:
         abs_path = os.path.abspath(mpd_path).replace('\\', '/')
+
+        self._playback_last_time_pos = None
+        self._playback_stall_since = None
+        self._ignore_playback_stall(0.35)
         
         # Start the video and unpause it.
         self.player.play(abs_path) 
@@ -1078,6 +1178,9 @@ class PlayerMixin:
 
     def update_ui_from_vlc(self):
         """ Updates UI and Timeline from MPV engine """
+        if hasattr(self, 'player') and self.player:
+            self._update_playback_loading_state()
+
         if not hasattr(self, 'player') or not self.player:
             return
             
