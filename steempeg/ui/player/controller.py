@@ -161,19 +161,35 @@ class PlayerMixin:
         self._playback_recover_at = None
 
     def _set_playback_loading(self, active, message="Buffering…"):
-        wrapper = getattr(self, 'mpv_wrapper', None)
-        overlay = getattr(wrapper, 'loading_overlay', None) if wrapper else None
-        if overlay is None:
+        # Draw the indicator with mpv's OWN native OSD (player.show_text), NOT a Qt
+        # widget over the video. A non-native overlay on top of the native mpv window
+        # was the root cause of the splitter stutter, so we must never bring it back.
+        if not hasattr(self, 'player') or not self.player:
             return
+        now = time.time()
         if active:
-            overlay.show_loading(message)
+            # Re-arm periodically so the OSD text stays up for the whole stall, but
+            # throttle the IPC so we don't spam mpv on every 16ms tick.
+            last_armed = getattr(self, '_osd_buffering_armed_at', 0.0)
+            if not getattr(self, '_playback_loading_active', False) or (now - last_armed) > 0.4:
+                try:
+                    self.player.show_text(message, 1500)
+                except Exception:
+                    pass
+                self._osd_buffering_armed_at = now
             self._playback_loading_active = True
             self._playback_recover_at = None
         else:
-            overlay.hide_loading()
+            # Only clear once, on the active -> inactive transition.
+            if getattr(self, '_playback_loading_active', False):
+                try:
+                    self.player.command('show-text', '', 1)
+                except Exception:
+                    pass
             self._playback_loading_active = False
             self._playback_recover_at = None
             self._playback_stall_since = None
+            self._osd_buffering_armed_at = 0.0
 
     def _mpv_is_buffering(self):
         if not hasattr(self, 'player') or not self.player:
@@ -1278,6 +1294,9 @@ class PlayerMixin:
                 if tl is not None and tl.is_trim_mode:
                     want_yellow = tl.trim_start_ms <= current_ms <= tl.trim_end_ms
             self._apply_video_border(want_yellow)
+
+            # --- BUFFERING INDICATOR (native mpv OSD, no Qt overlay) ---
+            self._update_playback_loading_state()
 
             # --- UPDATE TEXT TIMERS (00:00 / 00:00) ---
 
