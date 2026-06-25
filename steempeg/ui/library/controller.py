@@ -405,6 +405,30 @@ class LibraryMixin:
         grid.setUpdatesEnabled(True)
 
     # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
+    def refresh_library(self):
+        """ Refresh button: wipe the active filter, deselect the current clip/queue job,
+        reset the player + settings panel, then rescan the folder from scratch. """
+        # 1. Drop the remembered filter so the menu reopens at defaults and nothing stays hidden
+        self.saved_filter_state = None
+        if getattr(self, 'filter_menu', None) is not None:
+            try:
+                self.filter_menu.deleteLater()
+            except Exception:
+                pass
+            self.filter_menu = None
+
+        # 2. Reset the selected clip, the player surface and every settings tab
+        if hasattr(self, 'close_current_clip'):
+            self.close_current_clip()
+
+        # 3. Drop the queue selection (the queued jobs themselves are kept)
+        self._selected_queue_job_id = None
+        if hasattr(self, 'refresh_render_queue_panel'):
+            self.refresh_render_queue_panel()
+
+        # 4. Rescan the folder
+        self.scan_clips()
+
     def scan_clips(self):
         """ Scans both standard Steam folders AND custom extracted folders """
         if not hasattr(self.ui, 'table_clips'): return
