@@ -38,8 +38,7 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
 
     if settings.save_dir:
         app.custom_destination = settings.save_dir
-        if hasattr(ui, "destination_button"):
-            ui.destination_button.setText(f"Destination: {settings.save_dir}")
+        # Keep the button's static label; the destination path is shown in the Output line.
 
     blockers = []
     for name in (
