@@ -732,6 +732,31 @@ class RenderMixin:
         self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self._update_start_button_label()
 
+    def fit_settings_tab_to_page(self, idx=None):
+        """ Keep the scroll content as tall as the CURRENT settings page only.
+
+        settings_tabs is a QTabWidget (QStackedLayout under the hood), which reports
+        the height of its TALLEST page. Inside the scroll area that means short pages
+        (Source Info, Export) show a phantom scrollbar over empty space. Collapsing the
+        non-current pages to an Ignored size policy makes each page contribute 0 height,
+        so the scroll range matches what's actually visible.
+        """
+        tabs = getattr(self.ui, 'settings_tabs', None)
+        if tabs is None:
+            return
+        if idx is None:
+            idx = tabs.currentIndex()
+        for i in range(tabs.count()):
+            page = tabs.widget(i)
+            if page is None:
+                continue
+            if i == idx:
+                page.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            page.updateGeometry()
+        tabs.updateGeometry()
+
     def update_bitrate_options(self):
         """ Refreshes lists, applies FPS math visually, and freezes settings if Original is selected. """
         if not hasattr(self.ui, 'combo_bitrate') or not hasattr(self.ui, 'combo_quality'):
@@ -757,7 +782,13 @@ class RenderMixin:
                 self.ui.combo_fps.setCurrentIndex(0) 
                 self.ui.combo_fps.setEnabled(False)
             if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.setEnabled(False)
-            if hasattr(self.ui, 'combo_encoder'): self.ui.combo_encoder.setEnabled(False)
+            if hasattr(self.ui, 'combo_encoder'):
+                self.ui.combo_encoder.setEnabled(False)
+                self.ui.combo_encoder.setToolTip(
+                    "Original copies the source stream as-is (no re-encode), so no encoder "
+                    "is used. Pick a quality preset (e.g. 1440p) to re-encode and choose "
+                    "NVENC / CPU."
+                )
             self.ui.combo_bitrate.blockSignals(False)
             self.update_final_setup()
             return
@@ -765,7 +796,9 @@ class RenderMixin:
         self.ui.combo_bitrate.setEnabled(True) 
         if hasattr(self.ui, 'combo_fps'): self.ui.combo_fps.setEnabled(True)
         if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.setEnabled(True)
-        if hasattr(self.ui, 'combo_encoder'): self.ui.combo_encoder.setEnabled(True)
+        if hasattr(self.ui, 'combo_encoder'):
+            self.ui.combo_encoder.setEnabled(True)
+            self.ui.combo_encoder.setToolTip("")
         
         match = re.search(r'^(\d+)p', quality_text)
         if not match: 
@@ -1043,8 +1076,8 @@ class RenderMixin:
                 f"FPS: {fps_display}\n"
                 f"Bitrate: {video_bitrate_display}\n"
                 f"Codec: Original copy\n"
-                f"Encoder: Not used\n"
-                f"Sound: Original audio (copy)\n"
+                f"Encoder: —\n"
+                f"Sound: Original audio\n"
                 f"Other settings: Original stream copy\n"
                 f"Est. File Size: {size_str}"
             )
