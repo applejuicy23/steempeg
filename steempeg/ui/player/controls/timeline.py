@@ -1028,9 +1028,9 @@ class TimelineCanvas(QWidget):
         self.drag_state = 'none'
 
     def update_playhead(self, mouse_x):
-        # Allow the mouse to move beyond the edges without hard clipping
-        percentage = max(0.0, min(mouse_x / self.width(), 1.0))
-        self.visual_ms = float(percentage * self.duration_ms)
+        # Use the SAME padded mapping as x_to_ms/ms_to_x, otherwise the playhead is
+        # drawn off from where the cursor clicked (up to ±pad px, worst at the edges).
+        self.visual_ms = max(0.0, min(self.x_to_ms(mouse_x), float(self.duration_ms)))
         self.target_ms = self.visual_ms 
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
