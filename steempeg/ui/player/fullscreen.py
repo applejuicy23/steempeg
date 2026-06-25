@@ -34,9 +34,20 @@ class FullscreenEventFilter(QObject):
                     self.app_instance.toggle_play()
                     return True  # Consume the event to prevent accidental activation of the highlighted button
 
-            # 2. ESC: Exit full-screen mode
-            elif event.key() == Qt.Key_Escape and getattr(self.app_instance, 'is_fullscreen', False):
-                self.app_instance.toggle_fullscreen()
+            # 2. ESC: leave fullscreen, but NEVER let it close the main window
+            elif event.key() == Qt.Key_Escape:
+                if getattr(self.app_instance, 'is_fullscreen', False):
+                    self.app_instance.toggle_fullscreen()
+                    return True
+                # Let child popups / modal dialogs (About, file picker, marker input,
+                # combo dropdowns) keep their own Esc-to-close behavior.
+                if QApplication.activePopupWidget() is not None:
+                    return False
+                modal = QApplication.activeModalWidget()
+                main_ui = getattr(self.app_instance, 'ui', None)
+                if modal is not None and modal is not main_ui:
+                    return False
+                # Swallow Esc aimed at the main window so QDialog.reject() can't fire.
                 return True
 
         # MOUSE LOGIC (FULLSCREEN ONLY)
