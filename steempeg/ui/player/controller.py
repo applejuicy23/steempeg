@@ -849,10 +849,7 @@ class PlayerMixin:
             )
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.hide()
-            if hasattr(self, "aspect_frame"):
-                self.aspect_frame.setStyleSheet(
-                    "border: 3px solid transparent; background-color: transparent;"
-                )
+            self._apply_video_border(False)
 
     def apply_trim_state(self, is_trim_mode: bool, trim_start_ms: int = 0, trim_end_ms: int = 0) -> None:
         """Restore per-clip trim handles and button state (does not toggle via enable_trim_mode)."""
@@ -1176,11 +1173,23 @@ class PlayerMixin:
             self.ui.btn_play.setIcon(QIcon(icon_path))
         
 
+    def _apply_video_border(self, active):
+        """Toggle the yellow trim border only when it actually changes.
+
+        aspect_frame is the MPVWrapper: setStyleSheet there repositions the native
+        mpv surface, so we cache the last state and no-op when nothing changed to
+        avoid moving native windows 60x/sec during playback.
+        """
+        if getattr(self, '_video_border_active', None) == active:
+            return
+        self._video_border_active = active
+        if not hasattr(self, 'aspect_frame'):
+            return
+        color = "#ffcc00" if active else "transparent"
+        self.aspect_frame.setStyleSheet(f"border: 3px solid {color}; background-color: transparent;")
+
     def update_ui_from_vlc(self):
         """ Updates UI and Timeline from MPV engine """
-        if hasattr(self, 'player') and self.player:
-            self._update_playback_loading_state()
-
         if not hasattr(self, 'player') or not self.player:
             return
             
@@ -1257,23 +1266,15 @@ class PlayerMixin:
                 return f"{m:02d}:{s:02d}"
             
             # --- YELLOW BORDER INDICATOR ---
-            if getattr(self, 'is_fullscreen', False):
-                if hasattr(self, 'aspect_frame'):
-                    self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
-            else:
-                if hasattr(self, 'custom_timeline') and self.custom_timeline.is_trim_mode:
-                    if self.custom_timeline.trim_start_ms <= current_ms <= self.custom_timeline.trim_end_ms:
-                        if hasattr(self, 'aspect_frame'):
-                            # Draw perfect yellow border
-                            self.aspect_frame.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
-                    else:
-                        if hasattr(self, 'aspect_frame'):
-                            # Remove border
-                            self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
-                else:
-                    if hasattr(self, 'aspect_frame'):
-                        # Remove border
-                        self.aspect_frame.setStyleSheet("border: 3px solid transparent; background-color: transparent;")
+            # aspect_frame is the MPVWrapper; its setStyleSheet repositions the native
+            # mpv window. Calling it every 16ms tick while playing is what makes a
+            # splitter drag stutter during playback, so only restyle on state change.
+            want_yellow = False
+            if not getattr(self, 'is_fullscreen', False):
+                tl = getattr(self, 'custom_timeline', None)
+                if tl is not None and tl.is_trim_mode:
+                    want_yellow = tl.trim_start_ms <= current_ms <= tl.trim_end_ms
+            self._apply_video_border(want_yellow)
 
             # --- UPDATE TEXT TIMERS (00:00 / 00:00) ---
 

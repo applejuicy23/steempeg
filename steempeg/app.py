@@ -805,19 +805,35 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # Place tabs in the scroll area
             self.right_scroll.setWidget(self.ui.settings_tabs)
             
-            # --- SAFE MASK (QRegion) LIKE IN THE PLAYER ---
+            # --- SAFE MASK (QRegion), applied after the resize settles ---
+            # Rebuilding a QRegion mask via setMask() on every resize event reclips and
+            # repaints the whole subtree, which shows up as vertical band artifacts
+            # during a splitter drag. Debounce it so the mask is rebuilt once the drag
+            # stops instead of on every pixel.
             class RoundedCornerFilter(QObject):
+                def __init__(self, target):
+                    super().__init__(target)
+                    self._target = target
+                    self._timer = QTimer(self)
+                    self._timer.setSingleShot(True)
+                    self._timer.timeout.connect(self._apply_mask)
+
                 def eventFilter(self, obj, event):
                     if event.type() == QEvent.Type.Resize:
-                        if obj.width() > 0 and obj.height() > 0:
-                            try:
-                                from PySide6.QtGui import QPainterPath, QRegion
-                                path = QPainterPath()
-                                path.addRoundedRect(0.0, 0.0, float(obj.width()), float(obj.height()), 16.0, 16.0)
-                                obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
-                            except Exception:
-                                pass
+                        self._timer.start(60)
                     return False
+
+                def _apply_mask(self):
+                    obj = self._target
+                    if obj is None or obj.width() <= 0 or obj.height() <= 0:
+                        return
+                    try:
+                        from PySide6.QtGui import QPainterPath, QRegion
+                        path = QPainterPath()
+                        path.addRoundedRect(0.0, 0.0, float(obj.width()), float(obj.height()), 16.0, 16.0)
+                        obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
+                    except Exception:
+                        pass
             
             self.corner_mask = RoundedCornerFilter(self.right_scroll)
             self.right_scroll.installEventFilter(self.corner_mask)
