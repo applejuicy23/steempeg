@@ -15,8 +15,11 @@ from PySide6.QtCore import QEvent, QEventLoop, Qt, QPropertyAnimation, QTimer
 from PySide6.QtGui import QIcon, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QGraphicsOpacityEffect,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QToolTip,
     QWidget,
@@ -1395,12 +1398,90 @@ class PlayerMixin:
             self.player.seek(pos_ms / 1000.0, reference='absolute', precision='exact')
             time.sleep(0.15) 
             
+        saved_ok = False
         try:
             self.player.command('screenshot-to-file', filepath, 'video')
             print(f"📸 Screenshot saved to: {filepath}")
+            saved_ok = True
         except Exception as e:
             print(f"Screenshot error: {e}")
             
         # We jump back in as if nothing had happened.
         if need_seek:
             self.player.seek(original_pos / 1000.0, reference='absolute', precision='exact')
+
+        if saved_ok:
+            self._show_screenshot_toast(self.screenshots_dir)
+
+    def _show_screenshot_toast(self, directory):
+        """ Flash a small 'Screenshot saved in <dir>' toast with a copy-path button. """
+        directory = os.path.normpath(directory)
+
+        toast = getattr(self, '_screenshot_toast', None)
+        if toast is None:
+            toast = QFrame(self.ui)
+            toast.setObjectName("screenshotToast")
+            toast.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+            toast.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            toast.setStyleSheet(
+                "QFrame#screenshotToast { background-color: #1f1f1f; border: 1px solid #6b5a8e;"
+                " border-radius: 10px; }"
+                " QLabel { color: #e8e8e8; background: transparent; font-size: 12px;"
+                " font-family: 'Segoe UI', Arial, sans-serif; }"
+                " QPushButton { background-color: #4a3f63; color: #ffffff; border: none;"
+                " border-radius: 7px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
+                " QPushButton:hover { background-color: #6b5a8e; }"
+            )
+            row = QHBoxLayout(toast)
+            row.setContentsMargins(14, 10, 12, 10)
+            row.setSpacing(12)
+
+            label = QLabel(toast)
+            label.setObjectName("screenshotToastLabel")
+            row.addWidget(label)
+
+            copy_btn = QPushButton("📋 Copy path", toast)
+            copy_btn.setCursor(Qt.PointingHandCursor)
+            row.addWidget(copy_btn)
+
+            self._screenshot_toast = toast
+            self._screenshot_toast_label = label
+            self._screenshot_toast_btn = copy_btn
+            self._screenshot_toast_timer = QTimer(toast)
+            self._screenshot_toast_timer.setSingleShot(True)
+            self._screenshot_toast_timer.timeout.connect(toast.hide)
+
+        self._screenshot_toast_dir = directory
+        self._screenshot_toast_label.setText(f"📸 Screenshot saved in  {directory}")
+        try:
+            self._screenshot_toast_btn.clicked.disconnect()
+        except Exception:
+            pass
+        self._screenshot_toast_btn.setText("📋 Copy path")
+        self._screenshot_toast_btn.clicked.connect(self._copy_screenshot_dir)
+
+        toast = self._screenshot_toast
+        toast.adjustSize()
+
+        # Anchor just above the camera button so it never spills off the bottom edge.
+        anchor = getattr(self, 'btn_screenshot', None) or self.ui
+        try:
+            top_left = anchor.mapToGlobal(anchor.rect().topLeft())
+            x = top_left.x() + anchor.width() - toast.width()
+            y = top_left.y() - toast.height() - 8
+        except Exception:
+            geo = self.ui.geometry()
+            x = geo.x() + (geo.width() - toast.width()) // 2
+            y = geo.y() + geo.height() - toast.height() - 40
+        toast.move(max(0, x), max(0, y))
+        toast.show()
+        toast.raise_()
+        self._screenshot_toast_timer.start(5000)
+
+    def _copy_screenshot_dir(self):
+        directory = getattr(self, '_screenshot_toast_dir', None)
+        if not directory:
+            return
+        QApplication.clipboard().setText(directory)
+        if hasattr(self, '_screenshot_toast_btn'):
+            self._screenshot_toast_btn.setText("✓ Copied")
