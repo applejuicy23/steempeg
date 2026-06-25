@@ -253,16 +253,13 @@ class LibraryMixin:
         self._publish_grid_selection(update_preview=update_preview)
 
     def _handle_grid_card_context_menu(self, item, event) -> None:
-        clicked_path = item.data(Qt.UserRole + 1)
-        selected_paths = [
-            it.data(Qt.UserRole + 1) for it in self.grid_clips.selectedItems() if it.data(Qt.UserRole + 1)
-        ]
-        if clicked_path not in selected_paths or len(selected_paths) <= 1:
-            if not (event.modifiers() & Qt.ControlModifier):
-                self._grid_select_item(item, event, force_single=True)
-
-        rect = self.grid_clips.visualItemRect(item)
-        self.show_grid_context_menu(rect.center())
+        # Right-click only opens the menu; it never changes the selection.
+        # The menu resolves its target from the clip under the cursor (see
+        # _context_menu_clip_paths_grid), so left-click stays the only way to select.
+        # The card sends a position relative to itself, so map it back to the grid
+        # viewport to pop the menu exactly where the cursor is (not the card center).
+        viewport_pos = self.grid_clips.viewport().mapFromGlobal(event.globalPosition().toPoint())
+        self.show_grid_context_menu(viewport_pos)
 
     def _handle_grid_viewport_press(self, event) -> bool:
         if event.button() != Qt.LeftButton:
