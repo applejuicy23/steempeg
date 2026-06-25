@@ -2305,7 +2305,11 @@ def main():
 
     try:
         import ctypes
-        myappid = f'steempeg.app.v{APP_VERSION_STR}' 
+        # MUST stay constant across versions. A version-specific AppUserModelID makes
+        # Windows treat every update as a brand-new app with no cached icon, so the
+        # taskbar falls back to the generic icon until the cache catches up — this was
+        # the long-standing "icon disappears after update" bug.
+        myappid = 'Steempeg.SteempegApp'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except: pass
 
