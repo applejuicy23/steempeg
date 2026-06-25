@@ -114,10 +114,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         if not os.path.exists(default_export_dir):
             os.makedirs(default_export_dir, exist_ok=True)
         self.custom_destination = default_export_dir 
-        
-        # Let's write this path directly on the button in the interface
-        if hasattr(self.ui, 'destination_button'):
-            self.ui.destination_button.setText(f"Destination: {self.custom_destination}")
+        # The button keeps a static "Save as…" label; the full path lives in the Output line.
             
         self.current_orig_bitrate = 0 # Bitrate of the selected original clip
         self.current_clip_duration_sec = 0
@@ -713,6 +710,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.settings_tabs.currentChanged.connect(
                 lambda idx: self.neo_nav_buttons[idx].setChecked(True) if idx < len(self.neo_nav_buttons) else None
             )
+            # Make the scroll area size to the active page so short tabs don't get a phantom scrollbar
+            self.ui.settings_tabs.currentChanged.connect(self.fit_settings_tab_to_page)
             
             neo_layout.addWidget(sidebar_frame)
             
@@ -852,6 +851,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         restyle_audio_page(self.ui)
         restyle_source_page(self.ui)
         restyle_export_page(self.ui)
+        # Collapse non-active settings pages so the scroll area fits the visible page
+        if hasattr(self, 'fit_settings_tab_to_page'):
+            self.fit_settings_tab_to_page()
         # Codec list
         if hasattr(self.ui, 'combo_codec'):
             self.ui.combo_codec.clear()
@@ -993,7 +995,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         if btn_update: bottom_row.addWidget(btn_update, 5)
         
         # 7. RECOVERING SIGNALS (Presses)
-        self.btn_refresh.clicked.connect(self.scan_clips)
+        self.btn_refresh.clicked.connect(self.refresh_library)
         self.ui.btn_browse.clicked.connect(self.choose_folder)
         if hasattr(self.ui, 'destination_button'):
             self.ui.destination_button.clicked.connect(self.choose_destination)
