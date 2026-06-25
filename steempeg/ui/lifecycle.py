@@ -12,11 +12,63 @@ import psutil
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.version import APP_VERSION_STR
+
+
+_ABOUT_DIALOG_STYLE = """
+    QDialog {
+        background-color: #202020;
+        border: 1px solid #444444;
+        border-radius: 8px;
+    }
+    QLabel { background: transparent; }
+    QLabel#AboutTitle { color: #b29ae7; font-size: 22px; font-weight: bold; }
+    QLabel#AboutDim { color: #888888; font-size: 11px; }
+    QLabel#AboutText { color: #dddddd; font-size: 12px; }
+    QLabel#AboutDisclaimer { color: #777777; font-size: 9px; font-style: italic; }
+    QPushButton {
+        background-color: #333333;
+        color: white;
+        border: 1px solid #555555;
+        border-radius: 16px;
+        padding: 6px 24px;
+        font-weight: bold;
+        font-size: 12px;
+        min-height: 32px;
+        outline: none;
+    }
+    QPushButton:hover {
+        background-color: #444444;
+        border: 1px solid #777777;
+    }
+    QPushButton:pressed {
+        background-color: #222222;
+    }
+"""
+
+
+def _crisp_icon(path, size, dpr=2.0):
+    """Smoothly-scaled, HiDPI-aware icon so embedded logos aren't pixelated."""
+    pix = QPixmap(path)
+    if pix.isNull():
+        return pix
+    scaled = pix.scaled(
+        int(size * dpr), int(size * dpr),
+        Qt.KeepAspectRatio, Qt.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    return scaled
 
 
 class LifecycleMixin:
@@ -159,52 +211,134 @@ class LifecycleMixin:
                     print(f"Killed FFmpeg after exit: {child.name()}")
         except: pass
     
+    def _about_icon_row(self, icon_file, html_text):
+        """A crisp icon + clickable rich-text label, laid out in one row."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        icon = QLabel()
+        pix = _crisp_icon(get_resource_path(icon_file), 18)
+        if not pix.isNull():
+            icon.setPixmap(pix)
+        icon.setFixedWidth(20)
+        icon.setAlignment(Qt.AlignVCenter)
+        row.addWidget(icon)
+
+        text = QLabel(html_text)
+        text.setObjectName("AboutText")
+        text.setOpenExternalLinks(True)
+        text.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        row.addWidget(text)
+        row.addStretch()
+        return row
+
     def show_about_dialog(self):
-        """ Shows the About dialog"""
-        if getattr(self, '_about_is_open', False): 
-            return # Block if already open
+        """ Frameless About dialog styled like the FFmpeg render-error window. """
+        if getattr(self, '_about_is_open', False):
+            return  # Block if already open
         self._about_is_open = True
-        
-        msg_box = QMessageBox(self.ui)
-        msg_box.setWindowTitle("About Steempeg")
-        
-        # Logo of the window itself
-        icon_path = get_resource_path("logo.png")
-        if os.path.exists(icon_path):
-            pixmap = QPixmap(icon_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            msg_box.setIconPixmap(pixmap)
-        else:
-            msg_box.setIcon(QMessageBox.Information)
 
-        # Prepare 100% working absolute paths for icons within HTML
-        # Use QUrl so Qt knows exactly where the images are located, even within an .exe file
-        github_icon = QUrl.fromLocalFile(get_resource_path("github.jpg")).toString()
-        steam_icon = QUrl.fromLocalFile(get_resource_path("steam.png")).toString()
+        link = "color:#b29ae7; text-decoration:none;"
 
-        about_text = f"""
-        <h3>Steempeg v{APP_VERSION_STR}</h3>
-        <p><b>Build:</b> v{APP_VERSION_STR}</p>
-        <p><b>Developer:</b> Emily 🎀 <span style="color: #888888; font-size: 10pt;">@applejuicy23</span></p>
+        dialog = QDialog(self.ui)
+        dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        dialog.setFixedSize(620, 470)
+        dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
 
-        <p><img src="{github_icon}" width="16" height="16" align="middle"> <b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg">applejuicy23/steempeg</a></p>
-        <p><img src="{steam_icon}" width="16" height="16" align="middle"> <b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/">applejuicy23</a></p>
+        main_layout = QHBoxLayout(dialog)
+        main_layout.setContentsMargins(26, 26, 26, 22)
+        main_layout.setSpacing(24)
 
-        <p>A smart, elegant, and fast hardware-accelerated video renderer for Steam Clips.</p>
-        <p>Powered by <b>FFmpeg,</b> <b>PyAV</b> & <b>MPV</b></p>
+        # --- Left: the program logo (smoothly scaled, never pixelated) ---
+        logo_label = QLabel()
+        logo_pix = _crisp_icon(get_resource_path("logo.png"), 120, dpr=1.0)
+        if not logo_pix.isNull():
+            logo_label.setPixmap(logo_pix)
+        logo_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        logo_label.setFixedWidth(128)
+        main_layout.addWidget(logo_label)
 
-        <p style="font-size: 8pt; color: #777777; margin-top: 15px;">
-        <i>Steempeg is an unofficial, community-created tool.<br>
-        Not affiliated with, associated with, authorized, or endorsed by Valve Corporation or Steam.</i>
-        </p>
-        """
-        
-        msg_box.setText(about_text)
-        msg_box.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        # --- Right: the content column ---
+        content = QVBoxLayout()
+        content.setSpacing(9)
 
-        msg_box.setStandardButtons(QMessageBox.Close)
-        msg_box.exec()
-        
-        self._about_is_open = False # Release the lock when closed
+        title = QLabel(f"Steempeg v{APP_VERSION_STR}")
+        title.setObjectName("AboutTitle")
+        content.addWidget(title)
+
+        build = QLabel(f"Build: v{APP_VERSION_STR}")
+        build.setObjectName("AboutDim")
+        content.addWidget(build)
+
+        dev = QLabel(
+            'Developer: <b>Emily</b> 🎀 '
+            '<span style="color:#888888;">@applejuicy23</span>'
+        )
+        dev.setObjectName("AboutText")
+        content.addWidget(dev)
+
+        content.addLayout(self._about_icon_row(
+            "github.jpg",
+            f'<b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg" '
+            f'style="{link}">applejuicy23/steempeg</a>',
+        ))
+        content.addLayout(self._about_icon_row(
+            "steam.png",
+            f'<b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/" '
+            f'style="{link}">applejuicy23</a>',
+        ))
+
+        desc = QLabel(
+            "A smart, elegant, and fast hardware-accelerated video renderer "
+            "for Steam Clips."
+        )
+        desc.setObjectName("AboutText")
+        desc.setWordWrap(True)
+        content.addWidget(desc)
+
+        powered = QLabel(
+            'Powered by '
+            f'<a href="https://github.com/ffmpeg/ffmpeg" style="{link}">FFmpeg</a>, '
+            f'<a href="https://github.com/pyav-org/pyav" style="{link}">PyAV</a> &amp; '
+            f'<a href="https://github.com/mpv-player/mpv" style="{link}">MPV</a>.'
+        )
+        powered.setObjectName("AboutText")
+        powered.setWordWrap(True)
+        powered.setOpenExternalLinks(True)
+        powered.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        content.addWidget(powered)
+
+        thanks = QLabel(
+            "Special thanks to these projects — without them Steempeg "
+            "simply wouldn't exist. 💜"
+        )
+        thanks.setObjectName("AboutDim")
+        thanks.setWordWrap(True)
+        content.addWidget(thanks)
+
+        content.addStretch()
+
+        disclaimer = QLabel(
+            "Steempeg is an unofficial, community-created tool.\n"
+            "Not affiliated with, associated with, authorized, or endorsed by "
+            "Valve Corporation or Steam."
+        )
+        disclaimer.setObjectName("AboutDisclaimer")
+        disclaimer.setWordWrap(True)
+        content.addWidget(disclaimer)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_close = QPushButton("Close")
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.clicked.connect(dialog.accept)
+        btn_row.addWidget(btn_close)
+        content.addLayout(btn_row)
+
+        main_layout.addLayout(content)
+
+        dialog.exec()
+        self._about_is_open = False  # Release the lock when closed
 
 
     def open_logs_folder(self):
