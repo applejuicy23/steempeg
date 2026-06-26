@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from steempeg.infra import paths
@@ -27,7 +28,7 @@ from steempeg.version import APP_VERSION_STR
 
 
 _ABOUT_DIALOG_STYLE = """
-    QDialog {
+    QWidget#AboutCard {
         background-color: #202020;
         border: 1px solid #444444;
         border-radius: 8px;
@@ -255,7 +256,15 @@ class LifecycleMixin:
         dialog.setFixedSize(620, 470)
         dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
 
-        main_layout = QHBoxLayout(dialog)
+        shell_layout = QVBoxLayout(dialog)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+
+        card = QWidget(dialog)
+        card.setObjectName("AboutCard")
+        shell_layout.addWidget(card)
+
+        main_layout = QHBoxLayout(card)
         main_layout.setContentsMargins(26, 26, 26, 22)
         main_layout.setSpacing(24)
 
