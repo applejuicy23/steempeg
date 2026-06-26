@@ -276,15 +276,20 @@ class PlayerMixin:
         if not getattr(self, '_awaiting_first_frame', False):
             return
 
+        # "width" (the decoded frame's pixel width) is only set once mpv has actually
+        # decoded the first frame — the precise moment it's safe to show the surface.
+        # We deliberately do NOT gate on buffering: cache-buffering-state often reads
+        # non-zero even on healthy playback, which would stall the reveal for the full
+        # deadline and cause a visible poster blink on every load.
         ready = False
         try:
-            if self.player.time_pos is not None and not self._mpv_is_buffering():
+            if self.player.width:
                 ready = True
         except Exception:
             ready = True  # never get wedged on a transient property error
 
         if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
-            QTimer.singleShot(30, self._reveal_video_when_ready)
+            QTimer.singleShot(16, self._reveal_video_when_ready)
             return
 
         self._awaiting_first_frame = False
