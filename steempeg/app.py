@@ -555,7 +555,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.set_view_mode(DEFAULT_LIBRARY_VIEW)
 
         # --- UI INJECTION: SORTING PANEL (NEXT TO FILTER BUTTON) ---
-        from PySide6.QtWidgets import QLabel, QComboBox
+        from PySide6.QtWidgets import QLabel, QComboBox, QSizePolicy
 
         # 1. Create a text label (like the one in View)
         lbl_sorting = QLabel("Sorting")
@@ -564,6 +564,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 2. Creating a stylish sorting dropdown list
         self.combo_sort = QComboBox()
         self.combo_sort.setCursor(Qt.PointingHandCursor)
+        # Size to the widest entry ("Default (Don't touch)") and never shrink below it,
+        # so the label can't get clipped when the Clips Manager panel gets narrow.
+        self.combo_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_sort.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.combo_sort.setStyleSheet("""
             QComboBox {
                 background-color: #383838; 
@@ -618,26 +622,15 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             group_layout.setContentsMargins(0, 0, 0, 0)
             group_layout.setSpacing(0)
 
-            # Thin white divider so the sorting/filter cluster reads as its own
-            # section instead of looking glued to the "· N Clips" counter.
-            sort_separator = QFrame()
-            sort_separator.setFixedWidth(1)
-            sort_separator.setFixedHeight(22)
-            sort_separator.setStyleSheet("background-color: #ffffff; border: none;")
-
             # 4.3. Placing elements into our new super-container
-            group_layout.addWidget(sort_separator)
-            group_layout.addSpacing(14)
             group_layout.addWidget(lbl_sorting)
             group_layout.addSpacing(14)
             group_layout.addWidget(self.combo_sort)
             group_layout.addSpacing(2)
             group_layout.addWidget(filter_btn)
-            
-            # 4.4. Insert a spacer (Stretch) into the main layout to shift everything to the right.
+
+            # 4.4. Push the sorting/filter group to the right with a single stretch.
             layout.insertStretch(idx)
-            
-            # 4.5. Inserting our assembled group back into the main layout
             layout.insertWidget(idx + 1, group_widget)
 
             
@@ -2049,11 +2042,13 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.main_splitter.setSizes(
                 self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
             )
-            # Guarantee the Clips Manager is always wide enough for two grid columns.
-            # A 254px card + 15px spacing needs ~553px of viewport; add the scrollbar
-            # and frame and we land at ~580. Without this the splitter ratio collapsed
-            # to a single column on smaller screens / other DPIs (fine on the dev PC).
-            self.ui.left_panel.setMinimumWidth(580)
+            # Guarantee the Clips Manager is always wide enough for two grid columns
+            # AND for the full sorting toolbar (the combo no longer shrinks). A 254px
+            # card + 15px spacing needs ~553px of viewport; add the scrollbar, frame and
+            # toolbar headroom and we land at ~620. 580 sat right on the 2-column
+            # threshold, which left a dead zone of "1 column + empty space" on other
+            # screens / DPIs (it only looked fine on the dev PC).
+            self.ui.left_panel.setMinimumWidth(620)
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
