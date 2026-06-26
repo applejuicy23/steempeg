@@ -249,6 +249,9 @@ class LifecycleMixin:
 
         dialog = QDialog(self.ui)
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        # Make the window itself transparent so only the stylesheet's rounded rect is
+        # painted; otherwise the square window background pokes out past the 8px radius.
+        dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         dialog.setFixedSize(620, 470)
         dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
 
