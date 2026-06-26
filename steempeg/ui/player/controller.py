@@ -297,7 +297,15 @@ class PlayerMixin:
             self.toggle_fullscreen() 
             
         self.is_theater = not getattr(self, 'is_theater', False)
-        
+
+        # Capture the real (expanded) splitter sizes the moment we enter theatre,
+        # while the side/bottom panels are still visible. Hiding them next makes the
+        # splitter report 0 for those panes, so we need this snapshot to restore a
+        # clean layout if the user jumps theatre -> fullscreen -> exit.
+        if self.is_theater:
+            self._save_splitter_sizes(getattr(self.ui, 'main_splitter', None), '_pre_theater_main_sizes')
+            self._save_splitter_sizes(getattr(self, 'main_v_splitter', None), '_pre_theater_v_sizes')
+
         if hasattr(self.ui, 'left_panel'):
             self.ui.left_panel.setVisible(not self.is_theater)
         else:
@@ -359,7 +367,12 @@ class PlayerMixin:
         if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
             margin_bottom = 0 if self.is_theater else 10
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
-                
+
+        # Same queue gutter as fullscreen: 0 in theatre (edge-to-edge), 10 otherwise.
+        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+            margin_right = 0 if self.is_theater else 10
+            self.right_content_wrap.layout().setContentsMargins(0, 0, margin_right, 0)
+
         # --- THE MAGIC SWAP ---
         if hasattr(self, 'btn_theater'):
             if self.is_theater:
@@ -594,6 +607,11 @@ class PlayerMixin:
             right_layout.setContentsMargins(self.original_right_margins)
             right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
 
+        # Restore the queue gutter only when returning to the normal layout; theatre
+        # also wants the video edge-to-edge, so keep it at 0 when exiting into theatre.
+        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+            self.right_content_wrap.layout().setContentsMargins(0, 0, 0 if is_t else 10, 0)
+
         footer = self.player_footer_frame
         footer.setWindowFlags(Qt.WindowType.Widget)
         footer.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -665,7 +683,8 @@ class PlayerMixin:
         
         if self.is_fullscreen:
             # --- ENTERING IMMERSIVE MODE (stay maximized / current window state) ---
-            if getattr(self, 'is_theater', False):
+            came_from_theater = getattr(self, 'is_theater', False)
+            if came_from_theater:
                 self.is_theater = False
                 if hasattr(self, 'btn_theater'):
                     icon_path = get_resource_path("theatremode.png")
@@ -673,9 +692,19 @@ class PlayerMixin:
                         self.btn_theater.setIcon(QIcon(icon_path))
                     else:
                         self.btn_theater.setText("🎦")
-            
+
             self._set_hide_watcher_suppressed(True)
             self._save_immersive_splitter_sizes()
+
+            # In theatre the side/bottom panes are collapsed to 0, so the snapshot
+            # above is degenerate. Swap in the expanded sizes captured on theatre
+            # entry, otherwise exiting fullscreen lands in a broken "panels visible
+            # but zero-width" layout.
+            if came_from_theater:
+                if hasattr(self, '_pre_theater_main_sizes'):
+                    self._immersive_main_splitter_sizes = list(self._pre_theater_main_sizes)
+                if hasattr(self, '_pre_theater_v_sizes'):
+                    self._immersive_v_splitter_sizes = list(self._pre_theater_v_sizes)
 
             # Hide ALL old and NEW panels
             if hasattr(self.ui, 'left_panel'): self.ui.left_panel.hide()
@@ -723,6 +752,11 @@ class PlayerMixin:
                 self.original_right_spacing = right_layout.spacing()
                 right_layout.setContentsMargins(0, 0, 0, 0)
                 right_layout.setSpacing(0)
+
+            # Drop the 10px gutter that sits before the (now collapsed) queue splitter,
+            # otherwise it leaves an empty strip on the right edge of the fullscreen video.
+            if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+                self.right_content_wrap.layout().setContentsMargins(0, 0, 0, 0)
 
             self._enter_immersive_layout()
             self._enter_immersive_chrome()
