@@ -1311,7 +1311,14 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         place_layout.addWidget(self.place_logo)
         place_layout.addWidget(self.place_text)
         self.video_stack.addWidget(self.placeholder_frame)
-        
+
+        # A plain black page shown only during the brief load gap (between selecting a
+        # clip and mpv's first decoded frame). It hides the native mpv surface so a
+        # stale/last frame can't flash, WITHOUT exposing the "Ready to play" poster.
+        self.video_blank_frame = QFrame()
+        self.video_blank_frame.setStyleSheet("QFrame { background-color: #000000; border: none; }")
+        self.video_stack.addWidget(self.video_blank_frame)
+
         # When starting, show MAP 2 (Stub)
         self.video_stack.setCurrentWidget(self.placeholder_frame)
 

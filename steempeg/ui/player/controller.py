@@ -1215,15 +1215,15 @@ class PlayerMixin:
 
 
         # 3. PREPARE THE CANVAS
-        # Keep the logo placeholder up (NOT the bare mpv surface) until the new clip's
-        # first frame is actually decoded. Switching to the mpv surface immediately
-        # exposed mpv's stale/last frame for a split second on every load — the brief
-        # flash the user saw (most reliably right after Refresh). _reveal_video_when_ready
-        # flips to the live video once mpv reports a real position.
+        # Show a plain BLACK page (not the bare mpv surface, not the "Ready to play"
+        # poster) until the new clip's first frame is actually decoded. Switching to the
+        # mpv surface immediately exposed mpv's stale/last frame for a split second on
+        # every load — the flash the user saw (most reliably right after Refresh).
+        # _reveal_video_when_ready flips to the live video once the first frame exists.
         self.ui.video_container.setStyleSheet("background-color: transparent;")
         self._awaiting_first_frame = True
-        if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
-            self.video_stack.setCurrentWidget(self.placeholder_frame)
+        if hasattr(self, 'video_stack') and hasattr(self, 'video_blank_frame'):
+            self.video_stack.setCurrentWidget(self.video_blank_frame)
         if hasattr(self, 'btn_close_clip'): 
             self.btn_close_clip.show()
         if hasattr(self, 'update_playback_badge'):
