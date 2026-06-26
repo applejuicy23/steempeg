@@ -268,11 +268,8 @@ class LibraryMixin:
         pos = event.position().toPoint()
         item = self.grid_clips.itemAt(pos)
         if item is None:
-            if not (event.modifiers() & Qt.ControlModifier):
-                self.grid_clips.blockSignals(True)
-                self.grid_clips.clearSelection()
-                self.grid_clips.blockSignals(False)
-                self.sync_table_from_grid_selection()
+            # Clicking empty space inside the grid keeps the current selection
+            # (the purple outline stays); only clicking another card changes it.
             return True
 
         self._grid_select_item(item, event)
