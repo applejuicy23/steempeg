@@ -27,7 +27,7 @@
   <a href="#-features">Features</a> ·
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-getting-started">Getting Started</a> ·
-  <a href="#-whats-new-in-v30">What's New</a> ·
+  <a href="#-whats-new-in-v31">What's New</a> ·
   <a href="#-credits">Credits</a>
 </p>
 
@@ -100,16 +100,17 @@ Then extract and run `Steempeg.exe`.
 
 ---
 
-## 🆕 What's New in v30
+## 🆕 What's New in v31
 
-- **Major codebase refactor** — modular architecture, easier to maintain and extend
-- **Redesigned render panel** — cleaner Video / Audio / Export tabs with live summary
-- **Render queue** — batch renders, drag-to-reorder, survives app restarts
-- **Clips manager** — Grid + List views, advanced filters, Ctrl/Shift multi-select
-- **Player upgrades** — auto-loaded marker icons, trim highlights, screenshot toasts
-- **Source info** — per-directory paths with individual copy buttons
-- **Quality engine** — resolution-aware bitrate estimates, Original preset warnings
-- **Stability** — fullscreen fixes, smoother splitter resize during playback, ESC no longer closes the app
+A stability & polish release on top of v30's big refactor — fewer surprises, tighter UI.
+
+- **Buffering overlay** — polished floating pill when playback stalls (no splitter lag)
+- **Window management** — reliable maximized startup; title bar stays visible when you hit Restore
+- **Immersive modes** — render queue stays hidden in theatre/fullscreen; layout restores correctly
+- **Clips Manager** — two-column minimum width, compact default launch, sorting controls don't truncate
+- **Player** — no flash on clip load, playhead tracks slow speeds, hatched timeline when idle
+- **Render queue** — clean drag preview; status badge clears on close and matches app chrome
+- **UI polish** — About dialog corners, white icon pass, distinct sub-1-Mbps bitrate labels
 
 Full changelog: [Releases](https://github.com/applejuicy23/steempeg/releases).
 
