@@ -230,8 +230,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.table_clips.setEditTriggers(QAbstractItemView.NoEditTriggers)
             self.ui.table_clips.setShowGrid(False)
             self.ui.table_clips.verticalHeader().setVisible(False)
+            # CustomContextMenu policy suppresses the native menu; the actual menu is
+            # shown from the right-press eventFilter (lifecycle.py) so selection never
+            # changes. Connecting customContextMenuRequested too would open a 2nd menu.
             self.ui.table_clips.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.ui.table_clips.customContextMenuRequested.connect(self.show_clip_context_menu)
             # 2. ADJUST THE WIDTH
             header = self.ui.table_clips.horizontalHeader()
 
@@ -481,8 +483,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.grid_clips.setViewMode(qtw.QListWidget.IconMode)
             self.grid_clips.setResizeMode(qtw.QListWidget.Adjust)
             self.grid_clips.setSpacing(15)
+            # Menu is shown from ClipCard.on_right_click (cards) and the viewport
+            # right-press eventFilter (empty area). A customContextMenuRequested
+            # connection on top of those would pop a duplicate menu.
             self.grid_clips.setContextMenuPolicy(Qt.CustomContextMenu)
-            self.grid_clips.customContextMenuRequested.connect(self.show_grid_context_menu)
             self.grid_clips.viewport().installEventFilter(self)
             # We strictly fix the card sizes so they don't fly apart when hidden!
             self.grid_clips.setUniformItemSizes(True)

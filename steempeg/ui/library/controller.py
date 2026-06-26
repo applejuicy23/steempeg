@@ -284,9 +284,10 @@ class LibraryMixin:
         if not clip_paths:
             return
 
+        # Keep QMenu's own native popup flags (Qt.Popup). Overriding them with a
+        # translucent frameless window made the menu a layered top-level that
+        # wouldn't close on focus loss and slid behind the main window.
         menu = QMenu(self.grid_clips)
-        menu.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        menu.setAttribute(Qt.WA_TranslucentBackground)
         menu.setStyleSheet(_LIBRARY_MENU_STYLE)
 
         self._populate_library_context_menu(menu, clip_paths)
@@ -298,9 +299,9 @@ class LibraryMixin:
         if not clip_paths:
             return
 
+        # See show_grid_context_menu: keep the native Qt.Popup flags so the menu
+        # closes correctly instead of lingering behind the window.
         menu = QMenu(self.ui.table_clips)
-        menu.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        menu.setAttribute(Qt.WA_TranslucentBackground)
         menu.setStyleSheet(_LIBRARY_MENU_STYLE)
 
         self._populate_library_context_menu(menu, clip_paths)
