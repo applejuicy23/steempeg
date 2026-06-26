@@ -612,13 +612,22 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             layout.takeAt(idx)
             
             # 4.2. Creating a separate container for our Sort/Filter group
-            from PySide6.QtWidgets import QHBoxLayout, QWidget
+            from PySide6.QtWidgets import QHBoxLayout, QWidget, QFrame
             group_widget = QWidget()
             group_layout = QHBoxLayout(group_widget)
             group_layout.setContentsMargins(0, 0, 0, 0)
             group_layout.setSpacing(0)
 
+            # Thin white divider so the sorting/filter cluster reads as its own
+            # section instead of looking glued to the "· N Clips" counter.
+            sort_separator = QFrame()
+            sort_separator.setFixedWidth(1)
+            sort_separator.setFixedHeight(22)
+            sort_separator.setStyleSheet("background-color: #ffffff; border: none;")
+
             # 4.3. Placing elements into our new super-container
+            group_layout.addWidget(sort_separator)
+            group_layout.addSpacing(14)
             group_layout.addWidget(lbl_sorting)
             group_layout.addSpacing(14)
             group_layout.addWidget(self.combo_sort)
