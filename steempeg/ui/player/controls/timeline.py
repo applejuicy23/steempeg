@@ -463,6 +463,22 @@ class TimelineCanvas(QWidget):
         ruler_y = track_y + track_height + 3.0
 
         painter.fillRect(QRectF(pad, track_y, usable_w, track_height), self.track_color)
+
+        # Disabled / no-clip state: hatch the whole track so it clearly reads as "locked"
+        # (and so stale game-mode segments from a previous clip can't bleed across the bar).
+        if not self.isEnabled() or self.duration_ms <= 1:
+            track_rect = QRectF(pad, track_y, usable_w, track_height)
+            painter.save()
+            painter.setClipRect(track_rect)
+            painter.setPen(QPen(QColor(255, 255, 255, 70), 2))
+            step = 7
+            xx = int(pad) - int(track_height)
+            while xx < int(pad + usable_w):
+                painter.drawLine(xx, int(track_y + track_height), xx + int(track_height), int(track_y))
+                xx += step
+            painter.restore()
+            return
+
         if self.duration_ms <= 0: return
         
         fill_x_end = self.ms_to_x(self.visual_ms)
