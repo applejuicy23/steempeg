@@ -41,6 +41,20 @@ from steempeg.render.queue import (
     save_queue_to_file,
 )
 from steempeg.ui.render_panel import set_settings_panel_locked
+
+
+def _fmt_mbps(value: float) -> str:
+    """Format a Mbps value for the bitrate dropdown.
+
+    Whole/large numbers stay short ("12", "7.5"), but sub-1-Mbps values keep enough
+    precision to stay distinct instead of all rounding to "0.1" / "0.0" — which is
+    exactly what happened at 144p with a low FPS multiplier (e.g. 0.13 / 0.08 / 0.05
+    / 0.03 was collapsing to 0.1 / 0.1 / 0.1 / 0.0).
+    """
+    if value >= 1:
+        return f"{value:.1f}".rstrip("0").rstrip(".") if value % 1 else str(int(value))
+    # Below 1 Mbps: two decimals, but never show a meaningless 0.00.
+    return f"{max(value, 0.01):.2f}".rstrip("0").rstrip(".")
 from steempeg.ui.render_job_builder import (
     apply_job_settings_to_ui,
     build_render_job_from_ui,
@@ -831,14 +845,14 @@ class RenderMixin:
                     # We're multiplying right here just for the sake of appearance in the ComboBox!
                     scaled_bitrate = preset_bitrate * fps_multiplier
                     
-                    display_val = f"{scaled_bitrate:.1f}".rstrip('0').rstrip('.') if scaled_bitrate % 1 != 0 else str(int(scaled_bitrate))
+                    display_val = _fmt_mbps(scaled_bitrate)
                     
                     self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
                     added_any = True
         
         if not added_any and res_key in self.steam_bitrate_presets["Low"]:
             lowest_bitrate = self.steam_bitrate_presets["Low"][res_key] * fps_multiplier
-            display_val = f"{lowest_bitrate:.1f}".rstrip('0').rstrip('.') if lowest_bitrate % 1 != 0 else str(int(lowest_bitrate))
+            display_val = _fmt_mbps(lowest_bitrate)
             self.ui.combo_bitrate.addItem(f"Low - {display_val} Mbps")
         
         self.ui.combo_bitrate.insertSeparator(self.ui.combo_bitrate.count())
