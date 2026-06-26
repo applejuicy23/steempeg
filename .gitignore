@@ -32,5 +32,8 @@ Thumbs.db
 newver_compilator.py
 pacher.py
 
+# --- Local tooling, not shipped ---
+tools/
+
 # --- Engines live in ./bin, shipped via Releases ---
 bin/
