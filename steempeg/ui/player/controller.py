@@ -160,36 +160,36 @@ class PlayerMixin:
         self._playback_stall_since = None
         self._playback_recover_at = None
 
+    def _get_buffering_overlay(self):
+        overlay = getattr(self, '_buffering_overlay', None)
+        if overlay is None:
+            from steempeg.ui.player.buffering_overlay import BufferingOverlay
+            overlay = BufferingOverlay()
+            self._buffering_overlay = overlay
+        return overlay
+
     def _set_playback_loading(self, active, message="Buffering…"):
-        # Draw the indicator with mpv's OWN native OSD (player.show_text), NOT a Qt
-        # widget over the video. A non-native overlay on top of the native mpv window
-        # was the root cause of the splitter stutter, so we must never bring it back.
-        if not hasattr(self, 'player') or not self.player:
-            return
-        now = time.time()
+        # Render the indicator in a SEPARATE top-level tool window, never as a Qt
+        # child over the native mpv surface — that overlap was the root cause of the
+        # splitter stutter. A floating window composites independently and is safe.
         if active:
-            # Re-arm periodically so the OSD text stays up for the whole stall, but
-            # throttle the IPC so we don't spam mpv on every 16ms tick.
-            last_armed = getattr(self, '_osd_buffering_armed_at', 0.0)
-            if not getattr(self, '_playback_loading_active', False) or (now - last_armed) > 0.4:
-                try:
-                    self.player.show_text(message, 1500)
-                except Exception:
-                    pass
-                self._osd_buffering_armed_at = now
             self._playback_loading_active = True
             self._playback_recover_at = None
+            overlay = self._get_buffering_overlay()
+            # Don't pop an always-on-top window over other apps when we're in the
+            # background; the state stays armed and re-shows once we're active again.
+            if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
+                overlay.hide_loading()
+                return
+            anchor = getattr(self, 'mpv_wrapper', None) or getattr(self.ui, 'video_container', None)
+            overlay.show_loading(anchor, message)
         else:
-            # Only clear once, on the active -> inactive transition.
-            if getattr(self, '_playback_loading_active', False):
-                try:
-                    self.player.command('show-text', '', 1)
-                except Exception:
-                    pass
+            overlay = getattr(self, '_buffering_overlay', None)
+            if overlay is not None and getattr(self, '_playback_loading_active', False):
+                overlay.hide_loading()
             self._playback_loading_active = False
             self._playback_recover_at = None
             self._playback_stall_since = None
-            self._osd_buffering_armed_at = 0.0
 
     def _mpv_is_buffering(self):
         if not hasattr(self, 'player') or not self.player:
@@ -815,7 +815,15 @@ class PlayerMixin:
         region = QRegion(path.toFillPolygon().toPolygon())
         self.player_footer_frame.setMask(region)
     def hide_hud_on_minimize(self, state):
-        
+
+        # The buffering pill is an always-on-top tool window; hide it whenever the
+        # app loses focus so it never floats over other applications. It re-shows on
+        # the next buffering tick if playback is still stalling.
+        if state != Qt.ApplicationState.ApplicationActive:
+            overlay = getattr(self, '_buffering_overlay', None)
+            if overlay is not None:
+                overlay.hide_loading()
+
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
             return

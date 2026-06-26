@@ -156,6 +156,13 @@ class LifecycleMixin:
         self._force_pause = True
         self._is_closing = True
 
+        # Tear down the floating buffering window so it can't linger as a ghost.
+        overlay = getattr(self, '_buffering_overlay', None)
+        if overlay is not None:
+            overlay.hide_loading()
+            overlay.deleteLater()
+            self._buffering_overlay = None
+
         # 1. Kill the player if it is active.
         if hasattr(self, 'player') and self.player:
             self.player.pause = True 
