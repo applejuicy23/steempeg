@@ -59,6 +59,10 @@ class TimelineCanvas(QWidget):
         self.vlc_last_update_time = time.time()
         
         self.is_playing = False
+        # Current mpv playback rate. The 60fps interpolation advances the playhead by
+        # wall-clock time, so it must be scaled by this or it races ahead at 1x and gets
+        # yanked back (visible jitter when zoomed in, especially at 0.1x).
+        self.playback_speed = 1.0
         self.user_seek_lock_time = 0 
         
         self.is_trim_mode = False
@@ -424,7 +428,7 @@ class TimelineCanvas(QWidget):
             # Detach from the MPV player (so it doesn't snap us back)
             # But continue to smoothly move the stick under our own power!
             if self.is_playing:
-                self.visual_ms += delta_ms
+                self.visual_ms += delta_ms * self.playback_speed
                 
             self.visual_ms = max(0.0, min(self.visual_ms, float(self.duration_ms)))
             self.update() # Rendering the frame: the canvas stretches, but the stick lives on!
@@ -432,7 +436,7 @@ class TimelineCanvas(QWidget):
 
         # --- STANDARD ENGINE LOGIC (When zoom is finished) ---
         if self.is_playing:
-            self.visual_ms += delta_ms
+            self.visual_ms += delta_ms * self.playback_speed
             drift = self.target_ms - self.visual_ms
             if abs(drift) > 1000: self.visual_ms = self.target_ms 
             else: self.visual_ms += drift * 0.1 

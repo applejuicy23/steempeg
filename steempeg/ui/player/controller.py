@@ -322,6 +322,10 @@ class PlayerMixin:
             # Convert 5..30 back to 0.5..3.0
             speed_float = value / 10.0
             self.player.speed = speed_float
+            # Keep the timeline's playhead interpolation in sync with the real rate,
+            # otherwise the playhead jitters at non-1x speeds (e.g. 0.1x when zoomed in).
+            if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
+                self.custom_timeline.canvas.playback_speed = speed_float
 
     def toggle_theater_mode(self):
         """ Safely collapses side and bottom panels, aware of Fullscreen state, and swaps icon. """
@@ -1244,6 +1248,11 @@ class PlayerMixin:
         # Start the video and unpause it.
         self.player.play(abs_path) 
         self.player.pause = False
+
+        # Keep the timeline interpolation in sync with mpv's current rate from the start
+        # (the speed setting persists across clips), so the playhead doesn't jitter.
+        if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
+            self.custom_timeline.canvas.playback_speed = float(getattr(self.player, 'speed', 1.0) or 1.0)
 
         # Reveal the live video only once the first frame is ready (see step 3).
         self._first_frame_deadline = time.time() + 0.6
