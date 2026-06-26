@@ -2341,8 +2341,16 @@ def main():
         # --- ADDING COLLAPSE AND EXPAND BUTTONS ---
         from PySide6.QtCore import Qt
         window.ui.setWindowFlags(window.ui.windowFlags() | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
-        
-    
+
+        # Pre-size to the screen work area BEFORE showing. showMaximized() on this
+        # QDialog can otherwise set the maximized *state* while the geometry stays at
+        # the designer size (1277x817) — the window opens as a small square in the
+        # corner with the title-bar showing the 'restore' icon. Heavy startup work
+        # (restoring a render-queue clip) made that race reliable. Starting already at
+        # the maximized geometry removes both the grow animation and the desync.
+        _screen = app.primaryScreen()
+        if _screen is not None:
+            window.ui.setGeometry(_screen.availableGeometry())
         window.ui.showMaximized()
         QTimer.singleShot(0, window._sync_startup_layout)
         
