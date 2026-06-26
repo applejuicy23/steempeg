@@ -83,6 +83,9 @@ class PlayerMixin:
             self.grid_clips.blockSignals(False)
             
         # 4. Restoring the Player Placeholder and Header Text
+        # Cancel any pending "reveal video" poll so it can't flip us back to the
+        # (now empty) mpv surface after we've intentionally shown the placeholder.
+        self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
             self.video_stack.setCurrentWidget(self.placeholder_frame)
             
@@ -262,6 +265,31 @@ class PlayerMixin:
                 self._set_playback_loading(True, "Buffering…")
         except Exception:
             pass
+
+    def _reveal_video_when_ready(self):
+        """Swap the placeholder for the live mpv surface once the first frame exists.
+
+        Polls mpv's time_pos (a real position means a frame is decoded) and waits out
+        any cache buffering, with a hard deadline so a hidden/idle surface can never
+        leave us stuck on the placeholder forever.
+        """
+        if not getattr(self, '_awaiting_first_frame', False):
+            return
+
+        ready = False
+        try:
+            if self.player.time_pos is not None and not self._mpv_is_buffering():
+                ready = True
+        except Exception:
+            ready = True  # never get wedged on a transient property error
+
+        if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
+            QTimer.singleShot(30, self._reveal_video_when_ready)
+            return
+
+        self._awaiting_first_frame = False
+        if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
+            self.video_stack.setCurrentWidget(self.ui.video_container)
 
     # VIDEO PLAYER CONTROLS
     def toggle_play(self):
@@ -1182,9 +1210,15 @@ class PlayerMixin:
 
 
         # 3. PREPARE THE CANVAS
+        # Keep the logo placeholder up (NOT the bare mpv surface) until the new clip's
+        # first frame is actually decoded. Switching to the mpv surface immediately
+        # exposed mpv's stale/last frame for a split second on every load — the brief
+        # flash the user saw (most reliably right after Refresh). _reveal_video_when_ready
+        # flips to the live video once mpv reports a real position.
         self.ui.video_container.setStyleSheet("background-color: transparent;")
-        if hasattr(self, 'video_stack'): 
-            self.video_stack.setCurrentWidget(self.ui.video_container)
+        self._awaiting_first_frame = True
+        if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
+            self.video_stack.setCurrentWidget(self.placeholder_frame)
         if hasattr(self, 'btn_close_clip'): 
             self.btn_close_clip.show()
         if hasattr(self, 'update_playback_badge'):
@@ -1205,6 +1239,10 @@ class PlayerMixin:
         # Start the video and unpause it.
         self.player.play(abs_path) 
         self.player.pause = False
+
+        # Reveal the live video only once the first frame is ready (see step 3).
+        self._first_frame_deadline = time.time() + 0.6
+        QTimer.singleShot(30, self._reveal_video_when_ready)
 
         # --- BACKGROUND THUMBNAIL BATCH GENERATION (THE MATRIX 2.0) ---
         if hasattr(self, 'thumb_thread') and self.thumb_thread.isRunning():
