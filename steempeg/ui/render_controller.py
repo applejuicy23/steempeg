@@ -1647,6 +1647,15 @@ class RenderMixin:
     def _sync_queue_splitter_visibility(self):
         if not hasattr(self, "right_h_splitter"):
             return
+        # Theatre and fullscreen own the layout and keep the queue collapsed. Many
+        # unrelated events (render progress, queue add/remove, refresh) funnel through
+        # here, so without this guard the panel pops back open mid-immersive.
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            if hasattr(self, "render_queue_panel"):
+                self.render_queue_panel.hide()
+            total = sum(self.right_h_splitter.sizes()) or self.right_h_splitter.width()
+            self.right_h_splitter.setSizes([max(int(total), 1), 0])
+            return
         sizes = self.right_h_splitter.sizes()
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
         if len(self.render_queue) > 0:
