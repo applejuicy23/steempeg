@@ -2040,7 +2040,11 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.main_splitter.setSizes(
                 self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
             )
-            self.ui.left_panel.setMinimumWidth(0)
+            # Guarantee the Clips Manager is always wide enough for two grid columns.
+            # A 254px card + 15px spacing needs ~553px of viewport; add the scrollbar
+            # and frame and we land at ~580. Without this the splitter ratio collapsed
+            # to a single column on smaller screens / other DPIs (fine on the dev PC).
+            self.ui.left_panel.setMinimumWidth(580)
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap

@@ -8,7 +8,8 @@ these constants are always used on launch.
 REMEMBER_LAYOUT_BETWEEN_SESSIONS = False
 
 # [Clips Manager width, player + queue area width]
-DEFAULT_MAIN_SPLITTER_SIZES = [300, 1850]
+# Left pane is clamped to a 580px minimum (two grid columns) in app.py.
+DEFAULT_MAIN_SPLITTER_SIZES = [580, 1570]
 
 # [player area, bottom tabs] vertical split inside the right column
 DEFAULT_MAIN_V_SPLITTER_SIZES = [750, 450]
