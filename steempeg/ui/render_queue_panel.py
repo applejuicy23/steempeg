@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
-from PySide6.QtGui import QDrag, QPixmap, QPainter
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF
+from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -143,16 +143,39 @@ class QueueJobCard(QFrame):
         self._apply_card_style()
 
     def _drag_preview_pixmap(self) -> QPixmap:
+        """A clean, opaque rounded snapshot of the card for the drag cursor.
+
+        A plain self.grab() captured the card's translucent background with hard
+        square corners, so the floating preview looked muddy and broken. Here we
+        paint a solid rounded panel, clip the live card contents to it, and add the
+        purple accent border — giving a crisp "lifted card" while dragging.
+        """
         w = max(1, min(self.width(), _DRAG_PIXMAP_MAX_W))
         h = max(1, min(self.height(), _DRAG_PIXMAP_MAX_H))
-        source = self.grab()
-        if source.isNull():
-            source = QPixmap(w, h)
-            source.fill(Qt.transparent)
-            painter = QPainter(source)
-            self.render(painter)
-            painter.end()
-        return source.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        dpr = self.devicePixelRatioF()
+
+        pix = QPixmap(int(w * dpr), int(h * dpr))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.transparent)
+
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
+        painter.fillPath(path, QColor("#262229"))
+
+        painter.save()
+        painter.setClipPath(path)
+        painter.setOpacity(0.97)
+        self.render(painter, QPoint(0, 0))
+        painter.restore()
+
+        painter.setPen(QPen(QColor("#b29ae7"), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 11, 11)
+        painter.end()
+        return pix
 
     def _refresh_num_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
