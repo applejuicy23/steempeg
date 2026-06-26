@@ -77,13 +77,18 @@ class PlayerMixin:
             self.custom_timeline.canvas.update()
 
         # 3. Resetting the Table and Grid
+        # NOTE: clearSelection() leaves the *current* index intact, so the badge's
+        # fallback (_current_preview_clip_path -> table.currentRow()) still resolved the
+        # old clip and the badge never hid. Reset the current index too.
         if hasattr(self.ui, 'table_clips'):
             self.ui.table_clips.blockSignals(True)
             self.ui.table_clips.clearSelection()
+            self.ui.table_clips.setCurrentCell(-1, -1)
             self.ui.table_clips.blockSignals(False)
         if hasattr(self, 'grid_clips'):
             self.grid_clips.blockSignals(True)
             self.grid_clips.clearSelection()
+            self.grid_clips.setCurrentItem(None)
             self.grid_clips.blockSignals(False)
             
         # 4. Restoring the Player Placeholder and Header Text
