@@ -1606,10 +1606,10 @@ class RenderMixin:
         self.label_playback_badge.setStyleSheet(
             f"color: {color};"
             f"background-color: rgba({r}, {g}, {b}, 0.18);"
-            f"border: 1px solid {color};"
+            f"border: 2px solid {color};"
             "border-radius: 8px; padding: 4px 10px;"
-            "font-weight: bold; font-size: 12px;"
-            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "font-weight: bold; font-size: 13px;"
+            "font-family: 'Segoe UI';"
         )
         self.label_playback_badge.show()
 
