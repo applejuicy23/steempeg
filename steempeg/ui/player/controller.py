@@ -70,6 +70,10 @@ class PlayerMixin:
             self.custom_timeline.set_duration(0)
             self.custom_timeline.force_jump(0)
             self.custom_timeline.canvas.markers.clear()
+            # Drop the previous clip's game-mode segments so their stripes can't leak
+            # onto the next bar (the CS2 leading segment was stretching across).
+            if hasattr(self.custom_timeline.canvas, 'mode_segments'):
+                self.custom_timeline.canvas.mode_segments = []
             self.custom_timeline.canvas.update()
 
         # 3. Resetting the Table and Grid
@@ -95,6 +99,10 @@ class PlayerMixin:
             self.custom_text_label.setText("Select a clip to preview...")
         if hasattr(self, 'custom_icon_label'):
             self.custom_icon_label.setPixmap(QIcon(get_resource_path("unknown_icon.png")).pixmap(24, 24))
+        # Forget the previewed clip / queue selection so the top-right badge
+        # ("Preview" / "In queue (N)") clears instead of lingering after close.
+        self._preview_clip_path = None
+        self._selected_queue_job_id = None
         if hasattr(self, 'update_playback_badge'):
             self.update_playback_badge()
             
