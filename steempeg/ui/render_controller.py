@@ -1607,7 +1607,7 @@ class RenderMixin:
             f"color: {color};"
             f"background-color: rgba({r}, {g}, {b}, 0.18);"
             f"border: 1px solid {color};"
-            "border-radius: 9px; padding: 2px 10px;"
+            "border-radius: 8px; padding: 4px 10px;"
             "font-weight: bold; font-size: 12px;"
             "font-family: 'Segoe UI', Arial, sans-serif;"
         )
