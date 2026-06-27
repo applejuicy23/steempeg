@@ -9,7 +9,7 @@ import re
 import tempfile
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime
+from PySide6.QtCore import QEvent, Qt, QDate, QDateTime, QPoint, QTime
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -17,11 +17,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display_format
 from steempeg.ui.widgets import BlockCombo, FlowLayout
 
 
@@ -127,6 +129,17 @@ class FilterMenu(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
+        # Sections are stacked directly; only the Games list scrolls (see below).
+        scroll_layout = layout
+
+        self._drag_active = False
+        self._drag_layout = None
+        self._drag_btn = None
+        # Remembers each type's checked state across rebuilds, so a type that
+        # disappears (its game was deselected) returns with the SAME state it had,
+        # instead of being force-checked or force-cleared.
+        self._type_checked_memory = {}
+
         # --- 1. SUPER HELPER: CREATE CATEGORY MEGA-CAPSULES ---
         def create_category_capsule(title_text, content_widget):
             capsule = QFrame()
@@ -157,17 +170,36 @@ class FilterMenu(QWidget):
             cap_layout.addWidget(content_widget)
             return capsule
 
-        # --- GAMES CAPSULE ---
+        # --- GAMES CAPSULE (the ONLY scrollable section) ---
         self.games_container = QWidget()
+        self.games_container.setStyleSheet("background: transparent;")
         self.games_layout = FlowLayout()
         self.games_container.setLayout(self.games_layout)
-        layout.addWidget(create_category_capsule("🎮 Games:", self.games_container))
+        self.games_container.setMouseTracking(True)
+        self.games_container.installEventFilter(self)
+
+        self._games_scroll = QScrollArea()
+        self._games_scroll.setWidgetResizable(True)
+        self._games_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._games_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._games_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._games_scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical { border: none; background: transparent; width: 8px; margin: 2px; }
+            QScrollBar::handle:vertical { background: #4e4e4e; min-height: 24px; border-radius: 4px; }
+            QScrollBar::handle:vertical:hover { background: #b29ae7; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+        """)
+        self._games_scroll.setWidget(self.games_container)
+        scroll_layout.addWidget(create_category_capsule("🎮 Games:", self._games_scroll))
 
         # --- TYPE CAPSULE ---
         self.types_container = QWidget()
         self.types_layout = FlowLayout()
         self.types_container.setLayout(self.types_layout)
-        layout.addWidget(create_category_capsule("📂 Type:", self.types_container))
+        scroll_layout.addWidget(create_category_capsule("📂 Type:", self.types_container))
+        self.types_container.setMouseTracking(True)
+        self.types_container.installEventFilter(self)
 
         # --- 3. SMART INPUTS STYLE (Clean, small pills + Rounded Spinners) ---
         
@@ -289,7 +321,7 @@ class FilterMenu(QWidget):
         date_layout.addWidget(lbl_to_d)
         date_layout.addWidget(self.input_max_date)
         date_layout.addStretch() 
-        layout.addWidget(create_category_capsule("📅 Date:", date_container))
+        scroll_layout.addWidget(create_category_capsule("📅 Date:", date_container))
 
         # --- TIME CAPSULE (WITH AM/PM & ICONS) ---
         time_c_container = QWidget()
@@ -301,7 +333,7 @@ class FilterMenu(QWidget):
         self.input_max_time = QTimeEdit()
         
         for te in (self.input_min_time, self.input_max_time):
-            te.setDisplayFormat("hh:mm AP")
+            te.setDisplayFormat(qt_time_display_format())
             te.setStyleSheet(smart_input_style)
             te.setCursor(Qt.PointingHandCursor)
         
@@ -314,7 +346,7 @@ class FilterMenu(QWidget):
         time_c_layout.addWidget(lbl_to_t)
         time_c_layout.addWidget(self.input_max_time)
         time_c_layout.addStretch()
-        layout.addWidget(create_category_capsule("⏰ Time of creation:", time_c_container))
+        scroll_layout.addWidget(create_category_capsule("⏰ Time of creation:", time_c_container))
 
         # --- DURATION CAPSULE (HH:MM:SS) ---
         dur_container = QWidget()
@@ -339,10 +371,10 @@ class FilterMenu(QWidget):
         dur_layout.addWidget(lbl_max_dur)
         dur_layout.addWidget(self.input_max_dur)
         dur_layout.addStretch()
-        layout.addWidget(create_category_capsule("⏱ Duration:", dur_container))
+        scroll_layout.addWidget(create_category_capsule("⏱ Duration:", dur_container))
 
 
-        layout.addStretch()
+        scroll_layout.addStretch()
 
         bottom_layout = QHBoxLayout()
         bottom_layout.setContentsMargins(0, 10, 0, 0)
@@ -382,11 +414,143 @@ class FilterMenu(QWidget):
         bottom_layout.addWidget(self.btn_apply)
         layout.addLayout(bottom_layout)
 
-    def gather_statistics(self, app_window):
-        self.app = app_window 
-        table = self.app.ui.table_clips
+    _PILL_BTN_STYLE = """
+        QPushButton {
+            background-color: #383838;
+            color: #aaaaaa;
+            border: 2px solid #444444;
+            border-radius: 10px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 4px 12px;
+            min-height: 24px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+            color: #ffffff;
+            border: 2px solid #555555;
+        }
+        QPushButton:checked {
+            background-color: #404040;
+            color: #ffffff;
+            border: 2px solid #6b5a8e;
+        }
+        QPushButton:checked:hover {
+            background-color: #3a324a;
+            border: 2px solid #b29ae7;
+        }
+    """
 
-        unique_games = {}
+    def set_content_max_height(self, max_px: int) -> None:
+        """Size the Games list to its content, capped so the popup never overruns
+        the footer buttons. The list grows row by row as games are added and the
+        scrollbar only appears once it hits that cap.
+        """
+        # Collapse Games to measure everything else, so the cap is independent of
+        # the scroll area's own expanding policy.
+        self._games_scroll.setFixedHeight(0)
+        self.adjustSize()
+        non_games = self.height()
+        cap = max(70, max_px - non_games)
+
+        # Fixed popup width (460) minus main/container/capsule margins + scrollbar.
+        width = max(120, self.width() - 84)
+        content = self.games_layout.heightForWidth(width) + 4
+        height = max(40, min(content, cap))
+
+        self._games_scroll.setFixedHeight(height)
+        self.adjustSize()
+
+    _MOUSE_EVENTS = (
+        QEvent.Type.MouseButtonPress,
+        QEvent.Type.MouseMove,
+        QEvent.Type.MouseButtonRelease,
+    )
+
+    def eventFilter(self, source, event):
+        et = event.type()
+        games_c = getattr(self, 'games_container', None)
+        types_c = getattr(self, 'types_container', None)
+        if source in (games_c, types_c) and source is not None and et in self._MOUSE_EVENTS:
+            layout = self.games_layout if source is games_c else self.types_layout
+            pos = event.position().toPoint()
+            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                btn = self._pill_at(layout, pos)
+                if btn and not btn.isChecked():
+                    self._is_gathering = True
+                    btn.setChecked(True)
+                    self._is_gathering = False
+                    self._drag_active = True
+                    self._drag_layout = layout
+                    self._drag_btn = btn
+                    if layout is self.games_layout:
+                        self._refresh_cascade_after_games()
+                    else:
+                        self._refresh_cascade_after_types()
+                    self.update_live_count()
+                    return True
+            elif et == QEvent.Type.MouseMove and self._drag_active and event.buttons() & Qt.MouseButton.LeftButton:
+                btn = self._pill_at(self._drag_layout, pos)
+                if btn and not btn.isChecked():
+                    self._is_gathering = True
+                    btn.setChecked(True)
+                    self._is_gathering = False
+                    if self._drag_layout is self.games_layout:
+                        self._refresh_cascade_after_games()
+                    else:
+                        self._refresh_cascade_after_types()
+                    self.update_live_count()
+            elif et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                handled = self._drag_btn is not None
+                self._drag_active = False
+                self._drag_layout = None
+                self._drag_btn = None
+                if handled:
+                    return True
+        return super().eventFilter(source, event)
+
+    @staticmethod
+    def _pill_at(layout, pos):
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if w and w.geometry().contains(pos):
+                return w
+        return None
+
+    @staticmethod
+    def _sec_to_qtime(seconds):
+        h = min(23, seconds // 3600)
+        m = (seconds % 3600) // 60
+        s = seconds % 60
+        return QTime(h, m, s)
+
+    @staticmethod
+    def _qtime_to_sec(qt):
+        return qt.hour() * 3600 + qt.minute() * 60 + qt.second()
+
+    @staticmethod
+    def _parse_row_datetime(text):
+        return parse_clip_datetime_text(text)
+
+    @staticmethod
+    def _parse_row_duration(text):
+        txt = text or ""
+        h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
+        m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
+        s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
+        return h * 3600 + m * 60 + s
+
+    def _get_checked_names(self, layout):
+        names = []
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if w and w.isChecked():
+                names.append(w.property("raw_name"))
+        return names
+
+    def _compute_stats(self, games=None, types=None):
+        table = self.app.ui.table_clips
         unique_types = set()
         min_sec = 999999
         max_sec = 0
@@ -395,143 +559,226 @@ class FilterMenu(QWidget):
 
         for row in range(table.rowCount()):
             g_item = table.item(row, 0)
-            if g_item:
-                name = g_item.text().strip()
-                if name not in unique_games: unique_games[name] = g_item.icon()
-
-            # Smart Type Collection
             t_item = table.item(row, 1)
-            if t_item and t_item.text().strip():
-                unique_types.add(t_item.text().strip())
+            game = g_item.text().strip() if g_item else ""
+            typ = t_item.text().strip() if t_item else ""
+
+            if games is not None and game not in games:
+                continue
+            if types is not None:
+                if not types:
+                    continue
+                if typ and typ not in types:
+                    continue
+
+            if typ:
+                unique_types.add(typ)
 
             dt_item = table.item(row, 2)
             if dt_item:
-                raw_dt_str = re.sub(r'\s+', ' ', dt_item.text().strip())
-                dt_obj = None
-                try: dt_obj = datetime.strptime(raw_dt_str, "%d %B %Y %I:%M %p")
-                except:
-                    try: dt_obj = datetime.strptime(raw_dt_str, "%d %B %Y")
-                    except: pass
-                
-                if dt_obj:
-                    q_dt = QDateTime(dt_obj.year, dt_obj.month, dt_obj.day, dt_obj.hour, dt_obj.minute, dt_obj.second)
-                    if min_dt is None or q_dt < min_dt: min_dt = q_dt
-                    if max_dt is None or q_dt > max_dt: max_dt = q_dt
+                q_dt = self._parse_row_datetime(dt_item.text())
+                if q_dt:
+                    if min_dt is None or q_dt < min_dt:
+                        min_dt = q_dt
+                    if max_dt is None or q_dt > max_dt:
+                        max_dt = q_dt
 
             d_item = table.item(row, 3)
             if d_item:
-                txt = d_item.text()
-                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-                total_sec = h * 3600 + m * 60 + s
-                if total_sec < min_sec: min_sec = total_sec
-                if total_sec > max_sec: max_sec = total_sec
+                total_sec = self._parse_row_duration(d_item.text())
+                if total_sec < min_sec:
+                    min_sec = total_sec
+                if total_sec > max_sec:
+                    max_sec = total_sec
 
-        # 1. Clean the old discs.
-        while self.games_layout.count():
-            item = self.games_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-            
+        if min_sec == 999999:
+            min_sec = 0
+
+        return {
+            'types': unique_types,
+            'min_dt': min_dt,
+            'max_dt': max_dt,
+            'min_sec': min_sec,
+            'max_sec': max_sec,
+        }
+
+    def _sync_type_memory(self):
+        for i in range(self.types_layout.count()):
+            w = self.types_layout.itemAt(i).widget()
+            if w:
+                self._type_checked_memory[w.property("raw_name")] = w.isChecked()
+
+    def _rebuild_type_buttons(self, available_types):
+        # Capture the live pill states first, then rebuild from remembered states.
+        self._sync_type_memory()
+
         while self.types_layout.count():
             item = self.types_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-            
-        # --- 2. NEW SMART BUTTON STYLES (Based on Refresh Button) ---
-        new_btn_style = """
-            QPushButton {
-                background-color: #383838;
-                color: #aaaaaa;
-                border: 2px solid #444444;
-                border-radius: 10px;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 4px 12px;
-                min-height: 24px;
-            }
-            QPushButton:hover {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #555555;
-            }
-            QPushButton:checked {
-                background-color: #404040;
-                color: #ffffff;
-                border: 2px solid #6b5a8e;
-            }
-            QPushButton:checked:hover {
-                background-color: #3a324a;
-                border: 2px solid #b29ae7;
-            }
-        """
-        
-        # 2. Generating IG circles
+            if item.widget():
+                item.widget().deleteLater()
+
+        for t_name in sorted(available_types):
+            short_name = t_name[:12] + '...' if len(t_name) > 12 else t_name
+            btn = QPushButton(f" {short_name}")
+            btn.setCheckable(True)
+            checked = self._type_checked_memory.get(t_name, True)
+            btn.setChecked(checked)
+            self._type_checked_memory[t_name] = checked
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
+            btn.setProperty("raw_name", t_name)
+            btn.clicked.connect(self._on_type_toggled)
+            self.types_layout.addWidget(btn)
+
+    def _apply_bounds(self, stats, *, clamp=False):
+        min_dt = stats['min_dt']
+        max_dt = stats['max_dt']
+        min_sec = stats['min_sec']
+        max_sec = stats['max_sec']
+
+        if min_dt is None:
+            min_dt = QDateTime.currentDateTime().addMonths(-1)
+        if max_dt is None:
+            max_dt = QDateTime.currentDateTime()
+
+        # Decide auto-vs-manual BEFORE overwriting the stored extent: a bound is
+        # "auto" while it still sits exactly on the previous actual extent (the user
+        # never dragged it). An auto bound keeps following the data extent; a manual
+        # bound is preserved and only reset when it becomes impossible.
+        prev_min_dt = getattr(self, 'actual_min_dt', None)
+        prev_max_dt = getattr(self, 'actual_max_dt', None)
+        prev_min_sec = getattr(self, 'actual_min_sec', None)
+        prev_max_sec = getattr(self, 'actual_max_sec', None)
+
+        auto_min_date = prev_min_dt is not None and self.input_min_date.date() == prev_min_dt.date()
+        auto_max_date = prev_max_dt is not None and self.input_max_date.date() == prev_max_dt.date()
+        cur_min_dur = self._qtime_to_sec(self.input_min_dur.time())
+        cur_max_dur = self._qtime_to_sec(self.input_max_dur.time())
+        auto_min_dur = prev_min_sec is not None and cur_min_dur == prev_min_sec
+        auto_max_dur = prev_max_sec is not None and cur_max_dur == prev_max_sec
+
+        self.actual_min_dt = min_dt
+        self.actual_max_dt = max_dt
+        self.actual_min_sec = min_sec
+        self.actual_max_sec = max_sec
+
+        if not clamp or stats['min_dt'] is None:
+            return
+
+        self._is_gathering = True
+
+        # Date: snap if untouched, or if the manual value is now impossible.
+        if auto_min_date or self.input_min_date.date() > max_dt.date():
+            self.input_min_date.setDate(min_dt.date())
+        if auto_max_date or self.input_max_date.date() < min_dt.date():
+            self.input_max_date.setDate(max_dt.date())
+
+        # Duration: same rule.
+        if auto_min_dur or cur_min_dur > max_sec:
+            self.input_min_dur.setTime(self._sec_to_qtime(min_sec))
+        if auto_max_dur or cur_max_dur < min_sec:
+            self.input_max_dur.setTime(self._sec_to_qtime(max_sec))
+
+        self._is_gathering = False
+
+    def _on_game_toggled(self):
+        self._refresh_cascade_after_games()
+        self.update_live_count()
+
+    def _on_type_toggled(self):
+        self._refresh_cascade_after_types()
+        self.update_live_count()
+
+    def _refresh_cascade_after_games(self):
+        if getattr(self, '_is_gathering', False):
+            return
+        games = self._get_checked_names(self.games_layout)
+        if not games:
+            self._rebuild_type_buttons(set())
+            # Nothing selected — blank the duration so it doesn't show a leftover value.
+            self._is_gathering = True
+            self.input_min_dur.setTime(QTime(0, 0, 0))
+            self.input_max_dur.setTime(QTime(0, 0, 0))
+            self._is_gathering = False
+            return
+
+        stats = self._compute_stats(games=games)
+        # Type pills follow their remembered checked state (see _rebuild_type_buttons).
+        self._rebuild_type_buttons(stats['types'])
+
+        active_types = self._get_checked_names(self.types_layout)
+        if not active_types:
+            return
+        bounds_stats = self._compute_stats(games=games, types=active_types)
+        self._apply_bounds(bounds_stats, clamp=True)
+
+    def _refresh_cascade_after_types(self):
+        if getattr(self, '_is_gathering', False):
+            return
+        games = self._get_checked_names(self.games_layout)
+        if not games:
+            return
+        types = self._get_checked_names(self.types_layout)
+        if not types:
+            return
+        stats = self._compute_stats(games=games, types=types)
+        self._apply_bounds(stats, clamp=True)
+
+    def gather_statistics(self, app_window):
+        self.app = app_window
+        table = self.app.ui.table_clips
+
+        unique_games = {}
+        for row in range(table.rowCount()):
+            g_item = table.item(row, 0)
+            if g_item:
+                name = g_item.text().strip()
+                if name not in unique_games:
+                    unique_games[name] = g_item.icon()
+
+        full_stats = self._compute_stats()
+
+        while self.games_layout.count():
+            item = self.games_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        saved_state = getattr(self.app, 'saved_filter_state', None)
         for name, icon in unique_games.items():
             short_name = name[:14] + '...' if len(name) > 14 else name
             btn = QPushButton(icon, f" {short_name}")
             btn.setCheckable(True)
-            saved_state = getattr(self.app, 'saved_filter_state', None)
             if saved_state and 'games' in saved_state:
                 btn.setChecked(name in saved_state['games'])
             else:
                 btn.setChecked(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(new_btn_style)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_name", name)
-            btn.clicked.connect(self.update_live_count)
+            btn.clicked.connect(self._on_game_toggled)
             self.games_layout.addWidget(btn)
 
-        # 3. Generating TYPE circles
-        for t_name in sorted(list(unique_types)):
-            short_name = t_name[:12] + '...' if len(t_name) > 12 else t_name
-            btn = QPushButton(f" {short_name}")
-            btn.setCheckable(True)
-            saved_state = getattr(self.app, 'saved_filter_state', None)
-            if saved_state and 'types' in saved_state:
-                btn.setChecked(t_name in saved_state['types'])
-            else:
-                btn.setChecked(True)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(new_btn_style)
-            btn.setProperty("raw_name", t_name)
-            btn.clicked.connect(self.update_live_count)
-            self.types_layout.addWidget(btn)
+        # Seed the type memory: from the saved state if present, otherwise all on.
+        if saved_state and 'types' in saved_state:
+            saved_types = set(saved_state['types'])
+            self._type_checked_memory = {t: (t in saved_types) for t in full_stats['types']}
+        else:
+            self._type_checked_memory = {t: True for t in full_stats['types']}
 
-
-        
-        # --- 3. SETTING NATIVE QT VALUES ---
-        
-        
+        min_dt = full_stats['min_dt']
+        max_dt = full_stats['max_dt']
+        min_sec = full_stats['min_sec']
+        max_sec = full_stats['max_sec']
         if not min_dt:
             min_dt = QDateTime.currentDateTime().addMonths(-1)
             max_dt = QDateTime.currentDateTime()
-            
-        # Filling out calendars
-        self.input_min_date.setDate(min_dt.date())
-        self.input_max_date.setDate(max_dt.date())
-        
-        # Filling in the time (AM/PM)
-        self.input_min_time.setTime(QTime(0, 0))
-        self.input_max_time.setTime(QTime(23, 59))
-        
-        # Fill in the duration 
-        if min_sec == 999999: min_sec = 0
-        
-        # --- CLEAR BUTTON FIX: Store the actual clip boundarie
+
         self.actual_min_dt = min_dt
         self.actual_max_dt = max_dt
         self.actual_min_sec = min_sec
         self.actual_max_sec = max_sec
-        
-        def sec_to_qtime(seconds):
-            h = seconds // 3600
-            m = (seconds % 3600) // 60
-            s = seconds % 60
-            if h > 23: h = 23; m = 59; s = 59 # Lockout due to exceeding 24 hours
-            return QTime(h, m, s)
 
-        saved_state = getattr(self.app, 'saved_filter_state', None)
+        self._is_gathering = True
         if saved_state:
             self.input_min_date.setDate(saved_state['min_date'])
             self.input_max_date.setDate(saved_state['max_date'])
@@ -540,22 +787,13 @@ class FilterMenu(QWidget):
             self.input_min_dur.setTime(saved_state['min_dur'])
             self.input_max_dur.setTime(saved_state['max_dur'])
         else:
-            # Otherwise, set default limits.
             self.input_min_date.setDate(min_dt.date())
             self.input_max_date.setDate(max_dt.date())
             self.input_min_time.setTime(QTime(0, 0))
             self.input_max_time.setTime(QTime(23, 59))
-            
-            if min_sec == 999999: min_sec = 0
-            def sec_to_qtime(seconds):
-                h = min(23, seconds // 3600); m = (seconds % 3600) // 60; s = seconds % 60
-                return QTime(h, m, s)
-
-            self.input_min_dur.setTime(sec_to_qtime(min_sec))
-            self.input_max_dur.setTime(sec_to_qtime(max_sec))
-
-
-        # Move this out of the else block so it works on the second opening too!
+            self.input_min_dur.setTime(self._sec_to_qtime(min_sec))
+            self.input_max_dur.setTime(self._sec_to_qtime(max_sec))
+        self._is_gathering = False
 
         self.input_min_date.dateChanged.connect(self.update_live_count)
         self.input_max_date.dateChanged.connect(self.update_live_count)
@@ -564,42 +802,37 @@ class FilterMenu(QWidget):
         self.input_min_dur.timeChanged.connect(self.update_live_count)
         self.input_max_dur.timeChanged.connect(self.update_live_count)
 
-        self._is_gathering = False
+        self._refresh_cascade_after_games()
         self.update_live_count()
 
     def clear_filters(self):
         """ Resets all buttons and calendars to ACTUAL minimums. """
         self._is_gathering = True
-        
+
         for i in range(self.games_layout.count()):
             w = self.games_layout.itemAt(i).widget()
-            if w: w.setChecked(True)
-            
-        for i in range(self.types_layout.count()):
-            w = self.types_layout.itemAt(i).widget()
-            if w: w.setChecked(True)
-            
-        # Bringing back the REAL dates and times for the clips!
-        if hasattr(self, 'actual_min_dt') and self.actual_min_dt:
-            self.input_min_date.setDate(self.actual_min_dt.date())
-            self.input_max_date.setDate(self.actual_max_dt.date())
-        else:
-            self.input_min_date.setDate(self.input_min_date.minimumDate())
-            self.input_max_date.setDate(self.input_max_date.maximumDate())
-        
+            if w:
+                w.setChecked(True)
+
+        full_stats = self._compute_stats()
+        # Clear = everything on: reset the type memory to all-checked, then rebuild.
+        self._type_checked_memory = {t: True for t in full_stats['types']}
+        self._rebuild_type_buttons(full_stats['types'])
+
+        min_dt = full_stats['min_dt'] or QDateTime.currentDateTime().addMonths(-1)
+        max_dt = full_stats['max_dt'] or QDateTime.currentDateTime()
+        self.actual_min_dt = min_dt
+        self.actual_max_dt = max_dt
+        self.actual_min_sec = full_stats['min_sec']
+        self.actual_max_sec = full_stats['max_sec']
+
+        self.input_min_date.setDate(min_dt.date())
+        self.input_max_date.setDate(max_dt.date())
         self.input_min_time.setTime(QTime(0, 0))
         self.input_max_time.setTime(QTime(23, 59))
-        
-        if hasattr(self, 'actual_min_sec'):
-            def sec_to_qtime(seconds):
-                h = min(23, seconds // 3600); m = (seconds % 3600) // 60; s = seconds % 60
-                return QTime(h, m, s)
-            self.input_min_dur.setTime(sec_to_qtime(self.actual_min_sec))
-            self.input_max_dur.setTime(sec_to_qtime(self.actual_max_sec))
-        else:
-            self.input_min_dur.setTime(QTime(0, 0))
-            self.input_max_dur.setTime(QTime(23, 59, 59))
-        
+        self.input_min_dur.setTime(self._sec_to_qtime(full_stats['min_sec']))
+        self.input_max_dur.setTime(self._sec_to_qtime(full_stats['max_sec']))
+
         self._is_gathering = False
         self.update_live_count()
 
@@ -607,18 +840,19 @@ class FilterMenu(QWidget):
         """ Safely counts suitable clips in real time. """
         if getattr(self, '_is_gathering', False) or not hasattr(self, 'app'): return
         table = self.app.ui.table_clips
-        
 
-        sel_games = [self.games_layout.itemAt(i).widget().property("raw_name") for i in range(self.games_layout.count()) if self.games_layout.itemAt(i).widget().isChecked()]
-        if not sel_games: sel_games = [self.games_layout.itemAt(i).widget().property("raw_name") for i in range(self.games_layout.count())]
+        sel_games = self._get_checked_names(self.games_layout)
+        sel_types = self._get_checked_names(self.types_layout)
 
-        sel_types = [self.types_layout.itemAt(i).widget().property("raw_name") for i in range(self.types_layout.count()) if self.types_layout.itemAt(i).widget().isChecked()]
-        if not sel_types: sel_types = [self.types_layout.itemAt(i).widget().property("raw_name") for i in range(self.types_layout.count())]
+        if not sel_games or not sel_types:
+            self.btn_apply.setText("Apply Filters (0)")
+            return
 
         min_date, max_date = self.input_min_date.date(), self.input_max_date.date()
-        def qt_sec(qt): return qt.hour() * 3600 + qt.minute() * 60 + qt.second()
-        min_time, max_time = qt_sec(self.input_min_time.time()), qt_sec(self.input_max_time.time())
-        min_dur, max_dur = qt_sec(self.input_min_dur.time()), qt_sec(self.input_max_dur.time())
+        min_time = self._qtime_to_sec(self.input_min_time.time())
+        max_time = self._qtime_to_sec(self.input_max_time.time())
+        min_dur = self._qtime_to_sec(self.input_min_dur.time())
+        max_dur = self._qtime_to_sec(self.input_max_dur.time())
 
         count = 0
         for row in range(table.rowCount()):
@@ -632,29 +866,20 @@ class FilterMenu(QWidget):
             if show and r_t and r_t.text().strip() not in sel_types: show = False
 
             if show and r_d:
-                raw_dt = re.sub(r'\s+', ' ', r_d.text().strip())
-                dt_obj = None
-                try: dt_obj = datetime.strptime(raw_dt, "%d %B %Y %I:%M %p")
-                except: 
-                    try: dt_obj = datetime.strptime(raw_dt, "%d %B %Y")
-                    except: pass
-                if dt_obj:
-                    q_d = QDate(dt_obj.year, dt_obj.month, dt_obj.day)
+                q_dt = self._parse_row_datetime(r_d.text())
+                if q_dt:
+                    q_d = q_dt.date()
                     if min_date.isValid() and q_d < min_date: show = False
                     if max_date.isValid() and q_d > max_date: show = False
-                    t_sec = dt_obj.hour * 3600 + dt_obj.minute * 60
-                    if min_time is not None and t_sec < min_time: show = False
-                    if max_time is not None and t_sec > max_time: show = False
+                    t_sec = q_dt.time().hour() * 3600 + q_dt.time().minute() * 60 + q_dt.time().second()
+                    if t_sec < min_time: show = False
+                    if t_sec > max_time: show = False
 
             if show and r_dur:
-                txt = r_dur.text()
-                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-                sec = h * 3600 + m * 60 + s
-                if min_dur is not None and sec < min_dur: show = False
-                if max_dur is not None and sec > max_dur: show = False
-            
+                sec = self._parse_row_duration(r_dur.text())
+                if sec < min_dur: show = False
+                if sec > max_dur: show = False
+
             if show: count += 1
 
         self.btn_apply.setText(f"Apply Filters ({count})")
@@ -663,26 +888,12 @@ class FilterMenu(QWidget):
         """ LIGHTNING FAST FILTERING (NO SORTING, NO LAGS) """
         if not hasattr(self, 'app'): return
         table = self.app.ui.table_clips
-            
-        
+
         table.setUpdatesEnabled(False)
 
-        # 1. Read filters
-        selected_games = []
-        for i in range(self.games_layout.count()):
-            btn = self.games_layout.itemAt(i).widget()
-            if btn and btn.isChecked(): selected_games.append(btn.property("raw_name"))
-        if not selected_games: selected_games = [self.games_layout.itemAt(i).widget().property("raw_name") for i in range(self.games_layout.count())]
+        selected_games = self._get_checked_names(self.games_layout)
+        selected_types = self._get_checked_names(self.types_layout)
 
-        selected_types = []
-        for i in range(self.types_layout.count()):
-            btn = self.types_layout.itemAt(i).widget()
-            if btn and btn.isChecked(): selected_types.append(btn.property("raw_name"))
-        if not selected_types:
-            for i in range(self.types_layout.count()):
-                btn = self.types_layout.itemAt(i).widget()
-                if btn: btn.setChecked(True); selected_types.append(btn.property("raw_name"))
-        
         self.app.saved_filter_state = {
             'games': selected_games,
             'types': selected_types,
@@ -694,57 +905,45 @@ class FilterMenu(QWidget):
             'max_dur': self.input_max_dur.time()
         }
 
-        min_date = self.input_min_date.date()
-        max_date = self.input_max_date.date()
-
-        def qtime_to_sec(qt):
-            return qt.hour() * 3600 + qt.minute() * 60 + qt.second()
-
-        min_time = qtime_to_sec(self.input_min_time.time())
-        max_time = qtime_to_sec(self.input_max_time.time())
-        
-        min_dur = qtime_to_sec(self.input_min_dur.time())
-        max_dur = qtime_to_sec(self.input_max_dur.time())
-
-        # 2. SIMPLY HIDING AND SHOWING ROWS (Without retrieving anything from memory!)
         visible_count = 0
-        for row in range(table.rowCount()):
-            show = True
-            item_game = table.item(row, 0)
-            item_type = table.item(row, 1)
-            item_date = table.item(row, 2)
-            item_dur = table.item(row, 3)
+        if not selected_games or not selected_types:
+            for row in range(table.rowCount()):
+                table.setRowHidden(row, True)
+        else:
+            min_date = self.input_min_date.date()
+            max_date = self.input_max_date.date()
+            min_time = self._qtime_to_sec(self.input_min_time.time())
+            max_time = self._qtime_to_sec(self.input_max_time.time())
+            min_dur = self._qtime_to_sec(self.input_min_dur.time())
+            max_dur = self._qtime_to_sec(self.input_max_dur.time())
 
-            if show and item_game and item_game.text().strip() not in selected_games: show = False
-            if show and item_type and item_type.text().strip() not in selected_types: show = False
+            for row in range(table.rowCount()):
+                show = True
+                item_game = table.item(row, 0)
+                item_type = table.item(row, 1)
+                item_date = table.item(row, 2)
+                item_dur = table.item(row, 3)
 
-            if show and item_date:
-                raw_dt = re.sub(r'\s+', ' ', item_date.text().strip())
-                dt_obj = None
-                try: dt_obj = datetime.strptime(raw_dt, "%d %B %Y %I:%M %p")
-                except: 
-                    try: dt_obj = datetime.strptime(raw_dt, "%d %B %Y")
-                    except: pass
-                if dt_obj:
-                    r_date = QDate(dt_obj.year, dt_obj.month, dt_obj.day)
-                    if min_date and r_date < min_date: show = False
-                    if max_date and r_date > max_date: show = False
-                    r_time = dt_obj.hour * 3600 + dt_obj.minute * 60
-                    if min_time is not None and r_time < min_time: show = False
-                    if max_time is not None and r_time > max_time: show = False
+                if show and item_game and item_game.text().strip() not in selected_games: show = False
+                if show and item_type and item_type.text().strip() not in selected_types: show = False
 
-            if show and item_dur:
-                txt = item_dur.text()
-                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-                r_dur = h * 3600 + m * 60 + s
-                if min_dur is not None and r_dur < min_dur: show = False
-                if max_dur is not None and r_dur > max_dur: show = False
-            
-            # Applying visibility
-            table.setRowHidden(row, not show)
-            if show: visible_count += 1
+                if show and item_date:
+                    q_dt = self._parse_row_datetime(item_date.text())
+                    if q_dt:
+                        r_date = q_dt.date()
+                        if min_date.isValid() and r_date < min_date: show = False
+                        if max_date.isValid() and r_date > max_date: show = False
+                        r_time = q_dt.time().hour() * 3600 + q_dt.time().minute() * 60 + q_dt.time().second()
+                        if r_time < min_time: show = False
+                        if r_time > max_time: show = False
+
+                if show and item_dur:
+                    r_dur = self._parse_row_duration(item_dur.text())
+                    if r_dur < min_dur: show = False
+                    if r_dur > max_dur: show = False
+
+                table.setRowHidden(row, not show)
+                if show: visible_count += 1
 
         self.btn_apply.setText(f"Apply Filters ({visible_count})")
         

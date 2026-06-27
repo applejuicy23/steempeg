@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.core import games
 from steempeg.core.dash import discovery, mpd
+from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
 
@@ -547,13 +548,13 @@ class LibraryMixin:
                         dt_local = dt_utc.astimezone()
                         
                         # 4. Unpack back into beautiful formats for the interface
-                        formatted_date = dt_local.strftime("%d %B %Y")
-                        formatted_time = dt_local.strftime("%I:%M %p")
+                        formatted_date = format_clip_date(dt_local)
+                        formatted_time = format_clip_time(dt_local)
                     except Exception as e:
                         # If the folder is named incorrectly, use the old fallback option.
-                        try: formatted_date = datetime.strptime(parts[2], "%Y%m%d").strftime("%d %B %Y")
+                        try: formatted_date = format_clip_date(datetime.strptime(parts[2], "%Y%m%d"))
                         except: formatted_date = parts[2]
-                        try: formatted_time = datetime.strptime(parts[3], "%H%M%S").strftime("%I:%M %p")
+                        try: formatted_time = format_clip_time(datetime.strptime(parts[3], "%H%M%S"))
                         except: formatted_time = ""
 
 
@@ -714,12 +715,16 @@ class LibraryMixin:
         # 2. Creating a brand-new menu from scratch
         self.filter_menu = FilterMenu(self.ui)
         self.filter_menu.gather_statistics(self)
-        
-        # 3. Positioning and showcasing
+
         button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
         x_shift = self.filter_menu.width() - self.btn_filter_pill.width()
-        
-        self.filter_menu.move(button_bottom_left.x() - x_shift + 10, button_bottom_left.y() + 5)
+        menu_y = button_bottom_left.y() + 5
+        self.filter_menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
+
+        if hasattr(self, 'btn_refresh'):
+            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
+            self.filter_menu.set_content_max_height(max(160, footer_top - menu_y - 8))
+
         self.filter_menu.show()
 
     def apply_sorting(self):
@@ -760,10 +765,10 @@ class LibraryMixin:
                 
             if sort_idx in (5, 6): # DATE
                 txt = re.sub(r'\s+', ' ', r[2].text().strip()) if r[2] else ""
-                try: return datetime.strptime(txt, "%d %B %Y %I:%M %p").timestamp()
-                except:
-                    try: return datetime.strptime(txt, "%d %B %Y").timestamp()
-                    except: return 0
+                qdt = parse_clip_datetime_text(txt)
+                if qdt is not None:
+                    return qdt.toSecsSinceEpoch()
+                return 0
                     
             if sort_idx in (7, 8): # DURATION
                 txt = r[3].text() if r[3] else ""
