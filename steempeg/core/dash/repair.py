@@ -19,75 +19,161 @@ _AUDIO_CHUNK_DUR = 144000
 _CHUNK_SECONDS = 3.0
 
 
-def fix_steam_manifest(mpd_path):
-    """Patch a Steam session.mpd whose early chunks were dropped by the rolling buffer.
+def _stream_chunk_numbers(folder, stream_idx):
+    """Sorted list of non-empty chunk numbers for chunk-stream{idx}-NNNNN.m4s on disk."""
+    nums = []
+    for c in glob.glob(os.path.join(folder, f"chunk-stream{stream_idx}-*.m4s")):
+        try:
+            if os.path.getsize(c) <= 0:
+                continue
+        except OSError:
+            continue
+        m = re.search(rf'chunk-stream{stream_idx}-(\d+)\.m4s', os.path.basename(c))
+        if m:
+            nums.append(int(m.group(1)))
+    return sorted(nums)
 
-    Numbering may start above 1, which leaves the offsets and duration wrong. We rewrite
-    the per-track presentation offsets, the startNumber, and the total duration, then save
-    it as session_fixed.mpd. Returns the fixed path, or the original if nothing to fix.
+
+def _u32(b, o):
+    return int.from_bytes(b[o:o + 4], "big")
+
+
+def _mdhd_timescale(init_path):
+    """Read the media timescale from an init segment's mdhd box (None on failure)."""
+    try:
+        with open(init_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    i = data.find(b"mdhd")
+    if i < 0:
+        return None
+    p = i + 4  # payload starts right after the box type
+    version = data[p]
+    ts_off = p + 20 if version == 1 else p + 12  # skip ver/flags + creation + modified
+    if ts_off + 4 > len(data):
+        return None
+    return _u32(data, ts_off)
+
+
+def _tfdt_base_time(chunk_path):
+    """Read baseMediaDecodeTime from a fragment's tfdt box (None on failure)."""
+    try:
+        with open(chunk_path, "rb") as f:
+            data = f.read(8192)  # tfdt lives in the leading moof, no need to read it all
+    except OSError:
+        return None
+    i = data.find(b"tfdt")
+    if i < 0:
+        return None
+    p = i + 4
+    version = data[p]
+    if version == 1:
+        if p + 12 > len(data):
+            return None
+        return int.from_bytes(data[p + 4:p + 12], "big")
+    if p + 8 > len(data):
+        return None
+    return _u32(data, p + 4)
+
+
+def _segment_start_ticks(folder, stream_idx, first_num, template_timescale):
+    """Real media-time start of a track's first fragment, in the template's timescale.
+
+    Steam fragments carry a non-zero baseMediaDecodeTime (e.g. ~6.01s). If the manifest
+    pretends segments start at 0, mpv's playback timeline drifts by that amount after a
+    seek (the "+6s" bug). We read the actual start so the SegmentTimeline can declare it.
+    Returns an int tick count, or None if the boxes can't be read.
+    """
+    init_path = os.path.join(folder, f"init-stream{stream_idx}.m4s")
+    chunk_path = os.path.join(folder, f"chunk-stream{stream_idx}-{first_num:05d}.m4s")
+    media_ts = _mdhd_timescale(init_path)
+    base = _tfdt_base_time(chunk_path)
+    if not media_ts or base is None:
+        return None
+    start_seconds = base / media_ts
+    return int(round(start_seconds * template_timescale))
+
+
+def fix_steam_manifest(mpd_path):
+    """Rewrite a Steam session.mpd so ffmpeg's DASH demuxer plays the whole clip.
+
+    Steam ships a live-profile SegmentTemplate with a bare ``duration``/``startNumber``
+    and a non-zero ``<Period start>``. ffmpeg can't derive the segment count from that:
+    it reads only the FIRST chunk, hits a premature EOF, and any seek back then fails
+    with "Error when loading first fragment" (which used to wedge playback entirely).
+
+    The fix is to enumerate the chunks actually on disk as an explicit ``<SegmentTimeline>``
+    and pin the period to ``start="PT0S"``. We keep each track's own timescale/duration and
+    the original ``mediaPresentationDuration`` (used elsewhere for the clip length). Saved as
+    session_fixed.mpd; returns that path, or the original on any failure.
     """
     folder = os.path.dirname(mpd_path)
-    chunks = glob.glob(os.path.join(folder, "chunk-stream0-*.m4s"))
-    if not chunks:
+    v_nums = _stream_chunk_numbers(folder, 0)
+    if not v_nums:
         return mpd_path
-
-    numbers = []
-    for c in chunks:
-        m = re.search(r'chunk-stream0-(\d+)\.m4s', os.path.basename(c))
-        if m:
-            numbers.append(int(m.group(1)))
-    if not numbers:
-        return mpd_path
-    min_chunk = min(numbers)
+    a_nums = _stream_chunk_numbers(folder, 1)
 
     try:
         with open(mpd_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # video and audio have different timescales, so each SegmentTemplate gets its
-        # own offset based on its own duration. compute it per tag.
-        def inject_offset(match):
-            tag = match.group(0)
-            ts_m = re.search(r'timescale="(\d+)"', tag)
-            dur_m = re.search(r'duration="(\d+)"', tag)
-            if ts_m and dur_m:
-                dur = int(dur_m.group(1))
-                track_offset = (min_chunk - 1) * dur
-                if 'presentationTimeOffset=' in tag:
-                    return re.sub(r'presentationTimeOffset="\d+"',
-                                  f'presentationTimeOffset="{track_offset}"', tag)
-                return tag.replace('<SegmentTemplate ',
-                                   f'<SegmentTemplate presentationTimeOffset="{track_offset}" ')
-            return tag
+        # 1) Pin the period to time 0. Steam's "start=PT8.119S" desyncs the demuxer's
+        #    timeline against the fragments' own timestamps.
+        content = re.sub(r'(<Period\b[^>]*?\bstart=")PT[^"]*(")', r'\g<1>PT0S\g<2>', content)
 
-        content = re.sub(r'<SegmentTemplate\s+[^>]+>', inject_offset, content)
+        # 2) Give each track an explicit SegmentTimeline covering every chunk it has.
+        #    contentType (or the mimeType) tells us video (stream0) from audio (stream1).
+        def patch_adaptation_set(as_match):
+            block = as_match.group(0)
+            is_audio = 'contentType="audio"' in block or 'audio/mp4' in block
+            stream_idx = 1 if is_audio else 0
+            nums = (a_nums or v_nums) if is_audio else v_nums
+            if not nums:
+                return block
+            start_num = nums[0]
+            count = len(nums)
 
-        # tell the player which chunk to start from
-        content = re.sub(r'startNumber="\d+"', f'startNumber="{min_chunk}"', content)
+            def patch_template(t_match):
+                tag = t_match.group(0)
+                dur_m = re.search(r'duration="(\d+)"', tag)
+                ts_m = re.search(r'timescale="(\d+)"', tag)
+                if not dur_m:
+                    return tag
+                seg_dur = dur_m.group(1)
+                template_ts = int(ts_m.group(1)) if ts_m else 1000000
 
-        # only shorten the total duration if Steam actually dropped chunks
-        if min_chunk > 1:
-            ts_match = re.search(r'timescale="(\d+)"', content)
-            dur_match = re.search(r'duration="(\d+)"', content)
-            mpd_dur_match = re.search(
-                r'mediaPresentationDuration="PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?"', content)
-            if ts_match and dur_match and mpd_dur_match:
-                chunk_seconds = float(dur_match.group(1)) / float(ts_match.group(1))
-                deleted_sec = (min_chunk - 1) * chunk_seconds
+                if 'startNumber=' in tag:
+                    tag = re.sub(r'startNumber="\d+"', f'startNumber="{start_num}"', tag)
+                else:
+                    tag = tag.replace('<SegmentTemplate ',
+                                      f'<SegmentTemplate startNumber="{start_num}" ', 1)
 
-                h = float(mpd_dur_match.group(1)) if mpd_dur_match.group(1) else 0
-                m = float(mpd_dur_match.group(2)) if mpd_dur_match.group(2) else 0
-                s = float(mpd_dur_match.group(3)) if mpd_dur_match.group(3) else 0
-                original_total = h * 3600 + m * 60 + s
-                new_total = max(0.0, original_total - deleted_sec)
+                # Anchor the timeline to the fragments' real start time so displayed
+                # time is 0-based AND stays consistent across seeks. Falls back to 0
+                # if the boxes can't be read (clip still plays; seek may drift).
+                anchor = _segment_start_ticks(folder, stream_idx, start_num, template_ts) or 0
+                tag = re.sub(r'\s*presentationTimeOffset="\d+"', '', tag)
+                if anchor:
+                    tag = tag.replace('<SegmentTemplate ',
+                                      f'<SegmentTemplate presentationTimeOffset="{anchor}" ', 1)
 
-                new_h = int(new_total // 3600)
-                new_m = int((new_total % 3600) // 60)
-                new_s = new_total % 60
-                new_pt = (f"PT{new_h}H{new_m}M{new_s:.3f}S" if new_h > 0
-                          else f"PT{new_m}M{new_s:.3f}S")
-                content = re.sub(r'mediaPresentationDuration="PT[^"]+"',
-                                 f'mediaPresentationDuration="{new_pt}"', content)
+                timeline = (f"<SegmentTimeline><S t=\"{anchor}\" d=\"{seg_dur}\" "
+                            f"r=\"{count - 1}\"/></SegmentTimeline>")
+
+                stripped = tag.rstrip()
+                if stripped.endswith('/>'):
+                    open_tag = stripped[:-2].rstrip() + '>'
+                    return f"{open_tag}{timeline}</SegmentTemplate>"
+                # already a container tag: drop any existing timeline, inject ours
+                body = re.sub(r'<SegmentTimeline>.*?</SegmentTimeline>', '', tag, flags=re.DOTALL)
+                return re.sub(r'>', '>' + timeline, body, count=1)
+
+            return re.sub(r'<SegmentTemplate\b[^>]*?/>|<SegmentTemplate\b[^>]*?>',
+                          patch_template, block, count=1)
+
+        content = re.sub(r'<AdaptationSet\b.*?</AdaptationSet>', patch_adaptation_set,
+                         content, flags=re.DOTALL)
 
         fixed_path = os.path.join(folder, "session_fixed.mpd")
         with open(fixed_path, "w", encoding="utf-8") as f:
@@ -145,15 +231,19 @@ def recover_orphaned_clip(folder_path):
             a_start = min(a_nums)
             has_audio = True
 
-    v_offset = (v_start - 1) * _VIDEO_CHUNK_DUR
+    # Explicit per-track timelines so ffmpeg reads every chunk (a bare duration makes
+    # it stop after the first segment — the same bug fix_steam_manifest works around).
+    v_count = len(v_nums)
+    v_timeline = f'<SegmentTimeline><S t="0" d="{_VIDEO_CHUNK_DUR}" r="{v_count - 1}"/></SegmentTimeline>'
 
     audio_block = ""
     if has_audio:
-        a_offset = (a_start - 1) * _AUDIO_CHUNK_DUR
+        a_count = len(a_nums)
+        a_timeline = f'<SegmentTimeline><S t="0" d="{_AUDIO_CHUNK_DUR}" r="{a_count - 1}"/></SegmentTimeline>'
         audio_block = f"""
             <AdaptationSet id="1" contentType="audio" segmentAlignment="true">
               <Representation id="1" bandwidth="192000" mimeType="audio/mp4">
-                <SegmentTemplate presentationTimeOffset="{a_offset}" timescale="{_AUDIO_TIMESCALE}" duration="{_AUDIO_CHUNK_DUR}" startNumber="{a_start}" initialization="init-stream1.m4s" media="chunk-stream1-$Number%05d$.m4s" />
+                <SegmentTemplate timescale="{_AUDIO_TIMESCALE}" startNumber="{a_start}" initialization="init-stream1.m4s" media="chunk-stream1-$Number%05d$.m4s">{a_timeline}</SegmentTemplate>
               </Representation>
             </AdaptationSet>"""
 
@@ -162,7 +252,7 @@ def recover_orphaned_clip(folder_path):
   <Period id="0" start="PT0.000S">
     <AdaptationSet id="0" contentType="video" segmentAlignment="true">
       <Representation id="0" bandwidth="10000000" mimeType="video/mp4">
-        <SegmentTemplate presentationTimeOffset="{v_offset}" timescale="{_VIDEO_TIMESCALE}" duration="{_VIDEO_CHUNK_DUR}" startNumber="{v_start}" initialization="init-stream0.m4s" media="chunk-stream0-$Number%05d$.m4s" />
+        <SegmentTemplate timescale="{_VIDEO_TIMESCALE}" startNumber="{v_start}" initialization="init-stream0.m4s" media="chunk-stream0-$Number%05d$.m4s">{v_timeline}</SegmentTemplate>
       </Representation>
     </AdaptationSet>{audio_block}
   </Period>

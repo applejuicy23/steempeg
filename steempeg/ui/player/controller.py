@@ -37,6 +37,8 @@ class PlayerMixin:
             return
 
         self._force_pause = True
+        self._eof_rewind_pending = 0
+        self._current_mpd_abs_path = None
         
         # 1. STOP THE PLAYER
         if hasattr(self, 'player') and self.player:
@@ -308,6 +310,30 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
+
+    def _reopen_current_clip_paused(self):
+        """Reload the current clip and pause on the first frame.
+
+        Recovery path for a wedged DASH demuxer: some Steam clips (a non-zero
+        Period start plus keep_open) can't be seeked back to 0 after EOF — ffmpeg
+        fails to reload the first fragment and then spins on "Invalid data found"
+        forever, killing playback for this clip and sometimes the whole player.
+        Reopening the file tears down that broken demuxer and lands cleanly on
+        frame 0. The surface already shows video_container, so there's no flash.
+        """
+        path = getattr(self, '_current_mpd_abs_path', None)
+        if not path or not hasattr(self, 'player') or not self.player:
+            return
+        try:
+            self._ignore_playback_stall(0.8)
+            self.player.play(path)
+            self.player.pause = True
+            if hasattr(self.ui, 'btn_play'):
+                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+            if hasattr(self, 'custom_timeline'):
+                self.custom_timeline.force_jump(0)
+        except Exception:
+            pass
 
     # VIDEO PLAYER CONTROLS
     def toggle_play(self):
@@ -1254,6 +1280,11 @@ class PlayerMixin:
         # A Reliable Path for Windows:
         abs_path = os.path.abspath(mpd_path).replace('\\', '/')
 
+        # Remember the source so the EOF watchdog can reopen it if a rewind wedges
+        # ffmpeg's DASH demuxer (see update_ui_from_vlc / _reopen_current_clip_paused).
+        self._current_mpd_abs_path = abs_path
+        self._eof_rewind_pending = 0
+
         self._playback_last_time_pos = None
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
@@ -1357,16 +1388,34 @@ class PlayerMixin:
                     
             current_ms = int(time_sec * 1000)
 
+            # --- WATCHDOG: recover a DASH demuxer wedged by the rewind seek ---
+            # With the anchored manifest (see repair.fix_steam_manifest) seek(0) now
+            # lands cleanly at the start. This is just a safety net: if a clip's anchor
+            # couldn't be read and the rewind seek failed to reload the first fragment,
+            # eof_reached stays set — reopen the file for a fresh demuxer instead of
+            # spinning on "Invalid data found".
+            if getattr(self, '_eof_rewind_pending', 0):
+                if getattr(self.player, 'eof_reached', False):
+                    if time.time() - self._eof_rewind_pending >= 0.15:
+                        self._eof_rewind_pending = 0
+                        self._reopen_current_clip_paused()
+                        return
+                else:
+                    self._eof_rewind_pending = 0
+
             # --- AUTO-REWIND AT THE END OF VIDEO (EOF) ---
             # If MPV flags end-of-file, or we are within 100ms of the end
-            if getattr(self.player, 'eof_reached', False) or current_ms >= duration_ms - 5:
-                self.player.pause = True 
-                self.player.seek(0, reference='absolute', precision='exact') 
-                current_ms = 0 
-                
+            if not getattr(self, '_eof_rewind_pending', 0) and (
+                getattr(self.player, 'eof_reached', False) or current_ms >= duration_ms - 5
+            ):
+                self.player.pause = True
+                self.player.seek(0, reference='absolute', precision='exact')
+                self._eof_rewind_pending = time.time()
+                current_ms = 0
+
                 if hasattr(self, 'custom_timeline'):
                     self.custom_timeline.force_jump(0)
-                    
+
                 # Change the pause button back to play
                 if hasattr(self.ui, 'btn_play'):
                     icon_path = get_resource_path("icon_play.png")
