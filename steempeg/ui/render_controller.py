@@ -967,7 +967,10 @@ class RenderMixin:
                     size_str = f"~{target_mb / 1024:.2f} GB (Target)" if target_mb >= 1000 else f"~{target_mb} MB (Target)"
             elif "Original" in bitrate_text:
                 if hasattr(self, 'current_orig_bitrate') and self.current_orig_bitrate > 0:
-                    orig_total_bitrate = (self.current_orig_bitrate * fps_multiplier) + 0.19 
+                    # Stream copy keeps the source bitrate untouched — don't scale by
+                    # fps_multiplier (a copy can't drop FPS), or the size estimate
+                    # collapses the same way the bitrate label used to show "0.0".
+                    orig_total_bitrate = self.current_orig_bitrate + 0.19
                     size_mb = (orig_total_bitrate * duration) / 8 
                     size_str = f"Same as original (~{size_mb / 1024:.2f} GB)" if size_mb >= 1000 else f"Same as original (~{size_mb:.1f} MB)"
                 else:
@@ -1024,7 +1027,17 @@ class RenderMixin:
             except:
                 video_bitrate_display = f"{orig_v_bitrate * fps_multiplier:.1f} Mbps"
         elif "Original" in bitrate_text:
-            video_bitrate_display = f"{orig_v_bitrate * fps_multiplier:.1f} Mbps"
+            # Original = stream copy: the bitrate is whatever the source already is,
+            # so it must NOT be scaled by fps_multiplier (a copy can't change FPS).
+            # Mirror the Source Info value, and fall back to the number embedded in
+            # the combo text (e.g. "~22 Mbps (Original Copy)") if the live value is
+            # missing — otherwise the FPS multiplier could collapse it to "0.0".
+            orig_mbps = orig_v_bitrate
+            if orig_mbps <= 0:
+                m = re.search(r'([\d.]+)\s*Mbps', bitrate_text)
+                if m:
+                    orig_mbps = float(m.group(1))
+            video_bitrate_display = f"{orig_mbps:.1f} Mbps" if orig_mbps > 0 else "Original copy"
         else:
             match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
             if match: 
