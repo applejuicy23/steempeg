@@ -84,6 +84,10 @@ class RenderThread(QThread):
 
         temp_files = []
         concat_file = None
+        # Tracks whether any part was produced via raw stream copy. Copied parts can
+        # inherit a corrupt Steam decode timeline, so single-file output needs a final
+        # remux pass (instead of a plain move) to rewrite clean container headers.
+        self._stream_copy_used = False
         try:
             creation_flags = 0x08000000 if sys.platform == "win32" else 0
             # Get the target extension (.mp4, .mp3, .aac) from the final output file
@@ -108,6 +112,31 @@ class RenderThread(QThread):
                     match_fps = re.search(r'(\d+)', self.fps_text)
                     if match_fps:
                         fps_arg = f"-r {match_fps.group(1)} "
+
+                # Some Steam DASH clips ship a corrupt decode timeline: the first
+                # fragment carries a baseMediaDecodeTime that is offset by hundreds of
+                # seconds from the rest (e.g. chunk-0 at 0s, chunk-1 at +944s). ffprobe
+                # and the player hide this because they trust the presentation (PTS)
+                # timeline, but a raw "-c copy" mux writes the broken DTS verbatim and
+                # the muxer pads the gap, turning a 2-minute clip into a 15-minute file
+                # with a frozen tail. +igndts tells ffmpeg to drop the source DTS and
+                # regenerate a clean monotonic one from the (correct) PTS, which fixes
+                # stream copy losslessly and is a harmless no-op for re-encodes.
+                input_fix = "-fflags +igndts "
+
+                # Companion fix for stream copy: a few Steam clips also carry one absurd
+                # multi-hundred-second jump between the first fragment and the rest
+                # (e.g. frame 0 at 0s, the rest anchored at +944s). The mp4 muxer turns
+                # that single gap into an inflated track duration (a 2-minute clip
+                # becomes a 15-minute file with a frozen tail). setts rewrites the
+                # timestamps so any gap larger than 30s collapses to one normal frame
+                # interval, while leaving real sub-30s gaps (legit capture stalls)
+                # untouched. B-frame reorder is preserved because pts keeps its original
+                # offset from dts. Applied to copy only; re-encode paths don't need it.
+                copy_ts_fix = (
+                    r"-bsf:v setts=dts='PREV_OUTDTS+if(gt(DTS-PREV_INDTS\,30000000)\,16667\,DTS-PREV_INDTS)'"
+                    r":pts='PTS-DTS+PREV_OUTDTS+if(gt(DTS-PREV_INDTS\,30000000)\,16667\,DTS-PREV_INDTS)' "
+                )
                 
 
                 
@@ -118,6 +147,7 @@ class RenderThread(QThread):
                 trim_args = ""
                 if self.trim_start_sec >= 0 and self.trim_duration_sec > 0:
                     trim_args = f"-ss {self.trim_start_sec:.3f} -t {self.trim_duration_sec:.3f} "
+                trim_args = f"{trim_args}{input_fix}"
                 
                 # 1. Prepare the audio arguments
                 if self.mute_audio:
@@ -131,10 +161,11 @@ class RenderThread(QThread):
                     cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vn {base_audio} -y "{temp_mp4}"'
                     
                 elif "Original" in self.quality_text and "Target File" not in self.quality_text:
+                    self._stream_copy_used = True
                     if self.mute_audio:
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c:v copy -an -y "{temp_mp4}"'
+                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c:v copy {copy_ts_fix}-an -y "{temp_mp4}"'
                     else:
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy -y "{temp_mp4}"'
+                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
                         
                 elif "Target File Size" in self.quality_text:
                     bitrate_val = int(self.video_bitrate.replace('k', ''))
@@ -153,7 +184,8 @@ class RenderThread(QThread):
                         target_height = match.group(1)
                         cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}-c:v {self.selected_encoder} -b:v {self.video_bitrate} {base_audio} -y "{temp_mp4}"'
                     else:
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy -y "{temp_mp4}"'
+                        self._stream_copy_used = True
+                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
 
                 logging.debug(f"FFmpeg cmd for part {idx}: {cmd}")
 
@@ -223,12 +255,47 @@ class RenderThread(QThread):
             if len(temp_files) == 1:
                 # 99% of cases: No need to use the buggy 'concat' demuxer for a single file!
                 self.progress_signal.emit("Finalizing...")
-                
-                # Directly move/rename the perfectly rendered temp file to the final destination!
+
                 if os.path.exists(self.output_file):
                     os.remove(self.output_file)
-                shutil.move(temp_files[0], self.output_file)
-                
+
+                if self._stream_copy_used:
+                    # The setts pass above fixes the presentation timeline but leaves the
+                    # raw video track header (mdhd) still reporting the inflated duration,
+                    # which some players (e.g. Windows Media Player) read directly. A
+                    # second -c copy remux rebuilds the headers from the now-clean packet
+                    # timestamps. It's a fast, lossless metadata-only rewrite.
+                    remux = subprocess.Popen(
+                        f'"{self.ffmpeg_exe}" -i "{temp_files[0].replace(chr(92), "/")}" -c copy -y "{self.output_file}"',
+                        shell=False, cwd=self.save_dir, creationflags=creation_flags,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        universal_newlines=True, encoding='utf-8', errors='ignore'
+                    )
+                    self.current_process = remux
+                    remux_tail = []
+                    for line in remux.stdout:
+                        clean = line.strip()
+                        if clean:
+                            logging.debug(f"[FFmpeg] {clean}")
+                            remux_tail.append(clean)
+                            if len(remux_tail) > 5:
+                                remux_tail.pop(0)
+                    remux.wait()
+                    if remux.returncode != 0:
+                        # Header rewrite failed; fall back to the raw copied file so the
+                        # user still gets a playable (if slightly mis-tagged) result.
+                        logging.error("Finalize remux failed:\n" + "\n".join(remux_tail))
+                        if not os.path.exists(self.output_file):
+                            shutil.move(temp_files[0], self.output_file)
+                    else:
+                        try:
+                            os.remove(temp_files[0])
+                        except OSError:
+                            pass
+                else:
+                    # Directly move/rename the perfectly rendered temp file to the final destination!
+                    shutil.move(temp_files[0], self.output_file)
+
                 self.finished_signal.emit(True, "", self.output_file)
             else:
                 self.progress_signal.emit("Merging all parts...")
