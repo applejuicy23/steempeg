@@ -47,6 +47,50 @@ def get_resource_path(relative_path):
     return paths.get_resource_path(relative_path)
 
 
+def _force_native_window_icon(widget, ico_path):
+    """Push the .ico onto the realized HWND via WM_SETICON.
+
+    Qt's setWindowIcon is not always enough on first launch: Windows caches the
+    taskbar button icon per AppUserModelID, and on a cold cache the button shows
+    the generic icon until a later run warms it up (the "icon only appears on the
+    2nd/3rd launch" bug). Re-applying the icon directly to the native window after
+    it is shown populates that cache immediately, on the very first launch.
+    """
+    if os.name != 'nt' or not ico_path or not os.path.exists(ico_path):
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT,
+        ]
+        user32.SendMessageW.restype = ctypes.c_void_p
+        user32.SendMessageW.argtypes = [
+            wintypes.HWND, wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p,
+        ]
+
+        WM_SETICON = 0x0080
+        ICON_SMALL, ICON_BIG = 0, 1
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x00000010
+
+        hwnd = int(widget.winId())
+        # Big source (256) gives the taskbar a crisp downscale at any DPI; small
+        # (32) feeds the title-bar / small taskbar icon.
+        big = user32.LoadImageW(None, ico_path, IMAGE_ICON, 256, 256, LR_LOADFROMFILE)
+        small = user32.LoadImageW(None, ico_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        if big:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
+        if small:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+    except Exception:
+        pass
+
+
 def get_save_directory():
     return paths.get_save_directory()
 
@@ -502,13 +546,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     border-top-right-radius: 0px; 
                     border-bottom-left-radius: 12px; 
                     border-bottom-right-radius: 12px; 
-                    border: 2px solid #444444; 
+                    border: none; 
                     background-color: #2d2d2d; 
                     padding: 0px;
                     margin: 0px;
-                } 
-                QListWidget::item:selected { 
-                    border: 3px solid #b29ae7; 
                 }
                 
                 QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
@@ -2372,6 +2413,9 @@ def main():
             window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 50, -60, -50))
         window.ui.showMaximized()
         QTimer.singleShot(0, window._sync_startup_layout)
+        # Force the taskbar button to adopt our icon on the very first launch instead
+        # of waiting for Windows to warm its per-AppUserModelID icon cache.
+        QTimer.singleShot(0, lambda: _force_native_window_icon(window.ui, icon_path))
         
         if args.updated_from:
             QTimer.singleShot(1000, lambda: window.show_update_success(args.updated_from, args.backup_folder))

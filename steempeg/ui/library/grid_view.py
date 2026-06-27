@@ -27,6 +27,7 @@ class ClipCard(qtw.QWidget):
         self._on_left_click = on_left_click
         self._on_right_click = on_right_click
         self._selected = False
+        self._hovered = False
         self.setObjectName("ClipCard")
 
         # Cell 260, border 3px. That means the inside is exactly 254 by 184!
@@ -99,11 +100,19 @@ class ClipCard(qtw.QWidget):
         layout.addWidget(self.thumb_label)
         layout.addWidget(text_widget)
 
+        # The list itself can't draw a hover border: the card sits on top and eats the
+        # mouse, so QListWidget::item:hover never fires, and a border on the card widget
+        # is hidden behind the thumbnail/text children. This transparent overlay draws
+        # the whole border (default / hover / selected) on top of everything instead.
+        self._border_overlay = qtw.QFrame(self)
+        self._border_overlay.setGeometry(0, 0, 254, 184)
+
         # Clicks must hit the card, not child labels — viewport filters never see child events.
         for child in self.findChildren(qtw.QWidget):
             if child is not self:
                 child.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+        self._border_overlay.raise_()
         self._apply_selection_style()
 
     def set_selected(self, selected: bool) -> None:
@@ -112,10 +121,25 @@ class ClipCard(qtw.QWidget):
         self._selected = selected
         self._apply_selection_style()
 
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self._apply_selection_style()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self._apply_selection_style()
+        super().leaveEvent(event)
+
     def _apply_selection_style(self) -> None:
-        border = "3px solid #b29ae7" if self._selected else "2px solid #444444"
-        self.setStyleSheet(f"""
-            ClipCard#ClipCard {{
+        if self._selected:
+            border = "3px solid #b29ae7"
+        elif self._hovered:
+            border = "2px solid #7a6aa8"
+        else:
+            border = "2px solid #444444"
+        self._border_overlay.setStyleSheet(f"""
+            QFrame {{
                 background: transparent;
                 border: {border};
                 border-top-left-radius: 0px;
