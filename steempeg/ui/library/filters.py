@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display_format
+from steempeg.core.dash.health import ClipHealth
 from steempeg.ui.widgets import BlockCombo, FlowLayout
+
+_CLIP_HEALTH_ROLE = Qt.UserRole + 2
 
 
 class DateGroup(QWidget):
@@ -200,6 +203,29 @@ class FilterMenu(QWidget):
         scroll_layout.addWidget(create_category_capsule("📂 Type:", self.types_container))
         self.types_container.setMouseTracking(True)
         self.types_container.installEventFilter(self)
+
+        # --- HEALTH CAPSULE (static three-tier classification) ---
+        self.health_container = QWidget()
+        self.health_layout = FlowLayout()
+        self.health_container.setLayout(self.health_layout)
+        scroll_layout.addWidget(create_category_capsule("💚 Health:", self.health_container))
+        self.health_container.setMouseTracking(True)
+        self.health_container.installEventFilter(self)
+
+        _HEALTH_PILL_TEXT = {
+            ClipHealth.HEALTHY: "🟢 Healthy",
+            ClipHealth.DEGRADED: "🟡 Issues",
+            ClipHealth.DEAD: "🔴 Dead",
+        }
+        for level in (ClipHealth.HEALTHY, ClipHealth.DEGRADED, ClipHealth.DEAD):
+            btn = QPushButton(_HEALTH_PILL_TEXT[level])
+            btn.setCheckable(True)
+            btn.setChecked(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
+            btn.setProperty("health_level", level.value)
+            btn.clicked.connect(self.update_live_count)
+            self.health_layout.addWidget(btn)
 
         # --- 3. SMART INPUTS STYLE (Clean, small pills + Rounded Spinners) ---
         
@@ -472,8 +498,14 @@ class FilterMenu(QWidget):
         et = event.type()
         games_c = getattr(self, 'games_container', None)
         types_c = getattr(self, 'types_container', None)
-        if source in (games_c, types_c) and source is not None and et in self._MOUSE_EVENTS:
-            layout = self.games_layout if source is games_c else self.types_layout
+        health_c = getattr(self, 'health_container', None)
+        if source in (games_c, types_c, health_c) and source is not None and et in self._MOUSE_EVENTS:
+            if source is games_c:
+                layout = self.games_layout
+            elif source is types_c:
+                layout = self.types_layout
+            else:
+                layout = self.health_layout
             pos = event.position().toPoint()
             if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 btn = self._pill_at(layout, pos)
@@ -486,7 +518,7 @@ class FilterMenu(QWidget):
                     self._drag_btn = btn
                     if layout is self.games_layout:
                         self._refresh_cascade_after_games()
-                    else:
+                    elif layout is self.types_layout:
                         self._refresh_cascade_after_types()
                     self.update_live_count()
                     return True
@@ -498,7 +530,7 @@ class FilterMenu(QWidget):
                     self._is_gathering = False
                     if self._drag_layout is self.games_layout:
                         self._refresh_cascade_after_games()
-                    else:
+                    elif self._drag_layout is self.types_layout:
                         self._refresh_cascade_after_types()
                     self.update_live_count()
             elif et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
@@ -540,6 +572,14 @@ class FilterMenu(QWidget):
         m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
         s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
         return h * 3600 + m * 60 + s
+
+    def _get_checked_health_levels(self):
+        levels = []
+        for i in range(self.health_layout.count()):
+            w = self.health_layout.itemAt(i).widget()
+            if w and w.isChecked():
+                levels.append(w.property("health_level"))
+        return levels
 
     def _get_checked_names(self, layout):
         names = []
@@ -795,6 +835,16 @@ class FilterMenu(QWidget):
             self.input_max_dur.setTime(self._sec_to_qtime(max_sec))
         self._is_gathering = False
 
+        for i in range(self.health_layout.count()):
+            w = self.health_layout.itemAt(i).widget()
+            if not w:
+                continue
+            level = w.property("health_level")
+            if saved_state and 'health' in saved_state:
+                w.setChecked(level in saved_state['health'])
+            else:
+                w.setChecked(True)
+
         self.input_min_date.dateChanged.connect(self.update_live_count)
         self.input_max_date.dateChanged.connect(self.update_live_count)
         self.input_min_time.timeChanged.connect(self.update_live_count)
@@ -818,6 +868,17 @@ class FilterMenu(QWidget):
         # Clear = everything on: reset the type memory to all-checked, then rebuild.
         self._type_checked_memory = {t: True for t in full_stats['types']}
         self._rebuild_type_buttons(full_stats['types'])
+
+        saved_state = getattr(self, 'saved_filter_state', None)
+        for i in range(self.health_layout.count()):
+            w = self.health_layout.itemAt(i).widget()
+            if not w:
+                continue
+            level = w.property("health_level")
+            if saved_state and 'health' in saved_state:
+                w.setChecked(level in saved_state['health'])
+            else:
+                w.setChecked(True)
 
         min_dt = full_stats['min_dt'] or QDateTime.currentDateTime().addMonths(-1)
         max_dt = full_stats['max_dt'] or QDateTime.currentDateTime()
@@ -843,8 +904,9 @@ class FilterMenu(QWidget):
 
         sel_games = self._get_checked_names(self.games_layout)
         sel_types = self._get_checked_names(self.types_layout)
+        sel_health = self._get_checked_health_levels()
 
-        if not sel_games or not sel_types:
+        if not sel_games or not sel_types or not sel_health:
             self.btn_apply.setText("Apply Filters (0)")
             return
 
@@ -864,6 +926,10 @@ class FilterMenu(QWidget):
 
             if show and r_g and r_g.text().strip() not in sel_games: show = False
             if show and r_t and r_t.text().strip() not in sel_types: show = False
+            if show and r_g:
+                row_health = r_g.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
+                if row_health not in sel_health:
+                    show = False
 
             if show and r_d:
                 q_dt = self._parse_row_datetime(r_d.text())
@@ -893,10 +959,12 @@ class FilterMenu(QWidget):
 
         selected_games = self._get_checked_names(self.games_layout)
         selected_types = self._get_checked_names(self.types_layout)
+        selected_health = self._get_checked_health_levels()
 
         self.app.saved_filter_state = {
             'games': selected_games,
             'types': selected_types,
+            'health': selected_health,
             'min_date': self.input_min_date.date(),
             'max_date': self.input_max_date.date(),
             'min_time': self.input_min_time.time(),
@@ -906,7 +974,7 @@ class FilterMenu(QWidget):
         }
 
         visible_count = 0
-        if not selected_games or not selected_types:
+        if not selected_games or not selected_types or not selected_health:
             for row in range(table.rowCount()):
                 table.setRowHidden(row, True)
         else:
@@ -926,6 +994,10 @@ class FilterMenu(QWidget):
 
                 if show and item_game and item_game.text().strip() not in selected_games: show = False
                 if show and item_type and item_type.text().strip() not in selected_types: show = False
+                if show and item_game:
+                    row_health = item_game.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
+                    if row_health not in selected_health:
+                        show = False
 
                 if show and item_date:
                     q_dt = self._parse_row_datetime(item_date.text())

@@ -18,6 +18,7 @@ class ClipCard(qtw.QWidget):
         thumb_path,
         icon_path,
         row_idx,
+        health_color: Optional[str] = None,
         on_left_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         parent=None,
@@ -67,6 +68,14 @@ class ClipCard(qtw.QWidget):
         self.badge_label.adjustSize()
         badge_w = self.badge_label.width()
         self.badge_label.move(254 - badge_w - 6, 144 - 24)
+
+        if health_color:
+            self.health_dot = qtw.QLabel(self.thumb_label)
+            self.health_dot.setFixedSize(12, 12)
+            self.health_dot.setStyleSheet(
+                f"background-color: {health_color}; border: 2px solid #1a1a1a; border-radius: 8px;"
+            )
+            self.health_dot.move(254 - 18, 6)
 
         text_widget = qtw.QWidget()
         text_widget.setStyleSheet("""

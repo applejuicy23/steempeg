@@ -23,8 +23,10 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QToolTip,
     QWidget,
+    QMessageBox,
 )
 
+from steempeg.core.dash import health
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.player.thumbnails import ThumbnailBatchThread
@@ -112,6 +114,8 @@ class PlayerMixin:
         self._selected_queue_job_id = None
         if hasattr(self, 'update_playback_badge'):
             self.update_playback_badge()
+        if hasattr(self, 'update_clip_health_button'):
+            self.update_clip_health_button()
             
         # 5. Resetting the Time and the PLAY Button
         if hasattr(self.ui, 'label_time'):
@@ -1179,6 +1183,17 @@ class PlayerMixin:
         if not clip_path or not os.path.isdir(clip_path):
             return
 
+        if hasattr(self, "get_clip_health_report"):
+            report = self.get_clip_health_report(clip_path)
+            if report.level == health.ClipHealth.DEAD:
+                QMessageBox.warning(
+                    self.ui,
+                    "Unplayable Clip",
+                    "This clip is dead and cannot be previewed.\n\n"
+                    + "\n".join(f"• {issue}" for issue in report.issues[:6]),
+                )
+                return
+
         self._pending_trim_restore = trim_restore
 
         # 1. STOP CURRENT PLAYBACK
@@ -1271,6 +1286,8 @@ class PlayerMixin:
             self.btn_close_clip.show()
         if hasattr(self, 'update_playback_badge'):
             self.update_playback_badge()
+        if hasattr(self, 'update_clip_health_button'):
+            self.update_clip_health_button()
         if hasattr(self, 'custom_timeline'): 
             self.custom_timeline.setEnabled(True)
 

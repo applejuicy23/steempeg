@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import games
-from steempeg.core.dash import discovery, mpd
+from steempeg.core.dash import discovery, health, mpd
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
@@ -53,6 +53,10 @@ _LIBRARY_MENU_STYLE = """
         margin: 4px 10px;
     }
 """
+
+
+_CLIP_HEALTH_ROLE = Qt.UserRole + 2
+_CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 
 
 class LibraryMixin:
@@ -112,14 +116,120 @@ class LibraryMixin:
             paths.append(path)
         return paths
 
+    def get_clip_health_report(self, clip_path) -> health.ClipHealthReport:
+        """Return cached scan-time health for a clip path, or assess on demand."""
+        if not clip_path or not hasattr(self.ui, "table_clips"):
+            return health.assess_clip_health(clip_path or "")
+
+        norm = os.path.normpath(clip_path)
+        table = self.ui.table_clips
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if not item:
+                continue
+            row_path = item.data(Qt.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                level = item.data(_CLIP_HEALTH_ROLE)
+                issues_raw = item.data(_CLIP_HEALTH_ISSUES_ROLE) or ""
+                if level:
+                    issues = [line for line in issues_raw.split("\n") if line]
+                    try:
+                        enum_level = health.ClipHealth(level)
+                    except ValueError:
+                        enum_level = health.ClipHealth.DEAD
+                    return health.ClipHealthReport(enum_level, issues)
+                break
+        return health.assess_clip_health(clip_path)
+
+    def _clip_is_dead(self, clip_path) -> bool:
+        return self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD
+
+    def update_clip_health_button(self):
+        if not hasattr(self, "btn_clip_health"):
+            return
+
+        clip_path = None
+        if hasattr(self, "_current_header_clip_path"):
+            clip_path = self._current_header_clip_path()
+        if not clip_path and hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+            if item:
+                clip_path = item.data(Qt.UserRole)
+
+        if not clip_path:
+            self.btn_clip_health.hide()
+            return
+
+        report = self.get_clip_health_report(clip_path)
+        color = report.color
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        self.btn_clip_health.setToolTip(report.summary())
+        self.btn_clip_health.setStyleSheet(
+            f"QPushButton {{"
+            f"background-color: rgba({r}, {g}, {b}, 0.22);"
+            f"color: {color};"
+            f"border: 2px solid {color};"
+            f"border-radius: 8px;"
+            f"font-weight: bold;"
+            f"font-size: 13px;"
+            f"padding: 2px 10px;"
+            f"font-family: 'Segoe UI';"
+            f"}}"
+            f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
+        )
+        self.btn_clip_health.setText(report.label)
+        self.btn_clip_health.show()
+
+    def show_clip_health_menu(self):
+        clip_path = None
+        if hasattr(self, "_current_header_clip_path"):
+            clip_path = self._current_header_clip_path()
+        if not clip_path and hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+            if item:
+                clip_path = item.data(Qt.UserRole)
+        if not clip_path:
+            return
+
+        report = self.get_clip_health_report(clip_path)
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+
+        title = menu.addAction(f"{'🟢' if report.level == health.ClipHealth.HEALTHY else '🟡' if report.level == health.ClipHealth.DEGRADED else '🔴'} {report.label}")
+        title.setEnabled(False)
+        menu.addSeparator()
+
+        if report.issues:
+            for issue in report.issues:
+                act = menu.addAction(f"• {issue}")
+                act.setEnabled(False)
+        else:
+            act = menu.addAction("No issues detected.")
+            act.setEnabled(False)
+
+        if report.level == health.ClipHealth.DEAD:
+            menu.addSeparator()
+            delete_act = menu.addAction("🗑️ Delete clip")
+            delete_act.triggered.connect(lambda: self.delete_clip(clip_path))
+
+        menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
+
     def _populate_library_context_menu(self, menu, clip_paths: list):
         count = len(clip_paths)
         if count == 0:
             return
 
-        queue_label = "📋 Add to queue" if count == 1 else f"📋 Add to queue ({count})"
-        action_queue = menu.addAction(queue_label)
-        action_queue.triggered.connect(lambda: self.add_clips_to_render_queue(clip_paths))
+        any_dead = any(self._clip_is_dead(p) for p in clip_paths)
+        all_dead = all(self._clip_is_dead(p) for p in clip_paths)
+
+        if not all_dead:
+            queue_label = "📋 Add to queue" if count == 1 else f"📋 Add to queue ({count})"
+            action_queue = menu.addAction(queue_label)
+            if any_dead:
+                action_queue.setEnabled(False)
+                action_queue.setToolTip("Dead clips cannot be queued")
+            else:
+                action_queue.triggered.connect(lambda: self.add_clips_to_render_queue(clip_paths))
 
         menu.addSeparator()
         action_open = menu.addAction("📂 Open in folder")
@@ -499,8 +609,10 @@ class LibraryMixin:
                                     mpd_path = os.path.join(root, f)
                                     break 
 
-                if not has_mpd: continue
+                if not has_mpd and not has_chunks:
+                    continue
 
+                health_report = health.assess_clip_health(full_path)
                 # MAGIC: Extracting Duration from MPD
                 duration_str = "--:--"
                 if mpd_path:
@@ -519,6 +631,8 @@ class LibraryMixin:
                                 elif h == 0: duration_str = f"{m}m {s}s"
                                 else: duration_str = f"{h}h {m}m {s}s"
                     except: pass
+                elif health_report.level == health.ClipHealth.DEAD:
+                    duration_str = "—"
 
                 folder_name = os.path.basename(full_path)
                 parts = folder_name.split("_")
@@ -568,7 +682,9 @@ class LibraryMixin:
                 self.ui.table_clips.insertRow(row_position)
                 
                 item_game = QTableWidgetItem(icon, game_name)
-                item_game.setData(Qt.UserRole, full_path) 
+                item_game.setData(Qt.UserRole, full_path)
+                item_game.setData(_CLIP_HEALTH_ROLE, health_report.level.value)
+                item_game.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(health_report.issues))
                 self.ui.table_clips.setItem(row_position, 0, item_game)
                 
                 item_type = QTableWidgetItem(rec_type)
@@ -649,6 +765,14 @@ class LibraryMixin:
             date_str = date_item.text() if date_item else "Today"
             time_str = time_item.text() if time_item else "00:00"
             clip_path = title_item.data(Qt.UserRole) if title_item else None
+            health_color = None
+            if title_item:
+                level = title_item.data(_CLIP_HEALTH_ROLE)
+                if level:
+                    try:
+                        health_color = health.HEALTH_COLORS[health.ClipHealth(level)]
+                    except ValueError:
+                        health_color = health.HEALTH_COLORS[health.ClipHealth.DEAD]
             
             icon_path = ""
             thumb_path = ""
@@ -692,6 +816,7 @@ class LibraryMixin:
                 thumb_path,
                 icon_path,
                 row,
+                health_color=health_color,
                 on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
                 on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
             )

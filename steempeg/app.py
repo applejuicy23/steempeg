@@ -311,6 +311,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             self.ui.table_clips.itemSelectionChanged.connect(self.update_quality_options)
             self.ui.table_clips.itemSelectionChanged.connect(self.sync_grid_from_table_selection)
+            if hasattr(self, "update_clip_health_button"):
+                self.ui.table_clips.itemSelectionChanged.connect(self.update_clip_health_button)
             if hasattr(self.ui, 'table_clips'):
                 from PySide6.QtCore import QTimer 
                 self.ui.table_clips.horizontalHeader().sortIndicatorChanged.connect(
@@ -1387,6 +1389,12 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         header_layout.addWidget(self.custom_icon_label)
         header_layout.addWidget(self.custom_text_label)
         header_layout.addStretch()
+
+        self.btn_clip_health = QPushButton()
+        self.btn_clip_health.setCursor(Qt.PointingHandCursor)
+        self.btn_clip_health.hide()
+        self.btn_clip_health.clicked.connect(self.show_clip_health_menu)
+        header_layout.addWidget(self.btn_clip_health)
 
         self.label_playback_badge = QLabel()
         self.label_playback_badge.setStyleSheet(

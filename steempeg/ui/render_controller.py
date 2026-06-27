@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import capabilities
-from steempeg.core.dash import discovery, mpd, repair
+from steempeg.core.dash import discovery, health, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
 from steempeg.render.queue import (
@@ -1390,6 +1390,11 @@ class RenderMixin:
 
     def add_clip_to_render_queue(self, clip_path: str):
         """Snapshot current settings into a new queued job (stage 2+ UI will call this)."""
+        if hasattr(self, "get_clip_health_report"):
+            report = self.get_clip_health_report(clip_path)
+            if report.level == health.ClipHealth.DEAD:
+                logging.warning("Skipped dead clip for queue: %s", clip_path)
+                return None
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
@@ -1612,6 +1617,8 @@ class RenderMixin:
         text, color = self._playback_badge_for_context()
         if not text:
             self.label_playback_badge.hide()
+            if hasattr(self, "update_clip_health_button"):
+                self.update_clip_health_button()
             return
 
         self.label_playback_badge.setText(text)
@@ -1625,6 +1632,8 @@ class RenderMixin:
             "font-family: 'Segoe UI';"
         )
         self.label_playback_badge.show()
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
 
     def _apply_header_from_job(self, job):
         if not job or not hasattr(self, "custom_text_label"):
