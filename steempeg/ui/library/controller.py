@@ -101,7 +101,7 @@ _FOLDERS_MENU_STYLE = """
     QLabel#FolderRowLabel[missing="true"] {
         color: #d46a6a;
     }
-    QPushButton#FolderRowRemove {
+    QPushButton#FolderRowRemove, QPushButton#FolderRowReplace {
         background-color: #333333;
         color: #cccccc;
         border: 1px solid #555555;
@@ -121,6 +121,14 @@ _FOLDERS_MENU_STYLE = """
     }
     QPushButton#FolderRowRemove:pressed {
         background-color: #661a1a;
+    }
+    QPushButton#FolderRowReplace:hover {
+        background-color: #3a324a;
+        border: 1px solid #6b5a8e;
+        color: #d4c4ff;
+    }
+    QPushButton#FolderRowReplace:pressed {
+        background-color: #2d2640;
     }
 """
 
@@ -636,13 +644,16 @@ class LibraryMixin:
         picker = getattr(self, "folder_picker", None)
         if picker is None:
             return
-        valid = [f for f in getattr(self, "clips_folders", []) if os.path.isdir(f)]
-        if len(valid) <= 1:
+        folders = getattr(self, "clips_folders", [])
+        # The + only exists once at least one folder is set; with no folders the user
+        # must pick a main folder first via Choose Folder.
+        picker.set_add_visible(bool(folders))
+        if len(folders) <= 1:
             picker.set_folder_label("Choose Folder…")
         else:
             picker.set_folder_label(
-                f"Choose Folder… ({len(valid)})",
-                "Library folders:\n" + "\n".join(valid),
+                f"Choose Folder… ({len(folders)})",
+                "Library folders:\n" + "\n".join(folders),
             )
 
     def _default_clips_dialog_path(self):
@@ -722,48 +733,69 @@ class LibraryMixin:
         self._update_folder_picker_label()
         self.scan_clips()
 
+    def _folder_panel_row(self, menu, path, is_main):
+        """One folder row for the dropdown: label, optional replace, and remove ✕."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 2, 6, 2)
+        row_layout.setSpacing(6)
+
+        exists = os.path.isdir(path)
+        prefix = "★ " if is_main else ""
+        display = path if len(path) <= 42 else "…" + path[-41:]
+        label = QLabel(prefix + display)
+        label.setObjectName("FolderRowLabel")
+        tip = "Main folder\n" if is_main else ""
+        label.setToolTip(tip + (path if exists else f"{path}\n(Folder not found on disk)"))
+        if not exists:
+            label.setProperty("missing", True)
+        row_layout.addWidget(label, 1)
+
+        if is_main:
+            btn_replace = QPushButton("⟳")
+            btn_replace.setObjectName("FolderRowReplace")
+            btn_replace.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_replace.setToolTip("Replace main folder (keeps additional folders)")
+            btn_replace.clicked.connect(
+                lambda _checked=False: (menu.close(), self.choose_folder())
+            )
+            row_layout.addWidget(btn_replace)
+
+        btn_x = QPushButton("✕")
+        btn_x.setObjectName("FolderRowRemove")
+        btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_x.setToolTip("Remove this folder")
+        btn_x.clicked.connect(
+            lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p))
+        )
+        row_layout.addWidget(btn_x)
+
+        action_row = QWidgetAction(menu)
+        action_row.setDefaultWidget(row)
+        menu.addAction(action_row)
+
     def show_folders_panel(self):
-        """Dropdown panel (styled like Logs) listing library folders with remove + clear."""
+        """Dropdown panel (styled like Logs) listing the main + extra library folders."""
+        if not self.clips_folders:
+            # No main folder yet — nothing to manage; send the user to pick one.
+            self.choose_folder()
+            return
+
         menu = QMenu(self.folder_picker)
         menu.setStyleSheet(_FOLDERS_MENU_STYLE)
 
-        action_add = menu.addAction("➕  Add another folder…")
-        action_add.triggered.connect(self.add_clips_folder)
+        header = menu.addAction("Library folders")
+        header.setEnabled(False)
         menu.addSeparator()
 
-        if not self.clips_folders:
-            empty = menu.addAction("No folders added yet")
-            empty.setEnabled(False)
-        else:
-            for path in self.clips_folders:
-                row = QWidget()
-                row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(10, 2, 6, 2)
-                row_layout.setSpacing(8)
+        for idx, path in enumerate(self.clips_folders):
+            self._folder_panel_row(menu, path, is_main=(idx == 0))
 
-                exists = os.path.isdir(path)
-                display = path if len(path) <= 48 else "…" + path[-47:]
-                label = QLabel(display)
-                label.setObjectName("FolderRowLabel")
-                label.setToolTip(path if exists else f"{path}\n(Folder not found on disk)")
-                if not exists:
-                    label.setProperty("missing", True)
-                row_layout.addWidget(label, 1)
+        menu.addSeparator()
+        action_add = menu.addAction("➕  Add another folder…")
+        action_add.triggered.connect(self.add_clips_folder)
 
-                btn_x = QPushButton("✕")
-                btn_x.setObjectName("FolderRowRemove")
-                btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn_x.setToolTip("Remove this folder")
-                btn_x.clicked.connect(
-                    lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p))
-                )
-                row_layout.addWidget(btn_x)
-
-                action_row = QWidgetAction(menu)
-                action_row.setDefaultWidget(row)
-                menu.addAction(action_row)
-
-            menu.addSeparator()
+        if len(self.clips_folders) > 1:
             action_clear = menu.addAction("🧹  Clear list")
             action_clear.triggered.connect(self.clear_clips_folders)
 

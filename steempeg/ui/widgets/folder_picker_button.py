@@ -39,10 +39,11 @@ _FOLDER_PICKER_STYLE = """
         border-top-right-radius: 14px;
         border-bottom-right-radius: 14px;
         font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 16px;
+        font-size: 18px;
         font-weight: bold;
-        min-width: 30px;
-        max-width: 30px;
+        min-width: 44px;
+        max-width: 48px;
+        padding: 4px 0;
         min-height: 24px;
     }
     QPushButton#FolderPickerAdd:hover {
@@ -74,15 +75,36 @@ class FolderPickerButton(QWidget):
         self.main_btn = QPushButton("Choose Folder…")
         self.main_btn.setObjectName("FolderPickerMain")
         self.main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.add_btn = QPushButton("+")
         self.add_btn.setObjectName("FolderPickerAdd")
         self.add_btn.setToolTip("Manage clips folders")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.add_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         layout.addWidget(self.main_btn, 1)
         layout.addWidget(self.add_btn)
+
+        self._update_main_radius()
+
+    def _update_main_radius(self):
+        """When the + is hidden, the main button should be fully rounded on both sides."""
+        if self.add_btn.isVisible():
+            self.main_btn.setStyleSheet("")  # inherit composite stylesheet
+        else:
+            self.main_btn.setStyleSheet(
+                "QPushButton#FolderPickerMain {"
+                " border: 2px solid #444444;"
+                " border-top-right-radius: 14px;"
+                " border-bottom-right-radius: 14px; }"
+                "QPushButton#FolderPickerMain:hover { border: 2px solid #6b5a8e; }"
+                "QPushButton#FolderPickerMain:pressed { border: 2px solid #b29ae7; }"
+            )
+
+    def set_add_visible(self, visible):
+        self.add_btn.setVisible(visible)
+        self._update_main_radius()
 
     def set_folder_label(self, text, tooltip=""):
         self.main_btn.setText(text)

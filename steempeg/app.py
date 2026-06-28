@@ -1018,6 +1018,11 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         old_browse_btn = self.ui.btn_browse
         if old_browse_btn.parentWidget() and old_browse_btn.parentWidget().layout():
             old_browse_btn.parentWidget().layout().replaceWidget(old_browse_btn, mega_pill)
+        # replaceWidget orphans the original button but leaves it parented/visible in the
+        # left panel — hide it so it doesn't float as a phantom "Choose Folder" up top.
+        old_browse_btn.hide()
+        old_browse_btn.setParent(None)
+        old_browse_btn.deleteLater()
 
         self.folder_picker = FolderPickerButton()
             
