@@ -1167,9 +1167,20 @@ class RenderMixin:
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
             if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
-                self.place_logo.setStyleSheet(f"image: url('{icon_css}'); background: transparent; border: none;")
-                self.place_text.setText(f"Ready to play: {game_name}") 
-                self.place_text.setStyleSheet("color: #a0a0a0; font-size: 15px; font-weight: bold; margin-top: 15px;")
+                # Pixmap only (no stylesheet image) so the game icon scales with the
+                # aspect ratio kept and never overlaps the Steempeg logo underneath.
+                self.place_logo.setStyleSheet("")
+                game_pix = QPixmap(target_icon)
+                if not game_pix.isNull():
+                    self.place_logo.setPixmap(
+                        game_pix.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    )
+                self.place_logo.setAlignment(Qt.AlignCenter)
+                self.place_logo.show()
+                self.place_text.setText(f"Ready to play: {game_name}")
+                self.place_text.setStyleSheet(
+                    "color: #a0a0a0; font-size: 15px; font-weight: bold; margin-top: 15px;"
+                )
             
         if not getattr(self, '_is_rendering', False):
             self.update_status_indicator("Ready", "ready")
@@ -1591,6 +1602,10 @@ class RenderMixin:
         clip_path = self._current_header_clip_path()
         if not clip_path:
             return None, None
+
+        if hasattr(self, "get_clip_health_report"):
+            if self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD:
+                return None, None
 
         if getattr(self, "_is_rendering", False):
             active = getattr(self, "_active_render_job", None)

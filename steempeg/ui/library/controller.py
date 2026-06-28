@@ -54,6 +54,12 @@ _LIBRARY_MENU_STYLE = """
     }
 """
 
+_HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
+    QMenu::item {
+        padding: 8px 32px 8px 24px;
+    }
+"""
+
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
@@ -144,6 +150,82 @@ class LibraryMixin:
     def _clip_is_dead(self, clip_path) -> bool:
         return self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD
 
+    def _iter_dead_clip_paths(self) -> list:
+        if not hasattr(self.ui, "table_clips"):
+            return []
+        paths = []
+        seen = set()
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            if item.data(_CLIP_HEALTH_ROLE) != health.ClipHealth.DEAD.value:
+                continue
+            path = item.data(Qt.UserRole)
+            if not path:
+                continue
+            norm = os.path.normpath(path)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            paths.append(path)
+        return paths
+
+    def delete_all_dead_clips(self):
+        """Remove every clip classified as dead from disk and refresh the library."""
+        dead_paths = self._iter_dead_clip_paths()
+        if not dead_paths:
+            QMessageBox.information(self.ui, "Dead Clips", "No dead clips in the library.")
+            return
+
+        reply = QMessageBox.question(
+            self.ui,
+            "Delete ALL Dead Clips",
+            f"Permanently delete {len(dead_paths)} dead clip folder(s)?\n"
+            "This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        current = getattr(self, "_preview_clip_path", None)
+        if current:
+            current = os.path.normpath(current)
+
+        failed = []
+        for clip_path in dead_paths:
+            norm = os.path.normpath(clip_path)
+            try:
+                if current and norm == current:
+                    if hasattr(self, "close_current_clip"):
+                        self.close_current_clip()
+                    elif hasattr(self, "_clear_player_surface"):
+                        self._clear_player_surface()
+                    current = None
+                if os.path.exists(clip_path):
+                    shutil.rmtree(clip_path)
+                    logging.info(f"Deleted dead clip folder: {clip_path}")
+            except Exception as exc:
+                logging.error(f"Failed to delete dead clip {clip_path}: {exc}")
+                failed.append(os.path.basename(clip_path))
+
+        self.scan_clips()
+
+        if failed:
+            QMessageBox.warning(
+                self.ui,
+                "Delete ALL Dead Clips",
+                f"Deleted {len(dead_paths) - len(failed)} of {len(dead_paths)}.\n"
+                f"Could not remove: {', '.join(failed)}",
+            )
+        else:
+            QMessageBox.information(
+                self.ui,
+                "Delete ALL Dead Clips",
+                f"Removed {len(dead_paths)} dead clip(s).",
+            )
+
     def update_clip_health_button(self):
         if not hasattr(self, "btn_clip_health"):
             return
@@ -193,9 +275,11 @@ class LibraryMixin:
 
         report = self.get_clip_health_report(clip_path)
         menu = QMenu(self.ui)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(_HEALTH_MENU_STYLE)
 
-        title = menu.addAction(f"{'🟢' if report.level == health.ClipHealth.HEALTHY else '🟡' if report.level == health.ClipHealth.DEGRADED else '🔴'} {report.label}")
+        title = menu.addAction(
+            f"{'🟢' if report.level == health.ClipHealth.HEALTHY else '🟡' if report.level == health.ClipHealth.DEGRADED else '🔴'} {report.label}"
+        )
         title.setEnabled(False)
         menu.addSeparator()
 
@@ -211,6 +295,12 @@ class LibraryMixin:
             menu.addSeparator()
             delete_act = menu.addAction("🗑️ Delete clip")
             delete_act.triggered.connect(lambda: self.delete_clip(clip_path))
+
+        dead_count = len(self._iter_dead_clip_paths())
+        if dead_count > 0:
+            menu.addSeparator()
+            bulk_act = menu.addAction(f"🗑️ Delete ALL dead clips ({dead_count})")
+            bulk_act.triggered.connect(self.delete_all_dead_clips)
 
         menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
 

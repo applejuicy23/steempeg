@@ -33,35 +33,36 @@ from steempeg.ui.player.thumbnails import ThumbnailBatchThread
 
 
 class PlayerMixin:
-    def close_current_clip(self):
-        """ Completely destroys the current clip and clears the interface. """
-        if getattr(self, '_is_switching', False):
-            return
+    def _clear_player_surface(self):
+        """Stop mpv and return the player area to the empty placeholder.
 
+        Does not touch library selection or the header — callers that need a full
+        reset (close_current_clip) clear those separately.
+        """
         self._force_pause = True
         self._eof_rewind_pending = 0
         self._current_mpd_abs_path = None
-        
-        # 1. STOP THE PLAYER
+        self._is_switching = False
+        self._awaiting_first_frame = False
+
         if hasattr(self, 'player') and self.player:
             self.player.pause = True
             try:
                 self.player.stop()
                 self.player.play("")
-            except:
+            except Exception:
                 pass
 
         self._set_playback_loading(False)
-        
-        # 2. Clearing the Player Interface and Cache
+
         if hasattr(self.ui, 'video_container'):
             self.ui.video_container.setStyleSheet("background-color: transparent; border: none;")
-            
+
         if hasattr(self, 'custom_timeline'):
             if hasattr(self.custom_timeline, 'preview_widget'):
                 self.custom_timeline.preview_widget.hide()
             if hasattr(self.custom_timeline, 'img_label'):
-                self.custom_timeline.img_label.setPixmap(QPixmap()) 
+                self.custom_timeline.img_label.setPixmap(QPixmap())
             self.custom_timeline.thumb_dir = None
             self.custom_timeline.current_video_path = None
             if hasattr(self.custom_timeline, 'sniper'):
@@ -74,13 +75,44 @@ class PlayerMixin:
             self.custom_timeline.set_duration(0)
             self.custom_timeline.force_jump(0)
             self.custom_timeline.canvas.markers.clear()
-            # Drop the previous clip's game-mode segments so their stripes can't leak
-            # onto the next bar (the CS2 leading segment was stretching across).
             if hasattr(self.custom_timeline.canvas, 'mode_segments'):
                 self.custom_timeline.canvas.mode_segments = []
             self.custom_timeline.canvas.update()
 
-        # 3. Resetting the Table and Grid
+        if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
+            self.video_stack.setCurrentWidget(self.placeholder_frame)
+
+        if hasattr(self.ui, 'label_time'):
+            self.ui.label_time.setText("00:00 / 00:00")
+
+        if hasattr(self.ui, 'btn_play'):
+            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+
+    def _reset_player_placeholder_default(self):
+        """Restore the idle Steempeg poster (centered logo, no game icon overlay)."""
+        if not hasattr(self, 'place_logo') or not hasattr(self, 'place_text'):
+            return
+        # Use a pixmap only and clear any stylesheet image — mixing the two stacked a
+        # stretched game icon behind the logo and left a square halo around it.
+        self.place_logo.setStyleSheet("")
+        logo_path = get_resource_path("logo.png")
+        if os.path.exists(logo_path):
+            self.place_logo.setPixmap(
+                QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        self.place_logo.setAlignment(Qt.AlignCenter)
+        self.place_logo.show()
+        self.place_text.setText("Please select a clip from the library")
+        self.place_text.setStyleSheet(
+            "color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;"
+        )
+
+    def close_current_clip(self):
+        """ Completely destroys the current clip and clears the interface. """
+        if getattr(self, '_is_switching', False):
+            return
+
+        self._clear_player_surface()
         # NOTE: clearSelection() leaves the *current* index intact, so the badge's
         # fallback (_current_preview_clip_path -> table.currentRow()) still resolved the
         # old clip and the badge never hid. Reset the current index too.
@@ -94,14 +126,7 @@ class PlayerMixin:
             self.grid_clips.clearSelection()
             self.grid_clips.setCurrentItem(None)
             self.grid_clips.blockSignals(False)
-            
-        # 4. Restoring the Player Placeholder and Header Text
-        # Cancel any pending "reveal video" poll so it can't flip us back to the
-        # (now empty) mpv surface after we've intentionally shown the placeholder.
-        self._awaiting_first_frame = False
-        if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
-            self.video_stack.setCurrentWidget(self.placeholder_frame)
-            
+
         if hasattr(self, 'btn_close_clip'):
             self.btn_close_clip.hide()
         if hasattr(self, 'custom_text_label'):
@@ -116,15 +141,8 @@ class PlayerMixin:
             self.update_playback_badge()
         if hasattr(self, 'update_clip_health_button'):
             self.update_clip_health_button()
-            
-        # 5. Resetting the Time and the PLAY Button
-        if hasattr(self.ui, 'label_time'):
-            self.ui.label_time.setText("00:00 / 00:00")
-            
-        if hasattr(self.ui, 'btn_play'):
-            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
 
-        # 6. GLOBAL WIPE OF ALL SETTINGS TABS (UI WIPE)
+        # GLOBAL WIPE OF ALL SETTINGS TABS (UI WIPE)
         # clean the Source Info tab
         if hasattr(self.ui, 'source_label'): self.ui.source_label.setText("Source: -")
         if hasattr(self.ui, 'orig_res_label'): self.ui.orig_res_label.setText("Original resolution: -")
@@ -171,8 +189,8 @@ class PlayerMixin:
         # We're locking down the render button
         if hasattr(self.ui, 'btn_start'):
             self.ui.btn_start.setEnabled(False)
-            
-    
+
+        self._reset_player_placeholder_default()
 
 
     def _ignore_playback_stall(self, seconds=0.5):
@@ -1186,12 +1204,25 @@ class PlayerMixin:
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
             if report.level == health.ClipHealth.DEAD:
+                self._preview_clip_path = clip_path
+                self._selected_queue_job_id = None
+                self._clear_player_surface()
+                if hasattr(self, '_reset_player_placeholder_default'):
+                    self._reset_player_placeholder_default()
+                if hasattr(self, 'btn_close_clip'):
+                    self.btn_close_clip.hide()
+                if hasattr(self.ui, 'btn_start'):
+                    self.ui.btn_start.setEnabled(False)
                 QMessageBox.warning(
                     self.ui,
                     "Unplayable Clip",
                     "This clip is dead and cannot be previewed.\n\n"
                     + "\n".join(f"• {issue}" for issue in report.issues[:6]),
                 )
+                if hasattr(self, 'update_playback_badge'):
+                    self.update_playback_badge()
+                if hasattr(self, 'update_clip_health_button'):
+                    self.update_clip_health_button()
                 return
 
         self._pending_trim_restore = trim_restore

@@ -1344,7 +1344,9 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         logo_path = get_resource_path("logo.png")
         if os.path.exists(logo_path):
             from PySide6.QtGui import QPixmap
-            self.place_logo.setPixmap(QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.place_logo.setPixmap(
+                QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
         self.place_logo.setAlignment(Qt.AlignCenter)
         
         self.place_text = QLabel("Please select a clip from the library")
