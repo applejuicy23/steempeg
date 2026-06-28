@@ -18,10 +18,40 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_QUEUE_MENU_STYLE = """
+    QMenu {
+        background-color: #2d2d2d;
+        color: #ffffff;
+        border: 2px solid #444444;
+        border-radius: 8px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        font-weight: bold;
+        padding: 4px 0;
+    }
+    QMenu::item {
+        padding: 8px 28px 8px 20px;
+        border-radius: 4px;
+        margin: 2px 6px;
+    }
+    QMenu::item:selected {
+        background-color: #3a324a;
+        color: #b29ae7;
+    }
+    QMenu::item:disabled {
+        color: #777777;
+    }
+    QMenu::separator {
+        height: 1px;
+        background: #444444;
+        margin: 4px 10px;
+    }
+"""
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
@@ -281,13 +311,31 @@ class QueueJobCard(QFrame):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; }
-            QMenu::item:selected { background-color: #5a4b7a; }
-        """)
-        if _job_can_remove(self._job):
-            act_remove = menu.addAction("Remove from queue")
+        menu.setStyleSheet(_QUEUE_MENU_STYLE)
+
+        job = self._job
+        is_done = job.status == JobStatus.DONE
+        output_dir = os.path.dirname(job.output_file) if job.output_file else ""
+
+        act_select = menu.addAction("▶  Select in editor")
+        act_select.triggered.connect(lambda: self.clicked.emit(self._job_id))
+
+        act_open_clip = menu.addAction("📂  Open clip folder")
+        clip_exists = bool(job.clip_path) and os.path.isdir(job.clip_path)
+        act_open_clip.setEnabled(clip_exists)
+        act_open_clip.triggered.connect(lambda: paths.open_in_file_manager(job.clip_path))
+
+        if is_done:
+            act_open_out = menu.addAction("🎬  Open output folder")
+            out_exists = bool(output_dir) and os.path.isdir(output_dir)
+            act_open_out.setEnabled(out_exists)
+            act_open_out.triggered.connect(lambda: paths.open_in_file_manager(output_dir))
+
+        if _job_can_remove(job):
+            menu.addSeparator()
+            act_remove = menu.addAction("🗑️  Remove from queue")
             act_remove.triggered.connect(lambda: self.remove_requested.emit(self._job_id))
+
         menu.exec(event.globalPos())
 
 
