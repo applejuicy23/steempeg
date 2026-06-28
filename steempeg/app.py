@@ -151,7 +151,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         self.game_names_cache = {} # Cache for game names to avoid spamming the Steam API
         self.game_icons_cache = {} # Cache for downloaded Steam images
-        self.clips_folder = "" # Current clip folder
+        self.clips_folder = ""
+        self.clips_folders = []
         
         # --- Set default rendered_videos ---
         default_export_dir = os.path.join(get_save_directory(), "rendered_videos").replace('\\', '/')
@@ -1012,12 +1013,18 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         mega_layout.addLayout(bottom_row)
 
         #3. PUT THE MEGA-CAPSULE ON THE VERY TOP (INSTEAD OF THE OLD FOLDER BUTTON)
+        from steempeg.ui.widgets.folder_picker_button import FolderPickerButton
+
         old_browse_btn = self.ui.btn_browse
         if old_browse_btn.parentWidget() and old_browse_btn.parentWidget().layout():
             old_browse_btn.parentWidget().layout().replaceWidget(old_browse_btn, mega_pill)
+
+        self.folder_picker = FolderPickerButton()
+        self.folder_picker.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.folder_picker.customContextMenuRequested.connect(self._folder_picker_context_menu)
             
         self.btn_refresh = QPushButton("🔄 Refresh")
-        self.btn_refresh.setToolTip("Rescan folder for new clips")
+        self.btn_refresh.setToolTip("Rescan folders for new clips")
         
         #4. TEAR ABOUT AND UPDATE FROM THEIR OLD PLACES
         btn_about = getattr(self.ui, 'btn_about', None)
@@ -1029,9 +1036,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             btn_update.parentWidget().layout().removeWidget(btn_update)
             
         # 5. Color the buttons and add cursors
-        old_browse_btn.setStyleSheet(unified_table_style)
         self.btn_refresh.setStyleSheet(unified_table_style)
-        old_browse_btn.setCursor(Qt.PointingHandCursor)
         self.btn_refresh.setCursor(Qt.PointingHandCursor)
         
         if btn_about:
@@ -1044,7 +1049,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             btn_update.setCursor(Qt.PointingHandCursor)
             
         # 6. LAY OUT THE BUTTONS BY FLOORS (70/30 on top, 50/50 on the bottom)
-        top_row.addWidget(old_browse_btn, 7)
+        top_row.addWidget(self.folder_picker, 7)
         top_row.addWidget(self.btn_refresh, 3)
         
         if btn_about: bottom_row.addWidget(btn_about, 5)
@@ -1052,7 +1057,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         
         # 7. RECOVERING SIGNALS (Presses)
         self.btn_refresh.clicked.connect(self.refresh_library)
-        self.ui.btn_browse.clicked.connect(self.choose_folder)
+        self.folder_picker.main_btn.clicked.connect(self.choose_folder)
+        self.folder_picker.add_btn.clicked.connect(self.add_clips_folder)
         if hasattr(self.ui, 'destination_button'):
             self.ui.destination_button.clicked.connect(self.choose_destination)
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)
@@ -2078,18 +2084,16 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 5. AUTOMATIC DATA LOADING AT PROGRAM START
         self.detect_gpu_and_set_encoder()
         
-        # 1. Check if the user has a manually saved folder preference
-        user_settings = self.load_user_settings()
-        saved_folder = user_settings.get("last_clips_folder", "")
-        
+        # 1. Load saved library folder roots (migrates legacy last_clips_folder)
+        self._load_clips_folders_from_settings()
+
         default_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
-        
-        if saved_folder and os.path.exists(saved_folder):
-            self.clips_folder = saved_folder
-        elif os.path.exists(default_path):
+        if not self.clips_folders and os.path.exists(default_path):
+            self.clips_folders = [default_path]
             self.clips_folder = default_path
-            
-        if self.clips_folder:
+            self._save_clips_folders()
+
+        if self.clips_folders:
             self.scan_clips()
 
         if hasattr(self.ui, 'main_splitter'):

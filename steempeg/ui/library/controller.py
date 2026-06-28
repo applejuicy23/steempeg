@@ -11,15 +11,21 @@ import re
 import shutil
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QItemSelection, QItemSelectionModel
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QPushButton,
     QTableWidgetItem,
+    QVBoxLayout,
 )
 
 from steempeg.core import games
@@ -552,20 +558,170 @@ class LibraryMixin:
                 logging.error(f"Failed to delete clip: {e}")
                 QMessageBox.critical(self.ui, "Error", f"Failed to delete the clip.\nIt might be in use by another program.\n\n{e}")
 
-    def choose_folder(self):
-        """ Opens a dialog for selecting a clips folder and remembers the choice. """
-        target_path = getattr(self, 'clips_folder', "")
-        
-        if not target_path or not os.path.exists(target_path):
-            target_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
-            if not os.path.exists(target_path):
-                target_path = "C:\\"
+    def _load_clips_folders_from_settings(self):
+        settings = self.load_user_settings()
+        folders = settings.get("clips_folders")
+        if folders is None:
+            legacy = settings.get("last_clips_folder", "")
+            folders = [legacy] if legacy else []
+            self.save_user_settings("clips_folders", folders)
+        self.clips_folders = [os.path.normpath(f) for f in folders if f]
+        self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
+        self._update_folder_picker_label()
 
-        folder = QFileDialog.getExistingDirectory(self.ui, "Select clips folder", target_path)
-        if folder:
+    def _save_clips_folders(self):
+        self.save_user_settings("clips_folders", self.clips_folders)
+        if self.clips_folders:
+            self.save_user_settings("last_clips_folder", self.clips_folders[0])
+
+    def _update_folder_picker_label(self):
+        picker = getattr(self, "folder_picker", None)
+        if picker is None:
+            return
+        valid = [f for f in getattr(self, "clips_folders", []) if os.path.isdir(f)]
+        if len(valid) <= 1:
+            picker.set_folder_label("Choose Folder…")
+        else:
+            picker.set_folder_label(
+                f"Choose Folder… ({len(valid)})",
+                "Library folders:\n" + "\n".join(valid),
+            )
+
+    def _default_clips_dialog_path(self):
+        for folder in getattr(self, "clips_folders", []):
+            if folder and os.path.exists(folder):
+                return folder
+        default_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
+        if os.path.exists(default_path):
+            return default_path
+        return "C:\\"
+
+    def choose_folder(self):
+        """Pick the primary clips folder (first library root)."""
+        folder = QFileDialog.getExistingDirectory(
+            self.ui, "Select primary clips folder", self._default_clips_dialog_path()
+        )
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        if not self.clips_folders:
+            self.clips_folders = [folder]
+        else:
+            if folder in self.clips_folders[1:]:
+                self.clips_folders.remove(folder)
+            self.clips_folders[0] = folder
+        self.clips_folder = self.clips_folders[0]
+        self._save_clips_folders()
+        self._update_folder_picker_label()
+        self.scan_clips()
+
+    def add_clips_folder(self):
+        """Append another folder to the library scan list."""
+        folder = QFileDialog.getExistingDirectory(
+            self.ui, "Add clips folder", self._default_clips_dialog_path()
+        )
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        if folder in self.clips_folders:
+            QMessageBox.information(self.ui, "Library folders", "That folder is already in the list.")
+            return
+        if not self.clips_folders:
+            self.clips_folders = [folder]
             self.clips_folder = folder
-            self.save_user_settings("last_clips_folder", folder) # Save permanently!
+        else:
+            self.clips_folders.append(folder)
+        self._save_clips_folders()
+        self._update_folder_picker_label()
+        self.scan_clips()
+
+    def manage_clips_folders(self):
+        """Dialog to review and remove saved library roots."""
+        dialog = QDialog(self.ui)
+        dialog.setWindowTitle("Library folders")
+        dialog.setMinimumWidth(520)
+        dialog.setStyleSheet(_LIBRARY_MENU_STYLE.replace("QMenu", "QDialog").split("QMenu::")[0])
+
+        layout = QVBoxLayout(dialog)
+        hint = QLabel(
+            "Steempeg scans every folder below for Steam clips.\n"
+            "Use + on Choose Folder to add more roots."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        list_widget = QListWidget()
+        for path in self.clips_folders:
+            item = QListWidgetItem(path)
+            item.setData(Qt.UserRole, path)
+            if not os.path.isdir(path):
+                item.setForeground(Qt.GlobalColor.red)
+                item.setToolTip("Folder not found on disk")
+            list_widget.addItem(item)
+        layout.addWidget(list_widget)
+
+        btn_row = QHBoxLayout()
+        btn_remove = QPushButton("Remove selected")
+        btn_close = QPushButton("Close")
+        btn_row.addWidget(btn_remove)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+        def remove_selected():
+            row = list_widget.currentRow()
+            if row < 0:
+                return
+            path = list_widget.item(row).data(Qt.UserRole)
+            if path in self.clips_folders:
+                self.clips_folders.remove(path)
+            list_widget.takeItem(row)
+            if not self.clips_folders:
+                self.clips_folder = ""
+            else:
+                self.clips_folder = self.clips_folders[0]
+            self._save_clips_folders()
+            self._update_folder_picker_label()
             self.scan_clips()
+
+        btn_remove.clicked.connect(remove_selected)
+        btn_close.clicked.connect(dialog.accept)
+        dialog.exec()
+
+    def _folder_picker_context_menu(self, pos):
+        menu = QMenu(self.folder_picker)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        action_manage = menu.addAction("Manage library folders…")
+        action_manage.triggered.connect(self.manage_clips_folders)
+        menu.exec(self.folder_picker.mapToGlobal(pos))
+
+    def _collect_clip_roots(self, base_folder):
+        """Return clip folder paths discovered under one library root."""
+        if not base_folder or not os.path.exists(base_folder):
+            return set()
+
+        base_folder = os.path.normpath(base_folder)
+        if os.path.basename(base_folder).lower() == "clips":
+            base_folder = os.path.dirname(base_folder)
+
+        roots = set()
+        for sub in ("clips", "video"):
+            sub_path = os.path.join(base_folder, sub)
+            if os.path.exists(sub_path):
+                for item in os.listdir(sub_path):
+                    full = os.path.join(sub_path, item)
+                    if os.path.isdir(full):
+                        roots.add(full)
+
+        roots.add(base_folder)
+        try:
+            for item in os.listdir(base_folder):
+                full = os.path.join(base_folder, item)
+                if os.path.isdir(full) and item.lower().startswith(("clip_", "bg_", "fg_")):
+                    roots.add(full)
+        except Exception:
+            pass
+        return roots
 
     def fast_sync_grid(self):
         """ INSTANT GRID SYNCHRONIZATION """
@@ -634,30 +790,16 @@ class LibraryMixin:
         self.ui.table_clips.setSortingEnabled(False) 
         self.ui.table_clips.setRowCount(0)
         
-        if not self.clips_folder or not os.path.exists(self.clips_folder): return
+        if not getattr(self, "clips_folders", None):
+            self._load_clips_folders_from_settings()
 
-        base_folder = os.path.normpath(self.clips_folder)
-        if os.path.basename(base_folder).lower() == "clips":
-            base_folder = os.path.dirname(base_folder)
+        library_roots = [f for f in self.clips_folders if f and os.path.exists(f)]
+        if not library_roots:
+            return
 
         folders_to_check = set()
-        
-        # Scenario 1: Standard Steam Structure (gamerecordings/clips & gamerecordings/video)
-        for sub in ["clips", "video"]:
-            sub_path = os.path.join(base_folder, sub)
-            if os.path.exists(sub_path):
-                for item in os.listdir(sub_path):
-                    full = os.path.join(sub_path, item)
-                    if os.path.isdir(full): folders_to_check.add(full)
-                    
-        # Scenario 2: selected the W:\SteamLibrary folder itself directly
-        folders_to_check.add(base_folder)
-        try:
-            for item in os.listdir(base_folder):
-                full = os.path.join(base_folder, item)
-                if os.path.isdir(full) and item.lower().startswith(("clip_", "bg_", "fg_")):
-                    folders_to_check.add(full)
-        except Exception: pass
+        for root in library_roots:
+            folders_to_check.update(self._collect_clip_roots(root))
 
         try:
             # Sort the chaotic set() by folder modification time
@@ -813,8 +955,8 @@ class LibraryMixin:
                 self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
 
             logging.info(
-                "Library scan: folder=%s clips=%d healthy=%d issues=%d dead=%d",
-                self.clips_folder,
+                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d",
+                library_roots,
                 self.ui.table_clips.rowCount(),
                 health_counts["healthy"],
                 health_counts["issues"],

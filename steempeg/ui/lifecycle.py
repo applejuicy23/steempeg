@@ -379,9 +379,13 @@ class LifecycleMixin:
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
+        btn_report = QPushButton("Report a bug")
+        btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_report.clicked.connect(self.show_report_dialog)
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
+        btn_row.addWidget(btn_report)
         btn_row.addWidget(btn_close)
         content.addLayout(btn_row)
 
@@ -404,14 +408,21 @@ class LifecycleMixin:
         menu.addSeparator()
         action_clear_logs = menu.addAction("🧹  Clear old logs…")
         action_clear_cache = menu.addAction("🗑️  Clear cache…")
+        menu.addSeparator()
+        action_report = menu.addAction("🐛  Report a bug…")
 
         action_app.triggered.connect(self.open_current_log)
         action_mpv.triggered.connect(self.open_mpv_log)
         action_folder.triggered.connect(self.open_logs_folder)
         action_clear_logs.triggered.connect(self.confirm_clear_logs)
         action_clear_cache.triggered.connect(self.confirm_clear_cache)
+        action_report.triggered.connect(self.show_report_dialog)
 
         self.ui.btn_logs.setMenu(menu)
+
+    def show_report_dialog(self):
+        from steempeg.ui.report_dialog import show_report_dialog
+        show_report_dialog(self)
 
     def open_logs_folder(self):
         if hasattr(self, 'logs_dir'):
