@@ -6,6 +6,7 @@ screenshots and markers. They run on the application instance and reach its widg
 and player through self.
 """
 import json
+import logging
 import os
 import re
 import time
@@ -1203,7 +1204,14 @@ class PlayerMixin:
 
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
+            logging.info(
+                "Preview request: %s — health=%s issues=%s",
+                clip_path,
+                report.level.name,
+                report.issues,
+            )
             if report.level == health.ClipHealth.DEAD:
+                logging.warning("Blocked dead clip preview: %s", clip_path)
                 self._preview_clip_path = clip_path
                 self._selected_queue_job_id = None
                 self._clear_player_surface()
@@ -1235,7 +1243,8 @@ class PlayerMixin:
         
         # STEP 1: FIND THE VIDEO FOLDER
         all_mpds = self.get_all_mpd_paths(clip_path)
-        if not all_mpds: 
+        if not all_mpds:
+            logging.warning("No MPD found for clip: %s", clip_path)
             return
 
         mpd_path = all_mpds[0] 
@@ -1273,7 +1282,7 @@ class PlayerMixin:
         # 3. Passing to the Engine
         if hasattr(self, 'custom_timeline'):
             if json_path:
-                print(f"Json was found successfully: {json_path}")
+                logging.debug("Timeline JSON: %s", json_path)
                 
                 json_name = os.path.basename(json_path) 
                 video_folder_name = os.path.basename(os.path.dirname(mpd_path))
@@ -1291,14 +1300,14 @@ class PlayerMixin:
                         
                         offset_ms = int((video_dt - json_dt).total_seconds() * 1000)
                     except Exception as e:
-                        print(f"Time Count Error: {e}")
+                        logging.debug("Timeline offset calc failed: %s", e)
                         offset_ms = 0
-                        
-                print(f"Delay: {offset_ms} ms")
+
+                logging.debug("Timeline offset: %d ms", offset_ms)
                 self.custom_timeline.canvas.load_timeline_json(json_path, offset_ms)
                 
             else:
-                print(f"No JSON found for this clip: {clip_path}")
+                logging.debug("No timeline JSON for clip: %s", clip_path)
                 self.custom_timeline.canvas.markers.clear()
                 self.custom_timeline.canvas.update()
 
@@ -1323,7 +1332,7 @@ class PlayerMixin:
             self.custom_timeline.setEnabled(True)
 
         # 4. FEED THE RAW STEAM DASH FILE DIRECTLY TO MPV
-        print(f"---> Feeding MPD directly to MPV: {mpd_path}")
+        logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
         
         # A Reliable Path for Windows:
         abs_path = os.path.abspath(mpd_path).replace('\\', '/')

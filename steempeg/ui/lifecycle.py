@@ -5,6 +5,7 @@ exit cleanup, the About dialog, opening the logs, path elision and resetting
 per-clip state. They run on the application instance and reach its widgets and
 state through self.
 """
+import logging
 import os
 import re
 
@@ -17,14 +18,44 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from steempeg.infra import logging as log_util
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.version import APP_VERSION_STR
+
+
+_LOGS_MENU_STYLE = """
+    QMenu {
+        background-color: #2d2d2d;
+        color: #ffffff;
+        border: 2px solid #444444;
+        border-radius: 8px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        font-weight: bold;
+        padding: 4px 0;
+    }
+    QMenu::item {
+        padding: 8px 28px 8px 20px;
+        border-radius: 4px;
+        margin: 2px 6px;
+    }
+    QMenu::item:selected {
+        background-color: #3a324a;
+        color: #b29ae7;
+    }
+    QMenu::separator {
+        height: 1px;
+        background: #444444;
+        margin: 4px 10px;
+    }
+"""
 
 
 _ABOUT_DIALOG_STYLE = """
@@ -360,13 +391,111 @@ class LifecycleMixin:
         self._about_is_open = False  # Release the lock when closed
 
 
+    def setup_logs_menu(self):
+        """Attach a styled Logs dropdown to btn_logs."""
+        if not hasattr(self.ui, 'btn_logs'):
+            return
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(_LOGS_MENU_STYLE)
+
+        action_app = menu.addAction("📄  App + FFmpeg logs")
+        action_mpv = menu.addAction("🎬  MPV player log")
+        action_folder = menu.addAction("📂  Open logs folder")
+        menu.addSeparator()
+        action_clear_logs = menu.addAction("🧹  Clear old logs…")
+        action_clear_cache = menu.addAction("🗑️  Clear cache…")
+
+        action_app.triggered.connect(self.open_current_log)
+        action_mpv.triggered.connect(self.open_mpv_log)
+        action_folder.triggered.connect(self.open_logs_folder)
+        action_clear_logs.triggered.connect(self.confirm_clear_logs)
+        action_clear_cache.triggered.connect(self.confirm_clear_cache)
+
+        self.ui.btn_logs.setMenu(menu)
+
     def open_logs_folder(self):
         if hasattr(self, 'logs_dir'):
             paths.open_in_file_manager(self.logs_dir)
 
     def open_current_log(self):
-        if hasattr(self, 'current_log_file'):
-            paths.open_in_file_manager(self.current_log_file)
+        path = getattr(self, 'current_log_file', None)
+        if path and os.path.exists(path):
+            paths.open_in_file_manager(path)
+            logging.info("Opened app log: %s", path)
+        else:
+            QMessageBox.warning(self.ui, "Logs", "App log file not found for this session.")
+
+    def open_mpv_log(self):
+        path = getattr(self, 'current_mpv_log_file', None)
+        if path and os.path.exists(path):
+            paths.open_in_file_manager(path)
+            logging.info("Opened MPV log: %s", path)
+        else:
+            QMessageBox.warning(self.ui, "Logs", "MPV log file not found for this session.")
+
+    def confirm_clear_logs(self):
+        logs_dir = getattr(self, 'logs_dir', None)
+        if not logs_dir or not os.path.isdir(logs_dir):
+            return
+        count, size = log_util.logs_folder_stats(logs_dir)
+        if count == 0:
+            QMessageBox.information(self.ui, "Clear logs", "The logs folder is already empty.")
+            return
+        reply = QMessageBox.question(
+            self.ui,
+            "Clear old logs",
+            f"Delete old log files in:\n{logs_dir}\n\n"
+            f"Currently {count} file(s), {log_util.format_bytes(size)}.\n\n"
+            "Logs from this session will be kept.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        keep = [
+            getattr(self, 'current_log_file', None),
+            getattr(self, 'current_mpv_log_file', None),
+        ]
+        removed, freed = log_util.clear_log_files(logs_dir, keep_paths=keep)
+        logging.info("User cleared logs: removed %d file(s), freed %s", removed, log_util.format_bytes(freed))
+        QMessageBox.information(
+            self.ui,
+            "Clear logs",
+            f"Removed {removed} log file(s) ({log_util.format_bytes(freed)} freed).",
+        )
+
+    def confirm_clear_cache(self):
+        cache_dir = getattr(self, 'cache_dir', None)
+        if not cache_dir or not os.path.isdir(cache_dir):
+            return
+        count, size = log_util.cache_folder_stats(cache_dir)
+        if count == 0:
+            QMessageBox.information(self.ui, "Clear cache", "The cache folder is already empty.")
+            return
+        reply = QMessageBox.question(
+            self.ui,
+            "Clear cache",
+            f"Delete everything in:\n{cache_dir}\n\n"
+            f"{count} item(s), {log_util.format_bytes(size)}.\n\n"
+            "Game icons, settings, and the saved render queue will be removed. "
+            "They will be rebuilt on the next library scan.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        removed, freed = log_util.clear_directory_contents(cache_dir)
+        os.makedirs(cache_dir, exist_ok=True)
+        if hasattr(self, 'game_names_cache'):
+            self.game_names_cache = {}
+        if hasattr(self, 'game_icons_cache'):
+            self.game_icons_cache = {}
+        logging.info("User cleared cache: removed %d item(s), freed %s", removed, log_util.format_bytes(freed))
+        QMessageBox.information(
+            self.ui,
+            "Clear cache",
+            f"Removed {removed} item(s) ({log_util.format_bytes(freed)} freed).",
+        )
 
 
     def clear_clip_state(self):

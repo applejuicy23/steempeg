@@ -662,6 +662,8 @@ class LibraryMixin:
         try:
             # Sort the chaotic set() by folder modification time
             sorted_folders = sorted(list(folders_to_check), key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+
+            health_counts = {"healthy": 0, "issues": 0, "dead": 0}
             
             for full_path in sorted_folders:
                 if not os.path.exists(full_path): continue
@@ -703,6 +705,12 @@ class LibraryMixin:
                     continue
 
                 health_report = health.assess_clip_health(full_path)
+                if health_report.level == health.ClipHealth.HEALTHY:
+                    health_counts["healthy"] += 1
+                elif health_report.level == health.ClipHealth.DEAD:
+                    health_counts["dead"] += 1
+                else:
+                    health_counts["issues"] += 1
                 # MAGIC: Extracting Duration from MPD
                 duration_str = "--:--"
                 if mpd_path:
@@ -803,6 +811,15 @@ class LibraryMixin:
                 
             if hasattr(self, 'lbl_clip_count'):
                 self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+
+            logging.info(
+                "Library scan: folder=%s clips=%d healthy=%d issues=%d dead=%d",
+                self.clips_folder,
+                self.ui.table_clips.rowCount(),
+                health_counts["healthy"],
+                health_counts["issues"],
+                health_counts["dead"],
+            )
                 
                     
         except Exception as e:

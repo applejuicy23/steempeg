@@ -1,6 +1,6 @@
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui.main_window import MainWindow
-from steempeg.infra.logging import global_exception_handler, setup_logging
+from steempeg.infra.logging import global_exception_handler, setup_logging, session_timestamp, mpv_log_path, prune_old_logs
 from steempeg.infra import paths
 from steempeg.ui.player.surface import MPVWrapper
 from steempeg.ui.player.fullscreen import FullscreenEventFilter
@@ -194,10 +194,17 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         if not os.path.exists(self.logs_dir):
             os.makedirs(self.logs_dir)
-        
 
-            
-        self.current_log_file = setup_logging(self.logs_dir, APP_VERSION_STR)
+        self._session_ts = session_timestamp()
+        self.current_log_file = setup_logging(self.logs_dir, APP_VERSION_STR, self._session_ts)
+        self.current_mpv_log_file = mpv_log_path(self.logs_dir, self._session_ts)
+        prune_old_logs(
+            self.logs_dir,
+            keep_paths=(self.current_log_file, self.current_mpv_log_file),
+            max_files=40,
+        )
+        logging.info("Logs dir: %s", self.logs_dir)
+        logging.info("Cache dir: %s", self.cache_dir)
 
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir) # Create a cache folder if it doesn't exist
@@ -1952,7 +1959,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.custom_timeline.add_marker_requested.connect(self.add_user_marker)
         
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
-        mpv_log_path = os.path.join(self.logs_dir, f"mpv_engine_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+        mpv_log_path_str = self.current_mpv_log_file
+        logging.info("MPV log: %s", mpv_log_path_str)
 
         # Clean up any junk, if present
         if self.ui.video_container.layout():
@@ -1979,8 +1987,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             hwdec='auto',         
             keep_open='yes',      
             ao='wasapi',         
-            log_file=mpv_log_path,
-            loglevel='fatal'
+            log_file=mpv_log_path_str,
+            loglevel='info'
         )
         self.player['af'] = 'rubberband'
         
@@ -2022,17 +2030,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         
 
         if hasattr(self.ui, 'btn_logs'):
-            from PySide6.QtWidgets import QMenu
-            log_menu = QMenu(self.ui)
-            
-            action_current = log_menu.addAction("📄 Open current log")
-            action_folder = log_menu.addAction("📂 Open log folder")
-            
-            action_current.triggered.connect(self.open_current_log)
-            action_folder.triggered.connect(self.open_logs_folder)
-            
-            # Attach the menu to the button
-            self.ui.btn_logs.setMenu(log_menu)
+            self.setup_logs_menu()
         
         # We connect the "Final setup" update to all interface changes
         if hasattr(self.ui, 'combo_quality'): self.ui.combo_quality.currentTextChanged.connect(self.update_final_setup)
