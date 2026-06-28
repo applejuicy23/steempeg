@@ -1682,15 +1682,14 @@ class PlayerMixin:
             self._screenshot_toast_timer = QTimer(toast)
             self._screenshot_toast_timer.setSingleShot(True)
             self._screenshot_toast_timer.timeout.connect(toast.hide)
+            # Connect the copy button exactly once. The slot reads the live
+            # _screenshot_toast_dir, so we never need to reconnect per show (the old
+            # per-show disconnect() spammed a libpyside "Failed to disconnect" warning).
+            self._screenshot_toast_btn.setText("📋 Copy path")
+            self._screenshot_toast_btn.clicked.connect(self._copy_screenshot_dir)
 
         self._screenshot_toast_dir = directory
         self._screenshot_toast_label.setText(f"📸 Screenshot saved in  {directory}")
-        try:
-            self._screenshot_toast_btn.clicked.disconnect()
-        except Exception:
-            pass
-        self._screenshot_toast_btn.setText("📋 Copy path")
-        self._screenshot_toast_btn.clicked.connect(self._copy_screenshot_dir)
 
         toast = self._screenshot_toast
         toast.adjustSize()

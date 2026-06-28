@@ -595,10 +595,15 @@ class RenderMixin:
 
                     height_match = re.search(r'\bheight="(\d+)"', content)
                     width_match = re.search(r'\bwidth="(\d+)"', content)
-                    bandwidth_match = re.search(r'\bbandwidth="(\d+)"', content)
-
-                    if bandwidth_match:
-                        self.current_orig_bitrate = int(bandwidth_match.group(1)) / 1000000
+                    # A DASH manifest lists a bandwidth per representation (video + audio,
+                    # and sometimes several quality reps). re.search only returns the FIRST,
+                    # which can be a lower/audio rep — that's why a 22 Mbps clip read as 16.
+                    # Take the highest bandwidth across every match instead.
+                    bandwidths = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content)]
+                    if bandwidths:
+                        peak_mbps = max(bandwidths) / 1000000
+                        if peak_mbps > self.current_orig_bitrate:
+                            self.current_orig_bitrate = peak_mbps
 
                     if height_match and width_match:
                         h = int(height_match.group(1))
@@ -837,11 +842,15 @@ class RenderMixin:
         if selected_fps < orig_fps and orig_fps > 0:
             fps_multiplier = selected_fps / orig_fps
 
+        source_cap_mbps = getattr(self, 'current_orig_bitrate', 0)
         for quality_level in ["Ultra", "High", "Medium", "Low"]:
             if res_key in self.steam_bitrate_presets.get(quality_level, {}):
                 preset_bitrate = self.steam_bitrate_presets[quality_level][res_key]
                 
-                if getattr(self, 'current_orig_bitrate', 0) == 0 or preset_bitrate <= (self.current_orig_bitrate + 5):
+                # Never offer a re-encode preset above the source bitrate. The old
+                # +5 Mbps tolerance could show 1440p Ultra (32 Mbps) for a 22 Mbps
+                # source, which looks like an impossible quality upgrade.
+                if source_cap_mbps == 0 or preset_bitrate <= (source_cap_mbps + 0.25):
                     # We're multiplying right here just for the sake of appearance in the ComboBox!
                     scaled_bitrate = preset_bitrate * fps_multiplier
                     
@@ -850,6 +859,11 @@ class RenderMixin:
                     self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
                     added_any = True
         
+        if not added_any and source_cap_mbps > 0:
+            display_val = _fmt_mbps(source_cap_mbps * fps_multiplier)
+            self.ui.combo_bitrate.addItem(f"Source Max - {display_val} Mbps")
+            added_any = True
+
         if not added_any and res_key in self.steam_bitrate_presets["Low"]:
             lowest_bitrate = self.steam_bitrate_presets["Low"][res_key] * fps_multiplier
             display_val = _fmt_mbps(lowest_bitrate)
@@ -868,6 +882,23 @@ class RenderMixin:
         self.ui.combo_bitrate.blockSignals(False)
         self.update_final_setup()
     
+    def _audio_kbps_from_ui(self):
+        """Resolve the selected audio bitrate (kbps) from the combo / custom field.
+
+        Handles the "⚙️ Custom Audio..." sentinel and mute so callers never try to
+        float() the emoji label (the old crash in update_final_setup).
+        """
+        if hasattr(self.ui, 'check_mute_audio') and self.ui.check_mute_audio.isChecked():
+            return 0
+        text = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
+        if "Custom" in text and hasattr(self, 'input_custom_abitrate'):
+            try:
+                return max(1, int(self.input_custom_abitrate.text()))
+            except (ValueError, TypeError):
+                return getattr(self, 'current_orig_audio_bitrate', 192)
+        match = re.search(r'(\d+)', text)
+        return int(match.group(1)) if match else 192
+
     def update_final_setup(self):
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
         clip_path = self._active_preview_clip_path()
@@ -979,14 +1010,20 @@ class RenderMixin:
                 match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
                 if match:
                     video_bitrate = float(match.group(1)) 
-                    audio_bitrate_val = float(audio_bitrate.split(' ')[0]) / 1000 if ' ' in audio_bitrate else 0.19
+                    audio_bitrate_val = self._audio_kbps_from_ui() / 1000.0
                     if mute_audio: audio_bitrate_val = 0
                     total_bitrate = video_bitrate + audio_bitrate_val
                     size_mb = (total_bitrate * duration) / 8 
                     size_str = f"~{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"~{size_mb:.1f} MB"
 
+        # Pretty audio label that never shows the raw "⚙️ Custom Audio..." sentinel.
+        if "Custom" in audio_bitrate:
+            audio_display = f"{self._audio_kbps_from_ui()} kbps (Custom)"
+        else:
+            audio_display = audio_bitrate
+
         if audio_only:
-            sound_info = f"{audio_format} {audio_bitrate.split(' ')[0]} kbps"
+            sound_info = f"{audio_format} {self._audio_kbps_from_ui()} kbps"
             other_info = ">> EXTRACT AUDIO ONLY (NO VIDEO)"
         elif mute_audio:
             sound_info = "None"
@@ -995,7 +1032,7 @@ class RenderMixin:
             sound_info = "Original audio (copy)"
             other_info = "Original stream copy"
         else:
-            sound_info = audio_bitrate
+            sound_info = audio_display
             other_info = "Normal Render"
 
         # 5. Smart Detailed Summary in Export Settings

@@ -918,6 +918,8 @@ class LibraryMixin:
             sorted_folders = sorted(list(folders_to_check), key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
 
             health_counts = {"healthy": 0, "issues": 0, "dead": 0}
+            seen_clip_ids = set()
+            duplicate_count = 0
             
             for full_path in sorted_folders:
                 if not os.path.exists(full_path): continue
@@ -930,6 +932,14 @@ class LibraryMixin:
                 folder_name = os.path.basename(full_path).lower()
                 if "steempeg" in folder_name or folder_name in ["logs", "cache", "_update_extracted"]:
                     continue
+
+                # Same clip can live in two different library roots (a copy). The folder
+                # name (clip_<appid>_<date>_<time>) is the clip's identity — keep the
+                # first occurrence (most recent by mtime, sorted above) and skip the rest.
+                if folder_name in seen_clip_ids:
+                    duplicate_count += 1
+                    continue
+                seen_clip_ids.add(folder_name)
                 
                 has_mpd = False
                 has_chunks = False
@@ -1066,13 +1076,18 @@ class LibraryMixin:
             if hasattr(self, 'lbl_clip_count'):
                 self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
 
+            if duplicate_count and hasattr(self, 'set_status'):
+                noun = "duplicate" if duplicate_count == 1 else "duplicates"
+                self.set_status(f"Ignored {duplicate_count} {noun} across folders")
+
             logging.info(
-                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d",
+                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d ignored_duplicates=%d",
                 library_roots,
                 self.ui.table_clips.rowCount(),
                 health_counts["healthy"],
                 health_counts["issues"],
                 health_counts["dead"],
+                duplicate_count,
             )
                 
                     

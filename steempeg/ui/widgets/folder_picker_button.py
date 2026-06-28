@@ -86,11 +86,17 @@ class FolderPickerButton(QWidget):
         layout.addWidget(self.main_btn, 1)
         layout.addWidget(self.add_btn)
 
+        self._add_visible = True
         self._update_main_radius()
 
     def _update_main_radius(self):
-        """When the + is hidden, the main button should be fully rounded on both sides."""
-        if self.add_btn.isVisible():
+        """When the + is hidden, the main button should be fully rounded on both sides.
+
+        Tracks an explicit flag instead of QWidget.isVisible(): during construction (and
+        before the window is shown) isVisible() is always False, which previously made the
+        main button render with the "no +" rounding even though the + was about to show.
+        """
+        if self._add_visible:
             self.main_btn.setStyleSheet("")  # inherit composite stylesheet
         else:
             self.main_btn.setStyleSheet(
@@ -103,7 +109,8 @@ class FolderPickerButton(QWidget):
             )
 
     def set_add_visible(self, visible):
-        self.add_btn.setVisible(visible)
+        self._add_visible = bool(visible)
+        self.add_btn.setVisible(self._add_visible)
         self._update_main_radius()
 
     def set_folder_label(self, text, tooltip=""):

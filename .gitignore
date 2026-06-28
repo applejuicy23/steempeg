@@ -20,6 +20,9 @@ dist/
 cache/
 # logs/ -> steempeg_*.log, mpv_engine_*.log
 logs/
+# user output / test artifacts
+Screenshots/
+rendered_videos/
 temp_concat_list.txt
 
 # --- Editors / OS ---

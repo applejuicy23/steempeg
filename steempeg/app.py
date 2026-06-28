@@ -2222,7 +2222,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             class InstantTooltipFilter(QObject):
                 def eventFilter(self, obj, event):
                     if event.type() == QEvent.Type.Enter:
-                        QToolTip.showText(event.globalPos(), obj.toolTip(), obj)
+                        QToolTip.showText(event.globalPosition().toPoint(), obj.toolTip(), obj)
                     elif event.type() == QEvent.Type.Leave:
                         QToolTip.hideText()
                     return False
@@ -2237,88 +2237,6 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             self.ui.label_target_size.setVisible(True)
             self.size_container.setVisible(False)
-    
-    
-
-    
-
-
-    
-
-    
-
-    
-            
-    
-
-
-                
-
-    
-
-    
-
-    
-
-    
-    
-    
-
-    
-    
-
-    
-
-    
-        
-
-    
-        
-
-    
-    
-    
-    
-    
-    
-
-    
-
-    
-
-    
-
-   
-
-    
-
-
-    
-    
-    
-    
-
-
-    
-
-    
-
-    
-
-
-
-    
-
-    
-
-
-    
-    
-    
-
-
-    
-            
 
 
 import os
