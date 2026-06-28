@@ -314,7 +314,7 @@ class QueueJobCard(QFrame):
         menu.setStyleSheet(_QUEUE_MENU_STYLE)
 
         job = self._job
-        is_done = job.status == JobStatus.DONE
+        is_done = job.status == JobStatus.COMPLETED
         output_dir = os.path.dirname(job.output_file) if job.output_file else ""
 
         act_select = menu.addAction("▶  Select in editor")
