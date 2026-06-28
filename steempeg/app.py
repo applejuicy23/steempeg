@@ -1020,8 +1020,6 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             old_browse_btn.parentWidget().layout().replaceWidget(old_browse_btn, mega_pill)
 
         self.folder_picker = FolderPickerButton()
-        self.folder_picker.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.folder_picker.customContextMenuRequested.connect(self._folder_picker_context_menu)
             
         self.btn_refresh = QPushButton("🔄 Refresh")
         self.btn_refresh.setToolTip("Rescan folders for new clips")
@@ -1058,7 +1056,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 7. RECOVERING SIGNALS (Presses)
         self.btn_refresh.clicked.connect(self.refresh_library)
         self.folder_picker.main_btn.clicked.connect(self.choose_folder)
-        self.folder_picker.add_btn.clicked.connect(self.add_clips_folder)
+        self.folder_picker.add_btn.clicked.connect(self.show_folders_panel)
         if hasattr(self.ui, 'destination_button'):
             self.ui.destination_button.clicked.connect(self.choose_destination)
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)

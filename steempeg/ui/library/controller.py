@@ -15,17 +15,16 @@ from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelec
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
     QPushButton,
     QTableWidgetItem,
-    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
 )
 
 from steempeg.core import games
@@ -63,6 +62,65 @@ _LIBRARY_MENU_STYLE = """
 _HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
     QMenu::item {
         padding: 8px 32px 8px 24px;
+    }
+"""
+
+
+_FOLDERS_MENU_STYLE = """
+    QMenu {
+        background-color: #2d2d2d;
+        color: #ffffff;
+        border: 2px solid #444444;
+        border-radius: 8px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        font-weight: bold;
+        padding: 4px 0;
+    }
+    QMenu::item {
+        padding: 8px 28px 8px 20px;
+        border-radius: 4px;
+        margin: 2px 6px;
+    }
+    QMenu::item:selected {
+        background-color: #3a324a;
+        color: #b29ae7;
+    }
+    QMenu::separator {
+        height: 1px;
+        background: #444444;
+        margin: 4px 10px;
+    }
+    QLabel#FolderRowLabel {
+        color: #dddddd;
+        font-size: 12px;
+        font-weight: normal;
+        background: transparent;
+        padding: 2px 0;
+    }
+    QLabel#FolderRowLabel[missing="true"] {
+        color: #d46a6a;
+    }
+    QPushButton#FolderRowRemove {
+        background-color: #333333;
+        color: #cccccc;
+        border: 1px solid #555555;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: bold;
+        min-width: 20px;
+        max-width: 20px;
+        min-height: 20px;
+        max-height: 20px;
+        padding: 0;
+    }
+    QPushButton#FolderRowRemove:hover {
+        background-color: #8a2525;
+        border: 1px solid #a82e2e;
+        color: #ffffff;
+    }
+    QPushButton#FolderRowRemove:pressed {
+        background-color: #661a1a;
     }
 """
 
@@ -635,65 +693,82 @@ class LibraryMixin:
         self._update_folder_picker_label()
         self.scan_clips()
 
-    def manage_clips_folders(self):
-        """Dialog to review and remove saved library roots."""
-        dialog = QDialog(self.ui)
-        dialog.setWindowTitle("Library folders")
-        dialog.setMinimumWidth(520)
-        dialog.setStyleSheet(_LIBRARY_MENU_STYLE.replace("QMenu", "QDialog").split("QMenu::")[0])
+    def remove_clips_folder(self, path):
+        """Remove one library root and rescan."""
+        if path in self.clips_folders:
+            self.clips_folders.remove(path)
+        self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
+        self._save_clips_folders()
+        self._update_folder_picker_label()
+        self.scan_clips()
 
-        layout = QVBoxLayout(dialog)
-        hint = QLabel(
-            "Steempeg scans every folder below for Steam clips.\n"
-            "Use + on Choose Folder to add more roots."
+    def clear_clips_folders(self):
+        """Drop every saved library root."""
+        if not self.clips_folders:
+            return
+        reply = QMessageBox.question(
+            self.ui,
+            "Clear library folders",
+            "Remove all clips folders from the library?\n"
+            "You can add them again with Choose Folder.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
         )
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        if reply != QMessageBox.Yes:
+            return
+        self.clips_folders = []
+        self.clips_folder = ""
+        self._save_clips_folders()
+        self._update_folder_picker_label()
+        self.scan_clips()
 
-        list_widget = QListWidget()
-        for path in self.clips_folders:
-            item = QListWidgetItem(path)
-            item.setData(Qt.UserRole, path)
-            if not os.path.isdir(path):
-                item.setForeground(Qt.GlobalColor.red)
-                item.setToolTip("Folder not found on disk")
-            list_widget.addItem(item)
-        layout.addWidget(list_widget)
-
-        btn_row = QHBoxLayout()
-        btn_remove = QPushButton("Remove selected")
-        btn_close = QPushButton("Close")
-        btn_row.addWidget(btn_remove)
-        btn_row.addStretch()
-        btn_row.addWidget(btn_close)
-        layout.addLayout(btn_row)
-
-        def remove_selected():
-            row = list_widget.currentRow()
-            if row < 0:
-                return
-            path = list_widget.item(row).data(Qt.UserRole)
-            if path in self.clips_folders:
-                self.clips_folders.remove(path)
-            list_widget.takeItem(row)
-            if not self.clips_folders:
-                self.clips_folder = ""
-            else:
-                self.clips_folder = self.clips_folders[0]
-            self._save_clips_folders()
-            self._update_folder_picker_label()
-            self.scan_clips()
-
-        btn_remove.clicked.connect(remove_selected)
-        btn_close.clicked.connect(dialog.accept)
-        dialog.exec()
-
-    def _folder_picker_context_menu(self, pos):
+    def show_folders_panel(self):
+        """Dropdown panel (styled like Logs) listing library folders with remove + clear."""
         menu = QMenu(self.folder_picker)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
-        action_manage = menu.addAction("Manage library folders…")
-        action_manage.triggered.connect(self.manage_clips_folders)
-        menu.exec(self.folder_picker.mapToGlobal(pos))
+        menu.setStyleSheet(_FOLDERS_MENU_STYLE)
+
+        action_add = menu.addAction("➕  Add another folder…")
+        action_add.triggered.connect(self.add_clips_folder)
+        menu.addSeparator()
+
+        if not self.clips_folders:
+            empty = menu.addAction("No folders added yet")
+            empty.setEnabled(False)
+        else:
+            for path in self.clips_folders:
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(10, 2, 6, 2)
+                row_layout.setSpacing(8)
+
+                exists = os.path.isdir(path)
+                display = path if len(path) <= 48 else "…" + path[-47:]
+                label = QLabel(display)
+                label.setObjectName("FolderRowLabel")
+                label.setToolTip(path if exists else f"{path}\n(Folder not found on disk)")
+                if not exists:
+                    label.setProperty("missing", True)
+                row_layout.addWidget(label, 1)
+
+                btn_x = QPushButton("✕")
+                btn_x.setObjectName("FolderRowRemove")
+                btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn_x.setToolTip("Remove this folder")
+                btn_x.clicked.connect(
+                    lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p))
+                )
+                row_layout.addWidget(btn_x)
+
+                action_row = QWidgetAction(menu)
+                action_row.setDefaultWidget(row)
+                menu.addAction(action_row)
+
+            menu.addSeparator()
+            action_clear = menu.addAction("🧹  Clear list")
+            action_clear.triggered.connect(self.clear_clips_folders)
+
+        picker = self.folder_picker
+        menu.exec(picker.mapToGlobal(picker.rect().bottomLeft()))
 
     def _collect_clip_roots(self, base_folder):
         """Return clip folder paths discovered under one library root."""

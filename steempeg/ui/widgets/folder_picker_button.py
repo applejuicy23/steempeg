@@ -1,67 +1,71 @@
-"""Composite Choose Folder button with an inline + for extra library roots."""
+"""Composite Choose Folder button with a combobox-style side that opens a panel."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
 
 _FOLDER_PICKER_STYLE = """
     QPushButton#FolderPickerMain {
-        font-family: 'Segoe UI';
-        font-size: 12px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
         font-weight: bold;
         background-color: #383838;
         color: #ffffff;
         border: 2px solid #444444;
-        border-top-left-radius: 8px;
-        border-bottom-left-radius: 8px;
+        border-right: none;
+        border-top-left-radius: 14px;
+        border-bottom-left-radius: 14px;
         border-top-right-radius: 0px;
         border-bottom-right-radius: 0px;
-        border-right: 1px solid #555555;
-        padding: 6px 10px;
+        padding: 4px 12px;
+        min-height: 24px;
     }
     QPushButton#FolderPickerMain:hover {
         background-color: #404040;
         border: 2px solid #6b5a8e;
-        border-right: 1px solid #6b5a8e;
+        border-right: none;
     }
     QPushButton#FolderPickerMain:pressed {
         background-color: #3a324a;
+        border: 2px solid #b29ae7;
+        border-right: none;
     }
     QPushButton#FolderPickerAdd {
-        font-family: 'Segoe UI';
-        font-size: 14px;
-        font-weight: bold;
-        background-color: #383838;
-        color: #b29ae7;
+        background-color: #262626;
+        color: #cccccc;
         border: 2px solid #444444;
+        border-left: 2px solid #4a4a4a;
         border-top-left-radius: 0px;
         border-bottom-left-radius: 0px;
-        border-top-right-radius: 8px;
-        border-bottom-right-radius: 8px;
-        border-left: none;
-        padding: 6px 0px;
+        border-top-right-radius: 14px;
+        border-bottom-right-radius: 14px;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 16px;
+        font-weight: bold;
         min-width: 30px;
-        max-width: 34px;
+        max-width: 30px;
+        min-height: 24px;
     }
     QPushButton#FolderPickerAdd:hover {
         background-color: #3a324a;
-        border: 2px solid #6b5a8e;
-        border-left: none;
         color: #d4c4ff;
+        border: 2px solid #6b5a8e;
+        border-left: 2px solid #6b5a8e;
     }
     QPushButton#FolderPickerAdd:pressed {
         background-color: #2d2640;
+        border: 2px solid #b29ae7;
+        border-left: 2px solid #b29ae7;
     }
 """
 
 
 class FolderPickerButton(QWidget):
-    """Choose Folder… with a + slot to add more scan roots."""
+    """Choose Folder… with a combobox-style + cell that opens the folders panel."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setStyleSheet(_FOLDER_PICKER_STYLE)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -74,7 +78,7 @@ class FolderPickerButton(QWidget):
 
         self.add_btn = QPushButton("+")
         self.add_btn.setObjectName("FolderPickerAdd")
-        self.add_btn.setToolTip("Add another clips folder")
+        self.add_btn.setToolTip("Manage clips folders")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout.addWidget(self.main_btn, 1)
