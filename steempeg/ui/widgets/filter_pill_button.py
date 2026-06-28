@@ -1,5 +1,5 @@
 """A small square icon button that opens the filter panel."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QPushButton
 
@@ -14,7 +14,11 @@ class FilterPillButton(QPushButton):
         self.setToolTip("Filters")
         self.setIcon(QIcon(get_resource_path("filter.png")))
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(34, 34)
+        # Match the sort combo's rendered height (min-height 24 + padding 8 + border 4
+        # = 36) so the two controls line up; a slightly smaller icon leaves more of the
+        # light #383838 face showing, so the button no longer reads as darker.
+        self.setFixedSize(36, 36)
+        self.setIconSize(QSize(16, 16))
 
         # Static styling that matches the sort combo box look.
         self.setStyleSheet("""
