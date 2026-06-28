@@ -799,8 +799,13 @@ class LibraryMixin:
             action_clear = menu.addAction("🧹  Clear list")
             action_clear.triggered.connect(self.clear_clips_folders)
 
-        picker = self.folder_picker
-        menu.exec(picker.mapToGlobal(picker.rect().bottomLeft()))
+        # Open the panel directly above the + button: align the panel's bottom-right
+        # corner with the + 's top-right corner so it grows upward, not off to the side.
+        btn = self.folder_picker.add_btn
+        size = menu.sizeHint()
+        top_right = btn.mapToGlobal(btn.rect().topRight())
+        pos = QPoint(top_right.x() - size.width(), top_right.y() - size.height())
+        menu.exec(pos)
 
     def _collect_clip_roots(self, base_folder):
         """Return clip folder paths discovered under one library root."""

@@ -30,32 +30,32 @@ _FOLDER_PICKER_STYLE = """
         border-right: none;
     }
     QPushButton#FolderPickerAdd {
-        background-color: #262626;
-        color: #cccccc;
+        background-color: #383838;
+        color: #ffffff;
         border: 2px solid #444444;
-        border-left: 2px solid #4a4a4a;
+        border-left: 1px solid #555555;
         border-top-left-radius: 0px;
         border-bottom-left-radius: 0px;
         border-top-right-radius: 14px;
         border-bottom-right-radius: 14px;
         font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 18px;
+        font-size: 17px;
         font-weight: bold;
-        min-width: 44px;
-        max-width: 48px;
+        min-width: 40px;
+        max-width: 44px;
         padding: 4px 0;
         min-height: 24px;
     }
     QPushButton#FolderPickerAdd:hover {
-        background-color: #3a324a;
+        background-color: #404040;
         color: #d4c4ff;
         border: 2px solid #6b5a8e;
-        border-left: 2px solid #6b5a8e;
+        border-left: 1px solid #6b5a8e;
     }
     QPushButton#FolderPickerAdd:pressed {
-        background-color: #2d2640;
+        background-color: #3a324a;
         border: 2px solid #b29ae7;
-        border-left: 2px solid #b29ae7;
+        border-left: 1px solid #b29ae7;
     }
 """
 
