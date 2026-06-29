@@ -2096,6 +2096,12 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.clips_folder = default_path
             self._save_clips_folders()
 
+        # Keep the folder-picker (+ button / label) in sync with whatever roots we
+        # ended up with. The auto-detected default path above never went through
+        # _update_folder_picker_label, so on a fresh launch the "+" stayed hidden and
+        # extra folders couldn't be added until the user re-picked the main folder.
+        self._update_folder_picker_label()
+
         if self.clips_folders:
             self.scan_clips()
 

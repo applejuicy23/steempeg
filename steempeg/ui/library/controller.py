@@ -1205,6 +1205,26 @@ class LibraryMixin:
 
         self.sync_grid_from_table_selection()
 
+    def _position_filter_menu(self):
+        """Place + size the filter popup relative to the live widget geometry.
+
+        Split out so it can run again right after show(): on a fresh launch the
+        maximized window hasn't fully settled when the menu is first built, so the
+        button/footer global coords are stale and the panel comes out mis-sized
+        ("slightly broken"). Re-running once the geometry is valid self-corrects it.
+        """
+        menu = getattr(self, 'filter_menu', None)
+        if not menu or not hasattr(self, 'btn_filter_pill'):
+            return
+        button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
+        x_shift = menu.width() - self.btn_filter_pill.width()
+        menu_y = button_bottom_left.y() + 5
+        menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
+
+        if hasattr(self, 'btn_refresh'):
+            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
+            menu.set_content_max_height(max(160, footer_top - menu_y - 8))
+
     def show_filter_menu(self):
         """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
         if not hasattr(self, 'btn_filter_pill'): return
@@ -1217,16 +1237,11 @@ class LibraryMixin:
         self.filter_menu = FilterMenu(self.ui)
         self.filter_menu.gather_statistics(self)
 
-        button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
-        x_shift = self.filter_menu.width() - self.btn_filter_pill.width()
-        menu_y = button_bottom_left.y() + 5
-        self.filter_menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
-
-        if hasattr(self, 'btn_refresh'):
-            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
-            self.filter_menu.set_content_max_height(max(160, footer_top - menu_y - 8))
-
+        # Best-effort placement before show, then correct once shown (handles the
+        # first-launch case where the window geometry isn't settled yet).
+        self._position_filter_menu()
         self.filter_menu.show()
+        QTimer.singleShot(0, self._position_filter_menu)
 
     def apply_sorting(self):
         """ FAST INDEPENDENT SORTING ENGINE """
