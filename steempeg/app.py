@@ -2308,6 +2308,18 @@ def main():
 
     app = QApplication(sys.argv)
 
+    # Register Liberation Sans (Arial-metric-compatible, OFL) so the small UI texts
+    # (grid date/time, render queue, About body) can opt into it via QSS. We only
+    # register it here — the default app font stays untouched.
+    try:
+        from PySide6.QtGui import QFontDatabase
+        for _font_file in ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"):
+            _fp = get_resource_path(os.path.join("fonts", _font_file))
+            if os.path.exists(_fp):
+                QFontDatabase.addApplicationFont(_fp)
+    except Exception:
+        pass
+
     icon_path = get_resource_path("logo.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))

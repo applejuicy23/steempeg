@@ -94,12 +94,14 @@ class ClipCard(qtw.QWidget):
 
         title_lbl = qtw.QLabel(title)
         title_lbl.setStyleSheet(
-            "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
+            "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none;"
+            " font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif; }"
         )
 
         date_lbl = qtw.QLabel(date_str)
         date_lbl.setStyleSheet(
-            "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
+            "QLabel { color: #888888; font-size: 11px; background: transparent; border: none;"
+            " font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif; }"
         )
 
         text_layout.addWidget(title_lbl)
