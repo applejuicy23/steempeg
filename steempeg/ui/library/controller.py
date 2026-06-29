@@ -907,6 +907,15 @@ class LibraryMixin:
 
         library_roots = [f for f in self.clips_folders if f and os.path.exists(f)]
         if not library_roots:
+            # No folders left (e.g. the user cleared them mid-session). The list was
+            # already emptied above, but the grid is built separately and would keep
+            # showing the previous scan's cards — wipe it and the count too. Steam's
+            # default folder is only auto-scanned at startup when nothing is saved, so
+            # searching again is an explicit action (Choose Folder / Refresh).
+            if hasattr(self, 'build_netflix_grid'):
+                self.build_netflix_grid()
+            if hasattr(self, 'lbl_clip_count'):
+                self.lbl_clip_count.setText("• 0 Clips")
             return
 
         folders_to_check = set()

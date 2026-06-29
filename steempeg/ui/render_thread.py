@@ -145,9 +145,19 @@ class RenderThread(QThread):
                 
                 # 0. Inject Trim Arguments BEFORE the input for maximum seeking speed!
                 trim_args = ""
-                if self.trim_start_sec >= 0 and self.trim_duration_sec > 0:
+                is_trim = self.trim_start_sec >= 0 and self.trim_duration_sec > 0
+                if is_trim:
                     trim_args = f"-ss {self.trim_start_sec:.3f} -t {self.trim_duration_sec:.3f} "
                 trim_args = f"{trim_args}{input_fix}"
+
+                # Trimmed stream-copy segments: the input -ss seek already lands past
+                # the corrupt head fragment, so the video-only setts retimestamp isn't
+                # needed. Worse, setts rewrites ONLY the video timeline (forces it to
+                # start at 0) while the audio keeps its seek-relative timestamps, which
+                # desynced the audio on trims ("кривой звук"). Drop setts for trims and
+                # let avoid_negative_ts shift BOTH streams together so A/V stays in sync.
+                if is_trim:
+                    copy_ts_fix = "-avoid_negative_ts make_zero "
                 
                 # 1. Prepare the audio arguments
                 if self.mute_audio:

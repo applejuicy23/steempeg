@@ -127,6 +127,11 @@ class PlayerMixin:
             self.grid_clips.clearSelection()
             self.grid_clips.setCurrentItem(None)
             self.grid_clips.blockSignals(False)
+            # The QListWidget selection sits hidden under the custom ClipCard overlay,
+            # so clearSelection() alone leaves the card's "selected" border drawn.
+            # Repaint the cards to actually drop the highlight.
+            if hasattr(self, '_sync_grid_card_visuals'):
+                self._sync_grid_card_visuals()
 
         if hasattr(self, 'btn_close_clip'):
             self.btn_close_clip.hide()
