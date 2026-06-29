@@ -36,7 +36,7 @@ _LOGS_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;
@@ -69,13 +69,9 @@ _ABOUT_DIALOG_STYLE = """
     QLabel#AboutDim { color: #888888; font-size: 11px; }
     QLabel#AboutText { color: #dddddd; font-size: 12px; }
     QLabel#AboutDisclaimer {
-        color: #9a9a9a;
-        font-size: 11px;
+        color: #8a8a8a;
+        font-size: 10px;
         font-style: italic;
-        padding: 10px 6px;
-        background-color: #1a1a1a;
-        border: 1px solid #383838;
-        border-radius: 8px;
     }
     QPushButton {
         background-color: #333333;
@@ -96,16 +92,16 @@ _ABOUT_DIALOG_STYLE = """
         background-color: #222222;
     }
     QPushButton#AboutReportBtn {
-        background-color: #c0392b;
-        border: 1px solid #e74c3c;
+        background-color: #4a2525;
+        border: 1px solid #7a3535;
         color: #ffffff;
     }
     QPushButton#AboutReportBtn:hover {
-        background-color: #e74c3c;
-        border: 1px solid #ff6b5b;
+        background-color: #6a2e2e;
+        border: 1px solid #9a4545;
     }
     QPushButton#AboutReportBtn:pressed {
-        background-color: #962d22;
+        background-color: #3a1d1d;
     }
 """
 
@@ -386,7 +382,7 @@ class LifecycleMixin:
         thanks.setWordWrap(True)
         content.addWidget(thanks)
 
-        content.addStretch()
+        content.addSpacing(18)
 
         disclaimer = QLabel(
             "Steempeg is an unofficial, community-created tool.\n"
@@ -395,10 +391,9 @@ class LifecycleMixin:
         )
         disclaimer.setObjectName("AboutDisclaimer")
         disclaimer.setWordWrap(True)
-        disclaimer.setAlignment(Qt.AlignCenter)
         content.addWidget(disclaimer)
 
-        content.addSpacing(16)
+        content.addStretch()
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()

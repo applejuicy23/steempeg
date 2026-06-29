@@ -600,7 +600,7 @@ class PlayerMixin:
                 " padding: 12px 24px;"
                 " border-radius: 6px;"
                 " font-size: 15px;"
-                " font-family: 'Inter', 'Segoe UI', Arial, sans-serif;"
+                " font-family: 'Segoe UI', Arial, sans-serif;"
                 "}"
             )
             self._immersive_esc_hint = hint
@@ -1659,7 +1659,7 @@ class PlayerMixin:
                 "QFrame#screenshotToast { background-color: #1f1f1f; border: 1px solid #6b5a8e;"
                 " border-radius: 10px; }"
                 " QLabel { color: #e8e8e8; background: transparent; font-size: 12px;"
-                " font-family: 'Inter', 'Segoe UI', Arial, sans-serif; }"
+                " font-family: 'Segoe UI', Arial, sans-serif; }"
                 " QPushButton { background-color: #4a3f63; color: #ffffff; border: none;"
                 " border-radius: 7px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
                 " QPushButton:hover { background-color: #6b5a8e; }"

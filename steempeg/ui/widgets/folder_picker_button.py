@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
 _FOLDER_PICKER_STYLE = """
     QPushButton#FolderPickerMain {
-        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         background-color: #383838;
@@ -38,7 +38,7 @@ _FOLDER_PICKER_STYLE = """
         border-bottom-left-radius: 0px;
         border-top-right-radius: 14px;
         border-bottom-right-radius: 14px;
-        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 17px;
         font-weight: bold;
         min-width: 40px;

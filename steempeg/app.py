@@ -126,7 +126,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 color: #ffffff; 
                 border: 1px solid #444444; 
                 border-radius: 4px; 
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', Arial, sans-serif;
                 font-size: 11px;
                 font-weight: bold;
                 padding: 4px 8px;
@@ -235,7 +235,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     padding: 4px 12px; 
                     border-bottom: 1px solid #282828; 
                     color: #e0e0e0; 
-                    font-family: 'Inter', 'Segoe UI', sans-serif;
+                    font-family: 'Segoe UI', sans-serif;
                     font-size: 13px;
                     font-weight: 600; 
                 }
@@ -303,7 +303,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             # 2. Enter Bold Text
             from PySide6.QtGui import QFont
-            custom_font = QFont("Inter", 10) 
+            custom_font = QFont("Segoe UI", 10) 
             custom_font.setWeight(QFont.DemiBold)
             self.ui.table_clips.setFont(custom_font)
             
@@ -480,7 +480,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     border-bottom: 1px solid #282828; 
                     color: #d1d1d1; 
                     font-size: 13px;
-                    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                    font-family: 'Segoe UI', Arial, sans-serif;
                 }
                 QTableWidget::item:hover { 
                     background-color: #303030; 
@@ -610,7 +610,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         # 1. Create a text label (like the one in View)
         lbl_sorting = QLabel("Sorting")
-        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Inter', 'Segoe UI'; font-size: 13px;")
+        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Segoe UI'; font-size: 13px;")
 
         # 2. Creating a stylish sorting dropdown list
         self.combo_sort = QComboBox()
@@ -627,7 +627,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 border-radius: 8px;
                 padding: 4px 10px; 
                 font-weight: bold; 
-                font-family: 'Inter', 'Segoe UI'; 
+                font-family: 'Segoe UI'; 
                 font-size: 13px; 
                 min-height: 24px;
             }
@@ -812,12 +812,12 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 QTabWidget { background: transparent; border: none; }
                 QTabWidget::pane { border: none; background: transparent; }
 
-                QLabel { color: #cccccc; font-weight: bold; background: transparent; font-family: 'Inter', 'Arial'; }
+                QLabel { color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }
 
                 QComboBox, QLineEdit {
                     background-color: #383838; color: #ffffff;
                     border: 2px solid #4a4a4a; border-radius: 12px;
-                    padding: 7px 10px; font-size: 12px; font-weight: bold; font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                    padding: 7px 10px; font-size: 12px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;
                 }
                 QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
                 QComboBox:disabled, QLineEdit:disabled {
@@ -839,7 +839,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     background-color: #1e1e1e; color: #e0e0e0;
                     border: 2px solid #4a4a4a; border-radius: 10px; padding: 4px; outline: none;
                     selection-background-color: #4a4a4a; selection-color: #ffffff;
-                    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                    font-family: 'Segoe UI', Arial, sans-serif;
                 }
                 QComboBox QAbstractItemView::item {
                     min-height: 28px; padding: 7px 10px; border-radius: 6px;
@@ -852,7 +852,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 QPushButton {
                     background-color: #303030; color: #ffffff;
                     border: 2px solid #3a3a3a; border-radius: 12px;
-                    padding: 7px 15px; font-weight: bold; font-family: 'Inter', 'Arial';
+                    padding: 7px 15px; font-weight: bold; font-family: 'Arial';
                 }
                 QPushButton:hover { background-color: #262626; border: 2px solid #6b5a8e; }
                 QPushButton:pressed { background-color: #141414; border: 2px solid #b29ae7; }
@@ -974,7 +974,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 background-color: #2d2d2d; 
                 border-radius: 16px; 
                 border: 1px solid #383838;
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', Arial, sans-serif;
             }
         """
         
@@ -984,7 +984,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', Arial, sans-serif;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -1079,7 +1079,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             # Logs 
             btn_logs_style = """
-                QPushButton { font-family: 'Inter', 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #383838; color: #ffffff; border: 2px solid #444444; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #383838; color: #ffffff; border: 2px solid #444444; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
                 QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1088,7 +1088,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             # Start (Green — OUR BENCHMARK)
             start_btn_style = """
-                QPushButton { font-family: 'Inter', 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #2e6b32; color: #ffffff; border: 2px solid #3e8e41; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #2e6b32; color: #ffffff; border: 2px solid #3e8e41; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }
                 QPushButton:pressed { background-color: #235226; border: 2px solid #3e8e41; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1096,7 +1096,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             # Pause (Yellow-Orange Copy of the Green One)
             btn_pause_style = """
-                QPushButton { font-family: 'Inter', 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8c7314; color: #ffffff; border: 2px solid #a88b11; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8c7314; color: #ffffff; border: 2px solid #a88b11; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #a88b11; border: 2px solid #c9a716; }
                 QPushButton:pressed { background-color: #6b570d; border: 2px solid #a88b11; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1105,7 +1105,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             
             # Cancellation (Red copy of the green one)
             btn_cancel_style = """
-                QPushButton { font-family: 'Inter', 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8a2525; color: #ffffff; border: 2px solid #a82e2e; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8a2525; color: #ffffff; border: 2px solid #a82e2e; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #a82e2e; border: 2px solid #cc3939; }
                 QPushButton:pressed { background-color: #661a1a; border: 2px solid #a82e2e; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1146,7 +1146,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             dash_layout.setContentsMargins(18, 16, 18, 16)
             dash_layout.setSpacing(12)
 
-            _status_font = "font-family: 'Inter', 'Segoe UI', Arial, sans-serif;"
+            _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
 
             header_block = qtw.QVBoxLayout()
             header_block.setSpacing(12)
@@ -1253,7 +1253,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                     old_style = btn.styleSheet()
                     
                     # 2. Hardcode the 13px font, just like on the Refresh button!
-                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Inter', 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
+                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
                     
                     btn_row.addWidget(btn)
 
@@ -1417,7 +1417,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         self.label_playback_badge = QLabel()
         self.label_playback_badge.setStyleSheet(
             "color: #ffffff; font-weight: bold; font-size: 12px;"
-            "font-family: 'Inter', 'Segoe UI', Arial, sans-serif;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
         )
         self.label_playback_badge.hide()
         header_layout.addWidget(self.label_playback_badge)
@@ -2307,20 +2307,6 @@ def main():
     except: pass
 
     app = QApplication(sys.argv)
-
-    # Bundle our own UI font (Inter) so the app looks the same on every machine and
-    # no longer leans on the rather plain default Segoe UI/Arial fallback.
-    try:
-        from PySide6.QtGui import QFont, QFontDatabase
-        font_path = get_resource_path(os.path.join("fonts", "Inter.ttf"))
-        if os.path.exists(font_path):
-            font_id = QFontDatabase.addApplicationFont(font_path)
-            families = QFontDatabase.applicationFontFamilies(font_id)
-            if families:
-                base_font = QFont(families[0], 10)
-                app.setFont(base_font)
-    except Exception:
-        pass
 
     icon_path = get_resource_path("logo.ico")
     if os.path.exists(icon_path):

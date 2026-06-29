@@ -159,7 +159,7 @@ class FilterMenu(QWidget):
                     background: transparent;
                     font-size: 13px;
                     font-weight: bold;
-                    font-family: 'Inter', 'Segoe UI';
+                    font-family: 'Segoe UI';
                 }
             """)
             cap_layout = QVBoxLayout(capsule)
@@ -264,7 +264,7 @@ class FilterMenu(QWidget):
                 color: #ffffff;
                 border: 2px solid #444444;
                 border-radius: 8px;
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', Arial, sans-serif;
                 font-weight: bold;
                 font-size: 13px;
                 padding: 4px 10px;
@@ -411,7 +411,7 @@ class FilterMenu(QWidget):
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', Arial, sans-serif;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -446,7 +446,7 @@ class FilterMenu(QWidget):
             color: #aaaaaa;
             border: 2px solid #444444;
             border-radius: 10px;
-            font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+            font-family: 'Segoe UI', Arial, sans-serif;
             font-weight: bold;
             font-size: 13px;
             padding: 4px 12px;

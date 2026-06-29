@@ -26,7 +26,7 @@ class BlockCombo(QComboBox):
         self.lineEdit().editingFinished.connect(self.auto_pad_zero)
 
         self.style_normal = """
-            QComboBox { background: #1e1e1e; color: white; border: 1px solid #333; border-radius: 6px; padding: 0px; font-weight: bold; font-family: 'Inter', 'Segoe UI'; }
+            QComboBox { background: #1e1e1e; color: white; border: 1px solid #333; border-radius: 6px; padding: 0px; font-weight: bold; font-family: 'Segoe UI'; }
             QLineEdit { background: transparent; color: white; border: none; selection-background-color: #b29ae7; selection-color: black; padding: 0px; margin: 0px; }
             QComboBox QAbstractItemView { background: #252525; color: white; selection-background-color: #b29ae7; selection-color: black; border: 1px solid #444; outline: none; min-width: 50px; }
             QComboBox::drop-down { border: none; width: 0px; }

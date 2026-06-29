@@ -275,7 +275,7 @@ class RenderMixin:
             self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 4px;")
 
         self.ui.label_status.setText(
-            f"<span style='font-weight: bold; color: {color}; font-family: Inter, Segoe UI, Arial, sans-serif;'>"
+            f"<span style='font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;'>"
             f"{display_text}</span>"
         )
 
@@ -1724,7 +1724,7 @@ class RenderMixin:
             f"border: 2px solid {color};"
             "border-radius: 8px; padding: 4px 10px;"
             "font-weight: bold; font-size: 13px;"
-            "font-family: 'Inter', 'Segoe UI';"
+            "font-family: 'Segoe UI';"
         )
         self.label_playback_badge.show()
         if hasattr(self, "update_clip_health_button"):
