@@ -127,10 +127,7 @@ class QueueJobCard(QFrame):
         text_col.setSpacing(2)
 
         title = QLabel(job.game_name.strip())
-        title.setStyleSheet(
-            "color: #f0f0f0; font-weight: bold; font-size: 13px; "
-            "font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif;"
-        )
+        title.setStyleSheet("color: #f0f0f0; font-weight: bold; font-size: 13px;")
         title.setWordWrap(True)
 
         date_line = (job.clip_date or "").replace("\n", " • ")
@@ -138,10 +135,7 @@ class QueueJobCard(QFrame):
         if job.clip_time and job.clip_time not in date_line:
             meta_text = f"{date_line} • {job.clip_time}" if date_line else job.clip_time
         meta = QLabel(meta_text)
-        meta.setStyleSheet(
-            "color: #aaaaaa; font-size: 11px; "
-            "font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif;"
-        )
+        meta.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         meta.setWordWrap(True)
 
         text_col.addWidget(title)

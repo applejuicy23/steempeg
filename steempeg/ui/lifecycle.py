@@ -66,21 +66,12 @@ _ABOUT_DIALOG_STYLE = """
     }
     QLabel { background: transparent; }
     QLabel#AboutTitle { color: #b29ae7; font-size: 22px; font-weight: bold; }
-    QLabel#AboutDim {
-        color: #888888;
-        font-size: 11px;
-        font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif;
-    }
-    QLabel#AboutText {
-        color: #dddddd;
-        font-size: 12px;
-        font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif;
-    }
+    QLabel#AboutDim { color: #888888; font-size: 11px; }
+    QLabel#AboutText { color: #dddddd; font-size: 12px; }
     QLabel#AboutDisclaimer {
         color: #8a8a8a;
         font-size: 10px;
         font-style: italic;
-        font-family: 'Liberation Sans', 'Segoe UI', Arial, sans-serif;
     }
     QPushButton {
         background-color: #333333;

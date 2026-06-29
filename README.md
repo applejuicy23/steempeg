@@ -27,7 +27,7 @@
   <a href="#-features">Features</a> ·
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-getting-started">Getting Started</a> ·
-  <a href="#-whats-new-in-v31">What's New</a> ·
+  <a href="#-whats-new-in-v32">What's New</a> ·
   <a href="#-credits">Credits</a>
 </p>
 
@@ -97,6 +97,25 @@ gh release download -R applejuicy23/steempeg --pattern "*.zip" --dir .
 Then extract and run `Steempeg.exe`.
 
 </details>
+
+---
+
+## 🆕 What's New in v32
+
+The **Debuggability Update** — smarter library management, clip health, and tools to actually diagnose problems.
+
+- **Multi-folder library** — scan clips from several Steam recording folders at once; deduplicates identical clips across roots
+- **Bug reports** — built-in report dialog with log bundle export and GitHub Issues shortcut
+- **Logs menu** — App + FFmpeg logs, MPV player log, open logs folder, clear old logs / cache
+- **Clip health** — green / yellow / red status at scan time; dead clips blocked from preview; bulk delete dead clips
+- **Library filters** — cascade sync, drag-select, games-only scroll; filter button matches sort combo styling
+- **Locale-aware times** — 12h vs 24h follows your OS locale in clips and filters
+- **Render queue** — styled right-click menu (select, open folders, remove); per-clip trim persists across sessions
+- **Bitrate fixes** — accurate source max detection; presets capped to source bitrate; custom audio no longer crashes
+- **DASH playback** — full Steam clips play correctly; timeline stays accurate; Original render no longer inflates broken timelines
+- **About polish** — readable disclaimer placement, muted Report-a-bug button
+
+Full changelog: [Releases](https://github.com/applejuicy23/steempeg/releases).
 
 ---
 
