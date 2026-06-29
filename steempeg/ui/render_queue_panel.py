@@ -22,14 +22,14 @@ from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
-_FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_FONT = "font-family: 'Inter', 'Segoe UI', Arial, sans-serif;"
 _QUEUE_MENU_STYLE = """
     QMenu {
         background-color: #2d2d2d;
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;

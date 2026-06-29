@@ -40,7 +40,7 @@ _LIBRARY_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
     }
@@ -72,7 +72,7 @@ _FOLDERS_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;
@@ -327,7 +327,7 @@ class LibraryMixin:
             f"font-weight: bold;"
             f"font-size: 13px;"
             f"padding: 2px 10px;"
-            f"font-family: 'Segoe UI';"
+            f"font-family: 'Inter', 'Segoe UI';"
             f"}}"
             f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
         )

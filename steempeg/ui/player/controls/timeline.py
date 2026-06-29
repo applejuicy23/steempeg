@@ -155,7 +155,7 @@ class TimelineCanvas(QWidget):
         self.text_tooltip = QLabel()
         self.text_tooltip.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Segoe UI'; font-size: 12px; }")
+        self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Inter', 'Segoe UI'; font-size: 12px; }")
         self.text_tooltip.hide()
         
         # We use your get_resource_path function so that the icons are always found!
@@ -546,7 +546,7 @@ class TimelineCanvas(QWidget):
         start_sec -= start_sec % int(max(1, step)) 
 
         painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-        painter.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        painter.setFont(QFont("Inter", 7, QFont.Bold))
         
         ruler_y = track_y + track_height + 4 
 
@@ -734,7 +734,7 @@ class TimelineCanvas(QWidget):
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 8px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
                 font-size: 13px;
                 font-weight: bold;
             }
@@ -785,7 +785,7 @@ class TimelineCanvas(QWidget):
     def show_track_context_menu(self, pos, time_ms):
         menu = QMenu(self)
         menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444; border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }
+            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444; border-radius: 8px; font-family: 'Inter', 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }
             QMenu::item { padding: 6px 24px 6px 24px; border-radius: 4px; margin: 2px 4px; }
             QMenu::item:selected { background-color: #6b5a8e; }
         """)

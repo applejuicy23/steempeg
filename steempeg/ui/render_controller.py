@@ -5,6 +5,7 @@ bitrate options, validating custom input, running the export thread and reportin
 results. They run on the application instance and reach its widgets and state
 through self.
 """
+import json
 import logging
 import os
 import re
@@ -274,7 +275,7 @@ class RenderMixin:
             self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 4px;")
 
         self.ui.label_status.setText(
-            f"<span style='font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;'>"
+            f"<span style='font-weight: bold; color: {color}; font-family: Inter, Segoe UI, Arial, sans-serif;'>"
             f"{display_text}</span>"
         )
 
@@ -441,6 +442,41 @@ class RenderMixin:
             "trim_end_ms": int(self.custom_timeline.trim_end_ms),
         }
 
+    def _trim_memory_path(self) -> str:
+        return os.path.join(self.cache_dir, "clip_trim_state.json")
+
+    def _ensure_trim_memory_loaded(self) -> None:
+        """Lazily load the per-clip trim memory from disk (once)."""
+        if getattr(self, "_clip_trim_memory", None) is not None:
+            return
+        self._clip_trim_memory = {}
+        path = self._trim_memory_path()
+        if not os.path.isfile(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, TypeError):
+            return
+        if not isinstance(data, dict):
+            return
+        for key, trim in data.items():
+            if not isinstance(trim, dict):
+                continue
+            self._clip_trim_memory[os.path.normpath(key)] = {
+                "is_trim_mode": bool(trim.get("is_trim_mode", False)),
+                "trim_start_ms": int(trim.get("trim_start_ms", 0)),
+                "trim_end_ms": int(trim.get("trim_end_ms", 0)),
+            }
+
+    def _save_trim_memory(self) -> None:
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            with open(self._trim_memory_path(), "w", encoding="utf-8") as f:
+                json.dump(self._clip_trim_memory, f, indent=2)
+        except OSError as exc:
+            logging.warning("Could not save clip trim memory: %s", exc)
+
     def _write_trim_state(self, clip_path: str, trim: dict) -> None:
         clip_path = os.path.normpath(clip_path)
         job = self.render_queue.find_by_clip_path(clip_path)
@@ -448,9 +484,16 @@ class RenderMixin:
             job.settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
             job.settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
             job.settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
-        if not hasattr(self, "_clip_trim_memory"):
-            self._clip_trim_memory = {}
-        self._clip_trim_memory[clip_path] = trim
+        self._ensure_trim_memory_loaded()
+        has_trim = bool(trim.get("is_trim_mode", False)) and (
+            int(trim.get("trim_end_ms", 0)) > int(trim.get("trim_start_ms", 0))
+        )
+        if has_trim:
+            self._clip_trim_memory[clip_path] = trim
+        else:
+            # No meaningful trim -> drop the entry so we don't litter the file.
+            self._clip_trim_memory.pop(clip_path, None)
+        self._save_trim_memory()
 
     def _trim_state_for_clip(self, clip_path: str) -> dict:
         clip_path = os.path.normpath(clip_path)
@@ -462,8 +505,8 @@ class RenderMixin:
                 "trim_start_ms": int(s.trim_start_ms),
                 "trim_end_ms": int(s.trim_end_ms),
             }
-        mem = getattr(self, "_clip_trim_memory", {})
-        return mem.get(
+        self._ensure_trim_memory_loaded()
+        return self._clip_trim_memory.get(
             clip_path,
             {"is_trim_mode": False, "trim_start_ms": 0, "trim_end_ms": 0},
         )
@@ -1681,7 +1724,7 @@ class RenderMixin:
             f"border: 2px solid {color};"
             "border-radius: 8px; padding: 4px 10px;"
             "font-weight: bold; font-size: 13px;"
-            "font-family: 'Segoe UI';"
+            "font-family: 'Inter', 'Segoe UI';"
         )
         self.label_playback_badge.show()
         if hasattr(self, "update_clip_health_button"):

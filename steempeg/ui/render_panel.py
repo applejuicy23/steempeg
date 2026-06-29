@@ -34,7 +34,7 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
-_FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_FONT = "font-family: 'Inter', 'Segoe UI', Arial, sans-serif;"
 _COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge
 _FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
 _TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT

@@ -36,7 +36,7 @@ _LOGS_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;
@@ -68,7 +68,15 @@ _ABOUT_DIALOG_STYLE = """
     QLabel#AboutTitle { color: #b29ae7; font-size: 22px; font-weight: bold; }
     QLabel#AboutDim { color: #888888; font-size: 11px; }
     QLabel#AboutText { color: #dddddd; font-size: 12px; }
-    QLabel#AboutDisclaimer { color: #777777; font-size: 9px; font-style: italic; }
+    QLabel#AboutDisclaimer {
+        color: #9a9a9a;
+        font-size: 11px;
+        font-style: italic;
+        padding: 10px 6px;
+        background-color: #1a1a1a;
+        border: 1px solid #383838;
+        border-radius: 8px;
+    }
     QPushButton {
         background-color: #333333;
         color: white;
@@ -86,6 +94,18 @@ _ABOUT_DIALOG_STYLE = """
     }
     QPushButton:pressed {
         background-color: #222222;
+    }
+    QPushButton#AboutReportBtn {
+        background-color: #c0392b;
+        border: 1px solid #e74c3c;
+        color: #ffffff;
+    }
+    QPushButton#AboutReportBtn:hover {
+        background-color: #e74c3c;
+        border: 1px solid #ff6b5b;
+    }
+    QPushButton#AboutReportBtn:pressed {
+        background-color: #962d22;
     }
 """
 
@@ -375,11 +395,15 @@ class LifecycleMixin:
         )
         disclaimer.setObjectName("AboutDisclaimer")
         disclaimer.setWordWrap(True)
+        disclaimer.setAlignment(Qt.AlignCenter)
         content.addWidget(disclaimer)
+
+        content.addSpacing(16)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn_report = QPushButton("Report a bug")
+        btn_report = QPushButton("🐛  Report a bug")
+        btn_report.setObjectName("AboutReportBtn")
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
         btn_close = QPushButton("Close")
