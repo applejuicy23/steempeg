@@ -1152,19 +1152,27 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             header_block.setSpacing(12)
 
             top_row = qtw.QHBoxLayout()
-            top_row.setSpacing(8)
+            top_row.setSpacing(4)
 
             if hasattr(self.ui, 'label_short_summary'):
                 self.ui.label_short_summary.hide()
+
+                summary_left = qtw.QWidget()
+                summary_left_layout = qtw.QHBoxLayout(summary_left)
+                summary_left_layout.setContentsMargins(0, 0, 0, 2)
+                summary_left_layout.setSpacing(8)
 
                 self.bottom_icon_label = qtw.QLabel()
                 self.bottom_icon_label.setFixedSize(24, 24)
 
                 self.bottom_text_label = qtw.QLabel()
-                self.bottom_text_label.setStyleSheet(f"color: #e0e0e0; font-size: 13px; {_status_font}")
+                self.bottom_text_label.setStyleSheet(
+                    f"color: #e0e0e0; font-size: 14px; font-weight: bold; {_status_font}"
+                )
 
-                top_row.addWidget(self.bottom_icon_label, 0, qtc.Qt.AlignVCenter)
-                top_row.addWidget(self.bottom_text_label, 0, qtc.Qt.AlignVCenter)
+                summary_left_layout.addWidget(self.bottom_icon_label, 0, qtc.Qt.AlignVCenter)
+                summary_left_layout.addWidget(self.bottom_text_label, 0, qtc.Qt.AlignVCenter)
+                top_row.addWidget(summary_left, 0, qtc.Qt.AlignVCenter)
 
                 def reset_bottom_summary():
                     css_icon = get_resource_path("unknown_icon.png").replace('\\', '/')
@@ -1187,7 +1195,10 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             top_row.addStretch(1)
 
-            _STATUS_DOT_SIZE = 18
+            _PCT_COL_WIDTH = 40
+            _STATUS_ROW_H = 24
+            _STATUS_DOT_SIZE = 12
+
             self.status_dot = qtw.QLabel()
             self.status_dot.setFixedSize(_STATUS_DOT_SIZE, _STATUS_DOT_SIZE)
             self.status_dot.setAlignment(qtc.Qt.AlignCenter)
@@ -1195,19 +1206,31 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 f"background-color: #4CAF50; border-radius: {_STATUS_DOT_SIZE // 2}px;"
             )
 
-            status_row = qtw.QHBoxLayout()
-            status_row.setSpacing(6)
-            status_row.setContentsMargins(0, 0, 0, 0)
+            # Dot sits in the same 40px column as "0%" so they stack vertically.
+            dot_col = qtw.QWidget()
+            dot_col.setFixedSize(_PCT_COL_WIDTH, _STATUS_ROW_H)
+            dot_col_layout = qtw.QHBoxLayout(dot_col)
+            dot_col_layout.setContentsMargins(0, 0, 0, 0)
+            dot_col_layout.setSpacing(0)
+            dot_col_layout.addStretch()
+            dot_col_layout.addWidget(self.status_dot, 0, qtc.Qt.AlignCenter)
+            dot_col_layout.addStretch()
+
+            ready_cluster = qtw.QWidget()
+            ready_cluster.setFixedHeight(_STATUS_ROW_H)
+            ready_cluster_layout = qtw.QHBoxLayout(ready_cluster)
+            ready_cluster_layout.setContentsMargins(0, 0, 0, 0)
+            ready_cluster_layout.setSpacing(4)
 
             if hasattr(self.ui, 'label_status'):
                 self.ui.label_status.setStyleSheet(
-                    f"background: transparent; border: none; font-size: 12px; font-weight: bold; {_status_font}"
+                    f"background: transparent; border: none; font-size: 14px; font-weight: bold; {_status_font}"
                 )
                 self.ui.label_status.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
-                status_row.addWidget(self.ui.label_status, 0, qtc.Qt.AlignVCenter)
+                ready_cluster_layout.addWidget(self.ui.label_status, 0, qtc.Qt.AlignVCenter)
 
-            status_row.addWidget(self.status_dot, 0, qtc.Qt.AlignVCenter)
-            top_row.addLayout(status_row)
+            ready_cluster_layout.addWidget(dot_col, 0, qtc.Qt.AlignVCenter)
+            top_row.addWidget(ready_cluster, 0, qtc.Qt.AlignVCenter)
 
             header_block.addLayout(top_row)
 
@@ -1226,7 +1249,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             if not hasattr(self, 'label_pct'):
                 self.label_pct = qtw.QLabel("0%")
-            self.label_pct.setFixedWidth(40)
+            self.label_pct.setFixedWidth(_PCT_COL_WIDTH)
             self.label_pct.setAlignment(qtc.Qt.AlignHCenter | qtc.Qt.AlignVCenter)
             self.label_pct.setStyleSheet(
                 f"color: #ffffff; font-weight: bold; font-size: 13px; {_status_font}"

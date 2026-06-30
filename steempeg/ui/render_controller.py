@@ -272,15 +272,15 @@ class RenderMixin:
             display_text = "Rendering"
 
         if hasattr(self, 'status_dot'):
-            dot_px = self.status_dot.width() or 18
-            radius = max(4, dot_px // 2)
+            dot_px = self.status_dot.width() or 12
+            radius = max(3, dot_px // 2)
             self.status_dot.setStyleSheet(
                 f"background-color: {color}; border-radius: {radius}px;"
             )
 
         self.ui.label_status.setText(
-            f"<span style='font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;'>"
-            f"{display_text}</span>"
+            f"<span style='font-weight: bold; font-size: 14px; color: {color}; "
+            f"font-family: Segoe UI, Arial, sans-serif;'>{display_text}</span>"
         )
 
         if state == "success":
