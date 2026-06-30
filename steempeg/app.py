@@ -2115,16 +2115,19 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
         # 1. Load saved library folder roots (migrates legacy last_clips_folder)
         self._load_clips_folders_from_settings()
 
-        default_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
-        if not self.clips_folders and os.path.exists(default_path):
-            self.clips_folders = [default_path]
-            self.clips_folder = default_path
-            self._save_clips_folders()
+        # First launch only: auto-discover every Steam userdata/*/gamerecordings/clips.
+        # If the user later clears the list, we do not re-scan until they ask.
+        if not self.clips_folders and self._is_first_library_setup():
+            discovered = self.auto_discover_steam_folders(save=True)
+            if discovered:
+                logging.info(
+                    "Steam auto-discovery on first launch: %s folder(s)",
+                    len(discovered),
+                )
 
         # Keep the folder-picker (+ button / label) in sync with whatever roots we
-        # ended up with. The auto-detected default path above never went through
-        # _update_folder_picker_label, so on a fresh launch the "+" stayed hidden and
-        # extra folders couldn't be added until the user re-picked the main folder.
+        # ended up with. Auto-detected paths never went through choose_folder(), so
+        # _update_folder_picker_label must run here too.
         self._update_folder_picker_label()
 
         if self.clips_folders:

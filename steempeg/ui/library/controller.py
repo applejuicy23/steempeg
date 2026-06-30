@@ -29,6 +29,11 @@ from PySide6.QtWidgets import (
 
 from steempeg.core import games
 from steempeg.core.dash import discovery, health, mpd
+from steempeg.core.steam_paths import (
+    default_clips_dialog_path,
+    discover_steam_clips_folders,
+    steam_id_from_clips_folder,
+)
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
@@ -657,13 +662,71 @@ class LibraryMixin:
             )
 
     def _default_clips_dialog_path(self):
-        for folder in getattr(self, "clips_folders", []):
-            if folder and os.path.exists(folder):
-                return folder
-        default_path = r"C:\Program Files (x86)\Steam\userdata\1077964895\gamerecordings\clips"
-        if os.path.exists(default_path):
-            return default_path
-        return "C:\\"
+        return default_clips_dialog_path(getattr(self, "clips_folders", None))
+
+    def _is_first_library_setup(self):
+        """True when the user has never configured library folders (fresh install)."""
+        settings = self.load_user_settings()
+        return "clips_folders" not in settings and not settings.get("last_clips_folder")
+
+    def auto_discover_steam_folders(self, save=True):
+        """Scan Steam userdata for gamerecordings/clips paths. Returns newly found paths."""
+        discovered = discover_steam_clips_folders()
+        if not discovered:
+            return []
+
+        existing = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
+        new_paths = [p for p in discovered if p not in existing]
+        if not new_paths and existing:
+            return []
+
+        if not self.clips_folders:
+            self.clips_folders = list(discovered)
+            self.clips_folder = self.clips_folders[0]
+        else:
+            self.clips_folders.extend(new_paths)
+
+        self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
+        if save:
+            self._save_clips_folders()
+        self._update_folder_picker_label()
+        return new_paths if existing else discovered
+
+    def discover_steam_folders(self):
+        """User action: merge any newly found Steam clip folders into the library."""
+        from steempeg.core.steam_paths import get_steam_path
+
+        before = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
+        added = self.auto_discover_steam_folders(save=True)
+        after = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
+
+        if added:
+            logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
+            self.scan_clips()
+            QMessageBox.information(
+                self.ui,
+                "Steam folders found",
+                f"Added {len(added)} Steam clips folder(s):\n\n" + "\n".join(added),
+            )
+            return
+
+        discovered = discover_steam_clips_folders()
+        if not discovered:
+            steam = get_steam_path()
+            QMessageBox.information(
+                self.ui,
+                "Steam folders",
+                "No Steam Game Recording folders were found.\n\n"
+                f"Looked under:\n{os.path.join(steam, 'userdata', '<Steam ID>', 'gamerecordings', 'clips')}",
+            )
+            return
+
+        if before == after:
+            QMessageBox.information(
+                self.ui,
+                "Steam folders",
+                "All discovered Steam folders are already in your library.",
+            )
 
     def choose_folder(self):
         """Pick the primary clips folder (first library root)."""
@@ -746,6 +809,9 @@ class LibraryMixin:
         label = QLabel(prefix + display)
         label.setObjectName("FolderRowLabel")
         tip = "Main folder\n" if is_main else ""
+        steam_id = steam_id_from_clips_folder(path)
+        if steam_id:
+            tip += f"Steam ID: {steam_id}\n"
         label.setToolTip(tip + (path if exists else f"{path}\n(Folder not found on disk)"))
         if not exists:
             label.setProperty("missing", True)
@@ -777,8 +843,17 @@ class LibraryMixin:
     def show_folders_panel(self):
         """Dropdown panel (styled like Logs) listing the main + extra library folders."""
         if not self.clips_folders:
-            # No main folder yet — nothing to manage; send the user to pick one.
-            self.choose_folder()
+            menu = QMenu(self.folder_picker)
+            menu.setStyleSheet(_FOLDERS_MENU_STYLE)
+            action_discover = menu.addAction("🔍  Discover Steam folders…")
+            action_discover.triggered.connect(self.discover_steam_folders)
+            action_choose = menu.addAction("📂  Choose folder manually…")
+            action_choose.triggered.connect(self.choose_folder)
+            btn = self.folder_picker.add_btn
+            size = menu.sizeHint()
+            top_right = btn.mapToGlobal(btn.rect().topRight())
+            pos = QPoint(top_right.x() - size.width(), top_right.y() - size.height())
+            menu.exec(pos)
             return
 
         menu = QMenu(self.folder_picker)
@@ -792,6 +867,8 @@ class LibraryMixin:
             self._folder_panel_row(menu, path, is_main=(idx == 0))
 
         menu.addSeparator()
+        action_discover = menu.addAction("🔍  Discover Steam folders…")
+        action_discover.triggered.connect(self.discover_steam_folders)
         action_add = menu.addAction("➕  Add another folder…")
         action_add.triggered.connect(self.add_clips_folder)
 

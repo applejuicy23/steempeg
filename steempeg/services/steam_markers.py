@@ -19,14 +19,7 @@ from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 
-def get_steam_path():
-    """Steam install dir from the Windows registry, falling back to the default."""
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
-            return winreg.QueryValueEx(key, "SteamPath")[0]
-    except Exception:
-        return r"C:\Program Files (x86)\Steam"
+from steempeg.core.steam_paths import get_steam_path
 
 
 def find_markers_svg(app_id, steam_path=None):
