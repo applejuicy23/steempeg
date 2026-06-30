@@ -272,7 +272,11 @@ class RenderMixin:
             display_text = "Rendering"
 
         if hasattr(self, 'status_dot'):
-            self.status_dot.setStyleSheet(f"background-color: {color}; border-radius: 4px;")
+            dot_px = self.status_dot.width() or 18
+            radius = max(4, dot_px // 2)
+            self.status_dot.setStyleSheet(
+                f"background-color: {color}; border-radius: {radius}px;"
+            )
 
         self.ui.label_status.setText(
             f"<span style='font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;'>"
@@ -1107,17 +1111,14 @@ class RenderMixin:
             except:
                 video_bitrate_display = f"{orig_v_bitrate * fps_multiplier:.1f} Mbps"
         elif "Original" in bitrate_text:
-            # Original = stream copy: the bitrate is whatever the source already is,
-            # so it must NOT be scaled by fps_multiplier (a copy can't change FPS).
-            # Mirror the Source Info value, and fall back to the number embedded in
-            # the combo text (e.g. "~22 Mbps (Original Copy)") if the live value is
-            # missing — otherwise the FPS multiplier could collapse it to "0.0".
+            # Original = stream copy: show the source Mbps only — "Original" is already
+            # in the quality label; the bottom summary must not repeat "Original copy".
             orig_mbps = orig_v_bitrate
             if orig_mbps <= 0:
                 m = re.search(r'([\d.]+)\s*Mbps', bitrate_text)
                 if m:
                     orig_mbps = float(m.group(1))
-            video_bitrate_display = f"{orig_mbps:.1f} Mbps" if orig_mbps > 0 else "Original copy"
+            video_bitrate_display = f"{orig_mbps:.1f} Mbps" if orig_mbps > 0 else "—"
         else:
             match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
             if match: 

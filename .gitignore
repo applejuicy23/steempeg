@@ -34,6 +34,7 @@ Thumbs.db
 # --- Local dev scaffolding (dismantled during refactor) ---
 newver_compilator.py
 pacher.py
+docs/ROADMAP.md
 
 # --- Local tooling, not shipped ---
 tools/

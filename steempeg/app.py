@@ -1187,25 +1187,27 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
             top_row.addStretch(1)
 
+            _STATUS_DOT_SIZE = 18
             self.status_dot = qtw.QLabel()
-            self.status_dot.setFixedSize(8, 8)
-            self.status_dot.setStyleSheet("background-color: #4CAF50; border-radius: 4px;")
+            self.status_dot.setFixedSize(_STATUS_DOT_SIZE, _STATUS_DOT_SIZE)
+            self.status_dot.setAlignment(qtc.Qt.AlignCenter)
+            self.status_dot.setStyleSheet(
+                f"background-color: #4CAF50; border-radius: {_STATUS_DOT_SIZE // 2}px;"
+            )
+
+            status_row = qtw.QHBoxLayout()
+            status_row.setSpacing(6)
+            status_row.setContentsMargins(0, 0, 0, 0)
 
             if hasattr(self.ui, 'label_status'):
                 self.ui.label_status.setStyleSheet(
                     f"background: transparent; border: none; font-size: 12px; font-weight: bold; {_status_font}"
                 )
                 self.ui.label_status.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
-                top_row.addWidget(self.ui.label_status, 0, qtc.Qt.AlignVCenter)
+                status_row.addWidget(self.ui.label_status, 0, qtc.Qt.AlignVCenter)
 
-            dot_col = qtw.QWidget()
-            dot_col.setFixedWidth(40)
-            dot_col_layout = qtw.QHBoxLayout(dot_col)
-            dot_col_layout.setContentsMargins(0, 0, 0, 0)
-            dot_col_layout.addStretch()
-            dot_col_layout.addWidget(self.status_dot)
-            dot_col_layout.addStretch()
-            top_row.addWidget(dot_col, 0, qtc.Qt.AlignVCenter)
+            status_row.addWidget(self.status_dot, 0, qtc.Qt.AlignVCenter)
+            top_row.addLayout(status_row)
 
             header_block.addLayout(top_row)
 
