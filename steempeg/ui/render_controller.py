@@ -41,6 +41,13 @@ from steempeg.render.queue import (
     load_queue_from_file,
     save_queue_to_file,
 )
+from steempeg.render.queue_history import (
+    _utc_now_iso,
+    append_batch,
+    clear_history,
+    load_history,
+    snapshot_queue_batch,
+)
 from steempeg.ui.render_panel import set_settings_panel_locked
 
 
@@ -413,6 +420,33 @@ class RenderMixin:
     def _queue_persist_path(self) -> str:
         return os.path.join(self.cache_dir, "render_queue.json")
 
+    def _queue_history_path(self) -> str:
+        return os.path.join(self.cache_dir, "render_queue_history.json")
+
+    def _archive_batch_to_history(self, *, cancelled: bool = False) -> None:
+        started = getattr(self, "_batch_started_at", None)
+        if not started:
+            return
+        batch = snapshot_queue_batch(
+            self.render_queue, started_at=started, cancelled=cancelled,
+        )
+        self._batch_started_at = None
+        if not batch.jobs:
+            return
+        try:
+            append_batch(self._queue_history_path(), batch)
+        except OSError as exc:
+            logging.warning("Could not save render history: %s", exc)
+
+    def show_render_queue_history(self) -> None:
+        from steempeg.ui.render_queue_history import RenderQueueHistoryDialog
+
+        batches = load_history(self._queue_history_path())
+        dlg = RenderQueueHistoryDialog(batches, parent=self.ui)
+        dlg.open_output_requested.connect(self.open_rendered_folder)
+        if dlg.exec() == 2:
+            clear_history(self._queue_history_path())
+
     def _persist_render_queue(self) -> None:
         try:
             save_queue_to_file(self._queue_persist_path(), self.render_queue)
@@ -562,12 +596,18 @@ class RenderMixin:
     def _sync_ui_to_selected_job(self) -> None:
         self._sync_active_queue_job_from_ui()
 
-    def _populate_quality_options_for_clip(self, clip_path: str) -> None:
+    def _populate_quality_options_for_clip(
+        self, clip_path: str, *, preserve_ui_selection: bool = True,
+    ) -> None:
         """Fill render settings combos from clip metadata (no preview/header)."""
         clip_path = os.path.normpath(clip_path)
-        current_quality = self.ui.combo_quality.currentText() if hasattr(self.ui, "combo_quality") else ""
-        current_fps = self.ui.combo_fps.currentText() if hasattr(self.ui, "combo_fps") else ""
-        current_bitrate = self.ui.combo_bitrate.currentText() if hasattr(self.ui, "combo_bitrate") else ""
+        current_quality = ""
+        current_fps = ""
+        current_bitrate = ""
+        if preserve_ui_selection:
+            current_quality = self.ui.combo_quality.currentText() if hasattr(self.ui, "combo_quality") else ""
+            current_fps = self.ui.combo_fps.currentText() if hasattr(self.ui, "combo_fps") else ""
+            current_bitrate = self.ui.combo_bitrate.currentText() if hasattr(self.ui, "combo_bitrate") else ""
 
         clip_folder_name = os.path.basename(clip_path)
         parts = clip_folder_name.split("_")
@@ -718,15 +758,15 @@ class RenderMixin:
             self.ui.combo_fps.addItem("⚙️ Custom FPS...")
             self.ui.combo_fps.setCurrentIndex(0)
 
-        if current_quality and hasattr(self.ui, "combo_quality"):
+        if preserve_ui_selection and current_quality and hasattr(self.ui, "combo_quality"):
             index = self.ui.combo_quality.findText(current_quality)
             if index >= 0:
                 self.ui.combo_quality.setCurrentIndex(index)
-        if current_fps and hasattr(self.ui, "combo_fps"):
+        if preserve_ui_selection and current_fps and hasattr(self.ui, "combo_fps"):
             index = self.ui.combo_fps.findText(current_fps)
             if index >= 0:
                 self.ui.combo_fps.setCurrentIndex(index)
-        if current_bitrate and hasattr(self.ui, "combo_bitrate"):
+        if preserve_ui_selection and current_bitrate and hasattr(self.ui, "combo_bitrate"):
             index = self.ui.combo_bitrate.findText(current_bitrate)
             if index >= 0:
                 self.ui.combo_bitrate.setCurrentIndex(index)
@@ -1563,13 +1603,17 @@ class RenderMixin:
         if not job:
             return
         self._flush_current_trim_state()
+        if self._sync_active_queue_job_from_ui():
+            self._persist_render_queue()
         self._selected_queue_job_id = job_id
         self._preview_clip_path = job.clip_path
         trim_restore = self._trim_state_for_clip(job.clip_path)
         self._loading_queue_job = True
         try:
             self._apply_header_from_job(job)
-            self._populate_quality_options_for_clip(job.clip_path)
+            self._populate_quality_options_for_clip(
+                job.clip_path, preserve_ui_selection=False,
+            )
             apply_job_settings_to_ui(self, job.settings)
             if hasattr(self, "btn_close_clip"):
                 self.btn_close_clip.show()
@@ -1849,6 +1893,7 @@ class RenderMixin:
         self._queue_batch_active = True
         self._batch_total = pending
         self._batch_current = 0
+        self._batch_started_at = _utc_now_iso()
         self._flush_current_trim_state()
         self._sync_ui_to_selected_job()
         set_settings_panel_locked(self, True)
@@ -1969,6 +2014,7 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         self._persist_render_queue()
+        self._archive_batch_to_history(cancelled=False)
         self.update_status_indicator("Ready", "ready")
         QMessageBox.information(
             self.ui,
@@ -1977,6 +2023,7 @@ class RenderMixin:
         )
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
+        self._archive_batch_to_history(cancelled=cancelled)
         self._queue_batch_active = False
         set_settings_panel_locked(self, False)
         if hasattr(self.ui, 'btn_start'):

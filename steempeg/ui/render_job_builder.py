@@ -97,15 +97,56 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
     if hasattr(ui, "size_slider"):
         ui.size_slider.setValue(settings.size_slider_index)
 
-    if settings.custom_fps is not None and hasattr(app, "input_custom_fps"):
-        app.input_custom_fps.setText(str(settings.custom_fps))
-    if settings.custom_vbitrate is not None and hasattr(app, "input_custom_vbitrate"):
-        app.input_custom_vbitrate.setText(str(settings.custom_vbitrate))
-    if settings.custom_abitrate is not None and hasattr(app, "input_custom_abitrate"):
-        app.input_custom_abitrate.setText(str(settings.custom_abitrate))
+    fps_custom = "Custom" in (settings.fps_text or "")
+    if hasattr(app, "input_custom_fps"):
+        if fps_custom and settings.custom_fps is not None:
+            app.input_custom_fps.setText(str(settings.custom_fps))
+        else:
+            app.input_custom_fps.clear()
+
+    br_custom = "Custom" in (settings.bitrate_text or "")
+    if hasattr(app, "input_custom_vbitrate"):
+        if br_custom and settings.custom_vbitrate is not None:
+            app.input_custom_vbitrate.setText(str(settings.custom_vbitrate))
+        else:
+            app.input_custom_vbitrate.clear()
+
+    ab_custom = "Custom" in (settings.audio_bitrate_text or "")
+    if hasattr(app, "input_custom_abitrate"):
+        if ab_custom and settings.custom_abitrate is not None:
+            app.input_custom_abitrate.setText(str(settings.custom_abitrate))
+        else:
+            app.input_custom_abitrate.clear()
 
     for w in blockers:
         w.blockSignals(False)
+
+    sync_custom_combo_overlays(app)
+
+    if hasattr(app, "_sync_original_audio_controls"):
+        app._sync_original_audio_controls()
+
+
+def sync_custom_combo_overlays(app) -> None:
+    """Refresh custom FPS/bitrate overlay visibility after programmatic combo changes."""
+    ui = app.ui
+    pairs = (
+        ("combo_fps", "input_custom_fps", "validate_custom_fps"),
+        ("combo_bitrate", "input_custom_vbitrate", "validate_custom_vbitrate"),
+        ("combo_audio_bitrate", "input_custom_abitrate", "validate_custom_abitrate"),
+    )
+    for combo_name, input_attr, validate_attr in pairs:
+        combo = getattr(ui, combo_name, None)
+        if combo is None:
+            continue
+        text = combo.currentText()
+        combo.currentTextChanged.emit(text)
+        if "Custom" in text:
+            edit = getattr(ui, input_attr, None)
+            validate = getattr(app, validate_attr, None)
+            if edit is not None and validate is not None:
+                validate(edit.text())
+
 
 if TYPE_CHECKING:
     from steempeg.app import SteempegApp
