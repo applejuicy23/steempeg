@@ -123,6 +123,9 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
 
     sync_custom_combo_overlays(app)
 
+    if hasattr(ui, "combo_quality"):
+        ui.combo_quality.currentTextChanged.emit(ui.combo_quality.currentText())
+
     if hasattr(app, "_sync_original_audio_controls"):
         app._sync_original_audio_controls()
 

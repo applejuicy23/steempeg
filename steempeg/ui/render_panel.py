@@ -61,11 +61,6 @@ _CUSTOM_EDIT_QSS = ("QLineEdit { background: transparent; border: none; color: #
                     " QLineEdit:hover, QLineEdit:focus { border: none; background: transparent; }")
 _GEAR_QSS = "color: #b29ae7; background: transparent; font-size: 13px;"
 _UNIT_QSS = "color: #8a8a8a; background: transparent; font-size: 11px; font-weight: bold; " + _FONT
-_HELP_BTN_QSS = (
-    "QPushButton { background-color: #3a3326; border: 1px solid #6b5a2a;"
-    " border-radius: 6px; font-size: 14px; padding: 0; " + _FONT + " }"
-    " QPushButton:hover { background-color: #4a4030; border-color: #f0c000; }"
-)
 
 
 class SourcePathsBox(QWidget):
@@ -349,25 +344,32 @@ def _field(label, combo):
 
 
 def _quality_field(ui, label, combo):
-    """Quality field with a contextual '?' warning for the Original copy preset.
+    """Quality field with a contextual warning for the Original copy preset.
 
-    The row keeps the same total width as normal combo fields, so the FPS column
-    does not shift when the help button is present.
+    Row layout matches _custom_field (combo + 8px + 16px icon slot) so the help
+    icon lines up with custom-value warn icons and the combo stays full width.
     """
     box = QVBoxLayout()
     box.setSpacing(4)
     box.setContentsMargins(0, 0, 0, 0)
 
     label.setStyleSheet(_FIELD_LABEL_QSS)
+    combo.setFixedWidth(_COMBO_W)
 
-    row = QHBoxLayout()
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(6)
+    help_slot = QWidget()
+    help_slot.setFixedSize(16, 16)
+    help_slot_layout = QHBoxLayout(help_slot)
+    help_slot_layout.setContentsMargins(0, 0, 0, 0)
+    help_slot_layout.setSpacing(0)
 
-    help_btn = QPushButton("\u26a0\ufe0f")  # warning triangle emoji
-    help_btn.setFixedSize(26, 26)
+    help_btn = QPushButton("\u26a0\ufe0f", help_slot)
+    help_btn.setFixedSize(16, 16)
     help_btn.setCursor(Qt.PointingHandCursor)
-    help_btn.setStyleSheet(_HELP_BTN_QSS)
+    help_btn.setStyleSheet(
+        "QPushButton { background-color: #3a3326; border: 1px solid #6b5a2a;"
+        " border-radius: 4px; font-size: 10px; padding: 0; " + _FONT + " }"
+        " QPushButton:hover { background-color: #4a4030; border-color: #f0c000; }"
+    )
     help_btn.setToolTip(
         "\u26a0\ufe0f <b>Original preset warning</b><br>"
         "Original uses fast stream copy / block merge without re-encoding.<br><br>"
@@ -376,24 +378,22 @@ def _quality_field(ui, label, combo):
         "If that happens, use a normal re-encode preset such as 1440p/1080p. "
         "Re-encoding usually fixes those timeline glitches."
     )
+    help_btn.hide()
 
-    row.addWidget(combo)
-    row.addWidget(help_btn, 0, Qt.AlignVCenter)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
 
     def _sync_help(text):
-        show = "Original" in (text or "")
-        help_btn.setVisible(show)
-        # Keep the column's total width constant: shrink the combo to make room
-        # for the button only when it's visible, otherwise use the full width so
-        # the field lines up with the FPS column next to it.
-        if show:
-            combo.setFixedWidth(_COMBO_W - help_btn.width() - row.spacing())
-        else:
-            combo.setFixedWidth(_COMBO_W)
+        help_btn.setVisible("Original" in (text or ""))
 
     combo.currentTextChanged.connect(_sync_help)
     _sync_help(combo.currentText())
     ui.btn_quality_original_help = help_btn
+
+    row.addWidget(combo, 0, Qt.AlignLeft)
+    row.addWidget(help_slot, 0, Qt.AlignVCenter)
+    row.addStretch()
 
     box.addWidget(label, alignment=Qt.AlignLeft)
     box.addLayout(row)
