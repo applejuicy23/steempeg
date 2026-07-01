@@ -1,13 +1,14 @@
-"""Right-side render queue panel — job cards with status colours."""
+"""Right-side render queue panel — list or grid job cards with status colours."""
 from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -21,41 +22,30 @@ from PySide6.QtWidgets import (
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.render.queue_display import (
+    format_job_datetime_line,
+    format_job_output,
+    format_job_preset,
+    format_job_trim,
+)
+from steempeg.ui.queue_card_shared import (
+    _FONT,
+    _MIME_JOB_ID,
+    _QUEUE_MENU_STYLE,
+    job_accepts_drop as _job_accepts_drop,
+    job_can_remove as _job_can_remove,
+)
+from steempeg.ui.render_queue_grid import (
+    QueueGridJobCard,
+    _CARD_W as _GRID_CARD_W,
+    _REMOVE_BTN_STYLE,
+    _status_dot_style,
+)
 
-_FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
-_QUEUE_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        padding: 4px 0;
-    }
-    QMenu::item {
-        padding: 8px 28px 8px 20px;
-        border-radius: 4px;
-        margin: 2px 6px;
-    }
-    QMenu::item:selected {
-        background-color: #3a324a;
-        color: #b29ae7;
-    }
-    QMenu::item:disabled {
-        color: #777777;
-    }
-    QMenu::separator {
-        height: 1px;
-        background: #444444;
-        margin: 4px 10px;
-    }
-"""
-_MIME_JOB_ID = "application/x-steempeg-queue-job"
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
+_GRID_GAP = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
 )
@@ -77,14 +67,6 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def _job_accepts_drop(job: RenderJob) -> bool:
-    return job.status == JobStatus.QUEUED
-
-
-def _job_can_remove(job: RenderJob) -> bool:
-    return job.status != JobStatus.RENDERING
-
-
 class QueueJobCard(QFrame):
     clicked = Signal(str)
     remove_requested = Signal(str)
@@ -98,13 +80,15 @@ class QueueJobCard(QFrame):
         self._drag_start = QPoint()
         self._selected = selected
         self._drop_highlight = False
+        self._press_on_remove = False
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptDrops(_job_accepts_drop(job))
+        self.setMinimumWidth(0)
         self._apply_card_style()
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
         num = QLabel(str(job.queue_index))
         num.setFixedSize(26, 26)
@@ -124,32 +108,52 @@ class QueueJobCard(QFrame):
         root.addWidget(icon, 0, Qt.AlignTop)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(2)
+        text_col.setSpacing(5)
 
         title = QLabel(job.game_name.strip())
-        title.setStyleSheet("color: #f0f0f0; font-weight: bold; font-size: 13px;")
+        title.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 13px; {_FONT}")
         title.setWordWrap(True)
 
-        date_line = (job.clip_date or "").replace("\n", " • ")
-        meta_text = date_line
-        if job.clip_time and job.clip_time not in date_line:
-            meta_text = f"{date_line} • {job.clip_time}" if date_line else job.clip_time
-        meta = QLabel(meta_text)
-        meta.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        meta = QLabel(format_job_datetime_line(job))
+        meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
         meta.setWordWrap(True)
+        self._meta_label = meta
+
+        preset = QLabel(format_job_preset(job.settings))
+        preset.setStyleSheet(f"color: #c4b5e8; font-size: 11px; {_FONT}")
+        preset.setWordWrap(True)
+        self._preset_label = preset
+
+        trim_text = format_job_trim(job.settings)
+        has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
+        trim_lbl = QLabel(trim_text)
+        trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+        trim_lbl.setVisible(has_trim)
+        self._trim_label = trim_lbl
+
+        out_line = QLabel(format_job_output(job))
+        out_line.setStyleSheet(f"color: #999999; font-size: 11px; {_FONT}")
+        out_line.setWordWrap(True)
+        self._out_label = out_line
 
         text_col.addWidget(title)
         text_col.addWidget(meta)
+        text_col.addWidget(preset)
+        text_col.addWidget(trim_lbl)
+        text_col.addWidget(out_line)
+
         root.addLayout(text_col, 1)
 
+        self._btn_remove = None
         if _job_can_remove(job):
-            btn_remove = QPushButton("✕")
-            btn_remove.setObjectName("queueRemoveBtn")
-            btn_remove.setFixedSize(24, 24)
-            btn_remove.setToolTip("Remove from queue")
-            btn_remove.setCursor(Qt.PointingHandCursor)
-            btn_remove.clicked.connect(lambda: self.remove_requested.emit(self._job_id))
-            root.addWidget(btn_remove, 0, Qt.AlignTop)
+            self._btn_remove = QPushButton("✕")
+            self._btn_remove.setObjectName("queueRemoveBtn")
+            self._btn_remove.setFixedSize(26, 26)
+            self._btn_remove.setToolTip("Remove from queue")
+            self._btn_remove.setCursor(Qt.PointingHandCursor)
+            self._btn_remove.setStyleSheet(_REMOVE_BTN_STYLE)
+            self._btn_remove.clicked.connect(lambda: self.remove_requested.emit(self._job_id))
+            root.addWidget(self._btn_remove, 0, Qt.AlignTop)
 
         for label in self.findChildren(QLabel):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -162,6 +166,17 @@ class QueueJobCard(QFrame):
         self._selected = selected
         self._drop_highlight = False
         self._num_label.setText(str(job.queue_index))
+        if hasattr(self, "_meta_label"):
+            self._meta_label.setText(format_job_datetime_line(job))
+        if hasattr(self, "_preset_label"):
+            self._preset_label.setText(format_job_preset(job.settings))
+        if hasattr(self, "_trim_label"):
+            trim_text = format_job_trim(job.settings)
+            has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
+            self._trim_label.setText(trim_text)
+            self._trim_label.setVisible(has_trim)
+        if hasattr(self, "_out_label"):
+            self._out_label.setText(format_job_output(job))
         self.setAcceptDrops(_job_accepts_drop(job))
         self._refresh_num_style()
         self._apply_card_style()
@@ -209,10 +224,7 @@ class QueueJobCard(QFrame):
 
     def _refresh_num_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
-        self._num_label.setStyleSheet(
-            f"color: #1a1a1a; font-weight: bold; font-size: 12px;"
-            f"background-color: {color}; border-radius: 13px;"
-        )
+        self._num_label.setStyleSheet(_status_dot_style(color))
 
     def _apply_card_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
@@ -252,18 +264,33 @@ class QueueJobCard(QFrame):
         self._drop_highlight = active
         self._apply_card_style()
 
+    def _hit_remove_button(self, event) -> bool:
+        if self._btn_remove is None or not self._btn_remove.isVisible():
+            return False
+        gp = event.globalPosition().toPoint()
+        return self._btn_remove.rect().contains(self._btn_remove.mapFromGlobal(gp))
+
     def mousePressEvent(self, event):
+        if self._hit_remove_button(event):
+            self._press_on_remove = True
+            return
+        self._press_on_remove = False
         if event.button() == Qt.LeftButton:
             self._drag_start = event.position().toPoint()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if getattr(self, "_press_on_remove", False):
+            self._press_on_remove = False
+            return
         if event.button() == Qt.LeftButton:
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
                 self.clicked.emit(self._job_id)
         super().mouseReleaseEvent(event)
 
     def mouseMoveEvent(self, event):
+        if getattr(self, "_press_on_remove", False):
+            return
         if not (event.buttons() & Qt.LeftButton):
             return
         if self._job.status != JobStatus.QUEUED:
@@ -368,21 +395,23 @@ class QueueListHost(QWidget):
 
 
 class RenderQueuePanel(QWidget):
-    """Render queue column — header pill + list box, mirroring Clips Manager layout."""
+    """Render queue column — header pill + list or grid of job cards."""
 
     job_selected = Signal(str)
     job_remove_requested = Signal(str)
     job_reorder_requested = Signal(str, str)
     job_reorder_after_requested = Signal(str, str)
     clear_queue_requested = Signal()
+    view_mode_changed = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, initial_view_mode: str = "grid", parent=None):
         super().__init__(parent)
         self.setObjectName("render_queue_panel")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background: transparent;")
+        self._view_mode = initial_view_mode if initial_view_mode in ("list", "grid") else "grid"
         self._selected_id: str | None = None
-        self._card_widgets: list[QueueJobCard] = []
+        self._card_widgets: list = []
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
@@ -416,17 +445,46 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
+        self._btn_view_list = QPushButton("≡")
+        self._btn_view_list.setToolTip("List view")
+        self._btn_view_list.setFixedSize(28, 24)
+        self._btn_view_list.setCursor(Qt.PointingHandCursor)
+        self._btn_view_grid = QPushButton("▦")
+        self._btn_view_grid.setToolTip("Grid view")
+        self._btn_view_grid.setFixedSize(28, 24)
+        self._btn_view_grid.setCursor(Qt.PointingHandCursor)
+        view_btn_style = """
+            QPushButton {
+                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
+                border-radius: 8px; font-size: 14px; font-weight: bold; padding: 0;
+            }
+            QPushButton:hover { background-color: #4a4a4a; color: #ffffff; }
+            QPushButton:checked {
+                background-color: #3a324a; color: #b29ae7; border: 1px solid #6b5a8e;
+            }
+        """
+        self._btn_view_list.setCheckable(True)
+        self._btn_view_grid.setCheckable(True)
+        self._btn_view_list.setStyleSheet(view_btn_style)
+        self._btn_view_grid.setStyleSheet(view_btn_style)
+        self._btn_view_list.clicked.connect(lambda: self._set_view_mode("list"))
+        self._btn_view_grid.clicked.connect(lambda: self._set_view_mode("grid"))
+
         pill_layout.addWidget(self._title_label)
         pill_layout.addStretch()
+        pill_layout.addWidget(self._btn_view_list)
+        pill_layout.addWidget(self._btn_view_grid)
         pill_layout.addWidget(self._count_label)
         pill_layout.addWidget(self._btn_clear)
         outer.addWidget(header_pill)
+
+        self._sync_view_toggle_buttons()
 
         self._list_container = QFrame()
         self._list_container.setObjectName("queueListContainer")
         self._list_container.setStyleSheet(_ROUNDED_LIST_BOX)
         list_outer = QVBoxLayout(self._list_container)
-        list_outer.setContentsMargins(10, 10, 10, 10)
+        list_outer.setContentsMargins(8, 8, 8, 8)
         list_outer.setSpacing(10)
 
         self._scroll = QScrollArea()
@@ -441,18 +499,142 @@ class RenderQueuePanel(QWidget):
         self._list_layout.setContentsMargins(0, 0, 0, 0)
         self._list_layout.setSpacing(10)
 
+        self._grid_host = QWidget()
+        self._grid_host.setObjectName("queueGridHost")
+        self._grid_layout = QGridLayout(self._grid_host)
+        self._grid_layout.setContentsMargins(0, 0, 0, 0)
+        self._grid_layout.setHorizontalSpacing(_GRID_GAP)
+        self._grid_layout.setVerticalSpacing(_GRID_GAP)
+        self._grid_layout.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+
+        self._content_stack = QWidget()
+        self._content_stack_layout = QVBoxLayout(self._content_stack)
+        self._content_stack_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_stack_layout.addWidget(self._list_host)
+        self._content_stack_layout.addWidget(self._grid_host)
+        self._grid_host.hide()
+
         self._empty_label = QLabel("Right-click a clip → Add to queue\n✕ removes a clip from the queue")
         self._empty_label.setAlignment(Qt.AlignCenter)
         self._empty_label.setWordWrap(True)
         self._empty_label.setStyleSheet(f"color: #666666; font-size: 12px; {_FONT}")
 
-        self._scroll.setWidget(self._list_host)
+        self._scroll.setWidget(self._content_stack)
         list_outer.addWidget(self._scroll, 1)
 
         outer.addWidget(self._list_container, 1)
 
-        self.setMinimumWidth(0)
+        self._scroll.viewport().installEventFilter(self)
+
+        self.setMinimumWidth(320)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
+    def eventFilter(self, obj, event):
+        if (
+            obj == self._scroll.viewport()
+            and event.type() == QEvent.Type.Resize
+            and self._view_mode == "grid"
+            and self._jobs
+        ):
+            self._relayout_grid_cards()
+        return super().eventFilter(obj, event)
+
+    def _set_view_mode(self, mode: str) -> None:
+        if mode not in ("list", "grid") or mode == self._view_mode:
+            return
+        self._view_mode = mode
+        self._sync_view_toggle_buttons()
+        self.view_mode_changed.emit(mode)
+        self._rebuild_cards()
+
+    def _sync_view_toggle_buttons(self) -> None:
+        self._btn_view_list.setChecked(self._view_mode == "list")
+        self._btn_view_grid.setChecked(self._view_mode == "grid")
+
+    def _active_host_layout(self):
+        if self._view_mode == "grid":
+            return self._grid_layout
+        return self._list_layout
+
+    def _show_active_host(self) -> None:
+        is_grid = self._view_mode == "grid"
+        self._list_host.setVisible(not is_grid)
+        self._grid_host.setVisible(is_grid)
+
+    def _grid_column_count(self) -> int:
+        viewport_w = max(1, self._scroll.viewport().width())
+        return max(1, viewport_w // (_GRID_CARD_W + _GRID_GAP))
+
+    def _relayout_grid_cards(self) -> None:
+        if self._view_mode != "grid" or not self._card_widgets:
+            return
+        while self._grid_layout.count():
+            item = self._grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(self._grid_host)
+        cols = self._grid_column_count()
+        for index, card in enumerate(self._card_widgets):
+            row, col = divmod(index, cols)
+            self._grid_layout.addWidget(card, row, col)
+        rows_used = (len(self._card_widgets) + cols - 1) // cols
+        self._grid_layout.setRowStretch(rows_used, 1)
+
+    def _make_card(self, job: RenderJob, selected: bool):
+        if self._view_mode == "grid":
+            return QueueGridJobCard(job, selected=selected)
+        return QueueJobCard(job, selected=selected)
+
+    def _wire_card(self, card) -> None:
+        card.clicked.connect(self._on_card_clicked)
+        card.remove_requested.connect(self.job_remove_requested.emit)
+        card.dropped_on.connect(self._on_card_drop)
+
+    def _clear_cards(self) -> None:
+        if self._empty_label.parent() is not None:
+            self._list_layout.removeWidget(self._empty_label)
+
+        while self._list_layout.count():
+            item = self._list_layout.takeAt(0)
+            w = item.widget()
+            if w is not None and w is not self._empty_label:
+                w.setParent(None)
+                w.deleteLater()
+
+        while self._grid_layout.count():
+            item = self._grid_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+
+        self._card_widgets.clear()
+
+    def _rebuild_cards(self) -> None:
+        jobs = list(self._jobs)
+        selected = self._selected_id
+        self._clear_cards()
+        self._show_active_host()
+
+        if not jobs:
+            self._list_layout.addWidget(self._empty_label)
+            self._list_layout.addStretch()
+            self._empty_label.show()
+            return
+
+        self._empty_label.hide()
+        for job in jobs:
+            card = self._make_card(job, selected=(job.id == selected))
+            self._wire_card(card)
+            self._card_widgets.append(card)
+
+        if self._view_mode == "grid":
+            self._relayout_grid_cards()
+        else:
+            for card in self._card_widgets:
+                self._list_layout.addWidget(card)
+            self._list_layout.addStretch()
+
+        self._scroll_to_selected()
 
     def _clear_drop_highlights(self) -> None:
         for card in self._card_widgets:
@@ -471,43 +653,25 @@ class RenderQueuePanel(QWidget):
         self._selected_id = selected_id
         self._count_label.setText(f"({len(jobs)})")
         self._btn_clear.setEnabled(len(jobs) > 0)
+        self._jobs = list(jobs)
 
         job_ids = [j.id for j in jobs]
-        if job_ids and job_ids == [c._job_id for c in self._card_widgets]:
-            self._jobs = list(jobs)
+        same_cards = (
+            job_ids
+            and job_ids == [c._job_id for c in self._card_widgets]
+            and len(self._card_widgets) == len(jobs)
+            and (
+                (self._view_mode == "grid" and isinstance(self._card_widgets[0], QueueGridJobCard))
+                or (self._view_mode == "list" and isinstance(self._card_widgets[0], QueueJobCard))
+            )
+        )
+        if same_cards:
             for card, job in zip(self._card_widgets, jobs):
                 card.apply_job(job, selected=(job.id == selected_id))
             self._scroll_to_selected()
             return
 
-        self._jobs = list(jobs)
-
-        if self._empty_label.parent() is not None:
-            self._list_layout.removeWidget(self._empty_label)
-
-        while self._list_layout.count():
-            item = self._list_layout.takeAt(0)
-            w = item.widget()
-            if w is not None and w is not self._empty_label:
-                w.deleteLater()
-        self._card_widgets.clear()
-
-        if not jobs:
-            self._list_layout.addWidget(self._empty_label)
-            self._list_layout.addStretch()
-            self._empty_label.show()
-            return
-
-        self._empty_label.hide()
-        for job in jobs:
-            card = QueueJobCard(job, selected=(job.id == selected_id))
-            card.clicked.connect(self._on_card_clicked)
-            card.remove_requested.connect(self.job_remove_requested.emit)
-            card.dropped_on.connect(self._on_card_drop)
-            self._list_layout.addWidget(card)
-            self._card_widgets.append(card)
-        self._list_layout.addStretch()
-        self._scroll_to_selected()
+        self._rebuild_cards()
 
     def _scroll_to_selected(self) -> None:
         if not self._selected_id:
