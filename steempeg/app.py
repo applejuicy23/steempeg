@@ -1954,14 +1954,19 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 right_content_layout.setSpacing(0)
                 right_content_layout.addWidget(self.main_v_splitter)
 
+                from steempeg.ui.layout_defaults import DEFAULT_QUEUE_VIEW
                 from steempeg.ui.render_queue_panel import RenderQueuePanel
 
-                self.render_queue_panel = RenderQueuePanel()
+                queue_view = self.get_layout_setting("queue_view_mode", DEFAULT_QUEUE_VIEW)
+                self.render_queue_panel = RenderQueuePanel(initial_view_mode=queue_view)
                 self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
                 self.render_queue_panel.job_remove_requested.connect(self.remove_queue_job)
                 self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
                 self.render_queue_panel.job_reorder_after_requested.connect(self.reorder_queue_job_after)
                 self.render_queue_panel.clear_queue_requested.connect(self.clear_render_queue)
+                self.render_queue_panel.view_mode_changed.connect(
+                    lambda mode: self.save_layout_setting("queue_view_mode", mode)
+                )
 
                 self.right_h_splitter = QSplitter(Qt.Horizontal)
                 self.right_h_splitter.setObjectName("right_h_splitter")
