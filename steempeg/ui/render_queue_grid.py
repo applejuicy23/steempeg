@@ -39,7 +39,7 @@ from steempeg.ui.queue_card_shared import (
 # Match library grid card width; queue footer is taller (more metadata lines).
 _CARD_W = 280
 _THUMB_H = 148
-_TEXT_H = 104
+_TEXT_H = 96
 _CARD_H = _THUMB_H + _TEXT_H
 _STATUS_DOT = 26
 _DRAG_PIXMAP_MAX_W = 280
@@ -140,14 +140,14 @@ class QueueGridJobCard(QWidget):
 
         self._btn_remove = None
         if _job_can_remove(job):
-            self._btn_remove = QPushButton("✕", thumb_wrap)
+            self._btn_remove = QPushButton("✕", self)
             self._btn_remove.setObjectName("queueRemoveBtn")
             self._btn_remove.setFixedSize(_STATUS_DOT, _STATUS_DOT)
             self._btn_remove.setCursor(Qt.PointingHandCursor)
             self._btn_remove.setToolTip("Remove from queue")
-            self._btn_remove.move(_CARD_W - 34, 8)
             self._btn_remove.setStyleSheet(_REMOVE_BTN_STYLE)
             self._btn_remove.clicked.connect(self._on_remove_clicked)
+            self._btn_remove.move(_CARD_W - 34, 8)
 
         text_widget = QWidget()
         text_widget.setFixedHeight(_TEXT_H)
@@ -162,7 +162,7 @@ class QueueGridJobCard(QWidget):
         text_layout = QVBoxLayout(text_widget)
         # Padding matched to the comfortable 3-line reference block (12px sides, ~8/10 vertical).
         text_layout.setContentsMargins(12, 8, 12, 10)
-        text_layout.setSpacing(5)
+        text_layout.setSpacing(3)
 
         self._title_label = ElidedLabel()
         self._title_label.setText(job.game_name.strip() or os.path.basename(job.clip_path))
@@ -214,10 +214,10 @@ class QueueGridJobCard(QWidget):
                 continue
             child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+        self._border_overlay.raise_()
+        self._index_badge.raise_()
         if self._btn_remove is not None:
             self._btn_remove.raise_()
-        self._index_badge.raise_()
-        self._border_overlay.raise_()
         self._apply_border_style()
 
     def _on_remove_clicked(self) -> None:
@@ -318,6 +318,8 @@ class QueueGridJobCard(QWidget):
     def mouseReleaseEvent(self, event):
         if self._press_on_remove:
             self._press_on_remove = False
+            if self._hit_remove_button(event):
+                self.remove_requested.emit(self._job_id)
             return
         if event.button() == Qt.LeftButton:
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:

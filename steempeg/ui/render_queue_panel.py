@@ -28,6 +28,7 @@ from steempeg.render.queue_display import (
     format_job_preset,
     format_job_trim,
 )
+from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.queue_card_shared import (
     _FONT,
     _MIME_JOB_ID,
@@ -88,7 +89,7 @@ class QueueJobCard(QFrame):
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setSpacing(6)
 
         num = QLabel(str(job.queue_index))
         num.setFixedSize(26, 26)
@@ -108,32 +109,39 @@ class QueueJobCard(QFrame):
         root.addWidget(icon, 0, Qt.AlignTop)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(5)
+        text_col.setSpacing(3)
 
-        title = QLabel(job.game_name.strip())
+        title = ElidedLabel(job.game_name.strip())
         title.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 13px; {_FONT}")
-        title.setWordWrap(True)
+        title.setMinimumWidth(0)
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._title_label = title
 
-        meta = QLabel(format_job_datetime_line(job))
+        meta = ElidedLabel(format_job_datetime_line(job))
         meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
-        meta.setWordWrap(True)
+        meta.setMinimumWidth(0)
+        meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._meta_label = meta
 
-        preset = QLabel(format_job_preset(job.settings))
+        preset = ElidedLabel(format_job_preset(job.settings))
         preset.setStyleSheet(f"color: #c4b5e8; font-size: 11px; {_FONT}")
-        preset.setWordWrap(True)
+        preset.setMinimumWidth(0)
+        preset.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._preset_label = preset
 
         trim_text = format_job_trim(job.settings)
         has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
-        trim_lbl = QLabel(trim_text)
+        trim_lbl = ElidedLabel(trim_text)
         trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+        trim_lbl.setMinimumWidth(0)
+        trim_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         trim_lbl.setVisible(has_trim)
         self._trim_label = trim_lbl
 
-        out_line = QLabel(format_job_output(job))
+        out_line = ElidedLabel(format_job_output(job))
         out_line.setStyleSheet(f"color: #999999; font-size: 11px; {_FONT}")
-        out_line.setWordWrap(True)
+        out_line.setMinimumWidth(0)
+        out_line.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._out_label = out_line
 
         text_col.addWidget(title)
@@ -156,7 +164,11 @@ class QueueJobCard(QFrame):
             root.addWidget(self._btn_remove, 0, Qt.AlignTop)
 
         for label in self.findChildren(QLabel):
+            if label is self._btn_remove:
+                continue
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         self._refresh_num_style()
 
@@ -166,6 +178,8 @@ class QueueJobCard(QFrame):
         self._selected = selected
         self._drop_highlight = False
         self._num_label.setText(str(job.queue_index))
+        if hasattr(self, "_title_label"):
+            self._title_label.setText(job.game_name.strip())
         if hasattr(self, "_meta_label"):
             self._meta_label.setText(format_job_datetime_line(job))
         if hasattr(self, "_preset_label"):
@@ -282,6 +296,8 @@ class QueueJobCard(QFrame):
     def mouseReleaseEvent(self, event):
         if getattr(self, "_press_on_remove", False):
             self._press_on_remove = False
+            if self._hit_remove_button(event):
+                self.remove_requested.emit(self._job_id)
             return
         if event.button() == Qt.LeftButton:
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
@@ -515,11 +531,19 @@ class RenderQueuePanel(QWidget):
 
         self._grid_host = QWidget()
         self._grid_host.setObjectName("queueGridHost")
-        self._grid_layout = QGridLayout(self._grid_host)
+        self._grid_outer = QHBoxLayout(self._grid_host)
+        self._grid_outer.setContentsMargins(0, 0, 0, 0)
+        self._grid_outer.setSpacing(0)
+        self._grid_outer.addStretch(1)
+
+        self._grid_inner = QWidget()
+        self._grid_inner.setObjectName("queueGridInner")
+        self._grid_layout = QGridLayout(self._grid_inner)
         self._grid_layout.setContentsMargins(0, 0, 0, 0)
         self._grid_layout.setHorizontalSpacing(_GRID_GAP)
         self._grid_layout.setVerticalSpacing(_GRID_GAP)
-        self._grid_layout.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._grid_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        self._grid_outer.addWidget(self._grid_inner, 0, Qt.AlignTop)
 
         self._content_stack = QWidget()
         self._content_stack_layout = QVBoxLayout(self._content_stack)
@@ -585,7 +609,7 @@ class RenderQueuePanel(QWidget):
         while self._grid_layout.count():
             item = self._grid_layout.takeAt(0)
             if item.widget():
-                item.widget().setParent(self._grid_host)
+                item.widget().setParent(self._grid_inner)
         cols = self._grid_column_count()
         for index, card in enumerate(self._card_widgets):
             row, col = divmod(index, cols)

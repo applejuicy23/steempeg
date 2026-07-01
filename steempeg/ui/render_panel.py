@@ -11,7 +11,7 @@ Mbps / kbps) sits next to the drop-down arrow. The combo stays NON-editable, so
 currentText() still returns "Custom …" and every value-reading branch in render_controller
 keeps working untouched — we only expose the edit + warning icon on `ui`.
 """
-from PySide6.QtCore import QEvent, QObject, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -122,6 +123,11 @@ class SourcePathsBox(QWidget):
         for i, full in enumerate(paths):
             display = f"{i + 1}.  {full}" if multi else full
             self._rows_layout.addWidget(self._make_path_row(display, full))
+        QTimer.singleShot(0, self._refresh_path_labels)
+
+    def _refresh_path_labels(self) -> None:
+        for lbl in self._rows_host.findChildren(ElidedLabel):
+            lbl.update()
 
     def setText(self, text):
         """Legacy reset/placeholder entry point (lifecycle/player/controller)."""
@@ -156,6 +162,8 @@ class SourcePathsBox(QWidget):
         path_lbl = ElidedLabel()
         path_lbl.setStyleSheet(self._PATH_QSS)
         path_lbl.setText(display_text)
+        path_lbl.setMinimumWidth(0)
+        path_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         h.addWidget(path_lbl, 1)
 
         btn = QPushButton()
