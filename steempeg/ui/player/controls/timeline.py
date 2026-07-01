@@ -37,6 +37,12 @@ from steempeg.services.steam_markers import MarkerIconStore
 
 class TimelineCanvas(QWidget):
     """ The inner canvas of the timeline (the one that stretches when you zoom) """
+    _RULER_GAP = 4
+    _MAJOR_TICK_H = 10      # longer major ticks (was 8)
+    _MINOR_TICK_H = 4
+    _RULER_FONT_PT = 8
+    _CANVAS_H = 58
+
     pause_requested = Signal()        
     seek_requested = Signal(int)      
     resume_requested = Signal()
@@ -47,7 +53,7 @@ class TimelineCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(58)
+        self.setMinimumHeight(self._CANVAS_H)
         self.duration_ms = 0
         self.setMouseTracking(True)
         
@@ -157,6 +163,8 @@ class TimelineCanvas(QWidget):
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
         self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Segoe UI'; font-size: 12px; }")
         self.text_tooltip.hide()
+
+        self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
         
         # We use your get_resource_path function so that the icons are always found!
         self.icon_paths = {
@@ -460,8 +468,6 @@ class TimelineCanvas(QWidget):
         track_height = 12.0 
         track_y = 28.0
 
-        ruler_y = track_y + track_height + 3.0
-
         painter.fillRect(QRectF(pad, track_y, usable_w, track_height), self.track_color)
 
         # Disabled / no-clip state: hatch the whole track so it clearly reads as "locked"
@@ -546,32 +552,32 @@ class TimelineCanvas(QWidget):
         start_sec -= start_sec % int(max(1, step)) 
 
         painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-        painter.setFont(QFont("Segoe UI Semibold", 7))
-        
-        ruler_y = track_y + track_height + 4 
+        painter.setFont(self._ruler_font)
+
+        ruler_y = track_y + track_height + self._RULER_GAP
 
         current_sec = start_sec
         while current_sec <= end_sec:
             x = self.ms_to_x(current_sec * 1000)
+            x_pix = round(x)
             is_major = (current_sec % max(10, step * 5) == 0) or (step >= 60 and current_sec % 60 == 0)
 
             if is_major:
-                painter.drawLine(int(x), int(ruler_y), int(x), int(ruler_y + 8)) 
-                
-                # The New Mathematics of Time (With Clocks)
+                tick_bot = int(ruler_y + self._MAJOR_TICK_H)
+                painter.drawLine(x_pix, int(ruler_y), x_pix, tick_bot)
+
                 h = int(current_sec // 3600)
                 m = int((current_sec % 3600) // 60)
                 s = int(current_sec % 60)
-                
-                # If the duration exceeds one hour, display H:MM:SS; otherwise, M:SS
+
                 if h > 0:
                     time_str = f"{h}:{m:02d}:{s:02d}"
                 else:
                     time_str = f"{m}:{s:02d}"
-                    
-                painter.drawText(int(x) + 3, int(ruler_y + 8), time_str) 
+
+                painter.drawText(x_pix + 3, tick_bot, time_str)
             else:
-                painter.drawLine(int(x), int(ruler_y), int(x), int(ruler_y + 3)) 
+                painter.drawLine(x_pix, int(ruler_y), x_pix, int(ruler_y + self._MINOR_TICK_H))
 
             current_sec += step
 
@@ -1118,7 +1124,7 @@ class CustomTimelineWidget(QScrollArea):
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
 
-        canvas_h = 58     # Canvas height/divisions (TimelineCanvas)
+        canvas_h = TimelineCanvas._CANVAS_H
         top_gap = 0    # Gap from divisions to strip (your distance to scales)
         bar_h = 13 # Height of the scrollbar itself
         bottom_gap = 5    # Gap from the bottom of the strip to the button panel (your distance to the buttons)
