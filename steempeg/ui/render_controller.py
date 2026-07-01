@@ -488,6 +488,9 @@ class RenderMixin:
             job.settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
             job.settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
             job.settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
+            job.refresh_output_path()
+            if hasattr(self, "render_queue_panel"):
+                self.refresh_render_queue_panel(sync_splitter=False)
         self._ensure_trim_memory_loaded()
         has_trim = bool(trim.get("is_trim_mode", False)) and (
             int(trim.get("trim_end_ms", 0)) > int(trim.get("trim_start_ms", 0))
@@ -542,20 +545,22 @@ class RenderMixin:
                 settings.trim_end_ms,
             )
 
-    def _sync_ui_to_selected_job(self) -> None:
+    def _sync_active_queue_job_from_ui(self) -> bool:
+        """Push live export/trim UI into the queued job for the clip being previewed."""
         if getattr(self, "_loading_queue_job", False):
-            return
-        job_id = getattr(self, "_selected_queue_job_id", None)
-        if not job_id:
-            return
-        job = self.render_queue.get(job_id)
-        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
-            return
+            return False
         preview = self._current_preview_clip_path()
-        if not preview or os.path.normpath(preview) != os.path.normpath(job.clip_path):
-            return
+        if not preview:
+            return False
+        job = self.render_queue.find_by_clip_path(preview)
+        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+            return False
         job.settings = snapshot_settings_from_ui(self)
         job.refresh_output_path()
+        return True
+
+    def _sync_ui_to_selected_job(self) -> None:
+        self._sync_active_queue_job_from_ui()
 
     def _populate_quality_options_for_clip(self, clip_path: str) -> None:
         """Fill render settings combos from clip metadata (no preview/header)."""
@@ -1266,7 +1271,8 @@ class RenderMixin:
         if not getattr(self, '_is_rendering', False):
             self.update_status_indicator("Ready", "ready")
 
-        self._sync_ui_to_selected_job()
+        if self._queue_is_active() and self._sync_active_queue_job_from_ui():
+            self.refresh_render_queue_panel(sync_splitter=False)
 
     def on_quality_mode_changed(self, text):
         """ Hides or shows the slider and target inputs depending on the mode """
