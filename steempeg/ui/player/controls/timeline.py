@@ -546,7 +546,7 @@ class TimelineCanvas(QWidget):
         start_sec -= start_sec % int(max(1, step)) 
 
         painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-        painter.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        painter.setFont(QFont("Segoe UI Semibold", 7))
         
         ruler_y = track_y + track_height + 4 
 
