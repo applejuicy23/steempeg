@@ -402,6 +402,7 @@ class RenderQueuePanel(QWidget):
     job_reorder_requested = Signal(str, str)
     job_reorder_after_requested = Signal(str, str)
     clear_queue_requested = Signal()
+    history_requested = Signal()
     view_mode_changed = Signal(str)
 
     def __init__(self, initial_view_mode: str = "grid", parent=None):
@@ -445,6 +446,18 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
+        self._btn_history = QPushButton("History")
+        self._btn_history.setCursor(Qt.PointingHandCursor)
+        self._btn_history.setToolTip("Past render batches — what exported and where")
+        self._btn_history.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
+                border-radius: 10px; padding: 2px 10px; font-size: 11px;
+            }
+            QPushButton:hover { background-color: #3a324a; color: #d4c8f0; }
+        """)
+        self._btn_history.clicked.connect(self.history_requested.emit)
+
         self._btn_view_list = QPushButton("≡")
         self._btn_view_list.setToolTip("List view")
         self._btn_view_list.setFixedSize(28, 24)
@@ -475,6 +488,7 @@ class RenderQueuePanel(QWidget):
         pill_layout.addWidget(self._btn_view_list)
         pill_layout.addWidget(self._btn_view_grid)
         pill_layout.addWidget(self._count_label)
+        pill_layout.addWidget(self._btn_history)
         pill_layout.addWidget(self._btn_clear)
         outer.addWidget(header_pill)
 

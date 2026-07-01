@@ -1964,6 +1964,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
                 self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
                 self.render_queue_panel.job_reorder_after_requested.connect(self.reorder_queue_job_after)
                 self.render_queue_panel.clear_queue_requested.connect(self.clear_render_queue)
+                self.render_queue_panel.history_requested.connect(self.show_render_queue_history)
                 self.render_queue_panel.view_mode_changed.connect(
                     lambda mode: self.save_layout_setting("queue_view_mode", mode)
                 )
