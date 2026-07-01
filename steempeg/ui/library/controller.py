@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import games
+from steempeg.core.clip_thumbnails import find_clip_thumbnail
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.core.steam_paths import (
     default_clips_dialog_path,
@@ -1253,17 +1254,7 @@ class LibraryMixin:
                     icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
                     
                 if os.path.exists(clip_path):
-                    # Check "thumbnail.jpg" directly without scanning the folder
-                    direct_thumb = os.path.join(clip_path, "thumbnail.jpg")
-                    if os.path.exists(direct_thumb):
-                        thumb_path = direct_thumb
-                    else:
-                        # Fallback option (in case the file has a different name)
-                        # Only then do we use the resource-intensive os.listdir
-                        for file in os.listdir(clip_path):
-                            if file.endswith((".jpg", ".png", ".jpeg")):
-                                thumb_path = os.path.join(clip_path, file)
-                                break
+                    thumb_path = find_clip_thumbnail(clip_path)
 
             # Create the custom card
             item = QListWidgetItem(self.grid_clips)
