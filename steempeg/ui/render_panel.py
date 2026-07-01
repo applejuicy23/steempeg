@@ -431,7 +431,13 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     positioner = _OverlayPositioner(combo, overlay)
     overlay._positioner = positioner             # keep a reference alive
 
-    warn = QLabel()
+    warn_slot = QWidget()
+    warn_slot.setFixedSize(16, 16)
+    warn_slot_layout = QHBoxLayout(warn_slot)
+    warn_slot_layout.setContentsMargins(0, 0, 0, 0)
+    warn_slot_layout.setSpacing(0)
+
+    warn = QLabel(warn_slot)
     warn.setFixedSize(16, 16)
     warn.hide()
 
@@ -444,6 +450,7 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
             overlay.show()
             overlay.raise_()
             edit.setFocus()
+            edit.textChanged.emit(edit.text())
         else:
             overlay.hide()
             warn.hide()
@@ -454,7 +461,7 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     row = QHBoxLayout()
     row.setSpacing(8)
     row.addWidget(combo, 0, Qt.AlignLeft)
-    row.addWidget(warn, 0, Qt.AlignVCenter)
+    row.addWidget(warn_slot, 0, Qt.AlignVCenter)
     row.addStretch()
 
     box = QVBoxLayout()
