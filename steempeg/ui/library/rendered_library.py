@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -21,10 +21,23 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QFrame,
 )
 
+from steempeg.core.rendered_media import (
+    canvas_markers_to_sidecar,
+    extract_poster_frame,
+    load_markers_sidecar,
+    markers_to_canvas,
+    parse_app_id_from_name,
+    save_markers_sidecar,
+)
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
+from steempeg.infra.paths import get_resource_path
 from steempeg.ui.library.grid_view import ClipCard
+from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
+
+_UNKNOWN_GAME_ICON = get_resource_path("attention.png")
 
 RENDERED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
 RENDERED_AUDIO_EXTS = {".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".opus"}
@@ -37,8 +50,8 @@ _LIBRARY_TAB_INACTIVE = """
         border: 1px solid #353535;
         border-radius: 16px;
         font-weight: bold;
-        font-size: 13px;
-        padding: 8px 20px;
+        font-size: 14px;
+        padding: 8px 24px;
     }
     QPushButton:hover { color: #ffffff; border-color: #555555; }
 """
@@ -49,8 +62,8 @@ _LIBRARY_TAB_ACTIVE = """
         border: 1px solid #6b5a8e;
         border-radius: 16px;
         font-weight: bold;
-        font-size: 13px;
-        padding: 8px 20px;
+        font-size: 14px;
+        padding: 8px 24px;
     }
 """
 _ADD_PANEL_BTN = """
@@ -61,11 +74,11 @@ _ADD_PANEL_BTN = """
         border-radius: 16px;
         font-weight: 800;
         font-size: 18px;
-        padding: 4px 0px;
-        min-width: 34px;
-        max-width: 34px;
-        min-height: 34px;
-        max-height: 34px;
+        padding: 0px;
+        min-width: 40px;
+        max-width: 40px;
+        min-height: 40px;
+        max-height: 40px;
     }
     QPushButton:hover { background-color: #3a3a3a; border-color: #6b5a8e; }
 """
@@ -102,6 +115,7 @@ class RenderedLibraryMixin:
 
     def _make_library_tab_button(self, label: str, mode: str) -> QPushButton:
         btn = QPushButton(label)
+        btn.setFixedHeight(40)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(_LIBRARY_TAB_INACTIVE)
         btn.clicked.connect(lambda _checked=False, m=mode: self.set_library_panel(m))
@@ -118,6 +132,7 @@ class RenderedLibraryMixin:
         self.library_tabs_host.addWidget(clips_tab)
 
         self.btn_library_add = QPushButton("+")
+        self.btn_library_add.setFixedSize(40, 40)
         self.btn_library_add.setToolTip("Add library panel")
         self.btn_library_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_library_add.setStyleSheet(_ADD_PANEL_BTN)
@@ -176,6 +191,7 @@ class RenderedLibraryMixin:
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
         self.clips_page = QWidget()
+        self.clips_page.setStyleSheet("background: transparent;")
         clips_layout = QVBoxLayout(self.clips_page)
         clips_layout.setContentsMargins(0, 0, 0, 0)
         clips_layout.setSpacing(0)
@@ -184,6 +200,7 @@ class RenderedLibraryMixin:
         clips_layout.addWidget(self.ui.table_clips)
         clips_layout.addWidget(self.grid_clips)
         self.library_stack = QStackedWidget()
+        self.library_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self.library_stack.addWidget(self.clips_page)
         views_layout.addWidget(self.library_stack)
 
@@ -192,13 +209,14 @@ class RenderedLibraryMixin:
             return
 
         self.rendered_page = QWidget()
+        self.rendered_page.setStyleSheet("background: transparent;")
         rendered_layout = QVBoxLayout(self.rendered_page)
         rendered_layout.setContentsMargins(0, 0, 0, 0)
         rendered_layout.setSpacing(0)
 
         self.table_rendered = QTableWidget()
         self.table_rendered.setColumnCount(4)
-        self.table_rendered.setHorizontalHeaderLabels(["Name", "Type", "Date", "Size"])
+        self.table_rendered.setHorizontalHeaderLabels(["Game Name", "Type", "Date", "Size"])
         self.table_rendered.setShowGrid(False)
         self.table_rendered.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table_rendered.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -208,29 +226,24 @@ class RenderedLibraryMixin:
         self.table_rendered.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table_rendered.setWordWrap(False)
         self.table_rendered.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.table_rendered.setFrameShape(QFrame.Shape.NoFrame)
+        self.table_rendered.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table_rendered.verticalHeader().setDefaultSectionSize(46)
+        self.table_rendered.setIconSize(QSize(26, 26))
         self.table_rendered.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
         header = self.table_rendered.horizontalHeader()
         header.setHighlightSections(False)
         header.setSectionsClickable(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col in (1, 2, 3):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-        self.table_rendered.setColumnWidth(1, 72)
-        self.table_rendered.setColumnWidth(2, 130)
-        self.table_rendered.setColumnWidth(3, 88)
-        self.table_rendered.setStyleSheet("""
-            QTableWidget { background: transparent; border: none; outline: none; }
-            QTableWidget::item {
-                padding: 4px 12px; border-bottom: 1px solid #282828;
-                color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
-                font-size: 13px; font-weight: 600;
-            }
-            QTableWidget::item:selected { background-color: #5138e6; color: white; }
-            QHeaderView::section {
-                background-color: #252525; color: #888888; padding: 6px;
-                border: none; border-bottom: 1px solid #333333; font-weight: bold;
-            }
-        """)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table_rendered.setColumnWidth(1, 100)
+        self.table_rendered.setColumnWidth(2, 160)
+        self.table_rendered.setColumnWidth(3, 100)
+        self.table_rendered.setStyleSheet(LIBRARY_TABLE_STYLE)
 
         self.grid_rendered = QListWidget()
         self.grid_rendered.setViewMode(QListWidget.ViewMode.IconMode)
@@ -240,17 +253,7 @@ class RenderedLibraryMixin:
         self.grid_rendered.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid_rendered.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_rendered.setMovement(QListWidget.Movement.Static)
-        self.grid_rendered.setStyleSheet("""
-            QListWidget { background: transparent; border: none; outline: none; }
-            QListWidget::item {
-                border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;
-                border: none; background-color: #2d2d2d; padding: 0px; margin: 0px;
-            }
-            QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
-            QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }
-            QScrollBar::handle:vertical:hover { background: #b29ae7; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
+        self.grid_rendered.setStyleSheet(LIBRARY_GRID_STYLE)
 
         self.table_rendered.itemSelectionChanged.connect(self.update_rendered_selection)
         self.table_rendered.itemSelectionChanged.connect(self._sync_rendered_grid_from_table)
@@ -307,20 +310,51 @@ class RenderedLibraryMixin:
             dt = datetime.fromtimestamp(mtime)
             date_str = format_clip_date(dt)
             time_str = format_clip_time(dt)
+            basename = os.path.basename(full)
+            display_title, icon_path, _thumb = self._resolved_rendered_meta(full, basename)
             row = self.table_rendered.rowCount()
             self.table_rendered.insertRow(row)
-            name_item = QTableWidgetItem(os.path.basename(full))
+            icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
+            name_item = QTableWidgetItem(icon, f"   {display_title}")
             name_item.setData(Qt.ItemDataRole.UserRole, full)
             self.table_rendered.setItem(row, 0, name_item)
-            self.table_rendered.setItem(row, 1, QTableWidgetItem(type_label))
-            self.table_rendered.setItem(row, 2, QTableWidgetItem(date_str))
-            self.table_rendered.setItem(row, 3, QTableWidgetItem(_format_file_size(size)))
+            type_item = QTableWidgetItem(f"🎬 {type_label}")
+            type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.table_rendered.setItem(row, 1, type_item)
+            date_item = QTableWidgetItem(f"{date_str}\n{time_str}")
+            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.table_rendered.setItem(row, 2, date_item)
+            size_item = QTableWidgetItem(_format_file_size(size))
+            size_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.table_rendered.setItem(row, 3, size_item)
             name_item.setToolTip(full)
             if self._rendered_filter_types and type_label not in self._rendered_filter_types:
                 self.table_rendered.setRowHidden(row, True)
 
         self.build_rendered_grid()
         self._update_library_count_label()
+
+    def _resolved_rendered_meta(self, file_path: str, filename: str) -> tuple[str, str, str]:
+        """Return (display_title, icon_path, thumb_path) for a rendered file."""
+        app_id = parse_app_id_from_name(filename)
+        title = os.path.splitext(filename)[0]
+        icon_path = ""
+        if app_id and hasattr(self, "get_game_name"):
+            title = self.get_game_name(app_id) or title
+            if hasattr(self, "get_game_icon"):
+                icon = self.get_game_icon(app_id)
+                if icon and not icon.isNull():
+                    cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
+                    if os.path.isfile(cache_icon):
+                        icon_path = cache_icon
+        if not icon_path and os.path.isfile(_UNKNOWN_GAME_ICON):
+            icon_path = _UNKNOWN_GAME_ICON
+
+        thumb_path = ""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in RENDERED_VIDEO_EXTS and hasattr(self, "cache_dir"):
+            thumb_path = extract_poster_frame(file_path, self.cache_dir)
+        return title, icon_path, thumb_path
 
     def build_rendered_grid(self):
         if not hasattr(self, "grid_rendered"):
@@ -338,6 +372,9 @@ class RenderedLibraryMixin:
             date_str = date_item.text() if date_item else ""
             size_str = size_item.text() if size_item else ""
             file_path = name_item.data(Qt.ItemDataRole.UserRole)
+            display_title, icon_path, thumb_path = self._resolved_rendered_meta(
+                file_path, title
+            )
 
             item = QListWidgetItem(self.grid_rendered)
             item.setSizeHint(QSize(260, 190))
@@ -345,11 +382,11 @@ class RenderedLibraryMixin:
             item.setData(Qt.ItemDataRole.UserRole + 1, file_path)
 
             card = ClipCard(
-                title,
+                display_title,
                 f"{date_str} • {size_str}",
                 type_label,
-                "",
-                "",
+                thumb_path,
+                icon_path,
                 row,
                 health_color=None,
                 on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item),
@@ -544,15 +581,27 @@ class RenderedLibraryMixin:
 
         self._preview_clip_path = file_path
         self._selected_queue_job_id = None
+        self._rendered_media_path = file_path
+
+        display_title, icon_path, _thumb = self._resolved_rendered_meta(
+            file_path, name_item.text()
+        )
 
         if hasattr(self, "custom_text_label"):
             header_html = (
-                f"<b>{name_item.text()}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
+                f"<b>{display_title}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
                 f"{type_label} &nbsp;&nbsp;•&nbsp;&nbsp; {date_str} &nbsp;&nbsp;•&nbsp;&nbsp; {size_str}</span>"
             )
             self.custom_text_label.setText(header_html)
         if hasattr(self, "custom_icon_label"):
-            self.custom_icon_label.clear()
+            if icon_path and os.path.isfile(icon_path):
+                from PySide6.QtGui import QPixmap
+                self.custom_icon_label.setPixmap(QPixmap(icon_path).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            else:
+                self.custom_icon_label.clear()
+
+        if hasattr(self, "btn_clip_health"):
+            self.btn_clip_health.hide()
 
         if hasattr(self.ui, "btn_start"):
             self.ui.btn_start.setEnabled(False)
