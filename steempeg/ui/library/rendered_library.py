@@ -167,13 +167,16 @@ class RenderedLibraryMixin:
 
     def open_library_panel(self, mode: str):
         if mode == "rendered":
-            self._ensure_rendered_widgets()
-            if "rendered" not in self._library_tabs:
-                tab = self._make_library_tab_button("🎬 Rendered videos", "rendered")
-                idx = self.library_tabs_host.count()
-                self.library_tabs_host.insertWidget(idx, tab)
-                self._library_tabs["rendered"] = tab
+            self._ensure_rendered_tab()
         self.set_library_panel(mode)
+
+    def _ensure_rendered_tab(self):
+        self._ensure_rendered_widgets()
+        if "rendered" not in self._library_tabs:
+            tab = self._make_library_tab_button("🎬 Rendered videos", "rendered")
+            idx = self.library_tabs_host.count()
+            self.library_tabs_host.insertWidget(idx, tab)
+            self._library_tabs["rendered"] = tab
 
     def set_library_panel(self, mode: str):
         if mode not in self._library_tabs:
@@ -191,6 +194,58 @@ class RenderedLibraryMixin:
             if hasattr(self, "grid_clips"):
                 self.set_view_mode(self._clips_view_mode)
         self._update_library_count_label()
+        self._sync_library_mode_chrome()
+        self._persist_library_ui_state()
+
+    def _sync_library_mode_chrome(self):
+        """Finished renders are preview-only — hide the export dock on that shelf."""
+        in_rendered = getattr(self, "_library_panel_mode", "clips") == "rendered"
+        immersive = getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False)
+        show_bottom = not immersive and not in_rendered
+
+        if hasattr(self, "bottom_v_wrap"):
+            self.bottom_v_wrap.setVisible(show_bottom)
+        if hasattr(self, "main_v_splitter") and not immersive:
+            sizes = self.main_v_splitter.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else self.main_v_splitter.height()
+            total = max(int(total), 1)
+            if show_bottom:
+                if len(sizes) >= 2 and sizes[1] <= 0:
+                    from steempeg.ui.layout_defaults import DEFAULT_MAIN_V_SPLITTER_SIZES
+                    self.main_v_splitter.setSizes(DEFAULT_MAIN_V_SPLITTER_SIZES)
+            else:
+                self.main_v_splitter.setSizes([total, 0])
+
+    def _persist_library_ui_state(self):
+        if not hasattr(self, "save_user_settings"):
+            return
+        self.save_user_settings(
+            "library_ui",
+            {
+                "library_panel_mode": getattr(self, "_library_panel_mode", "clips"),
+                "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
+                "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
+                "rendered_tab_open": "rendered" in getattr(self, "_library_tabs", {}),
+            },
+        )
+
+    def _restore_library_ui_state(self):
+        if not hasattr(self, "load_user_settings"):
+            return
+        state = self.load_user_settings().get("library_ui") or {}
+        if not state:
+            return
+        clips_vm = state.get("clips_view_mode")
+        rendered_vm = state.get("rendered_view_mode")
+        if clips_vm in ("grid", "list"):
+            self._clips_view_mode = clips_vm
+        if rendered_vm in ("grid", "list"):
+            self._rendered_view_mode = rendered_vm
+        if state.get("rendered_tab_open"):
+            self._ensure_rendered_tab()
+        mode = state.get("library_panel_mode", "clips")
+        if mode in getattr(self, "_library_tabs", {}):
+            self.set_library_panel(mode)
 
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
@@ -640,10 +695,12 @@ class RenderedLibraryMixin:
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             self._rendered_view_mode = mode
             self._apply_rendered_view_mode()
+            self._persist_library_ui_state()
             return
         self._clips_view_mode = mode
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.set_view_mode(self, mode)
+        self._persist_library_ui_state()
 
     def apply_sorting(self):
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
