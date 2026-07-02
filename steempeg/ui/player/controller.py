@@ -1212,18 +1212,26 @@ class PlayerMixin:
         if not file_path or not os.path.isfile(file_path):
             return
 
-        from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS
+        from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS, RENDERED_VIDEO_EXTS
+        from steempeg.core.rendered_media import load_markers_sidecar, markers_to_canvas
 
         self._is_switching = True
         self._force_pause = False
         self._preview_clip_path = file_path
+        self._rendered_media_path = file_path
         self._pending_trim_restore = None
         self._current_mpd_abs_path = None
         self._eof_rewind_pending = 0
 
         if hasattr(self, "custom_timeline"):
-            self.custom_timeline.canvas.markers.clear()
-            self.custom_timeline.canvas.update()
+            canvas = self.custom_timeline.canvas
+            canvas.markers.clear()
+            canvas.current_json_path = None
+            canvas.rendered_media_path = file_path
+            if hasattr(self, "cache_dir"):
+                sidecar_entries = load_markers_sidecar(self.cache_dir, file_path)
+                canvas.markers.extend(markers_to_canvas(sidecar_entries))
+            canvas.update()
 
         self.ui.video_container.setStyleSheet("background-color: transparent;")
         self._awaiting_first_frame = True
@@ -1254,34 +1262,40 @@ class PlayerMixin:
         if hasattr(self, "thumb_thread") and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
 
-        if not is_audio:
-            duration = getattr(self, "current_clip_duration_sec", 0) or 0
-            self.thumb_thread = ThumbnailBatchThread(abs_path, duration, interval=3)
+        def _start_timeline_thumbs(duration_sec: float):
+            if is_audio or duration_sec <= 0:
+                if hasattr(self, "custom_timeline"):
+                    self.custom_timeline.thumb_dir = None
+                    self.custom_timeline.current_video_path = abs_path
+                return
+            self.thumb_thread = ThumbnailBatchThread(abs_path, duration_sec, interval=3)
             if hasattr(self, "custom_timeline"):
                 self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
                 self.custom_timeline.current_video_path = abs_path
             self.thumb_thread.start()
-        elif hasattr(self, "custom_timeline"):
-            self.custom_timeline.thumb_dir = None
-            self.custom_timeline.current_video_path = abs_path
 
         def finish_switch():
             if hasattr(self, "custom_timeline"):
                 self.custom_timeline.setEnabled(True)
             self._is_switching = False
+            duration_sec = 0.0
             try:
                 dur = self.player.duration
                 if dur and dur > 0:
+                    duration_sec = float(dur)
                     self.current_clip_duration_sec = dur
                     if hasattr(self, "custom_timeline"):
                         self.custom_timeline.set_duration(int(dur * 1000))
             except Exception:
                 pass
+            _start_timeline_thumbs(duration_sec)
+            if hasattr(self.ui, "btn_play"):
+                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
 
         QTimer.singleShot(500, finish_switch)
 
         if hasattr(self.ui, "btn_play"):
-            self.ui.btn_play.setIcon(QIcon(get_resource_path("pause.png")))
+            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
 
     def generate_and_play_preview(self, clip_path=None, trim_restore=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
@@ -1372,6 +1386,7 @@ class PlayerMixin:
 
         # 3. Passing to the Engine
         if hasattr(self, 'custom_timeline'):
+            self.custom_timeline.canvas.rendered_media_path = None
             if json_path:
                 logging.debug("Timeline JSON: %s", json_path)
                 
@@ -1653,6 +1668,16 @@ class PlayerMixin:
         markers_list.sort(key=lambda x: x.get('time_ms', 0))
         canvas.update()
         
+        rendered_path = getattr(canvas, "rendered_media_path", None)
+        if rendered_path and os.path.isfile(rendered_path) and hasattr(self, "cache_dir"):
+            from steempeg.core.rendered_media import canvas_markers_to_sidecar, save_markers_sidecar
+            save_markers_sidecar(
+                self.cache_dir,
+                rendered_path,
+                canvas_markers_to_sidecar(markers_list),
+            )
+            return
+
         # 2. Steam Format
         json_path = getattr(canvas, 'current_json_path', None)
         if not json_path or not os.path.exists(json_path):
