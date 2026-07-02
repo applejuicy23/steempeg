@@ -1264,17 +1264,10 @@ class CustomTimelineWidget(QScrollArea):
 
     @current_video_path.setter
     def current_video_path(self, val):
-        # 1. Brutal Memory Purge
         if hasattr(self.canvas, 'sniper') and self.canvas.sniper:
             self.canvas.sniper.kill_worker()
-            self.canvas.sniper.quit()
-            self.canvas.sniper.wait()
-            
-            # 2. Resurrecting a completely fresh, blank sniper
-            self.canvas.sniper = PreviewSniperWorker()
-            self.canvas.sniper.preview_ready.connect(self.canvas.on_preview_ready)
-            
-        # 3. Only now are we introducing the new path.
+            self.canvas.sniper.video_path = val or ""
+            self.canvas.sniper.cache.clear()
         self.canvas.current_video_path = val
 
     def force_jump(self, ms): self.canvas.force_jump(ms)

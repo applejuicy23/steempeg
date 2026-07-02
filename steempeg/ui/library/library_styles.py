@@ -63,4 +63,10 @@ LIBRARY_GRID_STYLE = """
         padding: 0px;
         margin: 0px;
     }
+    QListWidget::item:selected {
+        background-color: #2d2d2d;
+    }
+    QListWidget::item:focus {
+        outline: none;
+    }
 """ + LIBRARY_SCROLLBAR_VERTICAL
