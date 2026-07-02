@@ -778,6 +778,10 @@ class RenderMixin:
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
+        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+            if hasattr(self, "update_rendered_selection"):
+                self.update_rendered_selection()
+            return
         if getattr(self, '_grid_select_in_progress', False):
             return
         if not hasattr(self.ui, 'table_clips'): return

@@ -13,6 +13,7 @@ from steempeg.ui.settings.controller import SettingsMixin
 from steempeg.ui.render_controller import RenderMixin
 from steempeg.render.queue import RenderQueue
 from steempeg.ui.library.controller import LibraryMixin
+from steempeg.ui.library.rendered_library import RenderedLibraryMixin
 from steempeg.ui.player.controller import PlayerMixin
 from steempeg.ui.lifecycle import LifecycleMixin
 from steempeg.ui.hide_watcher import HideWatcher
@@ -109,7 +110,7 @@ from PySide6.QtCore import Qt
 
 
 
-class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
+class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
@@ -381,10 +382,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # Put the text into the tablet
             pill_layout.addWidget(self.lbl_cm)
 
-            # 3. PERFECT CENTERING IN THE PANEL
-            cm_row.addStretch()
-            cm_row.addWidget(self.mega_top_pill)
-            cm_row.addStretch()
+            # 3. Tab row (Clips Manager + add-panel +) replaces the single centered pill
+            self.setup_library_tab_bar(cm_row)
 
             # 1. MEGA-CAPSULE (All elements within a single floating island)
             # Container for external padding
@@ -586,8 +585,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             views_layout = qtw.QVBoxLayout(self.library_views_container)
             views_layout.setContentsMargins(10, 10, 10, 10)
             
-            views_layout.addWidget(self.ui.table_clips)
-            views_layout.addWidget(self.grid_clips)
+            self.wrap_library_views_in_stack(views_layout)
 
             # 5. Putting It All Together
             self.left_master_layout = qtw.QVBoxLayout()
@@ -2160,6 +2158,8 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             # screens / DPIs (it only looked fine on the dev PC).
             self.ui.left_panel.setMinimumWidth(620)
 
+        self._apply_dark_shell()
+
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
 
@@ -2194,6 +2194,23 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             self.ui.label_time.setText("00:00 / 00:00")
         
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
+
+    def _apply_dark_shell(self):
+        """Paint every major shell widget dark so unsettled layout never flashes white."""
+        dark = "#1e1e1e"
+        shell = f"background-color: {dark};"
+        for attr in ("left_panel", "right_panel"):
+            panel = getattr(self.ui, attr, None)
+            if panel is not None:
+                panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                panel.setAutoFillBackground(True)
+                panel.setStyleSheet(shell)
+        splitter = getattr(self.ui, "main_splitter", None)
+        if splitter is not None:
+            splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            splitter.setStyleSheet(
+                f"QSplitter {{ {shell} }} QSplitter::handle {{ background-color: #353535; }}"
+            )
 
     def _sync_startup_layout(self):
         """Re-apply splitter sizes once the maximized window has real geometry."""
@@ -2388,6 +2405,7 @@ def main():
         # min/max/close buttons) lands above the screen and the window becomes
         # ungrabbable. Inset the rect so the restored window keeps its title bar on
         # screen while staying large enough to avoid the false-maximized race.
+        window._apply_dark_shell()
         _screen = app.primaryScreen()
         if _screen is not None:
             window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 50, -60, -50))

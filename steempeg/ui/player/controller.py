@@ -422,8 +422,10 @@ class PlayerMixin:
 
         if hasattr(self, 'mega_top_pill'):
             self.mega_top_pill.setVisible(not self.is_theater)
-        elif hasattr(self.ui, 'mega_top_pill'):
-            self.ui.mega_top_pill.setVisible(not self.is_theater)
+        for btn in getattr(self, '_library_tabs', {}).values():
+            btn.setVisible(not self.is_theater)
+        if hasattr(self, 'btn_library_add'):
+            self.btn_library_add.setVisible(not self.is_theater)
 
         if hasattr(self, 'library_views_container'):
             self.library_views_container.setVisible(not self.is_theater)
@@ -673,6 +675,10 @@ class PlayerMixin:
             self.ui.left_panel.setVisible(not is_t)
         if hasattr(self, 'mega_top_pill'):
             self.mega_top_pill.setVisible(not is_t)
+        for btn in getattr(self, '_library_tabs', {}).values():
+            btn.setVisible(not is_t)
+        if hasattr(self, 'btn_library_add'):
+            self.btn_library_add.setVisible(not is_t)
         if hasattr(self, 'library_views_container'):
             self.library_views_container.setVisible(not is_t)
 
@@ -813,6 +819,10 @@ class PlayerMixin:
             # Hide ALL old and NEW panels
             if hasattr(self.ui, 'left_panel'): self.ui.left_panel.hide()
             if hasattr(self, 'mega_top_pill'): self.mega_top_pill.hide()
+            for btn in getattr(self, '_library_tabs', {}).values():
+                btn.hide()
+            if hasattr(self, 'btn_library_add'):
+                self.btn_library_add.hide()
             if hasattr(self, 'library_views_container'): self.library_views_container.hide()
             if hasattr(self.ui, 'settings_tabs'): self.ui.settings_tabs.hide()
             if hasattr(self, 'neo_wrapper'): self.neo_wrapper.hide()
@@ -1196,6 +1206,82 @@ class PlayerMixin:
         # 2. Recalculate slider sizes because shorter video = less Megabytes!
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
+
+    def play_media_file(self, file_path: str):
+        """Play a plain exported media file (mp4, mp3, etc.) in the preview player."""
+        if not file_path or not os.path.isfile(file_path):
+            return
+
+        from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS
+
+        self._is_switching = True
+        self._force_pause = False
+        self._preview_clip_path = file_path
+        self._pending_trim_restore = None
+        self._current_mpd_abs_path = None
+        self._eof_rewind_pending = 0
+
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.canvas.markers.clear()
+            self.custom_timeline.canvas.update()
+
+        self.ui.video_container.setStyleSheet("background-color: transparent;")
+        self._awaiting_first_frame = True
+        if hasattr(self, "video_stack") and hasattr(self, "video_blank_frame"):
+            self.video_stack.setCurrentWidget(self.video_blank_frame)
+        if hasattr(self, "btn_close_clip"):
+            self.btn_close_clip.show()
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.setEnabled(True)
+
+        abs_path = os.path.abspath(file_path).replace("\\", "/")
+        ext = os.path.splitext(file_path)[1].lower()
+        is_audio = ext in RENDERED_AUDIO_EXTS
+
+        logging.info("MPV play file: %s", abs_path)
+        self._playback_last_time_pos = None
+        self._playback_stall_since = None
+        self._ignore_playback_stall(0.35)
+        self.player.play(abs_path)
+        self.player.pause = False
+
+        if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
+            self.custom_timeline.canvas.playback_speed = float(getattr(self.player, "speed", 1.0) or 1.0)
+
+        self._first_frame_deadline = time.time() + 0.6
+        QTimer.singleShot(30, self._reveal_video_when_ready)
+
+        if hasattr(self, "thumb_thread") and self.thumb_thread.isRunning():
+            self.thumb_thread.stop()
+
+        if not is_audio:
+            duration = getattr(self, "current_clip_duration_sec", 0) or 0
+            self.thumb_thread = ThumbnailBatchThread(abs_path, duration, interval=3)
+            if hasattr(self, "custom_timeline"):
+                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
+                self.custom_timeline.current_video_path = abs_path
+            self.thumb_thread.start()
+        elif hasattr(self, "custom_timeline"):
+            self.custom_timeline.thumb_dir = None
+            self.custom_timeline.current_video_path = abs_path
+
+        def finish_switch():
+            if hasattr(self, "custom_timeline"):
+                self.custom_timeline.setEnabled(True)
+            self._is_switching = False
+            try:
+                dur = self.player.duration
+                if dur and dur > 0:
+                    self.current_clip_duration_sec = dur
+                    if hasattr(self, "custom_timeline"):
+                        self.custom_timeline.set_duration(int(dur * 1000))
+            except Exception:
+                pass
+
+        QTimer.singleShot(500, finish_switch)
+
+        if hasattr(self.ui, "btn_play"):
+            self.ui.btn_play.setIcon(QIcon(get_resource_path("pause.png")))
 
     def generate_and_play_preview(self, clip_path=None, trim_restore=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
