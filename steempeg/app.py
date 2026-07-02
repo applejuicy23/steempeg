@@ -361,6 +361,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             #2. CREATE A BEAUTIFUL TABLET (Without a counter)
             cm_row = qtw.QHBoxLayout()
             cm_row.setContentsMargins(0, 0, 0, 4)
+            cm_row.setSpacing(8)
             
             self.mega_top_pill = qtw.QFrame()
             self.mega_top_pill.setStyleSheet("""
@@ -461,6 +462,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             top_bar_layout.addWidget(mega_top_pill)
 
             # 2. KILLING A QT TABLE 
+            from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
+
             self.ui.table_clips.setShowGrid(False)
             
             # (Sorting buttons at the top
@@ -475,50 +478,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.table_clips.verticalHeader().setDefaultSectionSize(46) 
             self.ui.table_clips.setIconSize(qtc.QSize(26, 26)) 
 
-            self.ui.table_clips.setStyleSheet("""
-                QTableWidget { 
-                    background: transparent; 
-                    border: none; 
-                    outline: none; 
-                }
-                QTableWidget::item { 
-                    padding: 4px 12px; 
-                    border-bottom: 1px solid #282828; 
-                    color: #d1d1d1; 
-                    font-size: 13px;
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                }
-                QTableWidget::item:hover { 
-                    background-color: #303030; 
-                }
-                QTableWidget::item:selected { 
-                    background-color: #3a2e54; 
-                    color: #ffffff; 
-                }
-
-                QHeaderView {
-                    background-color: transparent;
-                    border: none;
-                }
-                QHeaderView::section {
-                    background-color: transparent; 
-                    color: #d1d1d1; 
-                    padding: 6px;
-                    border: none;
-                    border-bottom: 1px solid #333333; 
-                    font-size: 13px;
-                    font-weight: bold;
-                }
-                QHeaderView::section:hover {
-                    color: #ffffff;
-                }
-                QHeaderView::section:checked {
-                    color: #b29ae7;
-                }
-                QHeaderView::up-arrow, QHeaderView::down-arrow {
-                    width: 0px; height: 0px; 
-                }
-            """)
+            self.ui.table_clips.setStyleSheet(LIBRARY_TABLE_STYLE)
             
             header = self.ui.table_clips.horizontalHeader()
             header.setStretchLastSection(False) 
@@ -554,25 +514,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.grid_clips.setDragDropMode(qtw.QAbstractItemView.NoDragDrop)
             self.grid_clips.setMovement(qtw.QListView.Static)
             self.grid_clips.itemSelectionChanged.connect(self.on_grid_selection_changed)
-            self.grid_clips.setStyleSheet("""
-                QListWidget { background: transparent; border: none; outline: none; }
-                
-                QListWidget::item { 
-                    border-top-left-radius: 0px; 
-                    border-top-right-radius: 0px; 
-                    border-bottom-left-radius: 12px; 
-                    border-bottom-right-radius: 12px; 
-                    border: none; 
-                    background-color: #2d2d2d; 
-                    padding: 0px;
-                    margin: 0px;
-                }
-                
-                QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
-                QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }
-                QScrollBar::handle:vertical:hover { background: #b29ae7; }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-            """)
+            self.grid_clips.setStyleSheet(LIBRARY_GRID_STYLE)
 
             original_parent_layout = self.ui.table_clips.parentWidget().layout()
             original_idx = -1
@@ -626,7 +568,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.combo_sort.setStyleSheet("""
             QComboBox {
-                background-color: #383838; 
+                background-color: #383838;
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 8px;
@@ -637,7 +579,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 min-height: 24px;
             }
             QComboBox:hover { background-color: #404040; border: 2px solid #6b5a8e; }
-            QComboBox::drop-down { border: none; padding-right: 5px; }
+            QComboBox:on { background-color: #383838; }
+            QComboBox::drop-down { border: none; padding-right: 5px; background: transparent; }
             QComboBox QAbstractItemView {
                 background-color: #252525; 
                 color: white; 
@@ -674,6 +617,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             # 4.2. Creating a separate container for our Sort/Filter group
             from PySide6.QtWidgets import QHBoxLayout, QWidget, QFrame
             group_widget = QWidget()
+            group_widget.setStyleSheet("background: transparent;")
             group_layout = QHBoxLayout(group_widget)
             group_layout.setContentsMargins(0, 0, 0, 0)
             group_layout.setSpacing(0)
@@ -1493,6 +1437,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             border: none;
             border-radius: 4px;
             padding: 5px;
+            outline: none;
+        }
+        QPushButton#btn_play:focus, QPushButton#btn_skip_back:focus, QPushButton#btn_skip_forward:focus {
+            border: none;
+            outline: none;
         }
         QPushButton#btn_play:hover, QPushButton#btn_skip_back:hover, QPushButton#btn_skip_forward:hover {
             background-color: rgba(255, 255, 255, 25); 
@@ -1530,6 +1479,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         # --- SETTING UP BUTTON ICONS ---
         #1: Erase old text
+        self.ui.btn_play.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.ui.btn_skip_back.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.ui.btn_skip_forward.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
         self.ui.btn_play.setText("")
         self.ui.btn_skip_back.setText("")
         self.ui.btn_skip_forward.setText("")
