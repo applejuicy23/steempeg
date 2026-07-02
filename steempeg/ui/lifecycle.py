@@ -138,6 +138,20 @@ class LifecycleMixin:
                 self.align_fullscreen_hud()
             return False
 
+        if hasattr(self, 'mpv_wrapper') and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Move,
+        ):
+            tracked = (
+                getattr(self.ui, 'right_panel', None),
+                getattr(self, 'video_wrapper', None),
+                getattr(self, 'aspect_frame', None),
+                getattr(self.ui, 'video_container', None),
+            )
+            if source in tracked:
+                self.mpv_wrapper.update_geometry()
+            return False
+
         # 1. Disable right-click selection in the Table (List)
         if hasattr(self.ui, 'table_clips') and source == self.ui.table_clips.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
@@ -160,6 +174,20 @@ class LifecycleMixin:
 
         return super().eventFilter(source, event)
     
+    def _sync_mpv_surface_geometry(self, *args):
+        """Re-pin the native mpv child HWND after splitter drags move the player panel."""
+        wrapper = getattr(self, "mpv_wrapper", None)
+        if wrapper is not None:
+            wrapper.update_geometry()
+
+    def _install_mpv_geometry_hooks(self):
+        for splitter in (
+            getattr(self.ui, "main_splitter", None),
+            getattr(self, "right_h_splitter", None),
+        ):
+            if splitter is not None:
+                splitter.splitterMoved.connect(self._sync_mpv_surface_geometry)
+
     def set_status(self, text):
         """Updates the render status row (delegates to update_status_indicator when available)."""
         if hasattr(self, 'update_status_indicator'):
