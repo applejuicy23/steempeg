@@ -27,7 +27,8 @@
   <a href="#-features">Features</a> ·
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-getting-started">Getting Started</a> ·
-  <a href="#-whats-new-in-v32">What's New</a> ·
+  <a href="#-changelog">Changelog</a> ·
+  <a href="#-roadmap">Roadmap</a> ·
   <a href="#-credits">Credits</a>
 </p>
 
@@ -40,7 +41,7 @@
 | **Clips library** | Grid & List views, smart filters (game, date, duration), multi-select |
 | **Player** | Trim mode, timeline markers, screenshots, theatre & fullscreen |
 | **Render engine** | NVENC / CPU, H.264 & H.265, quality presets + custom bitrate |
-| **Render queue** | Batch multiple clips, reorder, pause / cancel, persistent between sessions |
+| **Render queue** | Grid & list views, batch export, reorder, history, persistent between sessions |
 | **Steam-aware** | Auto-discovers clip folders, repairs broken block-spliced recordings |
 | **Export** | Original stream copy, target file size, audio-only / mute options |
 
@@ -100,38 +101,25 @@ Then extract and run `Steempeg.exe`.
 
 ---
 
-## 🆕 What's New in v32
+## 📋 Changelog
 
-The **Debuggability Update** — smarter library management, clip health, and tools to actually diagnose problems.
-
-- **Multi-folder library** — scan clips from several Steam recording folders at once; deduplicates identical clips across roots
-- **Bug reports** — built-in report dialog with log bundle export and GitHub Issues shortcut
-- **Logs menu** — App + FFmpeg logs, MPV player log, open logs folder, clear old logs / cache
-- **Clip health** — green / yellow / red status at scan time; dead clips blocked from preview; bulk delete dead clips
-- **Library filters** — cascade sync, drag-select, games-only scroll; filter button matches sort combo styling
-- **Locale-aware times** — 12h vs 24h follows your OS locale in clips and filters
-- **Render queue** — styled right-click menu (select, open folders, remove); per-clip trim persists across sessions
-- **Bitrate fixes** — accurate source max detection; presets capped to source bitrate; custom audio no longer crashes
-- **DASH playback** — full Steam clips play correctly; timeline stays accurate; Original render no longer inflates broken timelines
-- **About polish** — readable disclaimer placement, muted Report-a-bug button
-
-Full changelog: [Releases](https://github.com/applejuicy23/steempeg/releases).
+Release notes for every version live on **[GitHub Releases](https://github.com/applejuicy23/steempeg/releases)** — that's the canonical place for what's new, fixed, and changed.
 
 ---
 
-## 🆕 What's New in v31
+## 🗺️ Roadmap
 
-A stability & polish release on top of v30's big refactor — fewer surprises, tighter UI.
+**Long-term vision:** a lightweight **in-app video editor** for Steam clips — trim, preview, queue, and export today; gradually more of a mini **Vegas-style** workflow without leaving the app. Not a full NLE overnight, but moving that direction.
 
-- **Buffering overlay** — polished floating pill when playback stalls (no splitter lag)
-- **Window management** — reliable maximized startup; title bar stays visible when you hit Restore
-- **Immersive modes** — render queue stays hidden in theatre/fullscreen; layout restores correctly
-- **Clips Manager** — two-column minimum width, compact default launch, sorting controls don't truncate
-- **Player** — no flash on clip load, playhead tracks slow speeds, hatched timeline when idle
-- **Render queue** — clean drag preview; status badge clears on close and matches app chrome
-- **UI polish** — About dialog corners, white icon pass, distinct sub-1-Mbps bitrate labels
+**Rough direction (next few versions):**
 
-Full changelog: [Releases](https://github.com/applejuicy23/steempeg/releases).
+- **Export & batch workflow** — smarter queue management, history actions, fewer clicks from clip to finished file
+- **Timeline & preview** — smoother scrubbing, better frame feedback, tighter sync with trim and markers
+- **Render settings** — clearer presets, custom values, and honest size estimates end-to-end
+- **Library & discovery** — faster scanning, healthier clip handling, easier multi-folder setups
+- **Editor building blocks** — small steps toward real editing tools around the player (layout, clip control, workflow)
+
+Plans shift as feedback comes in; open an [Issue](https://github.com/applejuicy23/steempeg/issues) if you have ideas.
 
 ---
 
