@@ -93,11 +93,13 @@ class ClipCard(qtw.QWidget):
         text_layout.setContentsMargins(12, 0, 12, 0)
 
         title_lbl = qtw.QLabel(title)
+        title_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
         title_lbl.setStyleSheet(
             "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
         )
 
         date_lbl = qtw.QLabel(date_str)
+        date_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
         date_lbl.setStyleSheet(
             "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
         )
