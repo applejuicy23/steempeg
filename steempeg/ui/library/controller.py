@@ -308,6 +308,10 @@ class LibraryMixin:
         if not hasattr(self, "btn_clip_health"):
             return
 
+        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+            self.btn_clip_health.hide()
+            return
+
         clip_path = None
         if hasattr(self, "_current_header_clip_path"):
             clip_path = self._current_header_clip_path()
@@ -316,7 +320,7 @@ class LibraryMixin:
             if item:
                 clip_path = item.data(Qt.UserRole)
 
-        if not clip_path:
+        if not clip_path or (clip_path and os.path.isfile(clip_path)):
             self.btn_clip_health.hide()
             return
 
