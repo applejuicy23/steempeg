@@ -86,6 +86,7 @@ class ElidedLabel(QLabel):
             return
 
         painter = QPainter(self)
+        painter.setFont(self.font())
         painter.setPen(self._text_color())
         metrics = self.fontMetrics()
         elided = metrics.elidedText(

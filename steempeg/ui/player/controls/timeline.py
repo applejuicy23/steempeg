@@ -995,25 +995,15 @@ class TimelineCanvas(QWidget):
             bucket_changed = bucket_sec != self._hover_preview_bucket
             if bucket_changed:
                 self._hover_preview_bucket = bucket_sec
+                self.preview_widget.update_time_display(time_str, is_in_trim)
                 if has_disk_thumb:
-                    self.preview_widget.update_info(time_str, is_in_trim, hover_ms, current_thumb_dir)
+                    self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
                 elif hasattr(self, 'sniper') and bucket_sec in self.sniper.cache:
-                    self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
-                    self.preview_widget.update_image_from_ram(self.sniper.cache[bucket_sec])
+                    self.preview_widget.set_preview_pixmap(self.sniper.cache[bucket_sec])
                 else:
-                    self.preview_widget.update_info(time_str, is_in_trim, hover_ms, None)
-                    self.preview_widget.img_label.setPixmap(QPixmap())
-                    self.preview_widget.img_label.setText("Generating...")
+                    self.preview_widget.start_loading()
             else:
-                self.preview_widget.time_label.setText(time_str)
-                if is_in_trim:
-                    self.preview_widget.time_label.setStyleSheet(
-                        "background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: #ffcc00; font-weight: bold; font-size: 11px;"
-                    )
-                else:
-                    self.preview_widget.time_label.setStyleSheet(
-                        "background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: white; font-weight: bold; font-size: 11px;"
-                    )
+                self.preview_widget.update_time_display(time_str, is_in_trim)
 
             if not has_disk_thumb and hasattr(self, 'sniper') and self.current_video_path and bucket_changed:
                 self.pending_sec = bucket_sec
@@ -1294,12 +1284,60 @@ class CustomTimelineWidget(QScrollArea):
     def disable_trim_mode(self): self.canvas.disable_trim_mode()
     
 
-# --- FLOATING TIMELINE PREVIEW WIDGET ---
-class ThumbnailPreviewWidget(QWidget):
-    """ A floating tooltip-like widget that shows a video frame and time on hover. """
+# --- TIMELINE HOVER PREVIEW SPINNER ---
+class PreviewSpinnerOverlay(QWidget):
+    """MPV-style loading arc over the hover thumbnail (no text)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Make the window a "ghost" (stays on top, no borders, doesn't steal focus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._angle = 0
+        self._spin = QTimer(self)
+        self._spin.setInterval(33)
+        self._spin.timeout.connect(self._advance)
+        self.hide()
+
+    def _advance(self):
+        self._angle = (self._angle + 24) % 360
+        self.update()
+
+    def start(self):
+        if not self._spin.isActive():
+            self._spin.start()
+        self.show()
+        self.raise_()
+
+    def stop(self):
+        self._spin.stop()
+        self.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
+
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        radius = 14.0
+        pen = QPen(QColor("#b29ae7"))
+        pen.setWidth(4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(
+            int(cx - radius), int(cy - radius), int(2 * radius), int(2 * radius),
+            self._angle * 16, 110 * 16,
+        )
+
+
+# --- FLOATING TIMELINE PREVIEW WIDGET ---
+class ThumbnailPreviewWidget(QWidget):
+    """A floating tooltip-like widget that shows a video frame and time on hover."""
+    _THUMB_W = 160
+    _THUMB_H = 90
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -1308,62 +1346,88 @@ class ThumbnailPreviewWidget(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
-        # Stylish container frame
         self.frame = QFrame()
         self.frame.setStyleSheet("QFrame { background-color: #181818; border: 1px solid #333; border-radius: 6px; }")
         self.frame_layout = QVBoxLayout(self.frame)
         self.frame_layout.setContentsMargins(4, 4, 4, 4)
         self.frame_layout.setSpacing(4)
 
-        # Thumbnail image placeholder
-        self.img_label = QLabel("No Frame")
-        self.img_label.setFixedSize(160, 90) # Perfect 16:9 ratio
-        self.img_label.setStyleSheet("background-color: #000000; border-radius: 4px; color: #555;")
-        self.img_label.setAlignment(Qt.AlignCenter)
+        self._thumb_host = QWidget()
+        self._thumb_host.setFixedSize(self._THUMB_W, self._THUMB_H)
 
-        # Timecode label
+        self.img_label = QLabel(self._thumb_host)
+        self.img_label.setGeometry(0, 0, self._THUMB_W, self._THUMB_H)
+        self.img_label.setStyleSheet("background-color: #000000; border-radius: 4px;")
+        self.img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._loading_overlay = PreviewSpinnerOverlay(self._thumb_host)
+        self._loading_overlay.setGeometry(0, 0, self._THUMB_W, self._THUMB_H)
+
         self.time_label = QLabel("00:00")
-        self.time_label.setAlignment(Qt.AlignCenter)
-        self.time_label.setStyleSheet("background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: white; font-weight: bold; font-size: 11px;")
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_label.setStyleSheet(
+            "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
+            "color: white; font-weight: bold; font-size: 11px;"
+        )
 
-        self.frame_layout.addWidget(self.img_label)
+        self.frame_layout.addWidget(self._thumb_host)
         self.frame_layout.addWidget(self.time_label)
         self.layout.addWidget(self.frame)
         self.hide()
-        
-    def update_info(self, time_str, is_in_trim, hover_ms, thumb_dir):
-        """ Updates UI and instantly loads the pre-generated image. """
+
+    def hideEvent(self, event):
+        self._loading_overlay.stop()
+        super().hideEvent(event)
+
+    def update_time_display(self, time_str, is_in_trim):
         self.time_label.setText(time_str)
-        
         if is_in_trim:
-            self.time_label.setStyleSheet("background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: #ffcc00; font-weight: bold; font-size: 11px;")
+            self.time_label.setStyleSheet(
+                "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
+                "color: #ffcc00; font-weight: bold; font-size: 11px;"
+            )
         else:
-            self.time_label.setStyleSheet("background-color: #2d2d2d; border-radius: 4px; padding: 2px; color: white; font-weight: bold; font-size: 11px;")
+            self.time_label.setStyleSheet(
+                "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
+                "color: white; font-weight: bold; font-size: 11px;"
+            )
 
-        # --- INSTANT IMAGE LOADING ---
-        
-        if thumb_dir and os.path.exists(thumb_dir):
-            sec = int(hover_ms // 1000)
-            bucket_sec = round(sec / 3.0) * 3
-            index = (bucket_sec // 3) + 1
-            img_path = os.path.join(thumb_dir, f"thumb_{index:04d}.jpg")
-            
-            if os.path.exists(img_path):
-                self.img_label.setPixmap(QPixmap(img_path))
-                return
-                
-        # If still generating in the background...
-        self.img_label.setPixmap(QPixmap())
-        self.img_label.setText("Generating...")
+    def _apply_pixmap(self, pixmap):
+        if pixmap is not None and not pixmap.isNull():
+            self.img_label.setPixmap(
+                pixmap.scaled(
+                    self._THUMB_W, self._THUMB_H,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self._loading_overlay.stop()
 
-    def set_image(self, img_path):
-        """ Called when the sniper successfully extracts the frame. """
-        self.img_label.setPixmap(QPixmap(img_path))
+    def load_disk_thumbnail(self, hover_ms, thumb_dir):
+        if not thumb_dir or not os.path.exists(thumb_dir):
+            return False
+        sec = int(hover_ms // 1000)
+        bucket_sec = round(sec / 3.0) * 3
+        index = (bucket_sec // 3) + 1
+        img_path = os.path.join(thumb_dir, f"thumb_{index:04d}.jpg")
+        if not os.path.exists(img_path):
+            return False
+        self._apply_pixmap(QPixmap(img_path))
+        return True
+
+    def start_loading(self):
+        self._loading_overlay.start()
+
+    def set_preview_pixmap(self, pixmap):
+        if pixmap is not None and not pixmap.isNull():
+            self._apply_pixmap(pixmap)
 
     def update_image_from_ram(self, pixmap):
-        """ Instantly applies a generated QPixmap from the Sniper's RAM cache """
-        if pixmap:
-            self.img_label.setPixmap(pixmap)
-        else:
-            self.img_label.setPixmap(QPixmap())
-            self.img_label.setText("Sniper Loading...")
+        """Instantly applies a generated QPixmap from the Sniper's RAM cache."""
+        self.set_preview_pixmap(pixmap)
+
+    def update_info(self, time_str, is_in_trim, hover_ms, thumb_dir):
+        """Legacy entry point — updates time and loads a disk thumb when available."""
+        self.update_time_display(time_str, is_in_trim)
+        if thumb_dir:
+            self.load_disk_thumbnail(hover_ms, thumb_dir)

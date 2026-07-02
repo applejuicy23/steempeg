@@ -102,10 +102,19 @@ class SourcePathsBox(QWidget):
         root.addWidget(self._caption)
 
         self._rows_host = QWidget()
+        self._rows_host.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._rows_layout = QVBoxLayout(self._rows_host)
         self._rows_layout.setContentsMargins(0, 0, 0, 0)
         self._rows_layout.setSpacing(6)
         root.addWidget(self._rows_host)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+    def minimumSizeHint(self):
+        sh = super().minimumSizeHint()
+        min_w = self.minimumWidth()
+        if min_w > 0:
+            return QSize(min_w, sh.height())
+        return sh
 
     def _clear_rows(self):
         while self._rows_layout.count():
@@ -155,6 +164,7 @@ class SourcePathsBox(QWidget):
         row = QFrame()
         row.setObjectName("srcRow")
         row.setStyleSheet(self._ROW_QSS)
+        row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h = QHBoxLayout(row)
         h.setContentsMargins(12, 6, 6, 6)
         h.setSpacing(8)
@@ -163,7 +173,7 @@ class SourcePathsBox(QWidget):
         path_lbl.setStyleSheet(self._PATH_QSS)
         path_lbl.setText(display_text)
         path_lbl.setMinimumWidth(0)
-        path_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        path_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h.addWidget(path_lbl, 1)
 
         btn = QPushButton()
@@ -649,6 +659,7 @@ def restyle_source_page(ui):
     # Match the stat-block grid width below (3 * 210 + 2 * 8 spacing) so the source
     # rows line up with the cards instead of sprawling to the panel edge.
     stat_grid_w = 210 * 3 + 8 * 2
+    ui.source_label.setMinimumWidth(stat_grid_w)
     ui.source_label.setMaximumWidth(stat_grid_w)
     root.addWidget(ui.source_label, alignment=Qt.AlignLeft)
 

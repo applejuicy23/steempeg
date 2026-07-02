@@ -985,11 +985,52 @@ class RenderMixin:
         text = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
         if "Custom" in text and hasattr(self, 'input_custom_abitrate'):
             try:
-                return max(1, int(self.input_custom_abitrate.text()))
+                val = int(self.input_custom_abitrate.text().strip())
+                orig = getattr(self, 'current_orig_audio_bitrate', 192)
+                return max(1, min(val, orig))
             except (ValueError, TypeError):
                 return getattr(self, 'current_orig_audio_bitrate', 192)
         match = re.search(r'(\d+)', text)
         return int(match.group(1)) if match else 192
+
+    def _resolved_fps_from_ui(self) -> int:
+        fps = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else ""
+        orig_fps = getattr(self, 'current_orig_fps', 60)
+        max_allowed = min(60, orig_fps)
+        if "Custom" in fps and hasattr(self, 'input_custom_fps'):
+            try:
+                val = int(self.input_custom_fps.text().strip())
+                return max(1, min(val, max_allowed))
+            except (ValueError, TypeError):
+                return orig_fps
+        try:
+            return int(re.search(r'(\d+)', fps).group(1))
+        except (AttributeError, ValueError, TypeError):
+            return orig_fps
+
+    def _resolved_custom_video_mbps(self) -> float:
+        """Clamped custom video Mbps (before any FPS scaling)."""
+        orig_v = getattr(self, 'current_orig_bitrate', 10.0)
+        if not hasattr(self, 'input_custom_vbitrate'):
+            return orig_v
+        try:
+            val = float(self.input_custom_vbitrate.text().replace(',', '.').strip())
+            return max(0.1, min(val, orig_v))
+        except (ValueError, TypeError):
+            return orig_v
+
+    def _video_mbps_for_size_estimate(self, bitrate_text: str, fps_multiplier: float) -> float | None:
+        if "Original" in bitrate_text:
+            return None
+        if "Custom" in bitrate_text:
+            return self._resolved_custom_video_mbps() * fps_multiplier
+        match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
+        return float(match.group(1)) if match else None
+
+    def _format_size_mb(self, size_mb: float) -> str:
+        if size_mb >= 1000:
+            return f"~{size_mb / 1024:.2f} GB"
+        return f"~{size_mb:.1f} MB"
 
     def update_final_setup(self):
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
@@ -1071,20 +1112,17 @@ class RenderMixin:
         # Calculating the size using the EFFECTIVE duration
         size_str = "Unknown"
         fps_multiplier = 1.0
-        if fps:
-            if "Custom" in fps and hasattr(self, 'input_custom_fps'):
-                try: selected_fps = int(self.input_custom_fps.text())
-                except: selected_fps = getattr(self, 'current_orig_fps', 60)
-            else:
-                try: selected_fps = int(re.search(r'(\d+)', fps).group(1))
-                except: selected_fps = getattr(self, 'current_orig_fps', 60)
-                
-            orig_fps = getattr(self, 'current_orig_fps', 60)
-            if selected_fps < orig_fps and orig_fps > 0:
-                fps_multiplier = selected_fps / orig_fps
+        selected_fps = self._resolved_fps_from_ui()
+        orig_fps = getattr(self, 'current_orig_fps', 60)
+        if selected_fps < orig_fps and orig_fps > 0:
+            fps_multiplier = selected_fps / orig_fps
 
         if duration > 0:
-            if "Target File Size" in quality:
+            if audio_only:
+                audio_mbps = self._audio_kbps_from_ui() / 1000.0
+                size_mb = (audio_mbps * duration) / 8
+                size_str = self._format_size_mb(size_mb)
+            elif "Target File Size" in quality:
                 if hasattr(self, 'dynamic_stops') and hasattr(self.ui, 'size_slider'):
                     target_mb = self.dynamic_stops[self.ui.size_slider.value()]
                     size_str = f"~{target_mb / 1024:.2f} GB (Target)" if target_mb >= 1000 else f"~{target_mb} MB (Target)"
@@ -1099,14 +1137,12 @@ class RenderMixin:
                 else:
                     size_str = "Same as original"
             else:
-                match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
-                if match:
-                    video_bitrate = float(match.group(1)) 
-                    audio_bitrate_val = self._audio_kbps_from_ui() / 1000.0
-                    if mute_audio: audio_bitrate_val = 0
+                video_bitrate = self._video_mbps_for_size_estimate(bitrate_text, fps_multiplier)
+                if video_bitrate is not None:
+                    audio_bitrate_val = 0 if mute_audio else self._audio_kbps_from_ui() / 1000.0
                     total_bitrate = video_bitrate + audio_bitrate_val
-                    size_mb = (total_bitrate * duration) / 8 
-                    size_str = f"~{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"~{size_mb:.1f} MB"
+                    size_mb = (total_bitrate * duration) / 8
+                    size_str = self._format_size_mb(size_mb)
 
         # Pretty audio label that never shows the raw "⚙️ Custom Audio..." sentinel.
         if "Custom" in audio_bitrate:
@@ -1148,13 +1184,8 @@ class RenderMixin:
             clean_mbps = int(round(val_mbps))
             video_bitrate_display = f"{clean_mbps} Mbps ({res_str})"
         elif "Custom" in bitrate_text:
-            try:
-                val = float(self.input_custom_vbitrate.text().replace(',', '.'))
-                val = max(0.1, min(val, orig_v_bitrate))
-                # Multiply by the FPS drop
-                video_bitrate_display = f"⚙️ {val * fps_multiplier:.1f} Mbps"
-            except:
-                video_bitrate_display = f"{orig_v_bitrate * fps_multiplier:.1f} Mbps"
+            val = self._resolved_custom_video_mbps()
+            video_bitrate_display = f"⚙️ {val * fps_multiplier:.1f} Mbps"
         elif "Original" in bitrate_text:
             # Original = stream copy: show the source Mbps only — "Original" is already
             # in the quality label; the bottom summary must not repeat "Original copy".
@@ -1170,14 +1201,9 @@ class RenderMixin:
                 video_bitrate_display = f"{float(match.group(1)):.1f} Mbps"
 
         # Parse Audio Bitrate for UI
-        orig_a_bitrate = getattr(self, 'current_orig_audio_bitrate', 192)
         if "Custom" in audio_bitrate:
-            try:
-                val = int(self.input_custom_abitrate.text())
-                val = max(1, min(val, orig_a_bitrate))
-                audio_bitrate_clean = f"⚙️ {val} kbps"
-            except:
-                audio_bitrate_clean = f"{orig_a_bitrate} kbps"
+            val = self._audio_kbps_from_ui()
+            audio_bitrate_clean = f"⚙️ {val} kbps"
         elif "Original" in quality and "Target File Size" not in quality and not audio_only:
             audio_bitrate_clean = "Original audio (copy)"
         else:
@@ -1185,15 +1211,9 @@ class RenderMixin:
             audio_bitrate_clean = audio_bitrate.split('(')[0].strip() if audio_bitrate else "192 kbps"
 
         # Parse FPS for UI (includes the word "FPS" inside)
-        orig_fps = getattr(self, 'current_orig_fps', 60)
         if "Custom" in fps:
-            max_allowed = min(60, orig_fps)
-            try:
-                val = int(self.input_custom_fps.text())
-                val = max(1, min(val, max_allowed))
-                fps_display = f"⚙️ {val} FPS"
-            except:
-                fps_display = f"{max_allowed} FPS"
+            val = self._resolved_fps_from_ui()
+            fps_display = f"⚙️ {val} FPS"
         else:
             val_str = fps.split(' ')[0] if fps else "Unknown"
             fps_display = f"{val_str} FPS" if val_str != "Unknown" else "Unknown"
@@ -1399,22 +1419,15 @@ class RenderMixin:
         audio_text = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
         if hasattr(self.ui, 'check_mute_audio') and self.ui.check_mute_audio.isChecked():
             audio_kbps = 0
-        elif "Custom" in audio_text and hasattr(self, 'input_custom_abitrate'):
-            try:
-                audio_kbps = int(self.input_custom_abitrate.text())
-            except ValueError:
-                audio_kbps = getattr(self, 'current_orig_audio_bitrate', 192)
+        elif "Custom" in audio_text:
+            audio_kbps = self._audio_kbps_from_ui()
         else:
             match = re.search(r'(\d+)', audio_text)
             audio_kbps = int(match.group(1)) if match else 192
 
         fps_text = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else "60"
-        if "Custom" in fps_text and hasattr(self, 'input_custom_fps'):
-            try:
-                fps = int(self.input_custom_fps.text())
-            except ValueError:
-                fps = getattr(self, 'current_orig_fps', 60)
-        else:
+        fps = self._resolved_fps_from_ui() if "Custom" in fps_text else None
+        if fps is None:
             try:
                 fps = int(re.search(r'(\d+)', fps_text).group(1))
             except (AttributeError, ValueError):
