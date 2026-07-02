@@ -636,7 +636,10 @@ class LibraryMixin:
         if folders is None:
             legacy = settings.get("last_clips_folder", "")
             folders = [legacy] if legacy else []
-            self.save_user_settings("clips_folders", folders)
+            # Do not persist an empty migrated list — that made _is_first_library_setup()
+            # think the library was already configured and skipped Steam auto-discovery.
+            if folders:
+                self.save_user_settings("clips_folders", folders)
         self.clips_folders = [os.path.normpath(f) for f in folders if f]
         self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
         self._update_folder_picker_label()
@@ -668,7 +671,20 @@ class LibraryMixin:
     def _is_first_library_setup(self):
         """True when the user has never configured library folders (fresh install)."""
         settings = self.load_user_settings()
-        return "clips_folders" not in settings and not settings.get("last_clips_folder")
+        if settings.get("user_cleared_library"):
+            return False
+        if settings.get("last_clips_folder"):
+            return False
+        folders = settings.get("clips_folders")
+        if folders:
+            return False
+        return True
+
+    def _should_auto_discover_steam_folders(self):
+        """Auto-scan Steam clip paths when the library is empty and the user did not clear it."""
+        if self.clips_folders:
+            return False
+        return self._is_first_library_setup()
 
     def auto_discover_steam_folders(self, save=True):
         """Scan Steam userdata for gamerecordings/clips paths. Returns newly found paths."""
@@ -744,6 +760,7 @@ class LibraryMixin:
                 self.clips_folders.remove(folder)
             self.clips_folders[0] = folder
         self.clips_folder = self.clips_folders[0]
+        self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
         self.scan_clips()
@@ -764,6 +781,7 @@ class LibraryMixin:
             self.clips_folder = folder
         else:
             self.clips_folders.append(folder)
+        self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
         self.scan_clips()
@@ -793,6 +811,7 @@ class LibraryMixin:
             return
         self.clips_folders = []
         self.clips_folder = ""
+        self.save_user_settings("user_cleared_library", True)
         self._save_clips_folders()
         self._update_folder_picker_label()
         self.scan_clips()
