@@ -263,6 +263,9 @@ class LifecycleMixin:
         if hasattr(self, "_persist_render_queue"):
             self._persist_render_queue()
 
+        if hasattr(self, "_persist_library_ui_state"):
+            self._persist_library_ui_state()
+
         if hasattr(self.ui, "main_splitter"):
             self.save_layout_setting("main_splitter_sizes", self.ui.main_splitter.sizes())
         if hasattr(self, "right_h_splitter"):

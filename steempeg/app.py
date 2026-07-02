@@ -2183,6 +2183,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
     def _sync_startup_layout(self):
         """Re-apply splitter sizes once the maximized window has real geometry."""
         self._apply_startup_splitter_sizes()
+        if hasattr(self, "_restore_library_ui_state"):
+            self._restore_library_ui_state()
         self.refresh_render_queue_panel(sync_splitter=True)
 
         job_id = getattr(self, "_startup_queue_job_id", None)
