@@ -20,6 +20,18 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 
+def _ensure_thumb_dir(path: str) -> None:
+    """Create a batch thumbnail folder; recover if a same-named file exists (WinError 183)."""
+    if os.path.isdir(path):
+        return
+    if os.path.isfile(path) or os.path.islink(path):
+        try:
+            os.remove(path)
+        except OSError:
+            shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path, exist_ok=True)
+
+
 class PreviewSniperWorker(QThread):
     preview_ready = Signal(int, QPixmap)
 
@@ -243,7 +255,7 @@ class ThumbnailBatchThread(QThread):
 
         path_hash = hashlib.md5(mpd_path.encode('utf-8')).hexdigest()[:10]
         self.thumb_dir = os.path.join(tempfile.gettempdir(), f"steempeg_batch_{path_hash}_{self.interval}s")
-        os.makedirs(self.thumb_dir, exist_ok=True)
+        _ensure_thumb_dir(self.thumb_dir)
 
     def stop(self):
         """ FORCE-KILLING THE FFMPEG PROCESS BEFORE STOPPING THE STREAM! """
@@ -263,7 +275,7 @@ class ThumbnailBatchThread(QThread):
             return
 
         shutil.rmtree(self.thumb_dir, ignore_errors=True)
-        os.makedirs(self.thumb_dir, exist_ok=True)
+        _ensure_thumb_dir(self.thumb_dir)
 
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
