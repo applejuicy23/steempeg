@@ -107,10 +107,42 @@ from PySide6.QtCore import Qt
 from PySide6.QtCore import Qt
 
 
-
+_PLAYBACK_BUTTONS_QSS = """
+QPushButton#btn_play, QPushButton#btn_skip_back, QPushButton#btn_skip_forward {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: 0px;
+    margin: 0px;
+}
+QPushButton#btn_play:hover, QPushButton#btn_skip_back:hover, QPushButton#btn_skip_forward:hover,
+QPushButton#btn_play:pressed, QPushButton#btn_skip_back:pressed, QPushButton#btn_skip_forward:pressed,
+QPushButton#btn_play:focus, QPushButton#btn_skip_back:focus, QPushButton#btn_skip_forward:focus {
+    background-color: transparent;
+    border: none;
+    outline: none;
+}
+"""
 
 
 class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
+    def _apply_playback_button_styles(self):
+        """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
+        if not hasattr(self.ui, "btn_play"):
+            return
+        from PySide6.QtWidgets import QSizePolicy
+        for btn in (self.ui.btn_play, self.ui.btn_skip_back, self.ui.btn_skip_forward):
+            btn.setFlat(True)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setStyleSheet(_PLAYBACK_BUTTONS_QSS)
+        self.ui.btn_skip_back.setMinimumSize(40, 48)
+        self.ui.btn_skip_back.setMaximumSize(40, 48)
+        self.ui.btn_skip_forward.setMinimumSize(40, 48)
+        self.ui.btn_skip_forward.setMaximumSize(40, 48)
+        self.ui.btn_play.setMinimumSize(80, 48)
+        self.ui.btn_play.setMaximumSize(80, 48)
+        self.ui.btn_play.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
@@ -1432,25 +1464,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
 
         player_style = """
-        QPushButton#btn_play, QPushButton#btn_skip_back, QPushButton#btn_skip_forward {
-            background-color: transparent;
-            border: none;
-            border-radius: 4px;
-            padding: 5px;
-            outline: none;
-        }
-        QPushButton#btn_play:focus, QPushButton#btn_skip_back:focus, QPushButton#btn_skip_forward:focus {
-            border: none;
-            outline: none;
-        }
-        QPushButton#btn_play:hover, QPushButton#btn_skip_back:hover, QPushButton#btn_skip_forward:hover {
-            background-color: rgba(255, 255, 255, 25); 
-        }
-        QPushButton#btn_play:pressed, QPushButton#btn_skip_back:pressed, QPushButton#btn_skip_forward:pressed {
-            background-color: rgba(255, 255, 255, 40);
-        }
-
-        
         QSlider#slider_timeline::groove:horizontal {
             border-radius: 2px;
             height: 4px;
@@ -1544,7 +1557,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                         background-color: #2d2d2d;
                         border-radius: 6px;
                     }
-                """)
+                """ + _PLAYBACK_BUTTONS_QSS)
                 
                 v_layout = QVBoxLayout(self.player_footer_frame)
                 v_layout.setContentsMargins(15, 12, 15, 12)
@@ -1799,7 +1812,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.ui.btn_skip_forward.setCursor(Qt.PointingHandCursor)
                 
                 h_layout = QHBoxLayout()
-                h_layout.setSpacing(5) # Normal spacing
+                h_layout.setSpacing(8)
                 h_layout.addStretch() # Pushes buttons to center
                 
                 self.ui.btn_skip_back.setParent(self.player_footer_frame)
@@ -1811,6 +1824,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 h_layout.addWidget(self.ui.btn_skip_forward)
                 
                 h_layout.addStretch() # Pushes buttons to center
+                
+                self._apply_playback_button_styles()
                 
                 v_layout.addLayout(h_layout)
                 
