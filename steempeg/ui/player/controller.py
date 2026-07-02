@@ -132,6 +132,23 @@ class PlayerMixin:
             # Repaint the cards to actually drop the highlight.
             if hasattr(self, '_sync_grid_card_visuals'):
                 self._sync_grid_card_visuals()
+        if hasattr(self, 'table_rendered'):
+            self.table_rendered.blockSignals(True)
+            self.table_rendered.clearSelection()
+            self.table_rendered.setCurrentCell(-1, -1)
+            self.table_rendered.blockSignals(False)
+        if hasattr(self, 'grid_rendered'):
+            self.grid_rendered.blockSignals(True)
+            self.grid_rendered.clearSelection()
+            self.grid_rendered.setCurrentItem(None)
+            self.grid_rendered.blockSignals(False)
+            if hasattr(self, '_sync_rendered_grid_card_visuals'):
+                self._sync_rendered_grid_card_visuals()
+        if hasattr(self, '_rendered_play_timer'):
+            self._rendered_play_timer.stop()
+        self._pending_rendered_play_path = None
+        self._active_play_media_path = None
+        self._rendered_media_path = None
 
         if hasattr(self, 'btn_close_clip'):
             self.btn_close_clip.hide()
@@ -1207,6 +1224,42 @@ class PlayerMixin:
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
 
+    def _begin_preview_switch(self) -> int:
+        """Pause MPV and stop background workers before loading another file."""
+        self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
+
+        if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
+            self.thumb_thread.stop()
+
+        if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
+            sniper = getattr(self.custom_timeline.canvas, "sniper", None)
+            if sniper:
+                sniper.kill_worker()
+
+        if hasattr(self, "player") and self.player:
+            try:
+                self.player.pause = True
+            except Exception:
+                pass
+
+        return self._media_switch_gen
+
+    def schedule_play_media_file(self, file_path: str, delay_ms: int = 220):
+        """Debounce rendered-file preview so rapid grid clicks don't wedge MPV."""
+        if not file_path:
+            return
+        if not hasattr(self, "_rendered_play_timer"):
+            self._rendered_play_timer = QTimer(self.ui)
+            self._rendered_play_timer.setSingleShot(True)
+            self._rendered_play_timer.timeout.connect(self._flush_scheduled_media_play)
+        self._pending_rendered_play_path = file_path
+        self._rendered_play_timer.start(delay_ms)
+
+    def _flush_scheduled_media_play(self):
+        path = getattr(self, "_pending_rendered_play_path", None)
+        if path and os.path.isfile(path):
+            self.play_media_file(path)
+
     def play_media_file(self, file_path: str):
         """Play a plain exported media file (mp4, mp3, etc.) in the preview player."""
         if not file_path or not os.path.isfile(file_path):
@@ -1215,8 +1268,10 @@ class PlayerMixin:
         from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS, RENDERED_VIDEO_EXTS
         from steempeg.core.rendered_media import load_markers_sidecar, markers_to_canvas
 
+        switch_gen = self._begin_preview_switch()
         self._is_switching = True
         self._force_pause = False
+        self._active_play_media_path = file_path
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
         self._pending_trim_restore = None
@@ -1250,8 +1305,13 @@ class PlayerMixin:
         self._playback_last_time_pos = None
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
-        self.player.play(abs_path)
-        self.player.pause = False
+        try:
+            self.player.play(abs_path)
+            self.player.pause = False
+        except Exception as exc:
+            logging.error("MPV play file failed for %s: %s", abs_path, exc)
+            self._is_switching = False
+            return
 
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             self.custom_timeline.canvas.playback_speed = float(getattr(self.player, "speed", 1.0) or 1.0)
@@ -1259,11 +1319,11 @@ class PlayerMixin:
         self._first_frame_deadline = time.time() + 0.6
         QTimer.singleShot(30, self._reveal_video_when_ready)
 
-        if hasattr(self, "thumb_thread") and self.thumb_thread.isRunning():
+        if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
 
         def _start_timeline_thumbs(duration_sec: float):
-            if is_audio or duration_sec <= 0:
+            if is_audio or duration_sec < 1.0:
                 if hasattr(self, "custom_timeline"):
                     self.custom_timeline.thumb_dir = None
                     self.custom_timeline.current_video_path = abs_path
@@ -1275,6 +1335,10 @@ class PlayerMixin:
             self.thumb_thread.start()
 
         def finish_switch():
+            if switch_gen != getattr(self, "_media_switch_gen", 0):
+                return
+            if getattr(self, "_active_play_media_path", None) != file_path:
+                return
             if hasattr(self, "custom_timeline"):
                 self.custom_timeline.setEnabled(True)
             self._is_switching = False
@@ -1468,15 +1532,19 @@ class PlayerMixin:
         # --- BACKGROUND THUMBNAIL BATCH GENERATION (THE MATRIX 2.0) ---
         if hasattr(self, 'thumb_thread') and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
-            
-        # Launch the Batch Generator
-        self.thumb_thread = ThumbnailBatchThread(abs_path, self.current_clip_duration_sec, interval=3)
+
+        clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
+        if clip_dur >= 1.0:
+            self.thumb_thread = ThumbnailBatchThread(abs_path, clip_dur, interval=3)
+            if hasattr(self, 'custom_timeline'):
+                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
+                self.custom_timeline.current_video_path = abs_path
+            self.thumb_thread.start()
+        elif hasattr(self, 'custom_timeline'):
+            self.custom_timeline.thumb_dir = None
+            self.custom_timeline.current_video_path = abs_path
         
         if hasattr(self, 'custom_timeline'):
-            self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
-            self.custom_timeline.current_video_path = abs_path
-            
-            # A function that removes the shield and activates the timeline
             def finish_switch():
                 self.custom_timeline.setEnabled(True)
                 self._is_switching = False
@@ -1484,8 +1552,6 @@ class PlayerMixin:
                     QTimer.singleShot(150, self._deferred_apply_trim_restore)
 
             QTimer.singleShot(500, finish_switch)
-                
-        self.thumb_thread.start()
 
         # --- IMMEDIATELY UPDATE PLAY BUTTON ICON TO PAUSE ---
         if hasattr(self.ui, 'btn_play'):
@@ -1572,12 +1638,16 @@ class PlayerMixin:
                 getattr(self.player, 'eof_reached', False) or current_ms >= duration_ms - 5
             ):
                 self.player.pause = True
-                self.player.seek(0, reference='absolute', precision='exact')
-                self._eof_rewind_pending = time.time()
-                current_ms = 0
-
-                if hasattr(self, 'custom_timeline'):
-                    self.custom_timeline.force_jump(0)
+                if duration_ms >= 1000:
+                    self.player.seek(0, reference='absolute', precision='exact')
+                    self._eof_rewind_pending = time.time()
+                    current_ms = 0
+                    if hasattr(self, 'custom_timeline'):
+                        self.custom_timeline.force_jump(0)
+                else:
+                    current_ms = duration_ms
+                    if hasattr(self, 'custom_timeline'):
+                        self.custom_timeline.force_jump(duration_ms)
 
                 # Change the pause button back to play
                 if hasattr(self.ui, 'btn_play'):
