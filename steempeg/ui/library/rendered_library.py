@@ -146,6 +146,9 @@ class RenderedLibraryMixin:
         if hasattr(self, "mega_top_pill"):
             self.mega_top_pill.hide()
 
+        for key, btn in self._library_tabs.items():
+            btn.setStyleSheet(_LIBRARY_TAB_ACTIVE if key == "clips" else _LIBRARY_TAB_INACTIVE)
+
     def _show_add_library_panel_menu(self):
         menu = QMenu(self.ui)
         menu.setStyleSheet("""
@@ -185,7 +188,8 @@ class RenderedLibraryMixin:
             self.scan_rendered_outputs()
             self._apply_rendered_view_mode()
         else:
-            self.set_view_mode(self._clips_view_mode)
+            if hasattr(self, "grid_clips"):
+                self.set_view_mode(self._clips_view_mode)
         self._update_library_count_label()
 
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
@@ -250,7 +254,9 @@ class RenderedLibraryMixin:
         self.grid_rendered.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.grid_rendered.setSpacing(15)
         self.grid_rendered.setUniformItemSizes(True)
-        self.grid_rendered.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.grid_rendered.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.grid_rendered.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.grid_rendered.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_rendered.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_rendered.setMovement(QListWidget.Movement.Static)
         self.grid_rendered.setStyleSheet(LIBRARY_GRID_STYLE)
@@ -336,18 +342,18 @@ class RenderedLibraryMixin:
 
     def _resolved_rendered_meta(self, file_path: str, filename: str) -> tuple[str, str, str]:
         """Return (display_title, icon_path, thumb_path) for a rendered file."""
-        app_id = parse_app_id_from_name(filename)
-        title = os.path.splitext(filename)[0]
+        basename = os.path.basename(filename) if filename else os.path.basename(file_path)
+        app_id = parse_app_id_from_name(basename)
+        title = os.path.splitext(basename)[0]
         icon_path = ""
         if app_id and hasattr(self, "get_game_name"):
             title = self.get_game_name(app_id) or title
             if hasattr(self, "get_game_icon"):
-                icon = self.get_game_icon(app_id)
-                if icon and not icon.isNull():
-                    cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
-                    if os.path.isfile(cache_icon):
-                        icon_path = cache_icon
-        if not icon_path and os.path.isfile(_UNKNOWN_GAME_ICON):
+                self.get_game_icon(app_id)
+                cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
+                if os.path.isfile(cache_icon):
+                    icon_path = cache_icon
+        elif not app_id and os.path.isfile(_UNKNOWN_GAME_ICON):
             icon_path = _UNKNOWN_GAME_ICON
 
         thumb_path = ""
@@ -373,8 +379,9 @@ class RenderedLibraryMixin:
             size_str = size_item.text() if size_item else ""
             file_path = name_item.data(Qt.ItemDataRole.UserRole)
             display_title, icon_path, thumb_path = self._resolved_rendered_meta(
-                file_path, title
+                file_path, os.path.basename(file_path)
             )
+            badge = type_item.text().replace("🎬 ", "").strip() if type_item else "FILE"
 
             item = QListWidgetItem(self.grid_rendered)
             item.setSizeHint(QSize(260, 190))
@@ -384,7 +391,7 @@ class RenderedLibraryMixin:
             card = ClipCard(
                 display_title,
                 f"{date_str} • {size_str}",
-                type_label,
+                badge,
                 thumb_path,
                 icon_path,
                 row,
@@ -396,6 +403,16 @@ class RenderedLibraryMixin:
                 item.setHidden(True)
 
         self._sync_rendered_grid_from_table()
+
+    def _sync_rendered_grid_card_visuals(self) -> None:
+        """Paint selection border on rendered ClipCard widgets."""
+        if not hasattr(self, "grid_rendered"):
+            return
+        for i in range(self.grid_rendered.count()):
+            item = self.grid_rendered.item(i)
+            card = self.grid_rendered.itemWidget(item)
+            if isinstance(card, ClipCard):
+                card.set_selected(item.isSelected())
 
     def _update_library_count_label(self):
         if not hasattr(self, "lbl_clip_count"):
@@ -540,6 +557,7 @@ class RenderedLibraryMixin:
             row = item.data(Qt.ItemDataRole.UserRole)
             item.setSelected(row in selected_rows)
         self.grid_rendered.blockSignals(False)
+        self._sync_rendered_grid_card_visuals()
 
     def _rendered_grid_select_item(self, item):
         self.grid_rendered.blockSignals(True)
@@ -552,6 +570,7 @@ class RenderedLibraryMixin:
             self.table_rendered.selectRow(row)
             self.table_rendered.blockSignals(False)
         self.update_rendered_selection()
+        self._sync_rendered_grid_card_visuals()
 
     def _on_rendered_grid_selection_changed(self):
         if not self.grid_rendered.selectedItems():
@@ -584,7 +603,7 @@ class RenderedLibraryMixin:
         self._rendered_media_path = file_path
 
         display_title, icon_path, _thumb = self._resolved_rendered_meta(
-            file_path, name_item.text()
+            file_path, os.path.basename(file_path)
         )
 
         if hasattr(self, "custom_text_label"):
@@ -610,7 +629,9 @@ class RenderedLibraryMixin:
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
 
-        if hasattr(self, "play_media_file"):
+        if hasattr(self, "schedule_play_media_file"):
+            self.schedule_play_media_file(file_path)
+        elif hasattr(self, "play_media_file"):
             self.play_media_file(file_path)
 
     # --- Hooks that branch when the rendered panel is active ---
