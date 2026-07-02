@@ -258,15 +258,24 @@ class ThumbnailBatchThread(QThread):
         _ensure_thumb_dir(self.thumb_dir)
 
     def stop(self):
-        """ FORCE-KILLING THE FFMPEG PROCESS BEFORE STOPPING THE STREAM! """
+        """Stop ffmpeg and end the batch thread without leaving a zombie process."""
         if self.process:
             try:
                 self.process.kill()
             except Exception:
                 pass
-        self.terminate()
+            self.process = None
+        if self.isRunning():
+            self.quit()
+            if not self.wait(2000):
+                self.terminate()
+                self.wait(500)
 
     def run(self):
+        if self.duration_sec <= 0 or self.duration_sec < self.interval:
+            self.finished_generation.emit(self.thumb_dir)
+            return
+
         existing_files = glob.glob(os.path.join(self.thumb_dir, "thumb_*.jpg"))
         expected_count = int(self.duration_sec // self.interval)
 
