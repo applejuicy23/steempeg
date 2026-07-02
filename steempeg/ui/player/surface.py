@@ -111,6 +111,15 @@ class MPVWrapper(QWidget):
         self.update_geometry()
         super().resizeEvent(event)
 
+    def moveEvent(self, event):
+        # Native mpv HWND does not always track parent moves during splitter drags.
+        self.update_geometry()
+        super().moveEvent(event)
+
+    def showEvent(self, event):
+        self.update_geometry()
+        super().showEvent(event)
+
     def set_border_active(self, active):
         if not hasattr(self, 'lines'):
             return
