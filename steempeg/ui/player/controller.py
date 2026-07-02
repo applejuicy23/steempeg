@@ -411,6 +411,23 @@ class PlayerMixin:
             if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
                 self.custom_timeline.canvas.playback_speed = speed_float
 
+    def _keep_deprecated_library_pill_hidden(self):
+        """mega_top_pill was replaced by tab buttons; never show it (orphan window on Windows)."""
+        if hasattr(self, 'mega_top_pill'):
+            self.mega_top_pill.hide()
+
+    def _set_left_library_panel_visible(self, visible: bool):
+        """Toggle the whole library column — do not show/hide tab children individually."""
+        if hasattr(self.ui, 'left_panel'):
+            self.ui.left_panel.setVisible(visible)
+        elif hasattr(self.ui, 'table_clips'):
+            left_wrapper = self.ui.table_clips.parentWidget()
+            if left_wrapper and "Splitter" not in type(left_wrapper).__name__ and left_wrapper.objectName() != "centralwidget":
+                left_wrapper.setVisible(visible)
+            else:
+                self.ui.table_clips.setVisible(visible)
+        self._keep_deprecated_library_pill_hidden()
+
     def toggle_theater_mode(self):
         """ Safely collapses side and bottom panels, aware of Fullscreen state, and swaps icon. """
         
@@ -427,27 +444,7 @@ class PlayerMixin:
             self._save_splitter_sizes(getattr(self.ui, 'main_splitter', None), '_pre_theater_main_sizes')
             self._save_splitter_sizes(getattr(self, 'main_v_splitter', None), '_pre_theater_v_sizes')
 
-        if hasattr(self.ui, 'left_panel'):
-            self.ui.left_panel.setVisible(not self.is_theater)
-        else:
-            if hasattr(self.ui, 'table_clips'):
-                left_wrapper = self.ui.table_clips.parentWidget()
-                if left_wrapper and "Splitter" not in type(left_wrapper).__name__ and left_wrapper.objectName() != "centralwidget":
-                    left_wrapper.setVisible(not self.is_theater)
-                else:
-                    self.ui.table_clips.setVisible(not self.is_theater)
-
-        if hasattr(self, 'mega_top_pill'):
-            self.mega_top_pill.setVisible(not self.is_theater)
-        for btn in getattr(self, '_library_tabs', {}).values():
-            btn.setVisible(not self.is_theater)
-        if hasattr(self, 'btn_library_add'):
-            self.btn_library_add.setVisible(not self.is_theater)
-
-        if hasattr(self, 'library_views_container'):
-            self.library_views_container.setVisible(not self.is_theater)
-        elif hasattr(self.ui, 'library_views_container'):
-            self.ui.library_views_container.setVisible(not self.is_theater)
+        self._set_left_library_panel_visible(not self.is_theater)
 
         if hasattr(self.ui, 'main_splitter'):
             self.ui.main_splitter.handle(1).setVisible(not self.is_theater)
@@ -518,6 +515,8 @@ class PlayerMixin:
 
         if not self.is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
             self._sync_queue_splitter_visibility()
+        if hasattr(self, '_sync_library_mode_chrome'):
+            self._sync_library_mode_chrome()
 
     def _save_splitter_sizes(self, splitter, attr_name):
         if splitter is None:
@@ -688,16 +687,7 @@ class PlayerMixin:
         if hasattr(self, 'player_footer_frame'):
             self.player_footer_frame.hide()
 
-        if hasattr(self.ui, 'left_panel'):
-            self.ui.left_panel.setVisible(not is_t)
-        if hasattr(self, 'mega_top_pill'):
-            self.mega_top_pill.setVisible(not is_t)
-        for btn in getattr(self, '_library_tabs', {}).values():
-            btn.setVisible(not is_t)
-        if hasattr(self, 'btn_library_add'):
-            self.btn_library_add.setVisible(not is_t)
-        if hasattr(self, 'library_views_container'):
-            self.library_views_container.setVisible(not is_t)
+        self._set_left_library_panel_visible(not is_t)
 
         if hasattr(self.ui, 'btn_start'):
             bw = self.ui.btn_start.parentWidget()
@@ -834,13 +824,7 @@ class PlayerMixin:
                     self._immersive_v_splitter_sizes = list(self._pre_theater_v_sizes)
 
             # Hide ALL old and NEW panels
-            if hasattr(self.ui, 'left_panel'): self.ui.left_panel.hide()
-            if hasattr(self, 'mega_top_pill'): self.mega_top_pill.hide()
-            for btn in getattr(self, '_library_tabs', {}).values():
-                btn.hide()
-            if hasattr(self, 'btn_library_add'):
-                self.btn_library_add.hide()
-            if hasattr(self, 'library_views_container'): self.library_views_container.hide()
+            self._set_left_library_panel_visible(False)
             if hasattr(self.ui, 'settings_tabs'): self.ui.settings_tabs.hide()
             if hasattr(self, 'neo_wrapper'): self.neo_wrapper.hide()
             if hasattr(self.ui, 'frame_status'): self.ui.frame_status.hide()
