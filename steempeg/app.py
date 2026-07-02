@@ -116,6 +116,13 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         self.ui = MainWindow()
 
+        from PySide6.QtGui import QColor, QPalette
+        self.ui.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        dark = QColor("#1e1e1e")
+        palette = self.ui.palette()
+        palette.setColor(QPalette.ColorRole.Window, dark)
+        self.ui.setPalette(palette)
+        self.ui.setAutoFillBackground(True)
 
         self.ui.setStyleSheet("""
             QDialog#Dialog { background-color: #1e1e1e; }
@@ -2031,7 +2038,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
             loglevel='info'
         )
         self.player['af'] = 'rubberband'
-        
+        self._install_mpv_geometry_hooks()
 
         # --- FULLSCREEN SYSTEM INITIALIZATION ---
         self.is_fullscreen = False
@@ -2123,7 +2130,7 @@ class SteempegApp(LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, Settin
 
         # First launch only: auto-discover every Steam userdata/*/gamerecordings/clips.
         # If the user later clears the list, we do not re-scan until they ask.
-        if not self.clips_folders and self._is_first_library_setup():
+        if self._should_auto_discover_steam_folders():
             discovered = self.auto_discover_steam_folders(save=True)
             if discovered:
                 logging.info(
@@ -2385,6 +2392,8 @@ def main():
         if _screen is not None:
             window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 50, -60, -50))
         window.ui.showMaximized()
+        QApplication.processEvents()
+        window._sync_startup_layout()
         QTimer.singleShot(0, window._sync_startup_layout)
         # Force the taskbar button to adopt our icon on the very first launch instead
         # of waiting for Windows to warm its per-AppUserModelID icon cache.
