@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from steempeg.core.dash import health
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
-from steempeg.ui.player.thumbnails import ThumbnailBatchThread
+from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
 
 
 class PlayerMixin:
@@ -1221,6 +1221,7 @@ class PlayerMixin:
         canvas.markers.clear()
         canvas.mode_segments = []
         canvas._hover_preview_bucket = -1
+        canvas._batch_thumbs_busy = False
         canvas.current_json_path = None
         canvas.update()
 
@@ -1230,7 +1231,9 @@ class PlayerMixin:
         self._clear_timeline_clip_overlays()
 
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
-            self.thumb_thread.stop()
+            self._stop_timeline_thumb_batch()
+        else:
+            self._set_timeline_batch_thumbs_busy(False)
 
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             sniper = getattr(self.custom_timeline.canvas, "sniper", None)
@@ -1244,6 +1247,59 @@ class PlayerMixin:
                 pass
 
         return self._media_switch_gen
+
+    def _set_timeline_batch_thumbs_busy(self, busy: bool) -> None:
+        if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
+            self.custom_timeline.canvas._batch_thumbs_busy = busy
+
+    def _stop_timeline_thumb_batch(self) -> None:
+        thread = getattr(self, "thumb_thread", None)
+        if not thread:
+            return
+        try:
+            thread.finished_generation.disconnect(self._on_timeline_thumb_batch_done)
+        except (TypeError, RuntimeError):
+            pass
+        thread.stop()
+        self.thumb_thread = None
+        self._set_timeline_batch_thumbs_busy(False)
+
+    def _on_timeline_thumb_batch_done(self, thumb_dir: str) -> None:
+        sender = self.sender()
+        if sender is not getattr(self, "thumb_thread", None):
+            logging.debug("Ignored stale thumb batch completion for %s", thumb_dir)
+            return
+        if getattr(sender, "_cancelled", False):
+            return
+        expected = getattr(sender, "mpd_path", "")
+        current = ""
+        if hasattr(self, "custom_timeline"):
+            current = getattr(self.custom_timeline, "current_video_path", "") or ""
+        if PreviewSniperWorker._norm_media_path(expected) != PreviewSniperWorker._norm_media_path(current):
+            logging.debug(
+                "Ignored thumb batch for wrong clip (got %s, playing %s)",
+                expected, current,
+            )
+            return
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.thumb_dir = thumb_dir
+        self._set_timeline_batch_thumbs_busy(False)
+
+    def _start_timeline_thumb_batch(self, abs_path: str, duration_sec: float) -> None:
+        if duration_sec < 1.0:
+            self._stop_timeline_thumb_batch()
+            if hasattr(self, "custom_timeline"):
+                self.custom_timeline.thumb_dir = None
+            return
+
+        self._stop_timeline_thumb_batch()
+        self._set_timeline_batch_thumbs_busy(True)
+
+        self.thumb_thread = ThumbnailBatchThread(abs_path, duration_sec, interval=3)
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
+        self.thumb_thread.finished_generation.connect(self._on_timeline_thumb_batch_done)
+        self.thumb_thread.start()
 
     def schedule_play_media_file(self, file_path: str, delay_ms: int = 220):
         """Debounce rendered-file preview so rapid grid clicks don't wedge MPV."""
@@ -1304,6 +1360,10 @@ class PlayerMixin:
         ext = os.path.splitext(file_path)[1].lower()
         is_audio = ext in RENDERED_AUDIO_EXTS
 
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.current_video_path = abs_path
+            self.custom_timeline.thumb_dir = None
+
         logging.info("MPV play file: %s", abs_path)
         self._playback_last_time_pos = None
         self._playback_stall_since = None
@@ -1326,16 +1386,12 @@ class PlayerMixin:
             self.thumb_thread.stop()
 
         def _start_timeline_thumbs(duration_sec: float):
-            if is_audio or duration_sec < 1.0:
+            if is_audio:
                 if hasattr(self, "custom_timeline"):
-                    self.custom_timeline.current_video_path = abs_path
                     self.custom_timeline.thumb_dir = None
+                self._set_timeline_batch_thumbs_busy(False)
                 return
-            self.thumb_thread = ThumbnailBatchThread(abs_path, duration_sec, interval=3)
-            if hasattr(self, "custom_timeline"):
-                self.custom_timeline.current_video_path = abs_path
-                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
-            self.thumb_thread.start()
+            self._start_timeline_thumb_batch(abs_path, duration_sec)
 
         def finish_switch():
             if switch_gen != getattr(self, "_media_switch_gen", 0):
@@ -1513,6 +1569,10 @@ class PlayerMixin:
         # A Reliable Path for Windows:
         abs_path = os.path.abspath(mpd_path).replace('\\', '/')
 
+        if hasattr(self, 'custom_timeline'):
+            self.custom_timeline.current_video_path = abs_path
+            self.custom_timeline.thumb_dir = None
+
         # Remember the source so the EOF watchdog can reopen it if a rewind wedges
         # ffmpeg's DASH demuxer (see update_ui_from_vlc / _reopen_current_clip_paused).
         self._current_mpd_abs_path = abs_path
@@ -1541,14 +1601,10 @@ class PlayerMixin:
 
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
         if clip_dur >= 1.0:
-            self.thumb_thread = ThumbnailBatchThread(abs_path, clip_dur, interval=3)
-            if hasattr(self, 'custom_timeline'):
-                self.custom_timeline.current_video_path = abs_path
-                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
-            self.thumb_thread.start()
+            self._start_timeline_thumb_batch(abs_path, clip_dur)
         elif hasattr(self, 'custom_timeline'):
-            self.custom_timeline.current_video_path = abs_path
             self.custom_timeline.thumb_dir = None
+            self._set_timeline_batch_thumbs_busy(False)
         
         if hasattr(self, 'custom_timeline'):
             def finish_switch():
