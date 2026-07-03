@@ -161,7 +161,55 @@ class LibraryMixin:
                 return True
         return False
 
+    @staticmethod
+    def _is_steam_clip_container_folder(folder_path: str) -> bool:
+        """Steam wrapper ``<appid>_<date>_<time>/clips/fg_…`` — not a clip itself."""
+        if not folder_path or not os.path.isdir(folder_path):
+            return False
+        base = os.path.basename(folder_path).lower()
+        if base.startswith(("clip_", "bg_", "fg_")):
+            return False
+        parts = base.split("_")
+        if not (len(parts) == 3 and parts[0].isdigit() and len(parts[1]) == 8 and parts[2].isdigit()):
+            return False
+        for sub in ("clips", "video"):
+            sub_path = os.path.join(folder_path, sub)
+            if not os.path.isdir(sub_path):
+                continue
+            try:
+                for item in os.listdir(sub_path):
+                    if item.lower().startswith(("clip_", "bg_", "fg_")):
+                        return True
+            except OSError:
+                pass
+        return False
+
+    @staticmethod
+    def _is_clip_library_root(folder_path: str) -> bool:
+        """Folder that groups recordings (``CLIPS``, ``clips``, …) — not a clip itself."""
+        if not folder_path or not os.path.isdir(folder_path):
+            return False
+        base = os.path.basename(folder_path).lower()
+        if base in ("clips", "video", "gamerecordings"):
+            return True
+        try:
+            entries = [
+                name
+                for name in os.listdir(folder_path)
+                if os.path.isdir(os.path.join(folder_path, name))
+            ]
+        except OSError:
+            return False
+        if not entries:
+            return False
+        steam_like = [n for n in entries if n.lower().startswith(("clip_", "bg_", "fg_"))]
+        return len(steam_like) == len(entries)
+
     def _looks_like_single_clip_folder(self, folder_path: str) -> bool:
+        if self._is_steam_clip_container_folder(folder_path):
+            return False
+        if self._is_clip_library_root(folder_path):
+            return False
         name = os.path.basename(folder_path).lower()
         if name.startswith(("clip_", "bg_", "fg_")):
             return True
@@ -962,7 +1010,9 @@ class LibraryMixin:
 
         base_folder = os.path.normpath(base_folder)
         if os.path.basename(base_folder).lower() == "clips":
-            base_folder = os.path.dirname(base_folder)
+            parent = os.path.dirname(base_folder)
+            if os.path.basename(parent).lower() == "gamerecordings":
+                base_folder = parent
 
         roots = set()
         for sub in ("clips", "video"):
@@ -976,7 +1026,8 @@ class LibraryMixin:
         if self._looks_like_single_clip_folder(base_folder):
             base_name = os.path.basename(base_folder).lower()
             if base_name not in ("gamerecordings", "clips", "video"):
-                roots.add(base_folder)
+                if not self._is_steam_clip_container_folder(base_folder):
+                    roots.add(base_folder)
         try:
             for item in os.listdir(base_folder):
                 full = os.path.join(base_folder, item)
@@ -1089,6 +1140,10 @@ class LibraryMixin:
 
                 folder_name = os.path.basename(full_path).lower()
                 if folder_name in ("gamerecordings", "clips", "video"):
+                    continue
+                if self._is_steam_clip_container_folder(full_path):
+                    continue
+                if self._is_clip_library_root(full_path):
                     continue
                 is_steam_name = folder_name.startswith(("clip_", "bg_", "fg_"))
                 if not is_steam_name and not self._folder_has_dash_recording(full_path):
