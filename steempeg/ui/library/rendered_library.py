@@ -586,6 +586,10 @@ class RenderedLibraryMixin:
         for root in getattr(self, "clips_folders", []):
             if root and norm == os.path.normpath(root):
                 return False
+        if hasattr(self, "_is_steam_clip_container_folder") and self._is_steam_clip_container_folder(clip_path):
+            return False
+        if hasattr(self, "_is_clip_library_root") and self._is_clip_library_root(clip_path):
+            return False
         return self._looks_like_single_clip_folder(clip_path)
 
     def _select_clip_path(self, clip_path: str, *, play: bool) -> bool:
