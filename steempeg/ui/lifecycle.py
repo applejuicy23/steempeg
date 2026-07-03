@@ -275,6 +275,8 @@ class LifecycleMixin:
         if hasattr(self, "_persist_render_queue"):
             self._persist_render_queue()
 
+        if hasattr(self, "_library_ui_persist_ready"):
+            self._library_ui_persist_ready = True
         if hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
 
@@ -292,6 +294,8 @@ class LifecycleMixin:
     def on_app_exit(self):
         """ Global Intercept: Triggers when the entire program closes. """
         self._is_closing = True
+        if hasattr(self, "_library_ui_persist_ready"):
+            self._library_ui_persist_ready = True
         if hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
         print("CLEANING BEFORE CLOSING...")
