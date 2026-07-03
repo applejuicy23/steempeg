@@ -396,6 +396,12 @@ class RenderMixin:
         """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
         self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
+        if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
+            logging.warning("Ignored invalid clip selection: %s", clip_path)
+            return
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            self._clear_rendered_selection_visual()
+        self._saved_rendered_selection_path = ""
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
         self._apply_header_from_table_row(selected_row)
@@ -828,6 +834,12 @@ class RenderMixin:
 
         self._flush_current_trim_state()
         clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
+        if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
+            logging.warning("Ignored invalid clip selection: %s", clip_path)
+            return
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            self._clear_rendered_selection_visual()
+        self._saved_rendered_selection_path = ""
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
         trim_restore = self._trim_state_for_clip(clip_path)
@@ -1304,8 +1316,12 @@ class RenderMixin:
             target_icon = getattr(self, 'current_game_icon', '')
 
         unknown_icon_path = get_resource_path("unknown_icon.png")
+        logo_path = get_resource_path("logo.png")
         if not target_icon or not os.path.exists(target_icon):
             target_icon = unknown_icon_path
+        place_icon = target_icon
+        if place_icon == unknown_icon_path or not os.path.exists(place_icon):
+            place_icon = logo_path if os.path.exists(logo_path) else unknown_icon_path
 
         if audio_only:
             text_part = f"<span style='font-size: 14px;'><b>{game_name} &nbsp;•&nbsp; AUDIO ONLY: {audio_format} {audio_bitrate_clean}</b></span>"
@@ -1330,7 +1346,7 @@ class RenderMixin:
                 # Pixmap only (no stylesheet image) so the game icon scales with the
                 # aspect ratio kept and never overlaps the Steempeg logo underneath.
                 self.place_logo.setStyleSheet("")
-                game_pix = QPixmap(target_icon)
+                game_pix = QPixmap(place_icon)
                 if not game_pix.isNull():
                     self.place_logo.setPixmap(
                         game_pix.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
