@@ -12,8 +12,9 @@ from steempeg.ui.main_window_ui import Ui_Dialog
  
  
 class MainWindow(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, app_host=None):
         super().__init__(parent)
+        self._app_host = app_host
         self._ui = Ui_Dialog()
         self._ui.setupUi(self)
  
@@ -23,3 +24,10 @@ class MainWindow(QDialog):
             if name.startswith("_"):
                 continue
             setattr(self, name, obj)
+
+    def closeEvent(self, event):
+        host = self._app_host
+        if host is not None and hasattr(host, "closeEvent"):
+            host.closeEvent(event)
+        else:
+            super().closeEvent(event)
