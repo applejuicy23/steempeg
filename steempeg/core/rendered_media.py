@@ -9,6 +9,7 @@ import re
 import subprocess
 
 _RENDERED_NAME_RE = re.compile(r"^clip_(\d+)_", re.IGNORECASE)
+_COMPANION_SUFFIX = ".steempeg.json"
 
 
 def file_identity(file_path: str) -> str:
@@ -21,6 +22,90 @@ def parse_app_id_from_name(filename: str) -> str | None:
     stem = os.path.splitext(os.path.basename(filename))[0]
     m = _RENDERED_NAME_RE.match(stem)
     return m.group(1) if m else None
+
+
+def parse_app_id_from_clip_folder(folder_name: str) -> str | None:
+    parts = os.path.basename(folder_name).split("_")
+    if len(parts) >= 2 and parts[0].lower() == "clip" and parts[1].isdigit():
+        return parts[1]
+    return None
+
+
+def is_default_rendered_basename(stem: str, app_id: str | None) -> bool:
+    """True for Steam's default ``clip_<appid>_…_rendered`` export names."""
+    if not app_id:
+        return False
+    low = stem.lower()
+    return low.startswith(f"clip_{app_id}_") and low.endswith("_rendered")
+
+
+def companion_meta_path(file_path: str) -> str:
+    return file_path + _COMPANION_SUFFIX
+
+
+def save_rendered_companion_meta(
+    file_path: str,
+    *,
+    app_id: str | None = None,
+    game_name: str = "",
+    clip_path: str = "",
+    game_icon_path: str = "",
+) -> None:
+    """Write ``<video>.steempeg.json`` so renamed exports keep their game metadata."""
+    try:
+        st = os.stat(file_path)
+    except OSError:
+        return
+    payload = {
+        "app_id": app_id or "",
+        "game_name": game_name,
+        "clip_path": clip_path,
+        "game_icon_path": game_icon_path,
+        "size": st.st_size,
+        "mtime_ns": st.st_mtime_ns,
+    }
+    try:
+        with open(companion_meta_path(file_path), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError as exc:
+        logging.debug("Could not write rendered companion meta for %s: %s", file_path, exc)
+
+
+def load_rendered_companion_meta(file_path: str) -> dict | None:
+    direct = companion_meta_path(file_path)
+    if os.path.isfile(direct):
+        try:
+            with open(direct, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    folder = os.path.dirname(file_path) or "."
+    try:
+        st = os.stat(file_path)
+    except OSError:
+        return None
+    try:
+        for name in os.listdir(folder):
+            if not name.endswith(_COMPANION_SUFFIX):
+                continue
+            meta_path = os.path.join(folder, name)
+            try:
+                with open(meta_path, encoding="utf-8") as handle:
+                    data = json.load(handle)
+                if (
+                    isinstance(data, dict)
+                    and data.get("size") == st.st_size
+                    and data.get("mtime_ns") == st.st_mtime_ns
+                ):
+                    return data
+            except (OSError, json.JSONDecodeError):
+                continue
+    except OSError:
+        pass
+    return None
 
 
 def poster_cache_path(cache_dir: str, file_path: str) -> str:
