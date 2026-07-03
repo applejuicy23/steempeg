@@ -147,7 +147,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # 1. LOADING THE INTERFACE
         super().__init__()
 
-        self.ui = MainWindow()
+        self.ui = MainWindow(app_host=self)
 
         from PySide6.QtGui import QColor, QPalette
         self.ui.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -2187,14 +2187,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         """Re-apply splitter sizes once the maximized window has real geometry."""
         self._apply_startup_splitter_sizes()
         if hasattr(self, "_restore_library_ui_state"):
-            QTimer.singleShot(0, self._restore_library_ui_state)
+            self._restore_library_ui_state()
+            QTimer.singleShot(500, self._restore_library_ui_state)
+        if hasattr(self, "_library_ui_persist_ready"):
+            QTimer.singleShot(250, lambda: setattr(self, "_library_ui_persist_ready", True))
         self.refresh_render_queue_panel(sync_splitter=True)
 
         job_id = getattr(self, "_startup_queue_job_id", None)
-        if job_id and hasattr(self, "load_user_settings"):
-            library_state = self.load_user_settings().get("library_ui") or {}
+        if job_id and hasattr(self, "_load_library_ui_state"):
+            library_state = self._load_library_ui_state()
             restoring_rendered = (
-                library_state.get("library_panel_mode") == "rendered"
+                library_state.get("rendered_tab_open")
+                or library_state.get("library_panel_mode") == "rendered"
                 or library_state.get("preview_kind") == "rendered"
             )
             if not restoring_rendered:
