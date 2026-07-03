@@ -9,6 +9,9 @@ import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
 
+from steempeg.infra.paths import get_resource_path
+
+
 class ClipCard(qtw.QWidget):
     def __init__(
         self,
@@ -19,6 +22,7 @@ class ClipCard(qtw.QWidget):
         icon_path,
         row_idx,
         health_color: Optional[str] = None,
+        status_badge: Optional[str] = None,
         on_left_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         parent=None,
@@ -55,9 +59,10 @@ class ClipCard(qtw.QWidget):
         self.icon_label = qtw.QLabel(self.thumb_label)
         self.icon_label.setFixedSize(24, 24)
         self.icon_label.move(8, 8)
-        if icon_path and os.path.exists(icon_path):
+        pix_path = icon_path if icon_path and os.path.exists(icon_path) else get_resource_path("unknown_icon.png")
+        if pix_path and os.path.exists(pix_path):
             self.icon_label.setPixmap(
-                qtg.QPixmap(icon_path).scaled(24, 24, qtc.Qt.KeepAspectRatio, qtc.Qt.SmoothTransformation)
+                qtg.QPixmap(pix_path).scaled(24, 24, qtc.Qt.KeepAspectRatio, qtc.Qt.SmoothTransformation)
             )
 
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
@@ -68,6 +73,15 @@ class ClipCard(qtw.QWidget):
         self.badge_label.adjustSize()
         badge_w = self.badge_label.width()
         self.badge_label.move(254 - badge_w - 6, 144 - 24)
+
+        if status_badge:
+            self.status_badge_label = qtw.QLabel(status_badge, self.thumb_label)
+            self.status_badge_label.setStyleSheet(
+                "background-color: #555555; color: #e0e0e0; font-weight: bold; font-size: 10px;"
+                "border-radius: 4px; padding: 2px 6px;"
+            )
+            self.status_badge_label.adjustSize()
+            self.status_badge_label.move(6, 144 - 22)
 
         if health_color:
             self.health_dot = qtw.QLabel(self.thumb_label)
@@ -92,7 +106,7 @@ class ClipCard(qtw.QWidget):
         text_layout = qtw.QHBoxLayout(text_widget)
         text_layout.setContentsMargins(12, 0, 12, 0)
 
-        title_lbl = qtw.QLabel(title)
+        title_lbl = qtw.QLabel(title.strip())
         title_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
         title_lbl.setStyleSheet(
             "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
