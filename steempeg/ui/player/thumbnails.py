@@ -62,6 +62,36 @@ class PreviewSniperWorker(QThread):
     def kill_worker(self):
         self._is_killed = True
         self.cache.clear()
+        self.target_sec = -1
+
+    def _is_dash_manifest(self, path: str) -> bool:
+        return path.lower().endswith(".mpd")
+
+    def _decode_frame_ffmpeg(self, media_path: str, sec: int):
+        """Single-frame extract for plain media files (rendered mp4, etc.)."""
+        if not media_path or not os.path.isfile(media_path):
+            return None
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(max(0, sec)),
+            "-i", media_path,
+            "-frames:v", "1",
+            "-vf", "scale=160:90",
+            "-f", "image2pipe", "-vcodec", "mjpeg", "-",
+        ]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, creationflags=creationflags, timeout=12,
+            )
+            if proc.returncode != 0 or not proc.stdout:
+                return None
+            qimg = QImage.fromData(proc.stdout)
+            if qimg.isNull():
+                return None
+            return QPixmap.fromImage(qimg)
+        except Exception:
+            return None
 
     def parse_mpd(self, mpd_path):
         self.base_dir = os.path.dirname(mpd_path)
@@ -97,8 +127,7 @@ class PreviewSniperWorker(QThread):
             pass
 
     def request_frame(self, mpd_path, hover_sec):
-        if self._is_killed:
-            return
+        self._is_killed = False
 
         target_sec = round(hover_sec / self.interval) * self.interval
 
@@ -109,7 +138,12 @@ class PreviewSniperWorker(QThread):
             self.bg_radius = self.interval
             self.bg_left_done = False
             self.bg_right_done = False
-            self.parse_mpd(mpd_path)
+            if self._is_dash_manifest(mpd_path):
+                self.parse_mpd(mpd_path)
+            else:
+                self.base_dir = ""
+                self.init_filename = ""
+                self.chunk_template = ""
 
         if target_sec in self.cache:
             self.preview_ready.emit(target_sec, self.cache[target_sec])
@@ -176,60 +210,73 @@ class PreviewSniperWorker(QThread):
                 continue
 
             try:
-                chunk_offset = int(sec // self.chunk_duration_sec)
-                chunk_num = self.start_number + chunk_offset
+                pixmap = None
+                if self._is_dash_manifest(self.video_path):
+                    chunk_offset = int(sec // self.chunk_duration_sec)
+                    chunk_num = self.start_number + chunk_offset
 
-                real_init = self.init_filename.replace('$RepresentationID$', self.rep_id)
-                real_chunk = self.chunk_template.replace('$RepresentationID$', self.rep_id)
+                    real_init = self.init_filename.replace('$RepresentationID$', self.rep_id)
+                    real_chunk = self.chunk_template.replace('$RepresentationID$', self.rep_id)
 
-                match = re.search(r'\$Number([^$]*)\$', real_chunk)
-                if match:
-                    format_spec = match.group(1)
-                    num_str = format_spec % chunk_num if format_spec else str(chunk_num)
-                    real_chunk = real_chunk[:match.start()] + num_str + real_chunk[match.end():]
-                else:
-                    real_chunk = real_chunk.replace('$Number$', str(chunk_num))
-
-                init_path = os.path.normpath(os.path.join(self.base_dir, real_init))
-                chunk_path = os.path.normpath(os.path.join(self.base_dir, real_chunk))
-
-                if not os.path.exists(init_path) or not os.path.exists(chunk_path):
-                    if is_background:
-                        if self.bg_side == "right":
-                            self.bg_right_done = True
-                        elif self.bg_side == "left":
-                            self.bg_left_done = True
+                    match = re.search(r'\$Number([^$]*)\$', real_chunk)
+                    if match:
+                        format_spec = match.group(1)
+                        num_str = format_spec % chunk_num if format_spec else str(chunk_num)
+                        real_chunk = real_chunk[:match.start()] + num_str + real_chunk[match.end():]
                     else:
-                        last_serviced = sec
-                    continue
+                        real_chunk = real_chunk.replace('$Number$', str(chunk_num))
 
-                # Decode one frame straight from RAM (init + chunk) via PyAV.
-                with open(init_path, 'rb') as f:
-                    init_bytes = f.read()
-                with open(chunk_path, 'rb') as f:
-                    chunk_bytes = f.read()
+                    init_path = os.path.normpath(os.path.join(self.base_dir, real_init))
+                    chunk_path = os.path.normpath(os.path.join(self.base_dir, real_chunk))
 
-                ram_buffer = io.BytesIO(init_bytes + chunk_bytes)
-                container = av.open(ram_buffer)
+                    if not os.path.exists(init_path) or not os.path.exists(chunk_path):
+                        if is_background:
+                            if self.bg_side == "right":
+                                self.bg_right_done = True
+                            elif self.bg_side == "left":
+                                self.bg_left_done = True
+                        else:
+                            last_serviced = sec
+                        continue
 
-                stream = container.streams.video[0]
-                for frame in container.decode(stream):
-                    if self._is_killed:
+                    # Decode one frame straight from RAM (init + chunk) via PyAV.
+                    with open(init_path, 'rb') as f:
+                        init_bytes = f.read()
+                    with open(chunk_path, 'rb') as f:
+                        chunk_bytes = f.read()
+
+                    ram_buffer = io.BytesIO(init_bytes + chunk_bytes)
+                    container = av.open(ram_buffer)
+
+                    stream = container.streams.video[0]
+                    for frame in container.decode(stream):
+                        if self._is_killed:
+                            break
+
+                        img = frame.to_image()
+                        img = img.resize((160, 90))
+                        img_data = img.convert("RGBA").tobytes("raw", "RGBA")
+                        qimg = QImage(img_data, img.width, img.height, QImage.Format_RGBA8888)
+                        pixmap = QPixmap.fromImage(qimg)
                         break
 
-                    img = frame.to_image()
-                    img = img.resize((160, 90))
-                    img_data = img.convert("RGBA").tobytes("raw", "RGBA")
-                    qimg = QImage(img_data, img.width, img.height, QImage.Format_RGBA8888)
-                    pixmap = QPixmap.fromImage(qimg)
-                    self.cache[sec] = pixmap
+                    container.close()
+                else:
+                    pixmap = self._decode_frame_ffmpeg(self.video_path, sec)
 
+                if pixmap is not None and not pixmap.isNull():
+                    self.cache[sec] = pixmap
                     if not is_background and self.target_sec == sec and not self._is_killed:
                         self.preview_ready.emit(sec, pixmap)
-                    break  # one frame per chunk is enough!
+                elif is_background:
+                    if self.bg_side == "right":
+                        self.bg_right_done = True
+                    elif self.bg_side == "left":
+                        self.bg_left_done = True
+                else:
+                    last_serviced = sec
 
-                container.close()
-                if not is_background:
+                if not is_background and pixmap is not None and not pixmap.isNull():
                     last_serviced = sec
 
             except Exception:

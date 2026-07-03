@@ -634,6 +634,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.addItem(QIcon(get_resource_path("datesort2.png")), "Date (Newest First)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort1.png")), "Duration (Shortest)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort2.png")), "Duration (Longest)")
+        self.combo_sort.addItem(QIcon(get_resource_path("nohealth.png")), "Bad health first")
+        self.combo_sort.addItem(QIcon(get_resource_path("health.png")), "Good health first")
 
         self.combo_sort.currentIndexChanged.connect(self.apply_sorting)
 

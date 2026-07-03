@@ -137,7 +137,7 @@ class TimelineCanvas(QWidget):
 
         self.current_video_path = ""
         self.current_preview_pixmap = None
-        
+        self._thumb_dir_media_path = ""
         if 'PreviewSniperWorker' in globals():
             self.sniper = PreviewSniperWorker()
             self.sniper.preview_ready.connect(self.on_preview_ready)
@@ -364,7 +364,10 @@ class TimelineCanvas(QWidget):
         #2. Fallback: bundle assets / gluing numbers / steam_ (the old CS2 way)
         return self._legacy_icon_pixmap(marker['icon_key'], marker['is_round'])
     def on_preview_ready(self, sec, pixmap):
-        if self.duration_ms <= 0: return
+        if self.duration_ms <= 0:
+            return
+        if getattr(self, 'sniper', None) and self.sniper.video_path != self.current_video_path:
+            return
         if not getattr(self, 'is_hovering', False):
             return
         hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
@@ -379,6 +382,13 @@ class TimelineCanvas(QWidget):
                 return
         if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
             self.preview_widget.update_image_from_ram(pixmap)
+
+    def _thumb_dir_is_valid(self):
+        thumb_dir = getattr(self, 'thumb_dir', None)
+        if not thumb_dir or not os.path.exists(thumb_dir):
+            return False
+        src = getattr(self, '_thumb_dir_media_path', '')
+        return bool(src) and src == getattr(self, 'current_video_path', '')
 
     def trigger_sniper(self):
         if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
@@ -982,15 +992,20 @@ class TimelineCanvas(QWidget):
             time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
             
             is_in_trim = self.is_trim_mode and (self.trim_start_ms <= hover_ms <= self.trim_end_ms)
-            current_thumb_dir = getattr(self, 'thumb_dir', None)
+            current_thumb_dir = getattr(self, 'thumb_dir', None) if self._thumb_dir_is_valid() else None
             has_disk_thumb = False
             
             bucket_sec = round(sec / 3.0) * 3
-            if current_thumb_dir and os.path.exists(current_thumb_dir):
+            if current_thumb_dir:
                 index = (bucket_sec // 3) + 1
                 img_path = os.path.join(current_thumb_dir, f"thumb_{index:04d}.jpg")
                 if os.path.exists(img_path):
                     has_disk_thumb = True
+
+            sniper_ok = (
+                hasattr(self, 'sniper')
+                and self.sniper.video_path == self.current_video_path
+            )
 
             bucket_changed = bucket_sec != self._hover_preview_bucket
             if bucket_changed:
@@ -998,14 +1013,14 @@ class TimelineCanvas(QWidget):
                 self.preview_widget.update_time_display(time_str, is_in_trim)
                 if has_disk_thumb:
                     self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
-                elif hasattr(self, 'sniper') and bucket_sec in self.sniper.cache:
+                elif sniper_ok and bucket_sec in self.sniper.cache:
                     self.preview_widget.set_preview_pixmap(self.sniper.cache[bucket_sec])
                 else:
                     self.preview_widget.start_loading()
             else:
                 self.preview_widget.update_time_display(time_str, is_in_trim)
 
-            if not has_disk_thumb and hasattr(self, 'sniper') and self.current_video_path and bucket_changed:
+            if not has_disk_thumb and sniper_ok and self.current_video_path and bucket_changed:
                 self.pending_sec = bucket_sec
                 if hasattr(self, 'sniper_timer'):
                     self.sniper_timer.start(120)
@@ -1257,17 +1272,30 @@ class CustomTimelineWidget(QScrollArea):
     @property
     def thumb_dir(self): return getattr(self.canvas, 'thumb_dir', None)
     @thumb_dir.setter
-    def thumb_dir(self, val): self.canvas.thumb_dir = val
+    def thumb_dir(self, val):
+        self.canvas.thumb_dir = val
+        if val:
+            self.canvas._thumb_dir_media_path = getattr(self.canvas, 'current_video_path', '') or ''
+        else:
+            self.canvas._thumb_dir_media_path = ''
+
     @property
     def current_video_path(self):
         return self.canvas.current_video_path
 
     @current_video_path.setter
     def current_video_path(self, val):
+        old = getattr(self.canvas, 'current_video_path', '')
         if hasattr(self.canvas, 'sniper') and self.canvas.sniper:
             self.canvas.sniper.kill_worker()
             self.canvas.sniper.video_path = val or ""
             self.canvas.sniper.cache.clear()
+        if val != old:
+            self.canvas._hover_preview_bucket = -1
+            self.canvas.thumb_dir = None
+            self.canvas._thumb_dir_media_path = ''
+            if hasattr(self.canvas, 'preview_widget'):
+                self.canvas.preview_widget.clear_for_new_media()
         self.canvas.current_video_path = val
 
     def force_jump(self, ms): self.canvas.force_jump(ms)
@@ -1372,6 +1400,11 @@ class ThumbnailPreviewWidget(QWidget):
         self._loading_overlay.stop()
         super().hideEvent(event)
 
+    def clear_for_new_media(self):
+        self._loading_overlay.stop()
+        self.img_label.clear()
+        self.img_label.setPixmap(QPixmap())
+
     def update_time_display(self, time_str, is_in_trim):
         self.time_label.setText(time_str)
         if is_in_trim:
@@ -1409,6 +1442,8 @@ class ThumbnailPreviewWidget(QWidget):
         return True
 
     def start_loading(self):
+        self.img_label.clear()
+        self.img_label.setPixmap(QPixmap())
         self._loading_overlay.start()
 
     def set_preview_pixmap(self, pixmap):

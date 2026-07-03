@@ -1208,9 +1208,26 @@ class PlayerMixin:
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
 
+    def _clear_timeline_clip_overlays(self):
+        """Drop clip-specific trim, markers, and hover preview when leaving a clip context."""
+        if not hasattr(self, 'custom_timeline'):
+            return
+        tl = self.custom_timeline
+        tl.disable_trim_mode()
+        if hasattr(tl, 'preview_widget'):
+            tl.preview_widget.hide()
+            tl.preview_widget.clear_for_new_media()
+        canvas = tl.canvas
+        canvas.markers.clear()
+        canvas.mode_segments = []
+        canvas._hover_preview_bucket = -1
+        canvas.current_json_path = None
+        canvas.update()
+
     def _begin_preview_switch(self) -> int:
         """Pause MPV and stop background workers before loading another file."""
         self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
+        self._clear_timeline_clip_overlays()
 
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
@@ -1259,6 +1276,8 @@ class PlayerMixin:
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
         self._pending_trim_restore = None
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         self._current_mpd_abs_path = None
         self._eof_rewind_pending = 0
 
@@ -1309,13 +1328,13 @@ class PlayerMixin:
         def _start_timeline_thumbs(duration_sec: float):
             if is_audio or duration_sec < 1.0:
                 if hasattr(self, "custom_timeline"):
-                    self.custom_timeline.thumb_dir = None
                     self.custom_timeline.current_video_path = abs_path
+                    self.custom_timeline.thumb_dir = None
                 return
             self.thumb_thread = ThumbnailBatchThread(abs_path, duration_sec, interval=3)
             if hasattr(self, "custom_timeline"):
-                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
                 self.custom_timeline.current_video_path = abs_path
+                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
             self.thumb_thread.start()
 
         def finish_switch():
@@ -1347,6 +1366,9 @@ class PlayerMixin:
 
     def generate_and_play_preview(self, clip_path=None, trim_restore=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
+        self._rendered_media_path = None
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         if clip_path is None:
             if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
                 return
@@ -1521,12 +1543,12 @@ class PlayerMixin:
         if clip_dur >= 1.0:
             self.thumb_thread = ThumbnailBatchThread(abs_path, clip_dur, interval=3)
             if hasattr(self, 'custom_timeline'):
-                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
                 self.custom_timeline.current_video_path = abs_path
+                self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
             self.thumb_thread.start()
         elif hasattr(self, 'custom_timeline'):
-            self.custom_timeline.thumb_dir = None
             self.custom_timeline.current_video_path = abs_path
+            self.custom_timeline.thumb_dir = None
         
         if hasattr(self, 'custom_timeline'):
             def finish_switch():
