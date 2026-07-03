@@ -258,17 +258,38 @@ class LifecycleMixin:
                 self.player.command('stop') 
             except:
                 pass
+
+        if hasattr(self, '_stop_timeline_thumb_batch'):
+            self._stop_timeline_thumb_batch()
+        if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
+            sniper = getattr(self.custom_timeline.canvas, 'sniper', None)
+            if sniper:
+                sniper.kill_worker()
                 
         # 2. Killing the frozen FFmpeg
         try:
+            import os
+            import subprocess
+
             current_process = psutil.Process()
             # We are looking for all child processes launched by our program.
             children = current_process.children(recursive=True)
             for child in children:
                 # If the process is named ffmpeg or ffprobe, terminate it.
                 if "ffmpeg" in child.name().lower() or "ffprobe" in child.name().lower():
-                    child.kill()
-                    print(f"Zombie proccess killed: {child.name()}")
+                    try:
+                        if os.name == "nt":
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(child.pid)],
+                                creationflags=subprocess.CREATE_NO_WINDOW,
+                                capture_output=True,
+                                timeout=5,
+                            )
+                        else:
+                            child.kill()
+                        print(f"Zombie proccess killed: {child.name()}")
+                    except Exception:
+                        pass
         except Exception as e:
             print(f"⚠️ Error with killing zombie pcorsalfgn: {e}")
 
@@ -299,6 +320,12 @@ class LifecycleMixin:
         if hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
         print("CLEANING BEFORE CLOSING...")
+        if hasattr(self, '_stop_timeline_thumb_batch'):
+            self._stop_timeline_thumb_batch()
+        if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
+            sniper = getattr(self.custom_timeline.canvas, 'sniper', None)
+            if sniper:
+                sniper.kill_worker()
         if hasattr(self, 'player') and self.player:
             try:
                 self.player.command('stop')
@@ -307,12 +334,26 @@ class LifecycleMixin:
             
         # Killing all zombie FFmpeg child processes
         try:
+            import os
+            import subprocess
+
             current_process = psutil.Process()
             children = current_process.children(recursive=True)
             for child in children:
                 if "ffmpeg" in child.name().lower() or "ffprobe" in child.name().lower():
-                    child.kill()
-                    print(f"Killed FFmpeg after exit: {child.name()}")
+                    try:
+                        if os.name == "nt":
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(child.pid)],
+                                creationflags=subprocess.CREATE_NO_WINDOW,
+                                capture_output=True,
+                                timeout=5,
+                            )
+                        else:
+                            child.kill()
+                        print(f"Killed FFmpeg after exit: {child.name()}")
+                    except Exception:
+                        pass
         except: pass
     
     def _about_icon_row(self, icon_file, html_text):

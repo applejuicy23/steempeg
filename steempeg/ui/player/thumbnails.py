@@ -29,6 +29,33 @@ _SNIPER_CACHE_MAX = 48
 MAX_BATCH_SEC = 600
 
 
+def _kill_process_tree(proc, *, label: str = "ffmpeg") -> None:
+    """Terminate a subprocess and its children (Windows needs /T)."""
+    if proc is None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True,
+                timeout=5,
+            )
+        else:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1)
+    except Exception as exc:
+        _log.debug("Could not kill %s pid=%s: %s", label, getattr(proc, "pid", "?"), exc)
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def _ensure_thumb_dir(path: str) -> None:
     """Create a batch thumbnail folder; recover if a same-named file exists (WinError 183)."""
     if os.path.isdir(path):
@@ -56,6 +83,7 @@ class PreviewSniperWorker(QThread):
         self._cache_order: list[int] = []
         self._fail_until: dict[int, float] = {}
         self._decode_gen = 0
+        self._ffmpeg_proc = None
 
         # --- Manifest variables ---
         self.base_dir = ""
@@ -65,6 +93,12 @@ class PreviewSniperWorker(QThread):
         self.start_number = 1
         self.rep_id = "1"
 
+    def _kill_ffmpeg_subprocess(self) -> None:
+        proc = self._ffmpeg_proc
+        self._ffmpeg_proc = None
+        if proc is not None:
+            _kill_process_tree(proc, label="sniper-ffmpeg")
+
     def kill_worker(self):
         if self.cache or self._in_flight_sec >= 0:
             _log.info(
@@ -73,6 +107,7 @@ class PreviewSniperWorker(QThread):
                 len(self.cache),
             )
         self._is_killed = True
+        self._kill_ffmpeg_subprocess()
         self.cache.clear()
         self._cache_order.clear()
         self._fail_until.clear()
@@ -127,6 +162,9 @@ class PreviewSniperWorker(QThread):
         if not media_path or not os.path.isfile(media_path):
             _log.debug("Sniper ffmpeg skip sec=%s: missing file %s", sec, media_path)
             return None
+        if self._is_killed:
+            return None
+        gen = self._decode_gen
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(max(0, sec)),
@@ -137,18 +175,38 @@ class PreviewSniperWorker(QThread):
         ]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         t0 = time.perf_counter()
+        self._kill_ffmpeg_subprocess()
+        proc = None
         try:
-            proc = subprocess.run(
-                cmd, capture_output=True, creationflags=creationflags, timeout=8,
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=creationflags,
             )
+            self._ffmpeg_proc = proc
+            deadline = time.monotonic() + 8.0
+            while proc.poll() is None:
+                if self._is_killed or gen != self._decode_gen:
+                    self._kill_ffmpeg_subprocess()
+                    return None
+                if time.monotonic() > deadline:
+                    self._kill_ffmpeg_subprocess()
+                    _log.info("Sniper ffmpeg timeout sec=%s file=%s", sec, os.path.basename(media_path))
+                    return None
+                time.sleep(0.05)
+            stdout = proc.stdout.read() if proc.stdout else b""
+            if proc.stderr:
+                proc.stderr.read()
+            self._ffmpeg_proc = None
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
-            if proc.returncode != 0 or not proc.stdout:
+            if proc.returncode != 0 or not stdout:
                 _log.info(
                     "Sniper ffmpeg miss sec=%s (%.0fms) file=%s rc=%s",
                     sec, elapsed_ms, os.path.basename(media_path), proc.returncode,
                 )
                 return None
-            qimg = QImage.fromData(proc.stdout)
+            qimg = QImage.fromData(stdout)
             if qimg.isNull():
                 _log.info("Sniper ffmpeg miss sec=%s (%.0fms): empty image", sec, elapsed_ms)
                 return None
@@ -158,12 +216,16 @@ class PreviewSniperWorker(QThread):
             )
             return QPixmap.fromImage(qimg)
         except Exception as exc:
+            self._kill_ffmpeg_subprocess()
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             _log.info(
                 "Sniper ffmpeg error sec=%s (%.0fms) file=%s: %s",
                 sec, elapsed_ms, os.path.basename(media_path), exc,
             )
             return None
+        finally:
+            if proc is not None and self._ffmpeg_proc is proc:
+                self._ffmpeg_proc = None
 
     def parse_mpd(self, mpd_path):
         self.base_dir = os.path.dirname(mpd_path)
@@ -373,10 +435,7 @@ class ThumbnailBatchThread(QThread):
         """Stop ffmpeg and end the batch thread without leaving a zombie process."""
         self._cancelled = True
         if self.process:
-            try:
-                self.process.kill()
-            except Exception:
-                pass
+            _kill_process_tree(self.process, label="batch-thumbs")
             self.process = None
         if self.isRunning():
             if not self.wait(3000):
@@ -435,10 +494,17 @@ class ThumbnailBatchThread(QThread):
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         t0 = time.perf_counter()
         self.process = subprocess.Popen(cmd, creationflags=creationflags)
-        self.process.wait()
+        try:
+            while self.process.poll() is None:
+                if self._cancelled:
+                    _kill_process_tree(self.process, label="batch-thumbs")
+                    _log.debug("Batch thumbs cancelled: %s", self.mpd_path)
+                    return
+                time.sleep(0.1)
+        finally:
+            self.process = None
         elapsed_s = time.perf_counter() - t0
         if self._cancelled:
-            _log.debug("Batch thumbs cancelled: %s", self.mpd_path)
             return
         produced = len(glob.glob(os.path.join(self.thumb_dir, "thumb_*.jpg")))
         _log.info(
