@@ -37,6 +37,24 @@ def get_save_directory():
     return str(_PROJECT_ROOT)
 
 
+def display_path(path: str) -> str:
+    """Return a path string suitable for UI display (native casing when possible)."""
+    if not path:
+        return path
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            buf = ctypes.create_unicode_buffer(32768)
+            if ctypes.windll.kernel32.GetLongPathNameW(path, buf, 32768):
+                resolved = buf.value
+                if resolved:
+                    return resolved
+        except Exception:
+            pass
+    return path
+
+
 def open_in_file_manager(path):
     """Open a file or folder in the OS file manager. Does nothing if it is missing."""
     if not os.path.exists(path):
