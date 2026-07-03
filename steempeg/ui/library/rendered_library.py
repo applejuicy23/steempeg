@@ -46,6 +46,7 @@ RENDERED_ALL_EXTS = RENDERED_VIDEO_EXTS | RENDERED_AUDIO_EXTS
 
 _RENDERED_TYPE_FILTER_ROLE = Qt.ItemDataRole.UserRole + 5
 _RENDERED_GAME_FILTER_ROLE = Qt.ItemDataRole.UserRole + 6
+_HEALTH_SORT_INDICES = (5, 6)
 
 _LIBRARY_TAB_INACTIVE = """
     QPushButton {
@@ -117,6 +118,9 @@ class RenderedLibraryMixin:
         self._rendered_filter_games: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
+        self._saved_clips_selection_path = ""
+        self._saved_rendered_selection_path = ""
+        self._library_ui_restored = False
 
     def _make_library_tab_button(self, label: str, mode: str) -> QPushButton:
         btn = QPushButton(label)
@@ -154,14 +158,14 @@ class RenderedLibraryMixin:
         for key, btn in self._library_tabs.items():
             btn.setStyleSheet(_LIBRARY_TAB_ACTIVE if key == "clips" else _LIBRARY_TAB_INACTIVE)
 
+        if hasattr(self, "_sync_sort_combo_for_panel"):
+            self._sync_sort_combo_for_panel()
+
     def _show_add_library_panel_menu(self):
+        from steempeg.ui.lifecycle import _LOGS_MENU_STYLE
+
         menu = QMenu(self.ui)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; padding: 4px; }
-            QMenu::item { padding: 8px 24px; border-radius: 4px; }
-            QMenu::item:selected { background-color: #5138e6; }
-            QMenu::item:disabled { color: #666666; }
-        """)
+        menu.setStyleSheet(_LOGS_MENU_STYLE)
         rendered_action = menu.addAction("🎬  Rendered videos")
         if "rendered" in self._library_tabs:
             rendered_action.setEnabled(False)
@@ -169,6 +173,75 @@ class RenderedLibraryMixin:
         action = menu.exec(pos)
         if action is rendered_action and action is not None:
             self.open_library_panel("rendered")
+
+    def _sync_sort_combo_for_panel(self):
+        if not hasattr(self, "combo_sort"):
+            return
+        rendered = self._library_panel_mode == "rendered"
+        view = self.combo_sort.view()
+        for i in _HEALTH_SORT_INDICES:
+            view.setRowHidden(i, rendered)
+        if rendered and self.combo_sort.currentIndex() in _HEALTH_SORT_INDICES:
+            self.combo_sort.blockSignals(True)
+            self.combo_sort.setCurrentIndex(0)
+            self.combo_sort.blockSignals(False)
+
+    def _stash_library_tab_selection(self, tab: str) -> None:
+        if tab == "rendered" and hasattr(self, "table_rendered"):
+            row = self.table_rendered.currentRow()
+            if row >= 0:
+                cell = self.table_rendered.item(row, 0)
+                if cell:
+                    self._saved_rendered_selection_path = cell.data(Qt.ItemDataRole.UserRole) or ""
+            else:
+                self._saved_rendered_selection_path = ""
+        elif tab == "clips" and hasattr(self.ui, "table_clips"):
+            row = self.ui.table_clips.currentRow()
+            if row >= 0:
+                cell = self.ui.table_clips.item(row, 0)
+                if cell:
+                    self._saved_clips_selection_path = cell.data(Qt.ItemDataRole.UserRole) or ""
+            else:
+                self._saved_clips_selection_path = ""
+
+    def _clear_clips_selection_visual(self) -> None:
+        if hasattr(self.ui, "table_clips"):
+            self.ui.table_clips.blockSignals(True)
+            self.ui.table_clips.clearSelection()
+            self.ui.table_clips.setCurrentCell(-1, -1)
+            self.ui.table_clips.blockSignals(False)
+        if hasattr(self, "grid_clips"):
+            self.grid_clips.blockSignals(True)
+            self.grid_clips.clearSelection()
+            self.grid_clips.blockSignals(False)
+            if hasattr(self, "_sync_grid_card_visuals"):
+                self._sync_grid_card_visuals()
+
+    def _clear_rendered_selection_visual(self) -> None:
+        if hasattr(self, "table_rendered"):
+            self.table_rendered.blockSignals(True)
+            self.table_rendered.clearSelection()
+            self.table_rendered.setCurrentCell(-1, -1)
+            self.table_rendered.blockSignals(False)
+        if hasattr(self, "grid_rendered"):
+            self.grid_rendered.blockSignals(True)
+            self.grid_rendered.clearSelection()
+            self.grid_rendered.blockSignals(False)
+            self._sync_rendered_grid_card_visuals()
+
+    def _restore_library_tab_selection(self, tab: str) -> None:
+        if tab == "rendered":
+            path = getattr(self, "_saved_rendered_selection_path", "")
+            if path:
+                self._select_rendered_path(path, play=False)
+            else:
+                self._clear_rendered_selection_visual()
+        else:
+            path = getattr(self, "_saved_clips_selection_path", "")
+            if path:
+                self._select_clip_path(path, play=False)
+            else:
+                self._clear_clips_selection_visual()
 
     def open_library_panel(self, mode: str):
         if mode == "rendered":
@@ -186,6 +259,9 @@ class RenderedLibraryMixin:
     def set_library_panel(self, mode: str):
         if mode not in self._library_tabs:
             return
+        old_mode = getattr(self, "_library_panel_mode", "clips")
+        if old_mode != mode:
+            self._stash_library_tab_selection(old_mode)
         self._library_panel_mode = mode
         for key, btn in self._library_tabs.items():
             btn.setStyleSheet(_LIBRARY_TAB_ACTIVE if key == mode else _LIBRARY_TAB_INACTIVE)
@@ -199,6 +275,9 @@ class RenderedLibraryMixin:
         else:
             if hasattr(self, "grid_clips"):
                 self.set_view_mode(self._clips_view_mode)
+        self._sync_sort_combo_for_panel()
+        if old_mode != mode:
+            self._restore_library_tab_selection(mode)
         self._update_library_count_label()
         self._sync_library_mode_chrome()
         self._persist_library_ui_state()
@@ -345,12 +424,16 @@ class RenderedLibraryMixin:
         )
 
     def _restore_library_ui_state(self):
+        if getattr(self, "_library_ui_restored", False):
+            return
         if not hasattr(self, "load_user_settings"):
             return
         state = self.load_user_settings().get("library_ui") or {}
         if not state:
             return
 
+        self._saved_clips_selection_path = state.get("clips_selected_path") or ""
+        self._saved_rendered_selection_path = state.get("rendered_selected_path") or ""
         self._restoring_library_state = True
         try:
             clips_vm = state.get("clips_view_mode")
@@ -359,15 +442,26 @@ class RenderedLibraryMixin:
                 self._clips_view_mode = clips_vm
             if rendered_vm in ("grid", "list"):
                 self._rendered_view_mode = rendered_vm
-            if state.get("rendered_tab_open"):
-                self._ensure_rendered_tab()
+
             mode = state.get("library_panel_mode", "clips")
+            preview_kind = state.get("preview_kind") or ""
+            wants_rendered = (
+                state.get("rendered_tab_open")
+                or mode == "rendered"
+                or preview_kind == "rendered"
+            )
+            if wants_rendered:
+                self._ensure_rendered_tab()
             if mode in getattr(self, "_library_tabs", {}):
-                self.set_library_panel(mode)
+                self.open_library_panel(mode)
+            elif wants_rendered and "rendered" in getattr(self, "_library_tabs", {}):
+                self.open_library_panel("rendered")
+
             QTimer.singleShot(
                 0,
                 lambda s=dict(state): self._restore_library_selections(s),
             )
+            self._library_ui_restored = True
         finally:
             self._restoring_library_state = False
 
@@ -699,6 +793,7 @@ class RenderedLibraryMixin:
                 icon_path,
                 row,
                 health_color=None,
+                round_icon=is_unknown,
                 on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item),
                 on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
             )
@@ -772,14 +867,16 @@ class RenderedLibraryMixin:
             rows.sort(key=lambda r: cell(r, 1).lower())
         elif idx == 4:
             rows.sort(key=lambda r: cell(r, 1).lower(), reverse=True)
-        elif idx == 5:
+        elif idx in (7, 8):
             rows.sort(key=lambda r: cell(r, 2))
-        elif idx == 6:
-            rows.sort(key=lambda r: cell(r, 2), reverse=True)
-        elif idx == 7:
+            if idx == 8:
+                rows.reverse()
+        elif idx in (9, 10):
             rows.sort(key=lambda r: os.path.getsize(path(r)) if path(r) and os.path.exists(path(r)) else 0)
-        elif idx == 8:
-            rows.sort(key=lambda r: os.path.getsize(path(r)) if path(r) and os.path.exists(path(r)) else 0, reverse=True)
+            if idx == 10:
+                rows.reverse()
+        elif idx in _HEALTH_SORT_INDICES:
+            pass
 
         if idx != 0:
             data = []
@@ -875,6 +972,7 @@ class RenderedLibraryMixin:
         if not name_item:
             return
         file_path = name_item.data(Qt.ItemDataRole.UserRole)
+        self._saved_rendered_selection_path = file_path or ""
         type_label = self.table_rendered.item(row, 1).text() if self.table_rendered.item(row, 1) else ""
         type_clean = type_label.replace("🎬 ", "").strip()
         date_str = self.table_rendered.item(row, 2).text() if self.table_rendered.item(row, 2) else ""
