@@ -440,6 +440,8 @@ class LibraryMixin:
 
     def sync_grid_from_table_selection(self):
         """Mirror multi-selection from the list into the grid."""
+        if getattr(self, "_library_panel_mode", "clips") != "clips":
+            return
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
 
@@ -453,6 +455,11 @@ class LibraryMixin:
                 item.setSelected(True)
         self.grid_clips.blockSignals(False)
         self._sync_grid_card_visuals()
+        row = self.ui.table_clips.currentRow()
+        if row >= 0:
+            cell = self.ui.table_clips.item(row, 0)
+            if cell:
+                self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
     def _sync_grid_card_visuals(self) -> None:
         """Paint selection on ClipCard widgets — QListWidget item chrome is hidden underneath."""
@@ -503,6 +510,8 @@ class LibraryMixin:
 
     def _publish_grid_selection(self, *, update_preview: bool = True) -> None:
         """Mirror grid selection into the table; reload preview only on plain LMB clicks."""
+        if getattr(self, "_library_panel_mode", "clips") != "clips":
+            return
         if not self.grid_clips.selectedItems():
             self.sync_table_from_grid_selection()
             self._sync_grid_card_visuals()
@@ -511,6 +520,11 @@ class LibraryMixin:
         self._sync_grid_card_visuals()
         if update_preview and hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
             self.update_quality_options()
+        row = self.ui.table_clips.currentRow()
+        if row >= 0:
+            cell = self.ui.table_clips.item(row, 0)
+            if cell:
+                self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
     def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
         """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
@@ -1320,6 +1334,7 @@ class LibraryMixin:
                     thumb_path = find_clip_thumbnail(clip_path)
 
             footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
+            is_unknown_clip = title.strip().lower() == "unknown"
 
             item = QListWidgetItem(self.grid_clips)
             item.setSizeHint(QSize(260, 190))
@@ -1334,6 +1349,7 @@ class LibraryMixin:
                 icon_path,
                 row,
                 health_color=health_color,
+                round_icon=is_unknown_clip,
                 on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
                 on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
             )
@@ -1419,22 +1435,8 @@ class LibraryMixin:
             if sort_idx in (3, 4): # TYPE
                 txt = r[1].text().lower() if r[1] else ""
                 return re.sub(r'[^a-zа-я0-9]', '', txt)
-                
-            if sort_idx in (5, 6): # DATE
-                txt = re.sub(r'\s+', ' ', r[2].text().strip()) if r[2] else ""
-                qdt = parse_clip_datetime_text(txt)
-                if qdt is not None:
-                    return qdt.toSecsSinceEpoch()
-                return 0
-                    
-            if sort_idx in (7, 8): # DURATION
-                txt = r[3].text() if r[3] else ""
-                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-                return h * 3600 + m * 60 + s
 
-            if sort_idx in (9, 10): # HEALTH
+            if sort_idx in (5, 6): # HEALTH
                 level = r[0].data(_CLIP_HEALTH_ROLE) if r[0] else health.ClipHealth.HEALTHY.value
                 rank = {
                     health.ClipHealth.HEALTHY.value: 2,
@@ -1442,6 +1444,20 @@ class LibraryMixin:
                     health.ClipHealth.DEAD.value: 0,
                 }
                 return rank.get(level, 1)
+                
+            if sort_idx in (7, 8): # DATE
+                txt = re.sub(r'\s+', ' ', r[2].text().strip()) if r[2] else ""
+                qdt = parse_clip_datetime_text(txt)
+                if qdt is not None:
+                    return qdt.toSecsSinceEpoch()
+                return 0
+                    
+            if sort_idx in (9, 10): # DURATION
+                txt = r[3].text() if r[3] else ""
+                h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
+                m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
+                s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
+                return h * 3600 + m * 60 + s
                 
             return data['orig_row']
 
