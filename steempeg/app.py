@@ -630,12 +630,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort2.png")), "Game Name (Z - A)")
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort1.png")), "Type (A - Z)")
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort2.png")), "Type (Z - A)")
+        self.combo_sort.addItem(QIcon(get_resource_path("nohealth.png")), "Bad health first")
+        self.combo_sort.addItem(QIcon(get_resource_path("health.png")), "Good health first")
         self.combo_sort.addItem(QIcon(get_resource_path("datesort1.png")), "Date (Oldest First)")
         self.combo_sort.addItem(QIcon(get_resource_path("datesort2.png")), "Date (Newest First)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort1.png")), "Duration (Shortest)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort2.png")), "Duration (Longest)")
-        self.combo_sort.addItem(QIcon(get_resource_path("nohealth.png")), "Bad health first")
-        self.combo_sort.addItem(QIcon(get_resource_path("health.png")), "Good health first")
+        self.combo_sort.setMaxVisibleItems(12)
 
         self.combo_sort.currentIndexChanged.connect(self.apply_sorting)
 
@@ -2186,11 +2187,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         """Re-apply splitter sizes once the maximized window has real geometry."""
         self._apply_startup_splitter_sizes()
         if hasattr(self, "_restore_library_ui_state"):
-            self._restore_library_ui_state()
+            QTimer.singleShot(0, self._restore_library_ui_state)
         self.refresh_render_queue_panel(sync_splitter=True)
 
         job_id = getattr(self, "_startup_queue_job_id", None)
-        if job_id:
+        if job_id and hasattr(self, "load_user_settings"):
+            library_state = self.load_user_settings().get("library_ui") or {}
+            restoring_rendered = (
+                library_state.get("library_panel_mode") == "rendered"
+                or library_state.get("preview_kind") == "rendered"
+            )
+            if not restoring_rendered:
+                QTimer.singleShot(100, lambda jid=job_id: self.activate_queue_job(jid))
+        elif job_id:
             QTimer.singleShot(100, lambda jid=job_id: self.activate_queue_job(jid))
 
     def _apply_startup_splitter_sizes(self):
@@ -2384,7 +2393,6 @@ def main():
         window.ui.showMaximized()
         QApplication.processEvents()
         window._sync_startup_layout()
-        QTimer.singleShot(0, window._sync_startup_layout)
         # Force the taskbar button to adopt our icon on the very first launch instead
         # of waiting for Windows to warm its per-AppUserModelID icon cache.
         QTimer.singleShot(0, lambda: _force_native_window_icon(window.ui, icon_path))
