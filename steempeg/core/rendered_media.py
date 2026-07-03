@@ -8,7 +8,8 @@ import os
 import re
 import subprocess
 
-_RENDERED_NAME_RE = re.compile(r"^clip_(\d+)_", re.IGNORECASE)
+_RENDERED_NAME_RE = re.compile(r"^(?:clip|bg|fg)_(\d+)_", re.IGNORECASE)
+_STEAM_CLIP_PREFIXES = ("clip", "bg", "fg")
 _COMPANION_SUFFIX = ".steempeg.json"
 
 
@@ -26,17 +27,20 @@ def parse_app_id_from_name(filename: str) -> str | None:
 
 def parse_app_id_from_clip_folder(folder_name: str) -> str | None:
     parts = os.path.basename(folder_name).split("_")
-    if len(parts) >= 2 and parts[0].lower() == "clip" and parts[1].isdigit():
+    if len(parts) >= 2 and parts[0].lower() in _STEAM_CLIP_PREFIXES and parts[1].isdigit():
         return parts[1]
     return None
 
 
 def is_default_rendered_basename(stem: str, app_id: str | None) -> bool:
-    """True for Steam's default ``clip_<appid>_…_rendered`` export names."""
+    """True for Steam's default ``<clip|bg|fg>_<appid>_…_rendered`` export names."""
     if not app_id:
         return False
     low = stem.lower()
-    return low.startswith(f"clip_{app_id}_") and low.endswith("_rendered")
+    for prefix in _STEAM_CLIP_PREFIXES:
+        if low.startswith(f"{prefix}_{app_id}_") and low.endswith("_rendered"):
+            return True
+    return False
 
 
 def companion_meta_path(file_path: str) -> str:
