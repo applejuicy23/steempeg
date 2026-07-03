@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
+from steempeg.infra import cache
 from steempeg.core.rendered_media import (
     canvas_markers_to_sidecar,
     extract_poster_frame,
@@ -121,6 +122,7 @@ class RenderedLibraryMixin:
         self._saved_clips_selection_path = ""
         self._saved_rendered_selection_path = ""
         self._library_ui_restored = False
+        self._library_ui_persist_ready = False
 
     def _make_library_tab_button(self, label: str, mode: str) -> QPushButton:
         btn = QPushButton(label)
@@ -230,18 +232,58 @@ class RenderedLibraryMixin:
             self._sync_rendered_grid_card_visuals()
 
     def _restore_library_tab_selection(self, tab: str) -> None:
+        """Re-paint the saved row highlight after a tab switch (preview keeps playing)."""
         if tab == "rendered":
             path = getattr(self, "_saved_rendered_selection_path", "")
             if path:
-                self._select_rendered_path(path, play=False)
+                self._highlight_rendered_path(path)
             else:
                 self._clear_rendered_selection_visual()
         else:
             path = getattr(self, "_saved_clips_selection_path", "")
             if path:
-                self._select_clip_path(path, play=False)
+                self._highlight_clip_path(path)
             else:
                 self._clear_clips_selection_visual()
+
+    def _highlight_clip_path(self, clip_path: str) -> bool:
+        """Select clip in table/grid for display only — does not change preview or other panel."""
+        if not self._is_valid_clip_path(clip_path) or not hasattr(self.ui, "table_clips"):
+            return False
+        norm = os.path.normpath(clip_path)
+        for row in range(self.ui.table_clips.rowCount()):
+            cell = self.ui.table_clips.item(row, 0)
+            if not cell:
+                continue
+            row_path = cell.data(Qt.ItemDataRole.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                self.ui.table_clips.blockSignals(True)
+                self.ui.table_clips.selectRow(row)
+                self.ui.table_clips.setCurrentCell(row, 0)
+                self.ui.table_clips.blockSignals(False)
+                if hasattr(self, "sync_grid_from_table_selection"):
+                    self.sync_grid_from_table_selection()
+                return True
+        return False
+
+    def _highlight_rendered_path(self, file_path: str) -> bool:
+        """Select rendered row in table/grid for display only."""
+        if not file_path or not hasattr(self, "table_rendered"):
+            return False
+        norm = os.path.normpath(file_path)
+        for row in range(self.table_rendered.rowCount()):
+            cell = self.table_rendered.item(row, 0)
+            if not cell:
+                continue
+            row_path = cell.data(Qt.ItemDataRole.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                self.table_rendered.blockSignals(True)
+                self.table_rendered.selectRow(row)
+                self.table_rendered.setCurrentCell(row, 0)
+                self.table_rendered.blockSignals(False)
+                self._sync_rendered_grid_from_table()
+                return True
+        return False
 
     def open_library_panel(self, mode: str):
         if mode == "rendered":
@@ -255,6 +297,15 @@ class RenderedLibraryMixin:
             idx = self.library_tabs_host.count()
             self.library_tabs_host.insertWidget(idx, tab)
             self._library_tabs["rendered"] = tab
+            if not getattr(self, "_restoring_library_state", False):
+                self._persist_library_ui_state()
+
+    def _wants_rendered_library_ui(self, state: dict) -> bool:
+        return bool(
+            state.get("rendered_tab_open")
+            or state.get("library_panel_mode") == "rendered"
+            or state.get("preview_kind") == "rendered"
+        )
 
     def set_library_panel(self, mode: str):
         if mode not in self._library_tabs:
@@ -270,9 +321,11 @@ class RenderedLibraryMixin:
         if mode == "rendered":
             if hasattr(self, "_clear_timeline_clip_overlays"):
                 self._clear_timeline_clip_overlays()
+            self._clear_clips_selection_visual()
             self.scan_rendered_outputs()
             self._apply_rendered_view_mode()
         else:
+            self._clear_rendered_selection_visual()
             if hasattr(self, "grid_clips"):
                 self.set_view_mode(self._clips_view_mode)
         self._sync_sort_combo_for_panel()
@@ -377,20 +430,40 @@ class RenderedLibraryMixin:
             return fallback
         return ""
 
+    def _library_ui_path(self) -> str:
+        return os.path.join(self.cache_dir, "library_ui.json")
+
+    def _load_library_ui_state(self) -> dict:
+        path = self._library_ui_path()
+        data = cache.read_json(path)
+        if data:
+            return data
+        legacy = {}
+        if hasattr(self, "load_user_settings"):
+            legacy = self.load_user_settings().get("library_ui") or {}
+        if legacy:
+            try:
+                cache.write_json(path, legacy)
+            except OSError:
+                pass
+        return legacy
+
     def _persist_library_ui_state(self):
         if getattr(self, "_restoring_library_state", False):
+            return
+        if not getattr(self, "_library_ui_persist_ready", False):
             return
         if not hasattr(self, "save_user_settings"):
             return
 
         clips_selected = ""
-        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+        rendered_selected = ""
+        panel_mode = getattr(self, "_library_panel_mode", "clips")
+        if panel_mode == "clips" and hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
             cell = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
             if cell:
                 clips_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
-
-        rendered_selected = ""
-        if hasattr(self, "table_rendered") and self.table_rendered.currentRow() >= 0:
+        elif panel_mode == "rendered" and hasattr(self, "table_rendered") and self.table_rendered.currentRow() >= 0:
             cell = self.table_rendered.item(self.table_rendered.currentRow(), 0)
             if cell:
                 rendered_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
@@ -409,27 +482,53 @@ class RenderedLibraryMixin:
                 preview_kind = "clip"
                 preview_path = path
 
-        self.save_user_settings(
-            "library_ui",
-            {
-                "library_panel_mode": getattr(self, "_library_panel_mode", "clips"),
-                "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
-                "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
-                "rendered_tab_open": "rendered" in getattr(self, "_library_tabs", {}),
-                "clips_selected_path": clips_selected,
-                "rendered_selected_path": rendered_selected,
-                "preview_kind": preview_kind,
-                "preview_path": preview_path,
-            },
+        rendered_tab_open = "rendered" in getattr(self, "_library_tabs", {})
+        payload = {
+            "library_panel_mode": getattr(self, "_library_panel_mode", "clips"),
+            "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
+            "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
+            "rendered_tab_open": rendered_tab_open,
+            "clips_selected_path": clips_selected,
+            "rendered_selected_path": rendered_selected,
+            "preview_kind": preview_kind,
+            "preview_path": preview_path,
+        }
+        try:
+            cache.write_json(self._library_ui_path(), payload)
+        except OSError as exc:
+            logging.warning("Could not save library_ui.json: %s", exc)
+        self.save_user_settings("library_ui", payload)
+        logging.info(
+            "Saved library_ui (rendered_tab_open=%s, mode=%s)",
+            payload["rendered_tab_open"],
+            payload["library_panel_mode"],
         )
 
     def _restore_library_ui_state(self):
-        if getattr(self, "_library_ui_restored", False):
+        if not hasattr(self, "library_stack") or not hasattr(self, "library_tabs_host"):
+            QTimer.singleShot(50, self._restore_library_ui_state)
             return
-        if not hasattr(self, "load_user_settings"):
-            return
-        state = self.load_user_settings().get("library_ui") or {}
+        state = self._load_library_ui_state()
         if not state:
+            return
+
+        logging.info(
+            "Restore library_ui (rendered_tab_open=%s, mode=%s)",
+            state.get("rendered_tab_open"),
+            state.get("library_panel_mode", "clips"),
+        )
+
+        wants_rendered = self._wants_rendered_library_ui(state)
+        if wants_rendered and "rendered" not in self._library_tabs:
+            self._ensure_rendered_tab()
+            logging.info(
+                "Restored Rendered videos tab (panel_mode=%s)",
+                state.get("library_panel_mode", "clips"),
+            )
+
+        if getattr(self, "_library_ui_restored", False):
+            if wants_rendered and "rendered" not in self._library_tabs:
+                self._ensure_rendered_tab()
             return
 
         self._saved_clips_selection_path = state.get("clips_selected_path") or ""
@@ -444,18 +543,10 @@ class RenderedLibraryMixin:
                 self._rendered_view_mode = rendered_vm
 
             mode = state.get("library_panel_mode", "clips")
-            preview_kind = state.get("preview_kind") or ""
-            wants_rendered = (
-                state.get("rendered_tab_open")
-                or mode == "rendered"
-                or preview_kind == "rendered"
-            )
-            if wants_rendered:
-                self._ensure_rendered_tab()
-            if mode in getattr(self, "_library_tabs", {}):
-                self.open_library_panel(mode)
-            elif wants_rendered and "rendered" in getattr(self, "_library_tabs", {}):
+            if mode == "rendered" and "rendered" in getattr(self, "_library_tabs", {}):
                 self.open_library_panel("rendered")
+            elif mode in getattr(self, "_library_tabs", {}):
+                self.open_library_panel(mode)
 
             QTimer.singleShot(
                 0,
@@ -466,20 +557,22 @@ class RenderedLibraryMixin:
             self._restoring_library_state = False
 
     def _restore_library_selections(self, state: dict):
-        clips_path = (state.get("clips_selected_path") or "").strip()
-        rendered_path = (state.get("rendered_selected_path") or "").strip()
-        if clips_path:
-            self._select_clip_path(clips_path, play=False)
-        if rendered_path:
-            self._select_rendered_path(rendered_path, play=False)
-
         preview_kind = state.get("preview_kind") or ""
         preview_path = (state.get("preview_path") or "").strip()
-        if preview_kind == "clip" and preview_path and os.path.isdir(preview_path):
-            if self._select_clip_path(preview_path, play=True):
-                return
+        mode = state.get("library_panel_mode", "clips")
+
         if preview_kind == "rendered" and preview_path and os.path.isfile(preview_path):
             self._select_rendered_path(preview_path, play=True)
+        elif preview_kind == "clip" and preview_path and os.path.isdir(preview_path):
+            self._select_clip_path(preview_path, play=True)
+        elif mode == "rendered":
+            rendered_path = (state.get("rendered_selected_path") or "").strip()
+            if rendered_path:
+                self._select_rendered_path(rendered_path, play=False)
+        else:
+            clips_path = (state.get("clips_selected_path") or "").strip()
+            if clips_path:
+                self._select_clip_path(clips_path, play=False)
 
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
@@ -488,6 +581,8 @@ class RenderedLibraryMixin:
         if not clip_path or not os.path.isdir(clip_path):
             return False
         norm = os.path.normpath(clip_path)
+        if os.path.basename(norm).lower() in ("gamerecordings", "clips", "video"):
+            return False
         for root in getattr(self, "clips_folders", []):
             if root and norm == os.path.normpath(root):
                 return False
@@ -496,45 +591,26 @@ class RenderedLibraryMixin:
     def _select_clip_path(self, clip_path: str, *, play: bool) -> bool:
         if not self._is_valid_clip_path(clip_path):
             return False
-        if not hasattr(self.ui, "table_clips"):
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            self._clear_rendered_selection_visual()
+        self._saved_rendered_selection_path = ""
+        if not self._highlight_clip_path(clip_path):
             return False
-        norm = os.path.normpath(clip_path)
-        for row in range(self.ui.table_clips.rowCount()):
-            cell = self.ui.table_clips.item(row, 0)
-            if not cell:
-                continue
-            row_path = cell.data(Qt.ItemDataRole.UserRole)
-            if row_path and os.path.normpath(row_path) == norm:
-                self.ui.table_clips.blockSignals(True)
-                self.ui.table_clips.selectRow(row)
-                self.ui.table_clips.setCurrentCell(row, 0)
-                self.ui.table_clips.blockSignals(False)
-                if hasattr(self, "sync_grid_from_table_selection"):
-                    self.sync_grid_from_table_selection()
-                if play and hasattr(self, "update_quality_options"):
-                    self.update_quality_options()
-                return True
-        return False
+        if play and hasattr(self, "update_quality_options"):
+            self.update_quality_options()
+        return True
 
     def _select_rendered_path(self, file_path: str, *, play: bool) -> bool:
         if not file_path or not hasattr(self, "table_rendered"):
             return False
-        norm = os.path.normpath(file_path)
-        for row in range(self.table_rendered.rowCount()):
-            cell = self.table_rendered.item(row, 0)
-            if not cell:
-                continue
-            row_path = cell.data(Qt.ItemDataRole.UserRole)
-            if row_path and os.path.normpath(row_path) == norm:
-                self.table_rendered.blockSignals(True)
-                self.table_rendered.selectRow(row)
-                self.table_rendered.setCurrentCell(row, 0)
-                self.table_rendered.blockSignals(False)
-                self._sync_rendered_grid_from_table()
-                if play:
-                    self.update_rendered_selection()
-                return True
-        return False
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+        self._saved_clips_selection_path = ""
+        if not self._highlight_rendered_path(file_path):
+            return False
+        if play:
+            self.update_rendered_selection()
+        return True
 
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
@@ -743,7 +819,9 @@ class RenderedLibraryMixin:
         else:
             title = game_name or stem
 
-        is_unknown = not bool(app_id and (icon_path or game_name))
+        is_unknown = not bool(app_id)
+        if app_id and not game_name and hasattr(self, "get_game_name"):
+            game_name = self.get_game_name(str(app_id)) or ""
 
         thumb_path = ""
         ext = os.path.splitext(file_path)[1].lower()
@@ -804,14 +882,21 @@ class RenderedLibraryMixin:
         self._sync_rendered_grid_from_table()
 
     def _sync_rendered_grid_card_visuals(self) -> None:
-        """Paint selection border on rendered ClipCard widgets."""
+        """Paint selection border on rendered ClipCard widgets — current row only."""
         if not hasattr(self, "grid_rendered"):
             return
+        highlight_row = -1
+        if (
+            getattr(self, "_library_panel_mode", "clips") == "rendered"
+            and hasattr(self, "table_rendered")
+        ):
+            highlight_row = self.table_rendered.currentRow()
         for i in range(self.grid_rendered.count()):
             item = self.grid_rendered.item(i)
             card = self.grid_rendered.itemWidget(item)
             if isinstance(card, ClipCard):
-                card.set_selected(item.isSelected())
+                row = item.data(Qt.ItemDataRole.UserRole)
+                card.set_selected(row == highlight_row and highlight_row >= 0)
 
     def _update_library_count_label(self):
         if not hasattr(self, "lbl_clip_count"):
@@ -921,6 +1006,7 @@ class RenderedLibraryMixin:
             menu.set_content_max_height(max(160, footer_top - menu_y - 8))
 
     def refresh_rendered_library(self):
+        self._rendered_output_meta_index = None
         self.scan_rendered_outputs()
 
     def _sync_rendered_grid_from_table(self):
@@ -959,6 +1045,9 @@ class RenderedLibraryMixin:
     def update_rendered_selection(self):
         if self._library_panel_mode != "rendered":
             return
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+        self._saved_clips_selection_path = ""
         if not hasattr(self, "table_rendered"):
             return
         row = self.table_rendered.currentRow()
