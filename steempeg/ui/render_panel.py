@@ -128,15 +128,17 @@ class SourcePathsBox(QWidget):
         paths = [p for p in (paths or []) if p]
         if not paths:
             return
+        from steempeg.infra.paths import display_path
+
         multi = len(paths) > 1
         for i, full in enumerate(paths):
-            display = f"{i + 1}.  {full}" if multi else full
-            self._rows_layout.addWidget(self._make_path_row(display, full))
+            shown = display_path(full)
+            display = f"{i + 1}.  {shown}" if multi else shown
+            self._rows_layout.addWidget(self._make_path_row(display, shown))
         QTimer.singleShot(0, self._refresh_path_labels)
 
     def _refresh_path_labels(self) -> None:
-        for lbl in self._rows_host.findChildren(ElidedLabel):
-            lbl.update()
+        return
 
     def setText(self, text):
         """Legacy reset/placeholder entry point (lifecycle/player/controller)."""
@@ -169,12 +171,14 @@ class SourcePathsBox(QWidget):
         h.setContentsMargins(12, 6, 6, 6)
         h.setSpacing(8)
 
-        path_lbl = ElidedLabel()
-        path_lbl.setStyleSheet(self._PATH_QSS)
-        path_lbl.setText(display_text)
-        path_lbl.setMinimumWidth(0)
-        path_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        h.addWidget(path_lbl, 1)
+        path_field = QLineEdit(full_path)
+        path_field.setReadOnly(True)
+        path_field.setFrame(False)
+        path_field.setCursorPosition(0)
+        path_field.setStyleSheet(self._PATH_QSS)
+        path_field.setMinimumWidth(0)
+        path_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        h.addWidget(path_field, 1)
 
         btn = QPushButton()
         btn.setFixedSize(24, 24)
