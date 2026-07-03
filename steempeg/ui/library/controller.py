@@ -462,14 +462,21 @@ class LibraryMixin:
                 self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
     def _sync_grid_card_visuals(self) -> None:
-        """Paint selection on ClipCard widgets — QListWidget item chrome is hidden underneath."""
+        """Paint selection on ClipCard widgets — only the current row glows (single highlight)."""
         if not hasattr(self, 'grid_clips'):
             return
+        highlight_row = -1
+        if (
+            getattr(self, "_library_panel_mode", "clips") == "clips"
+            and hasattr(self.ui, "table_clips")
+        ):
+            highlight_row = self.ui.table_clips.currentRow()
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
             card = self.grid_clips.itemWidget(item)
             if isinstance(card, ClipCard):
-                card.set_selected(item.isSelected())
+                row = item.data(Qt.UserRole)
+                card.set_selected(row == highlight_row and highlight_row >= 0)
 
     def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
         """Mirror multi-selection from the grid into the list."""
@@ -512,6 +519,9 @@ class LibraryMixin:
         """Mirror grid selection into the table; reload preview only on plain LMB clicks."""
         if getattr(self, "_library_panel_mode", "clips") != "clips":
             return
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            self._clear_rendered_selection_visual()
+        self._saved_rendered_selection_path = ""
         if not self.grid_clips.selectedItems():
             self.sync_table_from_grid_selection()
             self._sync_grid_card_visuals()
@@ -964,7 +974,9 @@ class LibraryMixin:
                         roots.add(full)
 
         if self._looks_like_single_clip_folder(base_folder):
-            roots.add(base_folder)
+            base_name = os.path.basename(base_folder).lower()
+            if base_name not in ("gamerecordings", "clips", "video"):
+                roots.add(base_folder)
         try:
             for item in os.listdir(base_folder):
                 full = os.path.join(base_folder, item)
@@ -1076,6 +1088,8 @@ class LibraryMixin:
                     continue
 
                 folder_name = os.path.basename(full_path).lower()
+                if folder_name in ("gamerecordings", "clips", "video"):
+                    continue
                 is_steam_name = folder_name.startswith(("clip_", "bg_", "fg_"))
                 if not is_steam_name and not self._folder_has_dash_recording(full_path):
                     continue
