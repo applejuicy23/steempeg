@@ -172,6 +172,18 @@ class LifecycleMixin:
             if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
                 return True
 
+        if hasattr(self, 'table_rendered') and source == self.table_rendered.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.RightButton:
+                if hasattr(self, 'show_rendered_table_context_menu'):
+                    self.show_rendered_table_context_menu(event.position().toPoint())
+                    return True
+
+        if hasattr(self, 'grid_rendered') and source == self.grid_rendered.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.RightButton:
+                if hasattr(self, 'show_rendered_grid_context_menu'):
+                    self.show_rendered_grid_context_menu(event.position().toPoint())
+                    return True
+
         return super().eventFilter(source, event)
     
     def _sync_mpv_surface_geometry(self, *args):
@@ -280,6 +292,8 @@ class LifecycleMixin:
     def on_app_exit(self):
         """ Global Intercept: Triggers when the entire program closes. """
         self._is_closing = True
+        if hasattr(self, "_persist_library_ui_state"):
+            self._persist_library_ui_state()
         print("CLEANING BEFORE CLOSING...")
         if hasattr(self, 'player') and self.player:
             try:
