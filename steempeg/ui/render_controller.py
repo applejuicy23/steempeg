@@ -397,6 +397,7 @@ class RenderMixin:
         self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
         self._preview_clip_path = clip_path
+        self._rendered_media_path = None
         self._apply_header_from_table_row(selected_row)
 
         queue_job = self.render_queue.find_by_clip_path(clip_path)
@@ -416,6 +417,10 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         self._update_start_button_label()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
+        if hasattr(self, "_persist_library_ui_state"):
+            self._persist_library_ui_state()
 
     def _queue_persist_path(self) -> str:
         return os.path.join(self.cache_dir, "render_queue.json")
@@ -824,6 +829,7 @@ class RenderMixin:
         self._flush_current_trim_state()
         clip_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
         self._preview_clip_path = clip_path
+        self._rendered_media_path = None
         trim_restore = self._trim_state_for_clip(clip_path)
         self._populate_quality_options_for_clip(clip_path)
 
@@ -846,6 +852,10 @@ class RenderMixin:
         self.update_playback_badge()
         self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self._update_start_button_label()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
+        if hasattr(self, "_persist_library_ui_state"):
+            self._persist_library_ui_state()
 
     def fit_settings_tab_to_page(self, idx=None):
         """ Keep the scroll content as tall as the CURRENT settings page only.
@@ -1642,6 +1652,8 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         self._update_start_button_label()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
     def _highlight_clip_in_library(self, clip_path: str) -> None:
         """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
@@ -2253,7 +2265,30 @@ class RenderMixin:
 
         if success:
             logging.info("=== RENDER SUCCESS ===")
-            
+            if output_file and active_job:
+                try:
+                    from steempeg.core.rendered_media import (
+                        parse_app_id_from_clip_folder,
+                        parse_app_id_from_name,
+                        save_rendered_companion_meta,
+                    )
+
+                    clip_name = os.path.basename(active_job.clip_path or "")
+                    app_id = (
+                        parse_app_id_from_name(clip_name)
+                        or parse_app_id_from_clip_folder(clip_name)
+                    )
+                    save_rendered_companion_meta(
+                        output_file,
+                        app_id=app_id,
+                        game_name=active_job.game_name,
+                        clip_path=active_job.clip_path,
+                        game_icon_path=active_job.game_icon_path,
+                    )
+                    self._rendered_output_meta_index = None
+                except Exception as exc:
+                    logging.debug("Rendered companion meta not saved: %s", exc)
+
             self.update_status_indicator("Success!", "success")
             
             # A CUSTOM SUCCESS WINDOW
