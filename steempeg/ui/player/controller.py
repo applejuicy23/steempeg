@@ -1433,6 +1433,10 @@ class PlayerMixin:
         if not clip_path or not os.path.isdir(clip_path):
             return
 
+        if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
+            logging.warning("Ignored invalid clip preview path: %s", clip_path)
+            return
+
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
             logging.info(
