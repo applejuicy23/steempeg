@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QTableWidget,
@@ -27,21 +28,24 @@ from PySide6.QtWidgets import (
 from steempeg.core.rendered_media import (
     canvas_markers_to_sidecar,
     extract_poster_frame,
+    is_default_rendered_basename,
     load_markers_sidecar,
+    load_rendered_companion_meta,
     markers_to_canvas,
+    parse_app_id_from_clip_folder,
     parse_app_id_from_name,
     save_markers_sidecar,
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
-from steempeg.infra.paths import get_resource_path
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
-
-_UNKNOWN_GAME_ICON = get_resource_path("attention.png")
 
 RENDERED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
 RENDERED_AUDIO_EXTS = {".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".opus"}
 RENDERED_ALL_EXTS = RENDERED_VIDEO_EXTS | RENDERED_AUDIO_EXTS
+
+_RENDERED_TYPE_FILTER_ROLE = Qt.ItemDataRole.UserRole + 5
+_RENDERED_GAME_FILTER_ROLE = Qt.ItemDataRole.UserRole + 6
 
 _LIBRARY_TAB_INACTIVE = """
     QPushButton {
@@ -110,6 +114,7 @@ class RenderedLibraryMixin:
         self._library_panel_mode = "clips"
         self._library_tabs: dict[str, QPushButton] = {}
         self._rendered_filter_types: set[str] | None = None
+        self._rendered_filter_games: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
 
@@ -187,7 +192,8 @@ class RenderedLibraryMixin:
         if hasattr(self, "library_stack"):
             self.library_stack.setCurrentIndex(1 if mode == "rendered" else 0)
         if mode == "rendered":
-            self._rendered_filter_types = None
+            if hasattr(self, "_clear_timeline_clip_overlays"):
+                self._clear_timeline_clip_overlays()
             self.scan_rendered_outputs()
             self._apply_rendered_view_mode()
         else:
@@ -198,14 +204,14 @@ class RenderedLibraryMixin:
         self._persist_library_ui_state()
 
     def _sync_library_mode_chrome(self):
-        """Finished renders are preview-only — hide the export dock on that shelf."""
-        in_rendered = getattr(self, "_library_panel_mode", "clips") == "rendered"
-        immersive = getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False)
-        show_bottom = not immersive and not in_rendered
+        """Hide export settings while previewing finished media, not only on the tab."""
+        show_bottom = self._should_show_render_dock()
 
         if hasattr(self, "bottom_v_wrap"):
             self.bottom_v_wrap.setVisible(show_bottom)
-        if hasattr(self, "main_v_splitter") and not immersive:
+        if hasattr(self, "main_v_splitter") and not (
+            getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False)
+        ):
             sizes = self.main_v_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else self.main_v_splitter.height()
             total = max(int(total), 1)
@@ -216,9 +222,114 @@ class RenderedLibraryMixin:
             else:
                 self.main_v_splitter.setSizes([total, 0])
 
+    def _is_previewing_rendered_media(self) -> bool:
+        if getattr(self, "_rendered_media_path", None):
+            return True
+        path = getattr(self, "_preview_clip_path", None)
+        if path and os.path.isfile(path):
+            ext = os.path.splitext(path)[1].lower()
+            return ext in RENDERED_ALL_EXTS
+        return False
+
+    def _should_show_render_dock(self) -> bool:
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            return False
+        return not self._is_previewing_rendered_media()
+
+    def _meta_from_render_job(self, job) -> dict:
+        clip_name = os.path.basename(job.clip_path or "")
+        app_id = parse_app_id_from_name(clip_name) or parse_app_id_from_clip_folder(clip_name)
+        return {
+            "app_id": app_id or "",
+            "game_name": getattr(job, "game_name", "") or "",
+            "clip_path": getattr(job, "clip_path", "") or "",
+            "game_icon_path": getattr(job, "game_icon_path", "") or "",
+        }
+
+    def _build_rendered_output_meta_index(self) -> dict[str, dict]:
+        index: dict[str, dict] = {}
+        for job in getattr(self, "render_queue", []):
+            out = getattr(job, "output_file", "") or ""
+            if out:
+                index[os.path.normcase(os.path.normpath(out))] = self._meta_from_render_job(job)
+        try:
+            from steempeg.render.queue_history import load_history
+
+            hist_path = os.path.join(self.cache_dir, "render_queue_history.json")
+            for batch in load_history(hist_path):
+                for jdict in batch.jobs:
+                    out = jdict.get("output_file")
+                    if not out:
+                        continue
+                    from steempeg.render.queue_history import parse_history_job
+
+                    job, _status = parse_history_job(jdict)
+                    if job:
+                        index[os.path.normcase(os.path.normpath(out))] = self._meta_from_render_job(job)
+        except Exception as exc:
+            logging.debug("Rendered output meta index skipped: %s", exc)
+        return index
+
+    def _lookup_rendered_source_meta(self, file_path: str, basename: str) -> dict:
+        companion = load_rendered_companion_meta(file_path)
+        if companion:
+            return companion
+
+        norm = os.path.normcase(os.path.normpath(file_path))
+        index = getattr(self, "_rendered_output_meta_index", None)
+        if index is None:
+            index = self._build_rendered_output_meta_index()
+            self._rendered_output_meta_index = index
+        if norm in index:
+            return index[norm]
+
+        app_id = parse_app_id_from_name(basename)
+        if app_id:
+            return {"app_id": app_id}
+        return {}
+
+    def _game_icon_path_for_rendered(self, app_id: str | None, fallback: str = "") -> str:
+        if app_id and hasattr(self, "get_game_icon"):
+            self.get_game_icon(app_id)
+            cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
+            if os.path.isfile(cache_icon):
+                return cache_icon
+        if fallback and os.path.isfile(fallback):
+            return fallback
+        return ""
+
     def _persist_library_ui_state(self):
+        if getattr(self, "_restoring_library_state", False):
+            return
         if not hasattr(self, "save_user_settings"):
             return
+
+        clips_selected = ""
+        if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
+            cell = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
+            if cell:
+                clips_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
+
+        rendered_selected = ""
+        if hasattr(self, "table_rendered") and self.table_rendered.currentRow() >= 0:
+            cell = self.table_rendered.item(self.table_rendered.currentRow(), 0)
+            if cell:
+                rendered_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
+
+        preview_kind = ""
+        preview_path = ""
+        if getattr(self, "_rendered_media_path", None):
+            preview_kind = "rendered"
+            preview_path = self._rendered_media_path
+        elif getattr(self, "_preview_clip_path", None):
+            path = self._preview_clip_path
+            if path and os.path.isfile(path):
+                preview_kind = "rendered"
+                preview_path = path
+            elif path and os.path.isdir(path):
+                preview_kind = "clip"
+                preview_path = path
+
         self.save_user_settings(
             "library_ui",
             {
@@ -226,6 +337,10 @@ class RenderedLibraryMixin:
                 "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
                 "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
                 "rendered_tab_open": "rendered" in getattr(self, "_library_tabs", {}),
+                "clips_selected_path": clips_selected,
+                "rendered_selected_path": rendered_selected,
+                "preview_kind": preview_kind,
+                "preview_path": preview_path,
             },
         )
 
@@ -235,17 +350,97 @@ class RenderedLibraryMixin:
         state = self.load_user_settings().get("library_ui") or {}
         if not state:
             return
-        clips_vm = state.get("clips_view_mode")
-        rendered_vm = state.get("rendered_view_mode")
-        if clips_vm in ("grid", "list"):
-            self._clips_view_mode = clips_vm
-        if rendered_vm in ("grid", "list"):
-            self._rendered_view_mode = rendered_vm
-        if state.get("rendered_tab_open"):
-            self._ensure_rendered_tab()
-        mode = state.get("library_panel_mode", "clips")
-        if mode in getattr(self, "_library_tabs", {}):
-            self.set_library_panel(mode)
+
+        self._restoring_library_state = True
+        try:
+            clips_vm = state.get("clips_view_mode")
+            rendered_vm = state.get("rendered_view_mode")
+            if clips_vm in ("grid", "list"):
+                self._clips_view_mode = clips_vm
+            if rendered_vm in ("grid", "list"):
+                self._rendered_view_mode = rendered_vm
+            if state.get("rendered_tab_open"):
+                self._ensure_rendered_tab()
+            mode = state.get("library_panel_mode", "clips")
+            if mode in getattr(self, "_library_tabs", {}):
+                self.set_library_panel(mode)
+            QTimer.singleShot(
+                0,
+                lambda s=dict(state): self._restore_library_selections(s),
+            )
+        finally:
+            self._restoring_library_state = False
+
+    def _restore_library_selections(self, state: dict):
+        clips_path = (state.get("clips_selected_path") or "").strip()
+        rendered_path = (state.get("rendered_selected_path") or "").strip()
+        if clips_path:
+            self._select_clip_path(clips_path, play=False)
+        if rendered_path:
+            self._select_rendered_path(rendered_path, play=False)
+
+        preview_kind = state.get("preview_kind") or ""
+        preview_path = (state.get("preview_path") or "").strip()
+        if preview_kind == "clip" and preview_path and os.path.isdir(preview_path):
+            if self._select_clip_path(preview_path, play=True):
+                return
+        if preview_kind == "rendered" and preview_path and os.path.isfile(preview_path):
+            self._select_rendered_path(preview_path, play=True)
+
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
+
+    def _is_valid_clip_path(self, clip_path: str) -> bool:
+        if not clip_path or not os.path.isdir(clip_path):
+            return False
+        norm = os.path.normpath(clip_path)
+        for root in getattr(self, "clips_folders", []):
+            if root and norm == os.path.normpath(root):
+                return False
+        return self._looks_like_single_clip_folder(clip_path)
+
+    def _select_clip_path(self, clip_path: str, *, play: bool) -> bool:
+        if not self._is_valid_clip_path(clip_path):
+            return False
+        if not hasattr(self.ui, "table_clips"):
+            return False
+        norm = os.path.normpath(clip_path)
+        for row in range(self.ui.table_clips.rowCount()):
+            cell = self.ui.table_clips.item(row, 0)
+            if not cell:
+                continue
+            row_path = cell.data(Qt.ItemDataRole.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                self.ui.table_clips.blockSignals(True)
+                self.ui.table_clips.selectRow(row)
+                self.ui.table_clips.setCurrentCell(row, 0)
+                self.ui.table_clips.blockSignals(False)
+                if hasattr(self, "sync_grid_from_table_selection"):
+                    self.sync_grid_from_table_selection()
+                if play and hasattr(self, "update_quality_options"):
+                    self.update_quality_options()
+                return True
+        return False
+
+    def _select_rendered_path(self, file_path: str, *, play: bool) -> bool:
+        if not file_path or not hasattr(self, "table_rendered"):
+            return False
+        norm = os.path.normpath(file_path)
+        for row in range(self.table_rendered.rowCount()):
+            cell = self.table_rendered.item(row, 0)
+            if not cell:
+                continue
+            row_path = cell.data(Qt.ItemDataRole.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                self.table_rendered.blockSignals(True)
+                self.table_rendered.selectRow(row)
+                self.table_rendered.setCurrentCell(row, 0)
+                self.table_rendered.blockSignals(False)
+                self._sync_rendered_grid_from_table()
+                if play:
+                    self.update_rendered_selection()
+                return True
+        return False
 
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
@@ -320,6 +515,10 @@ class RenderedLibraryMixin:
         self.table_rendered.itemSelectionChanged.connect(self._sync_rendered_grid_from_table)
         self.grid_rendered.itemSelectionChanged.connect(self._on_rendered_grid_selection_changed)
 
+        self.grid_rendered.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid_rendered.viewport().installEventFilter(self)
+        self.table_rendered.viewport().installEventFilter(self)
+
         rendered_layout.addWidget(self.table_rendered)
         rendered_layout.addWidget(self.grid_rendered)
         self.library_stack.addWidget(self.rendered_page)
@@ -366,20 +565,28 @@ class RenderedLibraryMixin:
                 logging.warning("Rendered scan failed for %s: %s", root, exc)
 
         files.sort(key=lambda row: row[1], reverse=True)
+        self._rendered_output_meta_index = self._build_rendered_output_meta_index()
         for full, mtime, size, ext in files:
             type_label = _rendered_type_label(ext)
             dt = datetime.fromtimestamp(mtime)
             date_str = format_clip_date(dt)
             time_str = format_clip_time(dt)
             basename = os.path.basename(full)
-            display_title, icon_path, _thumb = self._resolved_rendered_meta(full, basename)
+            display_title, icon_path, _thumb, is_unknown, game_filter_name = self._resolved_rendered_meta(full, basename)
             row = self.table_rendered.rowCount()
             self.table_rendered.insertRow(row)
-            icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
-            name_item = QTableWidgetItem(icon, f"   {display_title}")
+            list_icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
+            if is_unknown:
+                from steempeg.infra.paths import get_resource_path
+                unknown_icon = get_resource_path("unknown_icon.png")
+                if os.path.isfile(unknown_icon):
+                    list_icon = QIcon(unknown_icon)
+            name_item = QTableWidgetItem(list_icon, f"   {display_title}")
             name_item.setData(Qt.ItemDataRole.UserRole, full)
+            name_item.setData(_RENDERED_GAME_FILTER_ROLE, game_filter_name)
             self.table_rendered.setItem(row, 0, name_item)
             type_item = QTableWidgetItem(f"🎬 {type_label}")
+            type_item.setData(_RENDERED_TYPE_FILTER_ROLE, type_label)
             type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             self.table_rendered.setItem(row, 1, type_item)
             date_item = QTableWidgetItem(f"{date_str}\n{time_str}")
@@ -389,33 +596,67 @@ class RenderedLibraryMixin:
             size_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             self.table_rendered.setItem(row, 3, size_item)
             name_item.setToolTip(full)
-            if self._rendered_filter_types and type_label not in self._rendered_filter_types:
+            if self._row_hidden_by_rendered_filters(game_filter_name, type_label):
                 self.table_rendered.setRowHidden(row, True)
 
         self.build_rendered_grid()
         self._update_library_count_label()
 
-    def _resolved_rendered_meta(self, file_path: str, filename: str) -> tuple[str, str, str]:
-        """Return (display_title, icon_path, thumb_path) for a rendered file."""
+    def _row_hidden_by_rendered_filters(self, game_name: str, type_label: str) -> bool:
+        if self._rendered_filter_games is not None and game_name not in self._rendered_filter_games:
+            return True
+        if self._rendered_filter_types is not None and type_label not in self._rendered_filter_types:
+            return True
+        return False
+
+    def _apply_rendered_filters(self):
+        if not hasattr(self, "table_rendered"):
+            return
+        for row in range(self.table_rendered.rowCount()):
+            name_item = self.table_rendered.item(row, 0)
+            type_item = self.table_rendered.item(row, 1)
+            game_name = name_item.data(_RENDERED_GAME_FILTER_ROLE) if name_item else "Unknown"
+            type_label = type_item.data(_RENDERED_TYPE_FILTER_ROLE) if type_item else ""
+            self.table_rendered.setRowHidden(
+                row, self._row_hidden_by_rendered_filters(str(game_name or "Unknown"), str(type_label or ""))
+            )
+        self.build_rendered_grid()
+        self._update_library_count_label()
+
+    def _resolved_rendered_meta(self, file_path: str, filename: str) -> tuple[str, str, str, bool, str]:
+        """Return (display_title, icon_path, thumb_path, is_unknown, game_filter_name)."""
         basename = os.path.basename(filename) if filename else os.path.basename(file_path)
-        app_id = parse_app_id_from_name(basename)
-        title = os.path.splitext(basename)[0]
-        icon_path = ""
+        stem = os.path.splitext(basename)[0]
+        source = self._lookup_rendered_source_meta(file_path, basename)
+
+        app_id = source.get("app_id") or parse_app_id_from_name(basename)
+        if not app_id and source.get("clip_path"):
+            app_id = parse_app_id_from_clip_folder(source["clip_path"])
+
+        icon_path = self._game_icon_path_for_rendered(
+            str(app_id) if app_id else None,
+            source.get("game_icon_path", ""),
+        )
+
+        game_name = ""
         if app_id and hasattr(self, "get_game_name"):
-            title = self.get_game_name(app_id) or title
-            if hasattr(self, "get_game_icon"):
-                self.get_game_icon(app_id)
-                cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
-                if os.path.isfile(cache_icon):
-                    icon_path = cache_icon
-        elif not app_id and os.path.isfile(_UNKNOWN_GAME_ICON):
-            icon_path = _UNKNOWN_GAME_ICON
+            game_name = self.get_game_name(str(app_id)) or source.get("game_name") or ""
+        elif source.get("game_name"):
+            game_name = source["game_name"]
+
+        if app_id and game_name:
+            title = game_name if is_default_rendered_basename(stem, str(app_id)) else stem
+        else:
+            title = game_name or stem
+
+        is_unknown = not bool(app_id and (icon_path or game_name))
 
         thumb_path = ""
         ext = os.path.splitext(file_path)[1].lower()
         if ext in RENDERED_VIDEO_EXTS and hasattr(self, "cache_dir"):
             thumb_path = extract_poster_frame(file_path, self.cache_dir)
-        return title, icon_path, thumb_path
+        game_filter_name = game_name if game_name else "Unknown"
+        return title, icon_path, thumb_path, is_unknown, game_filter_name
 
     def build_rendered_grid(self):
         if not hasattr(self, "grid_rendered"):
@@ -433,10 +674,17 @@ class RenderedLibraryMixin:
             date_str = date_item.text() if date_item else ""
             size_str = size_item.text() if size_item else ""
             file_path = name_item.data(Qt.ItemDataRole.UserRole)
-            display_title, icon_path, thumb_path = self._resolved_rendered_meta(
+            display_title, icon_path, thumb_path, is_unknown, _game_key = self._resolved_rendered_meta(
                 file_path, os.path.basename(file_path)
             )
             badge = type_item.text().replace("🎬 ", "").strip() if type_item else "FILE"
+            if is_unknown:
+                from steempeg.infra.paths import get_resource_path
+                unknown_icon = get_resource_path("unknown_icon.png")
+                if os.path.isfile(unknown_icon):
+                    icon_path = unknown_icon
+
+            footer = f"Unknown • {size_str}" if is_unknown else f"{date_str} • {size_str}"
 
             item = QListWidgetItem(self.grid_rendered)
             item.setSizeHint(QSize(260, 190))
@@ -445,13 +693,14 @@ class RenderedLibraryMixin:
 
             card = ClipCard(
                 display_title,
-                f"{date_str} • {size_str}",
+                footer,
                 badge,
                 thumb_path,
                 icon_path,
                 row,
                 health_color=None,
                 on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item),
+                on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
             )
             self.grid_rendered.setItemWidget(item, card)
             if self.table_rendered.isRowHidden(row):
@@ -551,51 +800,28 @@ class RenderedLibraryMixin:
         self.build_rendered_grid()
 
     def show_rendered_filter_menu(self):
-        menu = QMenu(self.ui)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; padding: 4px; }
-            QMenu::item { padding: 8px 24px; border-radius: 4px; }
-            QMenu::item:selected { background-color: #5138e6; }
-        """)
-        all_action = menu.addAction("All formats")
-        all_action.setCheckable(True)
-        all_action.setChecked(self._rendered_filter_types is None)
-        menu.addSeparator()
-        type_actions = {}
-        present_types: set[str] = set()
-        for row in range(self.table_rendered.rowCount()):
-            item = self.table_rendered.item(row, 1)
-            if item:
-                present_types.add(item.text())
-        for type_label in sorted(present_types):
-            act = menu.addAction(type_label)
-            act.setCheckable(True)
-            if self._rendered_filter_types is None:
-                act.setChecked(True)
-            else:
-                act.setChecked(type_label in self._rendered_filter_types)
-            type_actions[type_label] = act
+        from steempeg.ui.library.rendered_filters import RenderedFilterMenu
 
-        pos = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
-        menu.exec(pos)
+        if hasattr(self, "rendered_filter_menu") and self.rendered_filter_menu:
+            self.rendered_filter_menu.deleteLater()
 
-        if all_action.isChecked():
-            self._rendered_filter_types = None
-        else:
-            selected = {t for t, act in type_actions.items() if act.isChecked()}
-            self._rendered_filter_types = selected if selected else None
+        self.rendered_filter_menu = RenderedFilterMenu(self.ui)
+        self.rendered_filter_menu.gather_statistics(self)
+        self._position_rendered_filter_menu()
+        self.rendered_filter_menu.show()
+        QTimer.singleShot(0, self._position_rendered_filter_menu)
 
-        for row in range(self.table_rendered.rowCount()):
-            type_item = self.table_rendered.item(row, 1)
-            type_label = type_item.text() if type_item else ""
-            hide = (
-                self._rendered_filter_types is not None
-                and type_label not in self._rendered_filter_types
-            )
-            self.table_rendered.setRowHidden(row, hide)
-
-        self.build_rendered_grid()
-        self._update_library_count_label()
+    def _position_rendered_filter_menu(self):
+        menu = getattr(self, "rendered_filter_menu", None)
+        if not menu or not hasattr(self, "btn_filter_pill"):
+            return
+        btn = self.btn_filter_pill
+        menu_x = btn.mapToGlobal(QPoint(0, 0)).x()
+        menu_y = btn.mapToGlobal(QPoint(0, btn.height())).y()
+        menu.move(menu_x, menu_y)
+        if hasattr(self, "btn_refresh"):
+            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
+            menu.set_content_max_height(max(160, footer_top - menu_y - 8))
 
     def refresh_rendered_library(self):
         self.scan_rendered_outputs()
@@ -650,6 +876,7 @@ class RenderedLibraryMixin:
             return
         file_path = name_item.data(Qt.ItemDataRole.UserRole)
         type_label = self.table_rendered.item(row, 1).text() if self.table_rendered.item(row, 1) else ""
+        type_clean = type_label.replace("🎬 ", "").strip()
         date_str = self.table_rendered.item(row, 2).text() if self.table_rendered.item(row, 2) else ""
         size_str = self.table_rendered.item(row, 3).text() if self.table_rendered.item(row, 3) else ""
 
@@ -657,20 +884,33 @@ class RenderedLibraryMixin:
         self._selected_queue_job_id = None
         self._rendered_media_path = file_path
 
-        display_title, icon_path, _thumb = self._resolved_rendered_meta(
+        display_title, icon_path, _thumb, is_unknown, _game_key = self._resolved_rendered_meta(
             file_path, os.path.basename(file_path)
         )
 
         if hasattr(self, "custom_text_label"):
+            unknown_tag = (
+                " <span style='color: #888888;'>&nbsp;&nbsp;•&nbsp;&nbsp; Unknown</span>"
+                if is_unknown else ""
+            )
             header_html = (
-                f"<b>{display_title}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
-                f"{type_label} &nbsp;&nbsp;•&nbsp;&nbsp; {date_str} &nbsp;&nbsp;•&nbsp;&nbsp; {size_str}</span>"
+                f"<b>{display_title}</b>{unknown_tag} <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
+                f"{type_clean} &nbsp;&nbsp;•&nbsp;&nbsp; {date_str} &nbsp;&nbsp;•&nbsp;&nbsp; {size_str}</span>"
             )
             self.custom_text_label.setText(header_html)
         if hasattr(self, "custom_icon_label"):
+            self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             if icon_path and os.path.isfile(icon_path):
                 from PySide6.QtGui import QPixmap
                 self.custom_icon_label.setPixmap(QPixmap(icon_path).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            elif is_unknown:
+                from steempeg.infra.paths import get_resource_path
+                from PySide6.QtGui import QPixmap
+                unknown = get_resource_path("unknown_icon.png")
+                if os.path.isfile(unknown):
+                    self.custom_icon_label.setPixmap(QPixmap(unknown).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                else:
+                    self.custom_icon_label.clear()
             else:
                 self.custom_icon_label.clear()
 
@@ -688,6 +928,135 @@ class RenderedLibraryMixin:
             self.schedule_play_media_file(file_path)
         elif hasattr(self, "play_media_file"):
             self.play_media_file(file_path)
+        self._sync_library_mode_chrome()
+        self._persist_library_ui_state()
+
+    # --- Rendered shelf context menu (open folder / delete) ---
+
+    def _context_menu_rendered_paths_table(self, pos) -> list[str]:
+        item = self.table_rendered.itemAt(pos)
+        if not item:
+            return []
+        clicked_row = item.row()
+        selected_rows = {idx.row() for idx in self.table_rendered.selectionModel().selectedRows()}
+        rows = sorted(selected_rows) if clicked_row in selected_rows and len(selected_rows) > 1 else [clicked_row]
+        paths: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            cell = self.table_rendered.item(row, 0)
+            if not cell:
+                continue
+            path = cell.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                continue
+            norm = os.path.normpath(path)
+            if norm in seen or not os.path.isfile(path):
+                continue
+            seen.add(norm)
+            paths.append(path)
+        return paths
+
+    def _context_menu_rendered_paths_grid(self, pos) -> list[str]:
+        item = self.grid_rendered.itemAt(pos)
+        if not item:
+            return []
+        clicked_path = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not clicked_path:
+            return []
+        return [clicked_path] if os.path.isfile(clicked_path) else []
+
+    def _populate_rendered_context_menu(self, menu, file_paths: list[str]) -> None:
+        count = len(file_paths)
+        if count == 0:
+            return
+        action_open = menu.addAction("📂 Open in folder")
+        action_delete = menu.addAction(
+            "🗑️ Delete file" if count == 1 else f"🗑️ Delete files ({count})"
+        )
+        if count == 1:
+            path = file_paths[0]
+            action_open.triggered.connect(lambda: self.open_rendered_folder(path))
+            action_delete.triggered.connect(lambda: self.delete_rendered_file(path))
+        else:
+            action_open.setEnabled(False)
+            action_delete.triggered.connect(lambda: self.delete_rendered_files(file_paths))
+
+    def show_rendered_grid_context_menu(self, pos) -> None:
+        file_paths = self._context_menu_rendered_paths_grid(pos)
+        if not file_paths:
+            return
+        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+
+        menu = QMenu(self.grid_rendered)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        self._populate_rendered_context_menu(menu, file_paths)
+        menu.exec(self.grid_rendered.viewport().mapToGlobal(pos))
+
+    def show_rendered_table_context_menu(self, pos) -> None:
+        file_paths = self._context_menu_rendered_paths_table(pos)
+        if not file_paths:
+            return
+        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+
+        menu = QMenu(self.table_rendered)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        self._populate_rendered_context_menu(menu, file_paths)
+        menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
+
+    def _handle_rendered_grid_card_context_menu(self, item, event) -> None:
+        viewport_pos = self.grid_rendered.viewport().mapFromGlobal(event.globalPosition().toPoint())
+        self.show_rendered_grid_context_menu(viewport_pos)
+
+    def open_rendered_folder(self, file_path: str) -> None:
+        try:
+            folder = os.path.dirname(file_path)
+            if folder:
+                os.startfile(folder)
+        except Exception as exc:
+            logging.error("Failed to open rendered folder: %s", exc)
+
+    def delete_rendered_file(self, file_path: str) -> None:
+        self.delete_rendered_files([file_path])
+
+    def delete_rendered_files(self, file_paths: list[str]) -> None:
+        paths = [p for p in file_paths if p and os.path.isfile(p)]
+        if not paths:
+            return
+        msg = QMessageBox(self.ui)
+        msg.setWindowTitle("Delete rendered file" if len(paths) == 1 else "Delete rendered files")
+        msg.setText(
+            "Delete this rendered file?" if len(paths) == 1 else f"Delete {len(paths)} rendered files?"
+        )
+        msg.setInformativeText("This cannot be undone.")
+        msg.setIcon(QMessageBox.Icon.Warning)
+        btn_delete = msg.addButton("🗑️ Delete", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() != btn_delete:
+            return
+
+        playing = getattr(self, "_rendered_media_path", None) or getattr(self, "_preview_clip_path", None)
+        for file_path in paths:
+            try:
+                if playing and os.path.normpath(playing) == os.path.normpath(file_path):
+                    if hasattr(self, "close_current_clip"):
+                        self.close_current_clip()
+                    elif hasattr(self, "player") and self.player:
+                        self.player.pause = True
+                os.remove(file_path)
+                from steempeg.core.rendered_media import companion_meta_path
+
+                meta_sidecar = companion_meta_path(file_path)
+                if os.path.isfile(meta_sidecar):
+                    os.remove(meta_sidecar)
+            except Exception as exc:
+                logging.error("Failed to delete rendered file %s: %s", file_path, exc)
+                QMessageBox.critical(self.ui, "Error", f"Could not delete:\n{file_path}\n\n{exc}")
+                return
+
+        self._rendered_output_meta_index = None
+        self.scan_rendered_outputs()
+        self._persist_library_ui_state()
 
     # --- Hooks that branch when the rendered panel is active ---
 
