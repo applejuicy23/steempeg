@@ -144,6 +144,29 @@ _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 
 
 class LibraryMixin:
+    @staticmethod
+    def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
+        """True when a folder itself (within a few levels) contains DASH manifests/chunks."""
+        if not folder_path or not os.path.isdir(folder_path):
+            return False
+        base_depth = os.path.normpath(folder_path).count(os.sep)
+        for root, dirs, files in os.walk(folder_path):
+            depth = root.count(os.sep) - base_depth
+            if depth > max_depth:
+                dirs.clear()
+                continue
+            if any(name.endswith(".mpd") for name in files):
+                return True
+            if any("chunk-stream" in name for name in files):
+                return True
+        return False
+
+    def _looks_like_single_clip_folder(self, folder_path: str) -> bool:
+        name = os.path.basename(folder_path).lower()
+        if name.startswith(("clip_", "bg_", "fg_")):
+            return True
+        return self._folder_has_dash_recording(folder_path)
+
     def _context_menu_clip_paths_table(self, pos) -> list:
         item = self.ui.table_clips.itemAt(pos)
         if not item:
@@ -926,7 +949,8 @@ class LibraryMixin:
                     if os.path.isdir(full):
                         roots.add(full)
 
-        roots.add(base_folder)
+        if self._looks_like_single_clip_folder(base_folder):
+            roots.add(base_folder)
         try:
             for item in os.listdir(base_folder):
                 full = os.path.join(base_folder, item)
@@ -1007,6 +1031,7 @@ class LibraryMixin:
             self._load_clips_folders_from_settings()
 
         library_roots = [f for f in self.clips_folders if f and os.path.exists(f)]
+        library_root_norms = {os.path.normpath(r) for r in library_roots}
         if not library_roots:
             # No folders left (e.g. the user cleared them mid-session). The list was
             # already emptied above, but the grid is built separately and would keep
@@ -1033,10 +1058,12 @@ class LibraryMixin:
             
             for full_path in sorted_folders:
                 if not os.path.exists(full_path): continue
+                if os.path.normpath(full_path) in library_root_norms:
+                    continue
 
                 folder_name = os.path.basename(full_path).lower()
-                # We strictly allow only Steam clips!
-                if not folder_name.startswith(("clip_", "bg_", "fg_")):
+                is_steam_name = folder_name.startswith(("clip_", "bg_", "fg_"))
+                if not is_steam_name and not self._folder_has_dash_recording(full_path):
                     continue
 
                 folder_name = os.path.basename(full_path).lower()
@@ -1145,16 +1172,23 @@ class LibraryMixin:
 
 
                 else:
-                    rec_type = "Folder"
-                    game_name = folder_name
+                    rec_type = "🎞️ FG"
+                    game_name = "   Unknown"
                     formatted_date = "Unknown"
+                    formatted_time = ""
                     icon = QIcon()
+                    from steempeg.infra.paths import get_resource_path
+                    unknown_icon = get_resource_path("unknown_icon.png")
+                    if os.path.isfile(unknown_icon):
+                        icon = QIcon(unknown_icon)
 
                 row_position = self.ui.table_clips.rowCount()
                 self.ui.table_clips.insertRow(row_position)
                 
                 item_game = QTableWidgetItem(icon, game_name)
                 item_game.setData(Qt.UserRole, full_path)
+                if game_name.strip().lower() == "unknown":
+                    item_game.setToolTip(full_path)
                 item_game.setData(_CLIP_HEALTH_ROLE, health_report.level.value)
                 item_game.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(health_report.issues))
                 self.ui.table_clips.setItem(row_position, 0, item_game)
@@ -1267,27 +1301,34 @@ class LibraryMixin:
             if clip_path:
                 clip_folder_name = os.path.basename(clip_path)
                 parts = clip_folder_name.split("_")
-                
-                # Extract the clip type
-                if len(parts) > 0:
+
+                if title.strip().lower() == "unknown":
+                    badge_text = "FG"
+                    from steempeg.infra.paths import get_resource_path
+                    unknown_icon = get_resource_path("unknown_icon.png")
+                    if os.path.isfile(unknown_icon):
+                        icon_path = unknown_icon
+                elif len(parts) > 0:
                     prefix = parts[0].upper()
-                    if prefix in ["FG", "BG", "CLIP"]: badge_text = prefix
-                    
-                if len(parts) >= 2 and parts[1].isdigit():
+                    if prefix in ["FG", "BG", "CLIP"]:
+                        badge_text = prefix
+
+                if not icon_path and len(parts) >= 2 and parts[1].isdigit():
                     icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
-                    
+
                 if os.path.exists(clip_path):
                     thumb_path = find_clip_thumbnail(clip_path)
 
-            # Create the custom card
+            footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
+
             item = QListWidgetItem(self.grid_clips)
             item.setSizeHint(QSize(260, 190))
             item.setData(Qt.UserRole, row)
             item.setData(Qt.UserRole + 1, clip_path)
 
             card = ClipCard(
-                title,
-                f"{date_str} • {time_str}",
+                title.strip(),
+                footer_right,
                 badge_text,
                 thumb_path,
                 icon_path,
@@ -1392,11 +1433,20 @@ class LibraryMixin:
                 m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
                 s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
                 return h * 3600 + m * 60 + s
+
+            if sort_idx in (9, 10): # HEALTH
+                level = r[0].data(_CLIP_HEALTH_ROLE) if r[0] else health.ClipHealth.HEALTHY.value
+                rank = {
+                    health.ClipHealth.HEALTHY.value: 2,
+                    health.ClipHealth.DEGRADED.value: 1,
+                    health.ClipHealth.DEAD.value: 0,
+                }
+                return rank.get(level, 1)
                 
             return data['orig_row']
 
        
-        reverse = sort_idx in (0, 2, 4, 6, 8) 
+        reverse = sort_idx in (0, 2, 4, 6, 8, 10)
         all_data.sort(key=get_sort_key, reverse=reverse)
         
         for new_row, data in enumerate(all_data):
