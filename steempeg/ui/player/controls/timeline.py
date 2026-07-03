@@ -138,6 +138,7 @@ class TimelineCanvas(QWidget):
         self.current_video_path = ""
         self.current_preview_pixmap = None
         self._thumb_dir_media_path = ""
+        self._batch_thumbs_busy = False
         if 'PreviewSniperWorker' in globals():
             self.sniper = PreviewSniperWorker()
             self.sniper.preview_ready.connect(self.on_preview_ready)
@@ -366,7 +367,7 @@ class TimelineCanvas(QWidget):
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0:
             return
-        if getattr(self, 'sniper', None) and self.sniper.video_path != self.current_video_path:
+        if getattr(self, 'sniper', None) and not self._sniper_path_matches():
             return
         if not getattr(self, 'is_hovering', False):
             return
@@ -383,12 +384,22 @@ class TimelineCanvas(QWidget):
         if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
             self.preview_widget.update_image_from_ram(pixmap)
 
+    def _norm_media_path(self, path) -> str:
+        if not path:
+            return ""
+        return os.path.normcase(os.path.normpath(str(path))).replace("\\", "/")
+
+    def _sniper_path_matches(self) -> bool:
+        if not hasattr(self, 'sniper') or not self.current_video_path:
+            return False
+        return self._norm_media_path(self.sniper.video_path) == self._norm_media_path(self.current_video_path)
+
     def _thumb_dir_is_valid(self):
         thumb_dir = getattr(self, 'thumb_dir', None)
         if not thumb_dir or not os.path.exists(thumb_dir):
             return False
         src = getattr(self, '_thumb_dir_media_path', '')
-        return bool(src) and src == getattr(self, 'current_video_path', '')
+        return bool(src) and self._norm_media_path(src) == self._norm_media_path(self.current_video_path)
 
     def trigger_sniper(self):
         if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
@@ -1002,28 +1013,28 @@ class TimelineCanvas(QWidget):
                 if os.path.exists(img_path):
                     has_disk_thumb = True
 
-            sniper_ok = (
-                hasattr(self, 'sniper')
-                and self.sniper.video_path == self.current_video_path
-            )
+            sniper_cache = getattr(self.sniper, 'cache', {}) if hasattr(self, 'sniper') else {}
 
             bucket_changed = bucket_sec != self._hover_preview_bucket
             if bucket_changed:
                 self._hover_preview_bucket = bucket_sec
-                self.preview_widget.update_time_display(time_str, is_in_trim)
-                if has_disk_thumb:
-                    self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
-                elif sniper_ok and bucket_sec in self.sniper.cache:
-                    self.preview_widget.set_preview_pixmap(self.sniper.cache[bucket_sec])
-                else:
-                    self.preview_widget.start_loading()
-            else:
-                self.preview_widget.update_time_display(time_str, is_in_trim)
 
-            if not has_disk_thumb and sniper_ok and self.current_video_path and bucket_changed:
+            self.preview_widget.update_time_display(time_str, is_in_trim)
+
+            if has_disk_thumb:
+                if bucket_changed or getattr(self, '_batch_thumbs_busy', False):
+                    self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
+            elif bucket_changed:
+                if bucket_sec in sniper_cache:
+                    self.preview_widget.set_preview_pixmap(sniper_cache[bucket_sec])
+                else:
+                    self.preview_widget.clear_for_new_media()
+                    self.preview_widget.start_loading()
+
+            if not has_disk_thumb and self.current_video_path and bucket_changed:
                 self.pending_sec = bucket_sec
                 if hasattr(self, 'sniper_timer'):
-                    self.sniper_timer.start(120)
+                    self.sniper_timer.start(100)
 
             if self.parentWidget() and self.parentWidget().parentWidget():
                 target_x = event.globalPosition().x() - (self.preview_widget.width() // 2)
@@ -1285,15 +1296,17 @@ class CustomTimelineWidget(QScrollArea):
 
     @current_video_path.setter
     def current_video_path(self, val):
-        old = getattr(self.canvas, 'current_video_path', '')
+        val = val or ""
+        old = getattr(self.canvas, 'current_video_path', '') or ''
         if hasattr(self.canvas, 'sniper') and self.canvas.sniper:
             self.canvas.sniper.kill_worker()
-            self.canvas.sniper.video_path = val or ""
+            self.canvas.sniper.video_path = val
             self.canvas.sniper.cache.clear()
         if val != old:
             self.canvas._hover_preview_bucket = -1
             self.canvas.thumb_dir = None
             self.canvas._thumb_dir_media_path = ''
+            self.canvas._batch_thumbs_busy = False
             if hasattr(self.canvas, 'preview_widget'):
                 self.canvas.preview_widget.clear_for_new_media()
         self.canvas.current_video_path = val
