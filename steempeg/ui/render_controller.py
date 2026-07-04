@@ -266,6 +266,7 @@ class RenderMixin:
             "cancelled": "#ff4444",
         }
         color = colors.get(state, "#a871ff")
+        preserve_progress = state in ("cancelling", "cancelled", "paused")
 
         display_text = str(text)
         percent = None
@@ -300,7 +301,7 @@ class RenderMixin:
                 self.ui.progress_render.setValue(int(percent * 10))
             elif state == "success":
                 self.ui.progress_render.setValue(1000)
-            elif state in ("ready", "error"):
+            elif not preserve_progress and state in ("ready", "error"):
                 self.ui.progress_render.setValue(0)
             self.ui.progress_render.setTextVisible(False)
 
@@ -328,7 +329,7 @@ class RenderMixin:
                 self.label_pct.setText(self._format_pct_label(percent))
             elif state == "success":
                 self.label_pct.setText("100%")
-            elif state in ("ready", "error"):
+            elif not preserve_progress and state in ("ready", "error"):
                 self.label_pct.setText("0%")
 
     def open_rendered_folder(self, file_path):

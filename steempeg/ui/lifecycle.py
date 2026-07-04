@@ -209,29 +209,10 @@ class LifecycleMixin:
             elif text == "Success":
                 state = "success"
             elif text == "Cancelled":
-                state = "error"
+                state = "cancelled"
             elif "%" in text or text.endswith(".."):
                 state = "rendering"
             self.update_status_indicator(text, state)
-            return
-
-        if hasattr(self.ui, 'label_status'):
-            self.ui.label_status.setText(text.split('..')[0] + '..')
-
-        if hasattr(self.ui, 'progress_render'):
-            if text in ["Ready", "Success", "Cancelled", "Error!"]:
-                self.ui.progress_render.setValue(0)
-                if hasattr(self, 'label_pct'):
-                    self.label_pct.setText("0%")
-                if text != "Error!":
-                    self.ui.label_status.setText(text)
-
-            match = re.search(r'\(([\d.]+)%\)', text)
-            if match:
-                val_float = float(match.group(1))
-                self.ui.progress_render.setValue(int(val_float * 10))
-                if hasattr(self, 'label_pct'):
-                    self.label_pct.setText(f"{int(val_float)}%")
 
     def elide_path(self, path, max_len=75):
         """ Smart truncation of long paths (keeps start and end) """
