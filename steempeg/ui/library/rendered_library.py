@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QPoint, QSize, QTimer
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -896,6 +896,7 @@ class RenderedLibraryMixin:
     def build_rendered_grid(self):
         if not hasattr(self, "grid_rendered"):
             return
+        self._rendered_grid_anchor_index = -1
         self.grid_rendered.clear()
         for row in range(self.table_rendered.rowCount()):
             name_item = self.table_rendered.item(row, 0)
@@ -935,7 +936,7 @@ class RenderedLibraryMixin:
                 row,
                 health_color=None,
                 round_icon=is_unknown,
-                on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item),
+                on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item, ev),
                 on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
             )
             self.grid_rendered.setItemWidget(item, card)
@@ -945,21 +946,23 @@ class RenderedLibraryMixin:
         self._sync_rendered_grid_from_table()
 
     def _sync_rendered_grid_card_visuals(self) -> None:
-        """Paint selection border on rendered ClipCard widgets — current row only."""
+        """Paint selection border on every selected rendered row."""
         if not hasattr(self, "grid_rendered"):
             return
-        highlight_row = -1
+        selected_rows: set[int] = set()
         if (
             getattr(self, "_library_panel_mode", "clips") == "rendered"
             and hasattr(self, "table_rendered")
         ):
-            highlight_row = self.table_rendered.currentRow()
+            selected_rows = {
+                idx.row() for idx in self.table_rendered.selectionModel().selectedRows()
+            }
         for i in range(self.grid_rendered.count()):
             item = self.grid_rendered.item(i)
             card = self.grid_rendered.itemWidget(item)
             if isinstance(card, ClipCard):
                 row = item.data(Qt.ItemDataRole.UserRole)
-                card.set_selected(row == highlight_row and highlight_row >= 0)
+                card.set_selected(row in selected_rows)
 
     def _update_library_count_label(self):
         if not hasattr(self, "lbl_clip_count"):
@@ -1086,24 +1089,111 @@ class RenderedLibraryMixin:
         self.grid_rendered.blockSignals(False)
         self._sync_rendered_grid_card_visuals()
 
-    def _rendered_grid_select_item(self, item):
-        self.grid_rendered.blockSignals(True)
-        self.grid_rendered.clearSelection()
-        item.setSelected(True)
-        self.grid_rendered.blockSignals(False)
-        row = item.data(Qt.ItemDataRole.UserRole)
-        if row is not None:
-            self.table_rendered.blockSignals(True)
-            self.table_rendered.selectRow(row)
-            self.table_rendered.blockSignals(False)
-        self.update_rendered_selection()
+    def _sync_rendered_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
+        if not hasattr(self, "grid_rendered") or not hasattr(self, "table_rendered"):
+            return
+
+        selected_items = self.grid_rendered.selectedItems()
+        table = self.table_rendered
+        if not selected_items:
+            table.blockSignals(True)
+            table.clearSelection()
+            table.blockSignals(False)
+            return
+
+        rows = sorted({
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in selected_items
+            if item.data(Qt.ItemDataRole.UserRole) is not None
+        })
+
+        selection = QItemSelection()
+        for row in rows:
+            if row < 0 or row >= table.rowCount():
+                continue
+            selection.select(
+                table.model().index(row, 0),
+                table.model().index(row, table.columnCount() - 1),
+            )
+
+        table.blockSignals(True)
+        table.selectionModel().clearSelection()
+        if not selection.isEmpty():
+            table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
+            current_row = table.currentRow()
+            if not keep_current_cell or current_row not in rows:
+                table.setCurrentCell(rows[0], 0)
+        table.blockSignals(False)
+
+    def _publish_rendered_grid_selection(self, *, update_preview: bool = True) -> None:
+        if getattr(self, "_library_panel_mode", "clips") != "rendered":
+            return
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+        self._saved_clips_selection_path = ""
+        if not self.grid_rendered.selectedItems():
+            self._sync_rendered_table_from_grid_selection()
+            self._sync_rendered_grid_card_visuals()
+            return
+        self._sync_rendered_table_from_grid_selection(keep_current_cell=not update_preview)
         self._sync_rendered_grid_card_visuals()
+        if update_preview and hasattr(self, "update_rendered_selection"):
+            self.update_rendered_selection()
+
+    def _rendered_grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
+        grid = self.grid_rendered
+        mods = self._event_modifiers(event)
+        if force_single:
+            mods = Qt.NoModifier
+
+        is_multi = bool(mods & self._MULTI_SELECT_MODIFIERS) and not force_single
+        update_preview = not is_multi
+        idx = self._list_widget_item_index(grid, item)
+
+        self._rendered_grid_select_in_progress = True
+        try:
+            grid.blockSignals(True)
+            if mods & self._TOGGLE_SELECT_MODIFIERS:
+                item.setSelected(not item.isSelected())
+            elif mods & Qt.ShiftModifier:
+                anchor_idx = getattr(self, '_rendered_grid_anchor_index', -1)
+                if anchor_idx < 0:
+                    anchor_idx = idx
+                lo, hi = sorted((anchor_idx, idx))
+                grid.clearSelection()
+                for i in range(lo, hi + 1):
+                    row_item = grid.item(i)
+                    if row_item and not row_item.isHidden():
+                        row_item.setSelected(True)
+            else:
+                grid.clearSelection()
+                item.setSelected(True)
+
+            if not (mods & self._MULTI_SELECT_MODIFIERS):
+                self._rendered_grid_anchor_index = idx
+
+            grid.blockSignals(False)
+        finally:
+            self._rendered_grid_select_in_progress = False
+
+        self._publish_rendered_grid_selection(update_preview=update_preview)
+
+    def _handle_rendered_grid_viewport_press(self, event) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+
+        pos = event.position().toPoint()
+        item = self.grid_rendered.itemAt(pos)
+        if item is None:
+            return True
+
+        self._rendered_grid_select_item(item, event)
+        return True
 
     def _on_rendered_grid_selection_changed(self):
-        if not self.grid_rendered.selectedItems():
+        if getattr(self, '_rendered_grid_select_in_progress', False):
             return
-        item = self.grid_rendered.selectedItems()[0]
-        self._rendered_grid_select_item(item)
+        self._publish_rendered_grid_selection()
 
     def update_rendered_selection(self):
         if self._library_panel_mode != "rendered":
@@ -1117,7 +1207,11 @@ class RenderedLibraryMixin:
         if row < 0:
             return
 
-        if QApplication.keyboardModifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+        if QApplication.keyboardModifiers() & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+        ):
             return
 
         name_item = self.table_rendered.item(row, 0)

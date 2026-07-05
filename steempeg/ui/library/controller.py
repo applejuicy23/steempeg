@@ -510,21 +510,23 @@ class LibraryMixin:
                 self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
     def _sync_grid_card_visuals(self) -> None:
-        """Paint selection on ClipCard widgets — only the current row glows (single highlight)."""
+        """Paint selection on ClipCard widgets for every selected table row."""
         if not hasattr(self, 'grid_clips'):
             return
-        highlight_row = -1
+        selected_rows: set[int] = set()
         if (
             getattr(self, "_library_panel_mode", "clips") == "clips"
             and hasattr(self.ui, "table_clips")
         ):
-            highlight_row = self.ui.table_clips.currentRow()
+            selected_rows = {
+                idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()
+            }
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
             card = self.grid_clips.itemWidget(item)
             if isinstance(card, ClipCard):
                 row = item.data(Qt.UserRole)
-                card.set_selected(row == highlight_row and highlight_row >= 0)
+                card.set_selected(row in selected_rows)
 
     def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
         """Mirror multi-selection from the grid into the list."""
@@ -584,33 +586,43 @@ class LibraryMixin:
             if cell:
                 self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
-    def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
-        """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
-        grid = self.grid_clips
+    def _list_widget_item_index(self, list_widget, item) -> int:
+        """Linear list index — QListWidget::row() is wrong in multi-column IconMode."""
+        if item is None:
+            return -1
+        return list_widget.indexFromItem(item).row()
+
+    @staticmethod
+    def _event_modifiers(event=None):
         mods = QApplication.keyboardModifiers()
         if event is not None:
             mods |= event.modifiers()
+        return mods
+
+    _MULTI_SELECT_MODIFIERS = Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier
+    _TOGGLE_SELECT_MODIFIERS = Qt.ControlModifier | Qt.AltModifier
+
+    def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
+        """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
+        grid = self.grid_clips
+        mods = self._event_modifiers(event)
         if force_single:
             mods = Qt.NoModifier
 
-        is_multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier)) and not force_single
+        is_multi = bool(mods & self._MULTI_SELECT_MODIFIERS) and not force_single
         update_preview = not is_multi
+        idx = self._list_widget_item_index(grid, item)
 
         self._grid_select_in_progress = True
         try:
             grid.blockSignals(True)
-            if mods & Qt.ControlModifier:
+            if mods & self._TOGGLE_SELECT_MODIFIERS:
                 item.setSelected(not item.isSelected())
             elif mods & Qt.ShiftModifier:
-                anchor = getattr(self, '_grid_anchor_item', None)
-                try:
-                    anchor_row = grid.row(anchor) if anchor is not None else -1
-                except RuntimeError:
-                    anchor_row = -1  # anchor item was destroyed by a grid rebuild
-                if anchor_row < 0:
-                    anchor_row = grid.row(item)
-                    self._grid_anchor_item = item
-                lo, hi = sorted((anchor_row, grid.row(item)))
+                anchor_idx = getattr(self, '_grid_anchor_index', -1)
+                if anchor_idx < 0:
+                    anchor_idx = idx
+                lo, hi = sorted((anchor_idx, idx))
                 grid.clearSelection()
                 for i in range(lo, hi + 1):
                     row_item = grid.item(i)
@@ -619,9 +631,9 @@ class LibraryMixin:
             else:
                 grid.clearSelection()
                 item.setSelected(True)
-                self._grid_anchor_item = item
 
-            if not (mods & (Qt.ControlModifier | Qt.ShiftModifier)):
+            if not (mods & self._MULTI_SELECT_MODIFIERS):
+                self._grid_anchor_index = idx
                 self._grid_anchor_item = item
 
             grid.blockSignals(False)
@@ -1357,6 +1369,7 @@ class LibraryMixin:
 
         # Items get destroyed below — drop the stale Shift anchor or range-select breaks.
         self._grid_anchor_item = None
+        self._grid_anchor_index = -1
         self.grid_clips.clear()
         
         for row in range(self.ui.table_clips.rowCount()):

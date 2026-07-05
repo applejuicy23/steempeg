@@ -832,7 +832,9 @@ class RenderMixin:
 
         # Multi-select (Ctrl/Shift) builds a SET — don't thrash the preview on every click.
         from PySide6.QtWidgets import QApplication
-        if QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier):
+        if QApplication.keyboardModifiers() & (
+            Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier
+        ):
             self.update_playback_badge()
             self._update_start_button_label()
             return
@@ -1711,6 +1713,7 @@ class RenderMixin:
             self.grid_clips.blockSignals(False)
             if anchor_item is not None:
                 self._grid_anchor_item = anchor_item
+                self._grid_anchor_index = self._list_widget_item_index(self.grid_clips, anchor_item)
                 self.grid_clips.scrollToItem(anchor_item)
             if hasattr(self, "_sync_grid_card_visuals"):
                 self._sync_grid_card_visuals()

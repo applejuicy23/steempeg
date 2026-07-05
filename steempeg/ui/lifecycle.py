@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QItemSelectionModel,
 )
 
 from steempeg.infra import logging as log_util
@@ -159,6 +160,18 @@ class LifecycleMixin:
                     click_pos = event.position().toPoint()
                     self.show_clip_context_menu(click_pos)
                     return True
+                if event.button() == Qt.LeftButton:
+                    mods = event.modifiers()
+                    if (mods & Qt.AltModifier) and not (mods & Qt.ShiftModifier):
+                        index = self.ui.table_clips.indexAt(event.position().toPoint())
+                        if index.isValid():
+                            self.ui.table_clips.selectionModel().select(
+                                index,
+                                QItemSelectionModel.SelectionFlag.Toggle
+                                | QItemSelectionModel.SelectionFlag.Rows,
+                            )
+                            self.ui.table_clips.setCurrentIndex(index)
+                            return True
                     
         # 2. Disable right-click selection in the Grid; handle LMB selection on cards manually
         if hasattr(self, 'grid_clips') and source == self.grid_clips.viewport():
@@ -173,16 +186,35 @@ class LifecycleMixin:
                 return True
 
         if hasattr(self, 'table_rendered') and source == self.table_rendered.viewport():
-            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.RightButton:
-                if hasattr(self, 'show_rendered_table_context_menu'):
-                    self.show_rendered_table_context_menu(event.position().toPoint())
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.RightButton:
+                    if hasattr(self, 'show_rendered_table_context_menu'):
+                        self.show_rendered_table_context_menu(event.position().toPoint())
                     return True
+                if event.button() == Qt.LeftButton:
+                    mods = event.modifiers()
+                    if (mods & Qt.AltModifier) and not (mods & Qt.ShiftModifier):
+                        index = self.table_rendered.indexAt(event.position().toPoint())
+                        if index.isValid():
+                            self.table_rendered.selectionModel().select(
+                                index,
+                                QItemSelectionModel.SelectionFlag.Toggle
+                                | QItemSelectionModel.SelectionFlag.Rows,
+                            )
+                            self.table_rendered.setCurrentIndex(index)
+                            return True
 
         if hasattr(self, 'grid_rendered') and source == self.grid_rendered.viewport():
-            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.RightButton:
-                if hasattr(self, 'show_rendered_grid_context_menu'):
-                    self.show_rendered_grid_context_menu(event.position().toPoint())
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.RightButton:
+                    click_pos = event.position().toPoint()
+                    if hasattr(self, 'show_rendered_grid_context_menu'):
+                        self.show_rendered_grid_context_menu(click_pos)
                     return True
+                if event.button() == Qt.LeftButton and hasattr(self, '_handle_rendered_grid_viewport_press'):
+                    return self._handle_rendered_grid_viewport_press(event)
+            if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
+                return True
 
         return super().eventFilter(source, event)
     
