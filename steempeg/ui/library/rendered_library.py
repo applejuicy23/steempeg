@@ -319,8 +319,6 @@ class RenderedLibraryMixin:
         if hasattr(self, "library_stack"):
             self.library_stack.setCurrentIndex(1 if mode == "rendered" else 0)
         if mode == "rendered":
-            if hasattr(self, "_clear_timeline_clip_overlays"):
-                self._clear_timeline_clip_overlays()
             self._clear_clips_selection_visual()
             self.scan_rendered_outputs()
             self._apply_rendered_view_mode()

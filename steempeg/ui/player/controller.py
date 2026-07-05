@@ -1209,7 +1209,7 @@ class PlayerMixin:
             self.setup_dynamic_slider()
 
     def _clear_timeline_clip_overlays(self):
-        """Drop clip-specific trim, markers, and hover preview when leaving a clip context."""
+        """Drop clip-specific trim, markers, and hover preview when switching media."""
         if not hasattr(self, 'custom_timeline'):
             return
         tl = self.custom_timeline
@@ -1220,9 +1220,12 @@ class PlayerMixin:
         canvas = tl.canvas
         canvas.markers.clear()
         canvas.mode_segments = []
+        canvas.clip_ranges = []
+        canvas.current_app_id = None
+        canvas.current_json_path = None
+        canvas.rendered_media_path = None
         canvas._hover_preview_bucket = -1
         canvas._batch_thumbs_busy = False
-        canvas.current_json_path = None
         canvas.update()
 
     def _begin_preview_switch(self) -> int:
@@ -1339,8 +1342,6 @@ class PlayerMixin:
 
         if hasattr(self, "custom_timeline"):
             canvas = self.custom_timeline.canvas
-            canvas.markers.clear()
-            canvas.current_json_path = None
             canvas.rendered_media_path = file_path
             if hasattr(self, "cache_dir"):
                 sidecar_entries = load_markers_sidecar(self.cache_dir, file_path)
