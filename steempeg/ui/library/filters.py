@@ -670,6 +670,30 @@ class FilterMenu(QWidget):
             btn.clicked.connect(self._on_type_toggled)
             self.types_layout.addWidget(btn)
 
+    def _default_datetime_bounds(self, stats):
+        min_dt = stats['min_dt']
+        max_dt = stats['max_dt']
+        if not min_dt:
+            min_dt = QDateTime.currentDateTime().addMonths(-1)
+            max_dt = QDateTime.currentDateTime()
+        return min_dt, max_dt
+
+    def _reset_bounds_to_stats(self, stats):
+        """Snap date/time/duration pickers to a stats dict (full library or cascade)."""
+        min_dt, max_dt = self._default_datetime_bounds(stats)
+        self.actual_min_dt = min_dt
+        self.actual_max_dt = max_dt
+        self.actual_min_sec = stats['min_sec']
+        self.actual_max_sec = stats['max_sec']
+        self._is_gathering = True
+        self.input_min_date.setDate(min_dt.date())
+        self.input_max_date.setDate(max_dt.date())
+        self.input_min_time.setTime(QTime(0, 0))
+        self.input_max_time.setTime(QTime(23, 59))
+        self.input_min_dur.setTime(self._sec_to_qtime(stats['min_sec']))
+        self.input_max_dur.setTime(self._sec_to_qtime(stats['max_sec']))
+        self._is_gathering = False
+
     def _ensure_types_checked_if_none(self):
         """Re-selecting a game after hide-all must not leave every type off."""
         if self._get_checked_names(self.types_layout):
@@ -746,14 +770,7 @@ class FilterMenu(QWidget):
         games = self._get_checked_names(self.games_layout)
         if not games:
             self._rebuild_type_buttons(set())
-            # Keep full-library duration bounds — 0:00–0:00 would block every clip on re-apply.
-            full_stats = self._compute_stats()
-            self._is_gathering = True
-            self.input_min_dur.setTime(self._sec_to_qtime(full_stats['min_sec']))
-            self.input_max_dur.setTime(self._sec_to_qtime(full_stats['max_sec']))
-            self.actual_min_sec = full_stats['min_sec']
-            self.actual_max_sec = full_stats['max_sec']
-            self._is_gathering = False
+            self._reset_bounds_to_stats(self._compute_stats())
             return
 
         stats = self._compute_stats(games=games)
@@ -799,11 +816,14 @@ class FilterMenu(QWidget):
                 item.widget().deleteLater()
 
         saved_state = getattr(self.app, 'saved_filter_state', None)
+        hide_all = bool(saved_state and saved_state.get('active') is False)
         for name, icon in unique_games.items():
             short_name = name[:14] + '...' if len(name) > 14 else name
             btn = QPushButton(icon, f" {short_name}")
             btn.setCheckable(True)
-            if saved_state and saved_state.get('games'):
+            if hide_all:
+                btn.setChecked(False)
+            elif saved_state and saved_state.get('games'):
                 btn.setChecked(name in saved_state['games'])
             else:
                 btn.setChecked(True)
@@ -813,8 +833,12 @@ class FilterMenu(QWidget):
             btn.clicked.connect(self._on_game_toggled)
             self.games_layout.addWidget(btn)
 
-        # Seed the type memory: only honor a non-empty saved list (empty = hide-all artefact).
-        if saved_state and saved_state.get('types'):
+        # Seed the type memory: only honor a non-empty saved list on an active filter.
+        if (
+            saved_state
+            and saved_state.get('active')
+            and saved_state.get('types')
+        ):
             saved_types = set(saved_state['types'])
             self._type_checked_memory = {t: (t in saved_types) for t in full_stats['types']}
         else:
@@ -834,14 +858,15 @@ class FilterMenu(QWidget):
         self.actual_max_sec = max_sec
 
         self._is_gathering = True
-        if saved_state:
+        if hide_all or not saved_state:
+            self._reset_bounds_to_stats(full_stats)
+        elif saved_state.get('active'):
             self.input_min_date.setDate(saved_state['min_date'])
             self.input_max_date.setDate(saved_state['max_date'])
             self.input_min_time.setTime(saved_state['min_time'])
             self.input_max_time.setTime(saved_state['max_time'])
             saved_min_dur = saved_state['min_dur']
             saved_max_dur = saved_state['max_dur']
-            # Stale 0:00–0:00 from "uncheck all games" must not stick across re-opens.
             if (
                 self._qtime_to_sec(saved_min_dur) == 0
                 and self._qtime_to_sec(saved_max_dur) == 0
@@ -852,12 +877,7 @@ class FilterMenu(QWidget):
                 self.input_min_dur.setTime(saved_min_dur)
                 self.input_max_dur.setTime(saved_max_dur)
         else:
-            self.input_min_date.setDate(min_dt.date())
-            self.input_max_date.setDate(max_dt.date())
-            self.input_min_time.setTime(QTime(0, 0))
-            self.input_max_time.setTime(QTime(23, 59))
-            self.input_min_dur.setTime(self._sec_to_qtime(min_sec))
-            self.input_max_dur.setTime(self._sec_to_qtime(max_sec))
+            self._reset_bounds_to_stats(full_stats)
         self._is_gathering = False
 
         for i in range(self.health_layout.count()):
@@ -865,7 +885,9 @@ class FilterMenu(QWidget):
             if not w:
                 continue
             level = w.property("health_level")
-            if saved_state and saved_state.get('health'):
+            if hide_all:
+                w.setChecked(True)
+            elif saved_state and saved_state.get('active') and saved_state.get('health'):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
@@ -894,16 +916,11 @@ class FilterMenu(QWidget):
         self._type_checked_memory = {t: True for t in full_stats['types']}
         self._rebuild_type_buttons(full_stats['types'])
 
-        saved_state = getattr(self, 'saved_filter_state', None)
         for i in range(self.health_layout.count()):
             w = self.health_layout.itemAt(i).widget()
             if not w:
                 continue
-            level = w.property("health_level")
-            if saved_state and saved_state.get('health'):
-                w.setChecked(level in saved_state['health'])
-            else:
-                w.setChecked(True)
+            w.setChecked(True)
 
         min_dt = full_stats['min_dt'] or QDateTime.currentDateTime().addMonths(-1)
         max_dt = full_stats['max_dt'] or QDateTime.currentDateTime()
@@ -998,23 +1015,37 @@ class FilterMenu(QWidget):
 
         filter_active = bool(selected_games and selected_types and selected_health)
 
-        min_dur_sec, max_dur_sec = self._resolved_duration_bounds()
-        if (
-            self._qtime_to_sec(self.input_min_dur.time()) == 0
-            and self._qtime_to_sec(self.input_max_dur.time()) == 0
-            and max_dur_sec > 0
-        ):
-            self._is_gathering = True
-            self.input_min_dur.setTime(self._sec_to_qtime(min_dur_sec))
-            self.input_max_dur.setTime(self._sec_to_qtime(max_dur_sec))
-            self._is_gathering = False
+        if not filter_active:
+            full_stats = self._compute_stats()
+            self._reset_bounds_to_stats(full_stats)
+            min_dur_sec = full_stats['min_sec']
+            max_dur_sec = full_stats['max_sec']
+            min_date = self.input_min_date.date()
+            max_date = self.input_max_date.date()
+            min_time = self.input_min_time.time()
+            max_time = self.input_max_time.time()
+        else:
+            min_dur_sec, max_dur_sec = self._resolved_duration_bounds()
+            if (
+                self._qtime_to_sec(self.input_min_dur.time()) == 0
+                and self._qtime_to_sec(self.input_max_dur.time()) == 0
+                and max_dur_sec > 0
+            ):
+                self._is_gathering = True
+                self.input_min_dur.setTime(self._sec_to_qtime(min_dur_sec))
+                self.input_max_dur.setTime(self._sec_to_qtime(max_dur_sec))
+                self._is_gathering = False
+            min_date = self.input_min_date.date()
+            max_date = self.input_max_date.date()
+            min_time = self.input_min_time.time()
+            max_time = self.input_max_time.time()
 
         saved = {
             'active': filter_active,
-            'min_date': self.input_min_date.date(),
-            'max_date': self.input_max_date.date(),
-            'min_time': self.input_min_time.time(),
-            'max_time': self.input_max_time.time(),
+            'min_date': min_date,
+            'max_date': max_date,
+            'min_time': min_time,
+            'max_time': max_time,
             'min_dur': self._sec_to_qtime(min_dur_sec),
             'max_dur': self._sec_to_qtime(max_dur_sec),
         }
