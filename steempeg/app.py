@@ -42,7 +42,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtWidgets import QHeaderView, QAbstractItemView
 from PySide6.QtGui import QIcon
 
-from steempeg.ui.widgets import ElidedLabel, FilterPillButton
+from steempeg.ui.widgets import AnimatedRenderBar, ElidedLabel, FilterPillButton
 
 def get_resource_path(relative_path):
     return paths.get_resource_path(relative_path)
@@ -143,11 +143,37 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.ui.btn_play.setMaximumSize(80, 48)
         self.ui.btn_play.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+    def _install_animated_render_bar(self, parent=None):
+        """Swap designer QProgressBar for AnimatedRenderBar (safe to call more than once)."""
+        if not hasattr(self.ui, 'progress_render'):
+            return self.ui.progress_render if hasattr(self.ui, 'progress_render') else None
+        bar = self.ui.progress_render
+        if isinstance(bar, AnimatedRenderBar):
+            if parent is not None:
+                bar.setParent(parent)
+            return bar
+
+        old = bar
+        bar = AnimatedRenderBar(parent or old.parentWidget())
+        bar.setObjectName("progress_render")
+        old_parent = old.parentWidget()
+        layout = old_parent.layout() if old_parent else None
+        if layout is not None:
+            idx = layout.indexOf(old)
+            if idx >= 0:
+                layout.removeWidget(old)
+                layout.insertWidget(idx, bar)
+        old.hide()
+        old.deleteLater()
+        self.ui.progress_render = bar
+        return bar
+
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
 
         self.ui = MainWindow(app_host=self)
+        self._install_animated_render_bar()
 
         from PySide6.QtGui import QColor, QPalette
         self.ui.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1222,14 +1248,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             progress_row.setSpacing(8)
 
             if hasattr(self.ui, 'progress_render'):
-                self.ui.progress_render.setTextVisible(False)
-                self.ui.progress_render.setRange(0, 1000)
-                self.ui.progress_render.setSizePolicy(qtw.QSizePolicy.Expanding, qtw.QSizePolicy.Fixed)
-                self.ui.progress_render.setStyleSheet("""
-                    QProgressBar { background-color: #414141; border: none; border-radius: 3px; min-height: 6px; max-height: 6px; }
-                    QProgressBar::chunk { background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #6b5a8e, stop:1 #b29ae7); border-radius: 3px; }
-                """)
-                progress_row.addWidget(self.ui.progress_render, 1)
+                bar = self._install_animated_render_bar(self.render_dashboard)
+                progress_row.addWidget(bar, 1)
 
             if not hasattr(self, 'label_pct'):
                 self.label_pct = qtw.QLabel("0%")

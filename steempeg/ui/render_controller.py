@@ -297,32 +297,41 @@ class RenderMixin:
             percent = 0.0
 
         if hasattr(self.ui, 'progress_render'):
-            if percent is not None:
-                self.ui.progress_render.setValue(int(percent * 10))
-            elif state == "success":
-                self.ui.progress_render.setValue(1000)
-            elif not preserve_progress and state in ("ready", "error"):
-                self.ui.progress_render.setValue(0)
-            self.ui.progress_render.setTextVisible(False)
-
-            chunk = (
-                "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #6b5a8e, stop:1 #b29ae7)"
-                if state == "rendering"
-                else color
-            )
-            self.ui.progress_render.setStyleSheet(f"""
-                QProgressBar {{
-                    background-color: #414141;
-                    border: none;
-                    border-radius: 3px;
-                    min-height: 6px;
-                    max-height: 6px;
-                }}
-                QProgressBar::chunk {{
-                    background-color: {chunk};
-                    border-radius: 3px;
-                }}
-            """)
+            bar = self.ui.progress_render
+            if hasattr(bar, 'set_progress'):
+                if percent is not None:
+                    bar.set_progress(percent)
+                elif state == "success":
+                    bar.set_progress(100.0)
+                elif not preserve_progress and state in ("ready", "error"):
+                    bar.set_progress(0.0)
+                bar.set_state(state)
+            else:
+                if percent is not None:
+                    bar.setValue(int(percent * 10))
+                elif state == "success":
+                    bar.setValue(1000)
+                elif not preserve_progress and state in ("ready", "error"):
+                    bar.setValue(0)
+                bar.setTextVisible(False)
+                chunk = (
+                    "qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 #6b5a8e, stop:1 #b29ae7)"
+                    if state == "rendering"
+                    else color
+                )
+                bar.setStyleSheet(f"""
+                    QProgressBar {{
+                        background-color: #414141;
+                        border: none;
+                        border-radius: 3px;
+                        min-height: 6px;
+                        max-height: 6px;
+                    }}
+                    QProgressBar::chunk {{
+                        background-color: {chunk};
+                        border-radius: 3px;
+                    }}
+                """)
 
         if hasattr(self, 'label_pct'):
             if percent is not None:
