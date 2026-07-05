@@ -11,7 +11,7 @@ import re
 
 import psutil
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, QItemSelectionModel
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
-    QItemSelectionModel,
 )
 
 from steempeg.infra import logging as log_util
