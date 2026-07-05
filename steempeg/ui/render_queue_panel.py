@@ -100,6 +100,7 @@ class QueueJobCard(QFrame):
         self._drag_start = QPoint()
         self._selected = selected
         self._drop_highlight = False
+        self._hovered = False
         self._press_on_remove = False
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptDrops(_job_accepts_drop(job))
@@ -285,6 +286,8 @@ class QueueJobCard(QFrame):
             border = "2px dashed #b29ae7"
         elif self._selected:
             border = "3px solid #b29ae7"
+        elif self._hovered:
+            border = "2px solid #7a6aa8"
         else:
             border = "2px solid #444444"
         self.setStyleSheet(f"""
@@ -315,6 +318,16 @@ class QueueJobCard(QFrame):
             return
         self._drop_highlight = active
         self._apply_card_style()
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self._apply_card_style()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self._apply_card_style()
+        super().leaveEvent(event)
 
     def _hit_remove_button(self, event) -> bool:
         if self._btn_remove is None or not self._btn_remove.isVisible():

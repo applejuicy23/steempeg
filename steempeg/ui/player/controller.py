@@ -1906,16 +1906,25 @@ class PlayerMixin:
             self._show_screenshot_toast(self.screenshots_dir)
 
     def _show_screenshot_toast(self, directory):
-        """ Flash a small 'Screenshot saved in <dir>' toast with a copy-path button. """
+        """Flash a small 'Screenshot saved in <dir>' toast with copy/open actions."""
         directory = os.path.normpath(directory)
 
         toast = getattr(self, '_screenshot_toast', None)
         if toast is None:
-            toast = QFrame(self.ui)
-            toast.setObjectName("screenshotToast")
-            toast.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+            toast = QWidget(self.ui)
+            toast.setObjectName("screenshotToastHost")
+            toast.setWindowFlags(
+                Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+            )
             toast.setAttribute(Qt.WA_ShowWithoutActivating, True)
-            toast.setStyleSheet(
+            toast.setAttribute(Qt.WA_TranslucentBackground, True)
+
+            shell = QVBoxLayout(toast)
+            shell.setContentsMargins(0, 0, 0, 0)
+
+            panel = QFrame(toast)
+            panel.setObjectName("screenshotToast")
+            panel.setStyleSheet(
                 "QFrame#screenshotToast { background-color: #1f1f1f; border: 1px solid #6b5a8e;"
                 " border-radius: 10px; }"
                 " QLabel { color: #e8e8e8; background: transparent; font-size: 12px;"
@@ -1924,32 +1933,38 @@ class PlayerMixin:
                 " border-radius: 7px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
                 " QPushButton:hover { background-color: #6b5a8e; }"
             )
-            row = QHBoxLayout(toast)
+            row = QHBoxLayout(panel)
             row.setContentsMargins(14, 10, 12, 10)
-            row.setSpacing(12)
+            row.setSpacing(10)
 
-            label = QLabel(toast)
+            label = QLabel(panel)
             label.setObjectName("screenshotToastLabel")
             row.addWidget(label)
 
-            copy_btn = QPushButton("📋 Copy path", toast)
+            copy_btn = QPushButton("📋 Copy path", panel)
             copy_btn.setCursor(Qt.PointingHandCursor)
             row.addWidget(copy_btn)
+
+            open_btn = QPushButton("📂 Open folder", panel)
+            open_btn.setCursor(Qt.PointingHandCursor)
+            row.addWidget(open_btn)
+
+            shell.addWidget(panel)
 
             self._screenshot_toast = toast
             self._screenshot_toast_label = label
             self._screenshot_toast_btn = copy_btn
+            self._screenshot_toast_open_btn = open_btn
             self._screenshot_toast_timer = QTimer(toast)
             self._screenshot_toast_timer.setSingleShot(True)
             self._screenshot_toast_timer.timeout.connect(toast.hide)
-            # Connect the copy button exactly once. The slot reads the live
-            # _screenshot_toast_dir, so we never need to reconnect per show (the old
-            # per-show disconnect() spammed a libpyside "Failed to disconnect" warning).
-            self._screenshot_toast_btn.setText("📋 Copy path")
-            self._screenshot_toast_btn.clicked.connect(self._copy_screenshot_dir)
+            copy_btn.clicked.connect(self._copy_screenshot_dir)
+            open_btn.clicked.connect(self._open_screenshot_dir)
 
         self._screenshot_toast_dir = directory
         self._screenshot_toast_label.setText(f"📸 Screenshot saved in  {directory}")
+        if hasattr(self, '_screenshot_toast_btn'):
+            self._screenshot_toast_btn.setText("📋 Copy path")
 
         toast = self._screenshot_toast
         toast.adjustSize()
@@ -1976,3 +1991,12 @@ class PlayerMixin:
         QApplication.clipboard().setText(directory)
         if hasattr(self, '_screenshot_toast_btn'):
             self._screenshot_toast_btn.setText("✓ Copied")
+
+    def _open_screenshot_dir(self):
+        directory = getattr(self, '_screenshot_toast_dir', None)
+        if not directory or not os.path.isdir(directory):
+            return
+        try:
+            os.startfile(directory)
+        except Exception as exc:
+            logging.error("Failed to open screenshots folder: %s", exc)
