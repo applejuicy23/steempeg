@@ -1540,7 +1540,14 @@ class PlayerMixin:
                         offset_ms = 0
 
                 logging.debug("Timeline offset: %d ms", offset_ms)
-                self.custom_timeline.canvas.load_timeline_json(json_path, offset_ms)
+                canvas = self.custom_timeline.canvas
+                canvas.load_timeline_json(json_path, offset_ms, clip_path=clip_path)
+                app_id = canvas.current_app_id
+                if app_id:
+                    canvas.marker_store.prefetch(
+                        app_id,
+                        on_ready=canvas.update,
+                    )
                 
             else:
                 logging.debug("No timeline JSON for clip: %s", clip_path)

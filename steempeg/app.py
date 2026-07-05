@@ -1569,6 +1569,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 # ROW 1: The Custom Timeline
                 if not hasattr(self, 'custom_timeline'):
                     self.custom_timeline = CustomTimelineWidget()
+                    self.custom_timeline.canvas.marker_store.set_cache_dir(self.cache_dir)
                 v_layout.addWidget(self.custom_timeline)
                 v_layout.addSpacing(6)
                 # ROW 2: The Time Label AND Theater Button (Perfectly centered)
