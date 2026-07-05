@@ -226,7 +226,7 @@ class RenderQueueHistoryDialog(QDialog):
             row.addWidget(trim_lbl)
 
         out_path = job.output_file or format_job_output(job)
-        out_lbl = ElidedLabel(f"→ {out_path}")
+        out_lbl = ElidedLabel(f"📁 {out_path}")
         out_lbl.setStyleSheet(f"color: #999999; font-size: 11px; {_FONT}")
         row.addWidget(out_lbl)
 

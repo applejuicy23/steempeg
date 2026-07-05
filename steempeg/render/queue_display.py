@@ -130,5 +130,5 @@ def format_job_output(job: RenderJob) -> str:
         base = (job.settings.output_basename or "rendered").strip()
         path = os.path.join(job.settings.save_dir, base)
     if path:
-        return f"→ {path}"
-    return "→ (output not set)"
+        return f"📁 {path}"
+    return "📁 (output not set)"

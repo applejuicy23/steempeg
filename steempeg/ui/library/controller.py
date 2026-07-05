@@ -1056,17 +1056,17 @@ class LibraryMixin:
                 # Saving the index and visibility status
                 table_order[clip_path] = {'row': row, 'hidden': table.isRowHidden(row)}
 
-        # 2. Gently update grid elements 
+        # 2. Gently update grid elements
         for i in range(grid.count()):
             item = grid.item(i)
             clip_path = item.data(Qt.UserRole + 1)
-            
+            hidden = True
             if clip_path and clip_path in table_order:
                 info = table_order[clip_path]
-                
                 item.setText(f"{info['row']:06d}")
-                item.setData(Qt.UserRole, info['row']) 
-                item.setHidden(info['hidden'])         
+                item.setData(Qt.UserRole, info['row'])
+                hidden = info['hidden']
+            item.setHidden(hidden)
         # 3. Qt's built-in ultra-fast sort
         grid.sortItems(Qt.AscendingOrder)
 

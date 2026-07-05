@@ -28,4 +28,4 @@ DEFAULT_QUEUE_PANEL_WIDTH = 420
 DEFAULT_LIBRARY_VIEW = "grid"
 
 # "grid" or "list" — render queue cards
-DEFAULT_QUEUE_VIEW = "grid"
+DEFAULT_QUEUE_VIEW = "list"

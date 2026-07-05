@@ -670,6 +670,17 @@ class FilterMenu(QWidget):
             btn.clicked.connect(self._on_type_toggled)
             self.types_layout.addWidget(btn)
 
+    def _ensure_types_checked_if_none(self):
+        """Re-selecting a game after hide-all must not leave every type off."""
+        if self._get_checked_names(self.types_layout):
+            return
+        for i in range(self.types_layout.count()):
+            w = self.types_layout.itemAt(i).widget()
+            if not w:
+                continue
+            w.setChecked(True)
+            self._type_checked_memory[w.property("raw_name")] = True
+
     def _apply_bounds(self, stats, *, clamp=False):
         min_dt = stats['min_dt']
         max_dt = stats['max_dt']
@@ -735,21 +746,25 @@ class FilterMenu(QWidget):
         games = self._get_checked_names(self.games_layout)
         if not games:
             self._rebuild_type_buttons(set())
-            # Nothing selected — blank the duration so it doesn't show a leftover value.
+            # Keep full-library duration bounds — 0:00–0:00 would block every clip on re-apply.
+            full_stats = self._compute_stats()
             self._is_gathering = True
-            self.input_min_dur.setTime(QTime(0, 0, 0))
-            self.input_max_dur.setTime(QTime(0, 0, 0))
+            self.input_min_dur.setTime(self._sec_to_qtime(full_stats['min_sec']))
+            self.input_max_dur.setTime(self._sec_to_qtime(full_stats['max_sec']))
+            self.actual_min_sec = full_stats['min_sec']
+            self.actual_max_sec = full_stats['max_sec']
             self._is_gathering = False
             return
 
         stats = self._compute_stats(games=games)
-        # Type pills follow their remembered checked state (see _rebuild_type_buttons).
         self._rebuild_type_buttons(stats['types'])
+        self._ensure_types_checked_if_none()
 
         active_types = self._get_checked_names(self.types_layout)
-        if not active_types:
-            return
-        bounds_stats = self._compute_stats(games=games, types=active_types)
+        if active_types:
+            bounds_stats = self._compute_stats(games=games, types=active_types)
+        else:
+            bounds_stats = stats
         self._apply_bounds(bounds_stats, clamp=True)
 
     def _refresh_cascade_after_types(self):
@@ -788,7 +803,7 @@ class FilterMenu(QWidget):
             short_name = name[:14] + '...' if len(name) > 14 else name
             btn = QPushButton(icon, f" {short_name}")
             btn.setCheckable(True)
-            if saved_state and 'games' in saved_state:
+            if saved_state and saved_state.get('games'):
                 btn.setChecked(name in saved_state['games'])
             else:
                 btn.setChecked(True)
@@ -798,8 +813,8 @@ class FilterMenu(QWidget):
             btn.clicked.connect(self._on_game_toggled)
             self.games_layout.addWidget(btn)
 
-        # Seed the type memory: from the saved state if present, otherwise all on.
-        if saved_state and 'types' in saved_state:
+        # Seed the type memory: only honor a non-empty saved list (empty = hide-all artefact).
+        if saved_state and saved_state.get('types'):
             saved_types = set(saved_state['types'])
             self._type_checked_memory = {t: (t in saved_types) for t in full_stats['types']}
         else:
@@ -824,8 +839,18 @@ class FilterMenu(QWidget):
             self.input_max_date.setDate(saved_state['max_date'])
             self.input_min_time.setTime(saved_state['min_time'])
             self.input_max_time.setTime(saved_state['max_time'])
-            self.input_min_dur.setTime(saved_state['min_dur'])
-            self.input_max_dur.setTime(saved_state['max_dur'])
+            saved_min_dur = saved_state['min_dur']
+            saved_max_dur = saved_state['max_dur']
+            # Stale 0:00–0:00 from "uncheck all games" must not stick across re-opens.
+            if (
+                self._qtime_to_sec(saved_min_dur) == 0
+                and self._qtime_to_sec(saved_max_dur) == 0
+            ):
+                self.input_min_dur.setTime(self._sec_to_qtime(min_sec))
+                self.input_max_dur.setTime(self._sec_to_qtime(max_sec))
+            else:
+                self.input_min_dur.setTime(saved_min_dur)
+                self.input_max_dur.setTime(saved_max_dur)
         else:
             self.input_min_date.setDate(min_dt.date())
             self.input_max_date.setDate(max_dt.date())
@@ -840,7 +865,7 @@ class FilterMenu(QWidget):
             if not w:
                 continue
             level = w.property("health_level")
-            if saved_state and 'health' in saved_state:
+            if saved_state and saved_state.get('health'):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
@@ -875,7 +900,7 @@ class FilterMenu(QWidget):
             if not w:
                 continue
             level = w.property("health_level")
-            if saved_state and 'health' in saved_state:
+            if saved_state and saved_state.get('health'):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
@@ -897,6 +922,17 @@ class FilterMenu(QWidget):
         self._is_gathering = False
         self.update_live_count()
 
+    def _resolved_duration_bounds(self):
+        """Return min/max duration seconds, recovering from stale 0:00–0:00."""
+        min_dur = self._qtime_to_sec(self.input_min_dur.time())
+        max_dur = self._qtime_to_sec(self.input_max_dur.time())
+        if max_dur == 0 and min_dur == 0:
+            full = self._compute_stats()
+            return full['min_sec'], full['max_sec']
+        if max_dur < min_dur:
+            return min_dur, min_dur
+        return min_dur, max_dur
+
     def update_live_count(self, *args):
         """ Safely counts suitable clips in real time. """
         if getattr(self, '_is_gathering', False) or not hasattr(self, 'app'): return
@@ -913,8 +949,7 @@ class FilterMenu(QWidget):
         min_date, max_date = self.input_min_date.date(), self.input_max_date.date()
         min_time = self._qtime_to_sec(self.input_min_time.time())
         max_time = self._qtime_to_sec(self.input_max_time.time())
-        min_dur = self._qtime_to_sec(self.input_min_dur.time())
-        max_dur = self._qtime_to_sec(self.input_max_dur.time())
+        min_dur, max_dur = self._resolved_duration_bounds()
 
         count = 0
         for row in range(table.rowCount()):
@@ -961,20 +996,38 @@ class FilterMenu(QWidget):
         selected_types = self._get_checked_names(self.types_layout)
         selected_health = self._get_checked_health_levels()
 
-        self.app.saved_filter_state = {
-            'games': selected_games,
-            'types': selected_types,
-            'health': selected_health,
+        filter_active = bool(selected_games and selected_types and selected_health)
+
+        min_dur_sec, max_dur_sec = self._resolved_duration_bounds()
+        if (
+            self._qtime_to_sec(self.input_min_dur.time()) == 0
+            and self._qtime_to_sec(self.input_max_dur.time()) == 0
+            and max_dur_sec > 0
+        ):
+            self._is_gathering = True
+            self.input_min_dur.setTime(self._sec_to_qtime(min_dur_sec))
+            self.input_max_dur.setTime(self._sec_to_qtime(max_dur_sec))
+            self._is_gathering = False
+
+        saved = {
+            'active': filter_active,
             'min_date': self.input_min_date.date(),
             'max_date': self.input_max_date.date(),
             'min_time': self.input_min_time.time(),
             'max_time': self.input_max_time.time(),
-            'min_dur': self.input_min_dur.time(),
-            'max_dur': self.input_max_dur.time()
+            'min_dur': self._sec_to_qtime(min_dur_sec),
+            'max_dur': self._sec_to_qtime(max_dur_sec),
         }
+        if filter_active:
+            saved['games'] = selected_games
+            saved['types'] = selected_types
+            saved['health'] = selected_health
+        else:
+            saved['games'] = []
+        self.app.saved_filter_state = saved
 
         visible_count = 0
-        if not selected_games or not selected_types or not selected_health:
+        if not filter_active:
             for row in range(table.rowCount()):
                 table.setRowHidden(row, True)
         else:
@@ -982,8 +1035,8 @@ class FilterMenu(QWidget):
             max_date = self.input_max_date.date()
             min_time = self._qtime_to_sec(self.input_min_time.time())
             max_time = self._qtime_to_sec(self.input_max_time.time())
-            min_dur = self._qtime_to_sec(self.input_min_dur.time())
-            max_dur = self._qtime_to_sec(self.input_max_dur.time())
+            min_dur = min_dur_sec
+            max_dur = max_dur_sec
 
             for row in range(table.rowCount()):
                 show = True
