@@ -27,6 +27,9 @@ _SNIPER_CACHE_MAX = 48
 # Full-strip batch thumbs are only worth generating for the first N seconds of a clip.
 # Longer clips rely on on-demand sniper hover frames instead of a multi-hour ffmpeg job.
 MAX_BATCH_SEC = 600
+_STEAM_CHUNK_SEC = 3.0
+_STEAM_VIDEO_INIT = "init-stream0.m4s"
+_STEAM_VIDEO_CHUNK_TMPL = "chunk-stream0-$Number%05d$.m4s"
 
 
 def _kill_process_tree(proc, *, label: str = "ffmpeg") -> None:
@@ -122,6 +125,41 @@ class PreviewSniperWorker(QThread):
                 self.terminate()
                 self.wait(200)
 
+    def _infer_chunk_start_number(self, stream_idx: int = 0) -> int:
+        pattern = os.path.join(self.base_dir, f"chunk-stream{stream_idx}-*.m4s")
+        nums = []
+        for path in glob.glob(pattern):
+            m = re.search(rf"chunk-stream{stream_idx}-(\d+)\.m4s", os.path.basename(path))
+            if m and os.path.getsize(path) > 0:
+                nums.append(int(m.group(1)))
+        return min(nums) if nums else 1
+
+    def _apply_steam_dash_defaults(self) -> bool:
+        """Fallback when MPD XML parsing misses SegmentTemplate (common on session_fixed.mpd)."""
+        if not self.base_dir or not os.path.isdir(self.base_dir):
+            return False
+        init_path = os.path.join(self.base_dir, _STEAM_VIDEO_INIT)
+        if not self._is_usable_media_file(init_path):
+            return False
+        if not glob.glob(os.path.join(self.base_dir, "chunk-stream0-*.m4s")):
+            return False
+        self.init_filename = _STEAM_VIDEO_INIT
+        self.chunk_template = _STEAM_VIDEO_CHUNK_TMPL
+        self.chunk_duration_sec = _STEAM_CHUNK_SEC
+        self.start_number = self._infer_chunk_start_number(0)
+        self.rep_id = "0"
+        return True
+
+    def _ensure_dash_manifest(self, mpd_path: str) -> bool:
+        if self._dash_manifest_ready():
+            return True
+        if mpd_path and self._is_dash_manifest(mpd_path):
+            self.base_dir = os.path.dirname(mpd_path)
+            self.parse_mpd(mpd_path)
+        if self._dash_manifest_ready():
+            return True
+        return self._apply_steam_dash_defaults()
+
     def _dash_manifest_ready(self) -> bool:
         return bool(
             self.base_dir
@@ -161,6 +199,10 @@ class PreviewSniperWorker(QThread):
         """Single-frame extract for plain media files (rendered mp4, etc.)."""
         if not media_path or not os.path.isfile(media_path):
             _log.debug("Sniper ffmpeg skip sec=%s: missing file %s", sec, media_path)
+            return None
+        if self._is_dash_manifest(media_path):
+            # Seeking into a DASH manifest is extremely slow and often times out.
+            _log.debug("Sniper skip ffmpeg on DASH manifest sec=%s", sec)
             return None
         if self._is_killed:
             return None
@@ -257,11 +299,13 @@ class PreviewSniperWorker(QThread):
                                 self.start_number = int(elem.attrib.get('startNumber', 1))
                         break
             _log.debug(
-                "Sniper parsed MPD chunk=%.2fs rep=%s dir=%s",
-                self.chunk_duration_sec, self.rep_id, self.base_dir,
+                "Sniper parsed MPD chunk=%.2fs start=%s rep=%s dir=%s",
+                self.chunk_duration_sec, self.start_number, self.rep_id, self.base_dir,
             )
         except Exception as exc:
             _log.warning("Sniper MPD parse failed for %s: %s", mpd_path, exc)
+        if not self.init_filename or not self.chunk_template:
+            self._apply_steam_dash_defaults()
 
     def request_frame(self, media_path, hover_sec):
         self._is_killed = False
@@ -278,7 +322,7 @@ class PreviewSniperWorker(QThread):
             self._decode_gen += 1
             _log.info("Sniper opened %s", os.path.basename(media_path or ""))
             if self._is_dash_manifest(media_path):
-                self.parse_mpd(media_path)
+                self._ensure_dash_manifest(media_path)
             else:
                 self.base_dir = ""
                 self.init_filename = ""
@@ -298,8 +342,10 @@ class PreviewSniperWorker(QThread):
 
     def _decode_dash_frame(self, sec: int):
         if not self._dash_manifest_ready():
-            _log.debug("Sniper dash manifest not ready, ffmpeg fallback sec=%s", sec)
-            return self._decode_frame_ffmpeg(self.video_path, sec)
+            self._ensure_dash_manifest(self.video_path)
+        if not self._dash_manifest_ready():
+            _log.debug("Sniper dash manifest not ready sec=%s", sec)
+            return None
 
         chunk_offset = int(sec // self.chunk_duration_sec)
         chunk_num = self.start_number + chunk_offset
@@ -323,7 +369,7 @@ class PreviewSniperWorker(QThread):
                 "Sniper PyAV miss sec=%s chunk=%s (init=%s chunk=%s missing)",
                 sec, chunk_num, os.path.basename(init_path), os.path.basename(chunk_path),
             )
-            return self._decode_frame_ffmpeg(self.video_path, sec)
+            return None
 
         gen = self._decode_gen
         t0 = time.perf_counter()
@@ -363,14 +409,14 @@ class PreviewSniperWorker(QThread):
                 "Sniper PyAV miss sec=%s chunk=%s (%.0fms, no frame)",
                 sec, chunk_num, elapsed_ms,
             )
-            return self._decode_frame_ffmpeg(self.video_path, sec)
+            return None
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             _log.info(
-                "Sniper PyAV error sec=%s chunk=%s (%.0fms): %s — trying ffmpeg",
+                "Sniper PyAV error sec=%s chunk=%s (%.0fms): %s",
                 sec, chunk_num, elapsed_ms, exc,
             )
-            return self._decode_frame_ffmpeg(self.video_path, sec)
+            return None
 
     def _run_on_demand(self, decode_fn):
         """Decode only the bucket under the cursor — never background prefill."""
