@@ -663,7 +663,7 @@ class LifecycleMixin:
         if hasattr(self.ui, 'label_detailed_summary'):
             self.ui.label_detailed_summary.setText("Waiting for clip selection...")
         if hasattr(self.ui, 'label_location'):
-            self.ui.label_location.setText("Output: -")
+            self.ui.label_location.setText("—")
             
         # 5. Hard-Block the Render Button
         if hasattr(self.ui, 'btn_start'):

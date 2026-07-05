@@ -1116,10 +1116,7 @@ class RenderMixin:
 
         if hasattr(self.ui, 'label_location'):
             display_path = full_path.replace('\\', '/')
-            self.ui.label_location.setText(f"Output: {display_path}")
-            
-        if hasattr(self, 'btn_copy_loc') and full_path:
-            self.btn_copy_loc.show()
+            self.ui.label_location.setText(display_path)
             
 
         # 4. Collecting texts & Smart Math

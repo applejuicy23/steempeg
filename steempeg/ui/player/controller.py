@@ -207,7 +207,7 @@ class PlayerMixin:
         if hasattr(self.ui, 'label_detailed_summary'):
             self.ui.label_detailed_summary.setText("Waiting for clip selection...")
         if hasattr(self.ui, 'label_location'):
-            self.ui.label_location.setText("Output: -")
+            self.ui.label_location.setText("—")
             
         # We're locking down the render button
         if hasattr(self.ui, 'btn_start'):

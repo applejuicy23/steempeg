@@ -941,39 +941,42 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # 1. Source paths now render as per-directory rows with their own copy buttons
         #    (SourcePathsBox in render_panel) — no single wrapper button needed here.
 
-        # 2. Copy Button for Rendered Video Location
-        if hasattr(self.ui, 'label_location'):
-            loc_container = QWidget()
-            loc_layout = QHBoxLayout(loc_container)
-            loc_layout.setContentsMargins(0, 0, 0, 0)
-            loc_layout.setSpacing(6)
-            
-            self.ui.label_location.parentWidget().layout().replaceWidget(self.ui.label_location, loc_container)
-            
-            # --- replace standard label with our Smart Label ---
-            smart_label = ElidedLabel()
-            smart_label.setStyleSheet(self.ui.label_location.styleSheet())
-            smart_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            self.ui.label_location.deleteLater() # Destroy the old label
-            self.ui.label_location = smart_label # Hijack the variable!
-            
-            
-            self.btn_copy_loc = QPushButton()
-            self.btn_copy_loc.setFixedSize(20, 20)
-            self.btn_copy_loc.setToolTip("Copy raw output path")
-            self.btn_copy_loc.setStyleSheet("background: transparent; border: none;")
-            self.btn_copy_loc.setCursor(Qt.PointingHandCursor)
-            
-            if os.path.exists(copy_icon_path): 
-                self.btn_copy_loc.setIcon(QIcon(copy_icon_path))
-            else: 
-                self.btn_copy_loc.setText("📋")
-                
-            self.btn_copy_loc.clicked.connect(lambda: QApplication.clipboard().setText(getattr(self, 'current_output_file', "")))
-            self.btn_copy_loc.hide() # Hidden by default
-            
-            loc_layout.addWidget(self.ui.label_location)
-            loc_layout.addWidget(self.btn_copy_loc, alignment=Qt.AlignVCenter)
+        # 2. Copy button on the output path row (Export tab)
+        if hasattr(self.ui, 'output_path_row'):
+            path_row = self.ui.output_path_row
+            path_layout = path_row.layout()
+            if path_layout is not None and not hasattr(self, 'btn_copy_loc'):
+                if hasattr(self.ui, 'label_location') and not isinstance(
+                    self.ui.label_location, ElidedLabel
+                ):
+                    smart_label = ElidedLabel()
+                    smart_label.setStyleSheet(self.ui.label_location.styleSheet())
+                    smart_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                    old = self.ui.label_location
+                    path_layout.replaceWidget(old, smart_label)
+                    old.deleteLater()
+                    self.ui.label_location = smart_label
+
+                self.btn_copy_loc = QPushButton()
+                self.btn_copy_loc.setFixedSize(22, 22)
+                self.btn_copy_loc.setToolTip("Copy output path")
+                self.btn_copy_loc.setStyleSheet(
+                    "QPushButton { background: transparent; border: none; border-radius: 6px; }"
+                    " QPushButton:hover { background: rgba(255, 255, 255, 28); }"
+                )
+                self.btn_copy_loc.setCursor(Qt.PointingHandCursor)
+
+                if os.path.exists(copy_icon_path):
+                    self.btn_copy_loc.setIcon(QIcon(copy_icon_path))
+                else:
+                    self.btn_copy_loc.setText("📋")
+
+                self.btn_copy_loc.clicked.connect(
+                    lambda: QApplication.clipboard().setText(
+                        getattr(self, 'current_output_file', "")
+                    )
+                )
+                path_layout.addWidget(self.btn_copy_loc, 0, Qt.AlignVCenter)
 
         # --- UI INJECTION: REFRESH BUTTON ---
         from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QSizePolicy
@@ -1302,40 +1305,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             print(f"Error building ultimate monolithic dashboard: {e}")
         
         
-        # --- UI INJECTION: COPY BUTTONS ---
-        from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
-        
-        copy_icon_path = get_resource_path("copyfile.png")
-
-        # 1. Source paths render as per-directory rows with their own copy buttons
-        #    (SourcePathsBox in render_panel) — no single wrapper button needed here.
-
-        # 2. Copy Button for Rendered Video Location
-        if hasattr(self.ui, 'label_location'):
-            loc_container = QWidget()
-            loc_layout = QHBoxLayout(loc_container)
-            loc_layout.setContentsMargins(0, 0, 0, 0)
-            loc_layout.setSpacing(6)
-            
-            self.ui.label_location.parentWidget().layout().replaceWidget(self.ui.label_location, loc_container)
-            
-            self.btn_copy_loc = QPushButton()
-            self.btn_copy_loc.setFixedSize(20, 20)
-            self.btn_copy_loc.setToolTip("Copy raw output path")
-            self.btn_copy_loc.setStyleSheet("background: transparent; border: none;")
-            self.btn_copy_loc.setCursor(Qt.PointingHandCursor)
-            
-            if os.path.exists(copy_icon_path): self.btn_copy_loc.setIcon(QIcon(copy_icon_path))
-            else: self.btn_copy_loc.setText("📋")
-                
-            self.btn_copy_loc.clicked.connect(lambda: QApplication.clipboard().setText(getattr(self, 'current_output_file', "")))
-            self.btn_copy_loc.hide() # Hidden by default (No clip = no button)
-            
-            self.ui.label_location.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-            loc_layout.addWidget(self.ui.label_location)
-            loc_layout.addWidget(self.btn_copy_loc, alignment=Qt.AlignVCenter)
-            loc_layout.addStretch() # Pushes everything to the left wall!
-
         # --- FIXING THE INTERFACE AND PLAYER ---
         # 1. Give the right panel some breathing room
         right_layout = self.ui.right_panel.layout()

@@ -755,8 +755,23 @@ def restyle_export_page(ui):
     root.addLayout(name_row)
 
     if loc_label is not None:
-        loc_label.setStyleSheet(_PATHBOX_QSS)
-        root.addWidget(loc_label)
+        path_row = QFrame()
+        path_row.setObjectName("outputPathRow")
+        path_row.setStyleSheet(
+            "QFrame#outputPathRow { background-color: #252525; border-radius: 10px; }"
+        )
+        path_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        path_layout = QHBoxLayout(path_row)
+        path_layout.setContentsMargins(12, 8, 8, 8)
+        path_layout.setSpacing(6)
+        loc_label.setStyleSheet(
+            "background: transparent; border: none; color: #b29ae7; font-size: 11px;"
+            " font-weight: bold; font-family: 'Consolas', monospace;"
+        )
+        loc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        path_layout.addWidget(loc_label, 1)
+        ui.output_path_row = path_row
+        root.addWidget(path_row)
 
     root.addStretch()
 

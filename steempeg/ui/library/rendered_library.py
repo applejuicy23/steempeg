@@ -39,6 +39,7 @@ from steempeg.core.rendered_media import (
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.ui.library.grid_view import ClipCard
+from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
 
 RENDERED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
@@ -88,6 +89,12 @@ _ADD_PANEL_BTN = """
     }
     QPushButton:hover { background-color: #3a3a3a; border-color: #6b5a8e; }
 """
+# Catalog of optional library panels. When every entry is open, the + control shows −.
+_LIBRARY_PANEL_DEFS = (
+    ("clips", "📁  Clips Manager"),
+    ("rendered", "🎬  Rendered videos"),
+    # ("queue", "📋  Render Queue"),  # future
+)
 
 
 def _rendered_type_label(ext: str) -> str:
@@ -114,7 +121,7 @@ class RenderedLibraryMixin:
 
     def _init_rendered_library_state(self):
         self._library_panel_mode = "clips"
-        self._library_tabs: dict[str, QPushButton] = {}
+        self._library_tabs: dict[str, LibraryTabWidget] = {}
         self._rendered_filter_types: set[str] | None = None
         self._rendered_filter_games: set[str] | None = None
         self._clips_view_mode = "grid"
@@ -124,13 +131,11 @@ class RenderedLibraryMixin:
         self._library_ui_restored = False
         self._library_ui_persist_ready = False
 
-    def _make_library_tab_button(self, label: str, mode: str) -> QPushButton:
-        btn = QPushButton(label)
-        btn.setFixedHeight(40)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(_LIBRARY_TAB_INACTIVE)
-        btn.clicked.connect(lambda _checked=False, m=mode: self.set_library_panel(m))
-        return btn
+    def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
+        tab = LibraryTabWidget(label, mode)
+        tab.activated.connect(self.set_library_panel)
+        tab.close_requested.connect(self._close_library_tab)
+        return tab
 
     def setup_library_tab_bar(self, cm_row: QHBoxLayout):
         """Chrome-like tab row with a + button to add panels."""
@@ -157,24 +162,56 @@ class RenderedLibraryMixin:
         if hasattr(self, "mega_top_pill"):
             self.mega_top_pill.hide()
 
-        for key, btn in self._library_tabs.items():
-            btn.setStyleSheet(_LIBRARY_TAB_ACTIVE if key == "clips" else _LIBRARY_TAB_INACTIVE)
+        for key, tab in self._library_tabs.items():
+            tab.set_active(key == "clips")
+
+        self._sync_library_add_button()
 
         if hasattr(self, "_sync_sort_combo_for_panel"):
             self._sync_sort_combo_for_panel()
+
+    def _sync_library_add_button(self):
+        """Show + while a panel can still be added; flip to − when the catalog is full."""
+        if not hasattr(self, "btn_library_add"):
+            return
+        total = len(_LIBRARY_PANEL_DEFS)
+        open_count = len(self._library_tabs)
+        if open_count >= total:
+            self.btn_library_add.setText("−")
+            self.btn_library_add.setToolTip("Remove library panel")
+        else:
+            self.btn_library_add.setText("+")
+            self.btn_library_add.setToolTip("Add or remove library panels")
 
     def _show_add_library_panel_menu(self):
         from steempeg.ui.lifecycle import _LOGS_MENU_STYLE
 
         menu = QMenu(self.ui)
         menu.setStyleSheet(_LOGS_MENU_STYLE)
-        rendered_action = menu.addAction("🎬  Rendered videos")
-        if "rendered" in self._library_tabs:
-            rendered_action.setEnabled(False)
+        actions: dict = {}
+        can_remove = len(self._library_tabs) > 1
+
+        for mode, label in _LIBRARY_PANEL_DEFS:
+            if mode in self._library_tabs:
+                if can_remove:
+                    act = menu.addAction(f"−  {label}")
+                    actions[act] = ("close", mode)
+            else:
+                act = menu.addAction(f"+  {label}")
+                actions[act] = ("open", mode)
+
+        if not actions:
+            return
+
         pos = self.btn_library_add.mapToGlobal(QPoint(0, self.btn_library_add.height()))
-        action = menu.exec(pos)
-        if action is rendered_action and action is not None:
-            self.open_library_panel("rendered")
+        chosen = menu.exec(pos)
+        if chosen not in actions:
+            return
+        kind, mode = actions[chosen]
+        if kind == "open":
+            self.open_library_panel(mode)
+        else:
+            self._close_library_tab(mode)
 
     def _sync_sort_combo_for_panel(self):
         if not hasattr(self, "combo_sort"):
@@ -285,20 +322,44 @@ class RenderedLibraryMixin:
                 return True
         return False
 
+    def _close_library_tab(self, mode: str):
+        if mode not in self._library_tabs:
+            return
+        if len(self._library_tabs) <= 1:
+            return
+        tab = self._library_tabs.pop(mode)
+        self.library_tabs_host.removeWidget(tab)
+        tab.deleteLater()
+        self._sync_library_add_button()
+        if self._library_panel_mode == mode:
+            fallback = "clips" if "clips" in self._library_tabs else next(iter(self._library_tabs))
+            self.set_library_panel(fallback)
+        else:
+            self._persist_library_ui_state()
+
     def open_library_panel(self, mode: str):
-        if mode == "rendered":
-            self._ensure_rendered_tab()
+        self._ensure_library_tab(mode)
         self.set_library_panel(mode)
 
+    def _ensure_library_tab(self, mode: str):
+        if mode in self._library_tabs:
+            return
+        labels = dict(_LIBRARY_PANEL_DEFS)
+        if mode not in labels:
+            return
+        if mode == "rendered":
+            self._ensure_rendered_widgets()
+        tab = self._make_library_tab_button(labels[mode], mode)
+        order = [m for m, _ in _LIBRARY_PANEL_DEFS]
+        insert_idx = sum(1 for m in order[: order.index(mode)] if m in self._library_tabs)
+        self.library_tabs_host.insertWidget(insert_idx, tab)
+        self._library_tabs[mode] = tab
+        self._sync_library_add_button()
+        if not getattr(self, "_restoring_library_state", False):
+            self._persist_library_ui_state()
+
     def _ensure_rendered_tab(self):
-        self._ensure_rendered_widgets()
-        if "rendered" not in self._library_tabs:
-            tab = self._make_library_tab_button("🎬 Rendered videos", "rendered")
-            idx = self.library_tabs_host.count()
-            self.library_tabs_host.insertWidget(idx, tab)
-            self._library_tabs["rendered"] = tab
-            if not getattr(self, "_restoring_library_state", False):
-                self._persist_library_ui_state()
+        self._ensure_library_tab("rendered")
 
     def _wants_rendered_library_ui(self, state: dict) -> bool:
         return bool(
@@ -314,8 +375,8 @@ class RenderedLibraryMixin:
         if old_mode != mode:
             self._stash_library_tab_selection(old_mode)
         self._library_panel_mode = mode
-        for key, btn in self._library_tabs.items():
-            btn.setStyleSheet(_LIBRARY_TAB_ACTIVE if key == mode else _LIBRARY_TAB_INACTIVE)
+        for key, tab in self._library_tabs.items():
+            tab.set_active(key == mode)
         if hasattr(self, "library_stack"):
             self.library_stack.setCurrentIndex(1 if mode == "rendered" else 0)
         if mode == "rendered":
