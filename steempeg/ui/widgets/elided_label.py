@@ -13,11 +13,13 @@ class ElidedLabel(QLabel):
 
     _MAX_LAYOUT_RETRIES = 8
 
-    def __init__(self, parent=None):
+    def __init__(self, text="", parent=None):
         super().__init__(parent)
         self._full_text = ""
         self._layout_retry_pending = False
         self._layout_retries = 0
+        if text:
+            self.setText(text)
 
     def setStyleSheet(self, stylesheet):
         super().setStyleSheet(stylesheet)

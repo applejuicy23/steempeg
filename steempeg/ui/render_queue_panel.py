@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra import paths
-from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
@@ -31,18 +30,25 @@ from steempeg.render.queue_display import (
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.queue_card_shared import (
     _FONT,
+    _LIST_THUMB_H,
+    _LIST_THUMB_W,
     _MIME_JOB_ID,
+    _QUEUE_CHROME_INSET,
     _QUEUE_MENU_STYLE,
+    build_queue_thumb_strip,
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
+    set_game_icon_label,
+    status_dot_style as _status_dot_style,
 )
+
+_LIST_TITLE_ICON = 28
+
 from steempeg.ui.render_queue_grid import (
     QueueGridJobCard,
     _CARD_W as _GRID_CARD_W,
     _REMOVE_BTN_STYLE,
-    _status_dot_style,
 )
-
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
@@ -50,8 +56,21 @@ _GRID_GAP = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
 )
-_HEADER_PILL_BOX = (
-    "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 16px; }"
+_QUEUE_TAB_BOX = (
+    "QFrame#queueTab { background-color: #2d2d2d; border: 1px solid #6b5a8e;"
+    " border-radius: 16px; }"
+)
+_QUEUE_TOOLBAR_BOX = (
+    "QFrame#queueToolbar { background-color: #2d2d2d; border: 1px solid #353535;"
+    " border-radius: 20px; }"
+)
+_QUEUE_TOGGLE_ACTIVE = (
+    "background-color: #5138e6; color: #ffffff; border-radius: 12px;"
+    " font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
+)
+_QUEUE_TOGGLE_INACTIVE = (
+    "background-color: transparent; color: #888888; border-radius: 12px;"
+    " font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
 )
 _SCROLL_STYLE = """
     QScrollArea { background: transparent; border: none; }
@@ -88,75 +107,90 @@ class QueueJobCard(QFrame):
         self._apply_card_style()
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(10)
 
-        num = QLabel(str(job.queue_index))
-        num.setFixedSize(26, 26)
-        num.setAlignment(Qt.AlignCenter)
-        self._num_label = num
-        root.addWidget(num, 0, Qt.AlignTop)
-
-        icon = QLabel()
-        icon.setFixedSize(28, 28)
-        icon_path = job.game_icon_path
-        unknown = get_resource_path("unknown_icon.png")
-        pix_path = icon_path if icon_path and os.path.exists(icon_path) else unknown
-        if pix_path and os.path.exists(pix_path):
-            icon.setPixmap(
-                QPixmap(pix_path).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-        root.addWidget(icon, 0, Qt.AlignTop)
+        thumb_wrap, self._num_label, _ = build_queue_thumb_strip(job, show_game_icon=False)
+        thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        root.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(3)
+        text_col.setContentsMargins(0, 0, 0, 0)
 
-        title = ElidedLabel(job.game_name.strip())
+        title_row_host = QWidget()
+        title_row_host.setFixedHeight(_LIST_TITLE_ICON)
+        title_row_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        title_row = QHBoxLayout(title_row_host)
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        self._game_icon = QLabel()
+        set_game_icon_label(self._game_icon, job, size=_LIST_TITLE_ICON)
+        title_row.addWidget(self._game_icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        title_text = job.game_name.strip() or os.path.basename(job.clip_path)
+        title_wrap = QWidget()
+        title_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        title_wrap.setMinimumWidth(0)
+        title_wrap_lay = QHBoxLayout(title_wrap)
+        title_wrap_lay.setContentsMargins(0, 0, 0, 0)
+        title = ElidedLabel(title_text)
         title.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 13px; {_FONT}")
+        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         title.setMinimumWidth(0)
-        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._title_label = title
+        title_wrap_lay.addWidget(title, 1)
+        title_row.addWidget(title_wrap, 1, Qt.AlignmentFlag.AlignVCenter)
+        text_col.addWidget(title_row_host)
 
-        meta = ElidedLabel(format_job_datetime_line(job))
+        meta = QLabel(format_job_datetime_line(job))
         meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
+        meta.setWordWrap(False)
+        meta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         meta.setMinimumWidth(0)
-        meta.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._meta_label = meta
 
-        preset = ElidedLabel(format_job_preset(job.settings))
+        preset = QLabel(format_job_preset(job.settings))
         preset.setStyleSheet(f"color: #c4b5e8; font-size: 11px; {_FONT}")
+        preset.setWordWrap(False)
+        preset.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         preset.setMinimumWidth(0)
-        preset.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._preset_label = preset
 
         trim_text = format_job_trim(job.settings)
         has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
-        trim_lbl = ElidedLabel(trim_text)
+        trim_lbl = QLabel(trim_text)
         trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
-        trim_lbl.setMinimumWidth(0)
-        trim_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         trim_lbl.setVisible(has_trim)
+        trim_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        trim_lbl.setMinimumWidth(0)
         self._trim_label = trim_lbl
 
-        out_line = ElidedLabel(format_job_output(job))
+        out_text = format_job_output(job)
+        out_line = ElidedLabel(out_text)
         out_line.setStyleSheet(f"color: #999999; font-size: 11px; {_FONT}")
+        out_line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         out_line.setMinimumWidth(0)
-        out_line.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._out_label = out_line
 
-        text_col.addWidget(title)
         text_col.addWidget(meta)
         text_col.addWidget(preset)
         text_col.addWidget(trim_lbl)
         text_col.addWidget(out_line)
 
-        root.addLayout(text_col, 1)
+        text_host = QWidget()
+        text_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        text_host.setMinimumWidth(0)
+        text_host.setLayout(text_col)
+        root.addWidget(text_host, 1, Qt.AlignmentFlag.AlignTop)
 
         self._btn_remove = None
         if _job_can_remove(job):
             self._btn_remove = QPushButton("✕")
             self._btn_remove.setObjectName("queueRemoveBtn")
             self._btn_remove.setFixedSize(26, 26)
+            self._btn_remove.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             self._btn_remove.setToolTip("Remove from queue")
             self._btn_remove.setCursor(Qt.PointingHandCursor)
             self._btn_remove.setStyleSheet(_REMOVE_BTN_STYLE)
@@ -168,7 +202,8 @@ class QueueJobCard(QFrame):
                 continue
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setMinimumHeight(_LIST_THUMB_H + 20)
 
         self._refresh_num_style()
 
@@ -178,8 +213,11 @@ class QueueJobCard(QFrame):
         self._selected = selected
         self._drop_highlight = False
         self._num_label.setText(str(job.queue_index))
+        if hasattr(self, "_game_icon"):
+            set_game_icon_label(self._game_icon, job, size=_LIST_TITLE_ICON)
         if hasattr(self, "_title_label"):
-            self._title_label.setText(job.game_name.strip())
+            title_text = job.game_name.strip() or os.path.basename(job.clip_path)
+            self._title_label.setText(title_text)
         if hasattr(self, "_meta_label"):
             self._meta_label.setText(format_job_datetime_line(job))
         if hasattr(self, "_preset_label"):
@@ -433,26 +471,49 @@ class RenderQueuePanel(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, 0)
-        outer.setSpacing(4)
+        outer.setSpacing(8)
 
-        header_pill = QFrame()
-        header_pill.setStyleSheet(_HEADER_PILL_BOX)
-        pill_layout = QHBoxLayout(header_pill)
-        pill_layout.setContentsMargins(16, 8, 16, 8)
-        pill_layout.setSpacing(8)
+        tab_row = QHBoxLayout()
+        tab_row.setContentsMargins(0, 0, 0, 0)
+        tab_row.setSpacing(0)
+
+        self._tab_pill = QFrame()
+        self._tab_pill.setObjectName("queueTab")
+        self._tab_pill.setFixedHeight(40)
+        self._tab_pill.setStyleSheet(_QUEUE_TAB_BOX)
+        tab_inner = QHBoxLayout(self._tab_pill)
+        tab_inner.setContentsMargins(16, 0, 20, 0)
 
         self._title_label = QLabel("🎬 Render Queue")
         self._title_label.setStyleSheet(
-            f"color: #ffffff; font-weight: bold; font-size: 14px; border: none; background: transparent; {_FONT}"
+            f"color: #ffffff; font-weight: bold; font-size: 14px; border: none;"
+            f" background: transparent; {_FONT}"
         )
+        tab_inner.addWidget(self._title_label)
+        tab_row.addStretch()
+        tab_row.addWidget(self._tab_pill)
+        tab_row.addStretch()
+        outer.addLayout(tab_row)
+
+        toolbar_row = QHBoxLayout()
+        toolbar_row.setContentsMargins(_QUEUE_CHROME_INSET, 0, _QUEUE_CHROME_INSET, 0)
+        toolbar_row.setSpacing(0)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("queueToolbar")
+        toolbar.setStyleSheet(_QUEUE_TOOLBAR_BOX)
+        tool_layout = QHBoxLayout(toolbar)
+        tool_layout.setContentsMargins(16, 6, 16, 6)
+        tool_layout.setSpacing(8)
 
         self._count_label = QLabel("(0)")
         self._count_label.setStyleSheet(
-            f"color: #888888; font-weight: bold; font-size: 13px; border: none; background: transparent; {_FONT}"
+            f"color: #888888; font-weight: bold; font-size: 13px; border: none;"
+            f" background: transparent; {_FONT}"
         )
 
         self._btn_clear = QPushButton("Clear")
-        self._btn_clear.setCursor(Qt.PointingHandCursor)
+        self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_clear.setStyleSheet("""
             QPushButton {
                 background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
@@ -463,7 +524,7 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
         self._btn_history = QPushButton("History")
-        self._btn_history.setCursor(Qt.PointingHandCursor)
+        self._btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_history.setToolTip("Past render batches — what exported and where")
         self._btn_history.setStyleSheet("""
             QPushButton {
@@ -474,39 +535,39 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_history.clicked.connect(self.history_requested.emit)
 
-        self._btn_view_list = QPushButton("≡")
-        self._btn_view_list.setToolTip("List view")
-        self._btn_view_list.setFixedSize(28, 24)
-        self._btn_view_list.setCursor(Qt.PointingHandCursor)
-        self._btn_view_grid = QPushButton("▦")
-        self._btn_view_grid.setToolTip("Grid view")
-        self._btn_view_grid.setFixedSize(28, 24)
-        self._btn_view_grid.setCursor(Qt.PointingHandCursor)
-        view_btn_style = """
-            QPushButton {
-                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
-                border-radius: 8px; font-size: 14px; font-weight: bold; padding: 0;
-            }
-            QPushButton:hover { background-color: #4a4a4a; color: #ffffff; }
-            QPushButton:checked {
-                background-color: #3a324a; color: #b29ae7; border: 1px solid #6b5a8e;
-            }
-        """
-        self._btn_view_list.setCheckable(True)
-        self._btn_view_grid.setCheckable(True)
-        self._btn_view_list.setStyleSheet(view_btn_style)
-        self._btn_view_grid.setStyleSheet(view_btn_style)
+        lbl_view = QLabel("View")
+        lbl_view.setStyleSheet(
+            f"color: #777777; font-weight: bold; font-size: 13px; border: none;"
+            f" background: transparent; {_FONT}"
+        )
+
+        self._view_toggle_pill = QFrame()
+        self._view_toggle_pill.setStyleSheet(
+            "QFrame { background-color: #141414; border-radius: 14px; border: none; }"
+        )
+        toggle_layout = QHBoxLayout(self._view_toggle_pill)
+        toggle_layout.setContentsMargins(2, 2, 2, 2)
+        toggle_layout.setSpacing(0)
+
+        self._btn_view_grid = QPushButton("Grid")
+        self._btn_view_list = QPushButton("List")
+        for btn in (self._btn_view_grid, self._btn_view_list):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFlat(True)
         self._btn_view_list.clicked.connect(lambda: self._set_view_mode("list"))
         self._btn_view_grid.clicked.connect(lambda: self._set_view_mode("grid"))
 
-        pill_layout.addWidget(self._title_label)
-        pill_layout.addStretch()
-        pill_layout.addWidget(self._btn_view_list)
-        pill_layout.addWidget(self._btn_view_grid)
-        pill_layout.addWidget(self._count_label)
-        pill_layout.addWidget(self._btn_history)
-        pill_layout.addWidget(self._btn_clear)
-        outer.addWidget(header_pill)
+        toggle_layout.addWidget(self._btn_view_grid)
+        toggle_layout.addWidget(self._btn_view_list)
+
+        tool_layout.addWidget(lbl_view)
+        tool_layout.addWidget(self._view_toggle_pill)
+        tool_layout.addWidget(self._count_label)
+        tool_layout.addStretch()
+        tool_layout.addWidget(self._btn_history)
+        tool_layout.addWidget(self._btn_clear)
+        toolbar_row.addWidget(toolbar)
+        outer.addLayout(toolbar_row)
 
         self._sync_view_toggle_buttons()
 
@@ -564,7 +625,7 @@ class RenderQueuePanel(QWidget):
 
         self._scroll.viewport().installEventFilter(self)
 
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(420)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def eventFilter(self, obj, event):
@@ -586,8 +647,12 @@ class RenderQueuePanel(QWidget):
         self._rebuild_cards()
 
     def _sync_view_toggle_buttons(self) -> None:
-        self._btn_view_list.setChecked(self._view_mode == "list")
-        self._btn_view_grid.setChecked(self._view_mode == "grid")
+        if self._view_mode == "list":
+            self._btn_view_list.setStyleSheet(_QUEUE_TOGGLE_ACTIVE)
+            self._btn_view_grid.setStyleSheet(_QUEUE_TOGGLE_INACTIVE)
+        else:
+            self._btn_view_list.setStyleSheet(_QUEUE_TOGGLE_INACTIVE)
+            self._btn_view_grid.setStyleSheet(_QUEUE_TOGGLE_ACTIVE)
 
     def _active_host_layout(self):
         if self._view_mode == "grid":

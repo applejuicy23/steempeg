@@ -1900,10 +1900,13 @@ class RenderMixin:
         if len(self.render_queue) > 0:
             self.render_queue_panel.show()
             if sizes[1] <= 0:
-                from steempeg.ui.layout_defaults import DEFAULT_QUEUE_PANEL_WIDTH
+                from steempeg.ui.layout_defaults import (
+                    DEFAULT_QUEUE_PANEL_WIDTH,
+                    MIN_QUEUE_PANEL_WIDTH,
+                )
 
                 queue_w = self.get_layout_setting("queue_panel_width", DEFAULT_QUEUE_PANEL_WIDTH)
-                queue_w = max(0, min(int(queue_w), total))
+                queue_w = max(MIN_QUEUE_PANEL_WIDTH, min(int(queue_w), total))
                 self.right_h_splitter.setSizes([total - queue_w, queue_w])
         else:
             self.render_queue_panel.show()
