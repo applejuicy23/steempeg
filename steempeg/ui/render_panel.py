@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication, QIcon
 
+from steempeg.ui.layout_defaults import SETTINGS_CONTENT_WIDTH
 from steempeg.ui.widgets.elided_label import ElidedLabel
 
 from steempeg.ui.widgets.gradient_slider import GradientSlider
@@ -37,6 +38,8 @@ from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
 _COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge
+# Two export-tab combos side-by-side must fit inside SETTINGS_CONTENT_WIDTH.
+_EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - 16) // 2
 _FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
 _TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT
 _TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _FONT
@@ -347,6 +350,30 @@ def _page_title(text):
     title = QLabel(text)
     title.setStyleSheet(_TITLE_QSS)
     return title
+
+
+def _content_width_wrap(inner: QWidget) -> QWidget:
+    """Clamp a block to the settings-tab content column (Source Info right edge)."""
+    wrap = QWidget()
+    wrap.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
+    wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+    lay = QVBoxLayout(wrap)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    lay.addWidget(inner)
+    return wrap
+
+
+def _field_export(label, combo):
+    """Export tab field — narrower combo so two fit in SETTINGS_CONTENT_WIDTH."""
+    box = QVBoxLayout()
+    box.setSpacing(4)
+    box.setContentsMargins(0, 0, 0, 0)
+    label.setStyleSheet(_FIELD_LABEL_QSS)
+    combo.setFixedWidth(_EXPORT_COMBO_W)
+    box.addWidget(label, alignment=Qt.AlignLeft)
+    box.addWidget(combo, alignment=Qt.AlignLeft)
+    return box
 
 
 def _field(label, combo):
@@ -662,7 +689,7 @@ def restyle_source_page(ui):
 
     # Match the stat-block grid width below (3 * 210 + 2 * 8 spacing) so the source
     # rows line up with the cards instead of sprawling to the panel edge.
-    stat_grid_w = 210 * 3 + 8 * 2
+    stat_grid_w = SETTINGS_CONTENT_WIDTH
     ui.source_label.setMinimumWidth(stat_grid_w)
     ui.source_label.setMaximumWidth(stat_grid_w)
     root.addWidget(ui.source_label, alignment=Qt.AlignLeft)
@@ -729,11 +756,11 @@ def restyle_export_page(ui):
     cap.setStyleSheet("color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; " + _FONT)
     card_box.addWidget(cap)
     card_box.addWidget(summary)
-    card.setMaximumWidth(600)
+    card.setFixedWidth(SETTINGS_CONTENT_WIDTH)
     card_row = QHBoxLayout()
     card_row.setContentsMargins(0, 0, 0, 0)
     card_row.addWidget(card)
-    card_row.addStretch()  # keep the card hugging its content instead of spanning the panel
+    card_row.addStretch()
     root.addLayout(card_row)
 
     summary.setText(old_text)
@@ -750,29 +777,36 @@ def restyle_export_page(ui):
         container_combo.setObjectName("combo_container")
         ui.combo_container = container_combo
 
-    fmt_grid = QGridLayout()
+    fmt_host = QWidget()
+    fmt_grid = QGridLayout(fmt_host)
+    fmt_grid.setContentsMargins(0, 0, 0, 0)
     fmt_grid.setHorizontalSpacing(16)
     fmt_grid.setVerticalSpacing(12)
-    fmt_grid.addLayout(_field(QLabel("Output preset"), preset_combo), 0, 0)
-    fmt_grid.addLayout(_field(QLabel("Container"), container_combo), 0, 1)
-    fmt_grid.setColumnStretch(2, 1)
-    root.addLayout(fmt_grid)
+    fmt_grid.addLayout(_field_export(QLabel("Output preset"), preset_combo), 0, 0)
+    fmt_grid.addLayout(_field_export(QLabel("Container"), container_combo), 0, 1)
+    root.addWidget(_content_width_wrap(fmt_host))
+
+    fname_block = QWidget()
+    fname_block_lay = QVBoxLayout(fname_block)
+    fname_block_lay.setContentsMargins(0, 0, 0, 0)
+    fname_block_lay.setSpacing(4)
 
     if fname_cap is not None:
         fname_cap.setText("Output Filename")
         fname_cap.setStyleSheet(_FIELD_LABEL_QSS)
-        root.addWidget(fname_cap)
+        fname_block_lay.addWidget(fname_cap)
 
     name_row = QHBoxLayout()
     name_row.setSpacing(8)
     if fname_input is not None:
-        fname_input.setMaximumWidth(480)
+        fname_input.setMinimumWidth(0)
+        fname_input.setMaximumWidth(16777215)
         name_row.addWidget(fname_input, 1)
     if dest_btn is not None:
         dest_btn.setText("Save as…")
-        name_row.addWidget(dest_btn)
-    name_row.addStretch()  # name field + button stay compact, don't span the panel
-    root.addLayout(name_row)
+        name_row.addWidget(dest_btn, 0)
+    fname_block_lay.addLayout(name_row)
+    root.addWidget(_content_width_wrap(fname_block))
 
     if loc_label is not None:
         path_row = QFrame()
@@ -780,10 +814,18 @@ def restyle_export_page(ui):
         path_row.setStyleSheet(
             "QFrame#outputPathRow { background-color: #252525; border-radius: 10px; }"
         )
-        path_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        path_row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        path_row.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
         path_layout = QHBoxLayout(path_row)
         path_layout.setContentsMargins(12, 8, 8, 8)
         path_layout.setSpacing(6)
+        if not isinstance(loc_label, ElidedLabel):
+            smart_label = ElidedLabel()
+            smart_label.setStyleSheet(loc_label.styleSheet())
+            smart_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            loc_label.deleteLater()
+            loc_label = smart_label
+            ui.label_location = smart_label
         loc_label.setStyleSheet(
             "background: transparent; border: none; color: #b29ae7; font-size: 11px;"
             " font-weight: bold; font-family: 'Consolas', monospace;"

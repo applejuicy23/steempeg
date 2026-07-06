@@ -39,6 +39,11 @@ LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → to
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
 RENDER_QUEUE_BOTTOM_INSET = 0
 
+# Source Info stat grid width — right edge of settings-tab content ("red line").
+SETTINGS_STAT_COL_W = 210
+SETTINGS_STAT_GRID_GAP = 8
+SETTINGS_CONTENT_WIDTH = SETTINGS_STAT_COL_W * 3 + SETTINGS_STAT_GRID_GAP * 2
+
 # Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
 HORIZONTAL_SPLITTER_STYLESHEET = """
     QSplitter::handle {
