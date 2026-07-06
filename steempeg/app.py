@@ -2001,7 +2001,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.setup_logs_menu()
         
         # We connect the "Final setup" update to all interface changes
-        if hasattr(self.ui, 'combo_quality'): self.ui.combo_quality.currentTextChanged.connect(self.update_final_setup)
+        if hasattr(self.ui, 'combo_quality'):
+            self.ui.combo_quality.currentTextChanged.connect(self.on_quality_mode_changed)
         if hasattr(self.ui, 'combo_bitrate'): self.ui.combo_bitrate.currentTextChanged.connect(self.update_final_setup)
         if hasattr(self.ui, 'combo_codec'):
             self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
@@ -2011,7 +2012,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.combo_fps.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_fps.currentTextChanged.connect(self.refresh_slider_if_needed)
             self.ui.combo_fps.currentTextChanged.connect(self.update_bitrate_options)
-        self.ui.combo_fps.currentTextChanged.connect(self.refresh_slider_if_needed)
         if hasattr(self.ui, 'input_filename'): self.ui.input_filename.textChanged.connect(self.update_final_setup)
 
         if hasattr(self.ui, 'combo_encoder'):
@@ -2024,9 +2024,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if hasattr(self.ui, 'btn_pause'):
             self.ui.btn_pause.setEnabled(False)
             self.ui.btn_pause.clicked.connect(self.toggle_pause)
-        
-        if hasattr(self.ui, 'combo_quality'): 
-            self.ui.combo_quality.currentTextChanged.connect(self.on_quality_mode_changed)
 
         # Hide the size slider and its text when the program starts
         if hasattr(self.ui, 'size_slider'):
