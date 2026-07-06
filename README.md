@@ -40,10 +40,10 @@
 |---|---|
 | **Clips library** | Grid & List views, smart filters (game, date, duration), multi-select |
 | **Player** | Trim mode, timeline markers, screenshots, theatre & fullscreen |
-| **Render engine** | NVENC / CPU, H.264 & H.265, quality presets + custom bitrate |
+| **Render engine** | NVENC / CPU, H.264–AV1, VP9, quality presets + honest source bitrate cap |
 | **Render queue** | Grid & list views, batch export, reorder, history, persistent between sessions |
 | **Steam-aware** | Auto-discovers clip folders, repairs broken block-spliced recordings |
-| **Export** | Original stream copy, target file size, audio-only / mute options |
+| **Export** | MP4 / MKV / MOV / WebM, Share · Edit · Web presets, audio-only / mute, stream copy |
 
 ---
 
@@ -109,15 +109,30 @@ Release notes for every version live on **[GitHub Releases](https://github.com/a
 
 ## 🗺️ Roadmap
 
-**Long-term vision:** a lightweight **in-app video editor** for Steam clips — trim, preview, queue, and export today; gradually more of a mini **Vegas-style** workflow without leaving the app. Not a full NLE overnight, but moving that direction.
+**Long-term vision:** a lightweight **in-app video editor** for Steam clips — trim, preview, queue, and export today; gradually more of a mini **Vegas-style** workflow without leaving the app.
 
-**Rough direction (next few versions):**
+### ✅ Shipped in v35
 
-- **Export & batch workflow** — smarter queue management, history actions, fewer clicks from clip to finished file
-- **Timeline & preview** — smoother scrubbing, better frame feedback, tighter sync with trim and markers
-- **Render settings** — clearer presets, custom values, and honest size estimates end-to-end
-- **Library & discovery** — faster scanning, healthier clip handling, easier multi-folder setups
-- **Editor building blocks** — small steps toward real editing tools around the player (layout, clip control, workflow)
+- [x] **Export containers** — MP4, MKV, MOV, WebM with correct file extensions
+- [x] **Video codecs** — H.264, H.265, AV1, VP9 (+ Original stream copy)
+- [x] **Audio formats** — AAC, MP3, Opus, FLAC, WAV (stream copy in Original mode only)
+- [x] **Named presets** — Share (MP4/H.264/AAC), Edit (MKV/HEVC/FLAC), Web (WebM/VP9/Opus)
+- [x] **Smart export UI** — invalid container + codec pairs greyed out in dropdowns
+- [x] **Honest bitrate** — measured from the actual recording on disk, capped to source (no fake 32 Mbps tiers)
+- [x] **Original mode** — frozen settings with real Mbps shown (e.g. `22 Mbps (Original)`)
+- [x] **Render queue** — redesigned list cards, compact preset line (`1440p · 60 fps · 22 Mbps · H.265`)
+- [x] **Export tab polish** — aligned layout, path elision, copy button
+- [x] **Timeline markers** — Steam CDN sprite icons when cache is missing
+- [x] **Render progress** — animated bar with shimmer; survives pause / cancel states
+- [x] **Library UX** — closable panel tabs, multi-select fixes, filter restore
+
+### 🔜 Next up
+
+- [ ] **Custom chrome** — frameless title bar, unified modal sheets, design tokens app-wide
+- [ ] **Queue depth** — edit container / codec per job directly from the queue panel
+- [ ] **8K preset** — add 4320p to quality list (Steam bitrates already in the table)
+- [ ] **Timeline & preview** — even smoother scrubbing and frame feedback
+- [ ] **Editor building blocks** — small steps toward real editing tools around the player
 
 Plans shift as feedback comes in; open an [Issue](https://github.com/applejuicy23/steempeg/issues) if you have ideas.
 
