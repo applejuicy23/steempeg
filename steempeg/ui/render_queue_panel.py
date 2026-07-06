@@ -27,6 +27,7 @@ from steempeg.render.queue_display import (
     format_job_preset,
     format_job_trim,
 )
+from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.queue_card_shared import (
     _FONT,
@@ -51,14 +52,9 @@ from steempeg.ui.render_queue_grid import (
 )
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
-_SPLITTER_GUTTER = 10
 _GRID_GAP = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
-)
-_QUEUE_TAB_BOX = (
-    "QFrame#queueTab { background-color: #2d2d2d; border: 1px solid #6b5a8e;"
-    " border-radius: 16px; }"
 )
 _QUEUE_TOOLBAR_BOX = (
     "QFrame#queueToolbar { background-color: #2d2d2d; border: 1px solid #353535;"
@@ -483,28 +479,17 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, 0)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
         tab_row = QHBoxLayout()
-        tab_row.setContentsMargins(0, 0, 0, 0)
-        tab_row.setSpacing(0)
+        tab_row.setContentsMargins(0, 0, 0, 4)
+        tab_row.setSpacing(8)
 
-        self._tab_pill = QFrame()
-        self._tab_pill.setObjectName("queueTab")
-        self._tab_pill.setFixedHeight(40)
-        self._tab_pill.setStyleSheet(_QUEUE_TAB_BOX)
-        tab_inner = QHBoxLayout(self._tab_pill)
-        tab_inner.setContentsMargins(16, 0, 20, 0)
-
-        self._title_label = QLabel("🎬 Render Queue")
-        self._title_label.setStyleSheet(
-            f"color: #ffffff; font-weight: bold; font-size: 14px; border: none;"
-            f" background: transparent; {_FONT}"
-        )
-        tab_inner.addWidget(self._title_label)
+        self._tab = LibraryTabWidget("🎬 Render Queue", "queue", closable=False)
+        self._tab.set_active(True)
         tab_row.addStretch()
-        tab_row.addWidget(self._tab_pill)
+        tab_row.addWidget(self._tab)
         tab_row.addStretch()
         outer.addLayout(tab_row)
 

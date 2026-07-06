@@ -79,9 +79,10 @@ class LibraryTabWidget(QFrame):
     activated = Signal(str)
     close_requested = Signal(str)
 
-    def __init__(self, label: str, mode: str, parent=None):
+    def __init__(self, label: str, mode: str, parent=None, *, closable: bool = True):
         super().__init__(parent)
         self.mode = mode
+        self._closable = closable
         self._active = False
         self._hovered = False
         self.setObjectName("libraryTab")
@@ -89,7 +90,7 @@ class LibraryTabWidget(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(14, 0, 6, 0)
+        row.setContentsMargins(14, 0, 6 if closable else 14, 0)
         row.setSpacing(2)
 
         self._text = QLabel(label)
@@ -103,6 +104,9 @@ class LibraryTabWidget(QFrame):
         self._close.setToolTip("Close panel")
         self._close.setStyleSheet(_CLOSE_HIDDEN)
         self._close.clicked.connect(self._emit_close)
+        if not closable:
+            self._close.hide()
+            self._close.setEnabled(False)
         row.addWidget(self._close, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.set_active(False)
@@ -124,13 +128,15 @@ class LibraryTabWidget(QFrame):
 
     def enterEvent(self, event):
         self._hovered = True
-        self._close.setStyleSheet(_CLOSE_VISIBLE)
+        if self._closable:
+            self._close.setStyleSheet(_CLOSE_VISIBLE)
         self._apply_style()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._hovered = False
-        self._close.setStyleSheet(_CLOSE_HIDDEN)
+        if self._closable:
+            self._close.setStyleSheet(_CLOSE_HIDDEN)
         self._apply_style()
         super().leaveEvent(event)
 
