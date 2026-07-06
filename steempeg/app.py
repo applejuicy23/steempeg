@@ -1961,12 +1961,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.right_h_splitter.setCollapsible(0, False)
                 self.right_h_splitter.setCollapsible(1, True)
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
-                self.right_h_splitter.addWidget(self.right_content_wrap)
-                self.right_h_splitter.addWidget(self.render_queue_panel)
-                from steempeg.ui.layout_defaults import DEFAULT_RIGHT_H_SPLITTER_SIZES
-                self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
 
-                right_layout.addWidget(self.right_h_splitter)
+                right_layout.addWidget(self.right_content_wrap)
+
+                panel_idx = self.ui.main_splitter.indexOf(self.ui.right_panel)
+                self.ui.right_panel.setParent(None)
+                self.right_h_splitter.addWidget(self.ui.right_panel)
+                self.right_h_splitter.addWidget(self.render_queue_panel)
+                self.ui.main_splitter.insertWidget(panel_idx, self.right_h_splitter)
+                self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
