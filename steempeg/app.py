@@ -1307,10 +1307,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         
         # --- FIXING THE INTERFACE AND PLAYER ---
         # 1. Give the right panel some breathing room
+        from steempeg.ui.layout_defaults import (
+            RIGHT_PANEL_BOTTOM_INSET,
+            RIGHT_PANEL_SIDE_INSET,
+        )
+
         right_layout = self.ui.right_panel.layout()
         if right_layout:
-            # Left/right inset for the player; no top/bottom inset so tabs align with Clips Manager.
-            right_layout.setContentsMargins(12, 0, 10, 0)
+            # Side/bottom inset; top inset lives on the player wrap so the queue tab
+            # can align with Clips Manager without losing player breathing room.
+            right_layout.setContentsMargins(
+                RIGHT_PANEL_SIDE_INSET, 0, 0, RIGHT_PANEL_BOTTOM_INSET,
+            )
             right_layout.setSpacing(8)
 
         # 2: Taming MPV Player and creating a Border Wrapper
@@ -1910,12 +1918,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     }
                 """)
 
-                right_layout.addWidget(self.main_v_splitter)
+                # 7. Place the splitter back into the CLEAN right-hand panel.
+                self.right_content_wrap = QWidget()
+                self.right_content_wrap.setAttribute(Qt.WA_StyledBackground, True)
+                self.right_content_wrap.setStyleSheet("background: transparent;")
+                right_content_layout = QVBoxLayout(self.right_content_wrap)
+                from steempeg.ui.layout_defaults import (
+                    QUEUE_SPLITTER_GUTTER,
+                    RIGHT_PANEL_PLAYER_TOP_INSET,
+                )
+                # Player top inset + gutter before the queue splitter.
+                right_content_layout.setContentsMargins(
+                    0, RIGHT_PANEL_PLAYER_TOP_INSET, QUEUE_SPLITTER_GUTTER, 0,
+                )
+                right_content_layout.setSpacing(0)
+                right_content_layout.addWidget(self.main_v_splitter)
 
                 from steempeg.ui.layout_defaults import (
                     DEFAULT_QUEUE_VIEW,
                     DEFAULT_RIGHT_H_SPLITTER_SIZES,
-                    HORIZONTAL_SPLITTER_STYLESHEET,
                     MIN_QUEUE_PANEL_WIDTH,
                 )
                 from steempeg.ui.render_queue_panel import RenderQueuePanel
@@ -1939,14 +1960,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.right_h_splitter.setChildrenCollapsible(True)
                 self.right_h_splitter.setCollapsible(0, False)
                 self.right_h_splitter.setCollapsible(1, True)
-                self.right_h_splitter.setStyleSheet(HORIZONTAL_SPLITTER_STYLESHEET)
-
-                panel_idx = self.ui.main_splitter.indexOf(self.ui.right_panel)
-                self.ui.right_panel.setParent(None)
-                self.right_h_splitter.addWidget(self.ui.right_panel)
+                self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
+                self.right_h_splitter.addWidget(self.right_content_wrap)
                 self.right_h_splitter.addWidget(self.render_queue_panel)
-                self.ui.main_splitter.insertWidget(panel_idx, self.right_h_splitter)
+                from steempeg.ui.layout_defaults import DEFAULT_RIGHT_H_SPLITTER_SIZES
                 self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
+
+                right_layout.addWidget(self.right_h_splitter)
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()

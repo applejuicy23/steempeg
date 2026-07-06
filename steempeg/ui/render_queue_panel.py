@@ -27,6 +27,7 @@ from steempeg.render.queue_display import (
     format_job_preset,
     format_job_trim,
 )
+from steempeg.ui.layout_defaults import LIBRARY_TAB_TO_TOOLBAR_SPACING
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.queue_card_shared import (
@@ -52,6 +53,7 @@ from steempeg.ui.render_queue_grid import (
 )
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
+_SPLITTER_GUTTER = 10
 _GRID_GAP = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
@@ -479,8 +481,8 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
+        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, 0)
+        outer.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
 
         tab_row = QHBoxLayout()
         tab_row.setContentsMargins(0, 0, 0, 4)

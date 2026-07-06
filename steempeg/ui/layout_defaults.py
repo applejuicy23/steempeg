@@ -30,6 +30,13 @@ DEFAULT_LIBRARY_VIEW = "grid"
 # "grid" or "list" — render queue cards
 DEFAULT_QUEUE_VIEW = "list"
 
+# Right column chrome — keep in sync with app.py right_layout / right_content_wrap.
+RIGHT_PANEL_SIDE_INSET = 12
+RIGHT_PANEL_BOTTOM_INSET = 12
+RIGHT_PANEL_PLAYER_TOP_INSET = 12  # player only; queue tab row aligns with Clips Manager
+QUEUE_SPLITTER_GUTTER = 10
+LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
+
 # Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
 HORIZONTAL_SPLITTER_STYLESHEET = """
     QSplitter::handle {

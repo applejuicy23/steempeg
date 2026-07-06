@@ -488,12 +488,15 @@ class PlayerMixin:
             margin_bottom = 0 if self.is_theater else 10
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
 
-        # Same queue gutter as fullscreen: 0 in theatre (edge-to-edge), 10 otherwise.
-        right_layout = self.ui.right_panel.layout() if hasattr(self.ui, 'right_panel') else None
-        if right_layout is not None:
-            margin_right = 0 if self.is_theater else 10
-            m = right_layout.contentsMargins()
-            right_layout.setContentsMargins(m.left(), m.top(), margin_right, m.bottom())
+        # Player top inset + queue gutter: 0 in theatre (edge-to-edge), normal otherwise.
+        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+            from steempeg.ui.layout_defaults import (
+                QUEUE_SPLITTER_GUTTER,
+                RIGHT_PANEL_PLAYER_TOP_INSET,
+            )
+            margin_top = 0 if self.is_theater else RIGHT_PANEL_PLAYER_TOP_INSET
+            margin_right = 0 if self.is_theater else QUEUE_SPLITTER_GUTTER
+            self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
 
         # --- THE MAGIC SWAP ---
         if hasattr(self, 'btn_theater'):
@@ -726,12 +729,15 @@ class PlayerMixin:
             right_layout.setContentsMargins(self.original_right_margins)
             right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
 
-        # Restore the queue gutter only when returning to the normal layout; theatre
-        # also wants the video edge-to-edge, so keep it at 0 when exiting into theatre.
-        right_layout = self.ui.right_panel.layout() if hasattr(self.ui, 'right_panel') else None
-        if right_layout is not None and hasattr(self, 'original_right_margins'):
-            m = self.original_right_margins
-            right_layout.setContentsMargins(m.left(), m.top(), 0 if is_t else 10, m.bottom())
+        # Restore player inset + queue gutter when returning to the normal layout.
+        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+            from steempeg.ui.layout_defaults import (
+                QUEUE_SPLITTER_GUTTER,
+                RIGHT_PANEL_PLAYER_TOP_INSET,
+            )
+            margin_top = 0 if is_t else RIGHT_PANEL_PLAYER_TOP_INSET
+            margin_right = 0 if is_t else QUEUE_SPLITTER_GUTTER
+            self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
 
         footer = self.player_footer_frame
         footer.setWindowFlags(Qt.WindowType.Widget)
@@ -872,11 +878,10 @@ class PlayerMixin:
                 right_layout.setContentsMargins(0, 0, 0, 0)
                 right_layout.setSpacing(0)
 
-            # Drop the gutter before the queue splitter for edge-to-edge fullscreen video.
-            right_layout = self.ui.right_panel.layout() if hasattr(self.ui, 'right_panel') else None
-            if right_layout is not None:
-                m = right_layout.contentsMargins()
-                right_layout.setContentsMargins(m.left(), m.top(), 0, m.bottom())
+            # Drop the 10px gutter that sits before the (now collapsed) queue splitter,
+            # otherwise it leaves an empty strip on the right edge of the fullscreen video.
+            if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
+                self.right_content_wrap.layout().setContentsMargins(0, 0, 0, 0)
 
             self._enter_immersive_layout()
             self._enter_immersive_chrome()
