@@ -3,6 +3,8 @@
 Pure helpers - no Qt. They call ffprobe by name and rely on it being on PATH
 (the app prepends ./bin to PATH at startup), with safe fallbacks on any error.
 """
+import glob
+import os
 import subprocess
 import sys
 import re
@@ -62,8 +64,47 @@ def _video_bandwidths_from_content(content: str) -> list[int]:
     return bws
 
 
+def _video_segment_bytes(folder_path: str) -> int:
+    """Total bytes of stream0 (video) init + chunks on disk."""
+    total = 0
+    init = os.path.join(folder_path, "init-stream0.m4s")
+    if os.path.isfile(init):
+        total += os.path.getsize(init)
+    for chunk in glob.glob(os.path.join(folder_path, "chunk-stream0-*.m4s")):
+        try:
+            if os.path.getsize(chunk) > 0:
+                total += os.path.getsize(chunk)
+        except OSError:
+            pass
+    return total
+
+
+def estimate_video_bitrate_mbps(folder_path: str, duration_sec: float) -> float:
+    """Average video Mbps from recorded segment bytes — matches what was actually written."""
+    if duration_sec <= 0:
+        return 0.0
+    nbytes = _video_segment_bytes(folder_path)
+    if nbytes < 1000:
+        return 0.0
+    return (nbytes * 8.0) / duration_sec / 1_000_000.0
+
+
 def get_video_bitrate_mbps(mpd_path, default=0.0):
     """Return source video bitrate in Mbps from an .mpd, or ``default`` on failure."""
+    folder = os.path.dirname(os.path.abspath(mpd_path))
+    content = None
+    try:
+        with open(mpd_path, encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError:
+        pass
+
+    duration = parse_duration_seconds(content) if content else None
+    if duration and duration > 0:
+        measured = estimate_video_bitrate_mbps(folder, duration)
+        if measured > 0.1:
+            return measured
+
     try:
         out = subprocess.check_output(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -72,25 +113,34 @@ def get_video_bitrate_mbps(mpd_path, default=0.0):
             creationflags=_NO_WINDOW, stderr=subprocess.DEVNULL, text=True,
         ).strip()
         if out.isdigit() and int(out) > 0:
+            if duration and duration > 0:
+                measured = estimate_video_bitrate_mbps(folder, duration)
+                if measured > 0.1:
+                    return measured
             return int(out) / 1_000_000.0
     except Exception:
         pass
 
-    content = None
-    try:
-        with open(mpd_path, encoding="utf-8") as handle:
-            content = handle.read()
+    if content:
         bws = _video_bandwidths_from_content(content)
         if bws:
-            return max(bws) / 1_000_000.0
-    except OSError:
-        pass
+            manifest_mbps = max(bws) / 1_000_000.0
+            if duration and duration > 0:
+                measured = estimate_video_bitrate_mbps(folder, duration)
+                if measured > 0.1:
+                    return min(manifest_mbps, measured)
+            return manifest_mbps
 
     # Legacy manifests without mimeType on Representation — highest rep wins.
     if content:
         all_bws = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content)]
         if all_bws:
-            return max(all_bws) / 1_000_000.0
+            manifest_mbps = max(all_bws) / 1_000_000.0
+            if duration and duration > 0:
+                measured = estimate_video_bitrate_mbps(folder, duration)
+                if measured > 0.1:
+                    return min(manifest_mbps, measured)
+            return manifest_mbps
 
     return default
 
