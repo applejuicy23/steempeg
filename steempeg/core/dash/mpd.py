@@ -45,6 +45,56 @@ def get_audio_bitrate_kbps(mpd_path, default=192):
         pass
     return default
 
+_VIDEO_REP_BW = re.compile(
+    r'<Representation\b[^>]*\bbandwidth="(\d+)"[^>]*\bmimeType="video/',
+    re.IGNORECASE,
+)
+_VIDEO_REP_BW_ALT = re.compile(
+    r'<Representation\b[^>]*\bmimeType="video/[^"]*"[^>]*\bbandwidth="(\d+)"',
+    re.IGNORECASE,
+)
+
+
+def _video_bandwidths_from_content(content: str) -> list[int]:
+    """Peak bandwidth values from video Representations only (bps)."""
+    bws = [int(m.group(1)) for m in _VIDEO_REP_BW.finditer(content)]
+    bws.extend(int(m.group(1)) for m in _VIDEO_REP_BW_ALT.finditer(content))
+    return bws
+
+
+def get_video_bitrate_mbps(mpd_path, default=0.0):
+    """Return source video bitrate in Mbps from an .mpd, or ``default`` on failure."""
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=bit_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", mpd_path],
+            creationflags=_NO_WINDOW, stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+        if out.isdigit() and int(out) > 0:
+            return int(out) / 1_000_000.0
+    except Exception:
+        pass
+
+    content = None
+    try:
+        with open(mpd_path, encoding="utf-8") as handle:
+            content = handle.read()
+        bws = _video_bandwidths_from_content(content)
+        if bws:
+            return max(bws) / 1_000_000.0
+    except OSError:
+        pass
+
+    # Legacy manifests without mimeType on Representation — highest rep wins.
+    if content:
+        all_bws = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content)]
+        if all_bws:
+            return max(all_bws) / 1_000_000.0
+
+    return default
+
+
 def parse_duration_seconds(mpd_content):
     """Parse clip duration in seconds from an .mpd's mediaPresentationDuration,
     or None if absent. Pure - regex only."""
