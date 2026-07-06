@@ -32,6 +32,16 @@ from steempeg.core import capabilities
 from steempeg.core.dash import discovery, health, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render import bitrate
+from steempeg.render.output_formats import (
+    AUDIO_FORMATS,
+    CONTAINERS,
+    KNOWN_OUTPUT_EXTENSIONS,
+    OUTPUT_PRESETS,
+    VIDEO_CODEC_ITEMS,
+    audio_needs_bitrate,
+    is_valid_output_combo,
+    output_extension,
+)
 from steempeg.render.queue import (
     JobStatus,
     PREVIEW_BADGE_COLOR,
@@ -48,7 +58,15 @@ from steempeg.render.queue_history import (
     load_history,
     snapshot_queue_batch,
 )
+from steempeg.ui.widgets.combo_chrome import find_enabled_combo_text, set_combo_item_enabled
 from steempeg.ui.render_panel import set_settings_panel_locked
+from steempeg.ui.render_job_builder import (
+    apply_job_settings_to_ui,
+    build_render_job_from_ui,
+    resolve_render_params,
+    snapshot_settings_from_ui,
+)
+from steempeg.ui.render_thread import RenderThread
 
 
 def _fmt_mbps(value: float) -> str:
@@ -63,13 +81,7 @@ def _fmt_mbps(value: float) -> str:
         return f"{value:.1f}".rstrip("0").rstrip(".") if value % 1 else str(int(value))
     # Below 1 Mbps: two decimals, but never show a meaningless 0.00.
     return f"{max(value, 0.01):.2f}".rstrip("0").rstrip(".")
-from steempeg.ui.render_job_builder import (
-    apply_job_settings_to_ui,
-    build_render_job_from_ui,
-    resolve_render_params,
-    snapshot_settings_from_ui,
-)
-from steempeg.ui.render_thread import RenderThread
+
 
 _RENDER_ERROR_DIALOG_STYLE = """
     QDialog {
@@ -185,6 +197,8 @@ class RenderMixin:
         if hasattr(self.ui, 'tab_video'):
             self.ui.tab_video.setEnabled(not checked)  # Freeze entire Video Tab
         self._sync_original_audio_controls()
+        self.refresh_output_format_availability()
+        self._mark_output_preset_custom()
         self.update_final_setup()
 
     def on_mute_audio_toggled(self, checked):
@@ -197,6 +211,8 @@ class RenderMixin:
         if hasattr(self.ui, 'tab_audio'):
             self.ui.tab_audio.setEnabled(not checked)  # Freeze entire Audio Tab
         self._sync_original_audio_controls()
+        self.refresh_output_format_availability()
+        self._mark_output_preset_custom()
         self.update_final_setup()
 
     def _sync_original_audio_controls(self):
@@ -209,7 +225,7 @@ class RenderMixin:
             self.ui.combo_audio_bitrate.setCurrentIndex(0)
 
         tooltip = (
-            "Original preset uses stream copy: audio is copied as-is, without AAC/MP3 re-encoding."
+            "Original preset uses stream copy: audio is copied as-is, without re-encoding."
             if is_original_copy else ""
         )
         for name in ("label_audio_format", "combo_audio_format", "label_audio_bitrate", "combo_audio_bitrate"):
@@ -217,6 +233,13 @@ class RenderMixin:
             if widget is not None:
                 widget.setEnabled(not is_original_copy)
                 widget.setToolTip(tooltip)
+
+        audio_fmt = self.ui.combo_audio_format.currentText() if hasattr(self.ui, "combo_audio_format") else "AAC"
+        if not is_original_copy and audio_needs_bitrate(audio_fmt):
+            for name in ("label_audio_bitrate", "combo_audio_bitrate"):
+                widget = getattr(self.ui, name, None)
+                if widget is not None:
+                    widget.setEnabled(True)
 
     def detect_gpu_and_set_encoder(self):
         """Probe the hardware encoders and fill the encoder dropdown."""
@@ -232,6 +255,150 @@ class RenderMixin:
 
         # default to the first hardware encoder if there is one, otherwise CPU
         self.ui.combo_encoder.setCurrentIndex(1 if self.ui.combo_encoder.count() > 1 else 0)
+
+    def populate_output_format_combos(self) -> None:
+        """Fill container / codec / audio / preset dropdowns (post-restyle)."""
+        ui = self.ui
+        optional = set(capabilities.detect_optional_video_codecs())
+
+        if hasattr(ui, "combo_codec"):
+            ui.combo_codec.clear()
+            for item in VIDEO_CODEC_ITEMS:
+                if item == "AV1" and "AV1" not in optional:
+                    continue
+                if item == "VP9" and "VP9" not in optional:
+                    continue
+                ui.combo_codec.addItem(item)
+            if ui.combo_codec.count():
+                ui.combo_codec.setCurrentIndex(min(1, ui.combo_codec.count() - 1))
+
+        if hasattr(ui, "combo_audio_format"):
+            ui.combo_audio_format.clear()
+            for fmt in AUDIO_FORMATS:
+                ui.combo_audio_format.addItem(fmt)
+
+        if hasattr(ui, "combo_container"):
+            ui.combo_container.clear()
+            for container in CONTAINERS:
+                ui.combo_container.addItem(container)
+
+        if hasattr(ui, "combo_output_preset"):
+            ui.combo_output_preset.clear()
+            ui.combo_output_preset.addItem("Custom")
+            for name in OUTPUT_PRESETS:
+                ui.combo_output_preset.addItem(name)
+
+        self.refresh_output_format_availability()
+
+    def refresh_output_format_availability(self) -> None:
+        """Grey invalid container/codec/audio pairs; toggle lossless audio bitrate."""
+        ui = self.ui
+        container = ui.combo_container.currentText() if hasattr(ui, "combo_container") else "MP4"
+        codec = ui.combo_codec.currentText() if hasattr(ui, "combo_codec") else ""
+        audio_fmt = ui.combo_audio_format.currentText() if hasattr(ui, "combo_audio_format") else "AAC"
+        audio_only = ui.check_audio_only.isChecked() if hasattr(ui, "check_audio_only") else False
+        mute = ui.check_mute_audio.isChecked() if hasattr(ui, "check_mute_audio") else False
+        quality_text = ui.combo_quality.currentText() if hasattr(ui, "combo_quality") else ""
+        is_original_copy = (
+            "Original" in quality_text and "Target File" not in quality_text and not audio_only
+        )
+
+        if hasattr(ui, "combo_container"):
+            for i in range(ui.combo_container.count()):
+                c = ui.combo_container.itemText(i)
+                ok = is_valid_output_combo(
+                    c, codec, audio_fmt, audio_only=audio_only, mute_audio=mute
+                )
+                set_combo_item_enabled(ui.combo_container, i, ok)
+
+        if hasattr(ui, "combo_codec"):
+            for i in range(ui.combo_codec.count()):
+                ctext = ui.combo_codec.itemText(i)
+                ok = is_valid_output_combo(
+                    container, ctext, audio_fmt, audio_only=audio_only, mute_audio=mute
+                )
+                set_combo_item_enabled(ui.combo_codec, i, ok)
+
+        if hasattr(ui, "combo_audio_format"):
+            for i in range(ui.combo_audio_format.count()):
+                afmt = ui.combo_audio_format.itemText(i)
+                ok = is_valid_output_combo(
+                    container, codec, afmt, audio_only=audio_only, mute_audio=mute
+                )
+                set_combo_item_enabled(ui.combo_audio_format, i, ok)
+
+        needs_bitrate = audio_needs_bitrate(audio_fmt) and not is_original_copy
+        bitrate_enabled = needs_bitrate and (audio_only or not mute)
+        for name in ("label_audio_bitrate", "combo_audio_bitrate"):
+            widget = getattr(ui, name, None)
+            if widget is not None:
+                widget.setEnabled(bitrate_enabled)
+        if hasattr(ui, "input_custom_abitrate"):
+            ui.input_custom_abitrate.setEnabled(bitrate_enabled)
+
+    def _mark_output_preset_custom(self) -> None:
+        if getattr(self, "_applying_output_preset", False):
+            return
+        combo = getattr(self.ui, "combo_output_preset", None)
+        if combo is None:
+            return
+        idx = combo.findText("Custom")
+        if idx >= 0 and combo.currentIndex() != idx:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def on_output_preset_changed(self, text: str) -> None:
+        preset = OUTPUT_PRESETS.get((text or "").strip())
+        if not preset:
+            self.refresh_output_format_availability()
+            self.update_final_setup()
+            return
+
+        ui = self.ui
+        self._applying_output_preset = True
+        blockers = []
+        for name in (
+            "combo_container",
+            "combo_codec",
+            "combo_audio_format",
+            "check_audio_only",
+            "check_mute_audio",
+        ):
+            w = getattr(ui, name, None)
+            if w is not None and hasattr(w, "blockSignals"):
+                w.blockSignals(True)
+                blockers.append(w)
+
+        try:
+            if hasattr(ui, "combo_container"):
+                idx = ui.combo_container.findText(preset["container"])
+                if idx >= 0:
+                    ui.combo_container.setCurrentIndex(idx)
+            if hasattr(ui, "combo_codec"):
+                idx = ui.combo_codec.findText(preset["codec"])
+                if idx >= 0:
+                    ui.combo_codec.setCurrentIndex(idx)
+            if hasattr(ui, "combo_audio_format"):
+                idx = ui.combo_audio_format.findText(preset["audio"])
+                if idx >= 0:
+                    ui.combo_audio_format.setCurrentIndex(idx)
+            if hasattr(ui, "check_audio_only") and ui.check_audio_only.isChecked():
+                ui.check_audio_only.setChecked(False)
+            if hasattr(ui, "check_mute_audio") and ui.check_mute_audio.isChecked():
+                ui.check_mute_audio.setChecked(False)
+            if hasattr(ui, "tab_video"):
+                ui.tab_video.setEnabled(True)
+            if hasattr(ui, "tab_audio"):
+                ui.tab_audio.setEnabled(True)
+        finally:
+            for w in blockers:
+                w.blockSignals(False)
+            self._applying_output_preset = False
+
+        self.refresh_output_format_availability()
+        self._sync_original_audio_controls()
+        self.update_final_setup()
 
     def _on_render_progress(self, msg):
         """Helper to safely receive thread signals on the main GUI thread."""
@@ -676,8 +843,15 @@ class RenderMixin:
             ]
             self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
             for val, text in bitrates:
-                if val <= orig_audio_bitrate + 15:
-                    self.ui.combo_audio_bitrate.addItem(text)
+                self.ui.combo_audio_bitrate.addItem(text)
+                idx = self.ui.combo_audio_bitrate.count() - 1
+                if val > orig_audio_bitrate + 15:
+                    set_combo_item_enabled(
+                        self.ui.combo_audio_bitrate,
+                        idx,
+                        False,
+                        tooltip=f"Source audio is {orig_audio_bitrate} kbps — cannot increase.",
+                    )
             self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
             self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
             self.ui.combo_audio_bitrate.blockSignals(False)
@@ -756,8 +930,18 @@ class RenderMixin:
             else:
                 self.ui.combo_quality.addItem("Original (Lossless)")
             for preset_name, preset_height in self.all_qualities:
-                if preset_height <= max_height:
-                    self.ui.combo_quality.addItem(preset_name)
+                self.ui.combo_quality.addItem(preset_name)
+                idx = self.ui.combo_quality.count() - 1
+                if max_height > 0 and preset_height > max_height:
+                    set_combo_item_enabled(
+                        self.ui.combo_quality,
+                        idx,
+                        False,
+                        tooltip=(
+                            f"Clip is {max_height}p — cannot upscale to {preset_height}p. "
+                            "Pick a lower preset or Original."
+                        ),
+                    )
             self.ui.combo_quality.setCurrentIndex(0)
             self.ui.combo_quality.insertSeparator(self.ui.combo_quality.count())
             self.ui.combo_quality.addItem("🎯 Target File Size...")
@@ -766,29 +950,42 @@ class RenderMixin:
         if hasattr(self.ui, "combo_fps"):
             self.ui.combo_fps.clear()
             fps_val = getattr(self, "current_orig_fps", 60)
+            self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
+
+            optional_fps = []
             if fps_val >= 60:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
-                self.ui.combo_fps.addItem("30 FPS")
-                self.ui.combo_fps.addItem("15 FPS")
+                optional_fps = [30, 15]
             elif fps_val >= 30:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
-                self.ui.combo_fps.addItem("15 FPS")
-            else:
-                self.ui.combo_fps.addItem(f"{fps_val} FPS (Original)")
+                optional_fps = [15]
+            for target in optional_fps:
+                self.ui.combo_fps.addItem(f"{target} FPS")
+            # Show common higher FPS greyed when source is lower (cannot invent frames).
+            for target in (60, 30, 15):
+                label = f"{target} FPS"
+                if self.ui.combo_fps.findText(label) < 0 and target > fps_val:
+                    self.ui.combo_fps.addItem(label)
+                    idx = self.ui.combo_fps.count() - 1
+                    set_combo_item_enabled(
+                        self.ui.combo_fps,
+                        idx,
+                        False,
+                        tooltip=f"Source is {fps_val} FPS — cannot upscale to {target} FPS.",
+                    )
+
             self.ui.combo_fps.insertSeparator(self.ui.combo_fps.count())
             self.ui.combo_fps.addItem("⚙️ Custom FPS...")
             self.ui.combo_fps.setCurrentIndex(0)
 
         if preserve_ui_selection and current_quality and hasattr(self.ui, "combo_quality"):
-            index = self.ui.combo_quality.findText(current_quality)
+            index = find_enabled_combo_text(self.ui.combo_quality, current_quality)
             if index >= 0:
                 self.ui.combo_quality.setCurrentIndex(index)
         if preserve_ui_selection and current_fps and hasattr(self.ui, "combo_fps"):
-            index = self.ui.combo_fps.findText(current_fps)
+            index = find_enabled_combo_text(self.ui.combo_fps, current_fps)
             if index >= 0:
                 self.ui.combo_fps.setCurrentIndex(index)
         if preserve_ui_selection and current_bitrate and hasattr(self.ui, "combo_bitrate"):
-            index = self.ui.combo_bitrate.findText(current_bitrate)
+            index = find_enabled_combo_text(self.ui.combo_bitrate, current_bitrate)
             if index >= 0:
                 self.ui.combo_bitrate.setCurrentIndex(index)
 
@@ -1095,16 +1292,20 @@ class RenderMixin:
         mute_audio = self.ui.check_mute_audio.isChecked() if hasattr(self.ui, 'check_mute_audio') else False
         audio_format = self.ui.combo_audio_format.currentText() if hasattr(self.ui, 'combo_audio_format') else "AAC"
         audio_bitrate = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
+        container = self.ui.combo_container.currentText() if hasattr(self.ui, 'combo_container') else "MP4"
 
         # 2. Calculate the file extension
-        ext = ".mp3" if (audio_only and audio_format == "MP3") else (".aac" if audio_only else ".mp4")
+        ext = output_extension(container, audio_only, audio_format)
 
         # 3. OVERWRITE PROTECTION 
         save_dir = self.custom_destination if self.custom_destination else get_save_directory()
         base_filename = self.ui.input_filename.text().strip() if hasattr(self.ui, 'input_filename') else "rendered"
         
-        for e in [".mp4", ".mp3", ".aac"]:
-            if base_filename.lower().endswith(e): base_filename = base_filename[:-4]
+        lower_base = base_filename.lower()
+        for e in KNOWN_OUTPUT_EXTENSIONS:
+            if lower_base.endswith(e):
+                base_filename = base_filename[: -len(e)]
+                break
 
         test_path = os.path.join(save_dir, f"{base_filename}{ext}")
         counter = 1
@@ -1186,7 +1387,10 @@ class RenderMixin:
             audio_display = audio_bitrate
 
         if audio_only:
-            sound_info = f"{audio_format} {self._audio_kbps_from_ui()} kbps"
+            if audio_format in ("FLAC", "WAV", "Copy"):
+                sound_info = audio_format
+            else:
+                sound_info = f"{audio_format} {self._audio_kbps_from_ui()} kbps"
             other_info = ">> EXTRACT AUDIO ONLY (NO VIDEO)"
         elif mute_audio:
             sound_info = "None"
@@ -1194,6 +1398,12 @@ class RenderMixin:
         elif "Original" in quality and "Target File Size" not in quality:
             sound_info = "Original audio (copy)"
             other_info = "Original stream copy"
+        elif audio_format == "Copy":
+            sound_info = "Copy (from source)"
+            other_info = "Normal Render"
+        elif audio_format in ("FLAC", "WAV"):
+            sound_info = audio_format
+            other_info = "Normal Render"
         else:
             sound_info = audio_display
             other_info = "Normal Render"
@@ -1236,7 +1446,9 @@ class RenderMixin:
                 video_bitrate_display = f"{float(match.group(1)):.1f} Mbps"
 
         # Parse Audio Bitrate for UI
-        if "Custom" in audio_bitrate:
+        if audio_format in ("FLAC", "WAV", "Copy"):
+            audio_bitrate_clean = "lossless / copy" if audio_format != "Copy" else "copy"
+        elif "Custom" in audio_bitrate:
             val = self._audio_kbps_from_ui()
             audio_bitrate_clean = f"⚙️ {val} kbps"
         elif "Original" in quality and "Target File Size" not in quality and not audio_only:
@@ -1258,9 +1470,11 @@ class RenderMixin:
         enc_clean = encoder if encoder else "Unknown"
 
         # Construct the final detailed text block 
+        container_line = f"Container: {container}\n"
         if audio_only:
             detailed_text = (
                 f"Clip time: {duration_str}\n"
+                f"{container_line}"
                 f"Format: {audio_format}\n"
                 f"Sound: {audio_format}, {audio_bitrate_clean}\n"
                 f"Other settings: >> EXTRACT AUDIO ONLY (NO VIDEO)\n"
@@ -1269,6 +1483,7 @@ class RenderMixin:
         elif mute_audio:
             detailed_text = (
                 f"Clip time: {duration_str}\n"
+                f"{container_line}"
                 f"Quality: {q_clean}\n"
                 f"FPS: {fps_display}\n"
                 f"Bitrate: {video_bitrate_display}\n"
@@ -1280,6 +1495,7 @@ class RenderMixin:
         elif "Original" in quality and "Target File Size" not in quality:
             detailed_text = (
                 f"Clip time: {duration_str}\n"
+                f"{container_line}"
                 f"Quality: {q_clean}\n"
                 f"FPS: {fps_display}\n"
                 f"Bitrate: {video_bitrate_display}\n"
@@ -1292,6 +1508,7 @@ class RenderMixin:
         else:
             detailed_text = (
                 f"Clip time: {duration_str}\n"
+                f"{container_line}"
                 f"Quality: {q_clean}\n"
                 f"FPS: {fps_display}\n"
                 f"Bitrate: {video_bitrate_display}\n"
@@ -1304,6 +1521,14 @@ class RenderMixin:
             
         if hasattr(self.ui, 'label_detailed_summary'):
             self.ui.label_detailed_summary.setText(detailed_text)
+
+        combo_valid = is_valid_output_combo(
+            container, codec_raw, audio_format, audio_only=audio_only, mute_audio=mute_audio
+        )
+        if hasattr(self.ui, 'btn_start') and not getattr(self, '_is_rendering', False):
+            self.ui.btn_start.setEnabled(combo_valid)
+
+        self.refresh_output_format_availability()
 
         # 6. Short Summary ABOVE Ready 
         q_word = quality.split()[0] if quality.split() else "Unknown"

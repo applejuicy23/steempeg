@@ -5,6 +5,8 @@ Used for the date and time pickers in the filter panel.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QCompleter
 
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+
 
 class BlockCombo(QComboBox):
     def __init__(self, items, parent=None):
@@ -28,9 +30,8 @@ class BlockCombo(QComboBox):
         self.style_normal = """
             QComboBox { background: #1e1e1e; color: white; border: 1px solid #333; border-radius: 6px; padding: 0px; font-weight: bold; font-family: 'Segoe UI'; }
             QLineEdit { background: transparent; color: white; border: none; selection-background-color: #b29ae7; selection-color: black; padding: 0px; margin: 0px; }
-            QComboBox QAbstractItemView { background: #252525; color: white; selection-background-color: #b29ae7; selection-color: black; border: 1px solid #444; outline: none; min-width: 50px; }
             QComboBox::drop-down { border: none; width: 0px; }
-        """
+        """ + COMBO_POPUP_ITEM_RULES
         self.style_error = self.style_normal.replace(
             "border: 1px solid #333;", "border: 2px solid #ff4444;"
         )

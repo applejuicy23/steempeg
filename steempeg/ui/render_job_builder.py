@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Optional
 from PySide6.QtCore import Qt
 
 from steempeg.core.dash import discovery
+from steempeg.core import capabilities
 from steempeg.infra.paths import get_save_directory
+from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
     RenderJobSettings,
@@ -49,6 +51,8 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
         "combo_encoder",
         "combo_audio_format",
         "combo_audio_bitrate",
+        "combo_container",
+        "combo_output_preset",
         "check_audio_only",
         "check_mute_audio",
         "input_filename",
@@ -91,6 +95,10 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
         _set_combo_text(ui.combo_audio_format, settings.audio_format)
     if hasattr(ui, "combo_audio_bitrate") and settings.audio_bitrate_text:
         _set_combo_text(ui.combo_audio_bitrate, settings.audio_bitrate_text)
+    if hasattr(ui, "combo_container") and settings.container_format:
+        _set_combo_text(ui.combo_container, settings.container_format)
+    if hasattr(ui, "combo_output_preset") and settings.output_preset:
+        _set_combo_text(ui.combo_output_preset, settings.output_preset)
     if hasattr(ui, "input_filename") and settings.output_basename:
         ui.input_filename.setText(settings.output_basename)
 
@@ -186,10 +194,18 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
     encoder_codec = (
         ui.combo_encoder.currentData(Qt.UserRole) if hasattr(ui, "combo_encoder") else "libx264"
     )
-    if hasattr(ui, "combo_codec") and "H.265" in ui.combo_codec.currentText():
-        encoder_codec = (
-            str(encoder_codec).replace("h264", "hevc").replace("libx264", "libx265")
-        )
+    encoder_codec = resolve_video_encoder(
+        codec_raw,
+        str(encoder_codec),
+        capabilities.av1_encoder_available(),
+    )
+
+    container_format = (
+        ui.combo_container.currentText() if hasattr(ui, "combo_container") else "MP4"
+    )
+    output_preset = (
+        ui.combo_output_preset.currentText() if hasattr(ui, "combo_output_preset") else "Custom"
+    )
 
     audio_only = ui.check_audio_only.isChecked() if hasattr(ui, "check_audio_only") else False
     mute_audio = ui.check_mute_audio.isChecked() if hasattr(ui, "check_mute_audio") else False
@@ -259,6 +275,8 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         orig_fps=int(getattr(app, "current_orig_fps", 60)),
         orig_video_mbps=float(getattr(app, "current_orig_bitrate", 0.0)),
         orig_audio_kbps=int(getattr(app, "current_orig_audio_bitrate", 192)),
+        container_format=container_format or "MP4",
+        output_preset=output_preset or "Custom",
     )
 
 
@@ -332,7 +350,11 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
     quality_text = s.quality_text
     fps_text = s.fps_text
     bitrate_text = s.bitrate_text
-    selected_encoder = s.encoder_codec
+    selected_encoder = resolve_video_encoder(
+        s.codec_text,
+        s.encoder_codec,
+        capabilities.av1_encoder_available(),
+    )
 
     trim_start_sec = -1.0
     trim_duration_sec = -1.0
@@ -410,4 +432,5 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
         target_scale_h=target_scale_h,
         trim_start_sec=trim_start_sec,
         trim_duration_sec=trim_duration_sec,
+        container_format=s.container_format or "MP4",
     )

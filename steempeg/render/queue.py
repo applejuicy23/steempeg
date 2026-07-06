@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterator, List, Optional
 
+from steempeg.render.output_formats import KNOWN_OUTPUT_EXTENSIONS, output_extension
+
 
 class JobStatus(Enum):
     QUEUED = "queued"
@@ -67,6 +69,8 @@ class RenderJobSettings:
     orig_fps: int = 60
     orig_video_mbps: float = 0.0
     orig_audio_kbps: int = 192
+    container_format: str = "MP4"
+    output_preset: str = "Custom"
 
 
 @dataclass
@@ -86,9 +90,7 @@ class RenderJob:
     def refresh_output_path(self) -> str:
         """Recompute a collision-safe output path from current settings."""
         s = self.settings
-        ext = ".mp3" if (s.audio_only and s.audio_format == "MP3") else (
-            ".aac" if s.audio_only else ".mp4"
-        )
+        ext = output_extension(s.container_format, s.audio_only, s.audio_format)
         self.output_file = compute_unique_output_path(s.save_dir, s.output_basename, ext)
         return self.output_file
 
@@ -112,13 +114,16 @@ class ResolvedRenderParams:
     target_scale_h: int
     trim_start_sec: float
     trim_duration_sec: float
+    container_format: str = "MP4"
 
 
 def compute_unique_output_path(save_dir: str, base_filename: str, ext: str) -> str:
     base = (base_filename or "rendered").strip()
-    for suffix in (".mp4", ".mp3", ".aac"):
-        if base.lower().endswith(suffix):
+    lower = base.lower()
+    for suffix in KNOWN_OUTPUT_EXTENSIONS:
+        if lower.endswith(suffix):
             base = base[: -len(suffix)]
+            break
     candidate = os.path.join(save_dir, f"{base}{ext}")
     counter = 1
     while os.path.exists(candidate):

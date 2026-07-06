@@ -738,6 +738,26 @@ def restyle_export_page(ui):
 
     summary.setText(old_text)
 
+    # Output format: preset + container (codecs live on Video / Audio tabs)
+    preset_combo = getattr(ui, "combo_output_preset", None)
+    container_combo = getattr(ui, "combo_container", None)
+    if preset_combo is None:
+        preset_combo = QComboBox()
+        preset_combo.setObjectName("combo_output_preset")
+        ui.combo_output_preset = preset_combo
+    if container_combo is None:
+        container_combo = QComboBox()
+        container_combo.setObjectName("combo_container")
+        ui.combo_container = container_combo
+
+    fmt_grid = QGridLayout()
+    fmt_grid.setHorizontalSpacing(16)
+    fmt_grid.setVerticalSpacing(12)
+    fmt_grid.addLayout(_field(QLabel("Output preset"), preset_combo), 0, 0)
+    fmt_grid.addLayout(_field(QLabel("Container"), container_combo), 0, 1)
+    fmt_grid.setColumnStretch(2, 1)
+    root.addLayout(fmt_grid)
+
     if fname_cap is not None:
         fname_cap.setText("Output Filename")
         fname_cap.setStyleSheet(_FIELD_LABEL_QSS)

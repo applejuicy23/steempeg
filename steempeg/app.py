@@ -17,6 +17,10 @@ from steempeg.ui.library.rendered_library import RenderedLibraryMixin
 from steempeg.ui.player.controller import PlayerMixin
 from steempeg.ui.lifecycle import LifecycleMixin
 from steempeg.ui.hide_watcher import HideWatcher
+from steempeg.ui.widgets.combo_chrome import (
+    compact_combo_stylesheet,
+    settings_panel_stylesheet,
+)
 
 
 
@@ -624,31 +628,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # so the label can't get clipped when the Clips Manager panel gets narrow.
         self.combo_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo_sort.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self.combo_sort.setStyleSheet("""
-            QComboBox {
-                background-color: #383838;
-                color: #ffffff; 
-                border: 2px solid #444444; 
-                border-radius: 8px;
-                padding: 4px 10px; 
-                font-weight: bold; 
-                font-family: 'Segoe UI'; 
-                font-size: 13px; 
-                min-height: 24px;
-            }
-            QComboBox:hover { background-color: #404040; border: 2px solid #6b5a8e; }
-            QComboBox:on { background-color: #383838; }
-            QComboBox::drop-down { border: none; padding-right: 5px; background: transparent; }
-            QComboBox QAbstractItemView {
-                background-color: #252525; 
-                color: white; 
-                selection-background-color: #6b5a8e;
-                border: 1px solid #444; 
-                border-radius: 4px; 
-                outline: none; 
-                padding: 4px;
-            }
-        """)
+        self.combo_sort.setStyleSheet(compact_combo_stylesheet())
 
         # 3. Adding elements with attractive icons
         self.combo_sort.addItem(QIcon(get_resource_path("defaultsort.png")), "Default (Don't touch)")
@@ -823,42 +803,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 QTabWidget::pane { border: none; background: transparent; }
 
                 QLabel { color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }
-
-                QComboBox, QLineEdit {
-                    background-color: #383838; color: #ffffff;
-                    border: 2px solid #4a4a4a; border-radius: 12px;
-                    padding: 7px 10px; font-size: 12px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;
-                }
-                QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
-                QComboBox:disabled, QLineEdit:disabled {
-                    background-color: #262626; color: #5a5a5a; border: 2px solid #333333;
-                }
-                QComboBox::drop-down:disabled { background-color: #1f1f1f; }
-                QComboBox::drop-down {
-                    subcontrol-origin: padding; subcontrol-position: top right;
-                    width: 30px; background-color: #262626;
-                    border-left: 2px solid #4a4a4a;
-                    border-top-right-radius: 10px; border-bottom-right-radius: 10px;
-                }
-                QComboBox::down-arrow {
-                    width: 0; height: 0;
-                    border-left: 5px solid transparent; border-right: 5px solid transparent;
-                    border-top: 6px solid #cccccc;
-                }
-                QComboBox QAbstractItemView {
-                    background-color: #1e1e1e; color: #e0e0e0;
-                    border: 2px solid #4a4a4a; border-radius: 10px; padding: 4px; outline: none;
-                    selection-background-color: #4a4a4a; selection-color: #ffffff;
-                    font-family: 'Segoe UI', Arial, sans-serif;
-                }
-                QComboBox QAbstractItemView::item {
-                    min-height: 28px; padding: 7px 10px; border-radius: 6px;
-                    margin: 2px 2px; background-color: #333333; color: #e0e0e0;
-                }
-                QComboBox QAbstractItemView::item:hover {
-                    background-color: #4a4a4a; color: #ffffff;
-                }
-
+            """ + settings_panel_stylesheet("""
                 QPushButton {
                     background-color: #303030; color: #ffffff;
                     border: 2px solid #3a3a3a; border-radius: 12px;
@@ -866,7 +811,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 }
                 QPushButton:hover { background-color: #262626; border: 2px solid #6b5a8e; }
                 QPushButton:pressed { background-color: #141414; border: 2px solid #b29ae7; }
-            """)
+            """))
             
             # Place tabs in the scroll area
             self.right_scroll.setWidget(self.ui.settings_tabs)
@@ -921,13 +866,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # Collapse non-active settings pages so the scroll area fits the visible page
         if hasattr(self, 'fit_settings_tab_to_page'):
             self.fit_settings_tab_to_page()
-        # Codec list
-        if hasattr(self.ui, 'combo_codec'):
-            self.ui.combo_codec.clear()
-            self.ui.combo_codec.addItem("H.264 (AVC)")
-            self.ui.combo_codec.addItem("H.265 (HEVC)")
-            self.ui.combo_codec.setCurrentIndex(1) # Default is H.265
-            
+        if hasattr(self, 'populate_output_format_combos'):
+            self.populate_output_format_combos()
         # Update the bitrate list when changing resolution
         if hasattr(self.ui, 'combo_quality'):
             self.ui.combo_quality.currentTextChanged.connect(self.update_bitrate_options) 
@@ -2063,8 +2003,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # We connect the "Final setup" update to all interface changes
         if hasattr(self.ui, 'combo_quality'): self.ui.combo_quality.currentTextChanged.connect(self.update_final_setup)
         if hasattr(self.ui, 'combo_bitrate'): self.ui.combo_bitrate.currentTextChanged.connect(self.update_final_setup)
-        if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
-        if hasattr(self.ui, 'combo_fps'): 
+        if hasattr(self.ui, 'combo_codec'):
+            self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_codec.currentTextChanged.connect(self._mark_output_preset_custom)
+            self.ui.combo_codec.currentTextChanged.connect(self.refresh_output_format_availability)
+        if hasattr(self.ui, 'combo_fps'):
             self.ui.combo_fps.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_fps.currentTextChanged.connect(self.refresh_slider_if_needed)
             self.ui.combo_fps.currentTextChanged.connect(self.update_bitrate_options)
@@ -2100,8 +2043,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.check_mute_audio.toggled.connect(self.on_mute_audio_toggled)
         if hasattr(self.ui, 'combo_audio_format'):
             self.ui.combo_audio_format.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_audio_format.currentTextChanged.connect(self._mark_output_preset_custom)
+            self.ui.combo_audio_format.currentTextChanged.connect(self.refresh_output_format_availability)
         if hasattr(self.ui, 'combo_audio_bitrate'):
             self.ui.combo_audio_bitrate.currentTextChanged.connect(self.update_final_setup)
+        if hasattr(self.ui, 'combo_container'):
+            self.ui.combo_container.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_container.currentTextChanged.connect(self._mark_output_preset_custom)
+            self.ui.combo_container.currentTextChanged.connect(self.refresh_output_format_availability)
+        if hasattr(self.ui, 'combo_output_preset'):
+            self.ui.combo_output_preset.currentTextChanged.connect(self.on_output_preset_changed)
     
         # 5. AUTOMATIC DATA LOADING AT PROGRAM START
         self.detect_gpu_and_set_encoder()

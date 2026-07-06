@@ -50,55 +50,100 @@ def format_job_trim(settings: RenderJobSettings) -> str:
     return "Full clip"
 
 
-def format_job_preset(settings: RenderJobSettings) -> str:
-    if settings.audio_only:
-        fmt = (settings.audio_format or "Audio").strip()
-        br = (settings.audio_bitrate_text or "").strip()
-        return f"{fmt} extract" + (f" • {br}" if br else "")
+def _short_codec(codec_text: str) -> str:
+    codec = (codec_text or "").strip()
+    if not codec:
+        return ""
+    if "H.265" in codec or "HEVC" in codec.upper():
+        return "H.265"
+    if "H.264" in codec or "AVC" in codec.upper():
+        return "H.264"
+    if codec.startswith("AV1"):
+        return "AV1"
+    if codec.startswith("VP9"):
+        return "VP9"
+    return codec.split()[0]
 
-    parts: list[str] = []
+
+def _short_preset(settings: RenderJobSettings) -> str:
     quality = (settings.quality_text or "").strip()
-    fps = (settings.fps_text or "").strip()
-    bitrate = (settings.bitrate_text or "").strip()
-    codec = (settings.codec_text or "").strip()
+    if "Target File Size" in quality:
+        return "Target size"
+    if "Original" in quality:
+        return "Original"
+    match = re.match(r"^(\d+p)", quality)
+    if match:
+        return match.group(1)
+    if quality:
+        return quality.split("(")[0].strip()
+    return ""
 
-    is_original = "Original" in quality or (
-        "Original" in bitrate and not quality
+
+def _short_fps(settings: RenderJobSettings) -> str:
+    fps = (settings.fps_text or "").strip()
+    if not fps:
+        return ""
+    if settings.custom_fps is not None and "Custom" in fps:
+        return f"{settings.custom_fps} fps"
+    match = re.search(r"(\d+)", fps)
+    return f"{match.group(1)} fps" if match else ""
+
+
+def _short_bitrate(settings: RenderJobSettings) -> str:
+    bitrate = (settings.bitrate_text or "").strip()
+    quality = (settings.quality_text or "").strip()
+    if "Original" in quality or "Original" in bitrate:
+        return ""
+    if "Custom" in bitrate and settings.custom_vbitrate is not None:
+        s = f"{settings.custom_vbitrate:.1f}".rstrip("0").rstrip(".")
+        return f"{s} Mbps"
+    match = re.search(r"([\d.]+)\s*Mbps", bitrate)
+    if match:
+        return f"{match.group(1)} Mbps"
+    if "Target File Size" in quality and settings.custom_target_bitrate:
+        mbps = settings.custom_target_bitrate / 1000
+        s = f"{mbps:.1f}".rstrip("0").rstrip(".")
+        return f"{s} Mbps"
+    return ""
+
+
+def format_job_preset(settings: RenderJobSettings) -> str:
+    """One compact line for queue cards: preset · fps · bitrate · codec."""
+    if settings.audio_only:
+        audio = (settings.audio_format or "Audio").strip()
+        br = (settings.audio_bitrate_text or "").strip()
+        if br and audio not in ("FLAC", "WAV", "Copy"):
+            match = re.search(r"(\d+)", br)
+            br_bit = f"{match.group(1)}k" if match else br.split()[0]
+            return f"{audio} only · {br_bit}"
+        return f"{audio} only"
+
+    is_original = "Original" in (settings.quality_text or "") and "Target" not in (
+        settings.quality_text or ""
     )
 
-    if is_original:
-        parts.append("Original")
-    elif quality:
-        parts.append(quality.split("(")[0].strip() or quality)
+    parts: list[str] = []
+    preset = _short_preset(settings)
+    if preset:
+        parts.append(preset)
 
+    fps = _short_fps(settings)
     if fps:
-        short_fps = fps.split("(")[0].strip()
-        if "fps" not in short_fps.lower():
-            short_fps = f"{short_fps} FPS"
-        parts.append(short_fps)
+        parts.append(fps)
 
-    if bitrate and "Original" not in bitrate:
-        match = re.search(r"([\d.]+)\s*Mbps", bitrate)
-        if match:
-            parts.append(f"{match.group(1)} Mbps")
-        else:
-            chunk = bitrate.split("-")[0].strip()
-            if chunk:
-                parts.append(chunk)
-    elif not is_original and "Original" in bitrate:
-        parts.append("Original")
+    if not is_original:
+        br = _short_bitrate(settings)
+        if br:
+            parts.append(br)
 
-    if codec:
-        if "H.265" in codec or "HEVC" in codec.upper():
-            codec_short = "H.265"
-        elif "H.264" in codec:
-            codec_short = "H.264"
-        else:
-            codec_short = codec.split()[0] if codec else ""
-        if codec_short and codec_short not in " ".join(parts):
-            parts.append(codec_short)
+        codec = _short_codec(settings.codec_text)
+        if codec:
+            parts.append(codec)
 
-    return " • ".join(parts) if parts else "—"
+    if settings.mute_audio:
+        parts.append("muted")
+
+    return " · ".join(parts) if parts else "—"
 
 
 def format_job_datetime_line(job: RenderJob) -> str:

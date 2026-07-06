@@ -17,6 +17,11 @@ _ENCODERS = [
     ("QuickSync (Intel GPU)", "h264_qsv", "hevc_qsv"),
 ]
 
+_OPTIONAL_VIDEO_CODECS = [
+    ("AV1", ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv")),
+    ("VP9", ("libvpx-vp9",)),
+]
+
 
 def _encoder_works(test_code):
     """Try encoding a single black frame with test_code. True if ffmpeg accepts it."""
@@ -28,6 +33,10 @@ def _encoder_works(test_code):
         cmd += ["-preset", "p1"]
     elif "qsv" in test_code:
         cmd += ["-preset", "veryfast"]
+    elif test_code == "libvpx-vp9":
+        cmd += ["-b:v", "1M"]
+    elif test_code == "libsvtav1":
+        cmd += ["-preset", "10"]
     cmd += ["-f", "null", "-"]
     try:
         result = subprocess.run(cmd, stdout=subprocess.DEVNULL,
@@ -44,3 +53,16 @@ def detect_supported_encoders():
     if not supported:
         supported = [("CPU (Software)", "libx264")]
     return supported
+
+
+def detect_optional_video_codecs():
+    """Return codec labels (AV1, VP9) that this ffmpeg build can encode."""
+    found = []
+    for label, tests in _OPTIONAL_VIDEO_CODECS:
+        if any(_encoder_works(code) for code in tests):
+            found.append(label)
+    return found
+
+
+def av1_encoder_available() -> bool:
+    return any(_encoder_works(code) for code in ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv"))

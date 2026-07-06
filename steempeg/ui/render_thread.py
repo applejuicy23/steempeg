@@ -16,6 +16,8 @@ import psutil
 
 from PySide6.QtCore import QThread, Signal
 
+from steempeg.render.output_formats import build_audio_args, video_encoder_extra_args
+
 
 class RenderThread(QThread):
     progress_signal = Signal(str)  
@@ -160,11 +162,10 @@ class RenderThread(QThread):
                     copy_ts_fix = "-avoid_negative_ts make_zero "
                 
                 # 1. Prepare the audio arguments
-                if self.mute_audio:
-                    base_audio = "-an" 
-                else:
-                    a_codec = "libmp3lame" if self.audio_format == "MP3" else "aac"
-                    base_audio = f"-c:a {a_codec} -b:a {self.audio_bitrate_kbps}"
+                base_audio = build_audio_args(
+                    self.audio_format, self.audio_bitrate_kbps, self.mute_audio
+                )
+                v_extra = video_encoder_extra_args(self.selected_encoder)
 
                 # 2. Construct the final command based on video settings
                 if self.audio_only:
@@ -186,13 +187,13 @@ class RenderThread(QThread):
                     else:
                         scale_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
                     
-                    cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf "{scale_filter}" {fps_arg}-c:v {self.selected_encoder} -b:v {self.video_bitrate} -maxrate {self.video_bitrate} -bufsize {bufsize} {base_audio} -y "{temp_mp4}"'
+                    cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf "{scale_filter}" {fps_arg}{v_extra}-c:v {self.selected_encoder} -b:v {self.video_bitrate} -maxrate {self.video_bitrate} -bufsize {bufsize} {base_audio} -y "{temp_mp4}"'
                     
                 else:
                     match = re.search(r'^(\d+)p', self.quality_text)
                     if match:
                         target_height = match.group(1)
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}-c:v {self.selected_encoder} -b:v {self.video_bitrate} {base_audio} -y "{temp_mp4}"'
+                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}{v_extra}-c:v {self.selected_encoder} -b:v {self.video_bitrate} {base_audio} -y "{temp_mp4}"'
                     else:
                         self._stream_copy_used = True
                         cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
