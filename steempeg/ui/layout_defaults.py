@@ -36,6 +36,8 @@ RIGHT_PANEL_BOTTOM_INSET = 12
 RIGHT_PANEL_PLAYER_TOP_INSET = 12  # player only; queue tab row aligns with Clips Manager
 QUEUE_SPLITTER_GUTTER = 10
 LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
+# Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
+RENDER_QUEUE_BOTTOM_INSET = 0
 
 # Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
 HORIZONTAL_SPLITTER_STYLESHEET = """

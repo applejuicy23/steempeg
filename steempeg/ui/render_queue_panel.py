@@ -29,7 +29,7 @@ from steempeg.render.queue_display import (
 )
 from steempeg.ui.layout_defaults import (
     LIBRARY_TAB_TO_TOOLBAR_SPACING,
-    RIGHT_PANEL_BOTTOM_INSET,
+    RENDER_QUEUE_BOTTOM_INSET,
 )
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
@@ -484,7 +484,7 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RIGHT_PANEL_BOTTOM_INSET)
+        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET)
         outer.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
 
         tab_row = QHBoxLayout()
