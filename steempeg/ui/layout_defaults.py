@@ -44,6 +44,13 @@ SETTINGS_STAT_COL_W = 210
 SETTINGS_STAT_GRID_GAP = 8
 SETTINGS_CONTENT_WIDTH = SETTINGS_STAT_COL_W * 3 + SETTINGS_STAT_GRID_GAP * 2
 
+# Render settings tab content inset (right pane beside neo sidebar).
+# Top aligns with sidebar nav top inset; left adds breathing room from the divider.
+SETTINGS_PAGE_MARGIN_LEFT = 16
+SETTINGS_PAGE_MARGIN_TOP = 15
+SETTINGS_PAGE_MARGIN_RIGHT = 8
+SETTINGS_PAGE_MARGIN_BOTTOM = 8
+
 # Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
 HORIZONTAL_SPLITTER_STYLESHEET = """
     QSplitter::handle {

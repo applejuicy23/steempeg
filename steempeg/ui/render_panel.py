@@ -30,7 +30,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication, QIcon
 
-from steempeg.ui.layout_defaults import SETTINGS_CONTENT_WIDTH
+from steempeg.ui.layout_defaults import (
+    SETTINGS_CONTENT_WIDTH,
+    SETTINGS_PAGE_MARGIN_BOTTOM,
+    SETTINGS_PAGE_MARGIN_LEFT,
+    SETTINGS_PAGE_MARGIN_RIGHT,
+    SETTINGS_PAGE_MARGIN_TOP,
+)
 from steempeg.ui.widgets.elided_label import ElidedLabel
 
 from steempeg.ui.widgets.gradient_slider import GradientSlider
@@ -346,6 +352,15 @@ def _promote_size_slider(old):
     return new
 
 
+def _settings_page_margins():
+    return (
+        SETTINGS_PAGE_MARGIN_LEFT,
+        SETTINGS_PAGE_MARGIN_TOP,
+        SETTINGS_PAGE_MARGIN_RIGHT,
+        SETTINGS_PAGE_MARGIN_BOTTOM,
+    )
+
+
 def _page_title(text):
     title = QLabel(text)
     title.setStyleSheet(_TITLE_QSS)
@@ -570,7 +585,7 @@ def restyle_video_page(ui):
     _drop_layout(page)
 
     root = QVBoxLayout(page)
-    root.setContentsMargins(8, 8, 8, 8)
+    root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
     root.addWidget(_page_title("Video Settings"))
 
@@ -617,7 +632,7 @@ def restyle_audio_page(ui):
     _drop_layout(page)
 
     root = QVBoxLayout(page)
-    root.setContentsMargins(8, 8, 8, 8)
+    root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
     root.addWidget(_page_title("Audio Settings"))
 
@@ -683,7 +698,7 @@ def restyle_source_page(ui):
     ui.orig_res_label.setText(old_texts["orig_res_label"])
 
     root = QVBoxLayout(page)
-    root.setContentsMargins(8, 8, 8, 8)
+    root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(10)
     root.addWidget(_page_title("Source Info"))
 
@@ -741,7 +756,7 @@ def restyle_export_page(ui):
     ui.label_detailed_summary = summary
 
     root = QVBoxLayout(page)
-    root.setContentsMargins(8, 8, 8, 8)
+    root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
     root.addWidget(_page_title("Export Settings"))
 
