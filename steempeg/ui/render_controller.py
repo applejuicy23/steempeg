@@ -73,6 +73,11 @@ from steempeg.ui.render_job_builder import (
 from steempeg.ui.render_thread import RenderThread
 
 
+def _fmt_orig_mbps(value: float) -> str:
+    """Round source bitrate for Original UI (e.g. 21.9 → 22)."""
+    return str(int(round(value)))
+
+
 def _fmt_mbps(value: float) -> str:
     """Format a Mbps value for the bitrate dropdown.
 
@@ -1109,6 +1114,26 @@ class RenderMixin:
             page.updateGeometry()
         tabs.updateGeometry()
 
+    def _refresh_source_video_bitrate(self) -> float:
+        """Return source video Mbps, re-probing from disk when the cached value is missing."""
+        mbps = float(getattr(self, "current_orig_bitrate", 0) or 0)
+        if mbps > 0:
+            return mbps
+        clip_path = self._active_preview_clip_path()
+        if not clip_path:
+            return 0.0
+        peak = 0.0
+        for mpd_path in self.get_all_mpd_paths(clip_path):
+            v = mpd.get_video_bitrate_mbps(mpd_path)
+            if v > peak:
+                peak = v
+        if peak > 0:
+            self.current_orig_bitrate = peak
+            if hasattr(self.ui, "label_vbitrate"):
+                rounded = int(round(peak))
+                self.ui.label_vbitrate.setText(f"Video Bitrate: {rounded} Mbps")
+        return peak
+
     def update_bitrate_options(self):
         """ Refreshes lists, applies FPS math visually, and freezes settings if Original is selected. """
         if not hasattr(self.ui, 'combo_bitrate') or not hasattr(self.ui, 'combo_quality'):
@@ -1124,12 +1149,12 @@ class RenderMixin:
         self._sync_original_audio_controls()
 
         if "Original" in quality_text:
-            source_cap_mbps = getattr(self, "current_orig_bitrate", 0)
+            source_cap_mbps = self._refresh_source_video_bitrate()
             if source_cap_mbps > 0:
-                rounded = int(round(source_cap_mbps))
-                self.ui.combo_bitrate.addItem(f"~{rounded} Mbps (Original Copy)")
+                val = _fmt_orig_mbps(source_cap_mbps)
+                self.ui.combo_bitrate.addItem(f"{val} Mbps (Original)")
             else:
-                self.ui.combo_bitrate.addItem("Original Bitrate (Copy)")
+                self.ui.combo_bitrate.addItem("Unknown Mbps (Original)")
 
             self.ui.combo_bitrate.setEnabled(False)
             self.ui.combo_bitrate.setCurrentIndex(0)
@@ -1178,7 +1203,7 @@ class RenderMixin:
         if selected_fps < orig_fps and orig_fps > 0:
             fps_multiplier = selected_fps / orig_fps
 
-        source_cap_mbps = getattr(self, 'current_orig_bitrate', 0)
+        source_cap_mbps = self._refresh_source_video_bitrate()
         cap_label = (
             f"~{int(round(source_cap_mbps))} Mbps"
             if source_cap_mbps > 0
@@ -1464,7 +1489,9 @@ class RenderMixin:
                 m = re.search(r'([\d.]+)\s*Mbps', bitrate_text)
                 if m:
                     orig_mbps = float(m.group(1))
-            video_bitrate_display = f"{orig_mbps:.1f} Mbps" if orig_mbps > 0 else "—"
+            video_bitrate_display = (
+                f"{_fmt_orig_mbps(orig_mbps)} Mbps" if orig_mbps > 0 else "—"
+            )
         else:
             match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
             if match: 
