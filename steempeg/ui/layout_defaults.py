@@ -29,3 +29,15 @@ DEFAULT_LIBRARY_VIEW = "grid"
 
 # "grid" or "list" — render queue cards
 DEFAULT_QUEUE_VIEW = "list"
+
+# Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
+HORIZONTAL_SPLITTER_STYLESHEET = """
+    QSplitter::handle {
+        background-color: #444;
+        margin: 0px 2px;
+        border-radius: 2px;
+    }
+    QSplitter::handle:hover {
+        background-color: #666;
+    }
+"""

@@ -2163,6 +2163,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
+        from steempeg.ui.layout_defaults import HORIZONTAL_SPLITTER_STYLESHEET
+
         dark = "#1e1e1e"
         shell = f"background-color: {dark};"
         for attr in ("left_panel", "right_panel"):
@@ -2171,12 +2173,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 panel.setAutoFillBackground(True)
                 panel.setStyleSheet(shell)
-        splitter = getattr(self.ui, "main_splitter", None)
-        if splitter is not None:
-            splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            splitter.setStyleSheet(
-                f"QSplitter {{ {shell} }} QSplitter::handle {{ background-color: #353535; }}"
-            )
+        splitter_qss = f"QSplitter {{ {shell} }} {HORIZONTAL_SPLITTER_STYLESHEET}"
+        for splitter_attr in ("main_splitter", "right_h_splitter"):
+            splitter = getattr(self.ui, splitter_attr, None) or getattr(self, splitter_attr, None)
+            if splitter is not None:
+                splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                splitter.setStyleSheet(splitter_qss)
 
     def _sync_startup_layout(self):
         """Re-apply splitter sizes once the maximized window has real geometry."""
