@@ -58,7 +58,11 @@ from steempeg.render.queue_history import (
     load_history,
     snapshot_queue_batch,
 )
-from steempeg.ui.widgets.combo_chrome import find_enabled_combo_text, set_combo_item_enabled
+from steempeg.ui.widgets.combo_chrome import (
+    find_enabled_combo_text,
+    set_combo_index_if_enabled,
+    set_combo_item_enabled,
+)
 from steempeg.ui.render_panel import set_settings_panel_locked
 from steempeg.ui.render_job_builder import (
     apply_job_settings_to_ui,
@@ -235,6 +239,12 @@ class RenderMixin:
                 widget.setToolTip(tooltip)
 
         audio_fmt = self.ui.combo_audio_format.currentText() if hasattr(self.ui, "combo_audio_format") else "AAC"
+        if not is_original_copy and audio_fmt == "Copy" and hasattr(self.ui, "combo_audio_format"):
+            idx = self.ui.combo_audio_format.findText("AAC")
+            if idx >= 0:
+                self.ui.combo_audio_format.setCurrentIndex(idx)
+            audio_fmt = "AAC"
+
         if not is_original_copy and audio_needs_bitrate(audio_fmt):
             for name in ("label_audio_bitrate", "combo_audio_bitrate"):
                 widget = getattr(self.ui, name, None)
@@ -325,6 +335,8 @@ class RenderMixin:
                 ok = is_valid_output_combo(
                     container, codec, afmt, audio_only=audio_only, mute_audio=mute
                 )
+                if afmt == "Copy" and not is_original_copy:
+                    ok = False
                 set_combo_item_enabled(ui.combo_audio_format, i, ok)
 
         needs_bitrate = audio_needs_bitrate(audio_fmt) and not is_original_copy
@@ -882,15 +894,9 @@ class RenderMixin:
 
                     height_match = re.search(r'\bheight="(\d+)"', content)
                     width_match = re.search(r'\bwidth="(\d+)"', content)
-                    # A DASH manifest lists a bandwidth per representation (video + audio,
-                    # and sometimes several quality reps). re.search only returns the FIRST,
-                    # which can be a lower/audio rep — that's why a 22 Mbps clip read as 16.
-                    # Take the highest bandwidth across every match instead.
-                    bandwidths = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content)]
-                    if bandwidths:
-                        peak_mbps = max(bandwidths) / 1000000
-                        if peak_mbps > self.current_orig_bitrate:
-                            self.current_orig_bitrate = peak_mbps
+                    peak_mbps = mpd.get_video_bitrate_mbps(mpd_path)
+                    if peak_mbps > self.current_orig_bitrate:
+                        self.current_orig_bitrate = peak_mbps
 
                     if height_match and width_match:
                         h = int(height_match.group(1))
@@ -1118,12 +1124,15 @@ class RenderMixin:
         self._sync_original_audio_controls()
 
         if "Original" in quality_text:
-            if hasattr(self, 'current_orig_bitrate') and self.current_orig_bitrate > 0:
-                self.ui.combo_bitrate.addItem(f"~{int(self.current_orig_bitrate)} Mbps (Original Copy)")
+            source_cap_mbps = getattr(self, "current_orig_bitrate", 0)
+            if source_cap_mbps > 0:
+                rounded = int(round(source_cap_mbps))
+                self.ui.combo_bitrate.addItem(f"~{rounded} Mbps (Original Copy)")
             else:
                 self.ui.combo_bitrate.addItem("Original Bitrate (Copy)")
-                
-            self.ui.combo_bitrate.setEnabled(False) 
+
+            self.ui.combo_bitrate.setEnabled(False)
+            self.ui.combo_bitrate.setCurrentIndex(0)
             if hasattr(self.ui, 'combo_fps'):
                 self.ui.combo_fps.setCurrentIndex(0) 
                 self.ui.combo_fps.setEnabled(False)
@@ -1170,20 +1179,30 @@ class RenderMixin:
             fps_multiplier = selected_fps / orig_fps
 
         source_cap_mbps = getattr(self, 'current_orig_bitrate', 0)
+        cap_label = (
+            f"~{int(round(source_cap_mbps))} Mbps"
+            if source_cap_mbps > 0
+            else "unknown"
+        )
         for quality_level in ["Ultra", "High", "Medium", "Low"]:
             if res_key in self.steam_bitrate_presets.get(quality_level, {}):
                 preset_bitrate = self.steam_bitrate_presets[quality_level][res_key]
-                
-                # Never offer a re-encode preset above the source bitrate. The old
-                # +5 Mbps tolerance could show 1440p Ultra (32 Mbps) for a 22 Mbps
-                # source, which looks like an impossible quality upgrade.
-                if source_cap_mbps == 0 or preset_bitrate <= (source_cap_mbps + 0.25):
-                    # We're multiplying right here just for the sake of appearance in the ComboBox!
-                    scaled_bitrate = preset_bitrate * fps_multiplier
-                    
-                    display_val = _fmt_mbps(scaled_bitrate)
-                    
-                    self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
+
+                scaled_bitrate = preset_bitrate * fps_multiplier
+                display_val = _fmt_mbps(scaled_bitrate)
+
+                self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
+                idx = self.ui.combo_bitrate.count() - 1
+                if source_cap_mbps > 0 and preset_bitrate > source_cap_mbps + 0.25:
+                    set_combo_item_enabled(
+                        self.ui.combo_bitrate,
+                        idx,
+                        False,
+                        tooltip=(
+                            f"Source video is {cap_label} — cannot exceed the original bitrate."
+                        ),
+                    )
+                else:
                     added_any = True
         
         if not added_any and source_cap_mbps > 0:
@@ -1191,19 +1210,23 @@ class RenderMixin:
             self.ui.combo_bitrate.addItem(f"Source Max - {display_val} Mbps")
             added_any = True
 
-        if not added_any and res_key in self.steam_bitrate_presets["Low"]:
-            lowest_bitrate = self.steam_bitrate_presets["Low"][res_key] * fps_multiplier
-            display_val = _fmt_mbps(lowest_bitrate)
-            self.ui.combo_bitrate.addItem(f"Low - {display_val} Mbps")
-        
         self.ui.combo_bitrate.insertSeparator(self.ui.combo_bitrate.count())
         self.ui.combo_bitrate.addItem("⚙️ Custom Bitrate...")
         
         # --- RESTORING SELECTION ---
-        if selected_level:
+        restored = False
+        if selected_level and selected_level not in ("⚙️", "Original"):
             for i in range(self.ui.combo_bitrate.count()):
-                if self.ui.combo_bitrate.itemText(i).startswith(selected_level):
-                    self.ui.combo_bitrate.setCurrentIndex(i)
+                if self.ui.combo_bitrate.itemText(i).startswith(f"{selected_level} -"):
+                    if set_combo_index_if_enabled(self.ui.combo_bitrate, i):
+                        restored = True
+                    break
+        if not restored:
+            for i in range(self.ui.combo_bitrate.count()):
+                text = self.ui.combo_bitrate.itemText(i)
+                if text.startswith("⚙️") or not text.strip():
+                    break
+                if set_combo_index_if_enabled(self.ui.combo_bitrate, i):
                     break
 
         self.ui.combo_bitrate.blockSignals(False)
@@ -1320,7 +1343,9 @@ class RenderMixin:
         if hasattr(self.ui, 'label_location'):
             display_path = full_path.replace('\\', '/')
             self.ui.label_location.setText(display_path)
-            
+
+        if hasattr(self, 'btn_copy_loc') and full_path:
+            self.btn_copy_loc.show()
 
         # 4. Collecting texts & Smart Math
         duration = self.get_effective_duration() # Use trimmed duration for math!
@@ -1528,8 +1553,6 @@ class RenderMixin:
         if hasattr(self.ui, 'btn_start') and not getattr(self, '_is_rendering', False):
             self.ui.btn_start.setEnabled(combo_valid)
 
-        self.refresh_output_format_availability()
-
         # 6. Short Summary ABOVE Ready 
         q_word = quality.split()[0] if quality.split() else "Unknown"
         
@@ -1611,6 +1634,9 @@ class RenderMixin:
         if is_target_mode:
             self.setup_dynamic_slider()
         self._sync_original_audio_controls()
+        self.refresh_output_format_availability()
+        if is_target_mode:
+            self.update_final_setup()
 
     def on_custom_size_changed(self, text):
         """ Live updates when typing a custom MB value with idiot-proof protection """
