@@ -89,6 +89,17 @@ def _short_fps(settings: RenderJobSettings) -> str:
     return f"{match.group(1)} fps" if match else ""
 
 
+def _short_bitrate_original(settings: RenderJobSettings) -> str:
+    mbps = float(settings.orig_video_mbps or 0.0)
+    if mbps > 0:
+        s = f"{mbps:.1f}".rstrip("0").rstrip(".")
+        return f"{s} Mbps"
+    match = re.search(r"([\d.]+)\s*Mbps", settings.bitrate_text or "")
+    if match:
+        return f"{match.group(1)} Mbps"
+    return ""
+
+
 def _short_bitrate(settings: RenderJobSettings) -> str:
     bitrate = (settings.bitrate_text or "").strip()
     quality = (settings.quality_text or "").strip()
@@ -131,14 +142,16 @@ def format_job_preset(settings: RenderJobSettings) -> str:
     if fps:
         parts.append(fps)
 
-    if not is_original:
+    if is_original:
+        br = _short_bitrate_original(settings)
+    else:
         br = _short_bitrate(settings)
-        if br:
-            parts.append(br)
+    if br:
+        parts.append(br)
 
-        codec = _short_codec(settings.codec_text)
-        if codec:
-            parts.append(codec)
+    codec = _short_codec(settings.codec_text)
+    if codec:
+        parts.append(codec)
 
     if settings.mute_audio:
         parts.append("muted")
