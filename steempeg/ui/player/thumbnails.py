@@ -339,6 +339,9 @@ class PreviewSniperWorker(QThread):
         if not self.isRunning():
             self._is_killed = False
             self.start()
+        elif self._in_flight_sec < 0 and target_sec not in self.cache:
+            # Worker idle after kill_worker — wake the loop for a new target.
+            self._is_killed = False
 
     def _decode_dash_frame(self, sec: int):
         if not self._dash_manifest_ready():
@@ -418,6 +421,68 @@ class PreviewSniperWorker(QThread):
             )
             return None
 
+    def _decode_frame_av_file(self, media_path: str, sec: int):
+        """Decode one hover frame from a flat file (rendered mp4/mkv/…) via PyAV."""
+        if not media_path or not os.path.isfile(media_path):
+            return None
+        if self._is_dash_manifest(media_path):
+            return None
+        if self._is_killed:
+            return None
+        gen = self._decode_gen
+        t0 = time.perf_counter()
+        container = None
+        try:
+            container = av.open(media_path)
+            if not container.streams.video:
+                return None
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            seek_ts = int(max(0.0, sec) / stream.time_base)
+            container.seek(seek_ts, stream=stream, backward=True, any_frame=False)
+            pixmap = None
+            for frame in container.decode(stream):
+                if self._is_killed or gen != self._decode_gen:
+                    break
+                img = frame.to_image()
+                img = img.resize((160, 90))
+                img_data = img.convert("RGBA").tobytes("raw", "RGBA")
+                qimg = QImage(img_data, img.width, img.height, QImage.Format_RGBA8888)
+                pixmap = QPixmap.fromImage(qimg)
+                break
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            if pixmap is not None and not pixmap.isNull():
+                _log.info(
+                    "Sniper PyAV file ok sec=%s (%.0fms) file=%s",
+                    sec, elapsed_ms, os.path.basename(media_path),
+                )
+                return pixmap
+            _log.info(
+                "Sniper PyAV file miss sec=%s (%.0fms) file=%s",
+                sec, elapsed_ms, os.path.basename(media_path),
+            )
+            return None
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            _log.info(
+                "Sniper PyAV file error sec=%s (%.0fms) file=%s: %s",
+                sec, elapsed_ms, os.path.basename(media_path), exc,
+            )
+            return None
+        finally:
+            if container is not None:
+                try:
+                    container.close()
+                except Exception:
+                    pass
+
+    def _decode_plain_file_frame(self, media_path: str, sec: int):
+        """Hover frame for finished exports — PyAV first, ffmpeg fallback."""
+        pixmap = self._decode_frame_av_file(media_path, sec)
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        return self._decode_frame_ffmpeg(media_path, sec)
+
     def _run_on_demand(self, decode_fn):
         """Decode only the bucket under the cursor — never background prefill."""
         while not self._is_killed:
@@ -458,7 +523,8 @@ class PreviewSniperWorker(QThread):
         if self._is_dash_manifest(self.video_path):
             self._run_on_demand(self._decode_dash_frame)
         else:
-            self._run_on_demand(lambda sec: self._decode_frame_ffmpeg(self.video_path, sec))
+            path = self.video_path
+            self._run_on_demand(lambda sec, p=path: self._decode_plain_file_frame(p, sec))
 
 
 class ThumbnailBatchThread(QThread):

@@ -303,7 +303,9 @@ class PlayerMixin:
                 self._set_playback_loading(True, "Buffering…")
                 return
 
-            duration_sec = getattr(self, 'current_clip_duration_sec', None) or self.player.duration
+            duration_sec = self._playback_duration_sec()
+            if not duration_sec:
+                duration_sec = getattr(self, 'current_clip_duration_sec', None) or self.player.duration
             if duration_sec and time_sec >= duration_sec - 0.05:
                 self._set_playback_loading(False)
                 return
@@ -1265,6 +1267,77 @@ class PlayerMixin:
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             self.custom_timeline.canvas._batch_thumbs_busy = busy
 
+    def _playback_duration_sec(self):
+        """Clip length from MPD for DASH; MPV duration for exported rendered files."""
+        if getattr(self, "_rendered_media_path", None):
+            try:
+                dur = self.player.duration
+                if dur and dur > 0:
+                    return float(dur)
+            except Exception:
+                pass
+            clip_dur = getattr(self, "current_clip_duration_sec", None)
+            if clip_dur and clip_dur > 0:
+                return float(clip_dur)
+            return None
+
+        clip_dur = getattr(self, "current_clip_duration_sec", None)
+        if clip_dur and clip_dur > 0:
+            return float(clip_dur)
+        try:
+            dur = self.player.duration
+            if dur and dur > 0:
+                return float(dur)
+        except Exception:
+            pass
+        return None
+
+    def _apply_playback_duration(self, duration_sec: float) -> None:
+        if duration_sec < 1.0:
+            return
+        self.current_clip_duration_sec = duration_sec
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.set_duration(int(duration_sec * 1000))
+
+    def _poll_rendered_media_duration(self, file_path: str, switch_gen: int, attempt: int = 0) -> None:
+        """MPV often reports duration a few hundred ms after play — poll before hover preview."""
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        if getattr(self, "_active_play_media_path", None) != file_path:
+            return
+
+        from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS
+
+        duration_sec = 0.0
+        try:
+            dur = self.player.duration
+            if dur and dur > 0:
+                duration_sec = float(dur)
+        except Exception:
+            pass
+
+        if duration_sec >= 1.0:
+            self._apply_playback_duration(duration_sec)
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext in RENDERED_AUDIO_EXTS:
+                if hasattr(self, "custom_timeline"):
+                    self.custom_timeline.thumb_dir = None
+                self._set_timeline_batch_thumbs_busy(False)
+            else:
+                abs_path = os.path.abspath(file_path).replace("\\", "/")
+                self._start_timeline_thumb_batch(abs_path, duration_sec)
+            if hasattr(self, "custom_timeline"):
+                self.custom_timeline.setEnabled(True)
+            self._is_switching = False
+            if hasattr(self.ui, "btn_play"):
+                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
+            return
+
+        if attempt < 10:
+            QTimer.singleShot(120, lambda: self._poll_rendered_media_duration(file_path, switch_gen, attempt + 1))
+        else:
+            self._is_switching = False
+
     def _stop_timeline_thumb_batch(self) -> None:
         thread = getattr(self, "thumb_thread", None)
         if not thread:
@@ -1341,6 +1414,7 @@ class PlayerMixin:
         switch_gen = self._begin_preview_switch()
         self._is_switching = True
         self._force_pause = False
+        self.current_clip_duration_sec = 0
         self._active_play_media_path = file_path
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
@@ -1368,12 +1442,11 @@ class PlayerMixin:
             self.custom_timeline.setEnabled(True)
 
         abs_path = os.path.abspath(file_path).replace("\\", "/")
-        ext = os.path.splitext(file_path)[1].lower()
-        is_audio = ext in RENDERED_AUDIO_EXTS
 
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.current_video_path = abs_path
             self.custom_timeline.thumb_dir = None
+            self.custom_timeline.set_duration(0)
 
         logging.info("MPV play file: %s", abs_path)
         self._playback_last_time_pos = None
@@ -1396,37 +1469,7 @@ class PlayerMixin:
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
 
-        def _start_timeline_thumbs(duration_sec: float):
-            if is_audio:
-                if hasattr(self, "custom_timeline"):
-                    self.custom_timeline.thumb_dir = None
-                self._set_timeline_batch_thumbs_busy(False)
-                return
-            self._start_timeline_thumb_batch(abs_path, duration_sec)
-
-        def finish_switch():
-            if switch_gen != getattr(self, "_media_switch_gen", 0):
-                return
-            if getattr(self, "_active_play_media_path", None) != file_path:
-                return
-            if hasattr(self, "custom_timeline"):
-                self.custom_timeline.setEnabled(True)
-            self._is_switching = False
-            duration_sec = 0.0
-            try:
-                dur = self.player.duration
-                if dur and dur > 0:
-                    duration_sec = float(dur)
-                    self.current_clip_duration_sec = dur
-                    if hasattr(self, "custom_timeline"):
-                        self.custom_timeline.set_duration(int(dur * 1000))
-            except Exception:
-                pass
-            _start_timeline_thumbs(duration_sec)
-            if hasattr(self.ui, "btn_play"):
-                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
-
-        QTimer.singleShot(500, finish_switch)
+        QTimer.singleShot(80, lambda: self._poll_rendered_media_duration(file_path, switch_gen))
 
         if hasattr(self.ui, "btn_play"):
             self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
@@ -1672,10 +1715,9 @@ class PlayerMixin:
             return
 
         try:
-            duration_sec = getattr(self, 'current_clip_duration_sec', self.player.duration)
+            duration_sec = self._playback_duration_sec()
             if duration_sec is None or duration_sec <= 0:
-                duration_sec = self.player.duration
-                if duration_sec is None: return
+                return
                 
             time_sec = self.player.time_pos
             

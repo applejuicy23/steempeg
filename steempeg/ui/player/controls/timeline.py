@@ -421,7 +421,7 @@ class TimelineCanvas(QWidget):
         return None
 
     def set_duration(self, duration_ms):
-        self.duration_ms = max(1, duration_ms)
+        self.duration_ms = max(0, int(duration_ms))
 
     def set_vlc_time(self, vlc_ms, is_playing):
         self.is_playing = is_playing
@@ -1297,9 +1297,11 @@ class CustomTimelineWidget(QScrollArea):
         val = val or ""
         old = getattr(self.canvas, 'current_video_path', '') or ''
         if hasattr(self.canvas, 'sniper') and self.canvas.sniper:
-            self.canvas.sniper.kill_worker()
+            norm = self.canvas._norm_media_path
+            if norm(val) != norm(old):
+                self.canvas.sniper.kill_worker()
+                self.canvas.sniper.cache.clear()
             self.canvas.sniper.video_path = val
-            self.canvas.sniper.cache.clear()
         if val != old:
             self.canvas._hover_preview_bucket = -1
             self.canvas.thumb_dir = None
