@@ -89,7 +89,7 @@ COMPACT_COMBO_POPUP_ITEM_RULES = """
     }
     QComboBox QAbstractItemView::item {
         min-height: 24px;
-        padding: 4px 10px;
+        padding: 4px 10px 4px 6px;
         border-radius: 6px;
         margin: 1px 2px;
         background-color: transparent;
@@ -127,7 +127,7 @@ COMPACT_COMBO_RULES = """
         border-radius: 8px;
         padding: 4px 10px;
         font-weight: bold;
-        font-family: 'Segoe UI';
+        font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         min-height: 24px;
     }
