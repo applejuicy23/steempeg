@@ -398,6 +398,15 @@ class RenderedLibraryMixin:
         """Hide export settings while previewing finished media, not only on the tab."""
         show_bottom = self._should_show_render_dock()
 
+        # The player wrapper reserves a 10px gap above the splitter handle. With the
+        # dock hidden there is no handle, so drop that gap — otherwise a stray mini
+        # empty strip sits under the player for rendered previews.
+        if hasattr(self, "top_v_wrap") and self.top_v_wrap.layout() is not None:
+            m = self.top_v_wrap.layout().contentsMargins()
+            self.top_v_wrap.layout().setContentsMargins(
+                m.left(), m.top(), m.right(), 10 if show_bottom else 0
+            )
+
         if hasattr(self, "bottom_v_wrap"):
             self.bottom_v_wrap.setVisible(show_bottom)
         if hasattr(self, "main_v_splitter") and not (
