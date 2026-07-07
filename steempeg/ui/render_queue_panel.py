@@ -525,13 +525,18 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.setStyleSheet("""
             QPushButton {
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-                border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: bold;
+                border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: bold;
                 font-family: 'Segoe UI', Arial, sans-serif;
             }
             QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
             QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
             QPushButton:disabled { background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }
         """)
+        _clear_font = self._btn_clear.font()
+        _clear_font.setFamily("Segoe UI")
+        _clear_font.setBold(True)
+        _clear_font.setPixelSize(13)
+        self._btn_clear.setFont(_clear_font)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
         # History — styled like the Clips Manager Filter pill (square icon button).
