@@ -645,6 +645,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort2.png")), "Duration (Longest)")
         self.combo_sort.setMaxVisibleItems(12)
 
+        # Use the Source Info value font so the sort combo matches the rest of the UI.
+        # An ancestor stylesheet font does NOT reliably style a non-editable combo's
+        # painted text, so set family + weight + size explicitly on the widget.
+        _sort_font = self.combo_sort.font()
+        _sort_font.setFamily("Segoe UI")
+        _sort_font.setBold(True)
+        _sort_font.setPixelSize(13)
+        self.combo_sort.setFont(_sort_font)
+
+        # The compact field stays narrow, but the popup must be wide enough for the
+        # longest entry (+ icon) so rows never elide to "Game Na...(A - Z)".
+        _fm = self.combo_sort.fontMetrics()
+        _longest = max(
+            (_fm.horizontalAdvance(self.combo_sort.itemText(i)) for i in range(self.combo_sort.count())),
+            default=0,
+        )
+        self.combo_sort.view().setMinimumWidth(_longest + 78)
+
         self.combo_sort.currentIndexChanged.connect(self.apply_sorting)
 
         # 4. Locate the filter button and elegantly assemble the panel to its LEFT.
@@ -864,6 +882,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         restyle_audio_page(self.ui)
         restyle_source_page(self.ui)
         restyle_export_page(self.ui)
+
+        # Give each render combo its OWN stylesheet so the field text matches the
+        # Source Info value labels (Segoe UI, 14px, bold) instead of the app default.
+        if hasattr(self.ui, 'settings_tabs'):
+            from PySide6.QtWidgets import QComboBox as _QComboBox
+            _combo_qss = settings_panel_stylesheet(
+                "QComboBox { font-family: 'Segoe UI', Arial, sans-serif;"
+                " font-size: 13px; font-weight: bold; }"
+            )
+            for _combo in self.ui.settings_tabs.findChildren(_QComboBox):
+                _combo.setStyleSheet(_combo_qss)
         # Collapse non-active settings pages so the scroll area fits the visible page
         if hasattr(self, 'fit_settings_tab_to_page'):
             self.fit_settings_tab_to_page()
