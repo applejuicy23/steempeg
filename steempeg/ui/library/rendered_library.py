@@ -374,6 +374,10 @@ class RenderedLibraryMixin:
         old_mode = getattr(self, "_library_panel_mode", "clips")
         if old_mode != mode:
             self._stash_library_tab_selection(old_mode)
+            # Trim belongs to a clip preview; leaving the Clips tab must drop the trim
+            # handles/button so they don't linger over a rendered preview.
+            if old_mode == "clips" and hasattr(self, "cancel_trim_mode"):
+                self.cancel_trim_mode()
         self._library_panel_mode = mode
         for key, tab in self._library_tabs.items():
             tab.set_active(key == mode)

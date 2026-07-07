@@ -1156,18 +1156,33 @@ class PlayerMixin:
         if hasattr(self, "update_final_setup"):
             self.update_final_setup()
 
+    def _deactivate_trim_ui(self):
+        """Turn off trim mode on the timeline and reset its button/border chrome."""
+        if not hasattr(self, 'custom_timeline'):
+            return
+        self.custom_timeline.disable_trim_mode()
+        if hasattr(self, 'video_overlay'):
+            self.video_overlay.show_border = False
+            self.video_overlay.update()
+        if hasattr(self, 'border_overlay'):
+            self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
+        self._set_trim_button_active(False)
+
+    def cancel_trim_mode(self):
+        """Exit trim mode if active (used when leaving the clip via a tab switch)."""
+        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.is_trim_mode:
+            return
+        self._deactivate_trim_ui()
+        self.update_final_setup()
+        if hasattr(self, '_persist_trim_for_current_clip'):
+            self._persist_trim_for_current_clip()
+
     def toggle_trim_state(self):
         """ Toggles between Trim mode and Normal mode seamlessly without interrupting playback """
         if not hasattr(self, 'custom_timeline'): return
 
         if self.custom_timeline.is_trim_mode:
-            self.custom_timeline.disable_trim_mode()
-            if hasattr(self, 'video_overlay'):
-                self.video_overlay.show_border = False
-                self.video_overlay.update()
-            if hasattr(self, 'border_overlay'):
-                self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
-            self._set_trim_button_active(False)
+            self._deactivate_trim_ui()
         else:
             self.custom_timeline.enable_trim_mode()
             self._set_trim_button_active(True)
