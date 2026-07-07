@@ -146,6 +146,7 @@ class SteempegTitleBar(QWidget):
         super().__init__(parent)
         self._window = window
         self.setObjectName("SteempegTitleBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
 
         bar_h = tok.TITLE_BAR_HEIGHT
@@ -237,6 +238,10 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     layout = main_window.horizontalLayout_main
     layout.removeWidget(main_window.main_splitter)
+    # Flush the shell to the window edges so the title bar fills the very top
+    # (no window-background strip above/around it).
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
 
     shell = QWidget(main_window)
     shell.setObjectName("appShell")
@@ -250,7 +255,16 @@ def install_title_bar(main_window) -> SteempegTitleBar:
         subtitle=f"v{APP_VERSION_STR}",
     )
     shell_layout.addWidget(title_bar)
-    shell_layout.addWidget(main_window.main_splitter, 1)
+
+    # Title bar stays flush to the window edges; the content keeps the old
+    # breathing room around the splitter (restored after zeroing outer margins).
+    content_wrap = QWidget()
+    content_wrap.setObjectName("appContent")
+    content_layout = QVBoxLayout(content_wrap)
+    content_layout.setContentsMargins(9, 8, 9, 9)
+    content_layout.setSpacing(0)
+    content_layout.addWidget(main_window.main_splitter)
+    shell_layout.addWidget(content_wrap, 1)
 
     layout.addWidget(shell)
 
