@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QGuiApplication, QIcon
 
+from steempeg.ui.icon_assets import warning_icon
 from steempeg.ui.layout_defaults import (
     SETTINGS_CONTENT_WIDTH,
     SETTINGS_PAGE_MARGIN_BOTTOM,
@@ -426,16 +427,17 @@ def _quality_field(ui, label, combo):
     help_slot_layout.setContentsMargins(0, 0, 0, 0)
     help_slot_layout.setSpacing(0)
 
-    help_btn = QPushButton("\u26a0\ufe0f", help_slot)
-    help_btn.setFixedSize(16, 16)
+    help_btn = QPushButton(help_slot)
+    help_btn.setIcon(warning_icon(16))
+    help_btn.setIconSize(QSize(16, 16))
+    help_btn.setFlat(True)
     help_btn.setCursor(Qt.PointingHandCursor)
     help_btn.setStyleSheet(
-        "QPushButton { background-color: #3a3326; border: 1px solid #6b5a2a;"
-        " border-radius: 4px; font-size: 10px; padding: 0; " + _FONT + " }"
-        " QPushButton:hover { background-color: #4a4030; border-color: #f0c000; }"
+        "QPushButton { background: transparent; border: none; padding: 0; " + _FONT + " }"
+        " QPushButton:hover { background-color: rgba(240, 192, 0, 0.12); border-radius: 3px; }"
     )
     help_btn.setToolTip(
-        "\u26a0\ufe0f <b>Original preset warning</b><br>"
+        "<b>Original preset warning</b><br>"
         "Original uses fast stream copy / block merge without re-encoding.<br><br>"
         "If Steam DASH chunks are slightly broken, the output duration can be wrong "
         "(for example, a 3-second clip may become much longer).<br><br>"
@@ -443,14 +445,17 @@ def _quality_field(ui, label, combo):
         "Re-encoding usually fixes those timeline glitches."
     )
     help_btn.hide()
+    help_slot_layout.addWidget(help_btn)
 
     row = QHBoxLayout()
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(8)
 
     def _sync_help(text):
-        help_btn.setVisible("Original" in (text or ""))
+        dismissed = bool(help_btn.property("warning_dismissed"))
+        help_btn.setVisible("Original" in (text or "") and not dismissed)
 
+    help_btn._sync_help = _sync_help
     combo.currentTextChanged.connect(_sync_help)
     _sync_help(combo.currentText())
     ui.btn_quality_original_help = help_btn
