@@ -64,8 +64,72 @@ def win32_restore_title_bar(widget, saved_style):
     _frame_changed(hwnd)
 
 
+_SW_SHOWNORMAL = 1
+_MONITOR_DEFAULTTONEAREST = 2
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [
+        ("length", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("showCmd", ctypes.c_uint),
+        ("ptMinPosition", _POINT),
+        ("ptMaxPosition", _POINT),
+        ("rcNormalPosition", _RECT),
+    ]
+
+
+def win32_unmaximize_to_rect(widget, x, y, w, h):
+    """Drop the maximize state while setting the *normal* geometry directly to the
+    target rect — avoids the intermediate small-window paint that leaves a ghost."""
+    hwnd = _hwnd(widget)
+    wp = _WINDOWPLACEMENT()
+    wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+    ctypes.windll.user32.GetWindowPlacement(hwnd, ctypes.byref(wp))
+    wp.showCmd = _SW_SHOWNORMAL
+    wp.rcNormalPosition = _RECT(int(x), int(y), int(x + w), int(y + h))
+    ctypes.windll.user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("rcMonitor", _RECT),
+        ("rcWork", _RECT),
+        ("dwFlags", ctypes.c_ulong),
+    ]
+
+
+def win32_monitor_bounds(widget):
+    """Physical-pixel monitor rect for the window's screen (avoids Qt logical/DPI mismatch)."""
+    hwnd = _hwnd(widget)
+    hmon = ctypes.windll.user32.MonitorFromWindow(hwnd, _MONITOR_DEFAULTTONEAREST)
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(_MONITORINFO)
+    if not ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+        return None
+    r = info.rcMonitor
+    return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+
 def win32_set_bounds(widget, x, y, w, h):
-    ctypes.windll.user32.SetWindowPos(_hwnd(widget), 0, int(x), int(y), int(w), int(h), SWP_NOZORDER)
+    ctypes.windll.user32.SetWindowPos(
+        _hwnd(widget), 0, int(x), int(y), int(w), int(h),
+        SWP_NOZORDER | SWP_FRAMECHANGED,
+    )
 
 
 def enter_immersive_chrome(window, screen_geometry):
@@ -77,15 +141,24 @@ def enter_immersive_chrome(window, screen_geometry):
     )
 
     if os.name == 'nt':
-        window._immersive_win32_style = win32_hide_title_bar(window)
-        window._immersive_chrome_mode = 'win32'
-        win32_set_bounds(
-            window,
-            screen_geometry.x(),
-            screen_geometry.y(),
-            screen_geometry.width(),
-            screen_geometry.height(),
-        )
+        # Do NOT strip Win32 styles or move the window via Win32 here. The window
+        # already has its native caption suppressed by the persistent WM_NCCALCSIZE
+        # handler (window_chrome.handle_native_event), which stays active even while
+        # the title bar is hidden. We only need to (a) drop the maximize state at the
+        # Qt level so Qt's layout matches the physical window, and (b) size the window
+        # to the full monitor via Qt geometry.
+        #
+        # Previously we resized a still-"maximized" window with raw Win32 SetWindowPos.
+        # Qt kept laying out its content at the old work-area height, so the extra
+        # bottom band (taskbar height) was never painted — leaving a stale "ghost" of
+        # the windowed bottom UI. Driving the state + geometry through Qt keeps
+        # everything consistent, so the client paints edge-to-edge with no ghost.
+        window._immersive_chrome_mode = 'nt_geom'
+        if window._immersive_was_maximized:
+            window.setWindowState(
+                window.windowState() & ~Qt.WindowState.WindowMaximized
+            )
+        window.setGeometry(screen_geometry)
         return
 
     window._immersive_saved_flags = window.windowFlags()
@@ -101,11 +174,9 @@ def exit_immersive_chrome(window):
     was_maximized = getattr(window, '_immersive_was_maximized', False)
     saved_geometry = getattr(window, '_immersive_saved_geometry', None)
 
-    if mode == 'win32':
-        saved_style = getattr(window, '_immersive_win32_style', None)
-        if saved_style is not None:
-            win32_restore_title_bar(window, saved_style)
-        window._immersive_win32_style = None
+    if mode == 'nt_geom':
+        # Mirror of the Qt-geometry enter path: just restore the window state /
+        # geometry. No Win32 style restore needed (styles were never touched).
         if was_maximized:
             window.showMaximized()
         elif saved_geometry is not None:

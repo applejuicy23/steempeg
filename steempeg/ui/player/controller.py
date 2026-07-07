@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from steempeg.core.dash import health
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
+from steempeg.ui.window_chrome import collapse_content_insets, force_full_redraw, restore_content_insets, set_window_transitions
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
 
 
@@ -500,6 +501,9 @@ class PlayerMixin:
             margin_right = 0 if self.is_theater else QUEUE_SPLITTER_GUTTER
             self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
 
+        # Theatre keeps the normal content padding (only true fullscreen goes flush).
+        restore_content_insets(self.ui)
+
         # --- THE MAGIC SWAP ---
         if hasattr(self, 'btn_theater'):
             if self.is_theater:
@@ -605,6 +609,32 @@ class PlayerMixin:
         if cover is not None:
             cover.hide()
 
+    def _finish_fullscreen_enter(self):
+        """Drop the transition cover once the restore animation is done + repainted."""
+        if not getattr(self, 'is_fullscreen', False):
+            self._hide_immersive_transition_cover()
+            set_window_transitions(self.ui, True)
+            return
+        # Re-assert full-monitor geometry: clearing the maximized state queues a
+        # restore to the old (small) normalGeometry which, with transitions disabled,
+        # overrides the setGeometry done in enter_immersive_chrome. Applying it here
+        # (after Qt processed the state change) makes the fullscreen size stick.
+        self.ui.setGeometry(self._immersive_screen_geometry())
+        self.ui.raise_()
+        self.ui.activateWindow()
+        self.ui.update()
+        force_full_redraw(self.ui)
+        # Flush the paint before lifting the cover so the first visible frame is the
+        # finished fullscreen layout (no transparent edges / animation tail).
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        if hasattr(self, 'player_footer_frame'):
+            self.player_footer_frame.show()
+            self.player_footer_frame.raise_()
+        self._hide_immersive_transition_cover()
+        # Restore native min/max/restore animations that were disabled for the switch.
+        set_window_transitions(self.ui, True)
+        self._show_immersive_esc_hint()
+
     def _activate_window_layouts(self):
         for layout in (
             self.ui.layout() if hasattr(self.ui, 'layout') else None,
@@ -687,6 +717,9 @@ class PlayerMixin:
         is_t = getattr(self, 'is_theater', False)
 
         self._show_immersive_transition_cover()
+        # Same as enter: kill the SW_RESTORE/maximize cross-fade so exit is instant
+        # under the cover (no torn animation / desktop bleed). Restored in finish_exit.
+        set_window_transitions(self.ui, False)
         self._hide_immersive_esc_hint()
         if hasattr(self, 'fs_timer'):
             self.fs_timer.stop()
@@ -743,6 +776,10 @@ class PlayerMixin:
             margin_right = 0 if is_t else QUEUE_SPLITTER_GUTTER
             self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
 
+        # Both theatre and windowed keep the normal content padding; only the
+        # dedicated fullscreen mode collapses it (handled in toggle_fullscreen).
+        restore_content_insets(self.ui)
+
         footer = self.player_footer_frame
         footer.setWindowFlags(Qt.WindowType.Widget)
         footer.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -787,9 +824,13 @@ class PlayerMixin:
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
         def finish_exit():
-            exit_immersive_chrome(self.ui)
+            # Show the title bar *before* restoring the window state so WM_NCCALCSIZE
+            # sees it visible and re-applies the maximized inset (otherwise a restored
+            # maximized window overhangs the monitor / covers the taskbar).
             if hasattr(self.ui, "title_bar"):
                 self.ui.title_bar.show()
+            exit_immersive_chrome(self.ui)
+            if hasattr(self.ui, "title_bar"):
                 self.ui.title_bar.sync_window_state()
             self._activate_window_layouts()
             footer.show()
@@ -803,6 +844,15 @@ class PlayerMixin:
                 QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
             self._set_hide_watcher_suppressed(False)
             self._hide_immersive_transition_cover()
+            set_window_transitions(self.ui, True)
+            # The fullscreen HUD footer was a floating Tool window; after reparenting
+            # it back, force a full relayout + repaint so no ghost copy lingers at the
+            # bottom edge of the restored window.
+            if right_layout:
+                right_layout.activate()
+            self.ui.right_panel.updateGeometry()
+            self.ui.update()
+            self.ui.repaint()
 
         QTimer.singleShot(0, finish_exit)
 
@@ -817,6 +867,12 @@ class PlayerMixin:
         
         if self.is_fullscreen:
             # --- ENTERING IMMERSIVE MODE (stay maximized / current window state) ---
+            # Mask the whole transition with a solid cover: while growing the window
+            # from the work area to the full monitor, Windows briefly paints the native
+            # frame and leaves a stale "ghost" strip at the old bottom. The cover hides
+            # all of that until the surface is rebuilt and repainted.
+            self._show_immersive_transition_cover()
+
             came_from_theater = getattr(self, 'is_theater', False)
             if came_from_theater:
                 self.is_theater = False
@@ -890,6 +946,14 @@ class PlayerMixin:
             if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
                 self.right_content_wrap.layout().setContentsMargins(0, 0, 0, 0)
 
+            # Collapse the custom title-bar content wrapper padding so the video
+            # reaches every edge (otherwise a 9-11px border frames the fullscreen).
+            collapse_content_insets(self.ui)
+
+            # Make the un-maximize into fullscreen instant (no SW_RESTORE cross-fade
+            # that leaks the desktop through the window). Re-enabled in _finish.
+            set_window_transitions(self.ui, False)
+
             self._enter_immersive_layout()
             self._enter_immersive_chrome()
 
@@ -915,7 +979,9 @@ class PlayerMixin:
                 self.wake_up_fullscreen_controls()
 
             QTimer.singleShot(50, self.align_fullscreen_hud)
-            self._show_immersive_esc_hint()
+            # Transitions are disabled, so the switch is instant — a short cover is
+            # enough to hide the single-frame swap, then restore animations.
+            QTimer.singleShot(80, self._finish_fullscreen_enter)
             
         else:
             self._exit_immersive_mode()

@@ -50,6 +50,8 @@ _SM_CXPADDEDBORDER = 92
 
 _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_BORDER_COLOR = 34
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33
+_DWMWCP_DONOTROUND = 1
 _DWMWA_COLOR_NONE = 0xFFFFFFFE  # removes the window border line entirely (Win11)
 
 HTCLIENT = 1
@@ -245,6 +247,8 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     shell = QWidget(main_window)
     shell.setObjectName("appShell")
+    shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    shell.setStyleSheet(f"QWidget#appShell {{ background-color: {tok.BG_SHELL}; }}")
     shell_layout = QVBoxLayout(shell)
     shell_layout.setContentsMargins(0, 0, 0, 0)
     shell_layout.setSpacing(0)
@@ -260,6 +264,8 @@ def install_title_bar(main_window) -> SteempegTitleBar:
     # breathing room around the splitter (restored after zeroing outer margins).
     content_wrap = QWidget()
     content_wrap.setObjectName("appContent")
+    content_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    content_wrap.setStyleSheet(f"QWidget#appContent {{ background-color: {tok.BG_SHELL}; }}")
     content_layout = QVBoxLayout(content_wrap)
     content_layout.setContentsMargins(9, 11, 9, 9)
     content_layout.setSpacing(0)
@@ -267,6 +273,9 @@ def install_title_bar(main_window) -> SteempegTitleBar:
     shell_layout.addWidget(content_wrap, 1)
 
     layout.addWidget(shell)
+
+    main_window._custom_content_wrap = content_wrap
+    main_window._custom_content_margins = (9, 11, 9, 9)
 
     title_bar.close_requested.connect(lambda: win32_window_command(main_window, "close"))
     title_bar.minimize_requested.connect(lambda: win32_window_command(main_window, "minimize"))
@@ -332,6 +341,108 @@ def enable_frameless(window: QWidget) -> None:
 apply_native_caption_hidden = enable_frameless
 
 
+def collapse_content_insets(main_window) -> None:
+    """Zero the content wrapper margins for immersive / fullscreen (edge-to-edge video)."""
+    wrap = getattr(main_window, "_custom_content_wrap", None)
+    if wrap is not None and wrap.layout() is not None:
+        wrap.layout().setContentsMargins(0, 0, 0, 0)
+
+
+def restore_content_insets(main_window) -> None:
+    """Restore the normal content wrapper padding after leaving immersive/fullscreen."""
+    wrap = getattr(main_window, "_custom_content_wrap", None)
+    margins = getattr(main_window, "_custom_content_margins", (9, 11, 9, 9))
+    if wrap is not None and wrap.layout() is not None:
+        wrap.layout().setContentsMargins(*margins)
+
+
+_RDW_INVALIDATE = 0x0001
+_RDW_ERASE = 0x0004
+_RDW_ERASENOW = 0x0200
+_RDW_UPDATENOW = 0x0100
+_RDW_ALLCHILDREN = 0x0080
+_RDW_FRAME = 0x0400
+
+
+def force_full_redraw(window) -> None:
+    """Clear a stale native/DWM ghost left after switching into immersive fullscreen.
+
+    A 1px size nudge alone doesn't erase hidden child regions, so also force a
+    full RedrawWindow that invalidates + erases every child (mpv surface included)."""
+    if os.name != "nt":
+        window.update()
+        return
+    try:
+        hwnd = int(window.winId())
+        user32 = ctypes.windll.user32
+        rect = _RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        x, y = rect.left, rect.top
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        flags = _SWP_NOZORDER | 0x0010  # SWP_NOACTIVATE
+        user32.SetWindowPos(hwnd, 0, x, y, w, h - 1, flags)
+        user32.SetWindowPos(hwnd, 0, x, y, w, h, flags)
+        redraw = (
+            _RDW_INVALIDATE | _RDW_ERASE | _RDW_ERASENOW
+            | _RDW_UPDATENOW | _RDW_ALLCHILDREN | _RDW_FRAME
+        )
+        user32.RedrawWindow(hwnd, None, None, redraw)
+    except Exception:
+        window.update()
+
+
+_SW_HIDE = 0
+_SW_SHOWNA = 8  # show in current state, do not activate / change z-order
+
+
+def rebuild_window_surface(window) -> None:
+    """Force DWM to allocate a fresh redirection surface for the window.
+
+    Growing a frameless window from the maximized work-area size to the full
+    monitor leaves a stale composited strip (the old taskbar-height bottom) that
+    a plain RedrawWindow can't erase — only a minimize/restore fixes it. This
+    does the equivalent surface teardown/recreate (hide + show-no-activate)
+    without the visible animation; call it while a solid cover masks the window."""
+    if os.name != "nt":
+        return
+    try:
+        hwnd = int(window.winId())
+        user32 = ctypes.windll.user32
+        user32.ShowWindow(hwnd, _SW_HIDE)
+        user32.ShowWindow(hwnd, _SW_SHOWNA)
+        redraw = (
+            _RDW_INVALIDATE | _RDW_ERASE | _RDW_ERASENOW
+            | _RDW_UPDATENOW | _RDW_ALLCHILDREN | _RDW_FRAME
+        )
+        user32.RedrawWindow(hwnd, None, None, redraw)
+    except Exception:
+        pass
+
+
+_DWMWA_TRANSITIONS_FORCEDISABLED = 3
+
+
+def set_window_transitions(window, enabled: bool) -> None:
+    """Toggle the window's native min/max/restore animations.
+
+    Un-maximizing into fullscreen fires the SW_RESTORE cross-fade, which briefly
+    shows the desktop through the not-yet-painted window (transparent edges + torn
+    animation). Disabling transitions for the duration of the switch makes it
+    instant; re-enable afterwards so normal minimize/maximize animations stay."""
+    if os.name != "nt":
+        return
+    try:
+        hwnd = int(window.winId())
+        # attribute is BOOL: TRUE = transitions DISABLED
+        val = ctypes.c_int(0 if enabled else 1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, _DWMWA_TRANSITIONS_FORCEDISABLED, ctypes.byref(val), ctypes.sizeof(val),
+        )
+    except Exception:
+        pass
+
+
 def poke_frame(window: QWidget) -> None:
     """Re-trigger WM_NCCALCSIZE so the native caption stays hidden after a
     maximize/restore state change (Windows re-adds it otherwise)."""
@@ -366,6 +477,15 @@ def refresh_dwm_chrome(window: QWidget) -> None:
             )
         except Exception:
             pass
+        # Square corners — Win11 otherwise rounds the window, showing dark gaps at
+        # the corners (most visible in borderless fullscreen / theatre).
+        square = ctypes.c_int(_DWMWCP_DONOTROUND)
+        try:
+            dwm.DwmSetWindowAttribute(
+                hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(square), ctypes.sizeof(square),
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -381,6 +501,10 @@ def handle_native_event(window, eventType, message):
     except (TypeError, ValueError):
         return None
 
+    # NCCALCSIZE is handled unconditionally so the native caption stays suppressed
+    # in every state, including immersive fullscreen (where the title bar is hidden).
+    # Fullscreen makes the window a plain non-maximized window sized to the monitor,
+    # so there is nothing to double up with and no Aero "box in a box" halo.
     if msg.message == _WM_NCCALCSIZE:
         return _on_nccalcsize(window, msg)
     if msg.message == _WM_NCHITTEST:
@@ -393,9 +517,13 @@ def _on_nccalcsize(window, msg):
         return True, 0
     params = cast(msg.lParam, POINTER(_NCCALCSIZE_PARAMS)).contents
     rect = params.rgrc[0]
-    if window.isMaximized():
+    tb = getattr(window, "title_bar", None)
+    tb_visible = tb is not None and tb.isVisible()
+    if window.isMaximized() and tb_visible:
         # A maximized native window overhangs the monitor by the frame thickness;
         # inset the client so content isn't clipped and the taskbar stays visible.
+        # Skipped in immersive fullscreen (title bar hidden) so the client fills the
+        # entire monitor edge-to-edge with no inset border.
         th = _resize_border_thickness(window)
         rect.left += th
         rect.top += th
@@ -409,7 +537,9 @@ def _on_nccalcsize(window, msg):
 def _on_nchittest(window, msg):
     tb = getattr(window, "title_bar", None)
     if tb is None or not tb.isVisible():
-        return None
+        # Immersive fullscreen: whole window is client area — no resize borders,
+        # no caption drag.
+        return True, HTCLIENT
 
     x = ctypes.c_short(msg.lParam & 0xFFFF).value
     y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
