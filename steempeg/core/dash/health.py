@@ -55,6 +55,14 @@ HEALTH_COLORS = {
     ClipHealth.DEAD: "#c0392b",
 }
 
+HEALTH_ICON_FILES = {
+    ClipHealth.HEALTHY: "success.png",
+    ClipHealth.DEGRADED: "issue.png",
+    ClipHealth.DEAD: "dead.png",
+}
+
+WARNING_ICON_FILE = "issue.png"
+
 # Worst tier wins when a clip folder contains several fg_* segments.
 _RANK = {ClipHealth.HEALTHY: 0, ClipHealth.DEGRADED: 1, ClipHealth.DEAD: 2}
 
