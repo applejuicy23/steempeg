@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
 from steempeg.core.clip_thumbnails import find_clip_thumbnail
 from steempeg.core.dash import discovery, health, mpd
@@ -399,6 +400,9 @@ class LibraryMixin:
         color = report.color
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         self.btn_clip_health.setToolTip(report.summary())
+        self.btn_clip_health.setIcon(health_icon(report.level, 18))
+        self.btn_clip_health.setIconSize(QSize(18, 18))
+        self.btn_clip_health.setText(f" {report.label}")
         self.btn_clip_health.setStyleSheet(
             f"QPushButton {{"
             f"background-color: rgba({r}, {g}, {b}, 0.22);"
@@ -407,12 +411,11 @@ class LibraryMixin:
             f"border-radius: 8px;"
             f"font-weight: bold;"
             f"font-size: 13px;"
-            f"padding: 2px 10px;"
+            f"padding: 2px 10px 2px 8px;"
             f"font-family: 'Segoe UI';"
             f"}}"
             f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
         )
-        self.btn_clip_health.setText(report.label)
         self.btn_clip_health.show()
 
     def show_clip_health_menu(self):
@@ -430,9 +433,8 @@ class LibraryMixin:
         menu = QMenu(self.ui)
         menu.setStyleSheet(_HEALTH_MENU_STYLE)
 
-        title = menu.addAction(
-            f"{'🟢' if report.level == health.ClipHealth.HEALTHY else '🟡' if report.level == health.ClipHealth.DEGRADED else '🔴'} {report.label}"
-        )
+        title = menu.addAction(report.label)
+        title.setIcon(health_icon(report.level, 16))
         title.setEnabled(False)
         menu.addSeparator()
 
