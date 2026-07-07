@@ -32,8 +32,10 @@ DEFAULT_QUEUE_VIEW = "list"
 
 # Right column chrome — keep in sync with app.py right_layout / right_content_wrap.
 RIGHT_PANEL_SIDE_INSET = 12
-RIGHT_PANEL_BOTTOM_INSET = 12
-RIGHT_PANEL_PLAYER_TOP_INSET = 12  # player only; queue tab row aligns with Clips Manager
+# Player column runs flush with the left tab row (top) and footer buttons (bottom) —
+# no extra deep inset on the center panel (v36 change).
+RIGHT_PANEL_BOTTOM_INSET = 0
+RIGHT_PANEL_PLAYER_TOP_INSET = 0
 QUEUE_SPLITTER_GUTTER = 10
 LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.

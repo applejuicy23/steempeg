@@ -217,7 +217,7 @@ class SteempegTitleBar(QWidget):
             QLabel#TitleBarSubtitle {{
                 color: {tok.TEXT_MUTED};
                 font-family: {tok.FONT_UI};
-                padding-left: 6px;
+                padding-left: 4px;
             }}
             """
         )
@@ -261,7 +261,7 @@ def install_title_bar(main_window) -> SteempegTitleBar:
     content_wrap = QWidget()
     content_wrap.setObjectName("appContent")
     content_layout = QVBoxLayout(content_wrap)
-    content_layout.setContentsMargins(9, 8, 9, 9)
+    content_layout.setContentsMargins(9, 11, 9, 9)
     content_layout.setSpacing(0)
     content_layout.addWidget(main_window.main_splitter)
     shell_layout.addWidget(content_wrap, 1)
