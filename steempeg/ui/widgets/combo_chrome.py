@@ -72,6 +72,53 @@ SETTINGS_COMBO_FIELD_RULES = """
     }
 """
 
+# Slimmer popup for the compact combos (Sorting / Filter in the Clips Manager):
+# flat rows, normal weight, row height matched to the collapsed combo box.
+COMPACT_COMBO_POPUP_ITEM_RULES = """
+    QComboBox QAbstractItemView {
+        background-color: #1e1e1e;
+        color: #e0e0e0;
+        border: 2px solid #4a4a4a;
+        border-radius: 10px;
+        padding: 4px;
+        outline: none;
+        selection-background-color: transparent;
+        selection-color: #ffffff;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-weight: normal;
+    }
+    QComboBox QAbstractItemView::item {
+        min-height: 24px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        margin: 1px 2px;
+        background-color: transparent;
+        color: #e0e0e0;
+        border: 1px solid transparent;
+        font-weight: normal;
+    }
+    QComboBox QAbstractItemView::item:hover:enabled {
+        background-color: #3a3350;
+        color: #ffffff;
+        border: 1px solid #6b5a8e;
+    }
+    QComboBox QAbstractItemView::item:selected {
+        background-color: #3a3350;
+        color: #ffffff;
+        border: 1px solid #b29ae7;
+    }
+    QComboBox QAbstractItemView::item:selected:enabled {
+        background-color: #3a3350;
+        color: #ffffff;
+        border: 1px solid #b29ae7;
+    }
+    QComboBox QAbstractItemView::item:disabled {
+        background-color: transparent;
+        color: #5a5a5a;
+        border: 1px solid transparent;
+    }
+"""
+
 COMPACT_COMBO_RULES = """
     QComboBox {
         background-color: #383838;
@@ -96,7 +143,7 @@ def settings_panel_stylesheet(extra: str = "") -> str:
 
 
 def compact_combo_stylesheet() -> str:
-    return COMPACT_COMBO_RULES + COMBO_POPUP_ITEM_RULES
+    return COMPACT_COMBO_RULES + COMPACT_COMBO_POPUP_ITEM_RULES
 
 
 def set_combo_item_enabled(
