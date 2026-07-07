@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -18,9 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.infra.paths import open_in_file_manager
 from steempeg.render.queue import JobStatus, STATUS_COLORS
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
+from steempeg.ui.icon_assets import load_icon
 from steempeg.ui.queue_card_shared import _FONT
 from steempeg.ui.widgets import ElidedLabel
 
@@ -70,6 +72,15 @@ def _batch_summary(batch: RenderBatchRecord) -> str:
     return ", ".join(parts) if parts else "No renders"
 
 
+_BTN_STYLE = """
+    QPushButton {
+        background-color: #333; color: #ccc; border: 1px solid #555;
+        border-radius: 6px; padding: 2px 10px; font-size: 10px;
+    }
+    QPushButton:hover { background-color: #444; color: #fff; }
+"""
+
+
 class RenderQueueHistoryDialog(QDialog):
     open_output_requested = Signal(str)
 
@@ -86,20 +97,28 @@ class RenderQueueHistoryDialog(QDialog):
         root.setSpacing(12)
 
         header = QHBoxLayout()
+        title_icon = QLabel()
+        title_icon.setPixmap(load_icon("history.png", 18).pixmap(18, 18))
+        title_icon.setFixedSize(18, 18)
         title = QLabel("Render History")
         title.setStyleSheet(
             f"color: #ffffff; font-size: 16px; font-weight: bold; {_FONT}"
         )
+        header.addWidget(title_icon)
         header.addWidget(title)
         header.addStretch()
-        btn_clear = QPushButton("Clear all")
+        btn_clear = QPushButton("  Clear all")
         btn_clear.setCursor(Qt.PointingHandCursor)
+        btn_clear.setIcon(load_icon("clear.png", 16))
+        btn_clear.setIconSize(QSize(16, 16))
         btn_clear.setStyleSheet("""
             QPushButton {
-                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
-                border-radius: 8px; padding: 4px 12px; font-size: 11px;
+                background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
+                border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: bold;
+                font-family: 'Segoe UI', Arial, sans-serif;
             }
-            QPushButton:hover { background-color: #5a3535; color: #ffaaaa; }
+            QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
+            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
         """)
         btn_clear.clicked.connect(self._confirm_clear)
         header.addWidget(btn_clear)
@@ -116,11 +135,17 @@ class RenderQueueHistoryDialog(QDialog):
         host_layout.setSpacing(12)
 
         if not batches:
-            empty = QLabel("No batch renders yet.\nRun Render Queue to see history here.")
+            empty = QLabel("No batch renders yet")
             empty.setAlignment(Qt.AlignCenter)
-            empty.setWordWrap(True)
-            empty.setStyleSheet(f"color: #666666; font-size: 13px; padding: 40px; {_FONT}")
+            empty.setStyleSheet(
+                f"color: #c4b5e8; font-size: 14px; font-weight: bold; padding-top: 32px; {_FONT}"
+            )
+            hint = QLabel("Run a render queue batch to see exports here.")
+            hint.setAlignment(Qt.AlignCenter)
+            hint.setWordWrap(True)
+            hint.setStyleSheet(f"color: #8a8a8a; font-size: 12px; padding-bottom: 32px; {_FONT}")
             host_layout.addWidget(empty)
+            host_layout.addWidget(hint)
         else:
             for batch in batches:
                 host_layout.addWidget(self._build_batch_card(batch))
@@ -226,8 +251,11 @@ class RenderQueueHistoryDialog(QDialog):
             row.addWidget(trim_lbl)
 
         out_path = job.output_file or format_job_output(job)
-        out_lbl = ElidedLabel(f"📁 {out_path}")
-        out_lbl.setStyleSheet(f"color: #999999; font-size: 11px; {_FONT}")
+        file_exists = bool(out_path and os.path.isfile(out_path))
+        path_color = "#999999" if file_exists else "#666666"
+        path_suffix = "" if file_exists or not out_path else "  (file deleted)"
+        out_lbl = ElidedLabel(f"📁 {out_path}{path_suffix}")
+        out_lbl.setStyleSheet(f"color: {path_color}; font-size: 11px; {_FONT}")
         row.addWidget(out_lbl)
 
         if job.error_message and status_key == JobStatus.ERROR.value:
@@ -235,19 +263,20 @@ class RenderQueueHistoryDialog(QDialog):
             err.setStyleSheet(f"color: #ff8888; font-size: 10px; {_FONT}")
             row.addWidget(err)
 
-        if out_path and status_key == JobStatus.COMPLETED.value and os.path.isfile(out_path):
+        if file_exists and status_key == JobStatus.COMPLETED.value:
             btn_row = QHBoxLayout()
             btn_row.addStretch()
+            btn_folder = QPushButton("Open folder")
+            btn_folder.setCursor(Qt.PointingHandCursor)
+            btn_folder.setStyleSheet(_BTN_STYLE)
+            btn_folder.clicked.connect(
+                lambda _=False, p=out_path: open_in_file_manager(os.path.dirname(p))
+            )
             btn_open = QPushButton("Open file")
             btn_open.setCursor(Qt.PointingHandCursor)
-            btn_open.setStyleSheet("""
-                QPushButton {
-                    background-color: #333; color: #ccc; border: 1px solid #555;
-                    border-radius: 6px; padding: 2px 10px; font-size: 10px;
-                }
-                QPushButton:hover { background-color: #444; color: #fff; }
-            """)
+            btn_open.setStyleSheet(_BTN_STYLE)
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
+            btn_row.addWidget(btn_folder)
             btn_row.addWidget(btn_open)
             row.addLayout(btn_row)
 
