@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.infra import paths
+from steempeg.ui.icon_assets import load_icon
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
@@ -515,26 +515,39 @@ class RenderQueuePanel(QWidget):
             f" background: transparent; {_FONT}"
         )
 
-        self._btn_clear = QPushButton("Clear")
+        # Clear — styled like the Clips Manager sort combo (rounded #383838 field).
+        self._btn_clear = QPushButton("  Clear")
         self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_clear.setToolTip("Clear the render queue")
+        self._btn_clear.setIcon(load_icon("clear.png", 16))
+        self._btn_clear.setIconSize(QSize(16, 16))
+        self._btn_clear.setFixedHeight(32)
         self._btn_clear.setStyleSheet("""
             QPushButton {
-                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
-                border-radius: 10px; padding: 2px 10px; font-size: 11px;
+                background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
+                border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: bold;
+                font-family: 'Segoe UI', Arial, sans-serif;
             }
-            QPushButton:hover { background-color: #5a3535; color: #ffaaaa; }
+            QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
+            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
+            QPushButton:disabled { background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }
         """)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
-        self._btn_history = QPushButton("History")
+        # History — styled like the Clips Manager Filter pill (square icon button).
+        self._btn_history = QPushButton()
+        self._btn_history.setIcon(load_icon("history.png", 16))
+        self._btn_history.setIconSize(QSize(16, 16))
+        self._btn_history.setFixedSize(32, 32)
         self._btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_history.setToolTip("Past render batches — what exported and where")
+        self._btn_history.setToolTip("Render History — past batches and exports")
         self._btn_history.setStyleSheet("""
             QPushButton {
-                background-color: #3a3a3a; color: #cccccc; border: 1px solid #555;
-                border-radius: 10px; padding: 2px 10px; font-size: 11px;
+                background-color: #383838; border: 2px solid #444444;
+                border-radius: 8px; padding: 4px;
             }
-            QPushButton:hover { background-color: #3a324a; color: #d4c8f0; }
+            QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
+            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
         """)
         self._btn_history.clicked.connect(self.history_requested.emit)
 
@@ -616,10 +629,22 @@ class RenderQueuePanel(QWidget):
         self._content_stack_layout.addWidget(self._grid_host)
         self._grid_host.hide()
 
-        self._empty_label = QLabel("Right-click a clip → Add to queue\n✕ removes a clip from the queue")
-        self._empty_label.setAlignment(Qt.AlignCenter)
-        self._empty_label.setWordWrap(True)
-        self._empty_label.setStyleSheet(f"color: #666666; font-size: 12px; {_FONT}")
+        self._empty_label = QLabel("Queue is empty")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint = QLabel(
+            "Right-click a clip in the library and choose\n"
+            "<b>Add to queue</b> to build a batch render."
+        )
+        self._empty_hint.setTextFormat(Qt.TextFormat.RichText)
+        self._empty_hint.setWordWrap(True)
+        for lbl in (self._empty_label, self._empty_hint):
+            lbl.setStyleSheet(
+                f"color: #8a8a8a; font-size: 12px; border: none; background: transparent; {_FONT}"
+            )
+        self._empty_label.setStyleSheet(
+            f"color: #c4b5e8; font-size: 14px; font-weight: bold; border: none;"
+            f" background: transparent; {_FONT}"
+        )
 
         self._scroll.setWidget(self._content_stack)
         list_outer.addWidget(self._scroll, 1)
@@ -696,13 +721,14 @@ class RenderQueuePanel(QWidget):
         card.dropped_on.connect(self._on_card_drop)
 
     def _clear_cards(self) -> None:
-        if self._empty_label.parent() is not None:
-            self._list_layout.removeWidget(self._empty_label)
+        for empty_widget in (self._empty_label, self._empty_hint):
+            if empty_widget.parent() is not None:
+                self._list_layout.removeWidget(empty_widget)
 
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
             w = item.widget()
-            if w is not None and w is not self._empty_label:
+            if w is not None and w not in (self._empty_label, self._empty_hint):
                 w.setParent(None)
                 w.deleteLater()
 
@@ -722,12 +748,16 @@ class RenderQueuePanel(QWidget):
         self._show_active_host()
 
         if not jobs:
+            self._list_layout.addStretch(1)
             self._list_layout.addWidget(self._empty_label)
-            self._list_layout.addStretch()
+            self._list_layout.addWidget(self._empty_hint)
+            self._list_layout.addStretch(2)
             self._empty_label.show()
+            self._empty_hint.show()
             return
 
         self._empty_label.hide()
+        self._empty_hint.hide()
         for job in jobs:
             card = self._make_card(job, selected=(job.id == selected))
             self._wire_card(card)
