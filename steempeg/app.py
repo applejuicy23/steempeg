@@ -632,7 +632,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.setStyleSheet(compact_combo_stylesheet())
 
         # 3. Adding elements with attractive icons
-        self.combo_sort.addItem(QIcon(get_resource_path("defaultsort.png")), "Default (Don't touch)")
+        self.combo_sort.addItem(QIcon(get_resource_path("defaultsort.png")), "Default")
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort1.png")), "Game Name (A - Z)")
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort2.png")), "Game Name (Z - A)")
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort1.png")), "Type (A - Z)")
@@ -2004,6 +2004,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # We connect the "Final setup" update to all interface changes
         if hasattr(self.ui, 'combo_quality'):
             self.ui.combo_quality.currentTextChanged.connect(self.on_quality_mode_changed)
+        if hasattr(self.ui, 'btn_quality_original_help'):
+            self.ui.btn_quality_original_help.setToolTip(
+                "Original preset warning — click for details.\n"
+                "Fast stream copy without re-encoding may produce wrong output duration "
+                "if the Steam DASH chunks are slightly broken."
+            )
+            self.ui.btn_quality_original_help.clicked.connect(self.show_original_help_popup)
+            self.init_original_help_state()
         if hasattr(self.ui, 'combo_bitrate'): self.ui.combo_bitrate.currentTextChanged.connect(self.update_final_setup)
         if hasattr(self.ui, 'combo_codec'):
             self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
@@ -2093,7 +2101,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._apply_dark_shell()
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
-        from PySide6.QtGui import QDoubleValidator, QIntValidator, QPixmap
+        from PySide6.QtGui import QDoubleValidator, QIntValidator
+
+        from steempeg.ui.icon_assets import warning_pixmap
 
         def _wire_custom(input_attr, warn_attr, validator, slot):
             edit = getattr(self.ui, input_attr, None)
@@ -2105,9 +2115,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             edit.setValidator(validator)
             edit.textChanged.connect(slot)
             if warn is not None:
-                pix = QPixmap(get_resource_path("attention.png"))
+                pix = warning_pixmap(16)
                 if not pix.isNull():
-                    warn.setPixmap(pix.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    warn.setPixmap(pix)
                 if hasattr(self, 'instant_tooltip'):
                     warn.installEventFilter(self.instant_tooltip)
 
@@ -2226,9 +2236,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             self.warn_size = QLabel()
             self.warn_size.setFixedSize(16, 16)
-            pix_path = get_resource_path("attention.png")
-            if os.path.exists(pix_path):
-                self.warn_size.setPixmap(QPixmap(pix_path).scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            from steempeg.ui.icon_assets import warning_pixmap
+            _warn_pix = warning_pixmap(16)
+            if not _warn_pix.isNull():
+                self.warn_size.setPixmap(_warn_pix)
             self.warn_size.hide()
 
             class InstantTooltipFilter(QObject):
