@@ -577,6 +577,8 @@ class PlayerMixin:
         return screen.geometry() if screen else self.ui.geometry()
 
     def _enter_immersive_chrome(self):
+        if hasattr(self.ui, "title_bar"):
+            self.ui.title_bar.hide()
         enter_immersive_chrome(self.ui, self._immersive_screen_geometry())
         self.ui.raise_()
         self.ui.activateWindow()
@@ -786,6 +788,9 @@ class PlayerMixin:
 
         def finish_exit():
             exit_immersive_chrome(self.ui)
+            if hasattr(self.ui, "title_bar"):
+                self.ui.title_bar.show()
+                self.ui.title_bar.sync_window_state()
             self._activate_window_layouts()
             footer.show()
             if right_layout:

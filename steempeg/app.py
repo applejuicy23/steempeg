@@ -203,7 +203,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             }
         """)
         
-        self.ui.setWindowTitle(f"Steempeg v{APP_VERSION_STR}")
+        # Empty native title — custom SteempegTitleBar shows the label.
+        self.ui.setWindowTitle(" ")
         
         # Setting the application icon
         icon_path = get_resource_path("logo.png")
@@ -2334,9 +2335,16 @@ def main():
         if os.path.exists(icon_path): 
             window.ui.setWindowIcon(QIcon(icon_path))
             
-        # --- ADDING COLLAPSE AND EXPAND BUTTONS ---
+        # --- CUSTOM WINDOW CHROME ---
+        # Keep a fully native window (frame, shadow, Aero Snap, min/max animations);
+        # the caption is hidden later via WM_NCCALCSIZE, not by stripping styles.
         from PySide6.QtCore import Qt
-        window.ui.setWindowFlags(window.ui.windowFlags() | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
+        window.ui.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
 
         # Pre-size to (almost) the screen work area BEFORE showing. showMaximized()
         # on this QDialog can otherwise set the maximized *state* while the geometry
@@ -2345,23 +2353,25 @@ def main():
         # work (restoring a render-queue clip) made that race reliable. Pre-sizing to
         # a large geometry removes both the grow animation and the desync.
         #
-        # IMPORTANT: this geometry is also the window's *normal/restore* geometry. If
-        # we use availableGeometry() verbatim the client area starts at y=0, so the
-        # native title bar is pushed off the top of the screen — and the moment the
-        # user clicks the OS 'restore' button the title bar (logo + "Steempeg" + the
-        # min/max/close buttons) lands above the screen and the window becomes
-        # ungrabbable. Inset the rect so the restored window keeps its title bar on
-        # screen while staying large enough to avoid the false-maximized race.
+        # Inset the rect so a restored (non-maximized) window stays on screen. With
+        # custom title bar the top inset is smaller than the old native caption.
         window._apply_dark_shell()
         _screen = app.primaryScreen()
         if _screen is not None:
-            window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 50, -60, -50))
+            window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 36, -60, -40))
         window.ui.showMaximized()
         QApplication.processEvents()
         window._sync_startup_layout()
-        # Force the taskbar button to adopt our icon on the very first launch instead
-        # of waiting for Windows to warm its per-AppUserModelID icon cache.
-        QTimer.singleShot(0, lambda: _force_native_window_icon(window.ui, icon_path))
+
+        def _apply_custom_shell_native():
+            from steempeg.ui.window_chrome import enable_frameless
+            _force_native_window_icon(window.ui, icon_path)
+            enable_frameless(window.ui)
+            tb = getattr(window.ui, "title_bar", None)
+            if tb is not None:
+                tb.sync_window_state()
+
+        QTimer.singleShot(0, _apply_custom_shell_native)
         
         if args.updated_from:
             QTimer.singleShot(1000, lambda: window.show_update_success(args.updated_from, args.backup_folder))
