@@ -1595,16 +1595,31 @@ class PlayerMixin:
                     self.btn_close_clip.hide()
                 if hasattr(self.ui, 'btn_start'):
                     self.ui.btn_start.setEnabled(False)
-                QMessageBox.warning(
-                    self.ui,
-                    "Unplayable Clip",
-                    "This clip is dead and cannot be previewed.\n\n"
-                    + "\n".join(f"• {issue}" for issue in report.issues[:6]),
-                )
                 if hasattr(self, 'update_playback_badge'):
                     self.update_playback_badge()
                 if hasattr(self, 'update_clip_health_button'):
                     self.update_clip_health_button()
+
+                # Dead, but not necessarily hopeless: offer a salvage attempt instead
+                # of a dead-end warning. Yes -> force_play_dead_clip (shows its own
+                # disclaimer + rebuilds a manifest). No -> stay blocked.
+                issues = "\n".join(f"• {issue}" for issue in report.issues[:6])
+                offer = QMessageBox.question(
+                    self.ui,
+                    "Dead Clip",
+                    "This clip is marked Dead and won't play normally:\n\n"
+                    f"{issues}\n\n"
+                    "Steempeg can still try to salvage it — rebuild a manifest from the "
+                    "surviving chunks and, if needed, borrow a decoder header from a "
+                    "healthy clip of the same game.\n\n"
+                    "Do you want to try to recover / force-play it?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if offer == QMessageBox.StandardButton.Yes and hasattr(
+                    self, "force_play_dead_clip"
+                ):
+                    self.force_play_dead_clip(clip_path)
                 return
 
         self._pending_trim_restore = trim_restore
