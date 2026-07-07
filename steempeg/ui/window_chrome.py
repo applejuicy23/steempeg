@@ -148,6 +148,7 @@ class SteempegTitleBar(QWidget):
         self.setObjectName("SteempegTitleBar")
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
 
+        bar_h = tok.TITLE_BAR_HEIGHT
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 0, 12, 0)
         root.setSpacing(0)
@@ -155,10 +156,12 @@ class SteempegTitleBar(QWidget):
         icon_path = get_resource_path("logo.png")
         if os.path.isfile(icon_path):
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(QPixmap(icon_path).scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            icon_lbl.setFixedSize(18, 18)
+            icon_lbl.setPixmap(QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            icon_lbl.setFixedHeight(bar_h)
+            icon_lbl.setFixedWidth(16)
+            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             root.addWidget(icon_lbl)
-            root.addSpacing(8)
+            root.addSpacing(7)
 
         title_lbl = QLabel(title)
         title_lbl.setObjectName("TitleBarTitle")
@@ -167,6 +170,9 @@ class SteempegTitleBar(QWidget):
         font.setPointSize(tok.FONT_TITLE_SIZE)
         font.setWeight(QFont.Weight.DemiBold)
         title_lbl.setFont(font)
+        title_lbl.setFixedHeight(bar_h)
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        title_lbl.setContentsMargins(0, 0, 0, 2)
         root.addWidget(title_lbl)
 
         if subtitle:
@@ -174,8 +180,11 @@ class SteempegTitleBar(QWidget):
             sub_lbl.setObjectName("TitleBarSubtitle")
             sub_font = QFont(font)
             sub_font.setWeight(QFont.Weight.Normal)
-            sub_font.setPointSize(11)
+            sub_font.setPointSize(tok.FONT_SUBTITLE_SIZE)
             sub_lbl.setFont(sub_font)
+            sub_lbl.setFixedHeight(bar_h)
+            sub_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+            sub_lbl.setContentsMargins(0, 0, 0, 2)
             root.addWidget(sub_lbl)
 
         root.addStretch(1)
@@ -185,9 +194,9 @@ class SteempegTitleBar(QWidget):
         self.btn_minimize = _TrafficLight(tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "−")
         self.btn_maximize = _TrafficLight(tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "⤢")
         self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "✕")
-        controls.addWidget(self.btn_minimize)
-        controls.addWidget(self.btn_maximize)
-        controls.addWidget(self.btn_close)
+        controls.addWidget(self.btn_minimize, 0, Qt.AlignmentFlag.AlignVCenter)
+        controls.addWidget(self.btn_maximize, 0, Qt.AlignmentFlag.AlignVCenter)
+        controls.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(controls)
 
         self.btn_close.clicked.connect(self.close_requested.emit)

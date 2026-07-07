@@ -25,7 +25,8 @@ TRAFFIC_MAXIMIZE_HOVER = "#1aad2e"
 
 # Typography
 FONT_UI = "'Cascadia UI', 'Segoe UI Variable', 'Segoe UI', sans-serif"
-FONT_TITLE_SIZE = 12
+FONT_TITLE_SIZE = 10
+FONT_SUBTITLE_SIZE = 10
 
 # Layout
-TITLE_BAR_HEIGHT = 36
+TITLE_BAR_HEIGHT = 28

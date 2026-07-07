@@ -63,5 +63,5 @@ HORIZONTAL_SPLITTER_STYLESHEET = """
     }
 """
 
-# Custom title bar (see ui/window_chrome.py) — keep in sync with design_tokens.
-TITLE_BAR_HEIGHT = 36
+# Custom title bar (see ui/window_chrome.py) — canonical value in design_tokens.
+TITLE_BAR_HEIGHT = 28
