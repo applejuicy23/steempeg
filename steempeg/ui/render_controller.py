@@ -167,8 +167,35 @@ _bin_dir = os.path.join(_base_dir, "bin")
 
 
 class RenderMixin:
+    def _detect_clip_has_audio(self, all_mpds) -> bool:
+        """True if any source manifest/folder carries a real audio stream."""
+        for mpd_path in all_mpds:
+            folder = os.path.dirname(mpd_path)
+            init_a = os.path.join(folder, "init-stream1.m4s")
+            if os.path.isfile(init_a) and os.path.getsize(init_a) > 100:
+                try:
+                    for entry in os.listdir(folder):
+                        if entry.startswith("chunk-stream1-") and entry.endswith(".m4s"):
+                            return True
+                except OSError:
+                    pass
+            try:
+                with open(mpd_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if 'contentType="audio"' in content or 'mimeType="audio' in content:
+                        return True
+            except OSError:
+                pass
+        return False
+
     def get_all_mpd_paths(self, clip_path):
-        return discovery.find_mpd_paths(clip_path)
+        paths = discovery.find_mpd_paths(clip_path)
+        if paths:
+            return paths
+        # Force-play salvage: a clip with no scanner-visible manifest but a built
+        # session_salvage.mpd is playable/renderable through that salvage manifest.
+        salvaged = getattr(self, "_salvaged_clips", {}).get(os.path.normpath(clip_path))
+        return list(salvaged) if salvaged else []
 
     def fix_steam_manifest(self, mpd_path):
         return repair.fix_steam_manifest(mpd_path)
@@ -226,6 +253,18 @@ class RenderMixin:
 
     def _sync_original_audio_controls(self):
         """Freeze audio encode controls when Original is doing stream copy."""
+        if not getattr(self, "_current_clip_has_audio", True):
+            # No audio track on the source — keep all audio controls disabled and let
+            # refresh_output_format_availability own the final clamped state.
+            for name in (
+                "label_audio_format", "combo_audio_format", "label_audio_bitrate",
+                "combo_audio_bitrate", "input_custom_abitrate", "check_audio_only",
+                "check_mute_audio",
+            ):
+                widget = getattr(self.ui, name, None)
+                if widget is not None:
+                    widget.setEnabled(False)
+            return
         quality_text = self.ui.combo_quality.currentText() if hasattr(self.ui, 'combo_quality') else ""
         audio_only = self.ui.check_audio_only.isChecked() if hasattr(self.ui, 'check_audio_only') else False
         is_original_copy = "Original" in quality_text and "Target File" not in quality_text and not audio_only
@@ -308,6 +347,11 @@ class RenderMixin:
     def refresh_output_format_availability(self) -> None:
         """Grey invalid container/codec/audio pairs; toggle lossless audio bitrate."""
         ui = self.ui
+        no_audio = not getattr(self, "_current_clip_has_audio", True)
+        if no_audio and hasattr(ui, "check_audio_only") and ui.check_audio_only.isChecked():
+            ui.check_audio_only.blockSignals(True)
+            ui.check_audio_only.setChecked(False)
+            ui.check_audio_only.blockSignals(False)
         container = ui.combo_container.currentText() if hasattr(ui, "combo_container") else "MP4"
         codec = ui.combo_codec.currentText() if hasattr(ui, "combo_codec") else ""
         audio_fmt = ui.combo_audio_format.currentText() if hasattr(ui, "combo_audio_format") else "AAC"
@@ -352,6 +396,20 @@ class RenderMixin:
                 widget.setEnabled(bitrate_enabled)
         if hasattr(ui, "input_custom_abitrate"):
             ui.input_custom_abitrate.setEnabled(bitrate_enabled)
+
+        # Source has no audio track: clamp every audio choice off so the user can't
+        # pick a format/bitrate for something that doesn't exist.
+        if no_audio:
+            for name in (
+                "combo_audio_format", "combo_audio_bitrate", "label_audio_format",
+                "label_audio_bitrate", "input_custom_abitrate", "check_audio_only",
+                "check_mute_audio",
+            ):
+                widget = getattr(ui, name, None)
+                if widget is not None:
+                    widget.setEnabled(False)
+            if hasattr(ui, "label_abitrate"):
+                ui.label_abitrate.setText("Audio Bitrate: None (no audio track)")
 
     def _mark_output_preset_custom(self) -> None:
         if getattr(self, "_applying_output_preset", False):
@@ -835,6 +893,11 @@ class RenderMixin:
             self.ui.combo_quality.clear()
             return
 
+        # Detect whether the source actually carries an audio track. Salvaged clips
+        # (and some Steam recordings) have video only; without this the audio format/
+        # bitrate combos would offer choices for a track that doesn't exist.
+        self._current_clip_has_audio = self._detect_clip_has_audio(all_mpds)
+
         source_dirs = [os.path.dirname(m) for m in all_mpds]
         unique_source_dirs = list(dict.fromkeys(source_dirs))
         self.current_source_raw_paths = "\n".join(unique_source_dirs)
@@ -927,7 +990,12 @@ class RenderMixin:
         else:
             self.ui.orig_res_label.setText("Original resolution: Unknown")
             if hasattr(self.ui, "label_vbitrate"):
-                self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+                if getattr(self, "current_orig_bitrate", 0) > 0:
+                    self.ui.label_vbitrate.setText(
+                        f"Video Bitrate: {int(round(self.current_orig_bitrate))} Mbps"
+                    )
+                else:
+                    self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
             if hasattr(self.ui, "label_abitrate"):
                 self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
             max_height = 1080
@@ -1004,6 +1072,9 @@ class RenderMixin:
             self.ui.btn_start.setEnabled(True)
         self.ui.btn_start.setEnabled(True)
         self.update_final_setup()
+        # Enforce audio-track availability (disables audio choices for video-only clips).
+        self._sync_original_audio_controls()
+        self.refresh_output_format_availability()
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """

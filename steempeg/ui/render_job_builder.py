@@ -302,9 +302,16 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         return None
 
     mpds = discovery.find_mpd_paths(clip_path)
+    salvage_mpds: list[str] = []
     if not mpds:
-        logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
-        return None
+        # Force-play salvage: fall back to the built session_salvage.mpd for revived
+        # dead clips so they can still be rendered.
+        salvage_mpds = list(
+            getattr(app, "_salvaged_clips", {}).get(os.path.normpath(clip_path), [])
+        )
+        if not salvage_mpds:
+            logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
+            return None
 
     meta = find_clip_metadata(app, clip_path) or {}
     settings = snapshot_settings_from_ui(app)
@@ -333,6 +340,7 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         clip_time=meta.get("clip_time", ""),
         game_icon_path=icon_path,
         settings=settings,
+        salvage_mpds=salvage_mpds,
     )
     job.refresh_output_path()
     return job
@@ -342,6 +350,8 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
     """Turn a job's stored settings into RenderThread arguments."""
     s = job.settings
     all_mpds = discovery.find_mpd_paths(job.clip_path)
+    if not all_mpds:
+        all_mpds = list(getattr(job, "salvage_mpds", []) or [])
     if not all_mpds:
         return None
 

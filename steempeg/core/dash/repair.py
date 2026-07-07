@@ -6,9 +6,11 @@ Pure logic - no Qt. Two jobs:
 Both read and write files and return a path (or None on failure).
 """
 import glob
+import json
 import logging
 import os
 import re
+import subprocess
 
 # Steam's fixed DASH timing. Video runs at timescale 1000 with 3000-tick (3s) chunks,
 # audio at 48000 with 144000-tick (3s) chunks.
@@ -187,15 +189,80 @@ def fix_steam_manifest(mpd_path):
         return mpd_path
 
 
-def recover_orphaned_clip(folder_path):
-    """Build a session.mpd from scratch for a folder of orphaned chunks.
+def _probe_video_dimensions(mpd_path):
+    """(width, height, fps) for a manifest's video track via ffprobe (0s on failure)."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,avg_frame_rate",
+                "-of", "json", mpd_path,
+            ],
+            capture_output=True, text=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        data = json.loads(proc.stdout or "{}")
+        stream = (data.get("streams") or [{}])[0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+        rate = str(stream.get("avg_frame_rate") or "0/0")
+        num, _, den = rate.partition("/")
+        den = den or "1"
+        fps = int(round(float(num) / float(den))) if float(den) != 0 else 0
+        return width, height, fps
+    except Exception as exc:
+        logging.debug("ffprobe dimensions failed for %s: %s", mpd_path, exc)
+        return 0, 0, 0
 
-    Reads the surviving chunks, assumes Steam's standard DASH timing, and writes a fresh
-    session_recovered.mpd. Returns its path, or None if there is nothing usable.
+
+def _annotate_video_resolution(mpd_path):
+    """Bake real width/height/frameRate into a freshly built video Representation.
+
+    Recovered/salvage manifests are assembled from raw chunks and start with no
+    resolution, so the render UI shows 'Unknown' and caps its quality/bitrate ladder.
+    Probing the actual stream lets the pipeline see the true resolution."""
+    width, height, fps = _probe_video_dimensions(mpd_path)
+    if not (width and height):
+        return
+    attrs = f' width="{width}" height="{height}"'
+    if fps:
+        attrs += f' frameRate="{fps}"'
+    try:
+        with open(mpd_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        content = content.replace(
+            '<Representation id="0" bandwidth',
+            f'<Representation id="0"{attrs} bandwidth',
+            1,
+        )
+        with open(mpd_path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as exc:
+        logging.debug("Failed to annotate resolution for %s: %s", mpd_path, exc)
+
+
+def recover_orphaned_clip(
+    folder_path,
+    out_name="session_recovered.mpd",
+    video_init_name="init-stream0.m4s",
+    audio_init_name="init-stream1.m4s",
+    require_valid_init=True,
+    probe_resolution=False,
+):
+    """Build a manifest from scratch for a folder of orphaned chunks.
+
+    Reads the surviving chunks, assumes Steam's standard DASH timing, and writes a
+    fresh manifest named ``out_name``. Returns its path, or None if there is nothing
+    usable. Use a non-standard ``out_name`` (e.g. session_salvage.mpd) to keep the
+    health/discovery scanners from treating the clip as recovered.
+
+    ``video_init_name`` / ``audio_init_name`` let the manifest point at a *borrowed*
+    init segment (from a healthy clip of the same game) when the clip's own init is
+    missing/corrupt. Set ``require_valid_init=False`` when supplying such a donor init.
     """
     # without a valid video init segment MPV reads empty space and crashes, so bail early
-    init_v = os.path.join(folder_path, "init-stream0.m4s")
-    if not os.path.exists(init_v) or os.path.getsize(init_v) < 100:
+    init_v = os.path.join(folder_path, video_init_name)
+    if require_valid_init and (not os.path.exists(init_v) or os.path.getsize(init_v) < 100):
         logging.warning(f"Skipped, no valid init-stream0: {folder_path}")
         return None
 
@@ -215,10 +282,27 @@ def recover_orphaned_clip(folder_path):
     v_start = min(v_nums)
     duration_sec = len(v_nums) * _CHUNK_SECONDS
 
+    # Derive a real video bandwidth from the surviving bytes instead of a hardcoded
+    # placeholder, so the render UI's "Original" bitrate reflects the actual clip.
+    v_bytes = 0
+    for c in video_chunks:
+        try:
+            sz = os.path.getsize(c)
+            if sz > 0:
+                v_bytes += sz
+        except OSError:
+            pass
+    try:
+        v_bytes += os.path.getsize(init_v)
+    except OSError:
+        pass
+    video_bandwidth = int(v_bytes * 8 / duration_sec) if duration_sec > 0 else 10000000
+    video_bandwidth = max(video_bandwidth, 100000)
+
     # audio is optional, and only if its own init segment is valid too
     a_start = v_start
     has_audio = False
-    init_a = os.path.join(folder_path, "init-stream1.m4s")
+    init_a = os.path.join(folder_path, audio_init_name)
     audio_chunks = glob.glob(os.path.join(folder_path, "chunk-stream1-*.m4s"))
     if audio_chunks and os.path.exists(init_a) and os.path.getsize(init_a) > 100:
         a_nums = []
@@ -243,7 +327,7 @@ def recover_orphaned_clip(folder_path):
         audio_block = f"""
             <AdaptationSet id="1" contentType="audio" segmentAlignment="true">
               <Representation id="1" bandwidth="192000" mimeType="audio/mp4">
-                <SegmentTemplate timescale="{_AUDIO_TIMESCALE}" startNumber="{a_start}" initialization="init-stream1.m4s" media="chunk-stream1-$Number%05d$.m4s">{a_timeline}</SegmentTemplate>
+                <SegmentTemplate timescale="{_AUDIO_TIMESCALE}" startNumber="{a_start}" initialization="{audio_init_name}" media="chunk-stream1-$Number%05d$.m4s">{a_timeline}</SegmentTemplate>
               </Representation>
             </AdaptationSet>"""
 
@@ -251,18 +335,20 @@ def recover_orphaned_clip(folder_path):
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-live:2011" type="static" mediaPresentationDuration="PT{duration_sec}S">
   <Period id="0" start="PT0.000S">
     <AdaptationSet id="0" contentType="video" segmentAlignment="true">
-      <Representation id="0" bandwidth="10000000" mimeType="video/mp4">
-        <SegmentTemplate timescale="{_VIDEO_TIMESCALE}" startNumber="{v_start}" initialization="init-stream0.m4s" media="chunk-stream0-$Number%05d$.m4s">{v_timeline}</SegmentTemplate>
+      <Representation id="0" bandwidth="{video_bandwidth}" mimeType="video/mp4">
+        <SegmentTemplate timescale="{_VIDEO_TIMESCALE}" startNumber="{v_start}" initialization="{video_init_name}" media="chunk-stream0-$Number%05d$.m4s">{v_timeline}</SegmentTemplate>
       </Representation>
     </AdaptationSet>{audio_block}
   </Period>
 </MPD>"""
 
-    recovered_path = os.path.join(folder_path, "session_recovered.mpd")
+    recovered_path = os.path.join(folder_path, out_name)
     try:
         with open(recovered_path, "w", encoding="utf-8") as f:
             f.write(mpd_xml.strip())
         logging.info(f"Recovered orphaned clip at {recovered_path}")
+        if probe_resolution:
+            _annotate_video_resolution(recovered_path)
         return recovered_path
     except OSError as e:
         logging.error(f"Failed to write recovered MPD: {e}")

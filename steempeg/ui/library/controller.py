@@ -446,16 +446,172 @@ class LibraryMixin:
 
         if report.level == health.ClipHealth.DEAD:
             menu.addSeparator()
+            force_act = menu.addAction("▶️ Force play (salvage)")
+            force_act.setToolTip(
+                "Best-effort attempt to decode surviving chunks. May show corrupted "
+                "video, audio only, or nothing — the clip stays marked Dead."
+            )
+            force_act.triggered.connect(lambda: self.force_play_dead_clip(clip_path))
+
             delete_act = menu.addAction("🗑️ Delete clip")
             delete_act.triggered.connect(lambda: self.delete_clip(clip_path))
 
-        dead_count = len(self._iter_dead_clip_paths())
-        if dead_count > 0:
-            menu.addSeparator()
-            bulk_act = menu.addAction(f"🗑️ Delete ALL dead clips ({dead_count})")
-            bulk_act.triggered.connect(self.delete_all_dead_clips)
+            dead_count = len(self._iter_dead_clip_paths())
+            if dead_count > 0:
+                menu.addSeparator()
+                bulk_act = menu.addAction(f"🗑️ Delete ALL dead clips ({dead_count})")
+                bulk_act.triggered.connect(self.delete_all_dead_clips)
 
         menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
+
+    def force_play_dead_clip(self, clip_path: str) -> None:
+        """Best-effort salvage preview for a dead clip (user-initiated gamble).
+
+        Tries to synthesize a manifest from surviving chunks when none is playable,
+        then forces playback bypassing the dead-clip guard. The clip's health is left
+        untouched — a successful force-play does not re-classify it."""
+        if not clip_path or not os.path.isdir(clip_path):
+            return
+
+        confirm = QMessageBox.question(
+            self.ui,
+            "Force play dead clip",
+            "This clip is classified as Dead. Steempeg will try to decode whatever "
+            "survives on disk — and, if the clip's own decoder header (init) is gone, "
+            "borrow one from a healthy clip of the same game.\n\n"
+            "You may see corrupted/garbled video, only audio, or nothing at all. If it "
+            "does play, the clip stays labelled Dead but becomes renderable.\n\n"
+            "Try anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # Always rebuild a fresh salvage manifest from the *decodable* data on disk
+        # (valid init-stream0 + non-empty chunks). We deliberately ignore any stale
+        # session_recovered.mpd — playing that when the init is corrupt just opens an
+        # empty stream (0 frames / black). recover_orphaned_clip bails without a valid
+        # init, so a None result means there is genuinely nothing to decode.
+        mpd_override = self._build_salvage_manifest(clip_path)
+
+        if not mpd_override:
+            QMessageBox.warning(
+                self.ui,
+                "Nothing to salvage",
+                "No usable video chunks were found, and no healthy clip of the same "
+                "game was available to borrow a decoder header from. There is nothing "
+                "to decode — this clip is genuinely unrecoverable.",
+            )
+            return
+
+        # Register so get_all_mpd_paths resolves the salvage manifest everywhere
+        # (preview + render), then populate render settings from it so the revived
+        # clip is renderable. Health stays Dead — this is an explicit user salvage.
+        self._register_salvaged_clip(clip_path)
+        self.generate_and_play_preview(clip_path, force=True, mpd_override=mpd_override)
+        if hasattr(self, "_populate_quality_options_for_clip"):
+            self._populate_quality_options_for_clip(clip_path)
+
+    def _register_salvaged_clip(self, clip_path: str) -> None:
+        """Remember a clip's built salvage manifests so they resolve for render."""
+        if not hasattr(self, "_salvaged_clips"):
+            self._salvaged_clips = {}
+        mpds = []
+        for root, _dirs, files in os.walk(clip_path):
+            if "session_salvage.mpd" in files:
+                mpds.append(os.path.join(root, "session_salvage.mpd"))
+        if mpds:
+            self._salvaged_clips[os.path.normpath(clip_path)] = sorted(mpds)
+
+    def _is_salvaged_clip(self, clip_path: str) -> bool:
+        return os.path.normpath(clip_path) in getattr(self, "_salvaged_clips", {})
+
+    def _build_salvage_manifest(self, clip_path: str):
+        """Write a scanner-invisible salvage manifest from orphaned chunks.
+
+        For a folder whose own init-stream0 is missing/corrupt, borrow a valid init
+        from a healthy clip of the same game (Steam records with consistent per-title
+        encoder settings, so the SPS/PPS usually matches). The borrowed init is copied
+        in as init-stream0-salvage.m4s (non-destructive) and referenced by the salvage
+        manifest. Returns the manifest path, or None if there is nothing to decode."""
+        from steempeg.core.dash import repair
+        from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+
+        app_id = parse_app_id_from_clip_folder(os.path.basename(clip_path))
+        donor_init = None  # resolved lazily, only if some folder needs it
+
+        for root, _dirs, files in os.walk(clip_path):
+            if not any(f.startswith("chunk-stream0-") and f.endswith(".m4s") for f in files):
+                continue
+
+            own_init = os.path.join(root, "init-stream0.m4s")
+            own_ok = os.path.isfile(own_init) and os.path.getsize(own_init) >= 100
+
+            try:
+                if own_ok:
+                    path = repair.recover_orphaned_clip(
+                        root, out_name="session_salvage.mpd", probe_resolution=True,
+                    )
+                else:
+                    if donor_init is None:
+                        donor_init = self._find_donor_init(app_id, exclude=clip_path)
+                    if not donor_init:
+                        continue
+                    borrowed = os.path.join(root, "init-stream0-salvage.m4s")
+                    shutil.copy2(donor_init, borrowed)
+                    logging.info("Salvage: borrowed init %s -> %s", donor_init, root)
+                    path = repair.recover_orphaned_clip(
+                        root,
+                        out_name="session_salvage.mpd",
+                        video_init_name="init-stream0-salvage.m4s",
+                        require_valid_init=False,
+                        probe_resolution=True,
+                    )
+            except Exception as exc:
+                logging.warning("Salvage manifest build failed for %s: %s", root, exc)
+                path = None
+            if path:
+                return path
+        return None
+
+    def _find_valid_init0(self, clip_path: str):
+        """First valid (>=100B) init-stream0.m4s anywhere inside a clip folder."""
+        for root, _dirs, files in os.walk(clip_path):
+            if "init-stream0.m4s" in files:
+                p = os.path.join(root, "init-stream0.m4s")
+                try:
+                    if os.path.getsize(p) >= 100:
+                        return p
+                except OSError:
+                    continue
+        return None
+
+    def _find_donor_init(self, app_id, exclude: str = ""):
+        """Find a valid init-stream0.m4s from a healthy clip of the same game."""
+        if not app_id or not hasattr(self.ui, "table_clips"):
+            return None
+        exclude_norm = os.path.normpath(exclude) if exclude else ""
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            path = item.data(Qt.UserRole)
+            if not path or not os.path.isdir(path):
+                continue
+            if exclude_norm and os.path.normpath(path) == exclude_norm:
+                continue
+            from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+            if parse_app_id_from_clip_folder(os.path.basename(path)) != app_id:
+                continue
+            report = self.get_clip_health_report(path)
+            if report.level == health.ClipHealth.DEAD:
+                continue
+            donor = self._find_valid_init0(path)
+            if donor:
+                logging.info("Donor init for %s found in %s", app_id, path)
+                return donor
+        return None
 
     def _populate_library_context_menu(self, menu, clip_paths: list):
         count = len(clip_paths)

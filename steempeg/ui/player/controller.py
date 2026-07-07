@@ -819,6 +819,12 @@ class PlayerMixin:
                 self.ui.frame_status.show()
             if hasattr(self, 'render_dashboard'):
                 self.render_dashboard.show()
+            # The block above unconditionally re-shows the render dock + restores the
+            # queue splitter. For a rendered-video preview that must stay hidden
+            # (finished exports can't be re-rendered), so re-apply the library-mode
+            # chrome to collapse the dock again after leaving immersive mode.
+            if hasattr(self, '_sync_library_mode_chrome'):
+                self._sync_library_mode_chrome()
 
         self._activate_window_layouts()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
@@ -1545,8 +1551,13 @@ class PlayerMixin:
         if hasattr(self.ui, "btn_play"):
             self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
 
-    def generate_and_play_preview(self, clip_path=None, trim_restore=None):
-        """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed! """
+    def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
+        """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
+
+        force=True bypasses the dead-clip guard for a best-effort "salvage" preview
+        (may show corrupted video, audio only, or nothing — entirely on the user).
+        mpd_override plays a specific manifest directly (used for salvage manifests
+        that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
@@ -1570,7 +1581,10 @@ class PlayerMixin:
                 report.level.name,
                 report.issues,
             )
-            if report.level == health.ClipHealth.DEAD:
+            already_salvaged = (
+                hasattr(self, "_is_salvaged_clip") and self._is_salvaged_clip(clip_path)
+            )
+            if report.level == health.ClipHealth.DEAD and not force and not already_salvaged:
                 logging.warning("Blocked dead clip preview: %s", clip_path)
                 self._preview_clip_path = clip_path
                 self._selected_queue_job_id = None
@@ -1602,7 +1616,7 @@ class PlayerMixin:
         # 2. GET THE CLIP FOLDER PATH
         
         # STEP 1: FIND THE VIDEO FOLDER
-        all_mpds = self.get_all_mpd_paths(clip_path)
+        all_mpds = [mpd_override] if mpd_override else self.get_all_mpd_paths(clip_path)
         if not all_mpds:
             logging.warning("No MPD found for clip: %s", clip_path)
             return

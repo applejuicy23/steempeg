@@ -86,6 +86,7 @@ class RenderJob:
     queue_index: int = 0
     output_file: str = ""
     error_message: str = ""
+    salvage_mpds: List[str] = field(default_factory=list)
 
     def refresh_output_path(self) -> str:
         """Recompute a collision-safe output path from current settings."""
