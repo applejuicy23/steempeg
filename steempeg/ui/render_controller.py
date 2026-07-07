@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPoint
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from steempeg.core import capabilities
 from steempeg.core.dash import discovery, health, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
+from steempeg.ui.icon_assets import warning_pixmap
 from steempeg.render import bitrate
 from steempeg.render.output_formats import (
     AUDIO_FORMATS,
@@ -597,6 +598,14 @@ class RenderMixin:
         except Exception as e:
             print(f"Failed to open folder: {e}")
 
+    def open_rendered_file(self, file_path: str) -> None:
+        """Open a rendered output with the system default app."""
+        try:
+            if os.path.isfile(file_path):
+                os.startfile(file_path)
+        except OSError as exc:
+            logging.warning("Could not open rendered file %s: %s", file_path, exc)
+
     def _queue_is_active(self) -> bool:
         """True when the render queue has jobs (queue drives batch render)."""
         return bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
@@ -706,7 +715,7 @@ class RenderMixin:
 
         batches = load_history(self._queue_history_path())
         dlg = RenderQueueHistoryDialog(batches, parent=self.ui)
-        dlg.open_output_requested.connect(self.open_rendered_folder)
+        dlg.open_output_requested.connect(self.open_rendered_file)
         if dlg.exec() == 2:
             clear_history(self._queue_history_path())
 
@@ -1721,8 +1730,9 @@ class RenderMixin:
 
     def on_quality_mode_changed(self, text):
         """ Hides or shows the slider and target inputs depending on the mode """
+        self._last_quality_text = text
         is_target_mode = "Target File Size" in text
-        
+
         if hasattr(self.ui, 'size_slider'):
             self.ui.size_slider.setVisible(is_target_mode)
             
@@ -1735,6 +1745,71 @@ class RenderMixin:
         self.refresh_output_format_availability()
         if is_target_mode:
             self.update_final_setup()
+
+    def init_original_help_state(self) -> None:
+        """Apply the saved 'don't show again' preference to the Original warning icon."""
+        btn = getattr(self.ui, "btn_quality_original_help", None)
+        if btn is None:
+            return
+        dismissed = bool(self.load_user_settings().get("original_preset_warning_dismissed"))
+        btn.setProperty("warning_dismissed", dismissed)
+        sync = getattr(btn, "_sync_help", None)
+        if callable(sync) and hasattr(self.ui, "combo_quality"):
+            sync(self.ui.combo_quality.currentText())
+
+    def show_original_help_popup(self) -> None:
+        """Popup anchored to the Original warning icon with a 'don't show again' checkbox."""
+        from PySide6.QtWidgets import QMenu, QWidgetAction, QVBoxLayout, QLabel, QCheckBox, QWidget
+
+        btn = getattr(self.ui, "btn_quality_original_help", None)
+        if btn is None:
+            return
+
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(
+            "QMenu { background-color: #2a2a2a; border: 1px solid #4a4a4a; border-radius: 8px; padding: 4px; }"
+        )
+
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(8)
+
+        title = QLabel("Original preset warning")
+        title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px; font-family: 'Segoe UI';")
+        body = QLabel(
+            "Original uses fast stream copy / block merge without re-encoding.\n\n"
+            "If Steam DASH chunks are slightly broken, the output duration can be wrong "
+            "(for example, a 3-second clip may become much longer).\n\n"
+            "If that happens, use a normal re-encode preset such as 1440p / 1080p."
+        )
+        body.setWordWrap(True)
+        body.setFixedWidth(320)
+        body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: 'Segoe UI';")
+
+        chk = QCheckBox("Don't show this again")
+        chk.setCursor(Qt.PointingHandCursor)
+        chk.setChecked(bool(btn.property("warning_dismissed")))
+        chk.setStyleSheet("color: #b29ae7; font-size: 11px; font-family: 'Segoe UI'; padding-top: 4px;")
+
+        def _on_toggled(checked):
+            self.save_user_settings("original_preset_warning_dismissed", bool(checked))
+            btn.setProperty("warning_dismissed", bool(checked))
+            if checked:
+                menu.close()
+                btn.hide()
+
+        chk.toggled.connect(_on_toggled)
+
+        lay.addWidget(title)
+        lay.addWidget(body)
+        lay.addWidget(chk)
+
+        act = QWidgetAction(menu)
+        act.setDefaultWidget(host)
+        menu.addAction(act)
+        menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 4)))
 
     def on_custom_size_changed(self, text):
         """ Live updates when typing a custom MB value with idiot-proof protection """
@@ -2158,7 +2233,11 @@ class RenderMixin:
                 return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
             return f"In queue ({job.queue_index})", STATUS_COLORS[JobStatus.QUEUED]
 
-        return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
+        # Preview only shows while the Render Queue actually has clips in it.
+        if self._queue_is_active():
+            return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
+
+        return None, None
 
     def update_playback_badge(self):
         if not hasattr(self, "label_playback_badge"):
@@ -2406,8 +2485,6 @@ class RenderMixin:
                 QMessageBox.critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
 
     def _finish_queue_batch(self) -> None:
-        completed = sum(1 for j in self.render_queue if j.status == JobStatus.COMPLETED)
-        errors = sum(1 for j in self.render_queue if j.status == JobStatus.ERROR)
         self._queue_batch_active = False
         set_settings_panel_locked(self, False)
         if hasattr(self.ui, 'btn_start'):
@@ -2423,11 +2500,7 @@ class RenderMixin:
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
         self.update_status_indicator("Ready", "ready")
-        QMessageBox.information(
-            self.ui,
-            "Render Queue",
-            f"Batch finished.\nCompleted: {completed}\nErrors: {errors}",
-        )
+        self.show_render_queue_history()
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
         self._archive_batch_to_history(cancelled=cancelled)
@@ -2725,12 +2798,9 @@ class RenderMixin:
 
         warn_icon = QLabel()
         warn_icon.setFixedSize(16, 16)
-
-        # Load the attention icon smoothly
-        pix_path = get_resource_path("attention.png")
-        if os.path.exists(pix_path):
-            pixmap = QPixmap(pix_path)
-            warn_icon.setPixmap(pixmap.scaled(16, 16, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        _warn_pix = warning_pixmap(16)
+        if not _warn_pix.isNull():
+            warn_icon.setPixmap(_warn_pix)
         warn_icon.hide()  # Hidden by default
 
         # ---> APPLY THE INSTANT TOOLTIP MAGIC HERE <---
