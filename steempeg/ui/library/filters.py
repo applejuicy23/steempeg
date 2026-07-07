@@ -9,7 +9,7 @@ import re
 import tempfile
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, Qt, QDate, QDateTime, QPoint, QTime
+from PySide6.QtCore import QEvent, Qt, QDate, QDateTime, QPoint, QTime, QSize
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display_format
 from steempeg.core.dash.health import ClipHealth
+from steempeg.ui.icon_assets import health_icon
 from steempeg.ui.widgets import BlockCombo, FlowLayout
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
@@ -213,12 +214,14 @@ class FilterMenu(QWidget):
         self.health_container.installEventFilter(self)
 
         _HEALTH_PILL_TEXT = {
-            ClipHealth.HEALTHY: "🟢 Healthy",
-            ClipHealth.DEGRADED: "🟡 Issues",
-            ClipHealth.DEAD: "🔴 Dead",
+            ClipHealth.HEALTHY: "Healthy",
+            ClipHealth.DEGRADED: "Issues",
+            ClipHealth.DEAD: "Dead",
         }
         for level in (ClipHealth.HEALTHY, ClipHealth.DEGRADED, ClipHealth.DEAD):
-            btn = QPushButton(_HEALTH_PILL_TEXT[level])
+            btn = QPushButton(f" {_HEALTH_PILL_TEXT[level]}")
+            btn.setIcon(health_icon(level, 14))
+            btn.setIconSize(QSize(14, 14))
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.PointingHandCursor)
