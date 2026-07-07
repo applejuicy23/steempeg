@@ -986,7 +986,7 @@ class LibraryMixin:
 
         if added:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
-            self.scan_clips()
+            self.scan_clips(announce_duplicates=True)
             QMessageBox.information(
                 self.ui,
                 "Steam folders found",
@@ -1030,7 +1030,7 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips()
+        self.scan_clips(announce_duplicates=True)
 
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
@@ -1051,7 +1051,7 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips()
+        self.scan_clips(announce_duplicates=True)
 
     def remove_clips_folder(self, path):
         """Remove one library root and rescan."""
@@ -1266,7 +1266,7 @@ class LibraryMixin:
         # 4. Rescan the folder
         self.scan_clips()
 
-    def scan_clips(self):
+    def scan_clips(self, announce_duplicates: bool = False):
         """ Scans both standard Steam folders AND custom extracted folders """
         if not hasattr(self.ui, 'table_clips'): return
         self.ui.table_clips.setSortingEnabled(False) 
@@ -1471,9 +1471,18 @@ class LibraryMixin:
             if hasattr(self, 'lbl_clip_count'):
                 self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
 
-            if duplicate_count and hasattr(self, 'set_status'):
+            # Show a one-time popup (not a sticky status) when the user just added a
+            # folder that introduced duplicates. On startup/refresh/delete rescans we
+            # stay silent — the status line would otherwise get stuck on this message.
+            if announce_duplicates and duplicate_count:
                 noun = "duplicate" if duplicate_count == 1 else "duplicates"
-                self.set_status(f"Ignored {duplicate_count} {noun} across folders")
+                QMessageBox.information(
+                    self.ui,
+                    "Duplicate clips ignored",
+                    f"Ignored {duplicate_count} {noun} across folders.\n\n"
+                    "The same clip was found in more than one library folder; only the "
+                    "most recent copy is shown.",
+                )
 
             logging.info(
                 "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d ignored_duplicates=%d",
