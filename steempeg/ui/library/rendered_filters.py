@@ -248,7 +248,12 @@ class RenderedFilterMenu(QWidget):
         selected = {n for n, b in self._game_buttons.items() if b.isChecked()}
         if len(selected) == len(self._game_buttons):
             return None
-        return selected if selected else None
+        # IMPORTANT:
+        # If user unchecked *all* games, we must treat it as an active filter
+        # selecting zero games (so live count becomes 0 and applying hides all
+        # rows). Returning None here would mean "no filter" => count would
+        # incorrectly stay at the full library size.
+        return selected  # could be an empty set
 
     def _selected_types(self) -> set[str] | None:
         if not self._type_buttons:
@@ -256,7 +261,8 @@ class RenderedFilterMenu(QWidget):
         selected = {t for t, b in self._type_buttons.items() if b.isChecked()}
         if len(selected) == len(self._type_buttons):
             return None
-        return selected if selected else None
+        # Same semantics as games: an empty selection means "match nothing".
+        return selected  # could be an empty set
 
     def _live_match_count(self) -> int:
         if not self.app:
