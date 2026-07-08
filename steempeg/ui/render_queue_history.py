@@ -6,7 +6,6 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import (
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -25,9 +24,9 @@ from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
 from steempeg.ui.icon_assets import load_icon
 from steempeg.ui.queue_card_shared import _FONT
 from steempeg.ui.widgets import ElidedLabel
+from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 _DIALOG_STYLE = """
-    QDialog { background-color: #1e1e1e; }
     QLabel { background: transparent; border: none; }
 """
 
@@ -81,31 +80,27 @@ _BTN_STYLE = """
 """
 
 
-class RenderQueueHistoryDialog(QDialog):
+class RenderQueueHistoryDialog(SteempegDialog):
     open_output_requested = Signal(str)
 
-    def __init__(self, batches: list[RenderBatchRecord], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Render History")
-        self.setMinimumSize(520, 480)
-        self.resize(560, 560)
+    def __init__(
+        self,
+        batches: list[RenderBatchRecord],
+        parent=None,
+        *,
+        bar_color: str | None = None,
+        bg_color: str | None = None,
+    ):
+        super().__init__("Render History", parent, bar_color=bar_color, bg_color=bg_color)
+        self.setMinimumSize(520, 510)
+        self.resize(560, 590)
         self._batches = batches
-        self.setStyleSheet(_DIALOG_STYLE + _BATCH_FRAME + _JOB_FRAME)
+        # Append frame/label rules on top of the shared card stylesheet.
+        self.setStyleSheet(self.styleSheet() + _DIALOG_STYLE + _BATCH_FRAME + _JOB_FRAME)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
+        root = self.content_layout
 
         header = QHBoxLayout()
-        title_icon = QLabel()
-        title_icon.setPixmap(load_icon("history.png", 18).pixmap(18, 18))
-        title_icon.setFixedSize(18, 18)
-        title = QLabel("Render History")
-        title.setStyleSheet(
-            f"color: #ffffff; font-size: 16px; font-weight: bold; {_FONT}"
-        )
-        header.addWidget(title_icon)
-        header.addWidget(title)
         header.addStretch()
         btn_clear = QPushButton("  Clear all")
         btn_clear.setCursor(Qt.PointingHandCursor)
