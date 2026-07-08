@@ -2461,13 +2461,19 @@ def main():
             from steempeg.ui.window_chrome import enable_frameless
             _force_native_window_icon(window.ui, icon_path)
             enable_frameless(window.ui)
+            # Frameless / DWM refresh can drop the taskbar icon cache after an
+            # in-place update — re-push WM_SETICON once the chrome is settled.
+            _force_native_window_icon(window.ui, icon_path)
             tb = getattr(window.ui, "title_bar", None)
             if tb is not None:
                 tb.sync_window_state()
 
         QTimer.singleShot(0, _apply_custom_shell_native)
-        
+        # Second pass: after the first paint / shell settle (post-update launches
+        # sometimes need another poke before Windows shows the branded icon).
+        QTimer.singleShot(400, lambda: _force_native_window_icon(window.ui, icon_path))
         if args.updated_from:
+            QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
             QTimer.singleShot(1000, lambda: window.show_update_success(args.updated_from, args.backup_folder))
             
         sys.exit(app.exec())
