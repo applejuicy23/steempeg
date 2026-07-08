@@ -68,7 +68,14 @@ _LIBRARY_MENU_STYLE = """
 
 _HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
     QMenu::item {
-        padding: 8px 32px 8px 24px;
+        padding: 8px 28px 8px 12px;
+    }
+    /* Disabled rows must keep icon color (Healthy green / Issues amber / Dead red).
+       Default QMenu greys out icons on setEnabled(False), which made the health
+       glyph look B&W and sit in the far-left reserved icon column. */
+    QMenu::item:disabled {
+        color: #e0e0e0;
+        background: transparent;
     }
 """
 
@@ -433,9 +440,29 @@ class LibraryMixin:
         menu = QMenu(self.ui)
         menu.setStyleSheet(_HEALTH_MENU_STYLE)
 
-        title = menu.addAction(report.label)
-        title.setIcon(health_icon(report.level, 16))
-        title.setEnabled(False)
+        # Title row as a widget: icon sits next to the label (not a reserved muted
+        # left column), and keeps full color even though the row is non-clickable.
+        title_host = QWidget(menu)
+        title_row = QHBoxLayout(title_host)
+        title_row.setContentsMargins(12, 8, 16, 8)
+        title_row.setSpacing(8)
+        title_icon = QLabel()
+        title_icon.setPixmap(health_icon(report.level, 16).pixmap(16, 16))
+        title_icon.setFixedSize(16, 16)
+        title_lbl = QLabel(report.label)
+        title_lbl.setStyleSheet(
+            f"color: {report.color}; font-weight: bold; font-size: 13px;"
+            f" font-family: 'Segoe UI'; background: transparent;"
+        )
+        title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
+        title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+        title_act = QWidgetAction(menu)
+        title_act.setDefaultWidget(title_host)
+        # Keep enabled so Qt doesn't desaturate the row into greyscale.
+        # No trigger is connected, so it still behaves like a visual header.
+        title_act.setEnabled(True)
+        menu.addAction(title_act)
         menu.addSeparator()
 
         if report.issues:
