@@ -179,32 +179,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.ui = MainWindow(app_host=self)
         self._install_animated_render_bar()
 
+        # Chrome color theme (built-in default until saved settings load at startup).
+        from steempeg.ui import design_tokens as _tok_boot
+        self._chrome_theme = _tok_boot.DEFAULT_CHROME_THEME
+
         from PySide6.QtGui import QColor, QPalette
         self.ui.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        dark = QColor("#1e1e1e")
+        dark = QColor(self._current_app_bg())
         palette = self.ui.palette()
         palette.setColor(QPalette.ColorRole.Window, dark)
         self.ui.setPalette(palette)
         self.ui.setAutoFillBackground(True)
 
-        self.ui.setStyleSheet("""
-            QDialog#Dialog { background-color: #1e1e1e; }
-            
-
-            QToolTip {
-                background-color: #2d2d2d; 
-                color: #ffffff; 
-                border: 1px solid #444444; 
-                border-radius: 4px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-            }
-        """)
+        self.ui.setStyleSheet(self._shell_stylesheet(self._current_app_bg()))
         
-        # Empty native title — custom SteempegTitleBar shows the label.
-        self.ui.setWindowTitle(" ")
+        # Custom SteempegTitleBar shows the visible label; the native window title
+        # still feeds the taskbar hover / Alt-Tab tooltip, so give it the app name.
+        self.ui.setWindowTitle(f"Steempeg v{APP_VERSION_STR}")
         
         # Setting the application icon
         icon_path = get_resource_path("logo.png")
@@ -284,6 +275,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.json_cache_path = os.path.join(self.cache_dir, "games.json")
         self.game_names_cache = self.load_json_cache() # JSON
         self.game_icons_cache = {} # This is where we store downloaded images in memory
+
+        # Apply the saved chrome color theme now that settings are reachable
+        # (falls back to the built-in default theme when nothing is saved yet).
+        from steempeg.ui import design_tokens as _tok_theme
+        saved_theme = self.load_user_settings().get("chrome_theme", _tok_theme.DEFAULT_CHROME_THEME)
+        self.apply_chrome_theme(saved_theme, persist=False)
         
         # 3. CONFIGURING THE INTERFACE (TABLE AND COMBOBOXES)
         if hasattr(self.ui, 'table_clips'):
@@ -2166,11 +2163,68 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
 
+    def _current_app_bg(self) -> str:
+        """Background color for the current chrome theme."""
+        from steempeg.ui import design_tokens as tok
+        return tok.chrome_theme_colors(getattr(self, "_chrome_theme", "default"))["app_bg"]
+
+    def _shell_stylesheet(self, bg_color: str) -> str:
+        """Window stylesheet: dialog background + shared tooltip chrome."""
+        return f"""
+            QDialog#Dialog {{ background-color: {bg_color}; }}
+
+            QToolTip {{
+                background-color: #2d2d2d;
+                color: #ffffff;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+            }}
+        """
+
+    def apply_chrome_theme(self, name: str, persist: bool = True) -> None:
+        """Switch the title bar / background color theme live."""
+        from PySide6.QtGui import QColor, QPalette
+        from steempeg.ui import design_tokens as tok
+
+        if name not in tok.CHROME_THEMES:
+            name = tok.DEFAULT_CHROME_THEME
+        self._chrome_theme = name
+        colors = tok.chrome_theme_colors(name)
+        app_bg = colors["app_bg"]
+        bar_bg = colors["title_bar"]
+
+        palette = self.ui.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
+        self.ui.setPalette(palette)
+        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
+
+        # Shell wrappers created by install_title_bar (appShell + appContent).
+        for attr, obj_name in (
+            ("_custom_chrome_shell", "appShell"),
+            ("_custom_content_wrap", "appContent"),
+        ):
+            widget = getattr(self.ui, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(f"QWidget#{obj_name} {{ background-color: {app_bg}; }}")
+
+        title_bar = getattr(self.ui, "title_bar", None)
+        if title_bar is not None and hasattr(title_bar, "set_bar_color"):
+            title_bar.set_bar_color(bar_bg)
+
+        self._apply_dark_shell()
+
+        if persist:
+            self.save_user_settings("chrome_theme", name)
+
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
         from steempeg.ui.layout_defaults import HORIZONTAL_SPLITTER_STYLESHEET
 
-        dark = "#1e1e1e"
+        dark = self._current_app_bg()
         shell = f"background-color: {dark};"
         for attr in ("left_panel", "right_panel"):
             panel = getattr(self.ui, attr, None)
