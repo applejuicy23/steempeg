@@ -30,3 +30,19 @@ FONT_SUBTITLE_SIZE = 10
 
 # Layout
 TITLE_BAR_HEIGHT = 30
+
+# Experimental chrome color themes.
+#   default : current look (near-black title bar over #1e1e1e shell)
+#   exp1    : title bar only lifted to #1e1e1e, background unchanged
+#   exp2    : darker overall — #181818 title bar over a #141414 background
+CHROME_THEMES = {
+    "default": {"title_bar": BG_TITLE_BAR, "app_bg": BG_SHELL},
+    "exp1": {"title_bar": "#1e1e1e", "app_bg": "#1e1e1e"},
+    "exp2": {"title_bar": "#181818", "app_bg": "#141414"},
+}
+DEFAULT_CHROME_THEME = "exp2"
+
+
+def chrome_theme_colors(name: str) -> dict:
+    """Return {'title_bar', 'app_bg'} for a theme name (falls back to default)."""
+    return CHROME_THEMES.get(name, CHROME_THEMES[DEFAULT_CHROME_THEME])
