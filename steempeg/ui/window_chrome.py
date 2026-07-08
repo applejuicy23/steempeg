@@ -206,10 +206,14 @@ class SteempegTitleBar(QWidget):
         self.btn_minimize.clicked.connect(self.minimize_requested.emit)
         self.btn_maximize.clicked.connect(self.maximize_requested.emit)
 
+        self._apply_bar_style(tok.BG_TITLE_BAR)
+
+    def _apply_bar_style(self, bg_color: str) -> None:
+        self._bar_bg = bg_color
         self.setStyleSheet(
             f"""
             QWidget#SteempegTitleBar {{
-                background-color: {tok.BG_TITLE_BAR};
+                background-color: {bg_color};
                 border-bottom: 1px solid {tok.BORDER_SUBTLE};
             }}
             QLabel#TitleBarTitle {{
@@ -223,6 +227,10 @@ class SteempegTitleBar(QWidget):
             }}
             """
         )
+
+    def set_bar_color(self, bg_color: str) -> None:
+        """Re-tint the title bar background (used by the experimental themes)."""
+        self._apply_bar_style(bg_color)
 
     def sync_window_state(self) -> None:
         if self._window.isMaximized():
