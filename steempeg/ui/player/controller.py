@@ -474,6 +474,14 @@ class PlayerMixin:
             sizes = self.right_h_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else 1
             self.right_h_splitter.setSizes([total, 0])
+            # Remember original handle geometry so we can restore the exact
+            # same thickness as the left splitter (it is not always equal to
+            # QUEUE_SPLITTER_GUTTER).
+            self._pre_theater_right_handle_width = self.right_h_splitter.handleWidth()
+            try:
+                self._pre_theater_right_handle_visible = self.right_h_splitter.handle(1).isVisible()
+            except Exception:
+                self._pre_theater_right_handle_visible = True
             # Collapse the queue splitter handle itself — otherwise a thick dark
             # strip remains on the right and breaks symmetry with the left edge.
             self.right_h_splitter.handle(1).setVisible(False)
@@ -512,9 +520,19 @@ class PlayerMixin:
 
         # Restore the queue splitter handle after leaving theatre (we zeroed it on enter).
         if hasattr(self, 'right_h_splitter') and not self.is_theater:
-            from steempeg.ui.layout_defaults import QUEUE_SPLITTER_GUTTER
-            self.right_h_splitter.setHandleWidth(QUEUE_SPLITTER_GUTTER)
-            self.right_h_splitter.handle(1).setVisible(True)
+            # Restore the original handle width/visibility instead of hardcoding
+            # constants; otherwise theatre toggling can make the right handle
+            # thicker than the left.
+            restored_width = getattr(self, '_pre_theater_right_handle_width', None)
+            if restored_width is not None:
+                self.right_h_splitter.setHandleWidth(int(restored_width))
+            else:
+                # Fallback: main splitter uses 6px; keep right visually aligned.
+                self.right_h_splitter.setHandleWidth(6)
+            restored_visible = getattr(self, '_pre_theater_right_handle_visible', None)
+            if restored_visible is None:
+                restored_visible = True
+            self.right_h_splitter.handle(1).setVisible(bool(restored_visible))
 
         # Theatre keeps the normal content padding (only true fullscreen goes flush).
         restore_content_insets(self.ui)
