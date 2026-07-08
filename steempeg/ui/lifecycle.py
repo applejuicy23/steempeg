@@ -527,6 +527,8 @@ class LifecycleMixin:
         action_mpv = menu.addAction("🎬  MPV player log")
         action_folder = menu.addAction("📂  Open logs folder")
         menu.addSeparator()
+        self._build_appearance_menu(menu)
+        menu.addSeparator()
         action_clear_logs = menu.addAction("🧹  Clear old logs…")
         action_clear_cache = menu.addAction("🗑️  Clear cache…")
         menu.addSeparator()
@@ -540,6 +542,33 @@ class LifecycleMixin:
         action_report.triggered.connect(self.show_report_dialog)
 
         self.ui.btn_logs.setMenu(menu)
+
+    def _build_appearance_menu(self, parent_menu):
+        """Experimental chrome color themes as a checkable submenu."""
+        from PySide6.QtGui import QActionGroup
+
+        submenu = parent_menu.addMenu("🎨  Appearance (Experiments)")
+        submenu.setStyleSheet(_LOGS_MENU_STYLE)
+
+        from steempeg.ui import design_tokens as tok
+        current = tok.DEFAULT_CHROME_THEME
+        if hasattr(self, "load_user_settings"):
+            current = self.load_user_settings().get("chrome_theme", tok.DEFAULT_CHROME_THEME)
+
+        group = QActionGroup(submenu)
+        group.setExclusive(True)
+        options = [
+            ("default", "Default (black bar)"),
+            ("exp1", "Experiment 1 — #1e1e1e title bar"),
+            ("exp2", "Experiment 2 — #181818 bar + #141414 background"),
+        ]
+        for name, label in options:
+            act = submenu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            group.addAction(act)
+            act.triggered.connect(lambda _=False, n=name: self.apply_chrome_theme(n))
+        self._appearance_menu_group = group
 
     def show_report_dialog(self):
         from steempeg.ui.report_dialog import show_report_dialog
