@@ -17,7 +17,16 @@ def load_pixmap(name: str, size: int = 16) -> QPixmap:
 
 def load_icon(name: str, size: int = 16) -> QIcon:
     pix = load_pixmap(name, size)
-    return QIcon(pix) if not pix.isNull() else QIcon()
+    if pix.isNull():
+        return QIcon()
+    icon = QIcon()
+    # Keep icons colored even when actions/widgets are temporarily disabled.
+    # Qt otherwise auto-generates a greyscale Disabled mode variant.
+    icon.addPixmap(pix, QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(pix, QIcon.Mode.Disabled, QIcon.State.Off)
+    icon.addPixmap(pix, QIcon.Mode.Active, QIcon.State.Off)
+    icon.addPixmap(pix, QIcon.Mode.Selected, QIcon.State.Off)
+    return icon
 
 
 def health_icon(level: ClipHealth, size: int = 16) -> QIcon:
