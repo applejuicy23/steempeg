@@ -28,7 +28,6 @@
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-getting-started">Getting Started</a> ·
   <a href="#-changelog">Changelog</a> ·
-  <a href="#-roadmap">Roadmap</a> ·
   <a href="#-credits">Credits</a>
 </p>
 
@@ -104,37 +103,6 @@ Then extract and run `Steempeg.exe`.
 ## 📋 Changelog
 
 Release notes for every version live on **[GitHub Releases](https://github.com/applejuicy23/steempeg/releases)** — that's the canonical place for what's new, fixed, and changed.
-
----
-
-## 🗺️ Roadmap
-
-**Long-term vision:** a lightweight **in-app video editor** for Steam clips — trim, preview, queue, and export today; gradually more of a mini **Vegas-style** workflow without leaving the app.
-
-### ✅ Shipped in v35
-
-- [x] **Export containers** — MP4, MKV, MOV, WebM with correct file extensions
-- [x] **Video codecs** — H.264, H.265, AV1, VP9 (+ Original stream copy)
-- [x] **Audio formats** — AAC, MP3, Opus, FLAC, WAV (stream copy in Original mode only)
-- [x] **Named presets** — Share (MP4/H.264/AAC), Edit (MKV/HEVC/FLAC), Web (WebM/VP9/Opus)
-- [x] **Smart export UI** — invalid container + codec pairs greyed out in dropdowns
-- [x] **Honest bitrate** — measured from the actual recording on disk, capped to source (no fake 32 Mbps tiers)
-- [x] **Original mode** — frozen settings with real Mbps shown (e.g. `22 Mbps (Original)`)
-- [x] **Render queue** — redesigned list cards, compact preset line (`1440p · 60 fps · 22 Mbps · H.265`)
-- [x] **Export tab polish** — aligned layout, path elision, copy button
-- [x] **Timeline markers** — Steam CDN sprite icons when cache is missing
-- [x] **Render progress** — animated bar with shimmer; survives pause / cancel states
-- [x] **Library UX** — closable panel tabs, multi-select fixes, filter restore
-
-### 🔜 Next up
-
-- [ ] **Custom chrome** — frameless title bar, unified modal sheets, design tokens app-wide
-- [ ] **Queue depth** — edit container / codec per job directly from the queue panel
-- [ ] **8K preset** — add 4320p to quality list (Steam bitrates already in the table)
-- [ ] **Timeline & preview** — even smoother scrubbing and frame feedback
-- [ ] **Editor building blocks** — small steps toward real editing tools around the player
-
-Plans shift as feedback comes in; open an [Issue](https://github.com/applejuicy23/steempeg/issues) if you have ideas.
 
 ---
 
