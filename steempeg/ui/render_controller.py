@@ -713,8 +713,13 @@ class RenderMixin:
     def show_render_queue_history(self) -> None:
         from steempeg.ui.render_queue_history import RenderQueueHistoryDialog
 
+        from steempeg.ui import design_tokens as tok
+
         batches = load_history(self._queue_history_path())
-        dlg = RenderQueueHistoryDialog(batches, parent=self.ui)
+        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        dlg = RenderQueueHistoryDialog(
+            batches, parent=self.ui, bar_color=theme["title_bar"], bg_color=theme["app_bg"]
+        )
         dlg.open_output_requested.connect(self.open_rendered_file)
         if dlg.exec() == 2:
             clear_history(self._queue_history_path())
