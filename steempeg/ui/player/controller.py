@@ -474,6 +474,10 @@ class PlayerMixin:
             sizes = self.right_h_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else 1
             self.right_h_splitter.setSizes([total, 0])
+            # Collapse the queue splitter handle itself — otherwise a thick dark
+            # strip remains on the right and breaks symmetry with the left edge.
+            self.right_h_splitter.handle(1).setVisible(False)
+            self.right_h_splitter.setHandleWidth(0)
 
         if hasattr(self, 'btn_refresh'):
             browse_wrapper = self.btn_refresh.parentWidget()
@@ -491,15 +495,26 @@ class PlayerMixin:
             margin_bottom = 0 if self.is_theater else 10
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
 
-        # Player top inset + queue gutter: 0 in theatre (edge-to-edge), normal otherwise.
+        # Player top inset + right margin: in theatre keep a symmetric right inset
+        # matching the custom content padding (same visual spacing as left side).
         if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
             from steempeg.ui.layout_defaults import (
                 QUEUE_SPLITTER_GUTTER,
                 RIGHT_PANEL_PLAYER_TOP_INSET,
             )
             margin_top = 0 if self.is_theater else RIGHT_PANEL_PLAYER_TOP_INSET
-            margin_right = 0 if self.is_theater else QUEUE_SPLITTER_GUTTER
+            right_inset = 9
+            custom_margins = getattr(self.ui, '_custom_content_margins', None)
+            if custom_margins and len(custom_margins) >= 3:
+                right_inset = int(custom_margins[2])
+            margin_right = right_inset if self.is_theater else QUEUE_SPLITTER_GUTTER
             self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
+
+        # Restore the queue splitter handle after leaving theatre (we zeroed it on enter).
+        if hasattr(self, 'right_h_splitter') and not self.is_theater:
+            from steempeg.ui.layout_defaults import QUEUE_SPLITTER_GUTTER
+            self.right_h_splitter.setHandleWidth(QUEUE_SPLITTER_GUTTER)
+            self.right_h_splitter.handle(1).setVisible(True)
 
         # Theatre keeps the normal content padding (only true fullscreen goes flush).
         restore_content_insets(self.ui)
@@ -766,14 +781,18 @@ class PlayerMixin:
             right_layout.setContentsMargins(self.original_right_margins)
             right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
 
-        # Restore player inset + queue gutter when returning to the normal layout.
+        # Restore player inset + right margin when returning from immersive mode.
         if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
             from steempeg.ui.layout_defaults import (
                 QUEUE_SPLITTER_GUTTER,
                 RIGHT_PANEL_PLAYER_TOP_INSET,
             )
             margin_top = 0 if is_t else RIGHT_PANEL_PLAYER_TOP_INSET
-            margin_right = 0 if is_t else QUEUE_SPLITTER_GUTTER
+            right_inset = 9
+            custom_margins = getattr(self.ui, '_custom_content_margins', None)
+            if custom_margins and len(custom_margins) >= 3:
+                right_inset = int(custom_margins[2])
+            margin_right = right_inset if is_t else QUEUE_SPLITTER_GUTTER
             self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
 
         # Both theatre and windowed keep the normal content padding; only the
