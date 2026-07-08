@@ -34,11 +34,11 @@ TITLE_BAR_HEIGHT = 30
 # Experimental chrome color themes.
 #   default : current look (near-black title bar over #1e1e1e shell)
 #   exp1    : title bar only lifted to #1e1e1e, background unchanged
-#   exp2    : darker overall — #181818 title bar over a #141414 background
+#   exp2    : darker overall — #222222 title bar over a #141414 background
 CHROME_THEMES = {
     "default": {"title_bar": BG_TITLE_BAR, "app_bg": BG_SHELL},
     "exp1": {"title_bar": "#1e1e1e", "app_bg": "#1e1e1e"},
-    "exp2": {"title_bar": "#181818", "app_bg": "#141414"},
+    "exp2": {"title_bar": "#222222", "app_bg": "#141414"},
 }
 DEFAULT_CHROME_THEME = "exp2"
 
