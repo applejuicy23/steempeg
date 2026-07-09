@@ -241,8 +241,12 @@ class LifecycleMixin:
                 state = "success"
             elif text == "Cancelled":
                 state = "cancelled"
-            elif "%" in text or text.endswith(".."):
+            elif "%" in text:
                 state = "rendering"
+            elif text.endswith("..."):
+                state = "busy"
+            elif text.endswith(".."):
+                state = "busy"
             self.update_status_indicator(text, state)
 
     def elide_path(self, path, max_len=75):

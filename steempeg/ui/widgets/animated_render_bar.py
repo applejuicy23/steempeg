@@ -15,6 +15,7 @@ _SHIMMER = QColor(255, 255, 255, 72)
 _STATE_FILL = {
     "ready": None,
     "rendering": "gradient",
+    "busy": "gradient",
     "paused": QColor("#ffcc00"),
     "error": QColor("#ff4444"),
     "success": QColor("#4CAF50"),
@@ -84,7 +85,7 @@ class AnimatedRenderBar(QWidget):
     # -- animation -----------------------------------------------------------
     def _ensure_timer(self):
         needs_motion = (
-            self._state == "rendering"
+            self._state in ("rendering", "busy")
             or abs(self._display - self._target) > 0.05
         )
         if needs_motion:
@@ -103,8 +104,8 @@ class AnimatedRenderBar(QWidget):
             self._display = self._target
             moved = True
 
-        if self._state == "rendering":
-            self._shimmer = (self._shimmer + 0.018) % 1.0
+        if self._state in ("rendering", "busy"):
+            self._shimmer = (self._shimmer + 0.012) % 1.0
             moved = True
 
         if moved:
@@ -126,7 +127,9 @@ class AnimatedRenderBar(QWidget):
         painter.setBrush(_TRACK)
         painter.drawRoundedRect(track, radius, radius)
 
-        if self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF:
+        if self._state == "busy" or (
+            self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF
+        ):
             self._paint_indeterminate(painter, track, radius)
             painter.end()
             return
@@ -157,18 +160,23 @@ class AnimatedRenderBar(QWidget):
 
         painter.end()
 
-    def _paint_indeterminate(self, painter, track, radius):
-        w = track.width()
-        seg = max(28.0, w * 0.18)
-        travel = max(1.0, w - seg)
-        x = (self._shimmer * travel) if self._shimmer else 0.0
-
+    def _segment_gradient(self, x: float, seg: float) -> QLinearGradient:
         grad = QLinearGradient(x, 0.0, x + seg, 0.0)
         grad.setColorAt(0.0, _GRADIENT_START)
         grad.setColorAt(0.5, _GRADIENT_END)
         grad.setColorAt(1.0, _GRADIENT_START)
-        painter.setBrush(grad)
-        painter.drawRoundedRect(QRectF(x, 0.0, seg, track.height()), radius, radius)
+        return grad
+
+    def _paint_indeterminate(self, painter, track, radius):
+        """Single segment marquees left → right, then restarts off-screen left."""
+        w = track.width()
+        h = track.height()
+        seg = max(28.0, w * 0.22)
+        period = w + seg
+        x = self._shimmer * period - seg
+
+        painter.setBrush(self._segment_gradient(x, seg))
+        painter.drawRoundedRect(QRectF(x, 0.0, seg, h), radius, radius)
 
     def _paint_shimmer(self, painter, fill_w, h, radius):
         band = max(18.0, fill_w * 0.28)

@@ -502,6 +502,7 @@ class RenderMixin:
         colors = {
             "ready": "#4CAF50",
             "rendering": "#a871ff",
+            "busy": "#a871ff",
             "paused": "#ffcc00",
             "error": "#ff4444",
             "success": "#4CAF50",
@@ -538,6 +539,8 @@ class RenderMixin:
             percent = 100.0
         elif state == "ready" or state == "error":
             percent = 0.0
+        elif state == "busy":
+            percent = None
 
         if hasattr(self.ui, 'progress_render'):
             bar = self.ui.progress_render
