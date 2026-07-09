@@ -23,10 +23,27 @@ TRAFFIC_MINIMIZE_HOVER = "#e5a500"
 TRAFFIC_MAXIMIZE = "#28c840"
 TRAFFIC_MAXIMIZE_HOVER = "#1aad2e"
 
-# Typography
+# Typography — FONT_APP matches render panel, About, and queue cards.
+FONT_APP = "'Segoe UI', Arial, sans-serif"
 FONT_UI = "'Cascadia UI', 'Segoe UI Variable', 'Segoe UI', sans-serif"
 FONT_TITLE_SIZE = 10
 FONT_SUBTITLE_SIZE = 10
+
+STYLE_PANEL_TITLE = (
+    f"color: {TEXT_TITLE}; font-family: {FONT_APP}; font-size: 20px; font-weight: bold; "
+    "background: transparent;"
+)
+STYLE_PANEL_SUBTITLE = (
+    f"color: {TEXT_PRIMARY}; font-family: {FONT_APP}; font-size: 12px; background: transparent;"
+)
+STYLE_PANEL_HEADING = (
+    f"color: {TEXT_TITLE}; font-family: {FONT_APP}; font-size: 18px; font-weight: bold; "
+    "background: transparent;"
+)
+
+# Legacy aliases (prefer STYLE_PANEL_* in new UI).
+STYLE_HEADING = STYLE_PANEL_TITLE.replace("20px", "14px")
+STYLE_SUBHEADING = STYLE_PANEL_SUBTITLE
 
 # Layout
 TITLE_BAR_HEIGHT = 30

@@ -556,6 +556,14 @@ class RenderQueuePanel(QWidget):
         """)
         self._btn_history.clicked.connect(self.history_requested.emit)
 
+        actions_group = QWidget()
+        actions_group.setStyleSheet("background: transparent; border: none;")
+        actions_layout = QHBoxLayout(actions_group)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(4)
+        actions_layout.addWidget(self._btn_history)
+        actions_layout.addWidget(self._btn_clear)
+
         lbl_view = QLabel("View")
         lbl_view.setStyleSheet(
             f"color: #777777; font-weight: bold; font-size: 13px; border: none;"
@@ -585,8 +593,7 @@ class RenderQueuePanel(QWidget):
         tool_layout.addWidget(self._view_toggle_pill)
         tool_layout.addWidget(self._count_label)
         tool_layout.addStretch()
-        tool_layout.addWidget(self._btn_history)
-        tool_layout.addWidget(self._btn_clear)
+        tool_layout.addWidget(actions_group)
         toolbar_row.addWidget(toolbar)
         outer.addLayout(toolbar_row)
 

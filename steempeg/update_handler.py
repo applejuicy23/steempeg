@@ -51,6 +51,9 @@ def run_update_handler(job_path: str) -> int:
 
     def on_download_done(success: bool, filepath: str, asset_name: str) -> None:
         if not success:
+            if not filepath and not asset_name:
+                app.quit()
+                return
             fail(filepath or "Download was cancelled or failed.")
             return
         try:
@@ -102,6 +105,7 @@ def run_update_handler(job_path: str) -> int:
 
     thread.progress_signal.connect(on_progress)
     thread.finished_signal.connect(on_download_done)
+    dialog.cancel_requested.connect(thread.cancel)
     thread.start()
 
     return app.exec()

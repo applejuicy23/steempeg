@@ -110,6 +110,35 @@ _ICON_BTN = """
     QPushButton:hover { background-color: #454545; color: #fff; border-color: #6b5a8e; }
 """
 
+_ACK_FRAME_STYLE = """
+    QFrame#updateAckFrame {
+        background-color: #3a324a;
+        border: 1px solid #6b5a8e;
+        border-radius: 8px;
+    }
+    QFrame#updateAckFrame QCheckBox {
+        color: #ffffff;
+        font-family: """ + tok.FONT_APP + """;
+        font-size: 11px;
+        background: transparent;
+        spacing: 8px;
+    }
+    QFrame#updateAckFrame QCheckBox::indicator {
+        width: 16px;
+        height: 16px;
+        border: 1px solid #b29ae7;
+        border-radius: 4px;
+        background: #2a2238;
+    }
+    QFrame#updateAckFrame QCheckBox::indicator:checked {
+        background: #6b5a8e;
+        border-color: #b29ae7;
+    }
+"""
+
+_NOTICE_WARN = f"color: #e8b86d; font-size: 11px; font-family: {tok.FONT_APP};"
+_NOTICE_DANGER = f"color: #ff8a80; font-size: 11px; font-family: {tok.FONT_APP};"
+
 
 def _logo_pixmap(size: int = 18) -> QPixmap | None:
     path = get_resource_path("logo.png")
@@ -342,10 +371,13 @@ class UpdateCenterDialog(SteempegDialog):
 
         root = self.content_layout
 
-        header = QLabel(f"You are on <b>v{APP_VERSION_STR}</b>")
-        header.setTextFormat(Qt.TextFormat.RichText)
-        header.setStyleSheet(f"color: {tok.TEXT_TITLE}; font-size: 14px; font-weight: bold;")
-        root.addWidget(header)
+        title = QLabel("Update Center")
+        title.setStyleSheet(tok.STYLE_PANEL_TITLE)
+        root.addWidget(title)
+
+        version_line = QLabel(f"Current version is v{APP_VERSION_STR}")
+        version_line.setStyleSheet(tok.STYLE_PANEL_SUBTITLE)
+        root.addWidget(version_line)
 
         self._status_label = QLabel("Loading releases…")
         self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
@@ -377,23 +409,31 @@ class UpdateCenterDialog(SteempegDialog):
 
         self._notice_label = QLabel()
         self._notice_label.setWordWrap(True)
-        self._notice_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+        self._notice_label.setStyleSheet(_NOTICE_WARN)
         self._notice_label.hide()
         root.addWidget(self._notice_label)
 
         self._marker_label = QLabel()
         self._marker_label.setWordWrap(True)
-        self._marker_label.setStyleSheet(f"color: {tok.ACCENT_PRIMARY}; font-size: 11px; font-weight: 600;")
+        self._marker_label.setStyleSheet(
+            f"color: {tok.ACCENT_PRIMARY}; font-family: {tok.FONT_UI}; "
+            "font-size: 11px; font-weight: 600; background: transparent;"
+        )
         self._marker_label.hide()
         root.addWidget(self._marker_label)
 
+        self._ack_frame = QFrame()
+        self._ack_frame.setObjectName("updateAckFrame")
+        ack_layout = QHBoxLayout(self._ack_frame)
+        ack_layout.setContentsMargins(10, 8, 10, 8)
         self._ack_check = QCheckBox(
             "I understand settings, queue, and rendered sidecars may not match the target version."
         )
-        self._ack_check.setStyleSheet(f"color: {tok.TEXT_PRIMARY}; font-size: 11px;")
-        self._ack_check.hide()
         self._ack_check.stateChanged.connect(self._refresh_actions)
-        root.addWidget(self._ack_check)
+        ack_layout.addWidget(self._ack_check)
+        self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
+        self._ack_frame.hide()
+        root.addWidget(self._ack_frame)
 
         if len(local_backups) > 1:
             backup_row = QHBoxLayout()
@@ -527,11 +567,11 @@ class UpdateCenterDialog(SteempegDialog):
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
         if notice:
-            self._notice_label.setText(notice)
+            self._notice_label.setText(f"⚠️ {notice}")
             if entry.version_float <= 11.0:
-                self._notice_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
+                self._notice_label.setStyleSheet(_NOTICE_DANGER)
             else:
-                self._notice_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+                self._notice_label.setStyleSheet(_NOTICE_WARN)
             self._notice_label.show()
         else:
             self._notice_label.hide()
@@ -551,7 +591,7 @@ class UpdateCenterDialog(SteempegDialog):
 
         if not entry:
             self._btn_install.setEnabled(False)
-            self._ack_check.hide()
+            self._ack_frame.hide()
             return
 
         is_current = abs(entry.version_float - APP_VERSION_FLOAT) < 0.001
@@ -560,9 +600,9 @@ class UpdateCenterDialog(SteempegDialog):
         needs_ack = is_downgrade and base_can_install
 
         if needs_ack:
-            self._ack_check.show()
+            self._ack_frame.show()
         else:
-            self._ack_check.hide()
+            self._ack_frame.hide()
             self._ack_check.setChecked(False)
 
         can_install = base_can_install and (not needs_ack or self._ack_check.isChecked())
@@ -574,7 +614,7 @@ class UpdateCenterDialog(SteempegDialog):
                 self._btn_install.setText("Current version")
             elif entry.version_float > APP_VERSION_FLOAT:
                 if versions_equal(entry.version_float, self._latest_version):
-                    self._btn_install.setText(f"Update to v{entry.version_str}")
+                    self._btn_install.setText(f"⚙️ Update to v{entry.version_str}")
                 else:
                     self._btn_install.setText(f"Upgrade to v{entry.version_str}")
             else:

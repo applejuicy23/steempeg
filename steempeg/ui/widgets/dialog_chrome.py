@@ -18,11 +18,19 @@ from steempeg.ui.window_chrome import _TrafficLight
 
 
 class _DialogTitleBar(QWidget):
-    """Logo + title on the left, a single red close dot on the right. Draggable."""
+    """Logo + title on the left, optional minimize + close dots on the right. Draggable."""
 
     close_requested = Signal()
 
-    def __init__(self, dialog: QDialog, *, title: str, bar_color: str, parent=None):
+    def __init__(
+        self,
+        dialog: QDialog,
+        *,
+        title: str,
+        bar_color: str,
+        show_minimize: bool = False,
+        parent=None,
+    ):
         super().__init__(parent)
         self._dialog = dialog
         self._drag_offset: QPoint | None = None
@@ -61,6 +69,16 @@ class _DialogTitleBar(QWidget):
         root.addWidget(title_lbl)
 
         root.addStretch(1)
+
+        if show_minimize:
+            self.btn_minimize = _TrafficLight(
+                tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "\u2212"
+            )
+            self.btn_minimize.clicked.connect(dialog.showMinimized)
+            root.addWidget(self.btn_minimize, 0, Qt.AlignmentFlag.AlignVCenter)
+            root.addSpacing(6)
+        else:
+            self.btn_minimize = None
 
         self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "\u2715")
         self.btn_close.clicked.connect(self.close_requested.emit)
@@ -119,6 +137,7 @@ class SteempegDialog(QDialog):
         bar_color: str | None = None,
         bg_color: str | None = None,
         content_margins: tuple[int, int, int, int] = (16, 16, 16, 16),
+        show_minimize: bool = False,
     ):
         super().__init__(parent)
         theme = tok.chrome_theme_colors(tok.DEFAULT_CHROME_THEME)
@@ -141,7 +160,9 @@ class SteempegDialog(QDialog):
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
 
-        self._title_bar = _DialogTitleBar(self, title=title, bar_color=bar_color)
+        self._title_bar = _DialogTitleBar(
+            self, title=title, bar_color=bar_color, show_minimize=show_minimize
+        )
         self._title_bar.close_requested.connect(self.reject)
         card_layout.addWidget(self._title_bar)
 

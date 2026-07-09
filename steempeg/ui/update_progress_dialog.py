@@ -1,8 +1,8 @@
 """Steempeg-styled updater window for download / extract / install / launch."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QVBoxLayout
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QLabel
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
@@ -18,6 +18,8 @@ _PHASE_LABELS = {
 
 
 class UpdateProgressDialog(SteempegDialog):
+    cancel_requested = Signal()
+
     def __init__(
         self,
         target_label: str,
@@ -26,24 +28,35 @@ class UpdateProgressDialog(SteempegDialog):
         bar_color: str | None = None,
         bg_color: str | None = None,
     ):
-        super().__init__("Steempeg Updater", parent, bar_color=bar_color, bg_color=bg_color)
+        super().__init__(
+            "Steempeg Updater",
+            parent,
+            bar_color=bar_color,
+            bg_color=bg_color,
+            show_minimize=True,
+        )
         self.setMinimumWidth(420)
         self.resize(440, 200)
+        self._phase_key = "download"
 
         root = self.content_layout
 
-        self._title = QLabel(f"Updating to {target_label}")
-        self._title.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-size: 13px; font-weight: 600; background: transparent;"
-        )
+        self._title = QLabel(f"⚙️ Updating to {target_label}")
+        self._title.setStyleSheet(tok.STYLE_PANEL_HEADING)
         root.addWidget(self._title)
 
         self._phase = QLabel(_PHASE_LABELS["download"])
-        self._phase.setStyleSheet(f"color: {tok.TEXT_PRIMARY}; font-size: 12px; background: transparent;")
+        self._phase.setStyleSheet(
+            f"color: {tok.TEXT_PRIMARY}; font-family: {tok.FONT_APP}; "
+            "font-size: 12px; background: transparent;"
+        )
         root.addWidget(self._phase)
 
         self._detail = QLabel("")
-        self._detail.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent;")
+        self._detail.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
+            "font-size: 11px; background: transparent;"
+        )
         self._detail.setWordWrap(True)
         root.addWidget(self._detail)
 
@@ -52,13 +65,29 @@ class UpdateProgressDialog(SteempegDialog):
         self._bar.set_state("rendering")
         root.addWidget(self._bar)
 
-        hint = QLabel("The updater closes briefly while files are replaced, then Steempeg restarts.")
-        hint.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 10px; background: transparent;")
+        hint = QLabel("Close during download to cancel. After that, let the updater finish.")
+        hint.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
+            "font-size: 10px; background: transparent;"
+        )
         root.addWidget(hint)
 
-        self._title_bar.btn_close.setEnabled(False)
+        self._title_bar.close_requested.disconnect()
+        self._title_bar.close_requested.connect(self._on_close_requested)
+        self._sync_close_enabled()
+
+    def _on_close_requested(self) -> None:
+        if self._phase_key == "download":
+            self.cancel_requested.emit()
+            self.reject()
+        elif self._phase_key == "error":
+            self.reject()
+
+    def _sync_close_enabled(self) -> None:
+        self._title_bar.btn_close.setEnabled(self._phase_key in ("download", "error"))
 
     def set_phase(self, phase_key: str, *, percent: float | None = None) -> None:
+        self._phase_key = phase_key
         self._phase.setText(_PHASE_LABELS.get(phase_key, phase_key))
         if percent is not None:
             self._bar.set_progress(percent)
@@ -67,12 +96,14 @@ class UpdateProgressDialog(SteempegDialog):
             self._bar.set_progress(95.0)
         if phase_key == "error":
             self._bar.set_state("error")
-            self._title_bar.btn_close.setEnabled(True)
+        self._sync_close_enabled()
 
     def set_detail(self, text: str) -> None:
         self._detail.setText(text)
 
     def set_download_progress(self, percent: int, text: str) -> None:
+        self._phase_key = "download"
         self._phase.setText(_PHASE_LABELS["download"])
         self._bar.set_progress(float(percent) * 0.7)
         self._detail.setText(text.replace("Downloading update...\n", ""))
+        self._sync_close_enabled()
