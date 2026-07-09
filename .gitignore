@@ -35,6 +35,9 @@ Thumbs.db
 newver_compilator.py
 pacher.py
 docs/ROADMAP.md
+steempeg/.footer_lane_experiment_archive.py
+steempeg/.footer_lane_experiment_archive.diff
+steempeg/.footer_lane_experiment_notes.md
 
 # --- Local tooling, not shipped ---
 tools/
