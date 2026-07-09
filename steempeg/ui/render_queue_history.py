@@ -22,6 +22,7 @@ from steempeg.render.queue import JobStatus, STATUS_COLORS
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
 from steempeg.ui.icon_assets import load_icon
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.queue_card_shared import _FONT
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -101,6 +102,9 @@ class RenderQueueHistoryDialog(SteempegDialog):
         root = self.content_layout
 
         header = QHBoxLayout()
+        title = QLabel("Render History")
+        title.setStyleSheet(tok.STYLE_PANEL_TITLE)
+        header.addWidget(title)
         header.addStretch()
         btn_clear = QPushButton("  Clear all")
         btn_clear.setCursor(Qt.PointingHandCursor)
