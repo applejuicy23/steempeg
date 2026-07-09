@@ -114,7 +114,10 @@ class UpdaterMixin:
             f"<p>Successfully updated from <b>v{old_version}</b> to the latest version.</p>"
         )
         if backup_folder and backup_folder != "None":
-            text += f"<p>Your old version was saved in the folder:<br><code>{backup_folder}</code></p>"
+            text += (
+                f"<p>Your old version was saved in the folder:<br><code>{backup_folder}</code></p>"
+                "<p><small>Restore via <b>Update Center</b>, restore local backup (v37+).</small></p>"
+            )
 
         msg.setText(text)
 

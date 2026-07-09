@@ -53,7 +53,7 @@ class UpdateConfirmDialog(SteempegDialog):
     ):
         super().__init__("Before updating", parent, bar_color=bar_color, bg_color=bg_color)
         self.setMinimumWidth(420)
-        self.resize(460, 210)
+        self.resize(460, 230)
         self._choice = UpdateConfirmChoice.CANCEL
 
         root = self.content_layout
@@ -71,9 +71,15 @@ class UpdateConfirmDialog(SteempegDialog):
         body.setStyleSheet(f"color: {tok.TEXT_PRIMARY}; font-size: 12px; background: transparent;")
         root.addWidget(body)
 
-        hint = QLabel("Keeping a backup is recommended — you can restore it from Update Center.")
+        hint = QLabel(
+            "Keeping a backup is recommended. Restore from Update Center.\n"
+            "Update Center restore: v37+."
+        )
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent;")
+        hint.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
+            "font-size: 11px; background: transparent;"
+        )
         root.addWidget(hint)
 
         root.addStretch(1)
