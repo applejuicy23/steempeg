@@ -12,6 +12,8 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
 
@@ -28,5 +30,7 @@ jobs:
       - name: Import smoke tests
         run: |
           python -c "from steempeg.version import APP_VERSION_STR; print('version', APP_VERSION_STR)"
-          python -c "from steempeg.services import release_catalog, updater"
-          python -c "from steempeg.ui.update_center import UpdateCenterDialog"
+          python -c "from steempeg.services.release_catalog import fetch_releases"
+          python -c "from steempeg.services.updater import UpdateDownloadThread"
+          python -c "from steempeg.services.update_job import UpdateJob"
+          python -c "from steempeg.services.update_install import apply_installed_update"

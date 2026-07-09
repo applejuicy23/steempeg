@@ -2399,7 +2399,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--updated-from', type=str, default="")
     parser.add_argument('--backup-folder', type=str, default="")
+    parser.add_argument('--update-handler', action='store_true')
+    parser.add_argument('--job', type=str, default="")
     args, unknown = parser.parse_known_args()
+
+    if args.update_handler:
+        from steempeg.update_handler import run_update_handler
+        sys.exit(run_update_handler(args.job))
 
 
     try:
