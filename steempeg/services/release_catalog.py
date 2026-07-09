@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -61,9 +62,27 @@ class InstallTier(str, Enum):
 class FetchError(Exception):
     """Raised when the GitHub releases API cannot be read."""
 
-    def __init__(self, message: str, *, status_code: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        rate_limit: RateLimitInfo | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.rate_limit = rate_limit
+
+
+@dataclass(frozen=True)
+class RateLimitInfo:
+    reset_at: int
+    limit: int = 60
+    remaining: int = 0
+
+    @property
+    def seconds_remaining(self) -> int:
+        return max(0, self.reset_at - int(time.time()))
 
 
 @dataclass(frozen=True)
@@ -470,6 +489,44 @@ def parse_release(data: dict) -> ReleaseEntry | None:
     )
 
 
+def _rate_limit_from_response(response: requests.Response) -> RateLimitInfo | None:
+    """Parse GitHub rate-limit headers / body from an API response."""
+    reset_raw = response.headers.get("X-RateLimit-Reset")
+    limit_raw = response.headers.get("X-RateLimit-Limit", "60")
+    remaining_raw = response.headers.get("X-RateLimit-Remaining", "0")
+
+    is_rate_limit = False
+    try:
+        if int(remaining_raw) == 0:
+            is_rate_limit = True
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        body = response.json()
+        if isinstance(body, dict) and "rate limit" in str(body.get("message", "")).lower():
+            is_rate_limit = True
+    except ValueError:
+        pass
+
+    if not is_rate_limit:
+        return None
+
+    try:
+        reset_at = int(reset_raw) if reset_raw else int(time.time()) + 3600
+        limit = int(limit_raw)
+    except (TypeError, ValueError):
+        reset_at = int(time.time()) + 3600
+        limit = 60
+
+    try:
+        remaining = int(remaining_raw)
+    except (TypeError, ValueError):
+        remaining = 0
+
+    return RateLimitInfo(reset_at=reset_at, limit=limit, remaining=remaining)
+
+
 def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
     """Fetch all public releases, newest first."""
     releases: list[ReleaseEntry] = []
@@ -483,7 +540,14 @@ def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
             timeout=timeout,
         )
         if response.status_code == 403:
-            raise FetchError("GitHub API rate limit exceeded. Try again later.", status_code=403)
+            rate_limit = _rate_limit_from_response(response)
+            if rate_limit:
+                raise FetchError(
+                    "GitHub API rate limit exceeded.",
+                    status_code=403,
+                    rate_limit=rate_limit,
+                )
+            raise FetchError("GitHub API access denied.", status_code=403)
         if response.status_code == 404:
             raise FetchError("No public releases found for this repository.", status_code=404)
         if response.status_code != 200:

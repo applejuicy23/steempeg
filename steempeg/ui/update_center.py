@@ -27,6 +27,7 @@ from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
     LocalBackup,
+    RateLimitInfo,
     ReleaseEntry,
     default_selected_release,
     fetch_releases,
@@ -297,13 +298,17 @@ class _PatchGroupWidget(QWidget):
 class _ReleaseFetchThread(QThread):
     finished_ok = Signal(list)
     finished_error = Signal(str)
+    finished_rate_limited = Signal(object)
 
     def run(self):
         try:
             releases = fetch_releases()
             self.finished_ok.emit(releases)
         except FetchError as exc:
-            self.finished_error.emit(str(exc))
+            if exc.rate_limit:
+                self.finished_rate_limited.emit(exc.rate_limit)
+            else:
+                self.finished_error.emit(str(exc))
         except Exception as exc:
             logging.exception("UPDATE_CENTER: release fetch failed")
             self.finished_error.emit(f"Could not load releases:\n{exc}")
@@ -312,6 +317,7 @@ class _ReleaseFetchThread(QThread):
 class UpdateCenterDialog(SteempegDialog):
     install_requested = Signal(object)
     restore_requested = Signal(object)
+    rate_limited = Signal(object)
 
     def __init__(
         self,
@@ -439,6 +445,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._fetch_thread = _ReleaseFetchThread(self)
         self._fetch_thread.finished_ok.connect(self._on_releases_loaded)
         self._fetch_thread.finished_error.connect(self._on_fetch_error)
+        self._fetch_thread.finished_rate_limited.connect(self._on_fetch_rate_limited)
         self._fetch_thread.start()
 
     def _clear_list(self):
@@ -502,6 +509,12 @@ class UpdateCenterDialog(SteempegDialog):
     def _on_fetch_error(self, message: str):
         self._status_label.setText(message)
         self._status_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
+
+    def _on_fetch_rate_limited(self, info: RateLimitInfo):
+        self._status_label.setText("GitHub API rate limit exceeded — waiting to retry…")
+        self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+        self.rate_limited.emit(info)
+        self.reject()
 
     def _select_entry(self, entry: ReleaseEntry):
         self._selected = entry
