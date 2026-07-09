@@ -12,7 +12,11 @@ import requests
 REPO = "applejuicy23/steempeg"
 API_BASE = f"https://api.github.com/repos/{REPO}/releases"
 HEADERS = {"User-Agent": "Steempeg-Updater"}
-MIN_INSTALL_VERSION = 16.0
+
+# Install policy (see Steempegold smpeg8/9/12.1/16 for era references).
+MIN_INSTALL_VERSION = 12.1
+RECOMMENDED_INSTALL_VERSION = 16.0
+BLOCKED_INSTALL_VERSIONS: frozenset[float] = frozenset({12.0})
 
 _VERSION_RE = re.compile(r"v?(\d+(?:\.\d+)*)", re.IGNORECASE)
 _BACKUP_DIR_RE = re.compile(r"^old_version_v[\d.]+$", re.IGNORECASE)
@@ -24,6 +28,20 @@ REFACTOR_THRESHOLDS: tuple[tuple[float, str], ...] = (
     (36.0, "v36 changed window chrome and title bar."),
 )
 
+UPDATE_CENTER_POLICY_NOTE = ""
+
+GENERIC_DOWNGRADE_NOTICE = (
+    "Older release than your current build. You may hit bugs that were fixed in later patches."
+)
+
+
+_SECTION_HEADER_RE = re.compile(
+    r"^(?:🚀\s*NEW FEATURES|✨\s*PLAYER\s*&\s*UI|✨\s*PLAYER)",
+    re.IGNORECASE,
+)
+_BULLET_LINE_RE = re.compile(r"^[-*•]\s+(.+)$")
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
 
 class VersionEra(str, Enum):
     ALPHA = "alpha"
@@ -32,12 +50,60 @@ class VersionEra(str, Enum):
     RELIABLE = "reliable"
 
 
+class InstallTier(str, Enum):
+    MANUAL = "manual"
+    BROKEN = "broken"
+    NO_ZIP = "no_zip"
+    RISKY = "risky"
+    STABLE = "stable"
+
+
 class FetchError(Exception):
     """Raised when the GitHub releases API cannot be read."""
 
     def __init__(self, message: str, *, status_code: int | None = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class VersionMilestone:
+    version: float
+    icon: str
+    short_label: str
+    detail: str
+
+
+# Landmarks — manual anchors; release notes fill gaps for unlisted versions.
+VERSION_MILESTONES: tuple[VersionMilestone, ...] = (
+    VersionMilestone(36.0, "🎨", "New chrome", "Frameless title bar and chrome theme experiments."),
+    VersionMilestone(35.0, "📼", "Rendered library", "Rendered output sidecars and filter panel."),
+    VersionMilestone(30.0, "📋", "Render queue", "Batch render queue and export history."),
+    VersionMilestone(29.0, "🔧", "UI refactor", "Major player and shell layout refactor."),
+    VersionMilestone(27.0, "🔍", "Sort & filter", "Sorting and filtering."),
+    VersionMilestone(22.0, "🎬", "Clips manager", "Clips manager UI update."),
+    VersionMilestone(20.0, "📍", "Timeline markers", "Timeline marker support."),
+    VersionMilestone(16.0, "▶", "MPV player", "VLC replaced with mpv playback engine."),
+    VersionMilestone(16.0, "⚡", "Stable updater", "Download, unzip and updater.bat. Same model as today."),
+    VersionMilestone(12.1, "📦", "Zip installer", "First working in-app zip download and install."),
+    VersionMilestone(12.0, "💀", "Broken release", "Do not install. Shipped dead. Use v12.1."),
+    VersionMilestone(11.0, "📺", "VLC player", "VLC-based video playback."),
+    VersionMilestone(10.0, "▶", "Early player", "Early player update."),
+    VersionMilestone(9.0, "🎨", "UI update", "UI refresh."),
+    VersionMilestone(8.0, "🧪", "Early dev · last", "Select Clip + Render only."),
+)
+
+_KEYED_EARLY_INFO_VERSIONS: frozenset[float] = frozenset({8.0, 9.0, 10.0, 11.0})
+
+COLOR_VERSION_NEW = "#7ec8a3"
+COLOR_VERSION_CURRENT = "#b29ae7"
+COLOR_VERSION_STABLE = "#e8e8e8"
+COLOR_VERSION_RISKY = "#e8b86d"
+COLOR_VERSION_LEGACY = "#ff8a80"
+
+# How many major versions behind latest stay white before fading to yellow.
+WHITE_HOLD_GAP = 3
+YELLOW_FADE_SPAN = 18
 
 
 @dataclass(frozen=True)
@@ -52,21 +118,47 @@ class ReleaseEntry:
     zip_url: str | None
     zip_name: str | None
     era: VersionEra
+    install_tier: InstallTier
     installable: bool
+    milestones: tuple[VersionMilestone, ...]
+    block_reason: str | None
     published_at: str = ""
 
     def badge(self, current_version: float) -> str:
         if abs(self.version_float - current_version) < 0.001:
             return "current"
         if self.version_float > current_version:
+            if self.install_tier == InstallTier.STABLE:
+                return "newer"
+            if self.install_tier == InstallTier.RISKY:
+                return "newer · risky"
+            if self.install_tier == InstallTier.BROKEN:
+                return "broken"
             return "newer"
         if not self.installable:
-            if self.era == VersionEra.ALPHA:
+            if self.install_tier == InstallTier.BROKEN:
+                return "broken"
+            if self.install_tier == InstallTier.MANUAL:
                 return "manual only"
             if self.era in (VersionEra.BROWSER, VersionEra.EARLY):
                 return "browser-era"
             return "unavailable"
+        if self.install_tier == InstallTier.RISKY:
+            return "older · risky"
+        if abs(self.version_float - RECOMMENDED_INSTALL_VERSION) < 0.001:
+            return "older · stable floor"
         return "older"
+
+    def milestone_labels(self) -> str:
+        if not self.milestones:
+            return ""
+        parts = [f"{m.icon} {m.short_label}" for m in self.milestones]
+        return " · ".join(parts)
+
+    def row_highlight(self) -> str | None:
+        if self.milestones:
+            return self.milestone_labels()
+        return extract_release_highlight(self.body)
 
 
 @dataclass(frozen=True)
@@ -96,6 +188,10 @@ def format_version(parts: tuple[int, ...]) -> str:
     return ".".join(str(part) for part in parts)
 
 
+def versions_equal(a: float, b: float) -> bool:
+    return abs(a - b) < 0.001
+
+
 def classify_era(version_float: float) -> VersionEra:
     if version_float <= 8:
         return VersionEra.ALPHA
@@ -106,12 +202,212 @@ def classify_era(version_float: float) -> VersionEra:
     return VersionEra.RELIABLE
 
 
+def is_early_development(version_float: float) -> bool:
+    return version_float <= 8.0
+
+
+def extract_release_highlight(body: str) -> str | None:
+    """First bullet under NEW FEATURES or PLAYER & UI in GitHub release notes."""
+    if not body:
+        return None
+    lines = body.splitlines()
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _SECTION_HEADER_RE.search(stripped):
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("#") or stripped.startswith("---"):
+                break
+            if len(stripped) < 80 and _SECTION_HEADER_RE.search(stripped):
+                break
+            match = _BULLET_LINE_RE.match(stripped)
+            if match:
+                text = _MARKDOWN_BOLD_RE.sub(r"\1", match.group(1)).strip()
+                if text:
+                    return text[:72] + ("…" if len(text) > 72 else "")
+            if stripped[0].isdigit() and "." in stripped[:4]:
+                break
+    return None
+
+
+def group_releases_by_major(releases: list[ReleaseEntry]) -> list[list[ReleaseEntry]]:
+    """Group v36 / v36.1 / v36.2 together; preserve newest-major-first order."""
+    groups: dict[int, list[ReleaseEntry]] = {}
+    major_order: list[int] = []
+    for entry in releases:
+        major = entry.version[0]
+        if major not in groups:
+            groups[major] = []
+            major_order.append(major)
+        groups[major].append(entry)
+    return [
+        sorted(groups[major], key=lambda item: item.version_float, reverse=True)
+        for major in major_order
+    ]
+
+
+def patch_warning(entry: ReleaseEntry, group: list[ReleaseEntry]) -> str | None:
+    if len(group) <= 1:
+        return None
+    newest = group[0]
+    if entry.version_float < newest.version_float - 0.001:
+        return f"Newer patch v{newest.version_str} exists. This build may have unfixed bugs."
+    return None
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    value = hex_color.lstrip("#")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _lerp_color(color_a: str, color_b: str, progress: float) -> str:
+    progress = max(0.0, min(1.0, progress))
+    ar, ag, ab = _hex_to_rgb(color_a)
+    br, bg, bb = _hex_to_rgb(color_b)
+    return (
+        f"#{int(ar + (br - ar) * progress):02x}"
+        f"{int(ag + (bg - ag) * progress):02x}"
+        f"{int(ab + (bb - ab) * progress):02x}"
+    )
+
+
+def version_major(version_float: float) -> int:
+    return int(version_float)
+
+
+def latest_release_version(releases: list[ReleaseEntry]) -> float:
+    if not releases:
+        return 0.0
+    return releases[0].version_float
+
+
+def default_selected_release(releases: list[ReleaseEntry], installed: float) -> ReleaseEntry:
+    """Prefer the newest GitHub release when it is newer than the running build."""
+    latest = releases[0]
+    if latest.version_float > installed + 0.001:
+        return latest
+    for entry in releases:
+        if versions_equal(entry.version_float, installed):
+            return entry
+    return latest
+
+
+def version_label_color(
+    version_float: float,
+    *,
+    installed: float,
+    latest: float,
+) -> str:
+    if versions_equal(version_float, installed):
+        return COLOR_VERSION_CURRENT
+    if version_float > installed + 0.001:
+        return COLOR_VERSION_NEW
+    if version_float < 12.0 - 0.001:
+        return COLOR_VERSION_LEGACY
+
+    gap = version_major(latest) - version_major(version_float)
+    if gap <= WHITE_HOLD_GAP:
+        return COLOR_VERSION_STABLE
+    fade = min(1.0, (gap - WHITE_HOLD_GAP) / YELLOW_FADE_SPAN)
+    return _lerp_color(COLOR_VERSION_STABLE, COLOR_VERSION_RISKY, fade)
+
+
+def shows_info_icon(entry: ReleaseEntry) -> bool:
+    """(i) only on keyed Early builds v8–v11, and on v12+ milestone releases."""
+    if entry.version_float < 12.0 - 0.001:
+        return any(versions_equal(entry.version_float, v) for v in _KEYED_EARLY_INFO_VERSIONS)
+    return bool(entry.milestones)
+
+
+def selection_marker_text(entry: ReleaseEntry) -> str | None:
+    """Purple label above the ack checkbox for keyed releases."""
+    if not entry.milestones:
+        return None
+    parts: list[str] = []
+    for milestone in entry.milestones:
+        if versions_equal(milestone.version, 8.0):
+            parts.append(f"{milestone.icon} {milestone.short_label} · {milestone.detail}")
+        else:
+            parts.append(f"{milestone.icon} {milestone.short_label}")
+    return " · ".join(parts)
+
+
+def info_tooltip_text(entry: ReleaseEntry) -> str | None:
+    """Tooltip for the (i) button on a version row."""
+    if not shows_info_icon(entry):
+        return None
+    lines: list[str] = []
+    for milestone in entry.milestones:
+        lines.append(f"{milestone.icon} {milestone.short_label}: {milestone.detail}")
+    return "\n".join(lines) if lines else None
+
+
+def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
+    """Single short line under release notes when a version is selected."""
+    if entry.version_float <= 11.0:
+        return "Early Development. Bare .exe only. Cannot install in-app."
+    if entry.version_float >= current_version - 0.001:
+        return None
+    if versions_equal(entry.version_float, RECOMMENDED_INSTALL_VERSION):
+        return "Last safe version for in-app install."
+    if versions_equal(entry.version_float, 12.1):
+        return "Last early zip build. No longer supported. Not recommended to download."
+    if MIN_INSTALL_VERSION < entry.version_float < RECOMMENDED_INSTALL_VERSION:
+        return "Early zip updater era. Install may be unstable."
+    if entry.version_float >= RECOMMENDED_INSTALL_VERSION:
+        return GENERIC_DOWNGRADE_NOTICE
+    if entry.version_float < MIN_INSTALL_VERSION:
+        return "Bare .exe era. Manual download only."
+    return GENERIC_DOWNGRADE_NOTICE
+
+
+def old_version_warning(entry: ReleaseEntry, current_version: float) -> str | None:
+    return selection_notice(entry, current_version)
+
+
+def milestones_for_version(version_float: float) -> tuple[VersionMilestone, ...]:
+    return tuple(m for m in VERSION_MILESTONES if versions_equal(m.version, version_float))
+
+
+def classify_install_tier(version_float: float, zip_url: str | None) -> InstallTier:
+    if any(versions_equal(version_float, blocked) for blocked in BLOCKED_INSTALL_VERSIONS):
+        return InstallTier.BROKEN
+    if not zip_url:
+        return InstallTier.NO_ZIP if version_float >= MIN_INSTALL_VERSION else InstallTier.MANUAL
+    if version_float < MIN_INSTALL_VERSION:
+        return InstallTier.MANUAL
+    if version_float < RECOMMENDED_INSTALL_VERSION:
+        return InstallTier.RISKY
+    return InstallTier.STABLE
+
+
 def is_installable(version_float: float, zip_url: str | None) -> bool:
-    return bool(zip_url) and version_float >= MIN_INSTALL_VERSION
+    tier = classify_install_tier(version_float, zip_url)
+    return tier in (InstallTier.RISKY, InstallTier.STABLE)
+
+
+def install_policy_message(entry: ReleaseEntry) -> str | None:
+    if entry.block_reason:
+        return entry.block_reason.replace("—", ",")
+    if versions_equal(entry.version_float, RECOMMENDED_INSTALL_VERSION):
+        return "Last safe version for in-app install."
+    if versions_equal(entry.version_float, 12.1):
+        return "Last early zip build. No longer supported. Not recommended."
+    if MIN_INSTALL_VERSION < entry.version_float < RECOMMENDED_INSTALL_VERSION:
+        return "Early zip updater. Settings and formats may break."
+    if is_early_development(entry.version_float) and versions_equal(entry.version_float, 8.0):
+        return "Last Early Development build. Select Clip + Render only."
+    if is_early_development(entry.version_float):
+        return "Early Development. Bare .exe only."
+    return None
 
 
 def jump_warnings(from_version: float, to_version: float) -> list[str]:
-    if abs(from_version - to_version) < 0.001:
+    if versions_equal(from_version, to_version):
         return []
     low = min(from_version, to_version)
     high = max(from_version, to_version)
@@ -119,6 +415,10 @@ def jump_warnings(from_version: float, to_version: float) -> list[str]:
     for threshold, message in REFACTOR_THRESHOLDS:
         if low < threshold <= high:
             warnings.append(message)
+    if high < RECOMMENDED_INSTALL_VERSION and low >= MIN_INSTALL_VERSION:
+        warnings.append("Target is before v16 — early updater era; higher crash/incompatibility risk.")
+    if low < MIN_INSTALL_VERSION:
+        warnings.append("Crossing into pre-v12.1 territory — manual .exe era, not in-app install.")
     return warnings
 
 
@@ -128,6 +428,12 @@ def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None]:
         if name.endswith(".zip"):
             return asset.get("browser_download_url"), asset.get("name")
     return None, None
+
+
+def _block_reason_for(tier: InstallTier, version_float: float) -> str | None:
+    if tier == InstallTier.BROKEN and versions_equal(version_float, 12.0):
+        return "v12.0 cannot be installed. Broken release. Use v12.1."
+    return None
 
 
 def parse_release(data: dict) -> ReleaseEntry | None:
@@ -141,6 +447,9 @@ def parse_release(data: dict) -> ReleaseEntry | None:
     version_float = version_to_float(version)
     zip_url, zip_name = find_zip_asset(data.get("assets") or [])
     era = classify_era(version_float)
+    install_tier = classify_install_tier(version_float, zip_url)
+    milestones = milestones_for_version(version_float)
+    block_reason = _block_reason_for(install_tier, version_float)
 
     return ReleaseEntry(
         tag_name=tag_name,
@@ -153,7 +462,10 @@ def parse_release(data: dict) -> ReleaseEntry | None:
         zip_url=zip_url,
         zip_name=zip_name,
         era=era,
+        install_tier=install_tier,
         installable=is_installable(version_float, zip_url),
+        milestones=milestones,
+        block_reason=block_reason,
         published_at=data.get("published_at") or "",
     )
 

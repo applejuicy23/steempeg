@@ -2,74 +2,72 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import webbrowser
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
+from steempeg.infra.paths import get_resource_path
 from steempeg.services.release_catalog import (
     FetchError,
+    InstallTier,
     LocalBackup,
     ReleaseEntry,
+    default_selected_release,
     fetch_releases,
-    jump_warnings,
+    group_releases_by_major,
+    info_tooltip_text,
+    latest_release_version,
+    selection_marker_text,
+    selection_notice,
+    shows_info_icon,
+    version_label_color,
+    versions_equal,
 )
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
 
-_BADGE_LABELS = {
-    "current": "● current",
-    "newer": "↑ newer",
-    "older": "↓ older",
-    "manual only": "manual only",
-    "browser-era": "browser era",
-    "unavailable": "no zip",
-}
-
-_BADGE_COLORS = {
-    "current": "#7ec8a3",
-    "newer": "#8ec5ff",
-    "older": "#c4b5e8",
-    "manual only": "#888888",
-    "browser-era": "#d4a574",
-    "unavailable": "#888888",
-}
-
-_LIST_STYLE = """
-    QListWidget {
-        background-color: #242424;
-        border: 1px solid #3d3d3d;
+_ROW_NORMAL = """
+    QFrame#versionRow {
+        background-color: #2a2a2a;
+        border: 1px solid #353535;
         border-radius: 8px;
-        color: #ddd;
-        font-size: 12px;
-        padding: 4px;
     }
-    QListWidget::item {
-        border-radius: 6px;
-        padding: 8px 10px;
-        margin: 2px 0;
-    }
-    QListWidget::item:selected {
+"""
+_ROW_SELECTED = """
+    QFrame#versionRow {
         background-color: #3a324a;
         border: 1px solid #6b5a8e;
+        border-radius: 8px;
     }
-    QListWidget::item:hover:!selected {
-        background-color: #2e2e2e;
+"""
+_ROW_CHILD = """
+    QFrame#versionRow {
+        background-color: #262626;
+        border: 1px solid #333333;
+        border-radius: 6px;
     }
+"""
+
+_SCROLL_STYLE = """
+    QScrollArea { background: transparent; border: none; }
+    QWidget#releaseListHost { background: transparent; }
 """
 
 _NOTES_STYLE = """
@@ -102,44 +100,198 @@ _BTN_SECONDARY = """
     QPushButton:disabled { background-color: #2a2a2a; color: #666; border-color: #444; }
 """
 
+_ICON_BTN = """
+    QPushButton {
+        background-color: #383838; color: #ccc; border: 1px solid #555;
+        border-radius: 10px; min-width: 20px; max-width: 20px;
+        min-height: 20px; max-height: 20px; font-size: 10px; font-weight: bold; padding: 0;
+    }
+    QPushButton:hover { background-color: #454545; color: #fff; border-color: #6b5a8e; }
+"""
 
-def _release_row_text(entry: ReleaseEntry, badge_key: str) -> str:
-    tag = entry.tag_name or f"v{entry.version_str}"
-    title = (entry.name or "").strip()
-    if title and title.lower().replace("steempeg", "").strip() in (
-        tag.lower(),
-        f"v{entry.version_str}".lower(),
-        entry.version_str,
-    ):
-        title = ""
-    badge = _BADGE_LABELS.get(badge_key, badge_key)
-    if title and title != tag:
-        return f"{tag}   {title}   ·   {badge}"
-    return f"{tag}   ·   {badge}"
+
+def _logo_pixmap(size: int = 18) -> QPixmap | None:
+    path = get_resource_path("logo.png")
+    if not os.path.isfile(path):
+        return None
+    return QPixmap(path).scaled(
+        size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+    )
+
+
+def _sanitize_notes(text: str) -> str:
+    return text.replace(" — ", ": ").replace("— ", "")
 
 
 def _render_release_notes(edit: QTextEdit, body: str) -> None:
-    text = (body or "").strip() or "_No release notes provided._"
+    text = _sanitize_notes((body or "").strip() or "_No release notes provided._")
     edit.document().setDefaultStyleSheet(
         f"""
         body {{ color: {tok.TEXT_PRIMARY}; font-family: {tok.FONT_UI}; font-size: 11px; }}
         h1, h2, h3, h4 {{ color: {tok.TEXT_TITLE}; margin: 10px 0 4px 0; font-size: 12px; }}
         strong {{ color: {tok.TEXT_TITLE}; font-weight: 600; }}
-        em {{ color: {tok.TEXT_MUTED}; }}
         li {{ margin: 3px 0; }}
         ul, ol {{ margin: 4px 0 8px 16px; }}
         p {{ margin: 4px 0; }}
         a {{ color: {tok.ACCENT_PRIMARY}; text-decoration: none; }}
-        code {{ background: #2a2a2a; padding: 1px 4px; border-radius: 3px; }}
         """
     )
     try:
         edit.setMarkdown(text)
     except Exception:
-        # Fallback for odd markdown: strip common markers to readable plain text.
         plain = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-        plain = re.sub(r"^#+\s*", "", plain, flags=re.MULTILINE)
         edit.setPlainText(plain)
+
+
+class _VersionRow(QFrame):
+    """Single release row: logo, version label, optional (i) and expand buttons."""
+
+    activated = Signal(object)
+
+    def __init__(
+        self,
+        entry: ReleaseEntry,
+        *,
+        installed: float,
+        latest: float,
+        indent: int = 0,
+        expand_handler=None,
+        expanded: bool = False,
+    ):
+        super().__init__()
+        self._entry = entry
+        self._indent = indent
+        self._installed = installed
+        self._latest = latest
+        self._expand_handler = expand_handler
+        self.setObjectName("versionRow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(_ROW_CHILD if indent else _ROW_NORMAL)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(8 + indent * 14, 6, 8, 6)
+        outer.setSpacing(8)
+
+        logo = QLabel()
+        pix = _logo_pixmap(18 if not indent else 16)
+        if pix is not None:
+            logo.setPixmap(pix)
+        logo.setFixedSize(18 if not indent else 16, 18 if not indent else 16)
+        outer.addWidget(logo)
+
+        label = entry.tag_name or f"v{entry.version_str}"
+        color = version_label_color(entry.version_float, installed=installed, latest=latest)
+        self._version_label = QLabel(label)
+        self._version_label.setStyleSheet(
+            f"color: {color}; "
+            f"font-size: {'12px' if not indent else '11px'}; font-weight: 600; background: transparent;"
+        )
+        outer.addWidget(self._version_label)
+        outer.addStretch()
+
+        if shows_info_icon(entry):
+            tip = info_tooltip_text(entry)
+            info_btn = QPushButton("i")
+            if tip:
+                info_btn.setToolTip(tip)
+            info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            info_btn.setStyleSheet(_ICON_BTN)
+            info_btn.clicked.connect(lambda *_: None)
+            info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            outer.addWidget(info_btn)
+
+        if expand_handler is not None:
+            self._expand_btn = QPushButton("▾" if expanded else "▸")
+            self._expand_btn.setToolTip("Show other patches in this version line")
+            self._expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._expand_btn.setStyleSheet(_ICON_BTN)
+            self._expand_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._expand_btn.clicked.connect(self._on_expand_clicked)
+            outer.addWidget(self._expand_btn)
+        else:
+            self._expand_btn = None
+
+    def _on_expand_clicked(self):
+        if self._expand_handler:
+            self._expand_handler()
+
+    def set_expanded(self, expanded: bool) -> None:
+        if self._expand_btn is not None:
+            self._expand_btn.setText("▾" if expanded else "▸")
+
+    def set_selected(self, selected: bool) -> None:
+        if selected:
+            self.setStyleSheet(_ROW_SELECTED)
+        else:
+            self.setStyleSheet(_ROW_CHILD if self._indent else _ROW_NORMAL)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self._entry)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+
+class _PatchGroupWidget(QWidget):
+    """Collapsed by default: shows newest patch; expand reveals older patches."""
+
+    activated = Signal(object)
+
+    def __init__(self, group: list[ReleaseEntry], *, installed: float, latest: float):
+        super().__init__()
+        self._group = group
+        self._installed = installed
+        self._latest = latest
+        self._expanded = False
+        self._rows: list[_VersionRow] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self._child_host = QWidget()
+        child_layout = QVBoxLayout(self._child_host)
+        child_layout.setContentsMargins(0, 0, 0, 0)
+        child_layout.setSpacing(4)
+
+        header = _VersionRow(
+            group[0],
+            installed=installed,
+            latest=latest,
+            expand_handler=self._toggle,
+            expanded=False,
+        )
+        header.activated.connect(self.activated.emit)
+        layout.addWidget(header)
+        self._rows.append(header)
+
+        for entry in group[1:]:
+            row = _VersionRow(
+                entry,
+                installed=installed,
+                latest=latest,
+                indent=1,
+            )
+            row.activated.connect(self.activated.emit)
+            child_layout.addWidget(row)
+            self._rows.append(row)
+
+        layout.addWidget(self._child_host)
+        self._child_host.hide()
+
+    def _toggle(self):
+        self._expanded = not self._expanded
+        self._child_host.setVisible(self._expanded)
+        self._rows[0].set_expanded(self._expanded)
+
+    def expand(self):
+        if not self._expanded:
+            self._toggle()
+
+    def set_selected_entry(self, entry: ReleaseEntry | None) -> None:
+        for row in self._rows:
+            row.set_selected(entry is not None and row._entry.version_float == entry.version_float)
 
 
 class _ReleaseFetchThread(QThread):
@@ -158,10 +310,8 @@ class _ReleaseFetchThread(QThread):
 
 
 class UpdateCenterDialog(SteempegDialog):
-    """Frameless sheet for browsing and installing any public release."""
-
-    install_requested = Signal(object)  # ReleaseEntry
-    restore_requested = Signal(object)  # LocalBackup
+    install_requested = Signal(object)
+    restore_requested = Signal(object)
 
     def __init__(
         self,
@@ -172,13 +322,17 @@ class UpdateCenterDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumSize(560, 560)
-        self.resize(620, 640)
+        self.setMinimumSize(520, 520)
+        self.resize(560, 600)
         self._releases: list[ReleaseEntry] = []
         self._local_backups = local_backups
         self._fetch_thread: _ReleaseFetchThread | None = None
+        self._selected: ReleaseEntry | None = None
+        self._latest_version = APP_VERSION_FLOAT
+        self._row_widgets: list[_VersionRow | _PatchGroupWidget] = []
+        self._group_widgets: list[_PatchGroupWidget] = []
 
-        self.setStyleSheet(self.styleSheet() + _LIST_STYLE + _NOTES_STYLE)
+        self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
 
         root = self.content_layout
 
@@ -187,14 +341,23 @@ class UpdateCenterDialog(SteempegDialog):
         header.setStyleSheet(f"color: {tok.TEXT_TITLE}; font-size: 14px; font-weight: bold;")
         root.addWidget(header)
 
-        self._status_label = QLabel("Loading releases from GitHub…")
+        self._status_label = QLabel("Loading releases…")
         self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
         root.addWidget(self._status_label)
 
-        self._release_list = QListWidget()
-        self._release_list.setMinimumHeight(180)
-        self._release_list.currentRowChanged.connect(self._on_release_selected)
-        root.addWidget(self._release_list, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list_host = QWidget()
+        self._list_host.setObjectName("releaseListHost")
+        self._list_layout = QVBoxLayout(self._list_host)
+        self._list_layout.setContentsMargins(0, 0, 4, 0)
+        self._list_layout.setSpacing(4)
+        self._list_layout.addStretch()
+        scroll.setWidget(self._list_host)
+        scroll.setMinimumHeight(200)
+        root.addWidget(scroll, 1)
 
         notes_label = QLabel("Release notes")
         notes_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
@@ -202,23 +365,29 @@ class UpdateCenterDialog(SteempegDialog):
 
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
-        self._notes.setMinimumHeight(100)
-        self._notes.setPlaceholderText("Select a release to preview its notes.")
+        self._notes.setMinimumHeight(90)
+        self._notes.setPlaceholderText("Select a version.")
         root.addWidget(self._notes)
 
-        self._warning_label = QLabel()
-        self._warning_label.setWordWrap(True)
-        self._warning_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
-        self._warning_label.hide()
-        root.addWidget(self._warning_label)
+        self._notice_label = QLabel()
+        self._notice_label.setWordWrap(True)
+        self._notice_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+        self._notice_label.hide()
+        root.addWidget(self._notice_label)
 
-        self._downgrade_check = QCheckBox(
+        self._marker_label = QLabel()
+        self._marker_label.setWordWrap(True)
+        self._marker_label.setStyleSheet(f"color: {tok.ACCENT_PRIMARY}; font-size: 11px; font-weight: 600;")
+        self._marker_label.hide()
+        root.addWidget(self._marker_label)
+
+        self._ack_check = QCheckBox(
             "I understand settings, queue, and rendered sidecars may not match the target version."
         )
-        self._downgrade_check.setStyleSheet(f"color: {tok.TEXT_PRIMARY}; font-size: 11px;")
-        self._downgrade_check.hide()
-        self._downgrade_check.stateChanged.connect(self._refresh_actions)
-        root.addWidget(self._downgrade_check)
+        self._ack_check.setStyleSheet(f"color: {tok.TEXT_PRIMARY}; font-size: 11px;")
+        self._ack_check.hide()
+        self._ack_check.stateChanged.connect(self._refresh_actions)
+        root.addWidget(self._ack_check)
 
         if len(local_backups) > 1:
             backup_row = QHBoxLayout()
@@ -241,21 +410,21 @@ class UpdateCenterDialog(SteempegDialog):
         actions.setSpacing(8)
 
         self._btn_install = QPushButton("Install selected")
-        self._btn_install.setCursor(Qt.PointingHandCursor)
+        self._btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_install.setStyleSheet(_BTN_PRIMARY)
         self._btn_install.setEnabled(False)
         self._btn_install.clicked.connect(self._on_install_clicked)
         actions.addWidget(self._btn_install)
 
         self._btn_github = QPushButton("Open on GitHub")
-        self._btn_github.setCursor(Qt.PointingHandCursor)
+        self._btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_github.setStyleSheet(_BTN_SECONDARY)
         self._btn_github.setEnabled(False)
         self._btn_github.clicked.connect(self._on_github_clicked)
         actions.addWidget(self._btn_github)
 
         self._btn_restore = QPushButton("Restore local backup")
-        self._btn_restore.setCursor(Qt.PointingHandCursor)
+        self._btn_restore.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_restore.setStyleSheet(_BTN_SECONDARY)
         self._btn_restore.setVisible(bool(local_backups))
         self._btn_restore.clicked.connect(self._on_restore_clicked)
@@ -272,143 +441,167 @@ class UpdateCenterDialog(SteempegDialog):
         self._fetch_thread.finished_error.connect(self._on_fetch_error)
         self._fetch_thread.start()
 
+    def _clear_list(self):
+        while self._list_layout.count() > 1:
+            item = self._list_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._row_widgets.clear()
+        self._group_widgets.clear()
+
     def _on_releases_loaded(self, releases: list):
         self._releases = releases
-        self._release_list.clear()
+        self._clear_list()
 
         if not releases:
             self._status_label.setText("No public releases found.")
             return
 
-        self._status_label.setText(f"{len(releases)} public releases — newest first.")
-        current_row = 0
-        for index, entry in enumerate(releases):
-            badge_key = entry.badge(APP_VERSION_FLOAT)
-            item = QListWidgetItem(_release_row_text(entry, badge_key))
-            item.setData(Qt.ItemDataRole.UserRole, entry)
-            item.setToolTip(entry.html_url)
-            badge_color = _BADGE_COLORS.get(badge_key, "#aaaaaa")
-            item.setForeground(QColor(badge_color) if badge_key in ("manual only", "unavailable") else QColor("#e0e0e0"))
-            self._release_list.addItem(item)
+        self._latest_version = latest_release_version(releases)
+        latest_str = releases[0].version_str
+        if self._latest_version > APP_VERSION_FLOAT + 0.001:
+            self._status_label.setText(f"Update available: v{latest_str}")
+            self._status_label.setStyleSheet("color: #7ec8a3; font-size: 11px; font-weight: 600;")
+        else:
+            self._status_label.setText(f"{len(releases)} releases · you are on the latest")
+            self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
 
-            if badge_key == "current":
-                current_row = index
+        groups = group_releases_by_major(releases)
+        initial_entry = default_selected_release(releases, APP_VERSION_FLOAT)
 
-        self._release_list.setCurrentRow(current_row)
-        self._refresh_actions()
+        for group in groups:
+            if len(group) == 1:
+                entry = group[0]
+                row = _VersionRow(
+                    entry,
+                    installed=APP_VERSION_FLOAT,
+                    latest=self._latest_version,
+                )
+                row.activated.connect(self._select_entry)
+                self._list_layout.insertWidget(self._list_layout.count() - 1, row)
+                self._row_widgets.append(row)
+            else:
+                block = _PatchGroupWidget(
+                    group,
+                    installed=APP_VERSION_FLOAT,
+                    latest=self._latest_version,
+                )
+                block.activated.connect(self._select_entry)
+                self._list_layout.insertWidget(self._list_layout.count() - 1, block)
+                self._row_widgets.append(block)
+                self._group_widgets.append(block)
+
+        for block in self._group_widgets:
+            for entry in block._group:
+                if versions_equal(entry.version_float, initial_entry.version_float):
+                    block.expand()
+                    break
+
+        self._select_entry(initial_entry)
 
     def _on_fetch_error(self, message: str):
         self._status_label.setText(message)
         self._status_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
 
-    def _selected_release(self) -> ReleaseEntry | None:
-        item = self._release_list.currentItem()
-        if not item:
-            return None
-        return item.data(Qt.ItemDataRole.UserRole)
+    def _select_entry(self, entry: ReleaseEntry):
+        self._selected = entry
+        for widget in self._row_widgets:
+            if isinstance(widget, _VersionRow):
+                widget.set_selected(widget._entry.version_float == entry.version_float)
+            else:
+                widget.set_selected_entry(entry)
+        _render_release_notes(self._notes, entry.body)
 
-    def _on_release_selected(self, _row: int):
-        entry = self._selected_release()
-        if entry:
-            _render_release_notes(self._notes, entry.body)
+        notice = selection_notice(entry, APP_VERSION_FLOAT)
+        if notice:
+            self._notice_label.setText(notice)
+            if entry.version_float <= 11.0:
+                self._notice_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
+            else:
+                self._notice_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+            self._notice_label.show()
         else:
-            self._notes.clear()
+            self._notice_label.hide()
+
+        marker = selection_marker_text(entry)
+        if marker:
+            self._marker_label.setText(marker)
+            self._marker_label.show()
+        else:
+            self._marker_label.hide()
+
         self._refresh_actions()
 
     def _refresh_actions(self):
-        entry = self._selected_release()
+        entry = self._selected
         self._btn_github.setEnabled(entry is not None)
 
         if not entry:
             self._btn_install.setEnabled(False)
-            self._warning_label.hide()
-            self._downgrade_check.hide()
+            self._ack_check.hide()
             return
 
-        is_downgrade = entry.version_float < APP_VERSION_FLOAT - 0.001
         is_current = abs(entry.version_float - APP_VERSION_FLOAT) < 0.001
-        can_install = entry.installable and not is_current
+        is_downgrade = entry.version_float < APP_VERSION_FLOAT - 0.001
+        base_can_install = entry.installable and not is_current
+        needs_ack = is_downgrade and base_can_install
 
-        warnings = jump_warnings(APP_VERSION_FLOAT, entry.version_float)
-        if warnings:
-            self._warning_label.setText("⚠ " + " ".join(warnings))
-            self._warning_label.show()
+        if needs_ack:
+            self._ack_check.show()
         else:
-            self._warning_label.hide()
+            self._ack_check.hide()
+            self._ack_check.setChecked(False)
 
-        if is_downgrade and can_install:
-            self._downgrade_check.show()
-            can_install = self._downgrade_check.isChecked()
-        else:
-            self._downgrade_check.hide()
-            self._downgrade_check.setChecked(False)
+        can_install = base_can_install and (not needs_ack or self._ack_check.isChecked())
 
-        if entry.installable:
+        if entry.install_tier == InstallTier.BROKEN:
+            self._btn_install.setText("Blocked")
+        elif entry.installable:
             if is_current:
-                self._btn_install.setText("Already on this version")
+                self._btn_install.setText("Current version")
             elif entry.version_float > APP_VERSION_FLOAT:
-                self._btn_install.setText(f"Upgrade to v{entry.version_str}")
+                if versions_equal(entry.version_float, self._latest_version):
+                    self._btn_install.setText(f"Update to v{entry.version_str}")
+                else:
+                    self._btn_install.setText(f"Upgrade to v{entry.version_str}")
             else:
                 self._btn_install.setText(f"Downgrade to v{entry.version_str}")
+        elif entry.install_tier == InstallTier.MANUAL:
+            self._btn_install.setText("Manual .exe only")
         else:
-            if entry.era.value == "alpha":
-                self._btn_install.setText("Manual install only (pre-updater)")
-            elif entry.era.value in ("browser", "early"):
-                self._btn_install.setText("Open GitHub to install")
-            else:
-                self._btn_install.setText("No .zip available")
+            self._btn_install.setText("Open on GitHub")
 
         self._btn_install.setEnabled(can_install)
 
     def _on_install_clicked(self):
-        entry = self._selected_release()
+        entry = self._selected
         if not entry:
             return
-
         if not entry.installable:
             webbrowser.open(entry.html_url)
             return
-
-        warnings = jump_warnings(APP_VERSION_FLOAT, entry.version_float)
-        if warnings:
-            detail = "\n".join(f"• {line}" for line in warnings)
-            reply = QMessageBox.warning(
-                self,
-                "Large version jump",
-                f"Installing v{entry.version_str} may affect compatibility:\n\n{detail}\n\nContinue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-
         self.install_requested.emit(entry)
         self.accept()
 
     def _on_github_clicked(self):
-        entry = self._selected_release()
-        if entry:
-            webbrowser.open(entry.html_url)
+        if self._selected:
+            webbrowser.open(self._selected.html_url)
 
     def _on_restore_clicked(self):
         if not self._local_backups:
             return
-
         backup = self._selected_backup()
         if not backup:
             return
-
         reply = QMessageBox.question(
             self,
             "Restore local backup",
-            f"Restore backed-up v{backup.version_str} from:\n{backup.folder_name}\n\n"
-            "Current files will be moved aside before restore.",
+            f"Restore v{backup.version_str} from {backup.folder_name}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
-
         self.restore_requested.emit(backup)
         self.accept()
 

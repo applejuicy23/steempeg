@@ -560,7 +560,9 @@ class LifecycleMixin:
         options = [
             ("default", "Default (black bar)"),
             ("exp1", "Experiment 1 — #1e1e1e title bar"),
-            ("exp2", "Experiment 2 — #181818 bar + #141414 background"),
+            ("exp2", "Experiment 2 — #222222 bar + #141414 background"),
+            ("exp3", "Experiment 3 — #2d2d2d bar + #1e1e1e background"),
+            ("exp4", "Experiment 4 — #2d2d2d bar + #141414 background"),
         ]
         for name, label in options:
             act = submenu.addAction(label)
