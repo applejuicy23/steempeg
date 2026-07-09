@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install smoke-test dependencies
+        run: pip install requests PySide6
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q steempeg
+
+      - name: Import smoke tests
+        run: |
+          python -c "from steempeg.version import APP_VERSION_STR; print('version', APP_VERSION_STR)"
+          python -c "from steempeg.services import release_catalog, updater"
+          python -c "from steempeg.ui.update_center import UpdateCenterDialog"
