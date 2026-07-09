@@ -12,6 +12,7 @@ from steempeg.services.release_catalog import LocalBackup, ReleaseEntry, find_lo
 from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.update_center import UpdateCenterDialog
+from steempeg.ui.update_confirm_dialog import UpdateConfirmChoice, UpdateConfirmDialog
 from steempeg.version import APP_VERSION_STR
 
 
@@ -45,28 +46,27 @@ class UpdaterMixin:
             webbrowser.open(entry.html_url)
             return
 
-        msg = QMessageBox(self.ui)
-        msg.setWindowTitle("Before updating")
-        msg.setText(
-            f"Install v{entry.version_str}?\n\n"
-            "Steempeg will close and a small updater window will finish the download and install."
+        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        dlg = UpdateConfirmDialog(
+            entry.version_str,
+            parent=self.ui,
+            bar_color=theme["title_bar"],
+            bg_color=theme["app_bg"],
         )
-        msg.setIcon(QMessageBox.Question)
-        btn_go = msg.addButton("Continue", QMessageBox.AcceptRole)
-        btn_backup = msg.addButton("Continue and keep backup", QMessageBox.ActionRole)
-        msg.addButton("Cancel", QMessageBox.RejectRole)
-        msg.exec()
-
-        clicked = msg.clickedButton()
-        if clicked not in (btn_go, btn_backup):
+        if dlg.exec() != dlg.DialogCode.Accepted:
             return
+
+        if dlg.choice == UpdateConfirmChoice.CANCEL:
+            return
+
+        keep_backup = dlg.choice == UpdateConfirmChoice.UPDATE_KEEP_BACKUP
 
         job = UpdateJob(
             url=entry.zip_url,
             asset_name=entry.zip_name,
             from_version=APP_VERSION_STR,
             target_version=entry.version_str,
-            keep_backup=clicked == btn_backup,
+            keep_backup=keep_backup,
             exe_dir=os.path.dirname(sys.executable),
             chrome_theme=getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME),
         )

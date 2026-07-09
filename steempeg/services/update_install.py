@@ -4,8 +4,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
+import tempfile
 
 _PRESERVE_DIRS = frozenset({"logs", "cache", "_update_extracted"})
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def resolve_extract_source(extract_root: str) -> str:
@@ -79,3 +82,84 @@ def apply_installed_update(
     new_exe_name = find_app_executable(source_dir)
     logging.info("UPDATE_INSTALL: installed %s (backup=%s)", new_exe_name, backup_folder_name)
     return new_exe_name, backup_folder_name
+
+
+def _bat_path(path: str) -> str:
+    """Escape a path for embedding in a generated .bat file."""
+    return os.path.normpath(path).replace("%", "%%")
+
+
+def write_deferred_install_bat(
+    *,
+    handler_pid: int,
+    exe_dir: str,
+    source_dir: str,
+    extract_root: str,
+    keep_backup: bool,
+    from_version: str,
+    new_exe_name: str,
+    tmp_asset_name: str | None = None,
+) -> str:
+    """Write a temp .bat that waits for the handler to exit, then swaps files.
+
+    The handler process loads PyInstaller extensions from exe_dir, so in-place
+    install must run only after that process has fully terminated.
+    """
+    backup_folder = f"old_version_v{from_version}" if keep_backup else ""
+    tmp_guard = f'if /I not "%%I"=="{tmp_asset_name}.tmp" ' if tmp_asset_name else ""
+    bat_path = os.path.join(tempfile.gettempdir(), f"steempeg_install_{handler_pid}.bat")
+
+    if keep_backup:
+        remove_block = f"""if exist "{_bat_path(os.path.join(exe_dir, backup_folder))}" rd /S /Q "{_bat_path(os.path.join(exe_dir, backup_folder))}"
+mkdir "{_bat_path(os.path.join(exe_dir, backup_folder))}"
+for %%I in (*.*) do (
+    {tmp_guard}move "%%I" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+)
+for /D %%D in (*) do (
+    if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" if /I not "%%D"=="{backup_folder}" (
+        if exist "%%D" move "%%D" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+    )
+)"""
+    else:
+        remove_block = f"""for %%I in (*.*) do (
+    {tmp_guard}del /F /Q "%%I" > NUL 2>&1
+)
+for /D %%D in (*) do (
+    if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" (
+        if exist "%%D" rd /S /Q "%%D" > NUL 2>&1
+    )
+)"""
+
+    backup_arg = backup_folder if keep_backup else "None"
+    tmp_cleanup = f'if exist "{tmp_asset_name}.tmp" del /F /Q "{tmp_asset_name}.tmp" > NUL 2>&1' if tmp_asset_name else ""
+    bat_content = f"""@echo off
+title Steempeg Update
+cd /D "{_bat_path(exe_dir)}"
+
+:wait_loop
+tasklist /FI "PID eq {handler_pid}" 2>NUL | find "{handler_pid}" >NUL
+if errorlevel 1 goto do_install
+timeout /t 1 /nobreak >NUL
+goto wait_loop
+
+:do_install
+{remove_block}
+robocopy "{_bat_path(source_dir)}" "{_bat_path(exe_dir)}" /E /IS /IT /NFL /NDL /NJH /NJS /NC /NS /NP > NUL
+if exist "{_bat_path(extract_root)}" rd /S /Q "{_bat_path(extract_root)}"
+{tmp_cleanup}
+start "" "{new_exe_name}" --updated-from {from_version} --backup-folder {backup_arg}
+del "%~f0"
+"""
+    with open(bat_path, "w", encoding="utf-8") as handle:
+        handle.write(bat_content)
+    logging.info("UPDATE_INSTALL: deferred install script %s", bat_path)
+    return bat_path
+
+
+def spawn_deferred_install(bat_path: str, exe_dir: str) -> None:
+    subprocess.Popen(
+        [bat_path],
+        shell=True,
+        cwd=exe_dir,
+        creationflags=_CREATE_NO_WINDOW,
+    )

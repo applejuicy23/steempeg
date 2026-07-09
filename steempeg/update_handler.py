@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import subprocess
 import sys
 import zipfile
 
@@ -13,7 +12,12 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.services.update_install import apply_installed_update, resolve_extract_source
+from steempeg.services.update_install import (
+    find_app_executable,
+    resolve_extract_source,
+    spawn_deferred_install,
+    write_deferred_install_bat,
+)
 from steempeg.services.update_job import UpdateJob, load_update_job
 from steempeg.services.updater import UpdateDownloadThread
 from steempeg.ui import design_tokens as tok
@@ -62,43 +66,27 @@ def run_update_handler(job_path: str) -> int:
                 archive.extractall(extract_root)
 
             source_dir = resolve_extract_source(extract_root)
+            new_exe_name = find_app_executable(source_dir)
 
             dialog.set_phase("install", percent=85)
-            dialog.set_detail("Replacing application files…")
+            dialog.set_detail("Preparing file replacement…")
             QApplication.processEvents()
 
-            new_exe_name, backup_folder = apply_installed_update(
-                job.exe_dir,
-                source_dir,
+            bat_path = write_deferred_install_bat(
+                handler_pid=os.getpid(),
+                exe_dir=job.exe_dir,
+                source_dir=source_dir,
+                extract_root=extract_root,
                 keep_backup=job.keep_backup,
                 from_version=job.from_version,
+                new_exe_name=new_exe_name,
                 tmp_asset_name=asset_name,
             )
-
-            shutil.rmtree(extract_root, ignore_errors=True)
-            tmp_path = os.path.join(job.exe_dir, f"{asset_name}.tmp")
-            if os.path.isfile(tmp_path):
-                os.remove(tmp_path)
+            spawn_deferred_install(bat_path, job.exe_dir)
 
             dialog.set_phase("launch")
-            dialog.set_detail("Launching the new version…")
+            dialog.set_detail("Closing updater, then installing and starting Steempeg…")
             QApplication.processEvents()
-
-            env = os.environ.copy()
-            env.pop("_MEIPASS2", None)
-            env.pop("_MEIPASS", None)
-            new_exe = os.path.join(job.exe_dir, new_exe_name)
-            subprocess.Popen(
-                [
-                    new_exe,
-                    "--updated-from",
-                    job.from_version,
-                    "--backup-folder",
-                    backup_folder,
-                ],
-                cwd=job.exe_dir,
-                env=env,
-            )
 
             QTimer.singleShot(400, dialog.close)
             QTimer.singleShot(500, app.quit)

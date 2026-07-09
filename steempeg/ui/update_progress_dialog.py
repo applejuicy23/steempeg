@@ -52,7 +52,7 @@ class UpdateProgressDialog(SteempegDialog):
         self._bar.set_state("rendering")
         root.addWidget(self._bar)
 
-        hint = QLabel("Keep this window open until Steempeg restarts.")
+        hint = QLabel("The updater closes briefly while files are replaced, then Steempeg restarts.")
         hint.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 10px; background: transparent;")
         root.addWidget(hint)
 
