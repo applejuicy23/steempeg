@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from steempeg.core.clip_thumbnails import find_clip_thumbnail
+from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
@@ -59,9 +59,15 @@ def status_dot_style(color: str, *, size: int = _STATUS_DOT) -> str:
     )
 
 
-def set_thumb_pixmap(label: QLabel, clip_path: str, width: int, height: int) -> None:
+def set_thumb_pixmap(
+    label: QLabel,
+    clip_path: str,
+    width: int,
+    height: int,
+    cache_dir: str | None = None,
+) -> None:
     label.setPixmap(QPixmap())
-    thumb_path = find_clip_thumbnail(clip_path)
+    thumb_path = resolve_clip_thumbnail(clip_path, cache_dir, allow_generate=False)
     if not thumb_path:
         return
     pixmap = QPixmap(thumb_path)
@@ -94,6 +100,7 @@ def build_queue_thumb_strip(
     width: int = _LIST_THUMB_W,
     height: int = _LIST_THUMB_H,
     show_game_icon: bool = True,
+    cache_dir: str | None = None,
 ) -> tuple[QWidget, QLabel, QLabel]:
     """Thumbnail area with queue index badge; optional game icon bottom-left."""
     wrap = QWidget()
@@ -102,7 +109,7 @@ def build_queue_thumb_strip(
     thumb = QLabel(wrap)
     thumb.setGeometry(0, 0, width, height)
     thumb.setStyleSheet("background-color: #1a1a1a; border: none; border-radius: 8px;")
-    set_thumb_pixmap(thumb, job.clip_path, width, height)
+    set_thumb_pixmap(thumb, job.clip_path, width, height, cache_dir=cache_dir)
 
     color = STATUS_COLORS.get(job.status, "#ffcc00")
     badge = QLabel(str(job.queue_index), wrap)
