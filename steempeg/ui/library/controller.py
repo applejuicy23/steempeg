@@ -29,6 +29,12 @@ from PySide6.QtWidgets import (
 
 from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
+from steempeg.core.clip_identity import (
+    dedupe_steam_session_folders,
+    folder_has_video_chunks,
+    is_nested_same_session,
+    steam_session_key,
+)
 from steempeg.core.clip_thumbnails import find_clip_thumbnail
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.core.steam_paths import (
@@ -37,6 +43,7 @@ from steempeg.core.steam_paths import (
     steam_id_from_clips_folder,
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
+from steempeg.infra import cache as json_cache
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
 
@@ -152,6 +159,201 @@ _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 
 
 class LibraryMixin:
+    # --- Clip health cache (mtime-keyed, persisted between sessions) ---
+    def _clip_health_cache_path(self):
+        return os.path.join(self.cache_dir, "clip_health_cache.json")
+
+    def _ensure_clip_health_cache(self):
+        if not hasattr(self, "_clip_health_cache"):
+            self._clip_health_cache = json_cache.read_json(self._clip_health_cache_path(), default={})
+
+    def _save_clip_health_cache(self):
+        self._ensure_clip_health_cache()
+        json_cache.write_json(self._clip_health_cache_path(), self._clip_health_cache)
+
+    def _resolve_clip_health(
+        self, full_path: str, *, fast: bool, force: bool = False
+    ) -> health.ClipHealthReport:
+        """Return clip health, using disk cache on fast rescans."""
+        self._ensure_clip_health_cache()
+        norm = os.path.normpath(full_path)
+        try:
+            mtime = os.path.getmtime(full_path)
+        except OSError:
+            mtime = 0.0
+
+        if not force:
+            entry = self._clip_health_cache.get(norm)
+            if entry and entry.get("mtime") == mtime:
+                try:
+                    level = health.ClipHealth(entry["level"])
+                except ValueError:
+                    level = health.ClipHealth.DEAD
+                return health.ClipHealthReport(level, list(entry.get("issues") or []))
+
+        report = health.assess_clip_health(full_path, probe=not fast)
+        self._clip_health_cache[norm] = {
+            "mtime": mtime,
+            "level": report.level.value,
+            "issues": report.issues,
+        }
+        self._save_clip_health_cache()
+        return report
+
+    def _collect_library_app_ids(self):
+        """Unique Steam app ids currently listed in the clips table."""
+        ids = set()
+        if not hasattr(self.ui, "table_clips"):
+            return ids
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if not clip_path:
+                continue
+            parts = os.path.basename(clip_path).split("_")
+            if len(parts) >= 2 and parts[1].isdigit():
+                ids.add(parts[1])
+        return ids
+
+    def setup_refresh_menu(self):
+        """Attach the Refresh ▾ dropdown (Steam icons, health re-check, …)."""
+        btn = getattr(self, "btn_refresh", None)
+        if btn is None or not hasattr(btn, "menu_btn"):
+            return
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+
+        action_icons = menu.addAction("🖼️  Refresh game icons from Steam…")
+        action_names = menu.addAction("🏷️  Refresh game names from Steam…")
+        menu.addSeparator()
+        action_health = menu.addAction("🩺  Re-check clip health (ffprobe)…")
+
+        action_icons.setToolTip(
+            "Re-downloads icons for games in your library. Uses the Steam CDN — run only when icons look wrong."
+        )
+        action_names.setToolTip(
+            "Re-fetches display names from the Steam store API. Uses network — run only when a title is wrong."
+        )
+        action_health.setToolTip(
+            "Runs a full playback health pass (may call ffprobe per clip). Does not rescan folders."
+        )
+
+        action_icons.triggered.connect(self.refresh_steam_icons)
+        action_names.triggered.connect(self.refresh_steam_names)
+        action_health.triggered.connect(self.recheck_clip_health)
+
+        def _show_menu():
+            menu.exec(btn.menu_btn.mapToGlobal(QPoint(0, btn.menu_btn.height())))
+
+        btn.menu_btn.clicked.connect(_show_menu)
+
+    def refresh_steam_icons(self):
+        """Re-download game icons for every app id in the current library list."""
+        app_ids = sorted(self._collect_library_app_ids())
+        if not app_ids:
+            return
+        self.game_icons_cache.clear()
+        updated = 0
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for app_id in app_ids:
+                icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
+                try:
+                    if os.path.isfile(icon_path):
+                        os.remove(icon_path)
+                except OSError:
+                    pass
+                if games.download_icon(app_id, icon_path):
+                    updated += 1
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if not clip_path:
+                continue
+            parts = os.path.basename(clip_path).split("_")
+            if len(parts) >= 2 and parts[1].isdigit():
+                item.setIcon(self.get_game_icon(parts[1], allow_download=False))
+
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+        if hasattr(self, "set_status"):
+            self.set_status(
+                f"Refreshed {updated} of {len(app_ids)} game icon(s) from Steam."
+            )
+
+    def refresh_steam_names(self):
+        """Re-fetch game names from Steam for every app id in the library list."""
+        app_ids = sorted(self._collect_library_app_ids())
+        if not app_ids:
+            return
+        updated = 0
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for app_id in app_ids:
+                name = games.fetch_game_name(app_id)
+                if name:
+                    self.game_names_cache[app_id] = name
+                    updated += 1
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.save_json_cache()
+
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if not clip_path:
+                continue
+            parts = os.path.basename(clip_path).split("_")
+            if len(parts) >= 2 and parts[1].isdigit():
+                app_id = parts[1]
+                raw_name = self.get_game_name(app_id, allow_fetch=False)
+                item.setText(f"   {raw_name}")
+
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+        if hasattr(self, "set_status"):
+            self.set_status(
+                f"Refreshed {updated} of {len(app_ids)} game name(s) from Steam."
+            )
+
+    def recheck_clip_health(self):
+        """Full health pass for listed clips (ffprobe when needed). Keeps selection and filters."""
+        if not hasattr(self.ui, "table_clips"):
+            return
+        rows = self.ui.table_clips.rowCount()
+        if rows == 0:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for row in range(rows):
+                item = self.ui.table_clips.item(row, 0)
+                if not item:
+                    continue
+                clip_path = item.data(Qt.UserRole)
+                if not clip_path or not os.path.isdir(clip_path):
+                    continue
+                report = self._resolve_clip_health(clip_path, fast=False, force=True)
+                item.setData(_CLIP_HEALTH_ROLE, report.level.value)
+                item.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(report.issues))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
+        if hasattr(self, "set_status"):
+            self.set_status(f"Re-checked health for {rows} clip(s).")
+
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
         """True when a folder itself (within a few levels) contains DASH manifests/chunks."""
@@ -505,11 +707,13 @@ class LibraryMixin:
         confirm = QMessageBox.question(
             self.ui,
             "Force play dead clip",
-            "This clip is classified as Dead. Steempeg will try to decode whatever "
-            "survives on disk — and, if the clip's own decoder header (init) is gone, "
-            "borrow one from a healthy clip of the same game.\n\n"
-            "You may see corrupted/garbled video, only audio, or nothing at all. If it "
-            "does play, the clip stays labelled Dead but becomes renderable.\n\n"
+            "This clip is classified as Dead.\n\n"
+            "Steempeg can rebuild a salvage manifest from surviving chunks. "
+            "If this clip's own decoder header (init) is missing or corrupt, "
+            "recovery needs one healthy donor clip of the same game already in your library. "
+            "Without that donor, salvage usually cannot work.\n\n"
+            "You may see garbled video, only audio, or nothing. "
+            "If it plays, the clip stays labelled Dead but can be rendered.\n\n"
             "Try anyway?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -528,9 +732,11 @@ class LibraryMixin:
             QMessageBox.warning(
                 self.ui,
                 "Nothing to salvage",
-                "No usable video chunks were found, and no healthy clip of the same "
-                "game was available to borrow a decoder header from. There is nothing "
-                "to decode — this clip is genuinely unrecoverable.",
+                "Could not recover this clip.\n\n"
+                "Either there are no usable video chunks, or the decoder header is gone "
+                "and no healthy donor clip of the same game is in your library.\n\n"
+                "Add at least one working clip of this game, then try Force play (salvage) again. "
+                "Without a same-game donor, this dead clip cannot be revived.",
             )
             return
 
@@ -1228,8 +1434,14 @@ class LibraryMixin:
         try:
             for item in os.listdir(base_folder):
                 full = os.path.join(base_folder, item)
-                if os.path.isdir(full) and item.lower().startswith(("clip_", "bg_", "fg_")):
-                    roots.add(full)
+                if not os.path.isdir(full) or not item.lower().startswith(("clip_", "bg_", "fg_")):
+                    continue
+                base_name = os.path.basename(base_folder).lower()
+                if base_name.startswith(("clip_", "bg_", "fg_")) and is_nested_same_session(
+                    base_name, item.lower()
+                ):
+                    continue
+                roots.add(full)
         except Exception:
             pass
         return roots
@@ -1292,11 +1504,15 @@ class LibraryMixin:
         if hasattr(self, 'refresh_render_queue_panel'):
             self.refresh_render_queue_panel()
 
-        # 4. Rescan the folder
-        self.scan_clips()
+        # 4. Rescan folders (fast: cached health, no Steam network)
+        self.scan_clips(fast=True)
 
-    def scan_clips(self, announce_duplicates: bool = False):
-        """ Scans both standard Steam folders AND custom extracted folders """
+    def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = False):
+        """Scans both standard Steam folders AND custom extracted folders.
+
+        fast=True (Refresh button): rebuild the list from disk, use cached health and
+        cached game icons/names only — no Steam API or icon downloads.
+        """
         if not hasattr(self.ui, 'table_clips'): return
         self.ui.table_clips.setSortingEnabled(False) 
         self.ui.table_clips.setRowCount(0)
@@ -1324,11 +1540,16 @@ class LibraryMixin:
 
         try:
             # Sort the chaotic set() by folder modification time
-            sorted_folders = sorted(list(folders_to_check), key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0, reverse=True)
+            sorted_folders = sorted(
+                list(folders_to_check),
+                key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0,
+                reverse=True,
+            )
+            sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
 
             health_counts = {"healthy": 0, "issues": 0, "dead": 0}
             seen_clip_ids = set()
-            duplicate_count = 0
+            duplicate_count = session_dupes
             
             for full_path in sorted_folders:
                 if not os.path.exists(full_path): continue
@@ -1350,13 +1571,15 @@ class LibraryMixin:
                 if "steempeg" in folder_name or folder_name in ["logs", "cache", "_update_extracted"]:
                     continue
 
-                # Same clip can live in two different library roots (a copy). The folder
-                # name (clip_<appid>_<date>_<time>) is the clip's identity — keep the
-                # first occurrence (most recent by mtime, sorted above) and skip the rest.
-                if folder_name in seen_clip_ids:
+                # Same clip can live in two different library roots (a copy). The
+                # session key (appid + date + time, prefix ignored) is the clip's
+                # identity — keep the first occurrence (most recent by mtime).
+                session_key = steam_session_key(folder_name)
+                dedupe_key = session_key or folder_name
+                if dedupe_key in seen_clip_ids:
                     duplicate_count += 1
                     continue
-                seen_clip_ids.add(folder_name)
+                seen_clip_ids.add(dedupe_key)
                 
                 has_mpd = False
                 has_chunks = False
@@ -1385,7 +1608,12 @@ class LibraryMixin:
                 if not has_mpd and not has_chunks:
                     continue
 
-                health_report = health.assess_clip_health(full_path)
+                # Steam sometimes leaves empty fg_/clip_ shells (mpd only, no video).
+                # Steam's own UI hides these; skip them here too.
+                if not folder_has_video_chunks(full_path):
+                    continue
+
+                health_report = self._resolve_clip_health(full_path, fast=fast)
                 if health_report.level == health.ClipHealth.HEALTHY:
                     health_counts["healthy"] += 1
                 elif health_report.level == health.ClipHealth.DEAD:
@@ -1425,9 +1653,9 @@ class LibraryMixin:
                     elif prefix == "fg": rec_type = "🎞️ FG"
                     else: rec_type = "Unknown"
 
-                    raw_name = self.get_game_name(app_id)
+                    raw_name = self.get_game_name(app_id, allow_fetch=not fast)
                     game_name = f"   {raw_name}" 
-                    icon = self.get_game_icon(app_id)
+                    icon = self.get_game_icon(app_id, allow_download=not fast)
 
                     try:
                         # 1. Concatenate the date and time from the folder into a single string (YYYYMMDD_HHMMSS)
@@ -1514,13 +1742,15 @@ class LibraryMixin:
                 )
 
             logging.info(
-                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d ignored_duplicates=%d",
+                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d "
+                "ignored_duplicates=%d fast=%s",
                 library_roots,
                 self.ui.table_clips.rowCount(),
                 health_counts["healthy"],
                 health_counts["issues"],
                 health_counts["dead"],
                 duplicate_count,
+                fast,
             )
                 
                     
@@ -1756,11 +1986,13 @@ class LibraryMixin:
     
 
     # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
-    def get_game_name(self, app_id):
+    def get_game_name(self, app_id, *, allow_fetch: bool = True):
         app_id = str(app_id)
         # 1. Cache first
         if app_id in self.game_names_cache:
             return self.game_names_cache[app_id]
+        if not allow_fetch:
+            return f"Unknown Game ({app_id})"
         # 2. Otherwise, ask Steam once and remember
         name = games.fetch_game_name(app_id)
         if name:
@@ -1775,7 +2007,7 @@ class LibraryMixin:
     
 
     
-    def get_game_icon(self, app_id):
+    def get_game_icon(self, app_id, *, allow_download: bool = True):
         app_id = str(app_id)
         # 1. RAM cache
         if app_id in self.game_icons_cache:
@@ -1783,7 +2015,7 @@ class LibraryMixin:
         # 2. disk cache, otherwise download
         icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
         if not os.path.exists(icon_path):
-            if not games.download_icon(app_id, icon_path):
+            if not allow_download or not games.download_icon(app_id, icon_path):
                 return QIcon()
         # 3. Build a Qt icon (this is Qt -> stays here) and cache it in RAM
         icon = QIcon(QPixmap(icon_path))
