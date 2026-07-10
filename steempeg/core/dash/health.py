@@ -146,7 +146,9 @@ def _has_video_chunks_anywhere(clip_path: str) -> bool:
     return False
 
 
-def assess_segment_folder(folder: str, mpd_path: str, mpd_kind: str) -> ClipHealthReport:
+def assess_segment_folder(
+    folder: str, mpd_path: str, mpd_kind: str, *, probe: bool = True
+) -> ClipHealthReport:
     issues: List[str] = []
 
     init_v = os.path.join(folder, "init-stream0.m4s")
@@ -210,7 +212,7 @@ def assess_segment_folder(folder: str, mpd_path: str, mpd_kind: str) -> ClipHeal
         or any("timeline jump" in i for i in issues)
         or any("claims" in i for i in issues)
     )
-    if needs_probe and not _ffprobe_opens(mpd_path):
+    if needs_probe and probe and not _ffprobe_opens(mpd_path):
         return ClipHealthReport(ClipHealth.DEAD, ["Manifest cannot be opened (unplayable)"])
 
     if issues:
@@ -224,11 +226,14 @@ def _worst(reports: List[ClipHealthReport]) -> ClipHealthReport:
     return max(reports, key=lambda r: _RANK[r.level])
 
 
-def assess_clip_health(clip_path: str) -> ClipHealthReport:
+def assess_clip_health(clip_path: str, *, probe: bool = True) -> ClipHealthReport:
     """Assess the worst health across every DASH segment folder inside clip_path."""
     segments = list(_iter_segment_dirs(clip_path))
     if segments:
-        reports = [assess_segment_folder(folder, mpd, kind) for folder, mpd, kind in segments]
+        reports = [
+            assess_segment_folder(folder, mpd, kind, probe=probe)
+            for folder, mpd, kind in segments
+        ]
         return _worst(reports)
 
     if _has_video_chunks_anywhere(clip_path):
