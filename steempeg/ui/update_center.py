@@ -6,7 +6,7 @@ import os
 import re
 import webbrowser
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.icon_assets import info_icon
 from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
@@ -103,11 +104,11 @@ _BTN_SECONDARY = """
 
 _ICON_BTN = """
     QPushButton {
-        background-color: #383838; color: #ccc; border: 1px solid #555;
-        border-radius: 10px; min-width: 20px; max-width: 20px;
-        min-height: 20px; max-height: 20px; font-size: 10px; font-weight: bold; padding: 0;
+        background-color: transparent; color: #ccc; border: none;
+        min-width: 20px; max-width: 20px;
+        min-height: 20px; max-height: 20px; padding: 0;
     }
-    QPushButton:hover { background-color: #454545; color: #fff; border-color: #6b5a8e; }
+    QPushButton:hover { background-color: #454545; border-radius: 10px; }
 """
 
 _ACK_FRAME_STYLE = """
@@ -221,12 +222,13 @@ class _VersionRow(QFrame):
 
         if shows_info_icon(entry):
             tip = info_tooltip_text(entry)
-            info_btn = QPushButton("i")
+            info_btn = QPushButton()
+            info_btn.setIcon(info_icon(14))
+            info_btn.setIconSize(QSize(14, 14))
             if tip:
                 info_btn.setToolTip(tip)
             info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             info_btn.setStyleSheet(_ICON_BTN)
-            info_btn.clicked.connect(lambda *_: None)
             info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             outer.addWidget(info_btn)
 
