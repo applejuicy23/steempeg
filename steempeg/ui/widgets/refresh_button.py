@@ -1,6 +1,8 @@
 """Refresh clips library: main rescan + dropdown for heavier maintenance actions."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
+
+from steempeg.ui.icon_assets import arrow_icon
 
 
 _REFRESH_BUTTON_STYLE = """
@@ -80,8 +82,10 @@ class RefreshButton(QWidget):
         self.main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.menu_btn = QPushButton("▾")
+        self.menu_btn = QPushButton()
         self.menu_btn.setObjectName("RefreshMenu")
+        self.menu_btn.setIcon(arrow_icon(10, direction="down"))
+        self.menu_btn.setIconSize(QSize(10, 10))
         self.menu_btn.setToolTip("More refresh options")
         self.menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.menu_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
