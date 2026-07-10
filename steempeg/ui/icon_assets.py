@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPixmap, QTransform
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
 from steempeg.infra.paths import get_resource_path
+
+_ARROW_ROTATIONS = {
+    "down": 0,
+    "up": 180,
+    "left": 90,
+    "right": -90,
+}
 
 
 def load_pixmap(name: str, size: int = 16) -> QPixmap:
@@ -15,18 +22,39 @@ def load_pixmap(name: str, size: int = 16) -> QPixmap:
     return pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
 
-def load_icon(name: str, size: int = 16) -> QIcon:
-    pix = load_pixmap(name, size)
+def _icon_from_pixmap(pix: QPixmap) -> QIcon:
     if pix.isNull():
         return QIcon()
     icon = QIcon()
     # Keep icons colored even when actions/widgets are temporarily disabled.
-    # Qt otherwise auto-generates a greyscale Disabled mode variant.
     icon.addPixmap(pix, QIcon.Mode.Normal, QIcon.State.Off)
     icon.addPixmap(pix, QIcon.Mode.Disabled, QIcon.State.Off)
     icon.addPixmap(pix, QIcon.Mode.Active, QIcon.State.Off)
     icon.addPixmap(pix, QIcon.Mode.Selected, QIcon.State.Off)
     return icon
+
+
+def load_icon(name: str, size: int = 16) -> QIcon:
+    return _icon_from_pixmap(load_pixmap(name, size))
+
+
+def arrow_pixmap(size: int = 12, *, direction: str = "down") -> QPixmap:
+    """arrow.png points down by default."""
+    pix = load_pixmap("arrow.png", size)
+    if pix.isNull():
+        return pix
+    angle = _ARROW_ROTATIONS.get(direction, 0)
+    if not angle:
+        return pix
+    return pix.transformed(QTransform().rotate(angle), Qt.TransformationMode.SmoothTransformation)
+
+
+def arrow_icon(size: int = 12, *, direction: str = "down") -> QIcon:
+    return _icon_from_pixmap(arrow_pixmap(size, direction=direction))
+
+
+def info_icon(size: int = 14) -> QIcon:
+    return load_icon("info.png", size)
 
 
 def health_icon(level: ClipHealth, size: int = 16) -> QIcon:
