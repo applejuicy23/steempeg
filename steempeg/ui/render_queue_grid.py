@@ -384,7 +384,7 @@ class QueueGridJobCard(QWidget):
         is_done = job.status == JobStatus.COMPLETED
         output_dir = os.path.dirname(job.output_file) if job.output_file else ""
 
-        act_select = menu.addAction("▶  Select in editor")
+        act_select = menu.addAction("▶️  Select in editor")
         act_select.triggered.connect(lambda: self.clicked.emit(self._job_id))
 
         act_open_clip = menu.addAction("📂  Open clip folder")
