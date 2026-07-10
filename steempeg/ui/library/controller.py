@@ -35,7 +35,8 @@ from steempeg.core.clip_identity import (
     is_nested_same_session,
     steam_session_key,
 )
-from steempeg.core.clip_thumbnails import find_clip_thumbnail
+from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
+from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.core.steam_paths import (
     default_clips_dialog_path,
@@ -353,6 +354,48 @@ class LibraryMixin:
             self.update_clip_health_button()
         if hasattr(self, "set_status"):
             self.set_status(f"Re-checked health for {rows} clip(s).")
+
+    def _stop_clip_poster_backfill(self):
+        worker = getattr(self, "_clip_poster_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(3000)
+        self._clip_poster_worker = None
+
+    def _schedule_clip_poster_backfill(self):
+        """Generate ffmpeg posters for clips with no thumbnail.jpg on disk."""
+        if not hasattr(self, "cache_dir") or not hasattr(self.ui, "table_clips"):
+            return
+
+        missing = []
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if not clip_path or not os.path.isdir(clip_path):
+                continue
+            if resolve_clip_thumbnail(clip_path, self.cache_dir, allow_generate=False):
+                continue
+            missing.append(clip_path)
+
+        if not missing:
+            return
+
+        self._stop_clip_poster_backfill()
+        self._clip_poster_worker = ClipPosterBackfillWorker(missing, self.cache_dir, self.ui)
+        self._clip_poster_worker.poster_ready.connect(self._on_clip_poster_ready)
+        self._clip_poster_worker.finished_batch.connect(self._on_clip_poster_batch_done)
+        self._clip_poster_worker.start()
+
+    def _on_clip_poster_ready(self, _clip_path: str, _thumb_path: str):
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+
+    def _on_clip_poster_batch_done(self):
+        self._clip_poster_worker = None
 
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
@@ -1505,6 +1548,7 @@ class LibraryMixin:
             self.refresh_render_queue_panel()
 
         # 4. Rescan folders (fast: cached health, no Steam network)
+        self._stop_clip_poster_backfill()
         self.scan_clips(fast=True)
 
     def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = False):
@@ -1514,7 +1558,8 @@ class LibraryMixin:
         cached game icons/names only — no Steam API or icon downloads.
         """
         if not hasattr(self.ui, 'table_clips'): return
-        self.ui.table_clips.setSortingEnabled(False) 
+        self._stop_clip_poster_backfill()
+        self.ui.table_clips.setSortingEnabled(False)
         self.ui.table_clips.setRowCount(0)
         
         if not getattr(self, "clips_folders", None):
@@ -1724,6 +1769,7 @@ class LibraryMixin:
 
             if hasattr(self, 'build_netflix_grid'):
                 self.build_netflix_grid()
+            self._schedule_clip_poster_backfill()
                 
             if hasattr(self, 'lbl_clip_count'):
                 self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
@@ -1837,7 +1883,9 @@ class LibraryMixin:
                     icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
 
                 if os.path.exists(clip_path):
-                    thumb_path = find_clip_thumbnail(clip_path)
+                    thumb_path = resolve_clip_thumbnail(
+                        clip_path, self.cache_dir, allow_generate=False
+                    )
 
             footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
             is_unknown_clip = title.strip().lower() == "unknown"
