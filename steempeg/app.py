@@ -994,6 +994,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         #3. PUT THE MEGA-CAPSULE ON THE VERY TOP (INSTEAD OF THE OLD FOLDER BUTTON)
         from steempeg.ui.widgets.folder_picker_button import FolderPickerButton
+        from steempeg.ui.widgets.refresh_button import RefreshButton
 
         old_browse_btn = self.ui.btn_browse
         if old_browse_btn.parentWidget() and old_browse_btn.parentWidget().layout():
@@ -1006,8 +1007,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         self.folder_picker = FolderPickerButton()
             
-        self.btn_refresh = QPushButton("🔄 Refresh")
-        self.btn_refresh.setToolTip("Rescan folders for new clips")
+        self.btn_refresh = RefreshButton()
         
         #4. TEAR ABOUT AND UPDATE FROM THEIR OLD PLACES
         btn_about = getattr(self.ui, 'btn_about', None)
@@ -1019,9 +1019,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             btn_update.parentWidget().layout().removeWidget(btn_update)
             
         # 5. Color the buttons and add cursors
-        self.btn_refresh.setStyleSheet(unified_table_style)
-        self.btn_refresh.setCursor(Qt.PointingHandCursor)
-        
         if btn_about:
             btn_about.setStyleSheet(unified_table_style)
             btn_about.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -1039,7 +1036,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if btn_update: bottom_row.addWidget(btn_update, 5)
         
         # 7. RECOVERING SIGNALS (Presses)
-        self.btn_refresh.clicked.connect(self.refresh_library)
+        self.btn_refresh.main_btn.clicked.connect(self.refresh_library)
+        if hasattr(self, "setup_refresh_menu"):
+            self.setup_refresh_menu()
         self.folder_picker.main_btn.clicked.connect(self.choose_folder)
         self.folder_picker.add_btn.clicked.connect(self.show_folders_panel)
         if hasattr(self.ui, 'destination_button'):
