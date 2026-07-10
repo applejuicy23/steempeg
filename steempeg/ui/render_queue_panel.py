@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.infra.paths import get_save_directory
 from steempeg.ui.icon_assets import load_icon
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 from steempeg.render.queue_display import (
@@ -93,8 +94,15 @@ class QueueJobCard(QFrame):
     remove_requested = Signal(str)
     dropped_on = Signal(str, str)
 
-    def __init__(self, job: RenderJob, selected: bool = False, parent=None):
+    def __init__(
+        self,
+        job: RenderJob,
+        selected: bool = False,
+        cache_dir: str | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
+        self._cache_dir = cache_dir
         self.setObjectName("QueueJobCard")
         self._job = job
         self._job_id = job.id
@@ -112,7 +120,9 @@ class QueueJobCard(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        thumb_wrap, self._num_label, _ = build_queue_thumb_strip(job, show_game_icon=False)
+        thumb_wrap, self._num_label, _ = build_queue_thumb_strip(
+            job, show_game_icon=False, cache_dir=self._cache_dir
+        )
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -722,10 +732,14 @@ class RenderQueuePanel(QWidget):
         rows_used = (len(self._card_widgets) + cols - 1) // cols
         self._grid_layout.setRowStretch(rows_used, 1)
 
+    def _queue_cache_dir(self) -> str:
+        return getattr(self, "cache_dir", None) or os.path.join(get_save_directory(), "cache")
+
     def _make_card(self, job: RenderJob, selected: bool):
+        cache_dir = self._queue_cache_dir()
         if self._view_mode == "grid":
-            return QueueGridJobCard(job, selected=selected)
-        return QueueJobCard(job, selected=selected)
+            return QueueGridJobCard(job, selected=selected, cache_dir=cache_dir)
+        return QueueJobCard(job, selected=selected, cache_dir=cache_dir)
 
     def _wire_card(self, card) -> None:
         card.clicked.connect(self._on_card_clicked)
