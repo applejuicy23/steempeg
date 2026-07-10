@@ -16,9 +16,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.core.clip_thumbnails import find_clip_thumbnail
+from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra import paths
-from steempeg.infra.paths import get_resource_path
+from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
@@ -79,8 +79,9 @@ class QueueGridJobCard(QWidget):
     remove_requested = Signal(str)
     dropped_on = Signal(str, str)
 
-    def __init__(self, job: RenderJob, selected: bool = False, parent=None):
+    def __init__(self, job: RenderJob, selected: bool = False, cache_dir: str | None = None, parent=None):
         super().__init__(parent)
+        self._cache_dir = cache_dir or os.path.join(get_save_directory(), "cache")
         self.setObjectName("QueueGridJobCard")
         self._job = job
         self._job_id = job.id
@@ -101,7 +102,9 @@ class QueueGridJobCard(QWidget):
         self._thumb_label.setFixedSize(_CARD_W, _THUMB_H)
         self._thumb_label.setStyleSheet("background-color: #1a1a1a; border: none;")
 
-        thumb_path = find_clip_thumbnail(job.clip_path)
+        thumb_path = resolve_clip_thumbnail(
+            job.clip_path, self._cache_dir, allow_generate=False
+        )
         if thumb_path:
             pixmap = QPixmap(thumb_path)
             if not pixmap.isNull():
