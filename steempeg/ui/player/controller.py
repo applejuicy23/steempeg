@@ -1661,10 +1661,10 @@ class PlayerMixin:
                     "Dead Clip",
                     "This clip is marked Dead and won't play normally:\n\n"
                     f"{issues}\n\n"
-                    "Steempeg can still try to salvage it — rebuild a manifest from the "
-                    "surviving chunks and, if needed, borrow a decoder header from a "
-                    "healthy clip of the same game.\n\n"
-                    "Do you want to try to recover / force-play it?",
+                    "Steempeg can try to salvage it from surviving chunks. "
+                    "If the decoder header is missing, you need one healthy donor clip "
+                    "of the same game in your library. No same-game donor = usually unrecoverable.\n\n"
+                    "Try to recover / force-play?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
                 )
