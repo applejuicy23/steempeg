@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QPixmap, QTransform
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
 from steempeg.infra.paths import get_resource_path
@@ -55,6 +55,40 @@ def arrow_icon(size: int = 12, *, direction: str = "down") -> QIcon:
 
 def info_icon(size: int = 14) -> QIcon:
     return load_icon("info.png", size)
+
+
+def tinted_pixmap(name: str, color: str | QColor, size: int = 16) -> QPixmap:
+    """Recolor a bundled asset (keeps alpha) via SourceIn tint."""
+    src = QPixmap(get_resource_path(name))
+    if src.isNull():
+        return QPixmap()
+    scaled = src.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    if isinstance(color, str):
+        color = QColor(color)
+    out = QPixmap(scaled.size())
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(out.rect(), color)
+    painter.end()
+    return out
+
+
+def tinted_icon(name: str, color: str | QColor, size: int = 16) -> QIcon:
+    return _icon_from_pixmap(tinted_pixmap(name, color, size))
+
+
+def close_clip_icon(size: int = 14) -> QIcon:
+    """Red-tinted cancel.png for the player header close chip."""
+    return tinted_icon("cancel.png", "#e05555", size)
 
 
 def health_icon(level: ClipHealth, size: int = 16) -> QIcon:
