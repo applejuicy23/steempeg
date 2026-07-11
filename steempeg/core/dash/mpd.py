@@ -158,3 +158,36 @@ def parse_duration_seconds(mpd_content):
     minutes = int(m.group(2)) if m.group(2) else 0
     seconds = float(m.group(3)) if m.group(3) else 0.0
     return hours * 3600 + minutes * 60 + seconds
+
+
+def estimate_render_duration_sec(mpd_path: str, *, trim_duration_sec: float = -1.0) -> float:
+    """Best-effort output duration for render progress (seconds).
+
+    Steam manifests often lie (corrupt decode timeline → ffmpeg ``Duration:`` of
+    10–15 min for a 2 min clip). Prefer counting surviving video chunks on disk.
+    """
+    if trim_duration_sec > 0:
+        return trim_duration_sec
+
+    folder = os.path.dirname(os.path.abspath(mpd_path))
+    chunk_count = 0
+    for chunk in glob.glob(os.path.join(folder, "chunk-stream0-*.m4s")):
+        try:
+            if os.path.getsize(chunk) > 0:
+                chunk_count += 1
+        except OSError:
+            pass
+
+    from steempeg.core.dash.repair import _CHUNK_SECONDS
+
+    if chunk_count > 0:
+        return chunk_count * _CHUNK_SECONDS
+
+    try:
+        with open(mpd_path, encoding="utf-8") as handle:
+            declared = parse_duration_seconds(handle.read())
+        if declared and declared > 0:
+            return declared
+    except OSError:
+        pass
+    return 0.0
