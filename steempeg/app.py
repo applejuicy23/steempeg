@@ -1380,11 +1380,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         header_layout.addWidget(self.custom_text_label)
         header_layout.addStretch()
 
+        # Status chips (health + preview badge) | action chips (close, later: preview settings).
+        from PySide6.QtWidgets import QFrame, QPushButton, QWidget
+
+        self.player_header_status = QWidget()
+        status_row = QHBoxLayout(self.player_header_status)
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
+
         self.btn_clip_health = QPushButton()
         self.btn_clip_health.setCursor(Qt.PointingHandCursor)
         self.btn_clip_health.hide()
         self.btn_clip_health.clicked.connect(self.show_clip_health_menu)
-        header_layout.addWidget(self.btn_clip_health)
+        status_row.addWidget(self.btn_clip_health)
 
         self.label_playback_badge = QLabel()
         self.label_playback_badge.setStyleSheet(
@@ -1392,31 +1400,67 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             "font-family: 'Segoe UI', Arial, sans-serif;"
         )
         self.label_playback_badge.hide()
-        header_layout.addWidget(self.label_playback_badge)
+        status_row.addWidget(self.label_playback_badge)
 
-        from PySide6.QtWidgets import QPushButton
-        self.btn_close_clip = QPushButton("❌")
+        self.player_header_divider = QFrame()
+        self.player_header_divider.setFrameShape(QFrame.Shape.VLine)
+        self.player_header_divider.setFixedWidth(1)
+        self.player_header_divider.setStyleSheet(
+            "color: #555555; background-color: #555555; margin: 4px 2px;"
+        )
+        self.player_header_divider.hide()
+
+        self.player_header_actions = QWidget()
+        actions_row = QHBoxLayout(self.player_header_actions)
+        actions_row.setContentsMargins(0, 0, 0, 0)
+        actions_row.setSpacing(6)
+
+        from steempeg.ui.icon_assets import close_clip_icon
+
+        self.btn_preview_settings = QPushButton("⚙️")
+        self.btn_preview_settings.setFixedSize(24, 24)
+        self.btn_preview_settings.setCursor(Qt.PointingHandCursor)
+        self.btn_preview_settings.setToolTip("Preview quality")
+        self.btn_preview_settings.setStyleSheet(
+            "QPushButton {"
+            "background-color: transparent;"
+            "border: none;"
+            "border-radius: 6px;"
+            "font-size: 13px;"
+            "padding: 0px;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "}"
+            "QPushButton:hover { background-color: #444444; }"
+            "QPushButton:pressed { background-color: #555555; }"
+        )
+        self.btn_preview_settings.clicked.connect(self.show_preview_quality_menu)
+        actions_row.addWidget(self.btn_preview_settings)
+
+        self.btn_close_clip = QPushButton()
         self.btn_close_clip.setFixedSize(24, 24)
+        self.btn_close_clip.setIcon(close_clip_icon(14))
+        self.btn_close_clip.setIconSize(QSize(14, 14))
         self.btn_close_clip.setCursor(Qt.PointingHandCursor)
-        self.btn_close_clip.setToolTip("Close Clip")
-        self.btn_close_clip.setStyleSheet("""
-            QPushButton {
-                background-color: transparent; 
-                border: none;
-                border-radius: 6px; 
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #9e3636; 
-            }
-            QPushButton:pressed {
-                background-color: #6b2424; 
-            }
-        """)
-        self.btn_close_clip.hide()
+        self.btn_close_clip.setToolTip("Close clip")
+        self.btn_close_clip.setStyleSheet(
+            "QPushButton {"
+            "background-color: rgba(224, 85, 85, 0.18);"
+            "color: #e05555;"
+            "border: 2px solid #e05555;"
+            "border-radius: 6px;"
+            "padding: 0px;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "}"
+            "QPushButton:hover { background-color: rgba(224, 85, 85, 0.32); }"
+            "QPushButton:pressed { background-color: rgba(224, 85, 85, 0.45); }"
+        )
         self.btn_close_clip.clicked.connect(self.close_current_clip)
-        
-        header_layout.addWidget(self.btn_close_clip)
+        actions_row.addWidget(self.btn_close_clip)
+        self.player_header_actions.hide()
+
+        header_layout.addWidget(self.player_header_status)
+        header_layout.addWidget(self.player_header_divider)
+        header_layout.addWidget(self.player_header_actions)
 
         right_layout = self.ui.right_panel.layout()
         if right_layout:
@@ -1985,6 +2029,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             loglevel='info'
         )
         self.player['af'] = 'rubberband'
+        self._init_preview_quality()
+        self._apply_saved_preview_quality_to_player()
         self._install_mpv_geometry_hooks()
 
         # --- FULLSCREEN SYSTEM INITIALIZATION ---
@@ -2161,6 +2207,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.label_time.setText("00:00 / 00:00")
         
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
+
+    def set_player_header_clip_controls_visible(self, visible: bool) -> None:
+        """Show divider + close chip when a clip is open in the player."""
+        for widget in (
+            getattr(self, "player_header_divider", None),
+            getattr(self, "player_header_actions", None),
+        ):
+            if widget is not None:
+                widget.setVisible(bool(visible))
 
     def _current_app_bg(self) -> str:
         """Background color for the current chrome theme."""
