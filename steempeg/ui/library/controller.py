@@ -1581,10 +1581,12 @@ class LibraryMixin:
             unknown_icon = get_resource_path("unknown_icon.png")
             if os.path.isfile(unknown_icon):
                 icon = QIcon(unknown_icon)
-        elif row.icon_disk_path and os.path.isfile(row.icon_disk_path):
-            icon = QIcon(QPixmap(row.icon_disk_path))
-            if row.app_id:
-                self.game_icons_cache[row.app_id] = icon
+        elif row.app_id:
+            icon = self.get_game_icon(row.app_id, allow_download=False)
+            if icon.isNull() and row.icon_disk_path and os.path.isfile(row.icon_disk_path):
+                icon = self._icon_from_disk(row.icon_disk_path, row.app_id)
+            if icon.isNull():
+                icon = self.get_game_icon(row.app_id, allow_download=True)
 
         item_game = QTableWidgetItem(icon, row.game_name)
         item_game.setData(Qt.UserRole, row.full_path)
@@ -1725,6 +1727,7 @@ class LibraryMixin:
         self.ui.table_clips.setSortingEnabled(True)
         self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
         self.sync_grid_from_table_selection()
+        self._backfill_missing_game_icons()
         self._schedule_clip_poster_backfill()
 
         if hasattr(self, "lbl_clip_count"):
@@ -1766,7 +1769,8 @@ class LibraryMixin:
     def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = True):
         """Scan library roots on a background thread with live progress in the status bar.
 
-        fast=True (default): cached health, no ffprobe / Steam network during scan.
+        fast=True skips ffprobe during health checks only. Game names and icons are
+        still fetched from Steam when missing from cache (first launch, new app id).
         Use Refresh ▾ → Re-check clip health for a full ffprobe pass.
         """
         if not hasattr(self.ui, "table_clips"):
@@ -2008,19 +2012,91 @@ class LibraryMixin:
     
 
     
+    def _icon_from_disk(self, icon_path: str, app_id: str | None = None) -> QIcon:
+        pixmap = QPixmap(icon_path)
+        if pixmap.isNull():
+            return QIcon()
+        icon = QIcon(pixmap)
+        if app_id:
+            self.game_icons_cache[str(app_id)] = icon
+        return icon
+
+    def _app_id_for_clip_path(self, clip_path: str | None) -> str | None:
+        if not clip_path:
+            return None
+        parts = os.path.basename(clip_path).split("_")
+        if len(parts) >= 4 and parts[1].isdigit():
+            return parts[1]
+        return None
+
+    def _apply_game_icon_to_rows(self, app_id: str, icon: QIcon) -> None:
+        if icon.isNull() or not hasattr(self.ui, "table_clips"):
+            return
+
+        app_id = str(app_id)
+        table = self.ui.table_clips
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if not item:
+                continue
+            if self._app_id_for_clip_path(item.data(Qt.UserRole)) != app_id:
+                continue
+            item.setIcon(icon)
+
+        if not hasattr(self, "grid_clips"):
+            return
+        for idx in range(self.grid_clips.count()):
+            item = self.grid_clips.item(idx)
+            if item is None:
+                continue
+            clip_path = item.data(Qt.UserRole + 1)
+            if self._app_id_for_clip_path(clip_path) != app_id:
+                continue
+            card = self.grid_clips.itemWidget(item)
+            if card is None or not hasattr(card, "icon_label"):
+                continue
+            icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
+            if os.path.isfile(icon_path):
+                pixmap = QPixmap(icon_path)
+                if not pixmap.isNull():
+                    card.icon_label.setPixmap(
+                        pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    )
+
+    def _backfill_missing_game_icons(self) -> None:
+        """Retry icon fetch for games that still show a blank list icon after scan."""
+        if not hasattr(self.ui, "table_clips"):
+            return
+
+        missing: set[str] = set()
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item or not item.icon().isNull():
+                continue
+            app_id = self._app_id_for_clip_path(item.data(Qt.UserRole))
+            if app_id:
+                missing.add(app_id)
+
+        if not missing:
+            return
+
+        for app_id in sorted(missing):
+            icon = self.get_game_icon(app_id, allow_download=True)
+            if not icon.isNull():
+                self._apply_game_icon_to_rows(app_id, icon)
+
     def get_game_icon(self, app_id, *, allow_download: bool = True):
         app_id = str(app_id)
-        # 1. RAM cache
-        if app_id in self.game_icons_cache:
-            return self.game_icons_cache[app_id]
-        # 2. disk cache, otherwise download
+        cached = self.game_icons_cache.get(app_id)
+        if cached is not None and not cached.isNull():
+            return cached
         icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
-        if not os.path.exists(icon_path):
+        if not os.path.isfile(icon_path) or os.path.getsize(icon_path) <= 100:
             if not allow_download or not games.download_icon(app_id, icon_path):
                 return QIcon()
-        # 3. Build a Qt icon (this is Qt -> stays here) and cache it in RAM
-        icon = QIcon(QPixmap(icon_path))
-        self.game_icons_cache[app_id] = icon
+        icon = self._icon_from_disk(icon_path, app_id)
+        if icon.isNull():
+            self.game_icons_cache.pop(app_id, None)
         return icon
 
     def set_view_mode(self, mode):
