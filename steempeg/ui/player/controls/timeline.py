@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.player.thumbnails import PreviewSniperWorker
+from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
 
 
@@ -50,6 +51,7 @@ class TimelineCanvas(QWidget):
     
     screenshot_requested = Signal(float) 
     add_marker_requested = Signal(float)
+    open_steam_screenshot_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -206,6 +208,8 @@ class TimelineCanvas(QWidget):
         
         self.current_json_path = json_path  
         self.current_offset_ms = offset_ms
+        self.current_clip_path = clip_path
+        self.current_json_start_utc = timeline_json_start_utc(json_path)
         self.current_app_id = app_id_from_clip_paths(json_path, clip_path)
         
         self.markers.clear()
@@ -238,6 +242,7 @@ class TimelineCanvas(QWidget):
                 self.markers.append({
                     'id': m_id,  # SAVING THE ID IN MEMORY!
                     'time_ms': time_ms,
+                    'raw_time_ms': raw_time,
                     'icon': entry.get('icon', ''),
                     'icon_key': icon_key,
                     'is_round': is_round,
@@ -784,11 +789,17 @@ class TimelineCanvas(QWidget):
         
         # Check whether the marker is custom or system-defined
         is_user_marker = marker.get('icon_key') == 'usermarker'
+        is_screenshot_marker = marker.get('icon_key') == 'screenshot'
         
         if is_user_marker:
             action_edit = menu.addAction("✏️ Edit Marker")
             action_delete = menu.addAction("🗑️ Delete Marker")
             menu.addSeparator() 
+
+        action_open_screenshot = None
+        if is_screenshot_marker:
+            action_open_screenshot = menu.addAction("🖼 Open Screenshot")
+            menu.addSeparator()
             
         action_trim = menu.addAction("✂️ Set Trim Start Here")
         
@@ -802,6 +813,8 @@ class TimelineCanvas(QWidget):
             self.edit_user_marker(marker)
         elif action_delete and action == action_delete:
             self.delete_user_marker(marker)
+        elif action_open_screenshot and action == action_open_screenshot:
+            self.open_steam_screenshot_requested.emit(marker)
         elif action == action_trim:
             self.set_trim_start_from_marker(marker)
         elif action == action_screenshot: # Sending the order to take a screenshot
@@ -1117,6 +1130,7 @@ class CustomTimelineWidget(QScrollArea):
 
     screenshot_requested = Signal(object)
     add_marker_requested = Signal(float)
+    open_steam_screenshot_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1135,6 +1149,7 @@ class CustomTimelineWidget(QScrollArea):
         # Connecting the Canvas to the Widget
         self.canvas.screenshot_requested.connect(self.screenshot_requested.emit)
         self.canvas.add_marker_requested.connect(self.add_marker_requested.emit)
+        self.canvas.open_steam_screenshot_requested.connect(self.open_steam_screenshot_requested.emit)
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
 
