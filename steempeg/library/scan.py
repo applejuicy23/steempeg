@@ -272,13 +272,9 @@ def _parse_duration_from_mpd(mpd_path: Optional[str], *, dead: bool) -> str:
 def _resolve_game_name(
     app_id: str,
     game_names_cache: Dict[str, str],
-    *,
-    allow_fetch: bool,
 ) -> str:
     if app_id in game_names_cache:
         return game_names_cache[app_id]
-    if not allow_fetch:
-        return f"Unknown Game ({app_id})"
     name = games.fetch_game_name(app_id)
     if name:
         game_names_cache[app_id] = name
@@ -289,14 +285,22 @@ def _resolve_game_name(
 def _resolve_icon_path(
     app_id: str,
     cache_dir: str,
-    *,
-    allow_download: bool,
+    icons_cache: Dict[str, str] | None = None,
 ) -> str:
+    if icons_cache is not None and app_id in icons_cache:
+        return icons_cache[app_id]
+
     icon_path = os.path.join(cache_dir, f"{app_id}.jpg")
-    if os.path.isfile(icon_path):
+    if os.path.isfile(icon_path) and os.path.getsize(icon_path) > 100:
+        if icons_cache is not None:
+            icons_cache[app_id] = icon_path
         return icon_path
-    if allow_download and games.download_icon(app_id, icon_path):
+    if games.download_icon(app_id, icon_path):
+        if icons_cache is not None:
+            icons_cache[app_id] = icon_path
         return icon_path
+    if icons_cache is not None:
+        icons_cache[app_id] = ""
     return ""
 
 
@@ -306,9 +310,8 @@ def scan_single_clip(
     cache_dir: str,
     health_cache: Dict[str, dict],
     game_names_cache: Dict[str, str],
+    icons_cache: Dict[str, str] | None = None,
     fast: bool,
-    allow_fetch: bool,
-    allow_download: bool,
 ) -> Optional[ScannedClip]:
     has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
 
@@ -341,9 +344,9 @@ def scan_single_clip(
         else:
             rec_type = "Unknown"
 
-        raw_name = _resolve_game_name(app_id, game_names_cache, allow_fetch=allow_fetch)
+        raw_name = _resolve_game_name(app_id, game_names_cache)
         game_name = f"   {raw_name}"
-        icon_disk_path = _resolve_icon_path(app_id, cache_dir, allow_download=allow_download)
+        icon_disk_path = _resolve_icon_path(app_id, cache_dir, icons_cache)
         use_unknown_icon = False
 
         try:
@@ -398,10 +401,11 @@ def run_library_scan(
     on_clip: Callable[[ScannedClip, int, int], None],
     should_cancel: Callable[[], bool],
 ) -> ScanFinishedStats:
-    """Scan all library roots; invoke callbacks for progress (no Qt)."""
-    allow_fetch = not fast
-    allow_download = not fast
+    """Scan all library roots; invoke callbacks for progress (no Qt).
 
+    fast=True skips ffprobe during health checks only. Game names and icons are
+    still fetched from Steam when missing from cache (first launch, new app id).
+    """
     on_discovered(0)
     candidates, duplicate_count = discover_clip_paths(library_roots)
     total = len(candidates)
@@ -409,6 +413,7 @@ def run_library_scan(
 
     health_counts = {"healthy": 0, "issues": 0, "dead": 0}
     clip_count = 0
+    icons_cache: Dict[str, str] = {}
 
     for index, full_path in enumerate(candidates, start=1):
         if should_cancel():
@@ -419,9 +424,8 @@ def run_library_scan(
                 cache_dir=cache_dir,
                 health_cache=health_cache,
                 game_names_cache=game_names_cache,
+                icons_cache=icons_cache,
                 fast=fast,
-                allow_fetch=allow_fetch,
-                allow_download=allow_download,
             )
         except Exception as exc:
             logging.warning("Scan skipped %s: %s", full_path, exc)
