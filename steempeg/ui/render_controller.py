@@ -680,8 +680,8 @@ class RenderMixin:
         self._selected_queue_job_id = None
         self._populate_quality_options_for_clip(clip_path)
 
-        if hasattr(self, "btn_close_clip"):
-            self.btn_close_clip.show()
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(True)
         self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self.update_final_setup()
         self.refresh_render_queue_panel()
@@ -2099,8 +2099,8 @@ class RenderMixin:
                 job.clip_path, preserve_ui_selection=False,
             )
             apply_job_settings_to_ui(self, job.settings)
-            if hasattr(self, "btn_close_clip"):
-                self.btn_close_clip.show()
+            if hasattr(self, "set_player_header_clip_controls_visible"):
+                self.set_player_header_clip_controls_visible(True)
             self.generate_and_play_preview(job.clip_path, trim_restore=trim_restore)
             self.update_final_setup()
         finally:
