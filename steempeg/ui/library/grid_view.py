@@ -180,6 +180,17 @@ class ClipCard(qtw.QWidget):
         self._selected = selected
         self._apply_selection_style()
 
+    def set_thumbnail(self, thumb_path: str) -> None:
+        if thumb_path and os.path.exists(thumb_path):
+            pixmap = qtg.QPixmap(thumb_path)
+            if not pixmap.isNull():
+                scaled_thumb = pixmap.scaled(
+                    254, 144,
+                    qtc.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    qtc.Qt.TransformationMode.SmoothTransformation,
+                )
+                self.thumb_label.setPixmap(scaled_thumb)
+
     def enterEvent(self, event) -> None:
         self._hovered = True
         self._apply_selection_style()

@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QIcon, QPixmap
@@ -29,14 +28,11 @@ from PySide6.QtWidgets import (
 
 from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
-from steempeg.core.clip_identity import (
-    dedupe_steam_session_folders,
-    folder_has_video_chunks,
-    is_nested_same_session,
-    steam_session_key,
-)
+from steempeg.core.clip_identity import is_nested_same_session
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
+from steempeg.ui.library.scan_worker import LibraryScanWorker
+from steempeg.library.scan import ScannedClip
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.core.steam_paths import (
     default_clips_dialog_path,
@@ -355,6 +351,15 @@ class LibraryMixin:
         if hasattr(self, "set_status"):
             self.set_status(f"Re-checked health for {rows} clip(s).")
 
+    def _stop_library_scan(self):
+        worker = getattr(self, "_library_scan_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(5000)
+        self._library_scan_worker = None
+
     def _stop_clip_poster_backfill(self):
         worker = getattr(self, "_clip_poster_worker", None)
         if worker is None:
@@ -390,9 +395,21 @@ class LibraryMixin:
         self._clip_poster_worker.finished_batch.connect(self._on_clip_poster_batch_done)
         self._clip_poster_worker.start()
 
-    def _on_clip_poster_ready(self, _clip_path: str, _thumb_path: str):
-        if hasattr(self, "build_netflix_grid"):
-            self.build_netflix_grid()
+    def _on_clip_poster_ready(self, clip_path: str, thumb_path: str):
+        if not hasattr(self, "grid_clips"):
+            return
+        norm = os.path.normpath(clip_path)
+        for i in range(self.grid_clips.count()):
+            item = self.grid_clips.item(i)
+            if item is None:
+                continue
+            item_path = item.data(Qt.UserRole + 1)
+            if not item_path or os.path.normpath(item_path) != norm:
+                continue
+            card = self.grid_clips.itemWidget(item)
+            if card is not None and hasattr(card, "set_thumbnail"):
+                card.set_thumbnail(thumb_path)
+            break
 
     def _on_clip_poster_batch_done(self):
         self._clip_poster_worker = None
@@ -1551,257 +1568,262 @@ class LibraryMixin:
         self._stop_clip_poster_backfill()
         self.scan_clips(fast=True)
 
-    def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = False):
-        """Scans both standard Steam folders AND custom extracted folders.
+    def _insert_scanned_clip_row(self, row: ScannedClip) -> int:
+        """Append one scanned clip to the hidden table (+ grid card). Returns row index."""
+        table = self.ui.table_clips
+        row_position = table.rowCount()
+        table.insertRow(row_position)
 
-        fast=True (Refresh button): rebuild the list from disk, use cached health and
-        cached game icons/names only — no Steam API or icon downloads.
+        icon = QIcon()
+        if row.use_unknown_icon:
+            from steempeg.infra.paths import get_resource_path
+
+            unknown_icon = get_resource_path("unknown_icon.png")
+            if os.path.isfile(unknown_icon):
+                icon = QIcon(unknown_icon)
+        elif row.icon_disk_path and os.path.isfile(row.icon_disk_path):
+            icon = QIcon(QPixmap(row.icon_disk_path))
+            if row.app_id:
+                self.game_icons_cache[row.app_id] = icon
+
+        item_game = QTableWidgetItem(icon, row.game_name)
+        item_game.setData(Qt.UserRole, row.full_path)
+        if row.game_name.strip().lower() == "unknown":
+            item_game.setToolTip(row.full_path)
+        item_game.setData(_CLIP_HEALTH_ROLE, row.health_level)
+        item_game.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(row.health_issues))
+        table.setItem(row_position, 0, item_game)
+
+        item_type = QTableWidgetItem(row.rec_type)
+        item_type.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.setItem(row_position, 1, item_type)
+
+        item_date = QTableWidgetItem(row.date_display)
+        item_date.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.setItem(row_position, 2, item_date)
+
+        item_duration = QTableWidgetItem(row.duration_str)
+        item_duration.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.setItem(row_position, 3, item_duration)
+
+        self._append_grid_card_for_row(row_position)
+        return row_position
+
+    def _append_grid_card_for_row(self, row: int) -> None:
+        """Add one grid card for ``row`` without rebuilding the whole grid."""
+        if not hasattr(self, "grid_clips") or not hasattr(self.ui, "table_clips"):
+            return
+
+        table = self.ui.table_clips
+        title_item = table.item(row, 0)
+        date_item = table.item(row, 2)
+        if not title_item:
+            return
+
+        title = title_item.text() if title_item else "Unknown"
+        date_str = date_item.text() if date_item else "Today"
+        time_item = table.item(row, 3)
+        time_str = time_item.text() if time_item else "00:00"
+        clip_path = title_item.data(Qt.UserRole)
+        health_color = None
+        level = title_item.data(_CLIP_HEALTH_ROLE)
+        if level:
+            try:
+                health_color = health.HEALTH_COLORS[health.ClipHealth(level)]
+            except ValueError:
+                health_color = health.HEALTH_COLORS[health.ClipHealth.DEAD]
+
+        icon_path = ""
+        thumb_path = ""
+        badge_text = "Clip"
+
+        if clip_path:
+            clip_folder_name = os.path.basename(clip_path)
+            parts = clip_folder_name.split("_")
+
+            if title.strip().lower() == "unknown":
+                badge_text = "FG"
+                from steempeg.infra.paths import get_resource_path
+
+                unknown_icon = get_resource_path("unknown_icon.png")
+                if os.path.isfile(unknown_icon):
+                    icon_path = unknown_icon
+            elif len(parts) > 0:
+                prefix = parts[0].upper()
+                if prefix in ["FG", "BG", "CLIP"]:
+                    badge_text = prefix
+
+            if not icon_path and len(parts) >= 2 and parts[1].isdigit():
+                icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
+
+            if os.path.exists(clip_path):
+                thumb_path = resolve_clip_thumbnail(
+                    clip_path, self.cache_dir, allow_generate=False
+                )
+
+        footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
+        is_unknown_clip = title.strip().lower() == "unknown"
+
+        item = QListWidgetItem(self.grid_clips)
+        item.setSizeHint(QSize(260, 190))
+        item.setData(Qt.UserRole, row)
+        item.setData(Qt.UserRole + 1, clip_path)
+
+        card = ClipCard(
+            title.strip(),
+            footer_right,
+            badge_text,
+            thumb_path,
+            icon_path,
+            row,
+            health_color=health_color,
+            round_icon=is_unknown_clip,
+            on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
+            on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
+        )
+        self.grid_clips.setItemWidget(item, card)
+
+        if table.isRowHidden(row):
+            item.setHidden(True)
+
+    def _on_scan_discovering(self, total: int, generation: int) -> None:
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+        if hasattr(self, "update_status_indicator"):
+            if total <= 0:
+                self.update_status_indicator("Searching for clips…", "busy")
+            else:
+                self.update_status_indicator(f"Found {total} clips (0%)", "busy")
+
+    def _on_scan_clip_ready(self, row: ScannedClip, index: int, total: int, generation: int) -> None:
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+        self._insert_scanned_clip_row(row)
+        label = row.game_name.strip() or os.path.basename(row.full_path)
+        pct = int(100 * index / total) if total else 0
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator(f"Loading {index}/{total} — {label} ({pct}%)", "busy")
+        if hasattr(self, "lbl_clip_count"):
+            self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+
+    def _on_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+
+        worker = getattr(self, "_library_scan_worker", None)
+        if worker is not None:
+            self._ensure_clip_health_cache()
+            self._clip_health_cache.update(worker.health_cache)
+            self._save_clip_health_cache()
+            for app_id, name in worker.game_names_cache.items():
+                if app_id not in self.game_names_cache:
+                    self.game_names_cache[app_id] = name
+            if worker.game_names_cache:
+                self.save_json_cache()
+        self._library_scan_worker = None
+
+        self.ui.table_clips.setSortingEnabled(True)
+        self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
+        self.sync_grid_from_table_selection()
+        self._schedule_clip_poster_backfill()
+
+        if hasattr(self, "lbl_clip_count"):
+            self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+
+        if announce_duplicates and stats.duplicate_count:
+            noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
+            QMessageBox.information(
+                self.ui,
+                "Duplicate clips ignored",
+                f"Ignored {stats.duplicate_count} {noun} across folders.\n\n"
+                "The same clip was found in more than one library folder; only the "
+                "most recent copy is shown.",
+            )
+
+        logging.info(
+            "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d "
+            "ignored_duplicates=%d fast=%s",
+            stats.library_roots,
+            stats.clip_count,
+            stats.health_counts.get("healthy", 0),
+            stats.health_counts.get("issues", 0),
+            stats.health_counts.get("dead", 0),
+            stats.duplicate_count,
+            stats.fast,
+        )
+
+    def _on_scan_error(self, message: str, generation: int) -> None:
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+        self._library_scan_worker = None
+        logging.error("Library scan failed: %s", message)
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Scan error", "error")
+
+    def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = True):
+        """Scan library roots on a background thread with live progress in the status bar.
+
+        fast=True (default): cached health, no ffprobe / Steam network during scan.
+        Use Refresh ▾ → Re-check clip health for a full ffprobe pass.
         """
-        if not hasattr(self.ui, 'table_clips'): return
+        if not hasattr(self.ui, "table_clips"):
+            return
+
+        self._stop_library_scan()
         self._stop_clip_poster_backfill()
         self.ui.table_clips.setSortingEnabled(False)
         self.ui.table_clips.setRowCount(0)
-        
+
+        if hasattr(self, "grid_clips"):
+            self._grid_anchor_item = None
+            self._grid_anchor_index = -1
+            self.grid_clips.clear()
+
         if not getattr(self, "clips_folders", None):
             self._load_clips_folders_from_settings()
 
         library_roots = [f for f in self.clips_folders if f and os.path.exists(f)]
-        library_root_norms = {os.path.normpath(r) for r in library_roots}
         if not library_roots:
-            # No folders left (e.g. the user cleared them mid-session). The list was
-            # already emptied above, but the grid is built separately and would keep
-            # showing the previous scan's cards — wipe it and the count too. Steam's
-            # default folder is only auto-scanned at startup when nothing is saved, so
-            # searching again is an explicit action (Choose Folder / Refresh).
-            if hasattr(self, 'build_netflix_grid'):
-                self.build_netflix_grid()
-            if hasattr(self, 'lbl_clip_count'):
+            if hasattr(self, "lbl_clip_count"):
                 self.lbl_clip_count.setText("• 0 Clips")
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
             return
 
-        folders_to_check = set()
-        for root in library_roots:
-            folders_to_check.update(self._collect_clip_roots(root))
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        generation = self._scan_generation
+        self._ensure_clip_health_cache()
 
-        try:
-            # Sort the chaotic set() by folder modification time
-            sorted_folders = sorted(
-                list(folders_to_check),
-                key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0,
-                reverse=True,
-            )
-            sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
+        if hasattr(self, "lbl_clip_count"):
+            self.lbl_clip_count.setText("• … Clips")
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Searching for clips…", "busy")
 
-            health_counts = {"healthy": 0, "issues": 0, "dead": 0}
-            seen_clip_ids = set()
-            duplicate_count = session_dupes
-            
-            for full_path in sorted_folders:
-                if not os.path.exists(full_path): continue
-                if os.path.normpath(full_path) in library_root_norms:
-                    continue
-
-                folder_name = os.path.basename(full_path).lower()
-                if folder_name in ("gamerecordings", "clips", "video"):
-                    continue
-                if self._is_steam_clip_container_folder(full_path):
-                    continue
-                if self._is_clip_library_root(full_path):
-                    continue
-                is_steam_name = folder_name.startswith(("clip_", "bg_", "fg_"))
-                if not is_steam_name and not self._folder_has_dash_recording(full_path):
-                    continue
-
-                folder_name = os.path.basename(full_path).lower()
-                if "steempeg" in folder_name or folder_name in ["logs", "cache", "_update_extracted"]:
-                    continue
-
-                # Same clip can live in two different library roots (a copy). The
-                # session key (appid + date + time, prefix ignored) is the clip's
-                # identity — keep the first occurrence (most recent by mtime).
-                session_key = steam_session_key(folder_name)
-                dedupe_key = session_key or folder_name
-                if dedupe_key in seen_clip_ids:
-                    duplicate_count += 1
-                    continue
-                seen_clip_ids.add(dedupe_key)
-                
-                has_mpd = False
-                has_chunks = False
-                mpd_path = None
-                
-                for root, dirs, files in os.walk(full_path):
-                    for f in files:
-                        if f.endswith(".mpd"):
-                            has_mpd = True
-                            mpd_path = os.path.join(root, f)
-                            break 
-                    if any("chunk-stream" in f for f in files):
-                        has_chunks = True
-
-                if has_chunks and not has_mpd:
-                    recovered = self.recover_orphaned_clip(full_path)
-                    if recovered: 
-                        has_mpd = True
-                        # Just in case, search for mpd again after recovery.
-                        for root, dirs, files in os.walk(full_path):
-                            for f in files:
-                                if f.endswith(".mpd"):
-                                    mpd_path = os.path.join(root, f)
-                                    break 
-
-                if not has_mpd and not has_chunks:
-                    continue
-
-                # Steam sometimes leaves empty fg_/clip_ shells (mpd only, no video).
-                # Steam's own UI hides these; skip them here too.
-                if not folder_has_video_chunks(full_path):
-                    continue
-
-                health_report = self._resolve_clip_health(full_path, fast=fast)
-                if health_report.level == health.ClipHealth.HEALTHY:
-                    health_counts["healthy"] += 1
-                elif health_report.level == health.ClipHealth.DEAD:
-                    health_counts["dead"] += 1
-                else:
-                    health_counts["issues"] += 1
-                # MAGIC: Extracting Duration from MPD
-                duration_str = "--:--"
-                if mpd_path:
-                    try:
-                        with open(mpd_path, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                            
-                            match = re.search(r'(?:mediaPresentationDuration|duration)="PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?"', content)
-                            if match:
-                                h = int(match.group(1)) if match.group(1) else 0
-                                m = int(match.group(2)) if match.group(2) else 0
-                                s = int(float(match.group(3))) if match.group(3) else 0
-                                
-                                # Formatting for a Beautiful Look
-                                if h == 0 and m == 0: duration_str = f"{s}s"
-                                elif h == 0: duration_str = f"{m}m {s}s"
-                                else: duration_str = f"{h}h {m}m {s}s"
-                    except: pass
-                elif health_report.level == health.ClipHealth.DEAD:
-                    duration_str = "—"
-
-                folder_name = os.path.basename(full_path)
-                parts = folder_name.split("_")
-                
-                if len(parts) >= 4 and parts[1].isdigit():
-                    prefix = parts[0].lower()
-                    app_id = parts[1]
-                    
-                    if prefix == "clip": rec_type = "🎬 Clip"
-                    elif prefix == "bg": rec_type = "📼 BG"
-                    elif prefix == "fg": rec_type = "🎞️ FG"
-                    else: rec_type = "Unknown"
-
-                    raw_name = self.get_game_name(app_id, allow_fetch=not fast)
-                    game_name = f"   {raw_name}" 
-                    icon = self.get_game_icon(app_id, allow_download=not fast)
-
-                    try:
-                        # 1. Concatenate the date and time from the folder into a single string (YYYYMMDD_HHMMSS)
-                        raw_datetime_str = f"{parts[2]}_{parts[3]}"
-                        
-                        # 2. We tell Python: "This is UTC time (Greenwich Mean Time)!"
-                        dt_utc = datetime.strptime(raw_datetime_str, "%Y%m%d_%H%M%S")
-                        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-                        
-                        # 3. Automatically convert to your time zone (Windows will automatically detect that you are in UTC+3)
-                        dt_local = dt_utc.astimezone()
-                        
-                        # 4. Unpack back into beautiful formats for the interface
-                        formatted_date = format_clip_date(dt_local)
-                        formatted_time = format_clip_time(dt_local)
-                    except Exception as e:
-                        # If the folder is named incorrectly, use the old fallback option.
-                        try: formatted_date = format_clip_date(datetime.strptime(parts[2], "%Y%m%d"))
-                        except: formatted_date = parts[2]
-                        try: formatted_time = format_clip_time(datetime.strptime(parts[3], "%H%M%S"))
-                        except: formatted_time = ""
-
-
-                else:
-                    rec_type = "🎞️ FG"
-                    game_name = "   Unknown"
-                    formatted_date = "Unknown"
-                    formatted_time = ""
-                    icon = QIcon()
-                    from steempeg.infra.paths import get_resource_path
-                    unknown_icon = get_resource_path("unknown_icon.png")
-                    if os.path.isfile(unknown_icon):
-                        icon = QIcon(unknown_icon)
-
-                row_position = self.ui.table_clips.rowCount()
-                self.ui.table_clips.insertRow(row_position)
-                
-                item_game = QTableWidgetItem(icon, game_name)
-                item_game.setData(Qt.UserRole, full_path)
-                if game_name.strip().lower() == "unknown":
-                    item_game.setToolTip(full_path)
-                item_game.setData(_CLIP_HEALTH_ROLE, health_report.level.value)
-                item_game.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(health_report.issues))
-                self.ui.table_clips.setItem(row_position, 0, item_game)
-                
-                item_type = QTableWidgetItem(rec_type)
-                item_type.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-                self.ui.table_clips.setItem(row_position, 1, item_type)
-                
-                item_date = QTableWidgetItem(formatted_date)
-                self.ui.table_clips.setItem(row_position, 2, item_date)
-
-                date_display = f"{formatted_date}\n{formatted_time}" if formatted_time else formatted_date
-                
-                item_date = QTableWidgetItem(date_display)
-                item_date.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter) 
-                self.ui.table_clips.setItem(row_position, 2, item_date)
-
-                # Column 3: DURATION
-                item_duration = QTableWidgetItem(duration_str)
-                item_duration.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-                self.ui.table_clips.setItem(row_position, 3, item_duration)
-
-            self.ui.table_clips.setSortingEnabled(True)
-            self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
-
-            if hasattr(self, 'build_netflix_grid'):
-                self.build_netflix_grid()
-            self._schedule_clip_poster_backfill()
-                
-            if hasattr(self, 'lbl_clip_count'):
-                self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
-
-            # Show a one-time popup (not a sticky status) when the user just added a
-            # folder that introduced duplicates. On startup/refresh/delete rescans we
-            # stay silent — the status line would otherwise get stuck on this message.
-            if announce_duplicates and duplicate_count:
-                noun = "duplicate" if duplicate_count == 1 else "duplicates"
-                QMessageBox.information(
-                    self.ui,
-                    "Duplicate clips ignored",
-                    f"Ignored {duplicate_count} {noun} across folders.\n\n"
-                    "The same clip was found in more than one library folder; only the "
-                    "most recent copy is shown.",
-                )
-
-            logging.info(
-                "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d "
-                "ignored_duplicates=%d fast=%s",
-                library_roots,
-                self.ui.table_clips.rowCount(),
-                health_counts["healthy"],
-                health_counts["issues"],
-                health_counts["dead"],
-                duplicate_count,
-                fast,
-            )
-                
-                    
-        except Exception as e:
-            logging.error(f"Scan Error: {e}")
+        worker = LibraryScanWorker(
+            library_roots,
+            self.cache_dir,
+            self._clip_health_cache,
+            self.game_names_cache,
+            fast=fast,
+            parent=self.ui,
+        )
+        self._library_scan_worker = worker
+        worker.discovering.connect(
+            lambda total: self._on_scan_discovering(total, generation)
+        )
+        worker.clip_ready.connect(
+            lambda row, index, total: self._on_scan_clip_ready(row, index, total, generation)
+        )
+        worker.finished_scan.connect(
+            lambda stats: self._on_scan_finished(stats, generation, announce_duplicates)
+        )
+        worker.scan_error.connect(
+            lambda msg: self._on_scan_error(msg, generation)
+        )
+        worker.start()
     
     def get_clip_size_and_duration(self, clip_path, mpd_content):
         # total size of the clip folder
@@ -1841,78 +1863,9 @@ class LibraryMixin:
         self._grid_anchor_item = None
         self._grid_anchor_index = -1
         self.grid_clips.clear()
-        
+
         for row in range(self.ui.table_clips.rowCount()):
-            title_item = self.ui.table_clips.item(row, 0)
-            date_item = self.ui.table_clips.item(row, 2)
-            time_item = self.ui.table_clips.item(row, 3)
-            
-            title = title_item.text() if title_item else "Unknown"
-            date_str = date_item.text() if date_item else "Today"
-            time_str = time_item.text() if time_item else "00:00"
-            clip_path = title_item.data(Qt.UserRole) if title_item else None
-            health_color = None
-            if title_item:
-                level = title_item.data(_CLIP_HEALTH_ROLE)
-                if level:
-                    try:
-                        health_color = health.HEALTH_COLORS[health.ClipHealth(level)]
-                    except ValueError:
-                        health_color = health.HEALTH_COLORS[health.ClipHealth.DEAD]
-            
-            icon_path = ""
-            thumb_path = ""
-            badge_text = "Clip"
-            
-            if clip_path:
-                clip_folder_name = os.path.basename(clip_path)
-                parts = clip_folder_name.split("_")
-
-                if title.strip().lower() == "unknown":
-                    badge_text = "FG"
-                    from steempeg.infra.paths import get_resource_path
-                    unknown_icon = get_resource_path("unknown_icon.png")
-                    if os.path.isfile(unknown_icon):
-                        icon_path = unknown_icon
-                elif len(parts) > 0:
-                    prefix = parts[0].upper()
-                    if prefix in ["FG", "BG", "CLIP"]:
-                        badge_text = prefix
-
-                if not icon_path and len(parts) >= 2 and parts[1].isdigit():
-                    icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
-
-                if os.path.exists(clip_path):
-                    thumb_path = resolve_clip_thumbnail(
-                        clip_path, self.cache_dir, allow_generate=False
-                    )
-
-            footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
-            is_unknown_clip = title.strip().lower() == "unknown"
-
-            item = QListWidgetItem(self.grid_clips)
-            item.setSizeHint(QSize(260, 190))
-            item.setData(Qt.UserRole, row)
-            item.setData(Qt.UserRole + 1, clip_path)
-
-            card = ClipCard(
-                title.strip(),
-                footer_right,
-                badge_text,
-                thumb_path,
-                icon_path,
-                row,
-                health_color=health_color,
-                round_icon=is_unknown_clip,
-                on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
-                on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
-            )
-            self.grid_clips.setItemWidget(item, card)
-
-            
-            # SYNC VISIBILITY WITH TABLE
-            if self.ui.table_clips.isRowHidden(row):
-                item.setHidden(True)
+            self._append_grid_card_for_row(row)
 
         self.sync_grid_from_table_selection()
 

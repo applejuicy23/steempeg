@@ -277,6 +277,10 @@ class LifecycleMixin:
 
         if hasattr(self, '_stop_timeline_thumb_batch'):
             self._stop_timeline_thumb_batch()
+        if hasattr(self, '_stop_library_scan'):
+            self._stop_library_scan()
+        if hasattr(self, '_stop_clip_poster_backfill'):
+            self._stop_clip_poster_backfill()
         if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
             sniper = getattr(self.custom_timeline.canvas, 'sniper', None)
             if sniper:
