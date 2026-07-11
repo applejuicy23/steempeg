@@ -2001,6 +2001,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.custom_timeline.trim_changed.connect(self.on_trim_changed) 
                 self.custom_timeline.screenshot_requested.connect(self.take_screenshot)
                 self.custom_timeline.add_marker_requested.connect(self.add_user_marker)
+                self.custom_timeline.open_steam_screenshot_requested.connect(
+                    self.open_steam_screenshot_for_marker
+                )
         
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
         mpv_log_path_str = self.current_mpv_log_file
