@@ -86,9 +86,14 @@ def tinted_icon(name: str, color: str | QColor, size: int = 16) -> QIcon:
     return _icon_from_pixmap(tinted_pixmap(name, color, size))
 
 
-def close_clip_icon(size: int = 14) -> QIcon:
+def close_clip_icon(size: int = 16) -> QIcon:
     """Red-tinted cancel.png for the player header close chip."""
     return tinted_icon("cancel.png", "#e05555", size)
+
+
+def preview_settings_icon(size: int = 16) -> QIcon:
+    """settings.png for the player header preview-quality chip."""
+    return load_icon("settings.png", size)
 
 
 def health_icon(level: ClipHealth, size: int = 16) -> QIcon:
