@@ -23,7 +23,7 @@ class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
 
-    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0):
+    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced"):
         super().__init__()
         self.target_scale_h = target_scale_h 
         self.trim_start_sec = trim_start_sec
@@ -37,6 +37,7 @@ class RenderThread(QThread):
         self.selected_encoder = selected_encoder
         self.video_bitrate = video_bitrate
         self.fps_text = fps_text
+        self.encode_speed = encode_speed
         
         self.audio_only = audio_only
         self.mute_audio = mute_audio
@@ -165,7 +166,7 @@ class RenderThread(QThread):
                 base_audio = build_audio_args(
                     self.audio_format, self.audio_bitrate_kbps, self.mute_audio
                 )
-                v_extra = video_encoder_extra_args(self.selected_encoder)
+                v_extra = video_encoder_extra_args(self.selected_encoder, self.encode_speed)
 
                 # 2. Construct the final command based on video settings
                 if self.audio_only:

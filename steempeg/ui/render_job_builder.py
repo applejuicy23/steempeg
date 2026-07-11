@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from steempeg.core.dash import discovery
 from steempeg.core import capabilities
 from steempeg.infra.paths import get_save_directory
+from steempeg.render.encode_speed import normalize_encode_speed
 from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
@@ -49,6 +50,7 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
         "combo_bitrate",
         "combo_codec",
         "combo_encoder",
+        "combo_encode_speed",
         "combo_audio_format",
         "combo_audio_bitrate",
         "combo_container",
@@ -86,6 +88,13 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
                 break
         if not matched and settings.encoder_display:
             _set_combo_text(ui.combo_encoder, settings.encoder_display)
+
+    if hasattr(app, "refresh_encode_speed_options"):
+        app.refresh_encode_speed_options(settings.encode_speed)
+    elif hasattr(ui, "combo_encode_speed") and settings.encode_speed:
+        idx = ui.combo_encode_speed.findData(normalize_encode_speed(settings.encode_speed), Qt.UserRole)
+        if idx >= 0:
+            ui.combo_encode_speed.setCurrentIndex(idx)
 
     if hasattr(ui, "check_audio_only"):
         ui.check_audio_only.setChecked(settings.audio_only)
@@ -250,6 +259,12 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         except ValueError:
             pass
 
+    encode_speed = "balanced"
+    if hasattr(ui, "combo_encode_speed"):
+        data = ui.combo_encode_speed.currentData(Qt.UserRole)
+        if data:
+            encode_speed = normalize_encode_speed(str(data))
+
     return RenderJobSettings(
         quality_text=quality,
         fps_text=fps,
@@ -277,6 +292,7 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         orig_audio_kbps=int(getattr(app, "current_orig_audio_bitrate", 192)),
         container_format=container_format or "MP4",
         output_preset=output_preset or "Custom",
+        encode_speed=encode_speed,
     )
 
 
@@ -443,4 +459,5 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
         trim_start_sec=trim_start_sec,
         trim_duration_sec=trim_duration_sec,
         container_format=s.container_format or "MP4",
+        encode_speed=normalize_encode_speed(s.encode_speed),
     )

@@ -41,6 +41,7 @@ def collect_context(app):
         ("fps", "combo_fps"),
         ("bitrate", "combo_bitrate"),
         ("encoder", "combo_encoder"),
+        ("encode_speed", "combo_encode_speed"),
     ):
         combo = getattr(app.ui, attr, None)
         if combo is not None:

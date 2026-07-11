@@ -577,10 +577,20 @@ def restyle_video_page(ui):
         ui.check_mute_audio.setParent(None)
         ui.check_mute_audio.deleteLater()
 
+    if not hasattr(ui, "combo_encode_speed") or ui.combo_encode_speed is None:
+        ui.label_encode_speed = QLabel("Encode Speed")
+        ui.label_encode_speed.setObjectName("label_encode_speed")
+        ui.combo_encode_speed = QComboBox()
+        ui.combo_encode_speed.setObjectName("combo_encode_speed")
+    else:
+        ui.label_encode_speed.setParent(None)
+        ui.combo_encode_speed.setParent(None)
+
     keep = [
         ui.label_2, ui.combo_quality, ui.label_target_size, ui.size_slider,
         ui.label_5, ui.combo_fps, ui.label_4, ui.combo_bitrate,
         ui.label_14, ui.combo_codec, ui.label_6, ui.combo_encoder,
+        ui.label_encode_speed, ui.combo_encode_speed,
     ]
     for w in keep:
         w.setParent(None)
@@ -605,6 +615,7 @@ def restyle_video_page(ui):
     grid.addLayout(_custom_field(ui, ui.label_4, ui.combo_bitrate, "input_custom_vbitrate", "warn_vbitrate", "Mbps"), 3, 0)
     grid.addLayout(_field(ui.label_14, ui.combo_codec), 3, 1)
     grid.addLayout(_field(ui.label_6, ui.combo_encoder), 4, 0)
+    grid.addLayout(_field(ui.label_encode_speed, ui.combo_encode_speed), 4, 1)
     grid.setColumnStretch(2, 1)  # empty 3rd column soaks up slack -> fields stay left, columns line up
     root.addLayout(grid)
 

@@ -2094,6 +2094,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_codec.currentTextChanged.connect(self._mark_output_preset_custom)
             self.ui.combo_codec.currentTextChanged.connect(self.refresh_output_format_availability)
+            self.ui.combo_codec.currentTextChanged.connect(self.refresh_encode_speed_options)
         if hasattr(self.ui, 'combo_fps'):
             self.ui.combo_fps.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_fps.currentTextChanged.connect(self.refresh_slider_if_needed)
@@ -2102,6 +2103,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         if hasattr(self.ui, 'combo_encoder'):
             self.ui.combo_encoder.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_encoder.currentTextChanged.connect(self.refresh_encode_speed_options)
+            self.ui.combo_encoder.currentTextChanged.connect(self._mark_output_preset_custom)
+        if hasattr(self.ui, 'combo_encode_speed'):
+            self.ui.combo_encode_speed.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_encode_speed.currentTextChanged.connect(self._mark_output_preset_custom)
         # Connect the pause and cancel buttons (they are initially disabled)
         if hasattr(self.ui, 'btn_cancel'):
             self.ui.btn_cancel.setEnabled(False)

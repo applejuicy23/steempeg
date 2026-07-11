@@ -71,6 +71,7 @@ class RenderJobSettings:
     orig_audio_kbps: int = 192
     container_format: str = "MP4"
     output_preset: str = "Custom"
+    encode_speed: str = "balanced"
 
 
 @dataclass
@@ -116,6 +117,7 @@ class ResolvedRenderParams:
     trim_start_sec: float
     trim_duration_sec: float
     container_format: str = "MP4"
+    encode_speed: str = "balanced"
 
 
 def compute_unique_output_path(save_dir: str, base_filename: str, ext: str) -> str:

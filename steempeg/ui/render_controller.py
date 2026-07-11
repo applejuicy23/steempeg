@@ -42,6 +42,13 @@ from steempeg.render.output_formats import (
     audio_needs_bitrate,
     is_valid_output_combo,
     output_extension,
+    resolve_video_encoder,
+)
+from steempeg.render.encode_speed import (
+    ENCODE_SPEED_OPTIONS,
+    encode_speed_hint,
+    encoder_family,
+    normalize_encode_speed,
 )
 from steempeg.render.queue import (
     JobStatus,
@@ -310,6 +317,43 @@ class RenderMixin:
 
         # default to the first hardware encoder if there is one, otherwise CPU
         self.ui.combo_encoder.setCurrentIndex(1 if self.ui.combo_encoder.count() > 1 else 0)
+        self.refresh_encode_speed_options()
+
+    def refresh_encode_speed_options(self, preferred_id: str | None = None) -> None:
+        """Fill encode-speed presets for the active codec + encoder pair."""
+        ui = self.ui
+        if not hasattr(ui, "combo_encode_speed"):
+            return
+
+        current_id = preferred_id
+        if current_id is None:
+            data = ui.combo_encode_speed.currentData(Qt.UserRole)
+            if data:
+                current_id = str(data)
+
+        codec_raw = ui.combo_codec.currentText() if hasattr(ui, "combo_codec") else ""
+        enc_data = ui.combo_encoder.currentData(Qt.UserRole) if hasattr(ui, "combo_encoder") else "libx264"
+        resolved = resolve_video_encoder(
+            codec_raw,
+            str(enc_data) if enc_data else "libx264",
+            capabilities.av1_encoder_available(),
+        )
+        hint = encode_speed_hint(encoder_family(resolved))
+
+        ui.combo_encode_speed.blockSignals(True)
+        ui.combo_encode_speed.clear()
+        for opt in ENCODE_SPEED_OPTIONS:
+            ui.combo_encode_speed.addItem(opt.label, opt.id)
+
+        target = normalize_encode_speed(current_id)
+        idx = ui.combo_encode_speed.findData(target, Qt.UserRole)
+        if idx >= 0:
+            ui.combo_encode_speed.setCurrentIndex(idx)
+
+        ui.combo_encode_speed.setToolTip(hint)
+        if hasattr(ui, "label_encode_speed"):
+            ui.label_encode_speed.setToolTip(hint)
+        ui.combo_encode_speed.blockSignals(False)
 
     def populate_output_format_combos(self) -> None:
         """Fill container / codec / audio / preset dropdowns (post-restyle)."""
@@ -1257,6 +1301,8 @@ class RenderMixin:
                     "is used. Pick a quality preset (e.g. 1440p) to re-encode and choose "
                     "NVENC / CPU."
                 )
+            if hasattr(self.ui, 'combo_encode_speed'):
+                self.ui.combo_encode_speed.setEnabled(False)
             self.ui.combo_bitrate.blockSignals(False)
             self.update_final_setup()
             return
@@ -1267,6 +1313,8 @@ class RenderMixin:
         if hasattr(self.ui, 'combo_encoder'):
             self.ui.combo_encoder.setEnabled(True)
             self.ui.combo_encoder.setToolTip("")
+        if hasattr(self.ui, 'combo_encode_speed'):
+            self.ui.combo_encode_speed.setEnabled(True)
         
         match = re.search(r'^(\d+)p', quality_text)
         if not match: 
@@ -1423,6 +1471,9 @@ class RenderMixin:
         codec_raw = self.ui.combo_codec.currentText() if hasattr(self.ui, 'combo_codec') else ""
         codec = codec_raw.split()[0] if codec_raw else "Unknown"
         encoder = self.ui.combo_encoder.currentText() if hasattr(self.ui, 'combo_encoder') else ""
+        encode_speed = ""
+        if hasattr(self.ui, "combo_encode_speed"):
+            encode_speed = self.ui.combo_encode_speed.currentText()
 
         audio_only = self.ui.check_audio_only.isChecked() if hasattr(self.ui, 'check_audio_only') else False
         mute_audio = self.ui.check_mute_audio.isChecked() if hasattr(self.ui, 'check_mute_audio') else False
@@ -1629,6 +1680,7 @@ class RenderMixin:
                 f"Bitrate: {video_bitrate_display}\n"
                 f"Codec: {codec}\n"
                 f"Encoder: {enc_clean}\n"
+                f"Encode speed: {encode_speed or 'Balanced'}\n"
                 f"Other settings: >> NO SOUND (MUTED)\n"
                 f"Est. File Size: {size_str}"
             )
@@ -1654,6 +1706,7 @@ class RenderMixin:
                 f"Bitrate: {video_bitrate_display}\n"
                 f"Codec: {codec}\n"
                 f"Encoder: {enc_clean}\n"
+                f"Encode speed: {encode_speed or 'Balanced'}\n"
                 f"Sound: {audio_format}, {audio_bitrate_clean}\n"
                 f"Other settings: Normal Render\n"
                 f"Est. File Size: {size_str}"
@@ -2471,6 +2524,7 @@ class RenderMixin:
                 params.target_scale_h,
                 params.trim_start_sec,
                 params.trim_duration_sec,
+                params.encode_speed,
             )
             self.render_thread.progress_signal.connect(self._on_render_progress)
             self.render_thread.finished_signal.connect(self.on_render_finished)

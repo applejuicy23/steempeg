@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from steempeg.render.encode_speed import video_encoder_extra_args  # noqa: F401 — re-export
+
 CONTAINERS = ("MP4", "MKV", "MOV", "WebM")
 
 VIDEO_CODEC_ITEMS = (
@@ -177,17 +179,6 @@ def build_audio_args(audio_format: str, audio_bitrate_kbps: str, mute_audio: boo
         return "-c:a pcm_s16le"
     # AAC default — ffmpeg built-in encoder (not libfdk_aac)
     return f"-c:a aac -b:a {audio_bitrate_kbps}"
-
-
-def video_encoder_extra_args(encoder: str) -> str:
-    """Optional quality flags per encoder family."""
-    if encoder == "libvpx-vp9":
-        return "-row-mt 1 "
-    if encoder == "libsvtav1":
-        return "-preset 6 "
-    if encoder == "av1_nvenc":
-        return "-preset p4 "
-    return ""
 
 
 def format_output_summary(
