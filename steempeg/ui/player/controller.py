@@ -9,17 +9,20 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QEventLoop, Qt, QPropertyAnimation, QTimer
-from PySide6.QtGui import QIcon, QPainterPath, QPixmap, QRegion
+from PySide6.QtGui import QCursor, QIcon, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolTip,
@@ -2117,6 +2120,101 @@ class PlayerMixin:
 
         if saved_ok:
             self._show_screenshot_toast(self.screenshots_dir)
+
+    def open_steam_screenshot_for_marker(self, marker):
+        """Open the Steam client screenshot that matches a timeline screenshot marker."""
+        from steempeg.core.steam_screenshots import (
+            find_steam_screenshot_files,
+            resolve_steam_id_for_clip,
+            steam_screenshots_dir,
+            timeline_json_start_utc,
+        )
+
+        if not hasattr(self, "custom_timeline"):
+            return
+        canvas = self.custom_timeline.canvas
+        clip_path = getattr(canvas, "current_clip_path", None) or getattr(
+            self, "_preview_clip_path", None
+        )
+        app_id = getattr(canvas, "current_app_id", None)
+        if not clip_path or not app_id:
+            QMessageBox.information(
+                self.ui,
+                "Screenshot",
+                "Open a Steam Game Recording clip first — screenshot lookup needs the clip folder.",
+            )
+            return
+
+        steam_id = resolve_steam_id_for_clip(
+            clip_path, getattr(self, "clips_folders", None) or []
+        )
+        if not steam_id:
+            QMessageBox.information(
+                self.ui,
+                "Screenshot",
+                "Could not determine your Steam user id from the library folder path.",
+            )
+            return
+
+        marker_ms = float(marker.get("time_ms", 0))
+        raw_time_ms = marker.get("raw_time_ms")
+        if raw_time_ms is None:
+            raw_time_ms = marker_ms + float(getattr(canvas, "current_offset_ms", 0) or 0)
+        else:
+            raw_time_ms = float(raw_time_ms)
+
+        json_start_utc = getattr(canvas, "current_json_start_utc", None)
+        if json_start_utc is None:
+            json_start_utc = timeline_json_start_utc(getattr(canvas, "current_json_path", None))
+
+        files = find_steam_screenshot_files(
+            steam_id=steam_id,
+            app_id=str(app_id),
+            json_start_utc=json_start_utc,
+            raw_time_ms=raw_time_ms,
+            clip_path=clip_path,
+            marker_time_ms=marker_ms,
+        )
+        if not files:
+            folder = steam_screenshots_dir(steam_id, str(app_id))
+            QMessageBox.information(
+                self.ui,
+                "Screenshot",
+                "No matching Steam screenshot was found on disk.\n\n"
+                f"Looked in:\n{folder}\n\n"
+                "Steam names files like 20260711152410_1.jpg (local date/time when captured).",
+            )
+            return
+
+        if len(files) == 1:
+            self._open_file_with_default_app(files[0])
+            return
+
+        pick = QMenu(self.ui)
+        pick.setStyleSheet("""
+            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
+                    border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; }
+            QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
+            QMenu::item:selected { background-color: #6b5a8e; }
+        """)
+        for path in files:
+            action = pick.addAction(os.path.basename(path))
+            action.triggered.connect(
+                lambda _checked=False, p=path: self._open_file_with_default_app(p)
+            )
+        pick.exec(QCursor.pos())
+
+    @staticmethod
+    def _open_file_with_default_app(path: str) -> None:
+        try:
+            if sys.platform == "win32":
+                os.startfile(os.path.normpath(path))  # noqa: S606
+            elif sys.platform == "darwin":
+                subprocess.run(["open", path], check=False)
+            else:
+                subprocess.run(["xdg-open", path], check=False)
+        except OSError as exc:
+            logging.error("Failed to open file %s: %s", path, exc)
 
     def _show_screenshot_toast(self, directory):
         """Flash a small 'Screenshot saved in <dir>' toast with copy/open actions."""
