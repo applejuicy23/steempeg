@@ -1276,8 +1276,8 @@ class RenderedLibraryMixin:
 
         if hasattr(self.ui, "btn_start"):
             self.ui.btn_start.setEnabled(False)
-        if hasattr(self, "btn_close_clip"):
-            self.btn_close_clip.show()
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(True)
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
 
