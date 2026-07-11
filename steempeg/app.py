@@ -1415,31 +1415,39 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         actions_row.setContentsMargins(0, 0, 0, 0)
         actions_row.setSpacing(6)
 
-        from steempeg.ui.icon_assets import close_clip_icon
+        from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
 
-        self.btn_preview_settings = QPushButton("⚙️")
-        self.btn_preview_settings.setFixedSize(24, 24)
+        _HEADER_ACTION_CHIP = 30
+        _HEADER_ACTION_ICON = 16
+        _HEADER_CHIP = (
+            "border-radius: 8px;"
+            "padding: 0px;"
+            "font-family: 'Segoe UI', Arial, sans-serif;"
+        )
+
+        self.btn_preview_settings = QPushButton()
+        self.btn_preview_settings.setFixedSize(_HEADER_ACTION_CHIP, _HEADER_ACTION_CHIP)
+        self.btn_preview_settings.setIcon(preview_settings_icon(_HEADER_ACTION_ICON))
+        self.btn_preview_settings.setIconSize(QSize(_HEADER_ACTION_ICON, _HEADER_ACTION_ICON))
         self.btn_preview_settings.setCursor(Qt.PointingHandCursor)
         self.btn_preview_settings.setToolTip("Preview quality")
         self.btn_preview_settings.setStyleSheet(
             "QPushButton {"
-            "background-color: transparent;"
-            "border: none;"
-            "border-radius: 6px;"
-            "font-size: 13px;"
-            "padding: 0px;"
-            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "background-color: rgba(74, 159, 216, 0.18);"
+            "color: #4a9fd8;"
+            "border: 2px solid #4a9fd8;"
+            + _HEADER_CHIP +
             "}"
-            "QPushButton:hover { background-color: #444444; }"
-            "QPushButton:pressed { background-color: #555555; }"
+            "QPushButton:hover { background-color: rgba(74, 159, 216, 0.32); }"
+            "QPushButton:pressed { background-color: rgba(74, 159, 216, 0.45); }"
         )
         self.btn_preview_settings.clicked.connect(self.show_preview_quality_menu)
         actions_row.addWidget(self.btn_preview_settings)
 
         self.btn_close_clip = QPushButton()
-        self.btn_close_clip.setFixedSize(24, 24)
-        self.btn_close_clip.setIcon(close_clip_icon(14))
-        self.btn_close_clip.setIconSize(QSize(14, 14))
+        self.btn_close_clip.setFixedSize(_HEADER_ACTION_CHIP, _HEADER_ACTION_CHIP)
+        self.btn_close_clip.setIcon(close_clip_icon(_HEADER_ACTION_ICON))
+        self.btn_close_clip.setIconSize(QSize(_HEADER_ACTION_ICON, _HEADER_ACTION_ICON))
         self.btn_close_clip.setCursor(Qt.PointingHandCursor)
         self.btn_close_clip.setToolTip("Close clip")
         self.btn_close_clip.setStyleSheet(
@@ -1447,9 +1455,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             "background-color: rgba(224, 85, 85, 0.18);"
             "color: #e05555;"
             "border: 2px solid #e05555;"
-            "border-radius: 6px;"
-            "padding: 0px;"
-            "font-family: 'Segoe UI', Arial, sans-serif;"
+            + _HEADER_CHIP +
             "}"
             "QPushButton:hover { background-color: rgba(224, 85, 85, 0.32); }"
             "QPushButton:pressed { background-color: rgba(224, 85, 85, 0.45); }"
