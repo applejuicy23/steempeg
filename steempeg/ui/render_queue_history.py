@@ -21,9 +21,9 @@ from steempeg.infra.paths import open_in_file_manager
 from steempeg.render.queue import JobStatus, STATUS_COLORS
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
-from steempeg.ui.icon_assets import load_icon
+from steempeg.ui.icon_assets import close_clip_icon, load_icon
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.queue_card_shared import _FONT
+from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
@@ -72,12 +72,20 @@ def _batch_summary(batch: RenderBatchRecord) -> str:
     return ", ".join(parts) if parts else "No renders"
 
 
-_BTN_STYLE = """
+_JOB_TITLE_ICON = 22
+_STATUS_ICON = 14
+
+
+_FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
+
+_PILL_BTN_STYLE = """
     QPushButton {
-        background-color: #333; color: #ccc; border: 1px solid #555;
-        border-radius: 6px; padding: 2px 10px; font-size: 10px;
+        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
+        border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
+        font-family: 'Segoe UI', Arial, sans-serif;
     }
-    QPushButton:hover { background-color: #444; color: #fff; }
+    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
+    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
 """
 
 
@@ -102,23 +110,23 @@ class RenderQueueHistoryDialog(SteempegDialog):
         root = self.content_layout
 
         header = QHBoxLayout()
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_icon = QLabel()
+        title_icon.setFixedSize(24, 24)
+        title_icon.setPixmap(load_icon("history.png", 22).pixmap(22, 22))
+        title_icon.setStyleSheet("background: transparent; border: none;")
         title = QLabel("Render History")
         title.setStyleSheet(tok.STYLE_PANEL_TITLE)
-        header.addWidget(title)
+        title_row.addWidget(title_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
+        header.addLayout(title_row)
         header.addStretch()
         btn_clear = QPushButton("  Clear all")
         btn_clear.setCursor(Qt.PointingHandCursor)
         btn_clear.setIcon(load_icon("clear.png", 16))
         btn_clear.setIconSize(QSize(16, 16))
-        btn_clear.setStyleSheet("""
-            QPushButton {
-                background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-                border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: bold;
-                font-family: 'Segoe UI', Arial, sans-serif;
-            }
-            QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-        """)
+        btn_clear.setStyleSheet(_PILL_BTN_STYLE)
         btn_clear.clicked.connect(self._confirm_clear)
         header.addWidget(btn_clear)
         root.addLayout(header)
@@ -183,6 +191,30 @@ class RenderQueueHistoryDialog(SteempegDialog):
         self._batches.clear()
         self.done(2)
 
+    @staticmethod
+    def _status_badge(status_key: str, status_lbl: str, color: str) -> QWidget:
+        host = QWidget()
+        host.setStyleSheet("background: transparent; border: none;")
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        icon = QLabel()
+        icon.setFixedSize(_STATUS_ICON, _STATUS_ICON)
+        icon.setStyleSheet("background: transparent; border: none;")
+        if status_key == JobStatus.COMPLETED.value:
+            icon.setPixmap(load_icon("success.png", _STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
+        elif status_key == JobStatus.ERROR.value:
+            icon.setPixmap(close_clip_icon(_STATUS_ICON).pixmap(_STATUS_ICON, _STATUS_ICON))
+        else:
+            icon.hide()
+        text = QLabel(status_lbl)
+        text.setStyleSheet(
+            f"color: {color}; font-size: 10px; font-weight: bold; {_FONT} background: transparent;"
+        )
+        row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)
+        return host
+
     def _build_batch_card(self, batch: RenderBatchRecord) -> QFrame:
         frame = QFrame()
         frame.setObjectName("batchFrame")
@@ -192,11 +224,17 @@ class RenderQueueHistoryDialog(SteempegDialog):
 
         when = _format_batch_when(batch.finished_at or batch.started_at)
         summary = _batch_summary(batch)
+        head_row = QHBoxLayout()
+        head_row.setSpacing(6)
+        cal = QLabel("📅")
+        cal.setStyleSheet(f"font-size: 12px; background: transparent; border: none; {_FONT}")
         head = QLabel(f"{when}  •  {summary}")
         head.setStyleSheet(
             f"color: #c4b5e8; font-size: 12px; font-weight: bold; {_FONT}"
         )
-        layout.addWidget(head)
+        head_row.addWidget(cal, 0, Qt.AlignmentFlag.AlignVCenter)
+        head_row.addWidget(head, 1, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(head_row)
 
         for job_data in batch.jobs:
             layout.addWidget(self._build_job_row(job_data))
@@ -227,14 +265,17 @@ class RenderQueueHistoryDialog(SteempegDialog):
             status_lbl = st.value.capitalize()
 
         title_line = QHBoxLayout()
+        title_line.setSpacing(8)
+        game_icon = QLabel()
+        set_game_icon_label(game_icon, job, size=_JOB_TITLE_ICON)
         name = QLabel(job.game_name.strip() or os.path.basename(job.clip_path))
-        name.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 12px; {_FONT}")
-        badge = QLabel(status_lbl)
-        badge.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: bold; {_FONT}"
+        name.setStyleSheet(
+            f"color: #f0f0f0; font-size: 13px; {_FONT_SEMIBOLD} background: transparent;"
         )
-        title_line.addWidget(name, 1)
-        title_line.addWidget(badge)
+        badge = self._status_badge(status_key, status_lbl, color)
+        title_line.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_line.addWidget(name, 1, Qt.AlignmentFlag.AlignVCenter)
+        title_line.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addLayout(title_line)
 
         meta = QLabel(
@@ -264,16 +305,18 @@ class RenderQueueHistoryDialog(SteempegDialog):
 
         if file_exists and status_key == JobStatus.COMPLETED.value:
             btn_row = QHBoxLayout()
+            btn_row.setContentsMargins(0, 8, 0, 0)
+            btn_row.setSpacing(8)
             btn_row.addStretch()
             btn_folder = QPushButton("Open folder")
             btn_folder.setCursor(Qt.PointingHandCursor)
-            btn_folder.setStyleSheet(_BTN_STYLE)
+            btn_folder.setStyleSheet(_PILL_BTN_STYLE)
             btn_folder.clicked.connect(
                 lambda _=False, p=out_path: open_in_file_manager(os.path.dirname(p))
             )
             btn_open = QPushButton("Open file")
             btn_open.setCursor(Qt.PointingHandCursor)
-            btn_open.setStyleSheet(_BTN_STYLE)
+            btn_open.setStyleSheet(_PILL_BTN_STYLE)
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
             btn_row.addWidget(btn_folder)
             btn_row.addWidget(btn_open)
