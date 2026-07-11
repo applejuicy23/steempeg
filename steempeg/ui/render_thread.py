@@ -17,6 +17,7 @@ import psutil
 from PySide6.QtCore import QThread, Signal
 
 from steempeg.render.output_formats import build_audio_args, video_encoder_extra_args
+from steempeg.core.dash.mpd import estimate_render_duration_sec
 
 
 class RenderThread(QThread):
@@ -49,6 +50,42 @@ class RenderThread(QThread):
         self.is_cancelled = False
         self.is_paused = False
         self.current_process = None
+
+    @staticmethod
+    def _parse_ffmpeg_time_hms(line: str) -> float | None:
+        match = re.search(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)", line)
+        if not match:
+            return None
+        h, m, s = float(match.group(1)), float(match.group(2)), float(match.group(3))
+        return h * 3600 + m * 60 + s
+
+    @staticmethod
+    def _parse_ffmpeg_duration_hms(line: str) -> float | None:
+        match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)", line)
+        if not match:
+            return None
+        h, m, s = float(match.group(1)), float(match.group(2)), float(match.group(3))
+        return h * 3600 + m * 60 + s
+
+    def _emit_part_progress(
+        self,
+        part_index: int,
+        part_count: int,
+        current_sec: float,
+        duration_sec: float,
+        last_pct: list,
+    ) -> None:
+        if duration_sec <= 0:
+            return
+        part_frac = min(1.0, max(0.0, current_sec / duration_sec))
+        overall = ((part_index + part_frac) / part_count) * 100.0
+        overall = min(99.9, overall)
+        if last_pct and abs(overall - last_pct[0]) < 0.4:
+            return
+        last_pct[:] = [overall]
+        self.progress_signal.emit(
+            f"Part {part_index + 1}/{part_count}.. ({overall:.1f}%)"
+        )
 
     def cancel(self):
         """ Force kills the FFmpeg process. """
@@ -201,6 +238,11 @@ class RenderThread(QThread):
 
                 logging.debug(f"FFmpeg cmd for part {idx}: {cmd}")
 
+                expected_duration = estimate_render_duration_sec(
+                    mpd,
+                    trim_duration_sec=self.trim_duration_sec if is_trim else -1.0,
+                )
+
                 # Launch FFmpeg
                 self.current_process = subprocess.Popen( 
                     cmd, shell=False, cwd=os.path.dirname(mpd),
@@ -208,8 +250,10 @@ class RenderThread(QThread):
                     stderr=subprocess.STDOUT, universal_newlines=True, encoding='utf-8', errors='ignore'
                 )
 
-                total_duration = 0
+                ffmpeg_duration = 0.0
+                progress_duration = expected_duration
                 last_ffmpeg_output = []
+                last_emitted_pct: list[float] = []
 
                 # Read FFmpeg logs in real time
                 for line in self.current_process.stdout:
@@ -218,33 +262,37 @@ class RenderThread(QThread):
                         
                     clean_line = line.strip()
                     if clean_line:
-                        # Collect the last 5 lines of logs for output in case of an error
                         logging.debug(f"[FFmpeg] {clean_line}")
                         last_ffmpeg_output.append(clean_line)
                         if len(last_ffmpeg_output) > 5:
                             last_ffmpeg_output.pop(0)
-                            
-                    # Parse the total duration of the video
-                    if total_duration == 0:
-                        dur_match = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)", line)
-                        if dur_match:
-                            h, m, s = float(dur_match.group(1)), float(dur_match.group(2)), float(dur_match.group(3))
-                            total_duration = h * 3600 + m * 60 + s
 
-                    # Parse the current render time to calculate percentages
-                    time_match = re.search(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)", line)
-                    if time_match and total_duration > 0:
-                        h, m, s = float(time_match.group(1)), float(time_match.group(2)), float(time_match.group(3))
-                        current_time = h * 3600 + m * 60 + s
-                        
-                        # Calculating tenths of a unit for perfect smoothness!
-                        percent = (current_time / total_duration) * 100.0
-                        self.progress_signal.emit(f"Part {idx+1}/{len(self.mpd_paths)}.. ({min(percent, 100.0):.1f}%)")
+                    parsed_dur = self._parse_ffmpeg_duration_hms(line)
+                    if parsed_dur and parsed_dur > 0:
+                        ffmpeg_duration = parsed_dur
+                        if progress_duration <= 0:
+                            progress_duration = ffmpeg_duration
+                        elif ffmpeg_duration > progress_duration * 2:
+                            # Manifest/ffmpeg duration inflated — keep chunk-based estimate.
+                            pass
+                        else:
+                            progress_duration = min(progress_duration, ffmpeg_duration)
+
+                    current_time = self._parse_ffmpeg_time_hms(line)
+                    if current_time is not None and progress_duration > 0:
+                        self._emit_part_progress(
+                            idx,
+                            len(self.mpd_paths),
+                            current_time,
+                            progress_duration,
+                            last_emitted_pct,
+                        )
 
                 self.current_process.wait()
                 
-                # If this was an ultra-fast copy (Original), manually set to 100%.
-                self.progress_signal.emit(f"Part {idx+1}/{len(self.mpd_paths)}.. (100%)")
+                self.progress_signal.emit(
+                    f"Part {idx + 1}/{len(self.mpd_paths)}.. (100%)"
+                )
                 
                 # Post-process checks
                 if self.is_cancelled:
