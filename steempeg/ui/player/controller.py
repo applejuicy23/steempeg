@@ -151,8 +151,8 @@ class PlayerMixin:
         self._active_play_media_path = None
         self._rendered_media_path = None
 
-        if hasattr(self, 'btn_close_clip'):
-            self.btn_close_clip.hide()
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(False)
         if hasattr(self, 'custom_text_label'):
             self.custom_text_label.setText("Select a clip to preview...")
         if hasattr(self, 'custom_icon_label'):
@@ -1565,8 +1565,8 @@ class PlayerMixin:
         self._awaiting_first_frame = True
         if hasattr(self, "video_stack") and hasattr(self, "video_blank_frame"):
             self.video_stack.setCurrentWidget(self.video_blank_frame)
-        if hasattr(self, "btn_close_clip"):
-            self.btn_close_clip.show()
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(True)
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.setEnabled(True)
 
@@ -1588,6 +1588,8 @@ class PlayerMixin:
             logging.error("MPV play file failed for %s: %s", abs_path, exc)
             self._is_switching = False
             return
+
+        QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             self.custom_timeline.canvas.playback_speed = float(getattr(self.player, "speed", 1.0) or 1.0)
@@ -1643,8 +1645,8 @@ class PlayerMixin:
                 self._clear_player_surface()
                 if hasattr(self, '_reset_player_placeholder_default'):
                     self._reset_player_placeholder_default()
-                if hasattr(self, 'btn_close_clip'):
-                    self.btn_close_clip.hide()
+                if hasattr(self, "set_player_header_clip_controls_visible"):
+                    self.set_player_header_clip_controls_visible(False)
                 if hasattr(self.ui, 'btn_start'):
                     self.ui.btn_start.setEnabled(False)
                 if hasattr(self, 'update_playback_badge'):
@@ -1686,6 +1688,7 @@ class PlayerMixin:
         all_mpds = [mpd_override] if mpd_override else self.get_all_mpd_paths(clip_path)
         if not all_mpds:
             logging.warning("No MPD found for clip: %s", clip_path)
+            self._is_switching = False
             return
 
         mpd_path = all_mpds[0] 
@@ -1771,8 +1774,8 @@ class PlayerMixin:
         self._awaiting_first_frame = True
         if hasattr(self, 'video_stack') and hasattr(self, 'video_blank_frame'):
             self.video_stack.setCurrentWidget(self.video_blank_frame)
-        if hasattr(self, 'btn_close_clip'): 
-            self.btn_close_clip.show()
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(True)
         if hasattr(self, 'update_playback_badge'):
             self.update_playback_badge()
         if hasattr(self, 'update_clip_health_button'):
@@ -1798,10 +1801,16 @@ class PlayerMixin:
         self._playback_last_time_pos = None
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
-        
-        # Start the video and unpause it.
-        self.player.play(abs_path) 
-        self.player.pause = False
+
+        try:
+            self.player.play(abs_path)
+            self.player.pause = False
+        except Exception as exc:
+            logging.error("MPV play failed for %s: %s", abs_path, exc)
+            self._is_switching = False
+            return
+
+        QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
         # Keep the timeline interpolation in sync with mpv's current rate from the start
         # (the speed setting persists across clips), so the playhead doesn't jitter.
@@ -2204,3 +2213,82 @@ class PlayerMixin:
             os.startfile(directory)
         except Exception as exc:
             logging.error("Failed to open screenshots folder: %s", exc)
+
+    def _init_preview_quality(self) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        saved = self.load_user_settings().get(pq.SETTINGS_KEY, pq.DEFAULT_QUALITY)
+        self._preview_quality_id = pq.normalize_quality_id(saved)
+
+    def _apply_saved_preview_quality_to_player(self, retry: int = 0) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        preset_id = pq.normalize_quality_id(getattr(self, "_preview_quality_id", pq.DEFAULT_QUALITY))
+        player = getattr(self, "player", None)
+        if (
+            player
+            and preset_id != pq.DEFAULT_QUALITY
+            and pq.source_height(player) <= 0
+            and retry < 20
+        ):
+            QTimer.singleShot(80, lambda: self._apply_saved_preview_quality_to_player(retry + 1))
+            return
+        if not pq.apply_mpv_preview_quality(player, preset_id):
+            self._preview_quality_id = pq.DEFAULT_QUALITY
+            if hasattr(self, "save_user_settings"):
+                self.save_user_settings(pq.SETTINGS_KEY, pq.DEFAULT_QUALITY)
+
+    def set_preview_quality(self, preset_id: str, *, persist: bool = True) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        preset_id = pq.normalize_quality_id(preset_id)
+        if preset_id == getattr(self, "_preview_quality_id", None):
+            return
+        self._preview_quality_id = preset_id
+        if not pq.apply_mpv_preview_quality(getattr(self, "player", None), preset_id):
+            self._preview_quality_id = pq.DEFAULT_QUALITY
+            preset_id = pq.DEFAULT_QUALITY
+        if persist:
+            self.save_user_settings(pq.SETTINGS_KEY, preset_id)
+
+    def show_preview_quality_menu(self) -> None:
+        from PySide6.QtGui import QActionGroup
+        from PySide6.QtWidgets import QMenu
+
+        from steempeg.ui.player import preview_quality as pq
+
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(pq.menu_stylesheet())
+
+        title = menu.addAction("Preview quality")
+        title.setEnabled(False)
+
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        current = pq.normalize_quality_id(getattr(self, "_preview_quality_id", pq.DEFAULT_QUALITY))
+
+        for preset in pq.PRESETS:
+            action = menu.addAction(preset.label)
+            action.setCheckable(True)
+            action.setChecked(preset.id == current)
+            action.setData(preset.id)
+            group.addAction(action)
+
+        def _on_quality_picked(action) -> None:
+            if action is None:
+                return
+            pid = action.data()
+            if pid:
+                QTimer.singleShot(0, lambda p=str(pid): self.set_preview_quality(p))
+
+        group.triggered.connect(_on_quality_picked)
+
+        menu.addSeparator()
+        footnote = menu.addAction("Does not affect export")
+        footnote.setEnabled(False)
+
+        anchor = getattr(self, "btn_preview_settings", None)
+        if anchor is not None:
+            menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        else:
+            menu.exec()
