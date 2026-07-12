@@ -42,6 +42,11 @@ class BufferingOverlay(QWidget):
         self.update()
 
     def show_loading(self, anchor_widget, message="Buffering…"):
+        from PySide6.QtWidgets import QApplication
+
+        if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
+            self.hide_loading()
+            return
         self._message = message
         self._reposition(anchor_widget)
         if not self._spin.isActive():
