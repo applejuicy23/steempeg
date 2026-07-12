@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -26,6 +25,7 @@ from steempeg.ui import design_tokens as tok
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.message_dialog import steempeg_question
 
 _DIALOG_STYLE = """
     QLabel { background: transparent; border: none; }
@@ -91,6 +91,8 @@ _PILL_BTN_STYLE = """
 
 class RenderQueueHistoryDialog(SteempegDialog):
     open_output_requested = Signal(str)
+    open_in_rendered_requested = Signal(str)
+    open_source_clip_requested = Signal(str)
 
     def __init__(
         self,
@@ -180,13 +182,11 @@ class RenderQueueHistoryDialog(SteempegDialog):
     def _confirm_clear(self) -> None:
         if not self._batches:
             return
-        if QMessageBox.question(
+        if not steempeg_question(
             self,
             "Clear history",
             "Remove all saved render batches?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        ) != QMessageBox.Yes:
+        ):
             return
         self._batches.clear()
         self.done(2)
@@ -318,8 +318,54 @@ class RenderQueueHistoryDialog(SteempegDialog):
             btn_open.setCursor(Qt.PointingHandCursor)
             btn_open.setStyleSheet(_PILL_BTN_STYLE)
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
+            btn_library = QPushButton("Rendered videos")
+            btn_library.setCursor(Qt.PointingHandCursor)
+            btn_library.setStyleSheet(_PILL_BTN_STYLE)
+            btn_library.clicked.connect(
+                lambda _=False, p=out_path: self._request_open_in_rendered(p)
+            )
             btn_row.addWidget(btn_folder)
             btn_row.addWidget(btn_open)
+            btn_row.addWidget(btn_library)
+            row.addLayout(btn_row)
+        elif status_key in (JobStatus.COMPLETED.value, JobStatus.ERROR.value):
+            btn_row = QHBoxLayout()
+            btn_row.setContentsMargins(0, 8, 0, 0)
+            btn_row.setSpacing(8)
+            btn_row.addStretch()
+            btn_details = QPushButton("Details")
+            btn_details.setCursor(Qt.PointingHandCursor)
+            btn_details.setStyleSheet(_PILL_BTN_STYLE)
+            btn_details.clicked.connect(
+                lambda _=False, data=job_data: self._show_job_details(data)
+            )
+            btn_row.addWidget(btn_details)
+            clip_path = (job.clip_path or "").strip()
+            if clip_path and os.path.isdir(clip_path):
+                btn_source = QPushButton("Source clip")
+                btn_source.setCursor(Qt.PointingHandCursor)
+                btn_source.setStyleSheet(_PILL_BTN_STYLE)
+                btn_source.clicked.connect(
+                    lambda _=False, p=clip_path: self._request_open_source_clip(p)
+                )
+                btn_row.addWidget(btn_source)
             row.addLayout(btn_row)
 
         return frame
+
+    def _show_job_details(self, job_data: dict) -> None:
+        from steempeg.ui.render_history_detail_dialog import RenderHistoryDetailDialog
+
+        dlg = RenderHistoryDetailDialog(job_data, parent=self)
+        dlg.open_source_clip_requested.connect(self._request_open_source_clip)
+        dlg.open_in_rendered_requested.connect(self._request_open_in_rendered)
+        dlg.open_folder_requested.connect(lambda p: reveal_in_file_manager(p))
+        dlg.exec()
+
+    def _request_open_in_rendered(self, path: str) -> None:
+        self.open_in_rendered_requested.emit(path)
+        self.accept()
+
+    def _request_open_source_clip(self, path: str) -> None:
+        self.open_source_clip_requested.emit(path)
+        self.accept()

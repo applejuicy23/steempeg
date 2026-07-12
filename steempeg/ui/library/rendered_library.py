@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QTableWidget,
@@ -41,6 +40,13 @@ from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
+from steempeg.ui.message_dialog import (
+    steempeg_confirm_delete,
+    steempeg_critical,
+    steempeg_information,
+    steempeg_question,
+    steempeg_warning,
+)
 
 RENDERED_VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}
 RENDERED_AUDIO_EXTS = {".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".opus"}
@@ -688,6 +694,47 @@ class RenderedLibraryMixin:
             self.update_rendered_selection()
         return True
 
+    def open_in_rendered_videos(self, file_path: str, *, play: bool = True) -> bool:
+        """Switch to Rendered videos, select the file, and optionally start preview."""
+        if not file_path or not os.path.isfile(file_path):
+            return False
+        self.open_library_panel("rendered")
+        if self._select_rendered_path(file_path, play=play):
+            return True
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        steempeg_warning(
+            self.ui,
+            "Rendered videos",
+            "This file is not in the library scan folders.\n\n"
+            "Check that it still exists and that your export folder in render settings "
+            "matches where the file was saved.",
+        )
+        return False
+
+    def open_source_clip(self, clip_path: str, *, play: bool = True) -> bool:
+        """Switch to Clips Manager and select the original Steam clip folder."""
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        if not clip_path or not self._is_valid_clip_path(clip_path):
+            steempeg_warning(
+                self.ui,
+                "Source clip",
+                "The original clip folder was not found.\n\n"
+                "It may have been moved or deleted from your library folders.",
+            )
+            return False
+        self.open_library_panel("clips")
+        if self._select_clip_path(clip_path, play=play):
+            return True
+        steempeg_warning(
+            self.ui,
+            "Source clip",
+            "Could not select this clip in the library.\n\n"
+            "Make sure its folder is still in your Clips Manager scan list.",
+        )
+        return False
+
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
         self.clips_page = QWidget()
@@ -1327,12 +1374,21 @@ class RenderedLibraryMixin:
         if count == 0:
             return
         action_open = menu.addAction("📂 Open in folder")
+        if count == 1:
+            path = file_paths[0]
+            meta = self._lookup_rendered_source_meta(path, os.path.basename(path))
+            clip_path = (meta.get("clip_path") or "").strip()
+            action_source = None
+            if clip_path and self._is_valid_clip_path(clip_path):
+                action_source = menu.addAction("🎮 Open source clip")
         action_delete = menu.addAction(
             "🗑️ Delete file" if count == 1 else f"🗑️ Delete files ({count})"
         )
         if count == 1:
             path = file_paths[0]
             action_open.triggered.connect(lambda: self.open_rendered_folder(path))
+            if action_source is not None:
+                action_source.triggered.connect(lambda p=clip_path: self.open_source_clip(p))
             action_delete.triggered.connect(lambda: self.delete_rendered_file(path))
         else:
             action_open.setEnabled(False)
@@ -1379,17 +1435,12 @@ class RenderedLibraryMixin:
         paths = [p for p in file_paths if p and os.path.isfile(p)]
         if not paths:
             return
-        msg = QMessageBox(self.ui)
-        msg.setWindowTitle("Delete rendered file" if len(paths) == 1 else "Delete rendered files")
-        msg.setText(
-            "Delete this rendered file?" if len(paths) == 1 else f"Delete {len(paths)} rendered files?"
-        )
-        msg.setInformativeText("This cannot be undone.")
-        msg.setIcon(QMessageBox.Icon.Warning)
-        btn_delete = msg.addButton("🗑️ Delete", QMessageBox.ButtonRole.AcceptRole)
-        msg.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        if msg.clickedButton() != btn_delete:
+        if not steempeg_confirm_delete(
+            self.ui,
+            "Delete rendered file" if len(paths) == 1 else "Delete rendered files",
+            "Delete this rendered file?" if len(paths) == 1 else f"Delete {len(paths)} rendered files?",
+            detail="This cannot be undone.",
+        ):
             return
 
         playing = getattr(self, "_rendered_media_path", None) or getattr(self, "_preview_clip_path", None)
@@ -1408,7 +1459,7 @@ class RenderedLibraryMixin:
                     os.remove(meta_sidecar)
             except Exception as exc:
                 logging.error("Failed to delete rendered file %s: %s", file_path, exc)
-                QMessageBox.critical(self.ui, "Error", f"Could not delete:\n{file_path}\n\n{exc}")
+                steempeg_critical(self.ui, "Error", f"Could not delete:\n{file_path}\n\n{exc}")
                 return
 
         self._rendered_output_meta_index = None
