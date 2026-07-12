@@ -55,13 +55,53 @@ def display_path(path: str) -> str:
     return path
 
 
-def open_in_file_manager(path):
-    """Open a file or folder in the OS file manager. Does nothing if it is missing."""
-    if not os.path.exists(path):
+def open_in_file_manager(path, *, reveal: bool = False):
+    """Open a file or folder in the OS file manager.
+
+    With ``reveal=True``, highlight ``path`` in its parent window when supported.
+    """
+    if not path:
+        return
+    norm = os.path.normpath(path)
+    if reveal:
+        reveal_in_file_manager(norm)
+        return
+    if not os.path.exists(norm):
         return
     if sys.platform == "win32":
-        os.startfile(path)
+        os.startfile(norm)  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.run(["open", path])
+        subprocess.run(["open", norm], check=False)
     else:
-        subprocess.run(["xdg-open", path])
+        subprocess.run(["xdg-open", norm], check=False)
+
+
+def reveal_in_file_manager(path: str) -> None:
+    """Open the file manager with ``path`` selected/highlighted."""
+    if not path:
+        return
+    norm = os.path.normpath(path)
+    if os.path.exists(norm):
+        if sys.platform == "win32":
+            subprocess.run(["explorer", "/select,", norm], check=False)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", "-R", norm], check=False)
+        else:
+            for cmd in (
+                ["nautilus", "--select", norm],
+                ["nemo", "--select", norm],
+                ["dolphin", "--select", norm],
+                ["thunar", "--select", norm],
+                ["pcmanfm", "--select", norm],
+            ):
+                try:
+                    subprocess.run(cmd, check=False)
+                    return
+                except FileNotFoundError:
+                    continue
+            open_in_file_manager(os.path.dirname(norm) if os.path.isfile(norm) else norm)
+        return
+
+    parent = os.path.dirname(norm)
+    if parent and os.path.isdir(parent):
+        open_in_file_manager(parent)
