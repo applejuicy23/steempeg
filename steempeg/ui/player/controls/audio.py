@@ -7,11 +7,23 @@ volume is remembered across mutes. The owning player connects to ``self.slider``
 import os
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QLabel, QPushButton, QSlider, QWidget
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets import SmartSliderFilter
+
+_ROUND_BTN_STYLE = """
+    QPushButton { background-color: #4e4e4e; border-radius: 20px; }
+    QPushButton:hover { background-color: #5a5a5a; }
+"""
+
+
+def _drag_value_font() -> QFont:
+    font = QFont("Segoe UI", 11)
+    font.setBold(True)
+    return font
 
 
 class VolumeControlWidget(QWidget):
@@ -47,10 +59,7 @@ class VolumeControlWidget(QWidget):
         self.btn_icon.move(0, 0)
         self.btn_icon.setCursor(Qt.PointingHandCursor)
         self.btn_icon.setToolTip("Mute / Unmute Volume")
-        self.btn_icon.setStyleSheet("""
-            QPushButton { background-color: #4e4e4e; border-radius: 20px; }
-            QPushButton:hover { background-color: #5a5a5a; }
-        """)
+        self.btn_icon.setStyleSheet(_ROUND_BTN_STYLE)
         
         # Set maximum volume (3) by default
         if not self.icon_vol3.isNull():
@@ -88,7 +97,10 @@ class VolumeControlWidget(QWidget):
         self.lbl_percent = QLabel("100%", self)
         self.lbl_percent.setFixedSize(45, 20)
         self.lbl_percent.move(136, 10)
-        self.lbl_percent.setStyleSheet("color: white; font-size: 11px; font-weight: bold;")
+        self.lbl_percent.setFont(_drag_value_font())
+        self.lbl_percent.setStyleSheet(
+            f"color: white; font-family: {tok.FONT_APP}; font-weight: bold; background: transparent;"
+        )
         self.lbl_percent.setAlignment(Qt.AlignCenter)
 
         self.slider.hide()
