@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.infra.paths import open_in_file_manager
+from steempeg.infra.paths import reveal_in_file_manager
 from steempeg.render.queue import JobStatus, STATUS_COLORS
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.render.queue_history import RenderBatchRecord, parse_history_job
@@ -312,7 +312,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
             btn_folder.setCursor(Qt.PointingHandCursor)
             btn_folder.setStyleSheet(_PILL_BTN_STYLE)
             btn_folder.clicked.connect(
-                lambda _=False, p=out_path: open_in_file_manager(os.path.dirname(p))
+                lambda _=False, p=out_path: reveal_in_file_manager(p)
             )
             btn_open = QPushButton("Open file")
             btn_open.setCursor(Qt.PointingHandCursor)
