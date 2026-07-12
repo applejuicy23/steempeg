@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -24,6 +23,7 @@ from steempeg.infra.reports import (
     github_issue_body,
 )
 from steempeg.version import APP_VERSION_STR
+from steempeg.ui.message_dialog import steempeg_critical, steempeg_information
 
 
 _REPORT_DIALOG_STYLE = """
@@ -141,7 +141,7 @@ def show_report_dialog(app):
     def on_copy():
         text = build_report_text(_description(), _context())
         QGuiApplication.clipboard().setText(text)
-        QMessageBox.information(dialog, "Copied", "Report summary copied to clipboard.")
+        steempeg_information(dialog, "Copied", "Report summary copied to clipboard.")
 
     def on_save():
         try:
@@ -152,19 +152,19 @@ def show_report_dialog(app):
                 include_mpv_log=chk_mpv.isChecked(),
             )
             paths.open_in_file_manager(path)
-            QMessageBox.information(
+            steempeg_information(
                 dialog,
                 "Report saved",
                 f"Report bundle saved:\n{path}\n\nAttach this zip to a GitHub issue.",
             )
         except Exception as exc:
-            QMessageBox.critical(dialog, "Error", f"Could not create report bundle:\n{exc}")
+            steempeg_critical(dialog, "Error", f"Could not create report bundle:\n{exc}")
 
     def on_github():
         body = github_issue_body(_description(), _context())
         QGuiApplication.clipboard().setText(body)
         webbrowser.open(GITHUB_ISSUES_URL)
-        QMessageBox.information(
+        steempeg_information(
             dialog,
             "GitHub Issues",
             "Issue page opened in your browser.\n"

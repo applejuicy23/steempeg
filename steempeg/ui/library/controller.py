@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPushButton,
     QTableWidgetItem,
     QWidget,
@@ -43,6 +42,13 @@ from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse
 from steempeg.infra import cache as json_cache
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
+from steempeg.ui.message_dialog import (
+    steempeg_confirm_delete,
+    steempeg_critical,
+    steempeg_information,
+    steempeg_question,
+    steempeg_warning,
+)
 
 
 _LIBRARY_MENU_STYLE = """
@@ -594,18 +600,15 @@ class LibraryMixin:
         """Remove every clip classified as dead from disk and refresh the library."""
         dead_paths = self._iter_dead_clip_paths()
         if not dead_paths:
-            QMessageBox.information(self.ui, "Dead Clips", "No dead clips in the library.")
+            steempeg_information(self.ui, "Dead Clips", "No dead clips in the library.")
             return
 
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self.ui,
             "Delete ALL Dead Clips",
-            f"Permanently delete {len(dead_paths)} dead clip folder(s)?\n"
-            "This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+            f"Permanently delete {len(dead_paths)} dead clip folder(s)?",
+            detail="This cannot be undone.",
+        ):
             return
 
         current = getattr(self, "_preview_clip_path", None)
@@ -632,14 +635,14 @@ class LibraryMixin:
         self.scan_clips()
 
         if failed:
-            QMessageBox.warning(
+            steempeg_warning(
                 self.ui,
                 "Delete ALL Dead Clips",
                 f"Deleted {len(dead_paths) - len(failed)} of {len(dead_paths)}.\n"
                 f"Could not remove: {', '.join(failed)}",
             )
         else:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Delete ALL Dead Clips",
                 f"Removed {len(dead_paths)} dead clip(s).",
@@ -1142,42 +1145,39 @@ class LibraryMixin:
     def delete_clip(self, clip_path):
         """ Prompts for confirmation and deletes the clip folder permanently. """
         
-        # 1. Double check with the user to prevent accidental deletion
-        msg = QMessageBox(self.ui)
-        msg.setWindowTitle("Delete Clip")
-        msg.setText("Are you sure you want to delete this clip?")
-        msg.setInformativeText("This will permanently delete the folder and all its contents.\nThis cannot be undone!")
-        msg.setIcon(QMessageBox.Warning)
-        
-        btn_delete = msg.addButton("🗑️ Delete", QMessageBox.AcceptRole)
-        btn_cancel = msg.addButton("Cancel", QMessageBox.RejectRole)
-        
-        msg.exec()
-        
-        if msg.clickedButton() == btn_delete:
-            try:
-                # 2. Stop MPV playback if the deleted clip is currently playing
-                selected_row = self.ui.table_clips.currentRow()
-                if selected_row >= 0:
-                    playing_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
-                    if playing_path == clip_path and hasattr(self, 'player'):
-                        self.player.stop()
-                        
-                # 3. Nuke the folder from orbit
-                shutil.rmtree(clip_path)
-                logging.info(f"Deleted clip folder: {clip_path}")
-                
-                # 4. Refresh the UI
-                self.scan_clips()
-                
-                if hasattr(self.ui, 'label_short_summary'):
-                    if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
-                if hasattr(self.ui, 'label_detailed_summary'):
-                    self.ui.label_detailed_summary.setText("Waiting for clip selection...")
-                    
-            except Exception as e:
-                logging.error(f"Failed to delete clip: {e}")
-                QMessageBox.critical(self.ui, "Error", f"Failed to delete the clip.\nIt might be in use by another program.\n\n{e}")
+        if not steempeg_confirm_delete(
+            self.ui,
+            "Delete Clip",
+            "Are you sure you want to delete this clip?",
+            detail="This will permanently delete the folder and all its contents.\nThis cannot be undone!",
+        ):
+            return
+
+        try:
+            # Stop MPV playback if the deleted clip is currently playing
+            selected_row = self.ui.table_clips.currentRow()
+            if selected_row >= 0:
+                playing_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
+                if playing_path == clip_path and hasattr(self, 'player'):
+                    self.player.stop()
+
+            shutil.rmtree(clip_path)
+            logging.info(f"Deleted clip folder: {clip_path}")
+            self.scan_clips()
+
+            if hasattr(self.ui, 'label_short_summary'):
+                if hasattr(self, 'reset_bottom_summary'):
+                    self.reset_bottom_summary()
+            if hasattr(self.ui, 'label_detailed_summary'):
+                self.ui.label_detailed_summary.setText("Waiting for clip selection...")
+
+        except Exception as e:
+            logging.error(f"Failed to delete clip: {e}")
+            steempeg_critical(
+                self.ui,
+                "Error",
+                f"Failed to delete the clip.\nIt might be in use by another program.\n\n{e}",
+            )
 
     def _load_clips_folders_from_settings(self):
         settings = self.load_user_settings()
@@ -1269,7 +1269,7 @@ class LibraryMixin:
         if added:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
             self.scan_clips(announce_duplicates=True)
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Steam folders found",
                 f"Added {len(added)} Steam clips folder(s):\n\n" + "\n".join(added),
@@ -1279,7 +1279,7 @@ class LibraryMixin:
         discovered = discover_steam_clips_folders()
         if not discovered:
             steam = get_steam_path()
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Steam folders",
                 "No Steam Game Recording folders were found.\n\n"
@@ -1288,7 +1288,7 @@ class LibraryMixin:
             return
 
         if before == after:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Steam folders",
                 "All discovered Steam folders are already in your library.",
@@ -1323,7 +1323,7 @@ class LibraryMixin:
             return
         folder = os.path.normpath(folder)
         if folder in self.clips_folders:
-            QMessageBox.information(self.ui, "Library folders", "That folder is already in the list.")
+            steempeg_information(self.ui, "Library folders", "That folder is already in the list.")
             return
         if not self.clips_folders:
             self.clips_folders = [folder]
@@ -1348,15 +1348,12 @@ class LibraryMixin:
         """Drop every saved library root."""
         if not self.clips_folders:
             return
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self.ui,
             "Clear library folders",
-            "Remove all clips folders from the library?\n"
-            "You can add them again with Choose Folder.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+            "Remove all clips folders from the library?",
+            detail="You can add them again with Choose Folder.",
+        ):
             return
         self.clips_folders = []
         self.clips_folder = ""
@@ -1725,7 +1722,7 @@ class LibraryMixin:
 
         if announce_duplicates and stats.duplicate_count:
             noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Duplicate clips ignored",
                 f"Ignored {stats.duplicate_count} {noun} across folders.\n\n"

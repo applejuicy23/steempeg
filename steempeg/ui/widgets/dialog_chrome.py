@@ -16,6 +16,9 @@ from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.window_chrome import _TrafficLight
 
+_SIDE_RAIL_PX = 2
+_CARD_RADIUS_PX = 10
+
 
 class _DialogTitleBar(QWidget):
     """Logo + title on the left, optional minimize + close dots on the right. Draggable."""
@@ -88,8 +91,8 @@ class _DialogTitleBar(QWidget):
             f"""
             QWidget#SteempegDialogBar {{
                 background-color: {bar_color};
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
+                border-top-left-radius: {_CARD_RADIUS_PX}px;
+                border-top-right-radius: {_CARD_RADIUS_PX}px;
                 border-bottom: 1px solid {tok.BORDER_SUBTLE};
             }}
             QLabel#SteempegDialogTitle {{
@@ -143,6 +146,8 @@ class SteempegDialog(QDialog):
         theme = tok.chrome_theme_colors(tok.DEFAULT_CHROME_THEME)
         bar_color = bar_color or theme["title_bar"]
         bg_color = bg_color or theme["app_bg"]
+        self._bar_color = bar_color
+        self._bg_color = bg_color
 
         self.setWindowTitle(title)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
@@ -154,6 +159,7 @@ class SteempegDialog(QDialog):
 
         self._card = QWidget(self)
         self._card.setObjectName("SteempegDialogCard")
+        self._card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         outer.addWidget(self._card)
 
         card_layout = QVBoxLayout(self._card)
@@ -166,20 +172,41 @@ class SteempegDialog(QDialog):
         self._title_bar.close_requested.connect(self.reject)
         card_layout.addWidget(self._title_bar)
 
-        content = QWidget(self._card)
+        body_host = QWidget(self._card)
+        body_host.setObjectName("SteempegDialogBodyHost")
+        body_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        body_layout = QVBoxLayout(body_host)
+        body_layout.setContentsMargins(_SIDE_RAIL_PX, 0, _SIDE_RAIL_PX, _SIDE_RAIL_PX)
+        body_layout.setSpacing(0)
+
+        content = QWidget(body_host)
         content.setObjectName("SteempegDialogContent")
+        content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.content_layout = QVBoxLayout(content)
         self.content_layout.setContentsMargins(*content_margins)
         self.content_layout.setSpacing(12)
-        card_layout.addWidget(content, 1)
+        body_layout.addWidget(content, 1)
+        card_layout.addWidget(body_host, 1)
 
+        self._apply_card_chrome(bar_color, bg_color)
+
+    def _apply_card_chrome(self, bar_color: str, bg_color: str) -> None:
+        """Title-bar-colored side rails so the shell does not melt into the desktop."""
+        inner_radius = max(_CARD_RADIUS_PX - _SIDE_RAIL_PX, 0)
         self.setStyleSheet(
             f"""
             QWidget#SteempegDialogCard {{
-                background-color: {bg_color};
-                border: 1px solid {tok.BORDER_DEFAULT};
-                border-radius: 10px;
+                background-color: {bar_color};
+                border: 2px solid {bar_color};
+                border-radius: {_CARD_RADIUS_PX}px;
             }}
-            QWidget#SteempegDialogContent {{ background-color: {bg_color}; }}
+            QWidget#SteempegDialogBodyHost {{
+                background-color: transparent;
+            }}
+            QWidget#SteempegDialogContent {{
+                background-color: {bg_color};
+                border-bottom-left-radius: {inner_radius}px;
+                border-bottom-right-radius: {inner_radius}px;
+            }}
             """
         )

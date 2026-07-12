@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QTextEdit,
@@ -79,6 +78,12 @@ from steempeg.ui.render_job_builder import (
     snapshot_settings_from_ui,
 )
 from steempeg.ui.render_thread import RenderThread
+from steempeg.ui.message_dialog import (
+    steempeg_critical,
+    steempeg_information,
+    steempeg_question,
+    steempeg_warning,
+)
 
 
 def _fmt_orig_mbps(value: float) -> str:
@@ -792,6 +797,8 @@ class RenderMixin:
             batches, parent=self.ui, bar_color=theme["title_bar"], bg_color=theme["app_bg"]
         )
         dlg.open_output_requested.connect(self.open_rendered_file)
+        dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
+        dlg.open_source_clip_requested.connect(self.open_source_clip)
         if dlg.exec() == 2:
             clear_history(self._queue_history_path())
 
@@ -2132,15 +2139,15 @@ class RenderMixin:
                 lines.append(f"{skipped} already in queue.")
             if failed:
                 lines.append(f"Could not queue: {', '.join(failed)}")
-            QMessageBox.information(self.ui, "Render Queue", "\n".join(lines))
+            steempeg_information(self.ui, "Render Queue", "\n".join(lines))
         elif skipped and not failed:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Render Queue",
                 "All selected clips are already in the queue.",
             )
         elif failed:
-            QMessageBox.warning(
+            steempeg_warning(
                 self.ui,
                 "Render Queue",
                 "Could not add the selected clip(s).\n"
@@ -2248,18 +2255,15 @@ class RenderMixin:
 
     def clear_render_queue(self) -> None:
         if getattr(self, "_queue_batch_active", False):
-            QMessageBox.warning(self.ui, "Render Queue", "Stop the batch render before clearing the queue.")
+            steempeg_warning(self.ui, "Render Queue", "Stop the batch render before clearing the queue.")
             return
         if not len(self.render_queue):
             return
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self.ui,
             "Clear Queue",
             f"Remove all {len(self.render_queue)} clip(s) from the render queue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        ):
             return
         self.render_queue.clear()
         self._on_queue_became_empty()
@@ -2445,20 +2449,20 @@ class RenderMixin:
             return
 
         if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
-            QMessageBox.warning(self.ui, "Error", "Please select a clip from the list first!")
+            steempeg_warning(self.ui, "Error", "Please select a clip from the list first!")
             return
 
         clip_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).data(Qt.UserRole)
         job = build_render_job_from_ui(self, clip_name)
         if job is None:
-            QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
+            steempeg_warning(self.ui, "Error", "session.mpd files not found inside this clip!")
             return
         self._start_render_job(job)
 
     def start_queue_batch_render(self) -> None:
         pending = self.render_queue.pending_count()
         if pending <= 0:
-            QMessageBox.information(self.ui, "Render Queue", "No queued clips to render.")
+            steempeg_information(self.ui, "Render Queue", "No queued clips to render.")
             return
 
         self._queue_batch_active = True
@@ -2493,14 +2497,14 @@ class RenderMixin:
         job.refresh_output_path()
         ffmpeg_exe = os.path.join(_bin_dir, "ffmpeg.exe")
         if not os.path.exists(ffmpeg_exe):
-            QMessageBox.critical(self.ui, "Error", "ffmpeg.exe not found!")
+            steempeg_critical(self.ui, "Error", "ffmpeg.exe not found!")
             if batch_mode:
                 self._stop_queue_batch()
             return
 
         params = resolve_render_params(job, ffmpeg_exe)
         if params is None:
-            QMessageBox.warning(self.ui, "Error", "session.mpd files not found inside this clip!")
+            steempeg_warning(self.ui, "Error", "session.mpd files not found inside this clip!")
             if batch_mode:
                 self._stop_queue_batch()
             return
@@ -2568,7 +2572,7 @@ class RenderMixin:
             if batch_mode:
                 self._stop_queue_batch()
             else:
-                QMessageBox.critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
+                steempeg_critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
 
     def _finish_queue_batch(self) -> None:
         self._queue_batch_active = False
@@ -2604,7 +2608,7 @@ class RenderMixin:
         self.update_playback_badge()
         if cancelled:
             self.update_status_indicator("Cancelled", "cancelled")
-            QMessageBox.information(self.ui, "Cancelled", "Queue render was cancelled.")
+            steempeg_information(self.ui, "Cancelled", "Queue render was cancelled.")
         self.update_status_indicator("Ready", "ready")
 
     def _show_steempeg_render_error_dialog(
@@ -2838,7 +2842,7 @@ class RenderMixin:
         elif "cancelled by user" in error_msg.lower():
             logging.warning("=== RENDER CANCELED ===")
             self.update_status_indicator("Cancelled", "cancelled")
-            QMessageBox.information(self.ui, "Cancelled", "Render was cancelled.")
+            steempeg_information(self.ui, "Cancelled", "Render was cancelled.")
             self.update_status_indicator("Ready", "ready")
 
         else:

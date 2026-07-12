@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QToolTip,
     QVBoxLayout,
     QWidget,
-    QMessageBox,
 )
 
 from steempeg.core.dash import health
@@ -36,6 +35,7 @@ from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.window_chrome import collapse_content_insets, force_full_redraw, restore_content_insets, set_window_transitions
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
+from steempeg.ui.message_dialog import steempeg_information
 
 
 class PlayerMixin:
@@ -2138,7 +2138,7 @@ class PlayerMixin:
         )
         app_id = getattr(canvas, "current_app_id", None)
         if not clip_path or not app_id:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Screenshot",
                 "Open a Steam Game Recording clip first — screenshot lookup needs the clip folder.",
@@ -2149,7 +2149,7 @@ class PlayerMixin:
             clip_path, getattr(self, "clips_folders", None) or []
         )
         if not steam_id:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Screenshot",
                 "Could not determine your Steam user id from the library folder path.",
@@ -2194,7 +2194,7 @@ class PlayerMixin:
             marker_time_ms=ctx["marker_ms"],
         )
         if not files:
-            QMessageBox.information(
+            steempeg_information(
                 self.ui,
                 "Screenshot",
                 "No matching Steam screenshot was found on disk.\n\n"
@@ -2243,7 +2243,7 @@ class PlayerMixin:
             if os.path.isdir(folder):
                 open_in_file_manager(folder)
             else:
-                QMessageBox.information(
+                steempeg_information(
                     self.ui,
                     "Screenshot folder",
                     "Steam screenshot folder was not found on disk.\n\n"

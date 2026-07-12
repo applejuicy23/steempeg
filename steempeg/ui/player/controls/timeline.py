@@ -16,21 +16,19 @@ import PySide6.QtWidgets as qtw
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
 from steempeg.ui.player.thumbnails import PreviewSniperWorker
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
@@ -880,57 +878,32 @@ class TimelineCanvas(QWidget):
 
     def edit_user_marker(self, marker):
         """ Opens the editing window and saves to Steam JSON. """
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Steam Marker")
-        dialog.setFixedSize(350, 250)
-        dialog.setStyleSheet("""
-            QDialog { background-color: #1e1e1e; color: white; }
-            QLabel { color: #ccc; font-weight: bold; }
-            QLineEdit, QTextEdit { background-color: #2d2d2d; color: white; border: 1px solid #555; border-radius: 4px; padding: 4px; }
-            QPushButton { background-color: #444; color: white; border-radius: 4px; padding: 6px; font-weight: bold; }
-            QPushButton:hover { background-color: #555; }
-        """)
-
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Title:"))
-        title_edit = QLineEdit(marker.get('title', ''))
-        layout.addWidget(title_edit)
-
-        layout.addWidget(QLabel("Description:"))
-        desc_edit = QTextEdit(marker.get('desc', ''))
-        layout.addWidget(desc_edit)
-
-        btn_layout = QHBoxLayout()
-        save_btn = QPushButton("Save")
-        cancel_btn = QPushButton("Cancel")
-        btn_layout.addStretch()
-        btn_layout.addWidget(cancel_btn)
-        btn_layout.addWidget(save_btn)
-        layout.addLayout(btn_layout)
-
-        save_btn.clicked.connect(dialog.accept)
-        cancel_btn.clicked.connect(dialog.reject)
-
+        dialog = EditSteamMarkerDialog(
+            marker.get('title', ''),
+            marker.get('desc', ''),
+            self,
+        )
         if dialog.exec():
-            # 1. Updating the program's memory
-            marker['title'] = title_edit.text().strip()
-            marker['desc'] = desc_edit.toPlainText().strip()
-            if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
+            marker['title'] = dialog.title_text
+            marker['desc'] = dialog.description_text
+            if hasattr(self, 'text_tooltip'):
+                self.text_tooltip.hide()
             self.update()
 
-            # 2. Overwriting in the JSON file by ID!
             json_path = getattr(self, 'current_json_path', None)
-            if not json_path or not os.path.exists(json_path): return
+            if not json_path or not os.path.exists(json_path):
+                return
             try:
-                with open(json_path, 'r', encoding='utf-8') as f: data = json.load(f)
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 if 'entries' in data:
                     for e in data['entries']:
                         if str(e.get('id')) == str(marker.get('id')):
                             e['title'] = marker['title']
-                            e['description'] = marker['desc'] # Steam uses 'description'
+                            e['description'] = marker['desc']
                             break
-                    with open(json_path, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4)
+                    with open(json_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=4)
             except Exception as e:
                 print(f"Edit error: {e}")
 

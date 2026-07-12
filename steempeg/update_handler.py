@@ -9,7 +9,7 @@ import zipfile
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.services.update_install import (
@@ -22,6 +22,7 @@ from steempeg.services.update_job import UpdateJob, load_update_job
 from steempeg.services.updater import UpdateDownloadThread
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.update_progress_dialog import UpdateProgressDialog
+from steempeg.ui.message_dialog import steempeg_critical
 
 
 def run_update_handler(job_path: str) -> int:
@@ -47,7 +48,7 @@ def run_update_handler(job_path: str) -> int:
     def fail(message: str) -> None:
         dialog.set_phase("error")
         dialog.set_detail(message)
-        QMessageBox.critical(dialog, "Update Failed", message)
+        steempeg_critical(dialog, "Update Failed", message)
 
     def on_download_done(success: bool, filepath: str, asset_name: str) -> None:
         if not success:

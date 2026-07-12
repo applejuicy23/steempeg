@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -45,6 +44,7 @@ from steempeg.services.release_catalog import (
 )
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.message_dialog import steempeg_question
 from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
 
 _ROW_NORMAL = """
@@ -767,14 +767,11 @@ class UpdateCenterDialog(SteempegDialog):
         backup = self._selected_backup()
         if not backup:
             return
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self,
             "Restore local backup",
             f"Restore v{backup.version_str} from {backup.folder_name}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
         self.restore_requested.emit(backup)
         self.accept()

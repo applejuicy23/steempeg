@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QMenu,
     QPushButton,
     QVBoxLayout,
@@ -28,6 +27,7 @@ from steempeg.infra import logging as log_util
 from steempeg.infra import paths
 from steempeg.infra.paths import get_resource_path
 from steempeg.version import APP_VERSION_STR
+from steempeg.ui.message_dialog import steempeg_information, steempeg_question, steempeg_warning
 
 
 _LOGS_MENU_STYLE = """
@@ -594,7 +594,7 @@ class LifecycleMixin:
             paths.open_in_file_manager(path)
             logging.info("Opened app log: %s", path)
         else:
-            QMessageBox.warning(self.ui, "Logs", "App log file not found for this session.")
+            steempeg_warning(self.ui, "Logs", "App log file not found for this session.")
 
     def open_mpv_log(self):
         path = getattr(self, 'current_mpv_log_file', None)
@@ -602,7 +602,7 @@ class LifecycleMixin:
             paths.open_in_file_manager(path)
             logging.info("Opened MPV log: %s", path)
         else:
-            QMessageBox.warning(self.ui, "Logs", "MPV log file not found for this session.")
+            steempeg_warning(self.ui, "Logs", "MPV log file not found for this session.")
 
     def confirm_clear_logs(self):
         logs_dir = getattr(self, 'logs_dir', None)
@@ -610,18 +610,15 @@ class LifecycleMixin:
             return
         count, size = log_util.logs_folder_stats(logs_dir)
         if count == 0:
-            QMessageBox.information(self.ui, "Clear logs", "The logs folder is already empty.")
+            steempeg_information(self.ui, "Clear logs", "The logs folder is already empty.")
             return
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self.ui,
             "Clear old logs",
             f"Delete old log files in:\n{logs_dir}\n\n"
             f"Currently {count} file(s), {log_util.format_bytes(size)}.\n\n"
             "Logs from this session will be kept.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        ):
             return
         keep = [
             getattr(self, 'current_log_file', None),
@@ -629,7 +626,7 @@ class LifecycleMixin:
         ]
         removed, freed = log_util.clear_log_files(logs_dir, keep_paths=keep)
         logging.info("User cleared logs: removed %d file(s), freed %s", removed, log_util.format_bytes(freed))
-        QMessageBox.information(
+        steempeg_information(
             self.ui,
             "Clear logs",
             f"Removed {removed} log file(s) ({log_util.format_bytes(freed)} freed).",
@@ -641,19 +638,16 @@ class LifecycleMixin:
             return
         count, size = log_util.cache_folder_stats(cache_dir)
         if count == 0:
-            QMessageBox.information(self.ui, "Clear cache", "The cache folder is already empty.")
+            steempeg_information(self.ui, "Clear cache", "The cache folder is already empty.")
             return
-        reply = QMessageBox.question(
+        if not steempeg_question(
             self.ui,
             "Clear cache",
             f"Delete everything in:\n{cache_dir}\n\n"
             f"{count} item(s), {log_util.format_bytes(size)}.\n\n"
             "Game icons, settings, and the saved render queue will be removed. "
             "They will be rebuilt on the next library scan.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        ):
             return
         removed, freed = log_util.clear_directory_contents(cache_dir)
         os.makedirs(cache_dir, exist_ok=True)
@@ -662,7 +656,7 @@ class LifecycleMixin:
         if hasattr(self, 'game_icons_cache'):
             self.game_icons_cache = {}
         logging.info("User cleared cache: removed %d item(s), freed %s", removed, log_util.format_bytes(freed))
-        QMessageBox.information(
+        steempeg_information(
             self.ui,
             "Clear cache",
             f"Removed {removed} item(s) ({log_util.format_bytes(freed)} freed).",

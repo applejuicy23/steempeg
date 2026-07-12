@@ -5,13 +5,19 @@ import subprocess
 import sys
 import webbrowser
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from steempeg.infra.paths import get_save_directory
 from steempeg.services.release_catalog import LocalBackup, ReleaseEntry, find_local_backups
 from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.github_rate_limit_dialog import GitHubRateLimitDialog
+from steempeg.ui.message_dialog import (
+    DialogButton,
+    steempeg_alert_actions,
+    steempeg_critical,
+    steempeg_warning,
+)
 from steempeg.ui.update_center import UpdateCenterDialog
 from steempeg.ui.update_confirm_dialog import UpdateConfirmChoice, UpdateConfirmDialog
 from steempeg.version import APP_VERSION_STR
@@ -26,7 +32,7 @@ class UpdaterMixin:
             self._open_update_center()
         except Exception as e:
             logging.error(f"UPDATER: Critical exception: {e}")
-            QMessageBox.critical(self.ui, "Updater Error", f"Could not open Update Center:\n{e}")
+            steempeg_critical(self.ui, "Updater Error", f"Could not open Update Center:\n{e}")
         finally:
             self.set_status("Ready")
             logging.info("--- UPDATER: check_for_updates finished ---")
@@ -105,10 +111,6 @@ class UpdaterMixin:
 
     def show_update_success(self, old_version, backup_folder):
         """Shows a nice window after a successful update."""
-        msg = QMessageBox(self.ui)
-        msg.setWindowTitle("Update Successful!")
-        msg.setIcon(QMessageBox.Information)
-
         text = (
             f"<h3>Steempeg is updated!</h3>"
             f"<p>Successfully updated from <b>v{old_version}</b> to the latest version.</p>"
@@ -119,16 +121,23 @@ class UpdaterMixin:
                 "<p><small>Restore via <b>Update Center</b>, restore local backup (v37+).</small></p>"
             )
 
-        msg.setText(text)
-
-        btn_ok = msg.addButton("Good!", QMessageBox.AcceptRole)
-        btn_folder = None
+        buttons = (DialogButton("Good!", "primary", accept=True),)
         if backup_folder and backup_folder != "None":
-            btn_folder = msg.addButton("📂 Open Backup Folder", QMessageBox.ActionRole)
+            buttons = (
+                DialogButton("📂 Open Backup Folder", "secondary", accept=True),
+                DialogButton("Good!", "primary", accept=True),
+            )
 
-        msg.exec()
+        clicked = steempeg_alert_actions(
+            self.ui,
+            "Update Successful!",
+            text,
+            buttons,
+            rich_text=True,
+            min_width=460,
+        )
 
-        if btn_folder and msg.clickedButton() == btn_folder:
+        if backup_folder and backup_folder != "None" and clicked == 0:
             backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
             if os.path.exists(backup_path):
                 os.startfile(backup_path)
@@ -138,7 +147,7 @@ class UpdaterMixin:
         exe_dir = os.path.dirname(sys.executable)
         backup_path = os.path.join(exe_dir, backup_folder_name)
         if not os.path.isdir(backup_path):
-            QMessageBox.warning(self.ui, "Restore Failed", f"Backup folder not found:\n{backup_folder_name}")
+            steempeg_warning(self.ui, "Restore Failed", f"Backup folder not found:\n{backup_folder_name}")
             return
 
         exe_name = os.path.basename(sys.executable)
