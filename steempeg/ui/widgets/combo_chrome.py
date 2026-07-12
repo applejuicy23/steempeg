@@ -142,8 +142,10 @@ def settings_panel_stylesheet(extra: str = "") -> str:
     return SETTINGS_COMBO_FIELD_RULES + COMBO_POPUP_ITEM_RULES + (extra or "")
 
 
-def compact_combo_stylesheet() -> str:
-    return COMPACT_COMBO_RULES + COMPACT_COMBO_POPUP_ITEM_RULES
+def compact_combo_stylesheet(*, settings_popup: bool = False) -> str:
+    """Clips Manager combo chrome; ``settings_popup=True`` matches render panel lists."""
+    popup = COMBO_POPUP_ITEM_RULES if settings_popup else COMPACT_COMBO_POPUP_ITEM_RULES
+    return COMPACT_COMBO_RULES + popup
 
 
 def set_combo_item_enabled(
