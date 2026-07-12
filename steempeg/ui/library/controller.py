@@ -764,21 +764,14 @@ class LibraryMixin:
         if not clip_path or not os.path.isdir(clip_path):
             return
 
-        confirm = QMessageBox.question(
-            self.ui,
-            "Force play dead clip",
-            "This clip is classified as Dead.\n\n"
-            "Steempeg can rebuild a salvage manifest from surviving chunks. "
-            "If this clip's own decoder header (init) is missing or corrupt, "
-            "recovery needs one healthy donor clip of the same game already in your library. "
-            "Without that donor, salvage usually cannot work.\n\n"
-            "You may see garbled video, only audio, or nothing. "
-            "If it plays, the clip stays labelled Dead but can be rendered.\n\n"
-            "Try anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        from steempeg.ui.dead_clip_dialogs import (
+            DeadClipSalvageDialog,
+            DeadClipSalvageFailedDialog,
+            dialog_theme,
         )
-        if confirm != QMessageBox.StandardButton.Yes:
+
+        confirm = DeadClipSalvageDialog(parent=self.ui, **dialog_theme(self))
+        if not (confirm.exec() and confirm.accepted_yes):
             return
 
         # Always rebuild a fresh salvage manifest from the *decodable* data on disk
@@ -789,15 +782,7 @@ class LibraryMixin:
         mpd_override = self._build_salvage_manifest(clip_path)
 
         if not mpd_override:
-            QMessageBox.warning(
-                self.ui,
-                "Nothing to salvage",
-                "Could not recover this clip.\n\n"
-                "Either there are no usable video chunks, or the decoder header is gone "
-                "and no healthy donor clip of the same game is in your library.\n\n"
-                "Add at least one working clip of this game, then try Force play (salvage) again. "
-                "Without a same-game donor, this dead clip cannot be revived.",
-            )
+            DeadClipSalvageFailedDialog(parent=self.ui, **dialog_theme(self)).exec()
             return
 
         # Register so get_all_mpd_paths resolves the salvage manifest everywhere
