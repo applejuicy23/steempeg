@@ -752,6 +752,35 @@ class RenderMixin:
         except OSError as exc:
             logging.warning("Could not save render history: %s", exc)
 
+    def _archive_single_render_to_history(self, job, output_file: str) -> None:
+        from steempeg.render.queue_history import append_batch, snapshot_completed_job
+
+        try:
+            append_batch(self._queue_history_path(), snapshot_completed_job(job, output_file))
+        except OSError as exc:
+            logging.warning("Could not save render history: %s", exc)
+
+    def _show_render_complete_dialog(self, job, output_file: str) -> None:
+        from steempeg.ui import design_tokens as tok
+        from steempeg.ui.render_complete_dialog import RenderCompleteChoice, RenderCompleteDialog
+
+        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        dlg = RenderCompleteDialog(
+            job,
+            output_file,
+            parent=self.ui,
+            bar_color=theme["title_bar"],
+            bg_color=theme["app_bg"],
+        )
+        dlg.exec()
+        choice = dlg.choice()
+        if choice == RenderCompleteChoice.OPEN_FOLDER:
+            self.open_rendered_folder(output_file)
+        elif choice == RenderCompleteChoice.PLAY:
+            self.open_rendered_file(output_file)
+        elif choice == RenderCompleteChoice.OPEN_HISTORY:
+            self.show_render_queue_history()
+
     def show_render_queue_history(self) -> None:
         from steempeg.ui.render_queue_history import RenderQueueHistoryDialog
 
@@ -2798,27 +2827,11 @@ class RenderMixin:
                     logging.debug("Rendered companion meta not saved: %s", exc)
 
             self.update_status_indicator("Success!", "success")
-            
-            # A CUSTOM SUCCESS WINDOW
-            msg_box = QMessageBox(self.ui)
-            msg_box.setWindowTitle("Success!")
-            msg_box.setText(f"Clip successfully saved to:\n{output_file}")
-            msg_box.setIcon(QMessageBox.Information)
-            
-            btn_folder = msg_box.addButton("Open Folder", QMessageBox.ActionRole)
-            btn_play = msg_box.addButton("Play Video", QMessageBox.ActionRole)
-            btn_ok = msg_box.addButton(QMessageBox.Ok)
-            
-            # The code pauses here. The user sees 100% in the background and a window.
-            msg_box.exec()
-            
-            # Handling User Selection
-            if msg_box.clickedButton() == btn_folder:
-                self.open_rendered_folder(output_file)
-                
-            elif msg_box.clickedButton() == btn_play:
-                file_path = os.path.abspath(output_file)
-                os.startfile(file_path)
+
+            if active_job and output_file:
+                if not getattr(self, "_queue_batch_active", False):
+                    self._archive_single_render_to_history(active_job, output_file)
+                self._show_render_complete_dialog(active_job, output_file)
 
             self.update_status_indicator("Ready", "ready")
 
