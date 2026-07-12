@@ -6,8 +6,9 @@ import os
 import re
 import webbrowser
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject
+from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextImageFormat
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -154,10 +156,29 @@ def _sanitize_notes(text: str) -> str:
     return text.replace(" — ", ": ").replace("— ", "")
 
 
-def _render_release_notes(edit: QTextEdit, body: str) -> None:
-    text = _sanitize_notes((body or "").strip() or "_No release notes provided._")
-    edit.document().setDefaultStyleSheet(
-        f"""
+_IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+def _image_placeholder(index: int) -> str:
+    return f"_(image {index + 1} loading…)_"
+
+
+def _split_release_images(body: str) -> tuple[str, list[tuple[str, str]]]:
+    images: list[tuple[str, str]] = []
+
+    def repl(match: re.Match) -> str:
+        alt = (match.group(1) or "image").strip()
+        url = match.group(2).strip()
+        if not url:
+            return ""
+        index = len(images)
+        images.append((alt, url))
+        return f"\n{_image_placeholder(index)}\n"
+
+    stripped = _IMG_MD_RE.sub(repl, body or "")
+    return stripped, images
+
+
+def _notes_document_style() -> str:
+    return f"""
         body {{ color: {tok.TEXT_PRIMARY}; font-family: {tok.FONT_UI}; font-size: 11px; }}
         h1, h2, h3, h4 {{ color: {tok.TEXT_TITLE}; margin: 10px 0 4px 0; font-size: 12px; }}
         strong {{ color: {tok.TEXT_TITLE}; font-weight: 600; }}
@@ -166,12 +187,104 @@ def _render_release_notes(edit: QTextEdit, body: str) -> None:
         p {{ margin: 4px 0; }}
         a {{ color: {tok.ACCENT_PRIMARY}; text-decoration: none; }}
         """
-    )
+
+
+def _apply_notes_markdown(edit: QTextEdit, body: str) -> list[tuple[str, str]]:
+    text = _sanitize_notes((body or "").strip() or "_No release notes provided._")
+    stripped, images = _split_release_images(text)
+    edit.document().setDefaultStyleSheet(_notes_document_style())
     try:
-        edit.setMarkdown(text)
+        edit.setMarkdown(stripped)
     except Exception:
-        plain = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        plain = re.sub(r"\*\*(.+?)\*\*", r"\1", stripped)
         edit.setPlainText(plain)
+    return images
+
+
+def _insert_note_image(edit: QTextEdit, placeholder: str, pixmap: QPixmap) -> None:
+    if pixmap.isNull():
+        return
+    doc = edit.document()
+    cursor = QTextCursor(doc)
+    cursor.movePosition(QTextCursor.MoveOperation.Start)
+    found = doc.find(placeholder, cursor)
+    if found.isNull():
+        return
+    found.removeSelectedText()
+    image = pixmap.toImage()
+    max_w = 460
+    if image.width() > max_w:
+        image = image.scaledToWidth(max_w, Qt.TransformationMode.SmoothTransformation)
+    fmt = QTextImageFormat()
+    fmt.setWidth(image.width())
+    fmt.setHeight(image.height())
+    resource_url = QUrl(f"notesimg://{id(image)}")
+    doc.addResource(QTextDocument.ResourceType.ImageResource, resource_url, image)
+    fmt.setName(resource_url.toString())
+    found.insertImage(fmt)
+    found.insertBlock()
+
+
+class _ReleaseNotesImageLoader(QObject):
+    """Fetch release-note images after the markdown text is already on screen."""
+
+    def __init__(self, edit: QTextEdit, images: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self._edit = edit
+        self._images = list(images)
+        self._nam = QNetworkAccessManager(self)
+        self._replies: list[QNetworkReply] = []
+
+    def cancel(self) -> None:
+        for reply in self._replies:
+            if reply.isRunning():
+                reply.abort()
+        self._replies.clear()
+
+    def start(self) -> None:
+        self.cancel()
+        if not self._images:
+            return
+        for idx, (_alt, url) in enumerate(self._images):
+            request = QNetworkRequest(QUrl(url))
+            request.setRawHeader(
+                b"User-Agent",
+                b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Steempeg",
+            )
+            request.setAttribute(
+                QNetworkRequest.Attribute.CacheLoadControlAttribute,
+                QNetworkRequest.CacheLoadControl.PreferCache,
+            )
+            reply = self._nam.get(request)
+            placeholder = _image_placeholder(idx)
+            reply.finished.connect(
+                lambda r=reply, ph=placeholder: self._on_finished(r, ph)
+            )
+            self._replies.append(reply)
+
+    def _on_finished(self, reply: QNetworkReply, placeholder: str) -> None:
+        if reply in self._replies:
+            self._replies.remove(reply)
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            reply.deleteLater()
+            return
+        data = reply.readAll()
+        reply.deleteLater()
+        if data.isEmpty():
+            return
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(data):
+            return
+        _insert_note_image(self._edit, placeholder, pixmap)
+
+
+def _render_release_notes(edit: QTextEdit, body: str, loader_parent: QObject) -> _ReleaseNotesImageLoader | None:
+    images = _apply_notes_markdown(edit, body)
+    if not images:
+        return None
+    loader = _ReleaseNotesImageLoader(edit, images, loader_parent)
+    loader.start()
+    return loader
 
 
 class _VersionRow(QFrame):
@@ -368,6 +481,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._latest_version = APP_VERSION_FLOAT
         self._row_widgets: list[_VersionRow | _PatchGroupWidget] = []
         self._group_widgets: list[_PatchGroupWidget] = []
+        self._notes_image_loader: _ReleaseNotesImageLoader | None = None
 
         self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
 
@@ -396,7 +510,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
         scroll.setWidget(self._list_host)
-        scroll.setMinimumHeight(200)
+        scroll.setMinimumHeight(180)
         root.addWidget(scroll, 1)
 
         notes_label = QLabel("Release notes")
@@ -405,9 +519,11 @@ class UpdateCenterDialog(SteempegDialog):
 
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
-        self._notes.setMinimumHeight(90)
+        self._notes.setMinimumHeight(110)
+        self._notes.setMaximumHeight(180)
+        self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._notes.setPlaceholderText("Select a version.")
-        root.addWidget(self._notes)
+        root.addWidget(self._notes, 0)
 
         self._notice_label = QLabel()
         self._notice_label.setWordWrap(True)
@@ -560,12 +676,15 @@ class UpdateCenterDialog(SteempegDialog):
 
     def _select_entry(self, entry: ReleaseEntry):
         self._selected = entry
+        if self._notes_image_loader is not None:
+            self._notes_image_loader.cancel()
+            self._notes_image_loader = None
         for widget in self._row_widgets:
             if isinstance(widget, _VersionRow):
                 widget.set_selected(widget._entry.version_float == entry.version_float)
             else:
                 widget.set_selected_entry(entry)
-        _render_release_notes(self._notes, entry.body)
+        self._notes_image_loader = _render_release_notes(self._notes, entry.body, self)
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
         if notice:
@@ -664,3 +783,9 @@ class UpdateCenterDialog(SteempegDialog):
         if self._backup_combo is not None:
             return self._backup_combo.currentData()
         return self._local_backups[0] if self._local_backups else None
+
+    def closeEvent(self, event):
+        if self._notes_image_loader is not None:
+            self._notes_image_loader.cancel()
+            self._notes_image_loader = None
+        super().closeEvent(event)
