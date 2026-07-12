@@ -1365,10 +1365,10 @@ class RenderedLibraryMixin:
         self.show_rendered_grid_context_menu(viewport_pos)
 
     def open_rendered_folder(self, file_path: str) -> None:
+        from steempeg.infra.paths import reveal_in_file_manager
+
         try:
-            folder = os.path.dirname(file_path)
-            if folder:
-                os.startfile(folder)
+            reveal_in_file_manager(file_path)
         except Exception as exc:
             logging.error("Failed to open rendered folder: %s", exc)
 
