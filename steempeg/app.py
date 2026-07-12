@@ -626,7 +626,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # so the label can't get clipped when the Clips Manager panel gets narrow.
         self.combo_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo_sort.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        self.combo_sort.setStyleSheet(compact_combo_stylesheet())
+        self.combo_sort.setStyleSheet(compact_combo_stylesheet(settings_popup=True))
 
         # 3. Adding elements with attractive icons
         self.combo_sort.addItem(QIcon(get_resource_path("defaultsort.png")), "Default")
@@ -2003,6 +2003,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.custom_timeline.add_marker_requested.connect(self.add_user_marker)
                 self.custom_timeline.open_steam_screenshot_requested.connect(
                     self.open_steam_screenshot_for_marker
+                )
+                self.custom_timeline.open_steam_screenshot_folder_requested.connect(
+                    self.open_steam_screenshot_folder_for_marker
                 )
         
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
