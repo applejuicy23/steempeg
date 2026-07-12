@@ -428,13 +428,17 @@ class QueueJobCard(QFrame):
         act_open_clip = menu.addAction("📂  Open clip folder")
         clip_exists = bool(job.clip_path) and os.path.isdir(job.clip_path)
         act_open_clip.setEnabled(clip_exists)
-        act_open_clip.triggered.connect(lambda: paths.open_in_file_manager(job.clip_path))
+        act_open_clip.triggered.connect(lambda: paths.reveal_in_file_manager(job.clip_path))
 
         if is_done:
             act_open_out = menu.addAction("🎬  Open output folder")
-            out_exists = bool(output_dir) and os.path.isdir(output_dir)
+            out_exists = bool(job.output_file and os.path.isfile(job.output_file)) or (
+                bool(output_dir) and os.path.isdir(output_dir)
+            )
             act_open_out.setEnabled(out_exists)
-            act_open_out.triggered.connect(lambda: paths.open_in_file_manager(output_dir))
+            act_open_out.triggered.connect(
+                lambda: paths.reveal_in_file_manager(job.output_file or output_dir)
+            )
 
         if _job_can_remove(job):
             menu.addSeparator()
