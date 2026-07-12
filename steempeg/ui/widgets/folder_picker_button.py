@@ -72,7 +72,7 @@ class FolderPickerButton(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.main_btn = QPushButton("Choose Folder…")
+        self.main_btn = QPushButton("📂 Choose Folder…")
         self.main_btn.setObjectName("FolderPickerMain")
         self.main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)

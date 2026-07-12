@@ -839,6 +839,27 @@ class RenderQueuePanel(QWidget):
 
         self._rebuild_cards()
 
+    def clear_selection(self) -> None:
+        """Drop the purple selection ring without rebuilding cards."""
+        self._selected_id = None
+        for card in self._card_widgets:
+            card.set_selected(False)
+
+    def patch_job_trim(self, job: RenderJob) -> None:
+        """Lightweight trim-line update for one queue card (no full rebuild)."""
+        for card in self._card_widgets:
+            if card._job_id != job.id:
+                continue
+            if hasattr(card, "_trim_label"):
+                trim_text = format_job_trim(job.settings)
+                has_trim = (
+                    job.settings.is_trim_mode
+                    and job.settings.trim_end_ms > job.settings.trim_start_ms
+                )
+                card._trim_label.setText(trim_text)
+                card._trim_label.setVisible(has_trim)
+            break
+
     def _scroll_to_selected(self) -> None:
         if not self._selected_id:
             return

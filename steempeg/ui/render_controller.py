@@ -765,6 +765,50 @@ class RenderMixin:
         except OSError as exc:
             logging.warning("Could not save render history: %s", exc)
 
+    def _save_render_companion_meta(self, job, output_file: str) -> None:
+        if not output_file or not job:
+            return
+        try:
+            from steempeg.core.rendered_media import (
+                parse_app_id_from_clip_folder,
+                parse_app_id_from_name,
+                save_rendered_companion_meta,
+            )
+
+            clip_name = os.path.basename(job.clip_path or "")
+            app_id = parse_app_id_from_name(clip_name) or parse_app_id_from_clip_folder(clip_name)
+            save_rendered_companion_meta(
+                output_file,
+                app_id=app_id,
+                game_name=job.game_name,
+                clip_path=job.clip_path,
+                game_icon_path=job.game_icon_path,
+            )
+            self._rendered_output_meta_index = None
+        except Exception as exc:
+            logging.debug("Rendered companion meta not saved: %s", exc)
+
+    def _show_batch_complete_dialog(self) -> None:
+        from steempeg.ui.batch_complete_dialog import BatchCompleteChoice, BatchCompleteDialog
+        from steempeg.ui import design_tokens as tok
+
+        jobs = list(self.render_queue.jobs)
+        if not jobs:
+            return
+        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        dlg = BatchCompleteDialog(
+            jobs,
+            parent=self.ui,
+            bar_color=theme["title_bar"],
+            bg_color=theme["app_bg"],
+        )
+        dlg.open_output_requested.connect(self.open_rendered_file)
+        dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
+        dlg.open_source_clip_requested.connect(self.open_source_clip)
+        dlg.exec()
+        if dlg.choice() == BatchCompleteChoice.OPEN_HISTORY:
+            self.show_render_queue_history()
+
     def _show_render_complete_dialog(self, job, output_file: str) -> None:
         from steempeg.ui import design_tokens as tok
         from steempeg.ui.render_complete_dialog import RenderCompleteChoice, RenderCompleteDialog
@@ -814,8 +858,7 @@ class RenderMixin:
         loaded = load_queue_from_file(self._queue_persist_path())
         if loaded:
             self.render_queue = loaded
-            if self.render_queue.jobs:
-                self._selected_queue_job_id = self.render_queue.jobs[0].id
+            self._selected_queue_job_id = None
 
     def _update_start_button_label(self) -> None:
         if not hasattr(self.ui, "btn_start"):
@@ -870,15 +913,18 @@ class RenderMixin:
         except OSError as exc:
             logging.warning("Could not save clip trim memory: %s", exc)
 
-    def _write_trim_state(self, clip_path: str, trim: dict) -> None:
+    def _write_trim_state(self, clip_path: str, trim: dict, *, interactive: bool = False) -> None:
         clip_path = os.path.normpath(clip_path)
         job = self.render_queue.find_by_clip_path(clip_path)
         if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
             job.settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
             job.settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
             job.settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
-            job.refresh_output_path()
-            if hasattr(self, "render_queue_panel"):
+            if interactive:
+                if hasattr(self, "render_queue_panel"):
+                    self.render_queue_panel.patch_job_trim(job)
+                self._schedule_trim_persist()
+            elif hasattr(self, "render_queue_panel"):
                 self.refresh_render_queue_panel(sync_splitter=False)
         self._ensure_trim_memory_loaded()
         has_trim = bool(trim.get("is_trim_mode", False)) and (
@@ -889,7 +935,39 @@ class RenderMixin:
         else:
             # No meaningful trim -> drop the entry so we don't litter the file.
             self._clip_trim_memory.pop(clip_path, None)
+        if not interactive:
+            self._save_trim_memory()
+
+    def _schedule_trim_persist(self) -> None:
+        timer = getattr(self, "_trim_persist_timer", None)
+        if timer is None:
+            timer = QTimer(self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._flush_trim_persist)
+            self._trim_persist_timer = timer
+        timer.start(300)
+
+    def _flush_trim_persist(self) -> None:
         self._save_trim_memory()
+        if self._queue_is_active():
+            self._persist_render_queue()
+
+    def _sync_queue_trim_from_timeline(self) -> bool:
+        """Update only trim fields on the queued job for the clip being previewed."""
+        if getattr(self, "_loading_queue_job", False):
+            return False
+        if not hasattr(self, "custom_timeline"):
+            return False
+        preview = self._current_preview_clip_path()
+        if not preview:
+            return False
+        job = self.render_queue.find_by_clip_path(preview)
+        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
+            return False
+        job.settings.is_trim_mode = bool(self.custom_timeline.is_trim_mode)
+        job.settings.trim_start_ms = int(self.custom_timeline.trim_start_ms)
+        job.settings.trim_end_ms = int(self.custom_timeline.trim_end_ms)
+        return True
 
     def _trim_state_for_clip(self, clip_path: str) -> dict:
         clip_path = os.path.normpath(clip_path)
@@ -907,7 +985,14 @@ class RenderMixin:
             {"is_trim_mode": False, "trim_start_ms": 0, "trim_end_ms": 0},
         )
 
+    def _flush_pending_trim_persist(self) -> None:
+        timer = getattr(self, "_trim_persist_timer", None)
+        if timer and timer.isActive():
+            timer.stop()
+            self._flush_trim_persist()
+
     def _flush_current_trim_state(self) -> None:
+        self._flush_pending_trim_persist()
         clip_path = getattr(self, "_preview_clip_path", None)
         if not clip_path:
             return
@@ -922,8 +1007,14 @@ class RenderMixin:
                     clip_path = item.data(Qt.UserRole)
         if not clip_path:
             return
-        self._write_trim_state(clip_path, self._capture_trim_state())
+        self._write_trim_state(
+            clip_path,
+            self._capture_trim_state(),
+            interactive=self._queue_is_active(),
+        )
         if self._queue_is_active():
+            if getattr(self, "_trim_persist_timer", None) and self._trim_persist_timer.isActive():
+                return
             self._persist_render_queue()
 
     def _apply_trim_from_job_settings(self, settings) -> None:
@@ -1482,7 +1573,7 @@ class RenderMixin:
             return f"~{size_mb / 1024:.2f} GB"
         return f"~{size_mb:.1f} MB"
 
-    def update_final_setup(self):
+    def update_final_setup(self, *, trim_only: bool = False):
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
         clip_path = self._active_preview_clip_path()
         if not clip_path:
@@ -1512,35 +1603,39 @@ class RenderMixin:
         audio_bitrate = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
         container = self.ui.combo_container.currentText() if hasattr(self.ui, 'combo_container') else "MP4"
 
-        # 2. Calculate the file extension
-        ext = output_extension(container, audio_only, audio_format)
+        if trim_only:
+            full_path = getattr(self, "current_output_file", "") or ""
+            final_filename = os.path.basename(full_path) if full_path else "rendered"
+        else:
+            # 2. Calculate the file extension
+            ext = output_extension(container, audio_only, audio_format)
 
-        # 3. OVERWRITE PROTECTION 
-        save_dir = self.custom_destination if self.custom_destination else get_save_directory()
-        base_filename = self.ui.input_filename.text().strip() if hasattr(self.ui, 'input_filename') else "rendered"
-        
-        lower_base = base_filename.lower()
-        for e in KNOWN_OUTPUT_EXTENSIONS:
-            if lower_base.endswith(e):
-                base_filename = base_filename[: -len(e)]
-                break
+            # 3. OVERWRITE PROTECTION
+            save_dir = self.custom_destination if self.custom_destination else get_save_directory()
+            base_filename = self.ui.input_filename.text().strip() if hasattr(self.ui, 'input_filename') else "rendered"
 
-        test_path = os.path.join(save_dir, f"{base_filename}{ext}")
-        counter = 1
-        while os.path.exists(test_path):
-            test_path = os.path.join(save_dir, f"{base_filename}_{counter}{ext}")
-            counter += 1
-            
-        full_path = test_path
-        final_filename = os.path.basename(full_path)
-        self.current_output_file = full_path
+            lower_base = base_filename.lower()
+            for e in KNOWN_OUTPUT_EXTENSIONS:
+                if lower_base.endswith(e):
+                    base_filename = base_filename[: -len(e)]
+                    break
 
-        if hasattr(self.ui, 'label_location'):
-            display_path = full_path.replace('\\', '/')
-            self.ui.label_location.setText(display_path)
+            test_path = os.path.join(save_dir, f"{base_filename}{ext}")
+            counter = 1
+            while os.path.exists(test_path):
+                test_path = os.path.join(save_dir, f"{base_filename}_{counter}{ext}")
+                counter += 1
 
-        if hasattr(self, 'btn_copy_loc') and full_path:
-            self.btn_copy_loc.show()
+            full_path = test_path
+            final_filename = os.path.basename(full_path)
+            self.current_output_file = full_path
+
+            if hasattr(self.ui, 'label_location'):
+                display_path = full_path.replace('\\', '/')
+                self.ui.label_location.setText(display_path)
+
+            if hasattr(self, 'btn_copy_loc') and full_path:
+                self.btn_copy_loc.show()
 
         # 4. Collecting texts & Smart Math
         duration = self.get_effective_duration() # Use trimmed duration for math!
@@ -2372,18 +2467,26 @@ class RenderMixin:
             if path and os.path.exists(path):
                 self.custom_icon_label.setPixmap(QPixmap(path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
-    def _sync_queue_job_render_status(self, clip_path, success, error_msg):
+    def _sync_queue_job_render_status(self, clip_path, success, error_msg, output_file: str = ""):
         job = self.render_queue.find_by_clip_path(clip_path)
         if not job:
             return
         if success:
             job.status = JobStatus.COMPLETED
+            if output_file:
+                job.output_file = output_file
         elif "cancelled by user" in (error_msg or "").lower():
             job.status = JobStatus.QUEUED
             job.error_message = ""
         else:
             job.status = JobStatus.ERROR
             job.error_message = (error_msg or "")[:240]
+
+    def _clear_queue_selection(self) -> None:
+        """Clear the active queue card highlight when preview leaves the queue."""
+        self._selected_queue_job_id = None
+        if hasattr(self, "render_queue_panel"):
+            self.render_queue_panel.clear_selection()
 
     def refresh_render_queue_panel(self, sync_splitter: bool = True):
         """Rebuild the right-side queue list from ``render_queue``."""
@@ -2395,6 +2498,7 @@ class RenderMixin:
             job = self.render_queue.get(selected_id)
             if job and os.path.normpath(job.clip_path) != os.path.normpath(preview_path):
                 selected_id = None
+                self._selected_queue_job_id = None
         self.render_queue_panel.refresh(
             self.render_queue.jobs,
             selected_id,
@@ -2590,7 +2694,7 @@ class RenderMixin:
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
         self.update_status_indicator("Ready", "ready")
-        self.show_render_queue_history()
+        self._show_batch_complete_dialog()
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
         self._archive_batch_to_history(cancelled=cancelled)
@@ -2774,7 +2878,9 @@ class RenderMixin:
         """ Fires when the background rendering thread exits. """
         active_job = getattr(self, "_active_render_job", None)
         if active_job:
-            self._sync_queue_job_render_status(active_job.clip_path, success, error_msg)
+            self._sync_queue_job_render_status(
+                active_job.clip_path, success, error_msg, output_file or ""
+            )
 
         self._is_rendering = False
         self._active_render_job = None
@@ -2785,6 +2891,8 @@ class RenderMixin:
         if getattr(self, "_queue_batch_active", False):
             if success:
                 logging.info("=== BATCH RENDER SUCCESS === %s", output_file)
+                if active_job and output_file:
+                    self._save_render_companion_meta(active_job, output_file)
                 self.process_next_in_queue()
                 return
             if "cancelled by user" in (error_msg or "").lower():
@@ -2807,28 +2915,7 @@ class RenderMixin:
         if success:
             logging.info("=== RENDER SUCCESS ===")
             if output_file and active_job:
-                try:
-                    from steempeg.core.rendered_media import (
-                        parse_app_id_from_clip_folder,
-                        parse_app_id_from_name,
-                        save_rendered_companion_meta,
-                    )
-
-                    clip_name = os.path.basename(active_job.clip_path or "")
-                    app_id = (
-                        parse_app_id_from_name(clip_name)
-                        or parse_app_id_from_clip_folder(clip_name)
-                    )
-                    save_rendered_companion_meta(
-                        output_file,
-                        app_id=app_id,
-                        game_name=active_job.game_name,
-                        clip_path=active_job.clip_path,
-                        game_icon_path=active_job.game_icon_path,
-                    )
-                    self._rendered_output_meta_index = None
-                except Exception as exc:
-                    logging.debug("Rendered companion meta not saved: %s", exc)
+                self._save_render_companion_meta(active_job, output_file)
 
             self.update_status_indicator("Success!", "success")
 

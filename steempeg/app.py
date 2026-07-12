@@ -1990,7 +1990,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
                     self._update_start_button_label()
-                    self._startup_queue_job_id = getattr(self, "_selected_queue_job_id", None)
                     self.refresh_render_queue_panel(sync_splitter=False)
 
                 # Saving the new index for Fullscreen
@@ -2320,19 +2319,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if hasattr(self, "_library_ui_persist_ready"):
             QTimer.singleShot(250, lambda: setattr(self, "_library_ui_persist_ready", True))
         self.refresh_render_queue_panel(sync_splitter=True)
-
-        job_id = getattr(self, "_startup_queue_job_id", None)
-        if job_id and hasattr(self, "_load_library_ui_state"):
-            library_state = self._load_library_ui_state()
-            restoring_rendered = (
-                library_state.get("rendered_tab_open")
-                or library_state.get("library_panel_mode") == "rendered"
-                or library_state.get("preview_kind") == "rendered"
-            )
-            if not restoring_rendered:
-                QTimer.singleShot(100, lambda jid=job_id: self.activate_queue_job(jid))
-        elif job_id:
-            QTimer.singleShot(100, lambda jid=job_id: self.activate_queue_job(jid))
 
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES

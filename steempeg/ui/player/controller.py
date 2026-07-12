@@ -164,7 +164,10 @@ class PlayerMixin:
         # Forget the previewed clip / queue selection so the top-right badge
         # ("Preview" / "In queue (N)") clears instead of lingering after close.
         self._preview_clip_path = None
-        self._selected_queue_job_id = None
+        if hasattr(self, "_clear_queue_selection"):
+            self._clear_queue_selection()
+        else:
+            self._selected_queue_job_id = None
         if hasattr(self, 'update_playback_badge'):
             self.update_playback_badge()
         if hasattr(self, 'update_clip_health_button'):
@@ -1354,8 +1357,10 @@ class PlayerMixin:
     def on_trim_changed(self, start_ms, end_ms):
         """ Fires instantly when the user drags the yellow trim handles """
         # 1. Update text info in Export Settings
-        self.update_final_setup()
-        if hasattr(self, '_sync_ui_to_selected_job'):
+        self.update_final_setup(trim_only=True)
+        if hasattr(self, '_sync_queue_trim_from_timeline'):
+            self._sync_queue_trim_from_timeline()
+        elif hasattr(self, '_sync_ui_to_selected_job'):
             self._sync_ui_to_selected_job()
         if hasattr(self, '_persist_trim_for_current_clip'):
             self._persist_trim_for_current_clip()

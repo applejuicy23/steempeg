@@ -640,9 +640,9 @@ class RenderedLibraryMixin:
         mode = state.get("library_panel_mode", "clips")
 
         if preview_kind == "rendered" and preview_path and os.path.isfile(preview_path):
-            self._select_rendered_path(preview_path, play=True)
+            self._select_rendered_path(preview_path, play=False)
         elif preview_kind == "clip" and preview_path and os.path.isdir(preview_path):
-            self._select_clip_path(preview_path, play=True)
+            self._select_clip_path(preview_path, play=False)
         elif mode == "rendered":
             rendered_path = (state.get("rendered_selected_path") or "").strip()
             if rendered_path:
@@ -1285,7 +1285,10 @@ class RenderedLibraryMixin:
         size_str = self.table_rendered.item(row, 3).text() if self.table_rendered.item(row, 3) else ""
 
         self._preview_clip_path = file_path
-        self._selected_queue_job_id = None
+        if hasattr(self, "_clear_queue_selection"):
+            self._clear_queue_selection()
+        else:
+            self._selected_queue_job_id = None
         self._rendered_media_path = file_path
 
         display_title, icon_path, _thumb, is_unknown, _game_key = self._resolved_rendered_meta(

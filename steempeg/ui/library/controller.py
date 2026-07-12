@@ -1207,10 +1207,10 @@ class LibraryMixin:
         # must pick a main folder first via Choose Folder.
         picker.set_add_visible(bool(folders))
         if len(folders) <= 1:
-            picker.set_folder_label("Choose Folder…")
+            picker.set_folder_label("📂 Choose Folder…")
         else:
             picker.set_folder_label(
-                f"Choose Folder… ({len(folders)})",
+                f"📂 Choose Folder… ({len(folders)})",
                 "Library folders:\n" + "\n".join(folders),
             )
 
@@ -1544,8 +1544,11 @@ class LibraryMixin:
             self.close_current_clip()
 
         # 3. Drop the queue selection (the queued jobs themselves are kept)
-        self._selected_queue_job_id = None
-        if hasattr(self, 'refresh_render_queue_panel'):
+        if hasattr(self, "_clear_queue_selection"):
+            self._clear_queue_selection()
+        else:
+            self._selected_queue_job_id = None
+        if hasattr(self, "refresh_render_queue_panel"):
             self.refresh_render_queue_panel()
 
         # 4. Rescan folders (fast: cached health, no Steam network)
