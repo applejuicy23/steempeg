@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QToolTip,
+    QVBoxLayout,
     QWidget,
     QMessageBox,
 )
@@ -1671,22 +1672,11 @@ class PlayerMixin:
                 # Dead, but not necessarily hopeless: offer a salvage attempt instead
                 # of a dead-end warning. Yes -> force_play_dead_clip (shows its own
                 # disclaimer + rebuilds a manifest). No -> stay blocked.
-                issues = "\n".join(f"• {issue}" for issue in report.issues[:6])
-                offer = QMessageBox.question(
-                    self.ui,
-                    "Dead Clip",
-                    "This clip is marked Dead and won't play normally:\n\n"
-                    f"{issues}\n\n"
-                    "Steempeg can try to salvage it from surviving chunks. "
-                    "If the decoder header is missing, you need one healthy donor clip "
-                    "of the same game in your library. No same-game donor = usually unrecoverable.\n\n"
-                    "Try to recover / force-play?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if offer == QMessageBox.StandardButton.Yes and hasattr(
-                    self, "force_play_dead_clip"
-                ):
+                issues = report.issues[:6]
+                from steempeg.ui.dead_clip_dialogs import DeadClipOfferDialog, dialog_theme
+
+                offer = DeadClipOfferDialog(issues, parent=self.ui, **dialog_theme(self))
+                if offer.exec() and offer.accepted_yes and hasattr(self, "force_play_dead_clip"):
                     self.force_play_dead_clip(clip_path)
                 return
 
