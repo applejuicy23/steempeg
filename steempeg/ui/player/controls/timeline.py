@@ -52,6 +52,7 @@ class TimelineCanvas(QWidget):
     screenshot_requested = Signal(float) 
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
+    open_steam_screenshot_folder_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -367,8 +368,17 @@ class TimelineCanvas(QWidget):
                 return pix
         #2. Fallback: bundle assets / gluing numbers / steam_ (the old CS2 way)
         return self._legacy_icon_pixmap(marker['icon_key'], marker['is_round'])
+    def _hide_hover_preview(self) -> None:
+        self._hover_preview_bucket = -1
+        if hasattr(self, "sniper_timer"):
+            self.sniper_timer.stop()
+        if hasattr(self, "preview_widget"):
+            self.preview_widget.hide()
+
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0:
+            return
+        if getattr(self, "hovered_marker", None):
             return
         if getattr(self, 'sniper', None) and not self._sniper_path_matches():
             return
@@ -797,8 +807,10 @@ class TimelineCanvas(QWidget):
             menu.addSeparator() 
 
         action_open_screenshot = None
+        action_open_screenshot_folder = None
         if is_screenshot_marker:
             action_open_screenshot = menu.addAction("🖼 Open Screenshot")
+            action_open_screenshot_folder = menu.addAction("📂 Open Screenshot folder")
             menu.addSeparator()
             
         action_trim = menu.addAction("✂️ Set Trim Start Here")
@@ -815,6 +827,8 @@ class TimelineCanvas(QWidget):
             self.delete_user_marker(marker)
         elif action_open_screenshot and action == action_open_screenshot:
             self.open_steam_screenshot_requested.emit(marker)
+        elif action_open_screenshot_folder and action == action_open_screenshot_folder:
+            self.open_steam_screenshot_folder_requested.emit(marker)
         elif action == action_trim:
             self.set_trim_start_from_marker(marker)
         elif action == action_screenshot: # Sending the order to take a screenshot
@@ -966,6 +980,8 @@ class TimelineCanvas(QWidget):
         # Updating the UI when the icon focus changes.
         if found_marker != getattr(self, 'hovered_marker', None):
             self.hovered_marker = found_marker
+            if found_marker:
+                self._hide_hover_preview()
             self.update()
             
             # Logic for a Pop-up Tooltip Beneath the Scrollbar
@@ -1007,55 +1023,59 @@ class TimelineCanvas(QWidget):
             
         self.setCursor(current_cursor)
         
-        if hasattr(self, 'preview_widget') and not getattr(self, 'hovered_marker', None):
-            hover_ms = max(0.0, min(ms, float(self.duration_ms)))
-            sec = int(hover_ms // 1000)
-            h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
-            time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-            
-            is_in_trim = self.is_trim_mode and (self.trim_start_ms <= hover_ms <= self.trim_end_ms)
-            current_thumb_dir = getattr(self, 'thumb_dir', None) if self._thumb_dir_is_valid() else None
-            has_disk_thumb = False
-            
-            bucket_sec = round(sec / 3.0) * 3
-            if current_thumb_dir:
-                index = (bucket_sec // 3) + 1
-                img_path = os.path.join(current_thumb_dir, f"thumb_{index:04d}.jpg")
-                if os.path.exists(img_path):
-                    has_disk_thumb = True
-
-            sniper_cache = getattr(self.sniper, 'cache', {}) if hasattr(self, 'sniper') else {}
-
-            bucket_changed = bucket_sec != self._hover_preview_bucket
-            if bucket_changed:
-                self._hover_preview_bucket = bucket_sec
-
-            self.preview_widget.update_time_display(time_str, is_in_trim)
-
-            if has_disk_thumb:
-                if bucket_changed or getattr(self, '_batch_thumbs_busy', False):
-                    self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
-            elif bucket_changed:
-                if bucket_sec in sniper_cache:
-                    self.preview_widget.set_preview_pixmap(sniper_cache[bucket_sec])
-                else:
-                    self.preview_widget.clear_for_new_media()
-                    self.preview_widget.start_loading()
-
-            if not has_disk_thumb and self.current_video_path and bucket_changed:
-                self.pending_sec = bucket_sec
-                if hasattr(self, 'sniper_timer'):
-                    self.sniper_timer.start(100)
-
-            if self.parentWidget() and self.parentWidget().parentWidget():
-                target_x = event.globalPosition().x() - (self.preview_widget.width() // 2)
-                target_y = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).y() - self.preview_widget.height() - 5
+        if hasattr(self, 'preview_widget'):
+            if getattr(self, 'hovered_marker', None):
+                if self.preview_widget.isVisible():
+                    self._hide_hover_preview()
+            else:
+                hover_ms = max(0.0, min(ms, float(self.duration_ms)))
+                sec = int(hover_ms // 1000)
+                h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
+                time_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
                 
-                min_x = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).x()
-                max_x = min_x + self.parentWidget().parentWidget().width() - self.preview_widget.width()
-                clamped_x = max(min_x, min(target_x, max_x))
-                self.preview_widget.move(clamped_x, target_y)
-                self.preview_widget.show()
+                is_in_trim = self.is_trim_mode and (self.trim_start_ms <= hover_ms <= self.trim_end_ms)
+                current_thumb_dir = getattr(self, 'thumb_dir', None) if self._thumb_dir_is_valid() else None
+                has_disk_thumb = False
+                
+                bucket_sec = round(sec / 3.0) * 3
+                if current_thumb_dir:
+                    index = (bucket_sec // 3) + 1
+                    img_path = os.path.join(current_thumb_dir, f"thumb_{index:04d}.jpg")
+                    if os.path.exists(img_path):
+                        has_disk_thumb = True
+
+                sniper_cache = getattr(self.sniper, 'cache', {}) if hasattr(self, 'sniper') else {}
+
+                bucket_changed = bucket_sec != self._hover_preview_bucket
+                if bucket_changed:
+                    self._hover_preview_bucket = bucket_sec
+
+                self.preview_widget.update_time_display(time_str, is_in_trim)
+
+                if has_disk_thumb:
+                    if bucket_changed or getattr(self, '_batch_thumbs_busy', False):
+                        self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
+                elif bucket_changed:
+                    if bucket_sec in sniper_cache:
+                        self.preview_widget.set_preview_pixmap(sniper_cache[bucket_sec])
+                    else:
+                        self.preview_widget.clear_for_new_media()
+                        self.preview_widget.start_loading()
+
+                if not has_disk_thumb and self.current_video_path and bucket_changed:
+                    self.pending_sec = bucket_sec
+                    if hasattr(self, 'sniper_timer'):
+                        self.sniper_timer.start(100)
+
+                if self.parentWidget() and self.parentWidget().parentWidget():
+                    target_x = event.globalPosition().x() - (self.preview_widget.width() // 2)
+                    target_y = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).y() - self.preview_widget.height() - 5
+                    
+                    min_x = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).x()
+                    max_x = min_x + self.parentWidget().parentWidget().width() - self.preview_widget.width()
+                    clamped_x = max(min_x, min(target_x, max_x))
+                    self.preview_widget.move(clamped_x, target_y)
+                    self.preview_widget.show()
         
         if self.drag_state == 'none':
             self.update() 
@@ -1099,8 +1119,8 @@ class TimelineCanvas(QWidget):
     def leaveEvent(self, event):
         self.is_hovering = False
         self.hover_x = -1.0
-        self._hover_preview_bucket = -1
-        if hasattr(self, 'preview_widget'): self.preview_widget.hide()
+        self.hovered_marker = None
+        self._hide_hover_preview()
         if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
         self.setCursor(Qt.ArrowCursor) 
         self.update() 
@@ -1131,6 +1151,7 @@ class CustomTimelineWidget(QScrollArea):
     screenshot_requested = Signal(object)
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
+    open_steam_screenshot_folder_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1150,6 +1171,9 @@ class CustomTimelineWidget(QScrollArea):
         self.canvas.screenshot_requested.connect(self.screenshot_requested.emit)
         self.canvas.add_marker_requested.connect(self.add_marker_requested.emit)
         self.canvas.open_steam_screenshot_requested.connect(self.open_steam_screenshot_requested.emit)
+        self.canvas.open_steam_screenshot_folder_requested.connect(
+            self.open_steam_screenshot_folder_requested.emit
+        )
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
 

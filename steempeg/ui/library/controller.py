@@ -1146,9 +1146,11 @@ class LibraryMixin:
         menu.exec(self.ui.table_clips.viewport().mapToGlobal(pos))
 
     def open_clip_folder(self, clip_path):
-        """ Opens the clip's directory directly in Windows Explorer. """
+        """Open the clip folder in the file manager with the clip folder selected."""
+        from steempeg.infra.paths import reveal_in_file_manager
+
         try:
-            os.startfile(clip_path)
+            reveal_in_file_manager(clip_path)
         except Exception as e:
             logging.error(f"Failed to open folder: {e}")
 
