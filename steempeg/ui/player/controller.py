@@ -239,15 +239,18 @@ class PlayerMixin:
         # Render the indicator in a SEPARATE top-level tool window, never as a Qt
         # child over the native mpv surface — that overlap was the root cause of the
         # splitter stutter. A floating window composites independently and is safe.
+        app = QApplication.instance()
+        if active and app is not None and app.applicationState() != Qt.ApplicationState.ApplicationActive:
+            overlay = getattr(self, '_buffering_overlay', None)
+            if overlay is not None:
+                overlay.hide_loading()
+            self._playback_loading_active = False
+            self._playback_recover_at = None
+            return
         if active:
             self._playback_loading_active = True
             self._playback_recover_at = None
             overlay = self._get_buffering_overlay()
-            # Don't pop an always-on-top window over other apps when we're in the
-            # background; the state stays armed and re-shows once we're active again.
-            if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
-                overlay.hide_loading()
-                return
             anchor = getattr(self, 'mpv_wrapper', None) or getattr(self.ui, 'video_container', None)
             overlay.show_loading(anchor, message)
         else:
@@ -277,6 +280,12 @@ class PlayerMixin:
     def _update_playback_loading_state(self):
         """Show a loading overlay when MPV is buffering or playback time stalls."""
         if not hasattr(self, 'player') or not self.player:
+            return
+
+        app = QApplication.instance()
+        if app is not None and app.applicationState() != Qt.ApplicationState.ApplicationActive:
+            if getattr(self, '_playback_loading_active', False):
+                self._set_playback_loading(False)
             return
 
         if getattr(self, '_is_switching', False):
@@ -1067,6 +1076,8 @@ class PlayerMixin:
             overlay = getattr(self, '_buffering_overlay', None)
             if overlay is not None:
                 overlay.hide_loading()
+            self._playback_loading_active = False
+            self._playback_recover_at = None
 
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
@@ -2119,19 +2130,18 @@ class PlayerMixin:
             self.player.seek(original_pos / 1000.0, reference='absolute', precision='exact')
 
         if saved_ok:
-            self._show_screenshot_toast(self.screenshots_dir)
+            self._show_screenshot_toast(self.screenshots_dir, screenshot_path=filepath)
 
-    def open_steam_screenshot_for_marker(self, marker):
-        """Open the Steam client screenshot that matches a timeline screenshot marker."""
+    def _steam_screenshot_marker_context(self, marker):
+        """Resolve Steam user, app id, and screenshot folder for a timeline marker."""
         from steempeg.core.steam_screenshots import (
-            find_steam_screenshot_files,
             resolve_steam_id_for_clip,
             steam_screenshots_dir,
             timeline_json_start_utc,
         )
 
         if not hasattr(self, "custom_timeline"):
-            return
+            return None
         canvas = self.custom_timeline.canvas
         clip_path = getattr(canvas, "current_clip_path", None) or getattr(
             self, "_preview_clip_path", None
@@ -2143,7 +2153,7 @@ class PlayerMixin:
                 "Screenshot",
                 "Open a Steam Game Recording clip first — screenshot lookup needs the clip folder.",
             )
-            return
+            return None
 
         steam_id = resolve_steam_id_for_clip(
             clip_path, getattr(self, "clips_folders", None) or []
@@ -2154,7 +2164,7 @@ class PlayerMixin:
                 "Screenshot",
                 "Could not determine your Steam user id from the library folder path.",
             )
-            return
+            return None
 
         marker_ms = float(marker.get("time_ms", 0))
         raw_time_ms = marker.get("raw_time_ms")
@@ -2167,21 +2177,38 @@ class PlayerMixin:
         if json_start_utc is None:
             json_start_utc = timeline_json_start_utc(getattr(canvas, "current_json_path", None))
 
+        return {
+            "clip_path": clip_path,
+            "steam_id": steam_id,
+            "app_id": str(app_id),
+            "marker_ms": marker_ms,
+            "raw_time_ms": raw_time_ms,
+            "json_start_utc": json_start_utc,
+            "folder": steam_screenshots_dir(steam_id, str(app_id)),
+        }
+
+    def open_steam_screenshot_for_marker(self, marker):
+        """Open the Steam client screenshot that matches a timeline screenshot marker."""
+        from steempeg.core.steam_screenshots import find_steam_screenshot_files
+
+        ctx = self._steam_screenshot_marker_context(marker)
+        if not ctx:
+            return
+
         files = find_steam_screenshot_files(
-            steam_id=steam_id,
-            app_id=str(app_id),
-            json_start_utc=json_start_utc,
-            raw_time_ms=raw_time_ms,
-            clip_path=clip_path,
-            marker_time_ms=marker_ms,
+            steam_id=ctx["steam_id"],
+            app_id=ctx["app_id"],
+            json_start_utc=ctx["json_start_utc"],
+            raw_time_ms=ctx["raw_time_ms"],
+            clip_path=ctx["clip_path"],
+            marker_time_ms=ctx["marker_ms"],
         )
         if not files:
-            folder = steam_screenshots_dir(steam_id, str(app_id))
             QMessageBox.information(
                 self.ui,
                 "Screenshot",
                 "No matching Steam screenshot was found on disk.\n\n"
-                f"Looked in:\n{folder}\n\n"
+                f"Looked in:\n{ctx['folder']}\n\n"
                 "Steam names files like 20260711152410_1.jpg (local date/time when captured).",
             )
             return
@@ -2204,6 +2231,54 @@ class PlayerMixin:
             )
         pick.exec(QCursor.pos())
 
+    def open_steam_screenshot_folder_for_marker(self, marker):
+        """Open the Steam screenshots folder with the matching screenshot selected."""
+        from steempeg.core.steam_screenshots import find_steam_screenshot_files
+        from steempeg.infra.paths import open_in_file_manager, reveal_in_file_manager
+
+        ctx = self._steam_screenshot_marker_context(marker)
+        if not ctx:
+            return
+
+        files = find_steam_screenshot_files(
+            steam_id=ctx["steam_id"],
+            app_id=ctx["app_id"],
+            json_start_utc=ctx["json_start_utc"],
+            raw_time_ms=ctx["raw_time_ms"],
+            clip_path=ctx["clip_path"],
+            marker_time_ms=ctx["marker_ms"],
+        )
+        if not files:
+            folder = ctx["folder"]
+            if os.path.isdir(folder):
+                open_in_file_manager(folder)
+            else:
+                QMessageBox.information(
+                    self.ui,
+                    "Screenshot folder",
+                    "Steam screenshot folder was not found on disk.\n\n"
+                    f"Expected:\n{folder}",
+                )
+            return
+
+        if len(files) == 1:
+            reveal_in_file_manager(files[0])
+            return
+
+        pick = QMenu(self.ui)
+        pick.setStyleSheet("""
+            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
+                    border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; }
+            QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
+            QMenu::item:selected { background-color: #6b5a8e; }
+        """)
+        for path in files:
+            action = pick.addAction(os.path.basename(path))
+            action.triggered.connect(
+                lambda _checked=False, p=path: reveal_in_file_manager(p)
+            )
+        pick.exec(QCursor.pos())
+
     @staticmethod
     def _open_file_with_default_app(path: str) -> None:
         try:
@@ -2216,7 +2291,7 @@ class PlayerMixin:
         except OSError as exc:
             logging.error("Failed to open file %s: %s", path, exc)
 
-    def _show_screenshot_toast(self, directory):
+    def _show_screenshot_toast(self, directory, *, screenshot_path=None):
         """Flash a small 'Screenshot saved in <dir>' toast with copy/open actions."""
         directory = os.path.normpath(directory)
 
@@ -2273,6 +2348,7 @@ class PlayerMixin:
             open_btn.clicked.connect(self._open_screenshot_dir)
 
         self._screenshot_toast_dir = directory
+        self._screenshot_toast_file = screenshot_path if screenshot_path and os.path.isfile(screenshot_path) else None
         self._screenshot_toast_label.setText(f"📸 Screenshot saved in  {directory}")
         if hasattr(self, '_screenshot_toast_btn'):
             self._screenshot_toast_btn.setText("📋 Copy path")
@@ -2304,13 +2380,17 @@ class PlayerMixin:
             self._screenshot_toast_btn.setText("✓ Copied")
 
     def _open_screenshot_dir(self):
+        from steempeg.infra.paths import open_in_file_manager, reveal_in_file_manager
+
         directory = getattr(self, '_screenshot_toast_dir', None)
-        if not directory or not os.path.isdir(directory):
+        screenshot_path = getattr(self, '_screenshot_toast_file', None)
+        if screenshot_path and os.path.isfile(screenshot_path):
+            reveal_in_file_manager(screenshot_path)
             return
-        try:
-            os.startfile(directory)
-        except Exception as exc:
-            logging.error("Failed to open screenshots folder: %s", exc)
+        if directory and os.path.isdir(directory):
+            open_in_file_manager(directory)
+            return
+        logging.error("Failed to open screenshots folder: %s", directory)
 
     def _init_preview_quality(self) -> None:
         from steempeg.ui.player import preview_quality as pq
