@@ -632,16 +632,11 @@ class RenderMixin:
                 self.label_pct.setText("0%")
 
     def open_rendered_folder(self, file_path):
-        """ Opens Windows Explorer and automatically highlights the rendered file! """
+        """Open the file manager with the rendered output selected."""
+        from steempeg.infra.paths import reveal_in_file_manager
+
         try:
-            if os.path.exists(file_path):
-                # Magic Windows command to open folder AND select the specific file
-                subprocess.run(['explorer', '/select,', os.path.normpath(file_path)])
-            else:
-                # Fallback: Just open the directory if the file is somehow missing
-                folder_dir = os.path.dirname(file_path)
-                if folder_dir and os.path.exists(folder_dir):
-                    os.startfile(folder_dir)
+            reveal_in_file_manager(file_path)
         except Exception as e:
             print(f"Failed to open folder: {e}")
 
