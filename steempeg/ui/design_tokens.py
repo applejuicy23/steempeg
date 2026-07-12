@@ -25,6 +25,7 @@ TRAFFIC_MAXIMIZE_HOVER = "#1aad2e"
 
 # Typography — FONT_APP matches render panel, About, and queue cards.
 FONT_APP = "'Segoe UI', Arial, sans-serif"
+FONT_SEMIBOLD = "'Segoe UI Semibold', 'Segoe UI', Arial, sans-serif"
 FONT_UI = "'Cascadia UI', 'Segoe UI Variable', 'Segoe UI', sans-serif"
 FONT_TITLE_SIZE = 10
 FONT_SUBTITLE_SIZE = 10
