@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from steempeg.render.queue import JobStatus, RenderQueue, job_from_dict, job_to_dict
+from steempeg.render.queue import JobStatus, RenderJob, RenderQueue, job_from_dict, job_to_dict
 
 
 MAX_BATCHES = 50
@@ -84,6 +84,22 @@ def snapshot_queue_batch(
         finished_at=_utc_now_iso(),
         cancelled=cancelled,
         jobs=jobs,
+    )
+
+
+def snapshot_completed_job(job: RenderJob, output_file: str) -> RenderBatchRecord:
+    """Persist a single finished export as a one-job history batch."""
+    entry = job_to_dict(job)
+    entry["status"] = JobStatus.COMPLETED.value
+    if output_file:
+        entry["output_file"] = output_file
+    now = _utc_now_iso()
+    return RenderBatchRecord(
+        id=uuid.uuid4().hex,
+        started_at=now,
+        finished_at=now,
+        cancelled=False,
+        jobs=[entry],
     )
 
 
