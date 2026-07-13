@@ -105,3 +105,20 @@ def reveal_in_file_manager(path: str) -> None:
     parent = os.path.dirname(norm)
     if parent and os.path.isdir(parent):
         open_in_file_manager(parent)
+
+
+def default_rendered_videos_dir() -> str:
+    """Default library folder for finished exports (Rendered videos tab)."""
+    return os.path.join(get_save_directory(), "rendered_videos")
+
+
+def is_in_default_rendered_videos(file_path: str) -> bool:
+    """True when ``file_path`` lives under the default ``rendered_videos`` folder."""
+    if not file_path or not os.path.isfile(file_path):
+        return False
+    root = os.path.normcase(os.path.normpath(default_rendered_videos_dir()))
+    path = os.path.normcase(os.path.normpath(file_path))
+    try:
+        return os.path.commonpath([root, path]) == root
+    except ValueError:
+        return False

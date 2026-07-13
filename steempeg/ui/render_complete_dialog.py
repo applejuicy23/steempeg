@@ -4,17 +4,18 @@ from __future__ import annotations
 import os
 from enum import Enum
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout
 
-from steempeg.infra.paths import get_resource_path
+from steempeg.infra.paths import get_resource_path, is_in_default_rendered_videos
 from steempeg.render.queue import RenderJob
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
 
 _BTN_PRIMARY = """
     QPushButton {
@@ -36,6 +37,16 @@ _BTN_SECONDARY = """
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
 """
 
+_MENU_STYLE = """
+    QMenu {
+        background-color: #2d2d2d; color: #e0e0e0; border: 1px solid #4a4a4a;
+        border-radius: 8px; padding: 4px;
+    }
+    QMenu::item { padding: 8px 24px 8px 12px; border-radius: 4px; }
+    QMenu::item:selected { background-color: #4a3d66; }
+    QMenu::item:disabled { color: #666666; }
+"""
+
 _MASCOT_H = 140
 
 
@@ -44,6 +55,7 @@ class RenderCompleteChoice(Enum):
     OPEN_FOLDER = "folder"
     PLAY = "play"
     OPEN_HISTORY = "history"
+    OPEN_IN_STEEMPEG = "steempeg"
 
 
 def _success_mascot() -> QLabel:
@@ -59,6 +71,8 @@ def _success_mascot() -> QLabel:
 
 
 class RenderCompleteDialog(SteempegDialog):
+    open_in_rendered_requested = Signal(str)
+
     def __init__(
         self,
         job: RenderJob,
@@ -108,7 +122,7 @@ class RenderCompleteDialog(SteempegDialog):
 
         trim_text = format_job_trim(job.settings)
         if trim_text != "Full clip":
-            trim_lbl = QLabel(f"✂️ {trim_text}")
+            trim_lbl = QLabel(trim_text)
             trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; background: transparent; {_FONT}")
             details.addWidget(trim_lbl)
 
@@ -145,13 +159,52 @@ class RenderCompleteDialog(SteempegDialog):
         btn_folder.clicked.connect(lambda: self._pick(RenderCompleteChoice.OPEN_FOLDER))
         actions.addWidget(btn_folder)
 
-        btn_play = QPushButton("▶  Play video")
-        btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_play.setStyleSheet(_BTN_PRIMARY)
-        btn_play.clicked.connect(lambda: self._pick(RenderCompleteChoice.PLAY))
-        actions.addWidget(btn_play)
+        play_split = PlayVideoSplitButton()
+        play_split.play_clicked.connect(lambda: self._pick(RenderCompleteChoice.PLAY))
+        self._setup_play_menu(play_split, out_path)
+        actions.addWidget(play_split)
 
         self.content_layout.addLayout(actions)
+
+    def _setup_play_menu(self, play_split: PlayVideoSplitButton, output_file: str) -> None:
+        in_library = is_in_default_rendered_videos(output_file)
+        play_split.set_menu_enabled(in_library)
+        if in_library:
+            play_split.menu_btn.setToolTip("More play options")
+        else:
+            play_split.menu_btn.setToolTip(
+                "Open in Steempeg is only available when the file is in the rendered_videos folder."
+            )
+
+        menu = QMenu(self)
+        menu.setStyleSheet(_MENU_STYLE)
+        action_steempeg = menu.addAction("Open in Steempeg")
+        action_steempeg.setEnabled(in_library)
+        if in_library:
+            action_steempeg.setToolTip(
+                "Open the Rendered videos tab and preview this export in Steempeg."
+            )
+        else:
+            action_steempeg.setToolTip(
+                "Only available when the file was saved to the rendered_videos folder."
+            )
+        action_steempeg.triggered.connect(self._open_in_steempeg)
+
+        def _show_menu() -> None:
+            if not in_library:
+                return
+            menu.exec(
+                play_split.menu_btn.mapToGlobal(
+                    QPoint(0, play_split.menu_btn.height())
+                )
+            )
+
+        play_split.menu_btn.clicked.connect(_show_menu)
+
+    def _open_in_steempeg(self) -> None:
+        if self._output_file:
+            self.open_in_rendered_requested.emit(self._output_file)
+        self._pick(RenderCompleteChoice.OPEN_IN_STEEMPEG)
 
     def _pick(self, choice: RenderCompleteChoice) -> None:
         self._choice = choice
