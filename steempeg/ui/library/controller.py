@@ -11,7 +11,7 @@ import re
 import shutil
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -93,47 +93,67 @@ _HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
 
 _FOLDERS_MENU_STYLE = """
     QMenu {
-        background-color: #2d2d2d;
+        background-color: #383838;
         color: #ffffff;
         border: 2px solid #444444;
-        border-radius: 8px;
+        border-radius: 14px;
         font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
-        padding: 4px 0;
+        padding: 8px 0;
     }
     QMenu::item {
-        padding: 8px 28px 8px 20px;
+        padding: 6px 24px 6px 24px;
         border-radius: 4px;
-        margin: 2px 6px;
+        margin: 2px 4px;
+        background: transparent;
+        border: none;
     }
     QMenu::item:selected {
-        background-color: #3a324a;
-        color: #b29ae7;
+        background-color: #6b5a8e;
+        color: #ffffff;
+    }
+    QMenu::item:disabled {
+        color: #ffffff;
+        background: transparent;
+        padding: 4px 20px 2px 20px;
+        font-size: 13px;
+        font-weight: bold;
     }
     QMenu::separator {
         height: 1px;
         background: #444444;
-        margin: 4px 10px;
+        margin: 4px 12px;
+    }
+    QWidget#FolderRowFrame {
+        background: transparent;
+        border: none;
+    }
+    QWidget#FolderRow {
+        background-color: #2a2a2a;
+        border: 1px solid #4a4a4a;
+        border-radius: 12px;
     }
     QLabel#FolderRowLabel {
-        color: #dddddd;
-        font-size: 12px;
-        font-weight: normal;
+        color: #ffffff;
+        font-family: 'Segoe UI', Arial, sans-serif;
+        font-size: 13px;
+        font-weight: bold;
         background: transparent;
-        padding: 2px 0;
+        border: none;
+        padding: 0;
     }
     QLabel#FolderRowLabel[missing="true"] {
         color: #d46a6a;
     }
     QPushButton#FolderRowRemove, QPushButton#FolderRowReplace {
-        background-color: #333333;
-        border: 1px solid #555555;
+        background-color: #3f3f3f;
+        border: 1px solid #5c5c5c;
         border-radius: 11px;
-        min-width: 22px;
-        max-width: 22px;
-        min-height: 22px;
-        max-height: 22px;
+        min-width: 24px;
+        max-width: 24px;
+        min-height: 24px;
+        max-height: 24px;
         padding: 0;
     }
     QPushButton#FolderRowRemove:hover {
@@ -142,13 +162,15 @@ _FOLDERS_MENU_STYLE = """
     }
     QPushButton#FolderRowRemove:pressed {
         background-color: #661a1a;
+        border: 1px solid #7a1f1f;
     }
     QPushButton#FolderRowReplace:hover {
-        background-color: #3a324a;
+        background-color: #4a3d66;
         border: 1px solid #6b5a8e;
     }
     QPushButton#FolderRowReplace:pressed {
-        background-color: #2d2640;
+        background-color: #3a324a;
+        border: 1px solid #5a4b7a;
     }
 """
 
@@ -1372,22 +1394,25 @@ class LibraryMixin:
         icon_path = get_resource_path(icon_file)
         if os.path.isfile(icon_path):
             btn.setIcon(QIcon(icon_path))
-            btn.setIconSize(QSize(14, 14))
+            btn.setIconSize(QSize(15, 15))
         btn.clicked.connect(callback)
         return btn
 
     def _folder_panel_row(self, menu, path, is_main):
         """One folder row for the dropdown: label, optional replace, and remove ✕."""
         row = QWidget()
+        row.setObjectName("FolderRow")
+        row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(10, 2, 6, 2)
-        row_layout.setSpacing(6)
+        row_layout.setContentsMargins(10, 7, 8, 7)
+        row_layout.setSpacing(8)
 
         exists = os.path.isdir(path)
         prefix = "★ " if is_main else ""
         display = path if len(path) <= 42 else "…" + path[-41:]
         label = QLabel(prefix + display)
         label.setObjectName("FolderRowLabel")
+        label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         tip = "Main folder\n" if is_main else ""
         steam_id = steam_id_from_clips_folder(path)
         if steam_id:
@@ -1414,8 +1439,15 @@ class LibraryMixin:
         )
         row_layout.addWidget(btn_x)
 
+        frame = QWidget()
+        frame.setObjectName("FolderRowFrame")
+        frame_layout = QHBoxLayout(frame)
+        frame_layout.setContentsMargins(12, 2, 12, 2)
+        frame_layout.setSpacing(0)
+        frame_layout.addWidget(row)
+
         action_row = QWidgetAction(menu)
-        action_row.setDefaultWidget(row)
+        action_row.setDefaultWidget(frame)
         menu.addAction(action_row)
 
     def show_folders_panel(self):
