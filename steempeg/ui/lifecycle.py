@@ -192,7 +192,7 @@ class LifecycleMixin:
                     return True
                 if event.button() == Qt.LeftButton:
                     mods = event.modifiers()
-                    if (mods & Qt.AltModifier) and not (mods & Qt.ShiftModifier):
+                    if (mods & (Qt.ControlModifier | Qt.AltModifier)) and not (mods & Qt.ShiftModifier):
                         index = self.table_rendered.indexAt(event.position().toPoint())
                         if index.isValid():
                             self.table_rendered.selectionModel().select(
@@ -279,8 +279,12 @@ class LifecycleMixin:
             self._stop_timeline_thumb_batch()
         if hasattr(self, '_stop_library_scan'):
             self._stop_library_scan()
+        if hasattr(self, '_stop_rendered_scan'):
+            self._stop_rendered_scan()
         if hasattr(self, '_stop_clip_poster_backfill'):
             self._stop_clip_poster_backfill()
+        if hasattr(self, '_stop_rendered_poster_backfill'):
+            self._stop_rendered_poster_backfill()
         if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
             sniper = getattr(self.custom_timeline.canvas, 'sniper', None)
             if sniper:

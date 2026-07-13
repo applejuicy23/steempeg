@@ -37,12 +37,14 @@ from steempeg.core.rendered_media import (
     save_markers_sidecar,
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
+from steempeg.library.rendered_scan import ScannedRenderedFile
+from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillWorker
+from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
 from steempeg.ui.message_dialog import (
     steempeg_confirm_delete,
-    steempeg_critical,
     steempeg_information,
     steempeg_question,
     steempeg_warning,
@@ -54,6 +56,8 @@ RENDERED_ALL_EXTS = RENDERED_VIDEO_EXTS | RENDERED_AUDIO_EXTS
 
 _RENDERED_TYPE_FILTER_ROLE = Qt.ItemDataRole.UserRole + 5
 _RENDERED_GAME_FILTER_ROLE = Qt.ItemDataRole.UserRole + 6
+_RENDERED_THUMB_ROLE = Qt.ItemDataRole.UserRole + 7
+_RENDERED_ICON_ROLE = Qt.ItemDataRole.UserRole + 8
 _HEALTH_SORT_INDICES = (5, 6)
 
 _LIBRARY_TAB_INACTIVE = """
@@ -136,6 +140,7 @@ class RenderedLibraryMixin:
         self._saved_rendered_selection_path = ""
         self._library_ui_restored = False
         self._library_ui_persist_ready = False
+        self._rendered_scan_generation = 0
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         tab = LibraryTabWidget(label, mode)
@@ -391,7 +396,7 @@ class RenderedLibraryMixin:
             self.library_stack.setCurrentIndex(1 if mode == "rendered" else 0)
         if mode == "rendered":
             self._clear_clips_selection_visual()
-            self.scan_rendered_outputs()
+            self._ensure_rendered_widgets()
             self._apply_rendered_view_mode()
         else:
             self._clear_rendered_selection_visual()
@@ -792,7 +797,7 @@ class RenderedLibraryMixin:
         self.grid_rendered.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.grid_rendered.setSpacing(15)
         self.grid_rendered.setUniformItemSizes(True)
-        self.grid_rendered.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.grid_rendered.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid_rendered.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_rendered.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_rendered.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
@@ -824,71 +829,291 @@ class RenderedLibraryMixin:
                     roots.append(norm)
         return roots
 
+    def _stop_rendered_scan(self):
+        worker = getattr(self, "_rendered_scan_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(5000)
+        self._rendered_scan_worker = None
+
+    def _stop_rendered_poster_backfill(self):
+        worker = getattr(self, "_rendered_poster_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(3000)
+        self._rendered_poster_worker = None
+
     def scan_rendered_outputs(self):
+        self._ensure_rendered_widgets()
         if not hasattr(self, "table_rendered"):
             return
+
+        self._stop_rendered_scan()
+        self._stop_rendered_poster_backfill()
+        self._saved_rendered_selection_path = ""
+        self._clear_rendered_selection_visual()
+
         self.table_rendered.setSortingEnabled(False)
         self.table_rendered.setRowCount(0)
+        if hasattr(self, "grid_rendered"):
+            self._rendered_grid_anchor_index = -1
+            self.grid_rendered.clear()
 
         roots = self._collect_rendered_scan_roots()
-        files: list[tuple[str, float, int, str]] = []
-        seen: set[str] = set()
-        for root in roots:
-            try:
-                for name in os.listdir(root):
-                    full = os.path.join(root, name)
-                    if not os.path.isfile(full):
-                        continue
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext not in RENDERED_ALL_EXTS:
-                        continue
-                    norm = os.path.normcase(os.path.normpath(full))
-                    if norm in seen:
-                        continue
-                    seen.add(norm)
-                    mtime = os.path.getmtime(full)
-                    size = os.path.getsize(full)
-                    files.append((full, mtime, size, ext))
-            except OSError as exc:
-                logging.warning("Rendered scan failed for %s: %s", root, exc)
+        if not roots:
+            if hasattr(self, "lbl_clip_count"):
+                self.lbl_clip_count.setText("• 0 Files")
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
+            return
 
-        files.sort(key=lambda row: row[1], reverse=True)
         self._rendered_output_meta_index = self._build_rendered_output_meta_index()
-        for full, mtime, size, ext in files:
-            type_label = _rendered_type_label(ext)
-            dt = datetime.fromtimestamp(mtime)
-            date_str = format_clip_date(dt)
-            time_str = format_clip_time(dt)
-            basename = os.path.basename(full)
-            display_title, icon_path, _thumb, is_unknown, game_filter_name = self._resolved_rendered_meta(full, basename)
-            row = self.table_rendered.rowCount()
-            self.table_rendered.insertRow(row)
-            list_icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
-            if is_unknown:
-                from steempeg.infra.paths import get_resource_path
-                unknown_icon = get_resource_path("unknown_icon.png")
-                if os.path.isfile(unknown_icon):
-                    list_icon = QIcon(unknown_icon)
-            name_item = QTableWidgetItem(list_icon, f"   {display_title}")
-            name_item.setData(Qt.ItemDataRole.UserRole, full)
-            name_item.setData(_RENDERED_GAME_FILTER_ROLE, game_filter_name)
-            self.table_rendered.setItem(row, 0, name_item)
-            type_item = QTableWidgetItem(f"🎬 {type_label}")
-            type_item.setData(_RENDERED_TYPE_FILTER_ROLE, type_label)
-            type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            self.table_rendered.setItem(row, 1, type_item)
-            date_item = QTableWidgetItem(f"{date_str}\n{time_str}")
-            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            self.table_rendered.setItem(row, 2, date_item)
-            size_item = QTableWidgetItem(_format_file_size(size))
-            size_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            self.table_rendered.setItem(row, 3, size_item)
-            name_item.setToolTip(full)
-            if self._row_hidden_by_rendered_filters(game_filter_name, type_label):
-                self.table_rendered.setRowHidden(row, True)
+        self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
+        generation = self._rendered_scan_generation
 
-        self.build_rendered_grid()
+        if hasattr(self, "lbl_clip_count"):
+            self.lbl_clip_count.setText("• … Files")
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Searching rendered files…", "busy", scan_phase="search")
+
+        worker = RenderedScanWorker(
+            roots,
+            self._rendered_output_meta_index,
+            self.cache_dir,
+            self.game_names_cache,
+            parent=getattr(self, "ui", None),
+        )
+        self._rendered_scan_worker = worker
+        worker.discovering.connect(
+            lambda total: self._on_rendered_scan_discovering(total, generation)
+        )
+        worker.file_ready.connect(
+            lambda row, index, total: self._on_rendered_file_ready(row, index, total, generation)
+        )
+        worker.finished_scan.connect(
+            lambda stats: self._on_rendered_scan_finished(stats, generation)
+        )
+        worker.scan_error.connect(
+            lambda msg: self._on_rendered_scan_error(msg, generation)
+        )
+        worker.start()
+
+    def _on_rendered_scan_discovering(self, total: int, generation: int) -> None:
+        if generation != getattr(self, "_rendered_scan_generation", 0):
+            return
+        if not hasattr(self, "update_status_indicator"):
+            return
+        if total <= 0:
+            self.update_status_indicator("Searching rendered files…", "busy", scan_phase="search")
+        else:
+            self.update_status_indicator(f"Found {total} files", "busy", scan_phase="search")
+
+    def _on_rendered_file_ready(
+        self, row: ScannedRenderedFile, index: int, total: int, generation: int
+    ) -> None:
+        if generation != getattr(self, "_rendered_scan_generation", 0):
+            return
+        table_row = self._insert_rendered_file_row(row)
+        if table_row >= 0:
+            self._append_rendered_grid_card_for_row(table_row)
+        label = row.display_title.strip() or os.path.basename(row.full_path)
+        pct = int(100 * index / total) if total else 0
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator(
+                f"Loading {index}/{total} — {label} ({pct}%)",
+                "busy",
+                scan_phase="loading",
+            )
+        if hasattr(self, "lbl_clip_count"):
+            self._update_library_count_label()
+
+    def _on_rendered_scan_finished(self, stats, generation: int) -> None:
+        if generation != getattr(self, "_rendered_scan_generation", 0):
+            return
+
+        worker = getattr(self, "_rendered_scan_worker", None)
+        if worker is not None:
+            for app_id, name in worker.game_names_cache.items():
+                if app_id not in self.game_names_cache:
+                    self.game_names_cache[app_id] = name
+            if worker.game_names_cache:
+                self.save_json_cache()
+        self._rendered_scan_worker = None
+
+        if hasattr(self, "table_rendered"):
+            self.table_rendered.setSortingEnabled(True)
+            self.table_rendered.horizontalHeader().setSectionsClickable(False)
+        self._sync_rendered_grid_from_table()
+        self._schedule_rendered_poster_backfill()
         self._update_library_count_label()
+
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+
+        logging.info(
+            "Rendered scan: roots=%s files=%d",
+            stats.scan_roots,
+            stats.file_count,
+        )
+
+    def _on_rendered_scan_error(self, message: str, generation: int) -> None:
+        if generation != getattr(self, "_rendered_scan_generation", 0):
+            return
+        self._rendered_scan_worker = None
+        logging.error("Rendered scan failed: %s", message)
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Scan error", "error")
+
+    def _insert_rendered_file_row(self, scanned: ScannedRenderedFile) -> int:
+        if not hasattr(self, "table_rendered"):
+            return -1
+
+        list_icon = QIcon(scanned.icon_path) if scanned.icon_path and os.path.isfile(scanned.icon_path) else QIcon()
+        if scanned.is_unknown:
+            from steempeg.infra.paths import get_resource_path
+
+            unknown_icon = get_resource_path("unknown_icon.png")
+            if os.path.isfile(unknown_icon):
+                list_icon = QIcon(unknown_icon)
+
+        row = self.table_rendered.rowCount()
+        self.table_rendered.insertRow(row)
+        name_item = QTableWidgetItem(list_icon, f"   {scanned.display_title}")
+        name_item.setData(Qt.ItemDataRole.UserRole, scanned.full_path)
+        name_item.setData(_RENDERED_GAME_FILTER_ROLE, scanned.game_filter_name)
+        name_item.setData(_RENDERED_THUMB_ROLE, "")
+        name_item.setData(_RENDERED_ICON_ROLE, scanned.icon_path or "")
+        name_item.setToolTip(scanned.full_path)
+        self.table_rendered.setItem(row, 0, name_item)
+
+        type_item = QTableWidgetItem(f"🎬 {scanned.type_label}")
+        type_item.setData(_RENDERED_TYPE_FILTER_ROLE, scanned.type_label)
+        type_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.table_rendered.setItem(row, 1, type_item)
+
+        date_item = QTableWidgetItem(f"{scanned.date_str}\n{scanned.time_str}")
+        date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.table_rendered.setItem(row, 2, date_item)
+
+        size_item = QTableWidgetItem(scanned.size_str)
+        size_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.table_rendered.setItem(row, 3, size_item)
+
+        if self._row_hidden_by_rendered_filters(scanned.game_filter_name, scanned.type_label):
+            self.table_rendered.setRowHidden(row, True)
+        return row
+
+    def _schedule_rendered_poster_backfill(self) -> None:
+        if not hasattr(self, "table_rendered") or not hasattr(self, "cache_dir"):
+            return
+
+        missing: list[str] = []
+        for row in range(self.table_rendered.rowCount()):
+            name_item = self.table_rendered.item(row, 0)
+            if not name_item:
+                continue
+            file_path = name_item.data(Qt.ItemDataRole.UserRole)
+            if not file_path:
+                continue
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext not in RENDERED_VIDEO_EXTS:
+                continue
+            if name_item.data(_RENDERED_THUMB_ROLE):
+                continue
+            missing.append(file_path)
+
+        if not missing:
+            return
+
+        self._stop_rendered_poster_backfill()
+        self._rendered_poster_worker = RenderedPosterBackfillWorker(
+            missing, self.cache_dir, getattr(self, "ui", None)
+        )
+        self._rendered_poster_worker.poster_ready.connect(self._on_rendered_poster_ready)
+        self._rendered_poster_worker.finished_batch.connect(self._on_rendered_poster_batch_done)
+        self._rendered_poster_worker.start()
+
+    def _on_rendered_poster_ready(self, file_path: str, thumb_path: str) -> None:
+        if not hasattr(self, "table_rendered"):
+            return
+        norm = os.path.normpath(file_path)
+        for row in range(self.table_rendered.rowCount()):
+            name_item = self.table_rendered.item(row, 0)
+            if not name_item:
+                continue
+            item_path = name_item.data(Qt.ItemDataRole.UserRole)
+            if not item_path or os.path.normpath(item_path) != norm:
+                continue
+            name_item.setData(_RENDERED_THUMB_ROLE, thumb_path)
+            if hasattr(self, "grid_rendered"):
+                for i in range(self.grid_rendered.count()):
+                    grid_item = self.grid_rendered.item(i)
+                    if grid_item is None:
+                        continue
+                    if grid_item.data(Qt.ItemDataRole.UserRole + 1) != item_path:
+                        continue
+                    card = self.grid_rendered.itemWidget(grid_item)
+                    if card is not None and hasattr(card, "set_thumbnail"):
+                        card.set_thumbnail(thumb_path)
+                    break
+            break
+
+    def _on_rendered_poster_batch_done(self) -> None:
+        self._rendered_poster_worker = None
+
+    def _append_rendered_grid_card_for_row(self, row: int) -> None:
+        if not hasattr(self, "grid_rendered") or not hasattr(self, "table_rendered"):
+            return
+        name_item = self.table_rendered.item(row, 0)
+        type_item = self.table_rendered.item(row, 1)
+        date_item = self.table_rendered.item(row, 2)
+        size_item = self.table_rendered.item(row, 3)
+        if not name_item:
+            return
+
+        display_title = name_item.text().strip()
+        date_str = date_item.text() if date_item else ""
+        size_str = size_item.text() if size_item else ""
+        file_path = name_item.data(Qt.ItemDataRole.UserRole)
+        thumb_path = name_item.data(_RENDERED_THUMB_ROLE) or ""
+        icon_path = name_item.data(_RENDERED_ICON_ROLE) or ""
+        badge = type_item.text().replace("🎬 ", "").strip() if type_item else "FILE"
+        is_unknown = (name_item.data(_RENDERED_GAME_FILTER_ROLE) or "Unknown") == "Unknown"
+
+        if is_unknown:
+            from steempeg.infra.paths import get_resource_path
+
+            unknown_icon = get_resource_path("unknown_icon.png")
+            if os.path.isfile(unknown_icon):
+                icon_path = unknown_icon
+
+        footer = f"Unknown • {size_str}" if is_unknown else f"{date_str} • {size_str}"
+
+        item = QListWidgetItem(self.grid_rendered)
+        item.setSizeHint(QSize(260, 190))
+        item.setData(Qt.ItemDataRole.UserRole, row)
+        item.setData(Qt.ItemDataRole.UserRole + 1, file_path)
+
+        card = ClipCard(
+            display_title,
+            footer,
+            badge,
+            thumb_path,
+            icon_path,
+            row,
+            health_color=None,
+            round_icon=is_unknown,
+            on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item, ev),
+            on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
+        )
+        self.grid_rendered.setItemWidget(item, card)
+        if self.table_rendered.isRowHidden(row):
+            item.setHidden(True)
+
 
     def _row_hidden_by_rendered_filters(self, game_name: str, type_label: str) -> bool:
         if self._rendered_filter_games is not None and game_name not in self._rendered_filter_games:
@@ -954,50 +1179,7 @@ class RenderedLibraryMixin:
         self._rendered_grid_anchor_index = -1
         self.grid_rendered.clear()
         for row in range(self.table_rendered.rowCount()):
-            name_item = self.table_rendered.item(row, 0)
-            type_item = self.table_rendered.item(row, 1)
-            date_item = self.table_rendered.item(row, 2)
-            size_item = self.table_rendered.item(row, 3)
-            if not name_item:
-                continue
-            title = name_item.text()
-            type_label = type_item.text() if type_item else "FILE"
-            date_str = date_item.text() if date_item else ""
-            size_str = size_item.text() if size_item else ""
-            file_path = name_item.data(Qt.ItemDataRole.UserRole)
-            display_title, icon_path, thumb_path, is_unknown, _game_key = self._resolved_rendered_meta(
-                file_path, os.path.basename(file_path)
-            )
-            badge = type_item.text().replace("🎬 ", "").strip() if type_item else "FILE"
-            if is_unknown:
-                from steempeg.infra.paths import get_resource_path
-                unknown_icon = get_resource_path("unknown_icon.png")
-                if os.path.isfile(unknown_icon):
-                    icon_path = unknown_icon
-
-            footer = f"Unknown • {size_str}" if is_unknown else f"{date_str} • {size_str}"
-
-            item = QListWidgetItem(self.grid_rendered)
-            item.setSizeHint(QSize(260, 190))
-            item.setData(Qt.ItemDataRole.UserRole, row)
-            item.setData(Qt.ItemDataRole.UserRole + 1, file_path)
-
-            card = ClipCard(
-                display_title,
-                footer,
-                badge,
-                thumb_path,
-                icon_path,
-                row,
-                health_color=None,
-                round_icon=is_unknown,
-                on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item, ev),
-                on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
-            )
-            self.grid_rendered.setItemWidget(item, card)
-            if self.table_rendered.isRowHidden(row):
-                item.setHidden(True)
-
+            self._append_rendered_grid_card_for_row(row)
         self._sync_rendered_grid_from_table()
 
     def _sync_rendered_grid_card_visuals(self) -> None:
@@ -1363,9 +1545,27 @@ class RenderedLibraryMixin:
         if not item:
             return []
         clicked_path = item.data(Qt.ItemDataRole.UserRole + 1)
-        if not clicked_path:
-            return []
-        return [clicked_path] if os.path.isfile(clicked_path) else []
+        selected_items = self.grid_rendered.selectedItems()
+        selected_paths = [
+            it.data(Qt.ItemDataRole.UserRole + 1) for it in selected_items if it.data(Qt.ItemDataRole.UserRole + 1)
+        ]
+
+        if clicked_path in selected_paths and len(selected_paths) > 1:
+            candidates = selected_paths
+        else:
+            candidates = [clicked_path]
+
+        paths: list[str] = []
+        seen: set[str] = set()
+        for path in candidates:
+            if not path:
+                continue
+            norm = os.path.normpath(path)
+            if norm in seen or not os.path.isfile(path):
+                continue
+            seen.add(norm)
+            paths.append(path)
+        return paths
 
     def _populate_rendered_context_menu(self, menu, file_paths: list[str]) -> None:
         count = len(file_paths)
@@ -1382,15 +1582,19 @@ class RenderedLibraryMixin:
         action_delete = menu.addAction(
             "🗑️ Delete file" if count == 1 else f"🗑️ Delete files ({count})"
         )
+        paths_for_delete = list(file_paths)
         if count == 1:
             path = file_paths[0]
-            action_open.triggered.connect(lambda: self.open_rendered_folder(path))
+            action_open.triggered.connect(lambda _checked=False, p=path: self.open_rendered_folder(p))
             if action_source is not None:
-                action_source.triggered.connect(lambda p=clip_path: self.open_source_clip(p))
-            action_delete.triggered.connect(lambda: self.delete_rendered_file(path))
+                action_source.triggered.connect(
+                    lambda _checked=False, p=clip_path: self.open_source_clip(p)
+                )
         else:
             action_open.setEnabled(False)
-            action_delete.triggered.connect(lambda: self.delete_rendered_files(file_paths))
+        action_delete.triggered.connect(
+            lambda _checked=False, paths=paths_for_delete: self.delete_rendered_files(paths)
+        )
 
     def show_rendered_grid_context_menu(self, pos) -> None:
         file_paths = self._context_menu_rendered_paths_grid(pos)
@@ -1426,6 +1630,27 @@ class RenderedLibraryMixin:
         except Exception as exc:
             logging.error("Failed to open rendered folder: %s", exc)
 
+    def _rendered_delete_confirm_copy(self, paths: list[str]) -> tuple[str, str, str]:
+        """Title, message, and detail for a rendered-file delete confirmation."""
+        if len(paths) == 1:
+            name = os.path.basename(paths[0])
+            return (
+                "Delete rendered file",
+                f'Delete "{name}"?',
+                "This cannot be undone.",
+            )
+
+        max_names = 15
+        lines = [f"• {os.path.basename(path)}" for path in paths[:max_names]]
+        if len(paths) > max_names:
+            lines.append(f"… and {len(paths) - max_names} more")
+        detail = "\n".join(lines) + "\n\nThis cannot be undone."
+        return (
+            "Delete rendered files",
+            f"Permanently delete {len(paths)} rendered files?",
+            detail,
+        )
+
     def delete_rendered_file(self, file_path: str) -> None:
         self.delete_rendered_files([file_path])
 
@@ -1433,15 +1658,18 @@ class RenderedLibraryMixin:
         paths = [p for p in file_paths if p and os.path.isfile(p)]
         if not paths:
             return
+        title, message, detail = self._rendered_delete_confirm_copy(paths)
         if not steempeg_confirm_delete(
             self.ui,
-            "Delete rendered file" if len(paths) == 1 else "Delete rendered files",
-            "Delete this rendered file?" if len(paths) == 1 else f"Delete {len(paths)} rendered files?",
-            detail="This cannot be undone.",
+            title,
+            message,
+            detail=detail,
+            delete_label=f"🗑️ Delete ({len(paths)})" if len(paths) > 1 else "🗑️ Delete",
         ):
             return
 
         playing = getattr(self, "_rendered_media_path", None) or getattr(self, "_preview_clip_path", None)
+        failed: list[str] = []
         for file_path in paths:
             try:
                 if playing and os.path.normpath(playing) == os.path.normpath(file_path):
@@ -1449,6 +1677,7 @@ class RenderedLibraryMixin:
                         self.close_current_clip()
                     elif hasattr(self, "player") and self.player:
                         self.player.pause = True
+                    playing = None
                 os.remove(file_path)
                 from steempeg.core.rendered_media import companion_meta_path
 
@@ -1457,12 +1686,19 @@ class RenderedLibraryMixin:
                     os.remove(meta_sidecar)
             except Exception as exc:
                 logging.error("Failed to delete rendered file %s: %s", file_path, exc)
-                steempeg_critical(self.ui, "Error", f"Could not delete:\n{file_path}\n\n{exc}")
-                return
+                failed.append(os.path.basename(file_path))
 
         self._rendered_output_meta_index = None
         self.scan_rendered_outputs()
         self._persist_library_ui_state()
+
+        if failed:
+            steempeg_warning(
+                self.ui,
+                "Delete rendered files",
+                f"Deleted {len(paths) - len(failed)} of {len(paths)} file(s).",
+                detail="Could not remove:\n" + "\n".join(f"• {name}" for name in failed),
+            )
 
     # --- Hooks that branch when the rendered panel is active ---
 

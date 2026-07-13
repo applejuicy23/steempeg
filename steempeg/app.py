@@ -2172,6 +2172,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if self.clips_folders:
             self.scan_clips()
 
+        if hasattr(self, "scan_rendered_outputs"):
+            self.scan_rendered_outputs()
+
         if hasattr(self.ui, 'main_splitter'):
             from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
 
