@@ -1975,6 +1975,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.render_queue_panel.view_mode_changed.connect(
                     lambda mode: self.save_layout_setting("queue_view_mode", mode)
                 )
+                dismissed = bool(
+                    self.load_user_settings().get("render_queue_empty_hint_dismissed", False)
+                )
+                self.render_queue_panel.set_empty_hint_dismissed(dismissed)
+                self.render_queue_panel.empty_hint_dismissed_changed.connect(
+                    lambda checked: self.save_user_settings(
+                        "render_queue_empty_hint_dismissed", bool(checked)
+                    )
+                )
 
                 self.right_h_splitter = QSplitter(Qt.Horizontal)
                 self.right_h_splitter.setObjectName("right_h_splitter")

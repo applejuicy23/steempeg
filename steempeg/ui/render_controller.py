@@ -857,18 +857,27 @@ class RenderMixin:
         if not jobs:
             return
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        always_clear = bool(
+            self.load_user_settings().get("always_clear_render_queue_after_batch", True)
+        )
         dlg = BatchCompleteDialog(
             jobs,
             parent=self.ui,
             bar_color=theme["title_bar"],
             bg_color=theme["app_bg"],
+            always_clear_queue=always_clear,
         )
         dlg.open_output_requested.connect(self.open_rendered_file)
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
         dlg.open_source_clip_requested.connect(self.open_source_clip)
-        dlg.exec()
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        self.save_user_settings("always_clear_render_queue_after_batch", dlg.always_clear_queue())
+        if not accepted:
+            return
         if dlg.choice() == BatchCompleteChoice.OPEN_HISTORY:
             self.show_render_queue_history()
+        elif dlg.choice() == BatchCompleteChoice.OK and dlg.always_clear_queue():
+            self._clear_render_queue_silent()
 
     def _show_render_complete_dialog(self, job, output_file: str) -> None:
         from steempeg.ui import design_tokens as tok
@@ -2423,6 +2432,12 @@ class RenderMixin:
             "Clear Queue",
             f"Remove all {len(self.render_queue)} clip(s) from the render queue?",
         ):
+            return
+        self._clear_render_queue_silent()
+
+    def _clear_render_queue_silent(self) -> None:
+        """Clear the live queue without a confirmation prompt (history is separate)."""
+        if not len(self.render_queue):
             return
         self.render_queue.clear()
         self._on_queue_became_empty()

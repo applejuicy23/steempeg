@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -77,11 +78,22 @@ _QUEUE_TOGGLE_INACTIVE = (
 _SCROLL_STYLE = """
     QScrollArea { background: transparent; border: none; }
     QWidget#queueListHost { background: transparent; }
+    QWidget#queueEmptyCenter { background: transparent; }
     QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
     QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }
     QScrollBar::handle:vertical:hover { background: #b29ae7; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
 """
+_EMPTY_PANEL_STYLE = (
+    "QFrame#queueEmptyPanel {"
+    " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
+)
+_EMPTY_CHECK_STYLE = (
+    f"color: #b29ae7; font-size: 11px; font-weight: bold; {_FONT}"
+    " QCheckBox::indicator { width: 14px; height: 14px; }"
+    " QCheckBox::indicator:unchecked { border: 2px solid #666; border-radius: 3px; background: #1a1a1a; }"
+    " QCheckBox::indicator:checked { border: 2px solid #b29ae7; border-radius: 3px; background: #5138e6; }"
+)
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -486,6 +498,7 @@ class RenderQueuePanel(QWidget):
     clear_queue_requested = Signal()
     history_requested = Signal()
     view_mode_changed = Signal(str)
+    empty_hint_dismissed_changed = Signal(bool)
 
     def __init__(self, initial_view_mode: str = "grid", parent=None):
         super().__init__(parent)
@@ -496,6 +509,7 @@ class RenderQueuePanel(QWidget):
         self._selected_id: str | None = None
         self._card_widgets: list = []
         self._jobs: list[RenderJob] = []
+        self._empty_hint_dismissed = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET)
@@ -623,7 +637,7 @@ class RenderQueuePanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._scroll.setStyleSheet(_SCROLL_STYLE)
 
         self._list_host = QueueListHost()
@@ -655,22 +669,59 @@ class RenderQueuePanel(QWidget):
         self._content_stack_layout.addWidget(self._grid_host)
         self._grid_host.hide()
 
+        self._empty_center = QWidget()
+        self._empty_center.setObjectName("queueEmptyCenter")
+        empty_center_layout = QVBoxLayout(self._empty_center)
+        empty_center_layout.setContentsMargins(12, 24, 12, 24)
+        empty_center_layout.setSpacing(0)
+
+        self._empty_panel = QFrame()
+        self._empty_panel.setObjectName("queueEmptyPanel")
+        self._empty_panel.setStyleSheet(_EMPTY_PANEL_STYLE)
+        self._empty_panel.setFixedWidth(300)
+        self._empty_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        empty_panel_layout = QVBoxLayout(self._empty_panel)
+        empty_panel_layout.setContentsMargins(20, 18, 20, 16)
+        empty_panel_layout.setSpacing(8)
+        empty_panel_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         self._empty_label = QLabel("Queue is empty")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setWordWrap(False)
         self._empty_hint = QLabel(
-            "Right-click a clip in the library and choose\n"
-            "<b>Add to queue</b> to build a batch render."
+            "Right-click a clip in the library<br>"
+            "and choose <b>Add to queue</b> to build<br>"
+            "a batch render."
         )
         self._empty_hint.setTextFormat(Qt.TextFormat.RichText)
-        self._empty_hint.setWordWrap(True)
+        self._empty_hint.setWordWrap(False)
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         for lbl in (self._empty_label, self._empty_hint):
             lbl.setStyleSheet(
                 f"color: #8a8a8a; font-size: 12px; border: none; background: transparent; {_FONT}"
             )
+            lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self._empty_label.setStyleSheet(
             f"color: #c4b5e8; font-size: 14px; font-weight: bold; border: none;"
             f" background: transparent; {_FONT}"
         )
+
+        self._empty_dismiss_chk = QCheckBox("Don't show again")
+        self._empty_dismiss_chk.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._empty_dismiss_chk.setStyleSheet(_EMPTY_CHECK_STYLE)
+        self._empty_dismiss_chk.toggled.connect(self._on_empty_hint_dismiss_toggled)
+
+        empty_panel_layout.addWidget(self._empty_label)
+        empty_panel_layout.addWidget(self._empty_hint)
+        empty_panel_layout.addSpacing(6)
+        empty_panel_layout.addWidget(self._empty_dismiss_chk, 0, Qt.AlignmentFlag.AlignCenter)
+
+        empty_center_layout.addStretch(1)
+        empty_center_layout.addWidget(self._empty_panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_center_layout.addStretch(2)
+
+        self._content_stack_layout.addWidget(self._empty_center)
+        self._empty_center.hide()
 
         self._scroll.setWidget(self._content_stack)
         list_outer.addWidget(self._scroll, 1)
@@ -750,15 +801,23 @@ class RenderQueuePanel(QWidget):
         card.remove_requested.connect(self.job_remove_requested.emit)
         card.dropped_on.connect(self._on_card_drop)
 
-    def _clear_cards(self) -> None:
-        for empty_widget in (self._empty_label, self._empty_hint):
-            if empty_widget.parent() is not None:
-                self._list_layout.removeWidget(empty_widget)
+    def set_empty_hint_dismissed(self, dismissed: bool) -> None:
+        self._empty_hint_dismissed = bool(dismissed)
+        self._empty_dismiss_chk.blockSignals(True)
+        self._empty_dismiss_chk.setChecked(self._empty_hint_dismissed)
+        self._empty_dismiss_chk.blockSignals(False)
+        if not self._jobs:
+            self._rebuild_cards()
 
+    def _on_empty_hint_dismiss_toggled(self, checked: bool) -> None:
+        self._empty_hint_dismissed = bool(checked)
+        self.empty_hint_dismissed_changed.emit(self._empty_hint_dismissed)
+
+    def _clear_cards(self) -> None:
         while self._list_layout.count():
             item = self._list_layout.takeAt(0)
             w = item.widget()
-            if w is not None and w not in (self._empty_label, self._empty_hint):
+            if w is not None:
                 w.setParent(None)
                 w.deleteLater()
 
@@ -778,16 +837,16 @@ class RenderQueuePanel(QWidget):
         self._show_active_host()
 
         if not jobs:
-            self._list_layout.addStretch(1)
-            self._list_layout.addWidget(self._empty_label)
-            self._list_layout.addWidget(self._empty_hint)
-            self._list_layout.addStretch(2)
-            self._empty_label.show()
-            self._empty_hint.show()
+            self._list_host.hide()
+            self._grid_host.hide()
+            if not self._empty_hint_dismissed:
+                self._empty_center.show()
+            else:
+                self._empty_center.hide()
             return
 
-        self._empty_label.hide()
-        self._empty_hint.hide()
+        self._empty_center.hide()
+        self._show_active_host()
         for job in jobs:
             card = self._make_card(job, selected=(job.id == selected))
             self._wire_card(card)
@@ -820,6 +879,10 @@ class RenderQueuePanel(QWidget):
         self._count_label.setText(f"({len(jobs)})")
         self._btn_clear.setEnabled(len(jobs) > 0)
         self._jobs = list(jobs)
+
+        if not jobs:
+            self._rebuild_cards()
+            return
 
         job_ids = [j.id for j in jobs]
         same_cards = (
