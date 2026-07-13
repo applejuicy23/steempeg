@@ -462,6 +462,7 @@ class PlayerMixin:
         if self.is_theater:
             self._save_splitter_sizes(getattr(self.ui, 'main_splitter', None), '_pre_theater_main_sizes')
             self._save_splitter_sizes(getattr(self, 'main_v_splitter', None), '_pre_theater_v_sizes')
+            self._save_splitter_sizes(getattr(self, 'right_h_splitter', None), '_pre_theater_h_sizes')
 
         self._set_left_library_panel_visible(not self.is_theater)
 
@@ -500,8 +501,7 @@ class PlayerMixin:
                 self._pre_theater_right_handle_visible = True
             # Collapse the queue splitter handle itself — otherwise a thick dark
             # strip remains on the right and breaks symmetry with the left edge.
-            self.right_h_splitter.handle(1).setVisible(False)
-            self.right_h_splitter.setHandleWidth(0)
+            self._hide_right_h_splitter_handle()
 
         if hasattr(self, 'btn_refresh'):
             browse_wrapper = self.btn_refresh.parentWidget()
@@ -582,6 +582,46 @@ class PlayerMixin:
         if splitter is None:
             return
         setattr(self, attr_name, splitter.sizes())
+
+    def _save_right_h_splitter_handle(self, width_attr: str, visible_attr: str) -> None:
+        splitter = getattr(self, "right_h_splitter", None)
+        if splitter is None:
+            return
+        setattr(self, width_attr, splitter.handleWidth())
+        try:
+            setattr(self, visible_attr, splitter.handle(1).isVisible())
+        except Exception:
+            setattr(self, visible_attr, True)
+
+    def _restore_right_h_splitter_handle(self) -> None:
+        splitter = getattr(self, "right_h_splitter", None)
+        if splitter is None:
+            return
+        width = getattr(self, "_immersive_right_h_handle_width", None)
+        visible = getattr(self, "_immersive_right_h_handle_visible", None)
+        if width is None:
+            width = getattr(self, "_pre_theater_right_handle_width", None)
+        if visible is None:
+            visible = getattr(self, "_pre_theater_right_handle_visible", None)
+        if width is None:
+            width = 6
+        if visible is None:
+            visible = True
+        splitter.setHandleWidth(int(width))
+        try:
+            splitter.handle(1).setVisible(bool(visible))
+        except Exception:
+            pass
+
+    def _hide_right_h_splitter_handle(self) -> None:
+        splitter = getattr(self, "right_h_splitter", None)
+        if splitter is None:
+            return
+        try:
+            splitter.handle(1).setVisible(False)
+        except Exception:
+            pass
+        splitter.setHandleWidth(0)
 
     def _collapse_splitter(self, splitter, keep_index):
         if splitter is None:
@@ -861,6 +901,8 @@ class PlayerMixin:
 
         self._exit_immersive_layout(is_t)
 
+        self._restore_right_h_splitter_handle()
+
         if not is_t:
             if hasattr(self, 'bottom_v_wrap'):
                 self.bottom_v_wrap.show()
@@ -954,6 +996,13 @@ class PlayerMixin:
                     self._immersive_main_splitter_sizes = list(self._pre_theater_main_sizes)
                 if hasattr(self, '_pre_theater_v_sizes'):
                     self._immersive_v_splitter_sizes = list(self._pre_theater_v_sizes)
+                if hasattr(self, '_pre_theater_h_sizes'):
+                    self._immersive_h_splitter_sizes = list(self._pre_theater_h_sizes)
+            elif hasattr(self, 'right_h_splitter'):
+                self._save_right_h_splitter_handle(
+                    '_immersive_right_h_handle_width',
+                    '_immersive_right_h_handle_visible',
+                )
 
             # Hide ALL old and NEW panels
             self._set_left_library_panel_visible(False)
@@ -1014,6 +1063,8 @@ class PlayerMixin:
             set_window_transitions(self.ui, False)
 
             self._enter_immersive_layout()
+            if hasattr(self, 'right_h_splitter'):
+                self._hide_right_h_splitter_handle()
             self._enter_immersive_chrome()
 
             self.player_footer_frame.setParent(self.ui)
