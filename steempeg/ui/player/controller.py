@@ -374,6 +374,8 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
+        if hasattr(self, '_maybe_offer_salvage_verification'):
+            self._maybe_offer_salvage_verification()
 
     def _reopen_current_clip_paused(self):
         """Reload the current clip and pause on the first frame.
@@ -1727,6 +1729,15 @@ class PlayerMixin:
                 hasattr(self, "_is_salvaged_clip") and self._is_salvaged_clip(clip_path)
             )
             if report.level == health.ClipHealth.DEAD and not force and not already_salvaged:
+                if (
+                    hasattr(self, "_is_clip_cured")
+                    and self._is_clip_cured(clip_path)
+                    and hasattr(self, "_is_salvage_auto_play")
+                    and self._is_salvage_auto_play(clip_path)
+                    and hasattr(self, "force_play_dead_clip")
+                ):
+                    self.force_play_dead_clip(clip_path, skip_confirm=True, skip_verify=True)
+                    return
                 logging.warning("Blocked dead clip preview: %s", clip_path)
                 self._preview_clip_path = clip_path
                 self._selected_queue_job_id = None
@@ -1920,6 +1931,9 @@ class PlayerMixin:
 
             QTimer.singleShot(500, finish_switch)
 
+        if hasattr(self, '_maybe_offer_salvage_verification'):
+            QTimer.singleShot(600, self._maybe_offer_salvage_verification)
+
         # --- IMMEDIATELY UPDATE PLAY BUTTON ICON TO PAUSE ---
         if hasattr(self.ui, 'btn_play'):
             icon_path = get_resource_path("icon_pause.png")
@@ -1982,6 +1996,9 @@ class PlayerMixin:
                     return
                     
             current_ms = int(time_sec * 1000)
+
+            if hasattr(self, "_record_salvage_playback_evidence"):
+                self._record_salvage_playback_evidence()
 
             # --- WATCHDOG: recover a DASH demuxer wedged by the rewind seek ---
             # With the anchored manifest (see repair.fix_steam_manifest) seek(0) now

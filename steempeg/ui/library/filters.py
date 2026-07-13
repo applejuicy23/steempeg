@@ -29,6 +29,13 @@ from steempeg.ui.icon_assets import health_icon
 from steempeg.ui.widgets import BlockCombo, FlowLayout
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
+_CLIP_CURED_ROLE = Qt.UserRole + 4
+
+
+def _row_display_health_level(item) -> str:
+    if item and item.data(_CLIP_CURED_ROLE):
+        return ClipHealth.CURED.value
+    return item.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
 
 
 class DateGroup(QWidget):
@@ -217,8 +224,9 @@ class FilterMenu(QWidget):
             ClipHealth.HEALTHY: "Healthy",
             ClipHealth.DEGRADED: "Issues",
             ClipHealth.DEAD: "Dead",
+            ClipHealth.CURED: "Cured",
         }
-        for level in (ClipHealth.HEALTHY, ClipHealth.DEGRADED, ClipHealth.DEAD):
+        for level in (ClipHealth.HEALTHY, ClipHealth.DEGRADED, ClipHealth.DEAD, ClipHealth.CURED):
             btn = QPushButton(f" {_HEALTH_PILL_TEXT[level]}")
             btn.setIcon(health_icon(level, 14))
             btn.setIconSize(QSize(14, 14))
@@ -982,7 +990,7 @@ class FilterMenu(QWidget):
             if show and r_g and r_g.text().strip() not in sel_games: show = False
             if show and r_t and r_t.text().strip() not in sel_types: show = False
             if show and r_g:
-                row_health = r_g.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
+                row_health = _row_display_health_level(r_g)
                 if row_health not in sel_health:
                     show = False
 
@@ -1082,7 +1090,7 @@ class FilterMenu(QWidget):
                 if show and item_game and item_game.text().strip() not in selected_games: show = False
                 if show and item_type and item_type.text().strip() not in selected_types: show = False
                 if show and item_game:
-                    row_health = item_game.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
+                    row_health = _row_display_health_level(item_game)
                     if row_health not in selected_health:
                         show = False
 

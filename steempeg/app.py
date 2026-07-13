@@ -275,6 +275,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.json_cache_path = os.path.join(self.cache_dir, "games.json")
         self.game_names_cache = self.load_json_cache() # JSON
         self.game_icons_cache = {} # This is where we store downloaded images in memory
+        if hasattr(self, "restore_salvage_verified_clips"):
+            self.restore_salvage_verified_clips()
 
         # Apply the saved chrome color theme now that settings are reachable
         # (falls back to the built-in default theme when nothing is saved yet).

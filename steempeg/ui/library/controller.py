@@ -177,6 +177,7 @@ _FOLDERS_MENU_STYLE = """
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
+_CLIP_CURED_ROLE = Qt.UserRole + 4
 
 
 class LibraryMixin:
@@ -590,6 +591,20 @@ class LibraryMixin:
                 break
         return health.assess_clip_health(clip_path)
 
+    def get_clip_display_health_report(self, clip_path) -> health.ClipHealthReport:
+        """Filesystem health with a Cured overlay when salvage playback was validated."""
+        report = self.get_clip_health_report(clip_path)
+        if report.level == health.ClipHealth.DEAD and self._is_clip_cured(clip_path):
+            issues = list(report.issues)
+            issues.append("Salvage playback verified — clip is Cured")
+            return health.ClipHealthReport(health.ClipHealth.CURED, issues)
+        return report
+
+    def _row_display_health_level(self, item) -> str:
+        if item and item.data(_CLIP_CURED_ROLE):
+            return health.ClipHealth.CURED.value
+        return item.data(_CLIP_HEALTH_ROLE) or health.ClipHealth.HEALTHY.value
+
     def _clip_is_dead(self, clip_path) -> bool:
         return self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD
 
@@ -601,6 +616,8 @@ class LibraryMixin:
         for row in range(self.ui.table_clips.rowCount()):
             item = self.ui.table_clips.item(row, 0)
             if not item:
+                continue
+            if item.data(_CLIP_CURED_ROLE):
                 continue
             if item.data(_CLIP_HEALTH_ROLE) != health.ClipHealth.DEAD.value:
                 continue
@@ -686,7 +703,7 @@ class LibraryMixin:
             self.btn_clip_health.hide()
             return
 
-        report = self.get_clip_health_report(clip_path)
+        report = self.get_clip_display_health_report(clip_path)
         color = report.color
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         self.btn_clip_health.setToolTip(report.summary())
@@ -719,7 +736,8 @@ class LibraryMixin:
         if not clip_path:
             return
 
-        report = self.get_clip_health_report(clip_path)
+        display = self.get_clip_display_health_report(clip_path)
+        fs_report = self.get_clip_health_report(clip_path)
         menu = QMenu(self.ui)
         menu.setStyleSheet(_HEALTH_MENU_STYLE)
 
@@ -730,11 +748,11 @@ class LibraryMixin:
         title_row.setContentsMargins(12, 8, 16, 8)
         title_row.setSpacing(8)
         title_icon = QLabel()
-        title_icon.setPixmap(health_icon(report.level, 16).pixmap(16, 16))
+        title_icon.setPixmap(health_icon(display.level, 16).pixmap(16, 16))
         title_icon.setFixedSize(16, 16)
-        title_lbl = QLabel(report.label)
+        title_lbl = QLabel(display.label)
         title_lbl.setStyleSheet(
-            f"color: {report.color}; font-weight: bold; font-size: 13px;"
+            f"color: {display.color}; font-weight: bold; font-size: 13px;"
             f" font-family: 'Segoe UI'; background: transparent;"
         )
         title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
@@ -748,15 +766,15 @@ class LibraryMixin:
         menu.addAction(title_act)
         menu.addSeparator()
 
-        if report.issues:
-            for issue in report.issues:
+        if display.issues:
+            for issue in display.issues:
                 act = menu.addAction(f"• {issue}")
                 act.setEnabled(False)
         else:
             act = menu.addAction("No issues detected.")
             act.setEnabled(False)
 
-        if report.level == health.ClipHealth.DEAD:
+        if fs_report.level == health.ClipHealth.DEAD:
             menu.addSeparator()
             force_act = menu.addAction("▶️ Force play (salvage)")
             force_act.setToolTip(
@@ -776,7 +794,9 @@ class LibraryMixin:
 
         menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
 
-    def force_play_dead_clip(self, clip_path: str) -> None:
+    def force_play_dead_clip(
+        self, clip_path: str, *, skip_confirm: bool = False, skip_verify: bool = False
+    ) -> None:
         """Best-effort salvage preview for a dead clip (user-initiated gamble).
 
         Tries to synthesize a manifest from surviving chunks when none is playable,
@@ -791,9 +811,10 @@ class LibraryMixin:
             dialog_theme,
         )
 
-        confirm = DeadClipSalvageDialog(parent=self.ui, **dialog_theme(self))
-        if not (confirm.exec() and confirm.accepted_yes):
-            return
+        if not skip_confirm:
+            confirm = DeadClipSalvageDialog(parent=self.ui, **dialog_theme(self))
+            if not (confirm.exec() and confirm.accepted_yes):
+                return
 
         # Always rebuild a fresh salvage manifest from the *decodable* data on disk
         # (valid init-stream0 + non-empty chunks). We deliberately ignore any stale
@@ -810,6 +831,13 @@ class LibraryMixin:
         # (preview + render), then populate render settings from it so the revived
         # clip is renderable. Health stays Dead — this is an explicit user salvage.
         self._register_salvaged_clip(clip_path)
+        if skip_verify or self._is_clip_cured(clip_path):
+            self._salvage_verify_pending = None
+            self._salvage_verify_shown = True
+        else:
+            self._salvage_verify_pending = os.path.normpath(clip_path)
+            self._salvage_verify_shown = False
+            self._reset_salvage_playback_evidence(clip_path)
         self.generate_and_play_preview(clip_path, force=True, mpd_override=mpd_override)
         if hasattr(self, "_populate_quality_options_for_clip"):
             self._populate_quality_options_for_clip(clip_path)
@@ -827,6 +855,235 @@ class LibraryMixin:
 
     def _is_salvaged_clip(self, clip_path: str) -> bool:
         return os.path.normpath(clip_path) in getattr(self, "_salvaged_clips", {})
+
+    def _salvage_verified_cache_path(self) -> str:
+        return os.path.join(self.cache_dir, "salvage_verified_cache.json")
+
+    def _ensure_salvage_verified_cache(self) -> None:
+        if not hasattr(self, "_salvage_verified_cache"):
+            self._salvage_verified_cache = json_cache.read_json(
+                self._salvage_verified_cache_path(), default={}
+            )
+
+    def _save_salvage_verified_cache(self) -> None:
+        self._ensure_salvage_verified_cache()
+        json_cache.write_json(self._salvage_verified_cache_path(), self._salvage_verified_cache)
+
+    def _clip_folder_mtime(self, clip_path: str) -> float:
+        try:
+            return os.path.getmtime(clip_path)
+        except OSError:
+            return 0.0
+
+    def _salvage_manifests_on_disk(self, clip_path: str) -> list[str]:
+        mpds: list[str] = []
+        for root, _dirs, files in os.walk(clip_path):
+            if "session_salvage.mpd" in files:
+                mpds.append(os.path.join(root, "session_salvage.mpd"))
+        return sorted(mpds)
+
+    def _salvage_verified_entry(self, clip_path: str) -> dict | None:
+        self._ensure_salvage_verified_cache()
+        norm = os.path.normpath(clip_path)
+        entry = self._salvage_verified_cache.get(norm)
+        if not entry:
+            return None
+        if entry.get("mtime") != self._clip_folder_mtime(clip_path):
+            return None
+        if not self._salvage_manifests_on_disk(clip_path):
+            return None
+        return entry
+
+    def _is_clip_cured(self, clip_path: str) -> bool:
+        entry = self._salvage_verified_entry(clip_path)
+        return bool(entry and entry.get("cured"))
+
+    def _is_salvage_verified(self, clip_path: str) -> bool:
+        return self._is_clip_cured(clip_path)
+
+    def _is_salvage_auto_play(self, clip_path: str) -> bool:
+        entry = self._salvage_verified_entry(clip_path)
+        return bool(entry and entry.get("auto_play"))
+
+    def _reset_salvage_playback_evidence(self, clip_path: str) -> None:
+        norm = os.path.normpath(clip_path)
+        if not hasattr(self, "_salvage_playback_evidence"):
+            self._salvage_playback_evidence = {}
+        self._salvage_playback_evidence[norm] = {"max_time_pos": 0.0, "had_frame": False}
+
+    def _record_salvage_playback_evidence(self, clip_path: str | None = None) -> None:
+        pending = clip_path or getattr(self, "_salvage_verify_pending", None)
+        if not pending:
+            return
+        norm = os.path.normpath(pending)
+        evidence = getattr(self, "_salvage_playback_evidence", {}).get(norm)
+        if evidence is None:
+            return
+        player = getattr(self, "player", None)
+        if not player:
+            return
+        try:
+            if bool(getattr(player, "idle_active", True)):
+                return
+            width = int(getattr(player, "width", 0) or 0)
+            time_pos = float(getattr(player, "time_pos", 0) or 0)
+            if width > 0:
+                evidence["had_frame"] = True
+            if time_pos > evidence.get("max_time_pos", 0.0):
+                evidence["max_time_pos"] = time_pos
+        except Exception:
+            return
+
+    def _validate_salvage_playback(self, clip_path: str) -> tuple[bool, str]:
+        """Internal check that salvage playback is actually decoding."""
+        player = getattr(self, "player", None)
+        if not player:
+            return False, "Player is not available."
+
+        norm = os.path.normpath(clip_path)
+        try:
+            if bool(getattr(player, "idle_active", True)):
+                return False, "Playback is idle."
+
+            loaded = os.path.normpath(str(getattr(player, "path", "") or ""))
+            salvage_mpds = [os.path.normpath(p) for p in self._salvage_manifests_on_disk(clip_path)]
+            if salvage_mpds and loaded not in salvage_mpds:
+                return False, "The salvage manifest is not the active media."
+
+            width = int(getattr(player, "width", 0) or 0)
+            time_pos = float(getattr(player, "time_pos", 0) or 0)
+            evidence = getattr(self, "_salvage_playback_evidence", {}).get(norm, {})
+            max_time = float(evidence.get("max_time_pos", 0.0) or 0.0)
+            had_frame = bool(evidence.get("had_frame"))
+
+            if width > 0 or had_frame:
+                return True, ""
+            if max(time_pos, max_time) >= 0.35:
+                return True, ""
+            return False, "No decoded playback was detected."
+        except Exception as exc:
+            return False, str(exc)
+
+    def _mark_clip_cured(self, clip_path: str, *, auto_play: bool) -> None:
+        norm = os.path.normpath(clip_path)
+        self._ensure_salvage_verified_cache()
+        self._salvage_verified_cache[norm] = {
+            "mtime": self._clip_folder_mtime(clip_path),
+            "auto_play": bool(auto_play),
+            "cured": True,
+        }
+        self._save_salvage_verified_cache()
+        self._register_salvaged_clip(clip_path)
+        self._apply_cured_status_to_library_row(clip_path)
+
+    def _apply_cured_status_to_library_row(self, clip_path: str) -> None:
+        if not hasattr(self.ui, "table_clips"):
+            return
+        norm = os.path.normpath(clip_path)
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            row_path = item.data(Qt.UserRole)
+            if row_path and os.path.normpath(row_path) == norm:
+                item.setData(_CLIP_CURED_ROLE, True)
+                break
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
+
+    def _sync_cured_role_on_item(self, item, clip_path: str) -> None:
+        item.setData(_CLIP_CURED_ROLE, bool(self._is_clip_cured(clip_path)))
+
+    def _mark_salvage_verified(self, clip_path: str, *, auto_play: bool) -> None:
+        self._mark_clip_cured(clip_path, auto_play=auto_play)
+
+    def _clear_salvage_verified(self, clip_path: str) -> None:
+        norm = os.path.normpath(clip_path)
+        self._ensure_salvage_verified_cache()
+        if norm in self._salvage_verified_cache:
+            del self._salvage_verified_cache[norm]
+            self._save_salvage_verified_cache()
+
+    def restore_salvage_verified_clips(self) -> None:
+        """Rehydrate salvage manifests for cured clips saved from past sessions."""
+        self._ensure_salvage_verified_cache()
+        stale: list[str] = []
+        for norm, entry in list(self._salvage_verified_cache.items()):
+            if not entry.get("cured"):
+                stale.append(norm)
+                continue
+            if not os.path.isdir(norm):
+                stale.append(norm)
+                continue
+            try:
+                mtime = os.path.getmtime(norm)
+            except OSError:
+                stale.append(norm)
+                continue
+            if entry.get("mtime") != mtime or not self._salvage_manifests_on_disk(norm):
+                stale.append(norm)
+                continue
+            self._register_salvaged_clip(norm)
+        for norm in stale:
+            del self._salvage_verified_cache[norm]
+        if stale:
+            self._save_salvage_verified_cache()
+
+    def _offer_salvage_verification(self, clip_path: str) -> None:
+        if not clip_path or self._is_clip_cured(clip_path):
+            self._salvage_verify_pending = None
+            return
+
+        from steempeg.ui.dead_clip_dialogs import DeadClipSalvageVerifyDialog, dialog_theme
+        from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
+
+        dlg = DeadClipSalvageVerifyDialog(parent=self.ui, **dialog_theme(self))
+        if dlg.exec() and dlg.accepted_yes:
+            ok, reason = self._validate_salvage_playback(clip_path)
+            if ok:
+                self._mark_clip_cured(clip_path, auto_play=dlg.always_play_salvage())
+                steempeg_information(
+                    self.ui,
+                    "Clip Cured",
+                    "Salvage playback was verified.\n"
+                    "This clip is now marked Cured and can be added to the render queue.",
+                )
+            else:
+                steempeg_warning(
+                    self.ui,
+                    "Could not verify playback",
+                    "Playback was not confirmed by the internal check, so this clip "
+                    "was not marked Cured.\n\n"
+                    f"{reason}",
+                )
+        self._salvage_verify_pending = None
+
+    def _maybe_offer_salvage_verification(self) -> None:
+        pending = getattr(self, "_salvage_verify_pending", None)
+        if not pending or getattr(self, "_salvage_verify_shown", False):
+            return
+        try:
+            player = getattr(self, "player", None)
+            if not player or not getattr(player, "path", None):
+                return
+            playing = not bool(getattr(player, "idle_active", True))
+            has_frame = bool(getattr(player, "width", 0))
+        except Exception:
+            return
+        if not playing and not has_frame:
+            return
+        self._record_salvage_playback_evidence(clip_path=pending)
+        self._salvage_verify_shown = True
+        clip_path = pending
+        self._salvage_verify_pending = None
+        self._offer_salvage_verification(clip_path)
+
+    def _clip_can_queue(self, clip_path: str) -> bool:
+        if not self._clip_is_dead(clip_path):
+            return True
+        return self._is_clip_cured(clip_path)
 
     def _build_salvage_manifest(self, clip_path: str):
         """Write a scanner-invisible salvage manifest from orphaned chunks.
@@ -919,17 +1176,19 @@ class LibraryMixin:
         if count == 0:
             return
 
-        any_dead = any(self._clip_is_dead(p) for p in clip_paths)
-        all_dead = all(self._clip_is_dead(p) for p in clip_paths)
+        queueable = [p for p in clip_paths if self._clip_can_queue(p)]
 
-        if not all_dead:
-            queue_label = "📋 Add to queue" if count == 1 else f"📋 Add to queue ({count})"
+        if queueable:
+            count_q = len(queueable)
+            queue_label = "📋 Add to queue" if count_q == 1 else f"📋 Add to queue ({count_q})"
             action_queue = menu.addAction(queue_label)
-            if any_dead:
-                action_queue.setEnabled(False)
-                action_queue.setToolTip("Dead clips cannot be queued")
-            else:
-                action_queue.triggered.connect(lambda: self.add_clips_to_render_queue(clip_paths))
+            if len(queueable) < len(clip_paths):
+                action_queue.setToolTip(
+                    "Unverified dead clips in the selection will be skipped"
+                )
+            action_queue.triggered.connect(
+                lambda paths=list(queueable): self.add_clips_to_render_queue(paths)
+            )
 
         menu.addSeparator()
         action_open = menu.addAction("📂 Open in folder")
@@ -1181,6 +1440,18 @@ class LibraryMixin:
 
             shutil.rmtree(clip_path)
             logging.info(f"Deleted clip folder: {clip_path}")
+            norm = os.path.normpath(clip_path)
+            if hasattr(self, "_clear_salvage_verified"):
+                self._clear_salvage_verified(clip_path)
+            if hasattr(self.ui, "table_clips"):
+                for row in range(self.ui.table_clips.rowCount()):
+                    item = self.ui.table_clips.item(row, 0)
+                    if item and item.data(Qt.UserRole) and os.path.normpath(item.data(Qt.UserRole)) == norm:
+                        item.setData(_CLIP_CURED_ROLE, False)
+                        break
+            salvaged = getattr(self, "_salvaged_clips", {})
+            if norm in salvaged:
+                del salvaged[norm]
             self.scan_clips()
 
             if hasattr(self.ui, 'label_short_summary'):
@@ -1623,6 +1894,7 @@ class LibraryMixin:
             item_game.setToolTip(row.full_path)
         item_game.setData(_CLIP_HEALTH_ROLE, row.health_level)
         item_game.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(row.health_issues))
+        self._sync_cured_role_on_item(item_game, row.full_path)
         table.setItem(row_position, 0, item_game)
 
         item_type = QTableWidgetItem(row.rec_type)
@@ -1657,12 +1929,15 @@ class LibraryMixin:
         time_str = time_item.text() if time_item else "00:00"
         clip_path = title_item.data(Qt.UserRole)
         health_color = None
-        level = title_item.data(_CLIP_HEALTH_ROLE)
-        if level:
-            try:
-                health_color = health.HEALTH_COLORS[health.ClipHealth(level)]
-            except ValueError:
-                health_color = health.HEALTH_COLORS[health.ClipHealth.DEAD]
+        if title_item.data(_CLIP_CURED_ROLE):
+            health_color = health.HEALTH_COLORS[health.ClipHealth.CURED]
+        else:
+            level = title_item.data(_CLIP_HEALTH_ROLE)
+            if level:
+                try:
+                    health_color = health.HEALTH_COLORS[health.ClipHealth(level)]
+                except ValueError:
+                    health_color = health.HEALTH_COLORS[health.ClipHealth.DEAD]
 
         icon_path = ""
         thumb_path = ""
@@ -2098,9 +2373,10 @@ class LibraryMixin:
                 return re.sub(r'[^a-zа-я0-9]', '', txt)
 
             if sort_idx in (5, 6): # HEALTH
-                level = r[0].data(_CLIP_HEALTH_ROLE) if r[0] else health.ClipHealth.HEALTHY.value
+                level = self._row_display_health_level(r[0]) if r[0] else health.ClipHealth.HEALTHY.value
                 rank = {
-                    health.ClipHealth.HEALTHY.value: 2,
+                    health.ClipHealth.HEALTHY.value: 3,
+                    health.ClipHealth.CURED.value: 2,
                     health.ClipHealth.DEGRADED.value: 1,
                     health.ClipHealth.DEAD.value: 0,
                 }

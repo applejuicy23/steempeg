@@ -5,7 +5,7 @@ from enum import Enum
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
@@ -219,6 +219,82 @@ class DeadClipSalvageFailedDialog(SteempegDialog):
         btn_ok.clicked.connect(self.accept)
         actions.addWidget(btn_ok)
         self.content_layout.addLayout(actions)
+
+
+class DeadClipSalvageVerifyDialog(SteempegDialog):
+    """After salvage playback starts — confirm recovery and optional auto-play."""
+
+    def __init__(self, parent=None, **theme):
+        super().__init__("Salvage playback", parent, **theme)
+        self.setMinimumWidth(500)
+        self.resize(540, 320)
+        self._accepted_yes = False
+
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.addWidget(_mascot_label("chupisuccess.png"), 0, Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        title = QLabel("Did the salvaged clip play correctly?")
+        title.setWordWrap(True)
+        title.setStyleSheet(
+            f"color: {tok.TEXT_TITLE}; font-size: 15px; font-weight: 600; background: transparent;"
+        )
+        col.addWidget(title)
+        body = QLabel(
+            "If playback looks or sounds right, Steempeg will run an internal check. "
+            "Only when real decoded playback is detected will this clip be marked "
+            "<b>Cured</b> and allowed into the render queue.\n\n"
+            "Saying yes without actual playback will not grant Cured status."
+        )
+        body.setTextFormat(Qt.TextFormat.RichText)
+        body.setWordWrap(True)
+        body.setStyleSheet(
+            f"color: {tok.TEXT_PRIMARY}; font-size: 12px; background: transparent;"
+        )
+        col.addWidget(body)
+        row.addLayout(col, 1)
+        self.content_layout.addLayout(row)
+
+        self._chk_auto_play = QCheckBox("Always play this clip via salvage without asking")
+        self._chk_auto_play.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._chk_auto_play.setStyleSheet(
+            "color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;"
+            " QCheckBox::indicator { width: 14px; height: 14px; }"
+            " QCheckBox::indicator:unchecked { border: 2px solid #666; border-radius: 3px; background: #1a1a1a; }"
+            " QCheckBox::indicator:checked { border: 2px solid #b29ae7; border-radius: 3px; background: #5138e6; }"
+        )
+        self.content_layout.addWidget(self._chk_auto_play)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch(1)
+
+        btn_no = QPushButton("Not yet")
+        btn_no.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_no.setStyleSheet(_BTN_SECONDARY)
+        btn_no.clicked.connect(self.reject)
+        actions.addWidget(btn_no)
+
+        btn_yes = QPushButton("Yes, it works")
+        btn_yes.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_yes.setStyleSheet(_BTN_PRIMARY)
+        btn_yes.clicked.connect(self._accept_yes)
+        actions.addWidget(btn_yes)
+
+        self.content_layout.addLayout(actions)
+
+    def _accept_yes(self) -> None:
+        self._accepted_yes = True
+        self.accept()
+
+    @property
+    def accepted_yes(self) -> bool:
+        return self._accepted_yes
+
+    def always_play_salvage(self) -> bool:
+        return self._chk_auto_play.isChecked()
 
 
 def dialog_theme(parent) -> dict:

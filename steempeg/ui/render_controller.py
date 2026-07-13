@@ -2265,8 +2265,12 @@ class RenderMixin:
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
             if report.level == health.ClipHealth.DEAD:
-                logging.warning("Skipped dead clip for queue: %s", clip_path)
-                return None
+                verified = hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path)
+                if not verified:
+                    logging.warning("Skipped unverified dead clip for queue: %s", clip_path)
+                    return None
+                if hasattr(self, "_register_salvaged_clip"):
+                    self._register_salvaged_clip(clip_path)
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
@@ -2478,6 +2482,10 @@ class RenderMixin:
 
         if hasattr(self, "get_clip_health_report"):
             if self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD:
+                if hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path):
+                    job = self._queue_job_for_clip(clip_path)
+                    if job:
+                        return STATUS_HEADER_LABELS[job.status], STATUS_COLORS[job.status]
                 return None, None
 
         if getattr(self, "_is_rendering", False):

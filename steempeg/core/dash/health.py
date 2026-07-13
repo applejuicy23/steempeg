@@ -41,24 +41,28 @@ class ClipHealth(str, Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     DEAD = "dead"
+    CURED = "cured"
 
 
 HEALTH_LABELS = {
     ClipHealth.HEALTHY: "Healthy",
     ClipHealth.DEGRADED: "Issues",
     ClipHealth.DEAD: "Dead",
+    ClipHealth.CURED: "Cured",
 }
 
 HEALTH_COLORS = {
     ClipHealth.HEALTHY: "#4caf50",
     ClipHealth.DEGRADED: "#e6a817",
     ClipHealth.DEAD: "#c0392b",
+    ClipHealth.CURED: "#9b7fd4",
 }
 
 HEALTH_ICON_FILES = {
     ClipHealth.HEALTHY: "success.png",
     ClipHealth.DEGRADED: "issue.png",
     ClipHealth.DEAD: "dead.png",
+    ClipHealth.CURED: "cured.png",
 }
 
 WARNING_ICON_FILE = "issue.png"
