@@ -40,6 +40,7 @@ from steempeg.core.steam_paths import (
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
 from steempeg.infra import cache as json_cache
+from steempeg.infra.paths import get_resource_path
 from steempeg.ui.library.filters import FilterMenu
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.message_dialog import (
@@ -127,21 +128,17 @@ _FOLDERS_MENU_STYLE = """
     }
     QPushButton#FolderRowRemove, QPushButton#FolderRowReplace {
         background-color: #333333;
-        color: #cccccc;
         border: 1px solid #555555;
-        border-radius: 10px;
-        font-size: 11px;
-        font-weight: bold;
-        min-width: 20px;
-        max-width: 20px;
-        min-height: 20px;
-        max-height: 20px;
+        border-radius: 11px;
+        min-width: 22px;
+        max-width: 22px;
+        min-height: 22px;
+        max-height: 22px;
         padding: 0;
     }
     QPushButton#FolderRowRemove:hover {
         background-color: #8a2525;
         border: 1px solid #a82e2e;
-        color: #ffffff;
     }
     QPushButton#FolderRowRemove:pressed {
         background-color: #661a1a;
@@ -149,7 +146,6 @@ _FOLDERS_MENU_STYLE = """
     QPushButton#FolderRowReplace:hover {
         background-color: #3a324a;
         border: 1px solid #6b5a8e;
-        color: #d4c4ff;
     }
     QPushButton#FolderRowReplace:pressed {
         background-color: #2d2640;
@@ -1362,6 +1358,24 @@ class LibraryMixin:
         self._update_folder_picker_label()
         self.scan_clips()
 
+    def _folder_row_icon_button(
+        self,
+        icon_file: str,
+        object_name: str,
+        tooltip: str,
+        callback,
+    ) -> QPushButton:
+        btn = QPushButton()
+        btn.setObjectName(object_name)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip(tooltip)
+        icon_path = get_resource_path(icon_file)
+        if os.path.isfile(icon_path):
+            btn.setIcon(QIcon(icon_path))
+            btn.setIconSize(QSize(14, 14))
+        btn.clicked.connect(callback)
+        return btn
+
     def _folder_panel_row(self, menu, path, is_main):
         """One folder row for the dropdown: label, optional replace, and remove ✕."""
         row = QWidget()
@@ -1384,21 +1398,19 @@ class LibraryMixin:
         row_layout.addWidget(label, 1)
 
         if is_main:
-            btn_replace = QPushButton("⟳")
-            btn_replace.setObjectName("FolderRowReplace")
-            btn_replace.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_replace.setToolTip("Replace main folder (keeps additional folders)")
-            btn_replace.clicked.connect(
-                lambda _checked=False: (menu.close(), self.choose_folder())
+            btn_replace = self._folder_row_icon_button(
+                "clipcutback.png",
+                "FolderRowReplace",
+                "Replace main folder (keeps additional folders)",
+                lambda _checked=False: (menu.close(), self.choose_folder()),
             )
             row_layout.addWidget(btn_replace)
 
-        btn_x = QPushButton("✕")
-        btn_x.setObjectName("FolderRowRemove")
-        btn_x.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_x.setToolTip("Remove this folder")
-        btn_x.clicked.connect(
-            lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p))
+        btn_x = self._folder_row_icon_button(
+            "multiplier.png",
+            "FolderRowRemove",
+            "Remove this folder",
+            lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p)),
         )
         row_layout.addWidget(btn_x)
 
