@@ -1171,7 +1171,14 @@ class PlayerMixin:
                 self.trim_tools_pill.hide()
             self._apply_video_border(False)
 
-    def apply_trim_state(self, is_trim_mode: bool, trim_start_ms: int = 0, trim_end_ms: int = 0) -> None:
+    def apply_trim_state(
+        self,
+        is_trim_mode: bool,
+        trim_start_ms: int = 0,
+        trim_end_ms: int = 0,
+        *,
+        silent: bool = False,
+    ) -> None:
         """Restore per-clip trim handles and button state (does not toggle via enable_trim_mode)."""
         if not hasattr(self, "custom_timeline"):
             return
@@ -1187,7 +1194,8 @@ class PlayerMixin:
             canvas.trim_start_ms = start
             canvas.trim_end_ms = end
             self._set_trim_button_active(True)
-            self.custom_timeline.trim_changed.emit(int(start), int(end))
+            if not silent:
+                self.custom_timeline.trim_changed.emit(int(start), int(end))
         else:
             canvas.disable_trim_mode()
             self._set_trim_button_active(False)
@@ -1196,6 +1204,8 @@ class PlayerMixin:
     def _deferred_apply_trim_restore(self) -> None:
         pending = getattr(self, "_pending_trim_restore", None)
         if not pending:
+            if hasattr(self, "_loading_queue_job"):
+                self._loading_queue_job = False
             return
         if pending.get("is_trim_mode") and hasattr(self, "custom_timeline"):
             duration = float(getattr(self.custom_timeline.canvas, "duration_ms", 0) or 0)
@@ -1203,13 +1213,19 @@ class PlayerMixin:
                 QTimer.singleShot(300, self._deferred_apply_trim_restore)
                 return
         self._pending_trim_restore = None
-        self.apply_trim_state(
-            pending.get("is_trim_mode", False),
-            pending.get("trim_start_ms", 0),
-            pending.get("trim_end_ms", 0),
-        )
+        if hasattr(self, "_apply_clip_session_state"):
+            self._apply_clip_session_state(pending, silent=True)
+        else:
+            self.apply_trim_state(
+                pending.get("is_trim_mode", False),
+                pending.get("trim_start_ms", 0),
+                pending.get("trim_end_ms", 0),
+                silent=True,
+            )
+        if hasattr(self, "_loading_queue_job"):
+            self._loading_queue_job = False
         if hasattr(self, "update_final_setup"):
-            self.update_final_setup()
+            self.update_final_setup(trim_only=True)
 
     def _deactivate_trim_ui(self):
         """Turn off trim mode on the timeline and reset its button/border chrome."""
@@ -1238,15 +1254,10 @@ class PlayerMixin:
 
         if self.custom_timeline.is_trim_mode:
             self._deactivate_trim_ui()
+            self._run_trim_side_effects()
         else:
             self.custom_timeline.enable_trim_mode()
             self._set_trim_button_active(True)
-
-        self.update_final_setup()
-        if hasattr(self, '_persist_trim_for_current_clip'):
-            self._persist_trim_for_current_clip()
-        if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
-            self.setup_dynamic_slider()
 
     def set_trim_start_to_playhead(self):
         """ Sets the left end of the yellow strip with a UNO REVERSAL. """
@@ -1355,17 +1366,23 @@ class PlayerMixin:
         return getattr(self, 'current_clip_duration_sec', 0)
 
     def on_trim_changed(self, start_ms, end_ms):
-        """ Fires instantly when the user drags the yellow trim handles """
-        # 1. Update text info in Export Settings
+        """ Fires when trim handles move or trim mode toggles — defer heavy UI work. """
+        if getattr(self, '_loading_queue_job', False):
+            return
+        timer = getattr(self, '_trim_side_effects_timer', None)
+        if timer is None:
+            timer = QTimer(self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._run_trim_side_effects)
+            self._trim_side_effects_timer = timer
+        timer.start(0)
+
+    def _run_trim_side_effects(self) -> None:
+        if getattr(self, '_loading_queue_job', False):
+            return
         self.update_final_setup(trim_only=True)
-        if hasattr(self, '_sync_queue_trim_from_timeline'):
-            self._sync_queue_trim_from_timeline()
-        elif hasattr(self, '_sync_ui_to_selected_job'):
-            self._sync_ui_to_selected_job()
         if hasattr(self, '_persist_trim_for_current_clip'):
             self._persist_trim_for_current_clip()
-        
-        # 2. Recalculate slider sizes because shorter video = less Megabytes!
         if hasattr(self.ui, 'combo_quality') and "Target File Size" in self.ui.combo_quality.currentText():
             self.setup_dynamic_slider()
 
@@ -1847,6 +1864,8 @@ class PlayerMixin:
                 self._is_switching = False
                 if getattr(self, "_pending_trim_restore", None):
                     QTimer.singleShot(150, self._deferred_apply_trim_restore)
+                elif hasattr(self, "_loading_queue_job"):
+                    self._loading_queue_job = False
 
             QTimer.singleShot(500, finish_switch)
 

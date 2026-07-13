@@ -231,7 +231,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._queue_batch_active = False
         self.render_thread = None
         self._preview_clip_path = None
-        self._clip_trim_memory = {}
+        self._clip_session_memory = {}
 
         
         # list of all supported resolutions for rendering

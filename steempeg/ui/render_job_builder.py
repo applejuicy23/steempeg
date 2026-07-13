@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import Qt
 
-from steempeg.core.dash import discovery
+from steempeg.core.dash import discovery, mpd
 from steempeg.core import capabilities
 from steempeg.infra.paths import get_save_directory
 from steempeg.render.encode_speed import normalize_encode_speed
@@ -193,6 +193,69 @@ def find_clip_metadata(app: SteempegApp, clip_path: str) -> Optional[dict]:
     return None
 
 
+def probe_clip_render_defaults(clip_path: str) -> dict:
+    """Per-clip Original preset strings from MPD (for queue add without preview)."""
+    clip_path = os.path.normpath(clip_path)
+    mpds = discovery.find_mpd_paths(clip_path)
+    if not mpds:
+        return {
+            "orig_fps": 60,
+            "orig_video_mbps": 0.0,
+            "orig_audio_kbps": 192,
+            "quality_text": "Original (Lossless)",
+            "fps_text": "60 FPS (Original)",
+            "bitrate_text": "Unknown Mbps (Original)",
+        }
+
+    orig_fps = 60
+    orig_video_mbps = 0.0
+    max_height = 0
+    orig_audio_kbps = 192
+
+    for mpd_path in mpds:
+        try:
+            with open(mpd_path, encoding="utf-8") as handle:
+                content = handle.read()
+            fps_match = re.search(r'\bframeRate="(\d+)(?:/\d+)?"', content)
+            if fps_match:
+                orig_fps = int(fps_match.group(1))
+            else:
+                probed = mpd.get_fps(mpd_path)
+                if probed:
+                    orig_fps = int(probed)
+            peak = mpd.get_video_bitrate_mbps(mpd_path)
+            if peak > orig_video_mbps:
+                orig_video_mbps = peak
+            height_match = re.search(r'\bheight="(\d+)"', content)
+            if height_match:
+                max_height = max(max_height, int(height_match.group(1)))
+        except OSError:
+            pass
+
+    ab = mpd.get_audio_bitrate_kbps(mpds[0])
+    if ab:
+        orig_audio_kbps = int(ab)
+
+    quality_text = (
+        f"Original (Lossless, {max_height}p)" if max_height > 0 else "Original (Lossless)"
+    )
+    fps_text = f"{orig_fps} FPS (Original)"
+    if orig_video_mbps > 0:
+        s = f"{orig_video_mbps:.1f}".rstrip("0").rstrip(".")
+        bitrate_text = f"{s} Mbps (Original)"
+    else:
+        bitrate_text = "Unknown Mbps (Original)"
+
+    return {
+        "orig_fps": orig_fps,
+        "orig_video_mbps": orig_video_mbps,
+        "orig_audio_kbps": orig_audio_kbps,
+        "quality_text": quality_text,
+        "fps_text": fps_text,
+        "bitrate_text": bitrate_text,
+    }
+
+
 def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
     ui = app.ui
     quality = ui.combo_quality.currentText() if hasattr(ui, "combo_quality") else ""
@@ -229,7 +292,12 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
     trim_start_ms = 0
     trim_end_ms = 0
     is_trim_mode = False
-    if hasattr(app, "custom_timeline") and app.custom_timeline.is_trim_mode:
+    preview = getattr(app, "_preview_clip_path", None)
+    if (
+        preview
+        and hasattr(app, "custom_timeline")
+        and app.custom_timeline.is_trim_mode
+    ):
         is_trim_mode = True
         trim_start_ms = int(app.custom_timeline.trim_start_ms)
         trim_end_ms = int(app.custom_timeline.trim_end_ms)
@@ -334,6 +402,20 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
     settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
 
     preview = getattr(app, "_preview_clip_path", None)
+    same_preview = preview and os.path.normpath(preview) == clip_path
+    ui = app.ui
+    ui_quality = (
+        ui.combo_quality.currentText().strip() if hasattr(ui, "combo_quality") else ""
+    )
+    if not (same_preview and ui_quality):
+        defaults = probe_clip_render_defaults(clip_path)
+        settings.quality_text = defaults["quality_text"]
+        settings.fps_text = defaults["fps_text"]
+        settings.bitrate_text = defaults["bitrate_text"]
+        settings.orig_fps = int(defaults["orig_fps"])
+        settings.orig_video_mbps = float(defaults["orig_video_mbps"])
+        settings.orig_audio_kbps = int(defaults["orig_audio_kbps"])
+
     if not (preview and os.path.normpath(preview) == clip_path):
         if hasattr(app, "_trim_state_for_clip"):
             trim = app._trim_state_for_clip(clip_path)

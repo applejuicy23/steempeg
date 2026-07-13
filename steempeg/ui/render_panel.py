@@ -277,6 +277,25 @@ class SummaryLabel(QWidget):
         self._pairs = pairs
         self._rebuild()
 
+    def patch_field(self, key: str, value: str) -> bool:
+        """Update one key/value pair without rebuilding unrelated rows."""
+        key = (key or "").strip()
+        if not key or self._plain is not None:
+            return False
+        for idx, (k, v) in enumerate(self._pairs):
+            if k == key:
+                if v == value:
+                    return True
+                self._pairs[idx] = (k, value)
+                cols = self._cols
+                r, c = idx // cols, idx % cols
+                base = c * 3 + 1
+                item = self._grid.itemAtPosition(r, base)
+                if item and item.widget():
+                    item.widget().setText(value)
+                return True
+        return False
+
     def _clear(self):
         while self._grid.count():
             item = self._grid.takeAt(0)

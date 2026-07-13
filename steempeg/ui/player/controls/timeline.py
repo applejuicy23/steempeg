@@ -453,6 +453,8 @@ class TimelineCanvas(QWidget):
 
     def disable_trim_mode(self):
         self.is_trim_mode = False
+        self.trim_start_ms = 0.0
+        self.trim_end_ms = 0.0
         self.update()
 
     def process_60fps_frame(self):
@@ -568,7 +570,7 @@ class TimelineCanvas(QWidget):
 
         pixels_per_sec = usable_w / (self.duration_ms / 1000.0) # Заменили width на usable_w
         
-        # SMART SCALING
+        # SMART SCALING — ruler ticks stay visible during trim drag.
         if pixels_per_sec < 0.1: step = 900       # 15-minute step (for very long durations)
         elif pixels_per_sec < 0.25: step = 600    # 10-minute step
         elif pixels_per_sec < 0.5: step = 300     # 5-minute step
@@ -678,7 +680,7 @@ class TimelineCanvas(QWidget):
                 draw_marker(marker, False)
                 painter.setOpacity(1.0) # Make sure to reset it for the next one!
                 
-       # 2. TOP LAYER: Draw the hovered icon (Always 100% visible on top!)
+        # 2. TOP LAYER: Draw the hovered icon (Always 100% visible on top!)
         if hovered_m and hovered_m in getattr(self, 'markers', []):
             painter.setOpacity(1.0)
             draw_marker(hovered_m, True)
@@ -1071,6 +1073,7 @@ class TimelineCanvas(QWidget):
             self.resume_requested.emit()
         elif self.drag_state in ['trim_l', 'trim_r']:
             self.trim_changed.emit(int(self.trim_start_ms), int(self.trim_end_ms))
+            self.update()
         self.drag_state = 'none'
 
     def update_playhead(self, mouse_x):
@@ -1194,7 +1197,19 @@ class CustomTimelineWidget(QScrollArea):
             }}
         """)
         self.zoom_level = 1.0
-        self.update_scrollbar_visibility() 
+        self.update_scrollbar_visibility()
+
+    def set_zoom_state(self, zoom_level: float, scroll_x: int = 0) -> None:
+        """Restore timeline zoom/scroll without wheel interaction (per-clip session)."""
+        self.zoom_level = max(1.0, float(zoom_level))
+        base_width = max(1, self.viewport().width())
+        new_width = max(base_width, int(base_width * self.zoom_level))
+        self.canvas.setMinimumWidth(new_width)
+        self.canvas.resize(new_width, self.canvas.height())
+        self.update_scrollbar_visibility()
+        bar = self.horizontalScrollBar()
+        if bar is not None:
+            bar.setValue(max(0, int(scroll_x))) 
 
     def update_scrollbar_visibility(self):
         """ Toggles the scrollbar ON/OFF, LEAVING the container height constant """
