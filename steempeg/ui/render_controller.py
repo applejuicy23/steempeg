@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from PySide6.QtCore import Qt, QTimer, QPoint
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -555,6 +555,12 @@ class RenderMixin:
         """Update the macOS-style status dot, label, progress bar and percent label."""
         if not hasattr(self.ui, 'label_status'):
             return
+        # While the library scan is running, ignore unrelated "Ready" updates that
+        # would reset the progress bar mid-load (settings callbacks, layout refresh, etc).
+        if getattr(self, "_clips_scan_active", False) and scan_phase is None and state == "ready":
+            return
+        if getattr(self, "_rendered_scan_active", False) and scan_phase is None and state == "ready":
+            return
 
         colors = {
             "ready": "#4CAF50",
@@ -592,7 +598,12 @@ class RenderMixin:
             f"background: transparent; border: none; font-size: 14px; font-weight: bold; "
             f"color: {color}; font-family: Segoe UI, Arial, sans-serif;"
         )
+        full_text = display_text
+        max_w = status_label.maximumWidth() if status_label.maximumWidth() > 0 else 280
+        metrics = QFontMetrics(status_label.font())
+        display_text = metrics.elidedText(full_text, Qt.TextElideMode.ElideMiddle, max_w)
         status_label.setText(display_text)
+        status_label.setToolTip(full_text if full_text != display_text else "")
 
         if state == "success":
             percent = 100.0

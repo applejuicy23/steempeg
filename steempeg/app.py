@@ -1197,29 +1197,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             ready_cluster = qtw.QWidget()
             ready_cluster.setFixedHeight(_STATUS_ROW_H)
-            ready_cluster.setSizePolicy(
-                qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Fixed
-            )
             ready_cluster_layout = qtw.QHBoxLayout(ready_cluster)
             ready_cluster_layout.setContentsMargins(0, 0, 0, 0)
             ready_cluster_layout.setSpacing(4)
 
             if hasattr(self.ui, 'label_status'):
-                elided_status = ElidedLabel("Ready", ready_cluster)
-                elided_status.setObjectName("label_status")
-                elided_status.setStyleSheet(
+                status_label = qtw.QLabel("Ready", ready_cluster)
+                status_label.setObjectName("label_status")
+                status_label.setStyleSheet(
                     f"background: transparent; border: none; font-size: 14px; font-weight: bold; {_status_font}"
                 )
-                elided_status.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
-                elided_status.setSizePolicy(
-                    qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
-                )
+                status_label.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
+                status_label.setMinimumWidth(120)
+                status_label.setMaximumWidth(280)
                 self.ui.label_status.deleteLater()
-                self.ui.label_status = elided_status
-                ready_cluster_layout.addWidget(elided_status, 1, qtc.Qt.AlignVCenter)
+                self.ui.label_status = status_label
+                ready_cluster_layout.addWidget(status_label, 0, qtc.Qt.AlignVCenter)
 
             ready_cluster_layout.addWidget(dot_col, 0, qtc.Qt.AlignVCenter)
-            top_row.addWidget(ready_cluster, 1, qtc.Qt.AlignVCenter)
+            top_row.addWidget(ready_cluster, 0, qtc.Qt.AlignVCenter)
 
             header_block.addLayout(top_row)
 
@@ -2179,11 +2175,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # _update_folder_picker_label must run here too.
         self._update_folder_picker_label()
 
-        if self.clips_folders:
-            self._defer_rendered_scan_until_clips_done = True
-            self.scan_clips()
-        elif hasattr(self, "scan_rendered_outputs"):
-            self.scan_rendered_outputs()
+        # Defer startup scans until the window geometry and library UI state are
+        # restored. Starting background scans here caused:
+        # - the library tab bar to "snap" when Rendered videos was restored
+        # - the footer dashboard to resize while clips were being inserted
+        # - cross-panel status updates (clips vs rendered) fighting each other
+        self._start_startup_scans_pending = True
 
         if hasattr(self.ui, 'main_splitter'):
             from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
@@ -2332,6 +2329,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if hasattr(self, "_library_ui_persist_ready"):
             QTimer.singleShot(250, lambda: setattr(self, "_library_ui_persist_ready", True))
         self.refresh_render_queue_panel(sync_splitter=True)
+        self._start_startup_scans_after_restore()
+
+    def _start_startup_scans_after_restore(self) -> None:
+        """Kick off initial library scans once the shell is stable."""
+        if not getattr(self, "_start_startup_scans_pending", False):
+            return
+        self._start_startup_scans_pending = False
+
+        def _start():
+            # Clips first; Rendered is deferred until clips finishes.
+            if getattr(self, "clips_folders", None):
+                self._startup_library_scan_active = True
+                self._defer_rendered_scan_until_clips_done = True
+                self.scan_clips()
+            elif hasattr(self, "scan_rendered_outputs"):
+                self.scan_rendered_outputs()
+
+        QTimer.singleShot(0, _start)
 
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES

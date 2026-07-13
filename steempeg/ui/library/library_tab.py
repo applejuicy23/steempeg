@@ -110,6 +110,11 @@ class LibraryTabWidget(QFrame):
             self._close.setEnabled(False)
         row.addWidget(self._close, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        text_w = self._text.fontMetrics().horizontalAdvance(label)
+        close_w = 18 if closable else 0
+        side_pad = 14 + (6 if closable else 14)
+        self.setMinimumWidth(text_w + close_w + side_pad + 8)
+
         self.set_active(False)
 
     def set_active(self, active: bool) -> None:

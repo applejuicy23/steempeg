@@ -1718,7 +1718,13 @@ class LibraryMixin:
             item.setHidden(True)
 
     def _library_scan_status_active(self, source: str) -> bool:
-        """Only the visible library panel should drive the footer status bar."""
+        """Only the visible library panel drives the footer — except during startup."""
+        if getattr(self, "_startup_library_scan_active", False):
+            if source == "clips" and getattr(self, "_clips_scan_active", False):
+                return True
+            if source == "rendered" and getattr(self, "_rendered_scan_active", False):
+                return True
+            return False
         return getattr(self, "_library_panel_mode", "clips") == source
 
     def _maybe_start_deferred_rendered_scan(self) -> None:
@@ -1731,7 +1737,11 @@ class LibraryMixin:
     def _on_scan_discovering(self, total: int, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
+        # Progress should reflect real UI insert, not just worker scan speed.
+        if total > 0:
+            self._scan_total = int(total)
+            self._scan_inserted = 0
+        if hasattr(self, "update_status_indicator") and getattr(self, "_clips_scan_active", False):
             if total <= 0:
                 self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
             else:
@@ -1740,21 +1750,91 @@ class LibraryMixin:
     def _on_scan_clip_ready(self, row: ScannedClip, index: int, total: int, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
-        self._insert_scanned_clip_row(row)
-        label = row.game_name.strip() or os.path.basename(row.full_path)
-        pct = int(100 * index / total) if total else 0
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
-            self.update_status_indicator(
-                f"Loading {index}/{total} — {label} ({pct}%)",
-                "busy",
-                scan_phase="loading",
-            )
+        # Insert in small batches on a timer so the UI stays smooth and clips appear
+        # 1-by-1 instead of stalling then dropping big chunks.
+        pending = getattr(self, "_scan_pending_rows", None)
+        if pending is None:
+            pending = []
+            self._scan_pending_rows = pending
+        pending.append((row, index, total))
+
+        if not getattr(self, "_scan_flush_scheduled", False):
+            self._scan_flush_scheduled = True
+            QTimer.singleShot(0, lambda g=generation: self._flush_scanned_clips(g))
+
+    def _flush_scanned_clips(self, generation: int) -> None:
+        if generation != getattr(self, "_scan_generation", 0):
+            self._scan_flush_scheduled = False
+            self._scan_pending_rows = []
+            self._scan_finalize_pending = None
+            return
+
+        self._scan_flush_scheduled = False
+        pending = getattr(self, "_scan_pending_rows", [])
+        if not pending:
+            finalize = getattr(self, "_scan_finalize_pending", None)
+            if finalize is not None:
+                stats, gen, announce = finalize
+                if gen == getattr(self, "_scan_generation", 0):
+                    self._scan_finalize_pending = None
+                    self._finalize_scan_finished(stats, gen, announce)
+            return
+
+        batch = 6
+        for _ in range(min(batch, len(pending))):
+            row, index, total = pending.pop(0)
+            self._insert_scanned_clip_row(row)
+
+            if hasattr(self, "update_status_indicator") and getattr(self, "_clips_scan_active", False):
+                inserted = int(getattr(self, "_scan_inserted", 0)) + 1
+                self._scan_inserted = inserted
+                # `_scan_total` is corrected to stats.clip_count once the worker finishes.
+                denom = int(getattr(self, "_scan_total", 0) or 0) or inserted or 1
+                label = row.game_name.strip() or os.path.basename(row.full_path)
+                pct = int(100 * inserted / denom) if denom else 0
+                if inserted >= denom and getattr(self, "_scan_finalize_pending", None) is None:
+                    pct = min(pct, 99)
+                self.update_status_indicator(
+                    f"Loading {inserted}/{denom} — {label} ({pct}%)",
+                    "busy",
+                    scan_phase="loading",
+                )
+
         if hasattr(self, "lbl_clip_count"):
             self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+
+        if pending:
+            self._scan_flush_scheduled = True
+            QTimer.singleShot(0, lambda g=generation: self._flush_scanned_clips(g))
+            return
+
+        # pending is empty; finalization is handled at the top of this method.
+        finalize = getattr(self, "_scan_finalize_pending", None)
+        if finalize is not None:
+            stats, gen, announce = finalize
+            if gen == getattr(self, "_scan_generation", 0):
+                self._scan_finalize_pending = None
+                self._finalize_scan_finished(stats, gen, announce)
 
     def _on_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
+
+        # Discovery count can include folders that fail health/parse; use the real total.
+        if int(stats.clip_count) > 0:
+            self._scan_total = int(stats.clip_count)
+
+        # Do not mark the scan as finished until the UI insertion queue drains.
+        # Otherwise unrelated "Ready" updates reset the progress bar mid-load.
+        pending = getattr(self, "_scan_pending_rows", [])
+        if pending or getattr(self, "_scan_flush_scheduled", False):
+            self._scan_finalize_pending = (stats, generation, announce_duplicates)
+            return
+
+        self._finalize_scan_finished(stats, generation, announce_duplicates)
+
+    def _finalize_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
+        """Run the original scan-finished logic once both worker + UI insert are done."""
 
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
@@ -1782,8 +1862,13 @@ class LibraryMixin:
             if hasattr(self, "_clear_clips_selection_visual"):
                 self._clear_clips_selection_visual()
 
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
-            self.update_status_indicator("Ready", "ready")
+        will_scan_rendered = getattr(self, "_defer_rendered_scan_until_clips_done", False)
+        self._clips_scan_active = False
+        if hasattr(self, "update_status_indicator"):
+            if not will_scan_rendered:
+                self.update_status_indicator("Ready", "ready")
+            else:
+                self.update_status_indicator("Clips loaded — scanning rendered files…", "busy", scan_phase="search")
 
         self._maybe_start_deferred_rendered_scan()
 
@@ -1814,7 +1899,8 @@ class LibraryMixin:
             return
         self._library_scan_worker = None
         logging.error("Library scan failed: %s", message)
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
+        self._clips_scan_active = False
+        if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Scan error", "error")
         self._maybe_start_deferred_rendered_scan()
 
@@ -1830,6 +1916,11 @@ class LibraryMixin:
 
         self._stop_library_scan()
         self._stop_clip_poster_backfill()
+        self._scan_pending_rows = []
+        self._scan_flush_scheduled = False
+        self._scan_total = 0
+        self._scan_inserted = 0
+        self._scan_finalize_pending = None
         self._saved_clips_selection_path = ""
         self._preview_clip_path = None
         if hasattr(self, "_clear_clips_selection_visual"):
@@ -1849,7 +1940,8 @@ class LibraryMixin:
         if not library_roots:
             if hasattr(self, "lbl_clip_count"):
                 self.lbl_clip_count.setText("• 0 Clips")
-            if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
+            self._clips_scan_active = False
+            if hasattr(self, "update_status_indicator"):
                 self.update_status_indicator("Ready", "ready")
             self._maybe_start_deferred_rendered_scan()
             return
@@ -1857,6 +1949,7 @@ class LibraryMixin:
         self._scan_generation = getattr(self, "_scan_generation", 0) + 1
         generation = self._scan_generation
         self._ensure_clip_health_cache()
+        self._clips_scan_active = True
 
         if hasattr(self, "lbl_clip_count"):
             self.lbl_clip_count.setText("• … Clips")

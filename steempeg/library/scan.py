@@ -441,7 +441,8 @@ def run_library_scan(
             health_counts["issues"] += 1
 
         clip_count += 1
-        on_clip(row, index, total)
+        # Use clip_count (successful rows), not loop index — some candidates are skipped.
+        on_clip(row, clip_count, total)
 
     return ScanFinishedStats(
         duplicate_count=duplicate_count,

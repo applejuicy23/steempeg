@@ -142,6 +142,9 @@ class RenderedLibraryMixin:
         self._library_ui_persist_ready = False
         self._rendered_scan_generation = 0
         self._defer_rendered_scan_until_clips_done = False
+        self._clips_scan_active = False
+        self._rendered_scan_active = False
+        self._startup_library_scan_active = False
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         tab = LibraryTabWidget(label, mode)
@@ -848,9 +851,22 @@ class RenderedLibraryMixin:
             worker.wait(3000)
         self._rendered_poster_worker = None
 
+    def _finish_startup_library_scan_status(self, *, text: str = "Ready", state: str = "ready") -> None:
+        """Drop startup scan flags and update the footer once library scans are done."""
+        self._rendered_scan_active = False
+        was_startup = bool(getattr(self, "_startup_library_scan_active", False))
+        if was_startup:
+            self._startup_library_scan_active = False
+        if not hasattr(self, "update_status_indicator"):
+            return
+        if was_startup or self._library_scan_status_active("rendered"):
+            self.update_status_indicator(text, state)
+
     def scan_rendered_outputs(self):
         self._ensure_rendered_widgets()
         if not hasattr(self, "table_rendered"):
+            if getattr(self, "_startup_library_scan_active", False):
+                self._finish_startup_library_scan_status()
             return
 
         self._stop_rendered_scan()
@@ -866,12 +882,12 @@ class RenderedLibraryMixin:
 
         roots = self._collect_rendered_scan_roots()
         if not roots:
+            self._finish_startup_library_scan_status()
             if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
                 self.lbl_clip_count.setText("• 0 Files")
-            if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
-                self.update_status_indicator("Ready", "ready")
             return
 
+        self._rendered_scan_active = True
         self._rendered_output_meta_index = self._build_rendered_output_meta_index()
         self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
         generation = self._rendered_scan_generation
@@ -954,8 +970,7 @@ class RenderedLibraryMixin:
         self._schedule_rendered_poster_backfill()
         self._update_library_count_label()
 
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
-            self.update_status_indicator("Ready", "ready")
+        self._finish_startup_library_scan_status()
 
         logging.info(
             "Rendered scan: roots=%s files=%d",
@@ -968,8 +983,7 @@ class RenderedLibraryMixin:
             return
         self._rendered_scan_worker = None
         logging.error("Rendered scan failed: %s", message)
-        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
-            self.update_status_indicator("Scan error", "error")
+        self._finish_startup_library_scan_status(text="Scan error", state="error")
 
     def _insert_rendered_file_row(self, scanned: ScannedRenderedFile) -> int:
         if not hasattr(self, "table_rendered"):
