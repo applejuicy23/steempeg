@@ -12,6 +12,7 @@ from steempeg.infra.paths import get_resource_path, is_in_default_rendered_video
 from steempeg.render.queue import RenderJob
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -35,16 +36,6 @@ _BTN_SECONDARY = """
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-"""
-
-_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d; color: #e0e0e0; border: 1px solid #4a4a4a;
-        border-radius: 8px; padding: 4px;
-    }
-    QMenu::item { padding: 8px 24px 8px 12px; border-radius: 4px; }
-    QMenu::item:selected { background-color: #4a3d66; }
-    QMenu::item:disabled { color: #666666; }
 """
 
 _MASCOT_H = 140
@@ -83,8 +74,8 @@ class RenderCompleteDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Render complete", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumWidth(520)
-        self.resize(560, 340)
+        self.setMinimumWidth(580)
+        self.resize(600, 340)
         self._choice = RenderCompleteChoice.OK
         self._output_file = output_file or ""
 
@@ -162,7 +153,7 @@ class RenderCompleteDialog(SteempegDialog):
         play_split = PlayVideoSplitButton()
         play_split.play_clicked.connect(lambda: self._pick(RenderCompleteChoice.PLAY))
         self._setup_play_menu(play_split, out_path)
-        actions.addWidget(play_split)
+        actions.addWidget(play_split, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.content_layout.addLayout(actions)
 
@@ -177,7 +168,7 @@ class RenderCompleteDialog(SteempegDialog):
             )
 
         menu = QMenu(self)
-        menu.setStyleSheet(_MENU_STYLE)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
         action_steempeg = menu.addAction("Open in Steempeg")
         action_steempeg.setEnabled(in_library)
         if in_library:
