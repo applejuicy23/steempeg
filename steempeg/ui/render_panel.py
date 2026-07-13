@@ -40,10 +40,12 @@ from steempeg.ui.layout_defaults import (
 )
 from steempeg.ui.widgets.elided_label import ElidedLabel
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
 _FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_FONT_SEMIBOLD = f"font-family: {tok.FONT_SEMIBOLD};"
 _COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge
 # Two export-tab combos side-by-side must fit inside SETTINGS_CONTENT_WIDTH.
 _EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - 16) // 2
@@ -248,7 +250,7 @@ class SummaryLabel(QWidget):
     keeps writing to it exactly like the old QLabel did."""
 
     _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 12px; " + _FONT
-    _VAL_QSS = "color: #ffffff; background: transparent; font-size: 12px; font-weight: bold; " + _FONT
+    _VAL_QSS = "color: #ffffff; background: transparent; font-size: 12px; " + _FONT_SEMIBOLD
 
     def __init__(self):
         super().__init__()
@@ -803,7 +805,9 @@ def restyle_export_page(ui):
     card_box.setContentsMargins(16, 12, 16, 14)
     card_box.setSpacing(10)
     cap = QLabel("Final Render Details")
-    cap.setStyleSheet("color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; " + _FONT)
+    cap.setStyleSheet(
+        "color: #b29ae7; background: transparent; font-size: 11px; " + _FONT_SEMIBOLD
+    )
     card_box.addWidget(cap)
     card_box.addWidget(summary)
     card.setFixedWidth(SETTINGS_CONTENT_WIDTH)
