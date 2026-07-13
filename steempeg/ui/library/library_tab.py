@@ -88,6 +88,7 @@ class LibraryTabWidget(QFrame):
         self.setObjectName("libraryTab")
         self.setFixedHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 0, 6 if closable else 14, 0)

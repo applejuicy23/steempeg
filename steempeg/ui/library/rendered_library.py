@@ -141,6 +141,7 @@ class RenderedLibraryMixin:
         self._library_ui_restored = False
         self._library_ui_persist_ready = False
         self._rendered_scan_generation = 0
+        self._defer_rendered_scan_until_clips_done = False
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         tab = LibraryTabWidget(label, mode)
@@ -865,9 +866,9 @@ class RenderedLibraryMixin:
 
         roots = self._collect_rendered_scan_roots()
         if not roots:
-            if hasattr(self, "lbl_clip_count"):
+            if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
                 self.lbl_clip_count.setText("• 0 Files")
-            if hasattr(self, "update_status_indicator"):
+            if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
                 self.update_status_indicator("Ready", "ready")
             return
 
@@ -875,9 +876,9 @@ class RenderedLibraryMixin:
         self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
         generation = self._rendered_scan_generation
 
-        if hasattr(self, "lbl_clip_count"):
+        if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
             self.lbl_clip_count.setText("• … Files")
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator("Searching rendered files…", "busy", scan_phase="search")
 
         worker = RenderedScanWorker(
@@ -907,6 +908,8 @@ class RenderedLibraryMixin:
             return
         if not hasattr(self, "update_status_indicator"):
             return
+        if not self._library_scan_status_active("rendered"):
+            return
         if total <= 0:
             self.update_status_indicator("Searching rendered files…", "busy", scan_phase="search")
         else:
@@ -922,13 +925,13 @@ class RenderedLibraryMixin:
             self._append_rendered_grid_card_for_row(table_row)
         label = row.display_title.strip() or os.path.basename(row.full_path)
         pct = int(100 * index / total) if total else 0
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator(
                 f"Loading {index}/{total} — {label} ({pct}%)",
                 "busy",
                 scan_phase="loading",
             )
-        if hasattr(self, "lbl_clip_count"):
+        if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
             self._update_library_count_label()
 
     def _on_rendered_scan_finished(self, stats, generation: int) -> None:
@@ -951,7 +954,7 @@ class RenderedLibraryMixin:
         self._schedule_rendered_poster_backfill()
         self._update_library_count_label()
 
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator("Ready", "ready")
 
         logging.info(
@@ -965,7 +968,7 @@ class RenderedLibraryMixin:
             return
         self._rendered_scan_worker = None
         logging.error("Rendered scan failed: %s", message)
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator("Scan error", "error")
 
     def _insert_rendered_file_row(self, scanned: ScannedRenderedFile) -> int:

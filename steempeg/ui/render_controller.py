@@ -587,10 +587,12 @@ class RenderMixin:
                 f"background-color: {color}; border-radius: {radius}px;"
             )
 
-        self.ui.label_status.setText(
-            f"<span style='font-weight: bold; font-size: 14px; color: {color}; "
-            f"font-family: Segoe UI, Arial, sans-serif;'>{display_text}</span>"
+        status_label = self.ui.label_status
+        status_label.setStyleSheet(
+            f"background: transparent; border: none; font-size: 14px; font-weight: bold; "
+            f"color: {color}; font-family: Segoe UI, Arial, sans-serif;"
         )
+        status_label.setText(display_text)
 
         if state == "success":
             percent = 100.0

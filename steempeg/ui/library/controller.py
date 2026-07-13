@@ -1616,8 +1616,6 @@ class LibraryMixin:
             icon = self.get_game_icon(row.app_id, allow_download=False)
             if icon.isNull() and row.icon_disk_path and os.path.isfile(row.icon_disk_path):
                 icon = self._icon_from_disk(row.icon_disk_path, row.app_id)
-            if icon.isNull():
-                icon = self.get_game_icon(row.app_id, allow_download=True)
 
         item_game = QTableWidgetItem(icon, row.game_name)
         item_game.setData(Qt.UserRole, row.full_path)
@@ -1719,10 +1717,21 @@ class LibraryMixin:
         if table.isRowHidden(row):
             item.setHidden(True)
 
+    def _library_scan_status_active(self, source: str) -> bool:
+        """Only the visible library panel should drive the footer status bar."""
+        return getattr(self, "_library_panel_mode", "clips") == source
+
+    def _maybe_start_deferred_rendered_scan(self) -> None:
+        if not getattr(self, "_defer_rendered_scan_until_clips_done", False):
+            return
+        self._defer_rendered_scan_until_clips_done = False
+        if hasattr(self, "scan_rendered_outputs"):
+            self.scan_rendered_outputs()
+
     def _on_scan_discovering(self, total: int, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
             if total <= 0:
                 self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
             else:
@@ -1734,7 +1743,7 @@ class LibraryMixin:
         self._insert_scanned_clip_row(row)
         label = row.game_name.strip() or os.path.basename(row.full_path)
         pct = int(100 * index / total) if total else 0
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
             self.update_status_indicator(
                 f"Loading {index}/{total} — {label} ({pct}%)",
                 "busy",
@@ -1773,8 +1782,10 @@ class LibraryMixin:
             if hasattr(self, "_clear_clips_selection_visual"):
                 self._clear_clips_selection_visual()
 
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
             self.update_status_indicator("Ready", "ready")
+
+        self._maybe_start_deferred_rendered_scan()
 
         if announce_duplicates and stats.duplicate_count:
             noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
@@ -1803,8 +1814,9 @@ class LibraryMixin:
             return
         self._library_scan_worker = None
         logging.error("Library scan failed: %s", message)
-        if hasattr(self, "update_status_indicator"):
+        if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
             self.update_status_indicator("Scan error", "error")
+        self._maybe_start_deferred_rendered_scan()
 
     def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = True):
         """Scan library roots on a background thread with live progress in the status bar.
@@ -1837,8 +1849,9 @@ class LibraryMixin:
         if not library_roots:
             if hasattr(self, "lbl_clip_count"):
                 self.lbl_clip_count.setText("• 0 Clips")
-            if hasattr(self, "update_status_indicator"):
+            if hasattr(self, "update_status_indicator") and self._library_scan_status_active("clips"):
                 self.update_status_indicator("Ready", "ready")
+            self._maybe_start_deferred_rendered_scan()
             return
 
         self._scan_generation = getattr(self, "_scan_generation", 0) + 1
