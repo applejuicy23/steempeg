@@ -3,6 +3,8 @@
 Replaces the flat QProgressBar strip with smooth value easing, a purple
 gradient fill, and a moving shimmer while FFmpeg is working.
 """
+import math
+
 from PySide6.QtCore import Qt, QTimer, QRectF
 from PySide6.QtGui import QColor, QLinearGradient, QPainter
 from PySide6.QtWidgets import QSizePolicy, QWidget
@@ -41,6 +43,7 @@ class AnimatedRenderBar(QWidget):
         self._target = 0.0
         self._state = "ready"
         self._shimmer = 0.0
+        self._indeterminate: str | None = None  # "bounce" while searching clips
 
         self._tick = QTimer(self)
         self._tick.setInterval(16)
@@ -62,17 +65,39 @@ class AnimatedRenderBar(QWidget):
     # -- API -----------------------------------------------------------------
     def set_state(self, state):
         state = state or "ready"
-        if state == self._state:
+        if state == self._state and state not in ("ready", "error"):
             return
         self._state = state
-        if state == "ready" or state == "error":
+        if state in ("ready", "error"):
+            self._indeterminate = None
             self._target = 0.0
         elif state == "success":
+            self._indeterminate = None
             self._target = 100.0
         self._ensure_timer()
         self.update()
 
+    def set_scan_bounce(self) -> None:
+        """Indeterminate ping-pong segment (library search / clip discovery)."""
+        self._indeterminate = "bounce"
+        self._state = "busy"
+        self._target = 0.0
+        self._display = 0.0
+        self._ensure_timer()
+        self.update()
+
+    def set_loading_progress(self, percent: float) -> None:
+        """Determinate left-to-right fill while clips are inserted (snap, no lag)."""
+        self._indeterminate = None
+        self._state = "busy"
+        clamped = max(0.0, min(100.0, float(percent)))
+        self._target = clamped
+        self._display = clamped
+        self._ensure_timer()
+        self.update()
+
     def set_progress(self, percent, *, animate=True):
+        self._indeterminate = None
         self._target = max(0.0, min(100.0, float(percent)))
         if not animate:
             self._display = self._target
@@ -85,7 +110,8 @@ class AnimatedRenderBar(QWidget):
     # -- animation -----------------------------------------------------------
     def _ensure_timer(self):
         needs_motion = (
-            self._state in ("rendering", "busy")
+            self._indeterminate is not None
+            or self._state in ("rendering", "busy")
             or abs(self._display - self._target) > 0.05
         )
         if needs_motion:
@@ -97,15 +123,15 @@ class AnimatedRenderBar(QWidget):
     def _on_tick(self):
         moved = False
 
-        if abs(self._display - self._target) > 0.05:
+        if self._indeterminate is None and abs(self._display - self._target) > 0.05:
             self._display += (self._target - self._display) * _LERP
             moved = True
-        elif self._display != self._target:
+        elif self._indeterminate is None and self._display != self._target:
             self._display = self._target
             moved = True
 
-        if self._state in ("rendering", "busy"):
-            self._shimmer = (self._shimmer + 0.012) % 1.0
+        if self._indeterminate is not None or self._state in ("rendering", "busy"):
+            self._shimmer = (self._shimmer + 0.014) % 1.0
             moved = True
 
         if moved:
@@ -127,14 +153,18 @@ class AnimatedRenderBar(QWidget):
         painter.setBrush(_TRACK)
         painter.drawRoundedRect(track, radius, radius)
 
-        if self._state == "busy" or (
-            self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF
-        ):
-            self._paint_indeterminate(painter, track, radius)
+        if self._indeterminate == "bounce":
+            self._paint_bounce(painter, track, radius)
             painter.end()
             return
 
-        fill_w = max(0.0, w * self._display / 100.0)
+        if self._state == "rendering" and self._display < _INDETERMINATE_CUTOFF:
+            self._paint_marquee(painter, track, radius)
+            painter.end()
+            return
+
+        fill_pct = self._display
+        fill_w = max(0.0, w * fill_pct / 100.0)
         if fill_w < 0.5:
             painter.end()
             return
@@ -167,8 +197,20 @@ class AnimatedRenderBar(QWidget):
         grad.setColorAt(1.0, _GRADIENT_START)
         return grad
 
-    def _paint_indeterminate(self, painter, track, radius):
-        """Single segment marquees left → right, then restarts off-screen left."""
+    def _paint_bounce(self, painter, track, radius):
+        """Purple segment ping-pongs inside the track (library search)."""
+        w = track.width()
+        h = track.height()
+        seg = max(28.0, w * 0.22)
+        travel = max(1.0, w - seg)
+        phase = (1.0 - math.cos(self._shimmer * math.pi * 2.0)) * 0.5
+        x = phase * travel
+
+        painter.setBrush(self._segment_gradient(x, seg))
+        painter.drawRoundedRect(QRectF(x, 0.0, seg, h), radius, radius)
+
+    def _paint_marquee(self, painter, track, radius):
+        """Single segment marquees left → right (early render / generic busy)."""
         w = track.width()
         h = track.height()
         seg = max(28.0, w * 0.22)

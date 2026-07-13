@@ -402,6 +402,12 @@ class RenderedLibraryMixin:
             self._restore_library_tab_selection(mode)
         self._update_library_count_label()
         self._sync_library_mode_chrome()
+        if hasattr(self, "update_final_setup") and not (
+            hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media()
+        ):
+            self.update_final_setup()
+            if hasattr(self, "_update_start_button_label"):
+                self._update_start_button_label()
         self._persist_library_ui_state()
 
     def _sync_library_mode_chrome(self):
@@ -537,11 +543,7 @@ class RenderedLibraryMixin:
         clips_selected = ""
         rendered_selected = ""
         panel_mode = getattr(self, "_library_panel_mode", "clips")
-        if panel_mode == "clips" and hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
-            cell = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
-            if cell:
-                clips_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
-        elif panel_mode == "rendered" and hasattr(self, "table_rendered") and self.table_rendered.currentRow() >= 0:
+        if panel_mode == "rendered" and hasattr(self, "table_rendered") and self.table_rendered.currentRow() >= 0:
             cell = self.table_rendered.item(self.table_rendered.currentRow(), 0)
             if cell:
                 rendered_selected = cell.data(Qt.ItemDataRole.UserRole) or ""
@@ -551,14 +553,6 @@ class RenderedLibraryMixin:
         if getattr(self, "_rendered_media_path", None):
             preview_kind = "rendered"
             preview_path = self._rendered_media_path
-        elif getattr(self, "_preview_clip_path", None):
-            path = self._preview_clip_path
-            if path and os.path.isfile(path):
-                preview_kind = "rendered"
-                preview_path = path
-            elif path and os.path.isdir(path):
-                preview_kind = "clip"
-                preview_path = path
 
         rendered_tab_open = "rendered" in getattr(self, "_library_tabs", {})
         payload = {
@@ -609,7 +603,7 @@ class RenderedLibraryMixin:
                 self._ensure_rendered_tab()
             return
 
-        self._saved_clips_selection_path = state.get("clips_selected_path") or ""
+        self._saved_clips_selection_path = ""
         self._saved_rendered_selection_path = state.get("rendered_selected_path") or ""
         self._restoring_library_state = True
         try:
@@ -635,22 +629,23 @@ class RenderedLibraryMixin:
             self._restoring_library_state = False
 
     def _restore_library_selections(self, state: dict):
+        """Restore rendered-tab highlight only — clips start clean until the user picks one."""
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+        self._saved_clips_selection_path = ""
+        if hasattr(self, "_preview_clip_path"):
+            self._preview_clip_path = None
+
         preview_kind = state.get("preview_kind") or ""
         preview_path = (state.get("preview_path") or "").strip()
         mode = state.get("library_panel_mode", "clips")
 
         if preview_kind == "rendered" and preview_path and os.path.isfile(preview_path):
             self._select_rendered_path(preview_path, play=False)
-        elif preview_kind == "clip" and preview_path and os.path.isdir(preview_path):
-            self._select_clip_path(preview_path, play=False)
         elif mode == "rendered":
             rendered_path = (state.get("rendered_selected_path") or "").strip()
             if rendered_path:
                 self._select_rendered_path(rendered_path, play=False)
-        else:
-            clips_path = (state.get("clips_selected_path") or "").strip()
-            if clips_path:
-                self._select_clip_path(clips_path, play=False)
 
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()

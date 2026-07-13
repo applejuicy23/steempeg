@@ -1680,9 +1680,9 @@ class LibraryMixin:
             return
         if hasattr(self, "update_status_indicator"):
             if total <= 0:
-                self.update_status_indicator("Searching for clips…", "busy")
+                self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
             else:
-                self.update_status_indicator(f"Found {total} clips (0%)", "busy")
+                self.update_status_indicator(f"Found {total} clips", "busy", scan_phase="search")
 
     def _on_scan_clip_ready(self, row: ScannedClip, index: int, total: int, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
@@ -1691,7 +1691,11 @@ class LibraryMixin:
         label = row.game_name.strip() or os.path.basename(row.full_path)
         pct = int(100 * index / total) if total else 0
         if hasattr(self, "update_status_indicator"):
-            self.update_status_indicator(f"Loading {index}/{total} — {label} ({pct}%)", "busy")
+            self.update_status_indicator(
+                f"Loading {index}/{total} — {label} ({pct}%)",
+                "busy",
+                scan_phase="loading",
+            )
         if hasattr(self, "lbl_clip_count"):
             self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
 
@@ -1719,6 +1723,11 @@ class LibraryMixin:
 
         if hasattr(self, "lbl_clip_count"):
             self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+
+        if not getattr(self, "_preview_clip_path", None):
+            self._saved_clips_selection_path = ""
+            if hasattr(self, "_clear_clips_selection_visual"):
+                self._clear_clips_selection_visual()
 
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
@@ -1765,6 +1774,10 @@ class LibraryMixin:
 
         self._stop_library_scan()
         self._stop_clip_poster_backfill()
+        self._saved_clips_selection_path = ""
+        self._preview_clip_path = None
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
         self.ui.table_clips.setSortingEnabled(False)
         self.ui.table_clips.setRowCount(0)
 
@@ -1791,7 +1804,7 @@ class LibraryMixin:
         if hasattr(self, "lbl_clip_count"):
             self.lbl_clip_count.setText("• … Clips")
         if hasattr(self, "update_status_indicator"):
-            self.update_status_indicator("Searching for clips…", "busy")
+            self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
 
         worker = LibraryScanWorker(
             library_roots,
