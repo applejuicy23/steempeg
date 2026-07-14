@@ -4,7 +4,6 @@ import webbrowser
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -24,6 +23,7 @@ from steempeg.infra.reports import (
 )
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui.message_dialog import steempeg_critical, steempeg_information
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 
 _REPORT_DIALOG_STYLE = """
@@ -43,8 +43,6 @@ _REPORT_DIALOG_STYLE = """
         padding: 8px;
         font-size: 12px;
     }
-    QCheckBox { color: #cccccc; font-size: 12px; spacing: 6px; }
-    QCheckBox::indicator { width: 14px; height: 14px; }
     QPushButton {
         background-color: #333333;
         color: white;
@@ -109,9 +107,9 @@ def show_report_dialog(app):
     editor.setMinimumHeight(140)
     layout.addWidget(editor)
 
-    chk_app = QCheckBox("Include App + FFmpeg log")
+    chk_app = SteempegCheckBox("Include App + FFmpeg log", accent_label=False, font_size=12)
     chk_app.setChecked(True)
-    chk_mpv = QCheckBox("Include MPV player log")
+    chk_mpv = SteempegCheckBox("Include MPV player log", accent_label=False, font_size=12)
     chk_mpv.setChecked(True)
     layout.addWidget(chk_app)
     layout.addWidget(chk_mpv)
