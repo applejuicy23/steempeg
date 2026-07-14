@@ -5,6 +5,7 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.filter_pill_button import FilterPillButton
 from steempeg.ui.widgets.flow_layout import FlowLayout
 from steempeg.ui.widgets.smart_slider_filter import SmartSliderFilter
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 __all__ = [
     "AnimatedRenderBar",
@@ -13,4 +14,5 @@ __all__ = [
     "FilterPillButton",
     "FlowLayout",
     "SmartSliderFilter",
+    "SteempegCheckBox",
 ]
