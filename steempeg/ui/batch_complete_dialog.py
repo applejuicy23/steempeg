@@ -7,7 +7,6 @@ from enum import Enum
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -23,7 +22,7 @@ from steempeg.render.queue_display import format_job_output, format_job_preset, 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import close_clip_icon, load_icon
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
-from steempeg.ui.widgets import ElidedLabel
+from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 _BTN_PRIMARY = """
@@ -185,15 +184,8 @@ class BatchCompleteDialog(SteempegDialog):
         scroll.setWidget(host)
         self.content_layout.addWidget(scroll, 1)
 
-        self._chk_clear_queue = QCheckBox("Always clear render queue after render")
-        self._chk_clear_queue.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._chk_clear_queue = SteempegCheckBox("Always clear render queue after render")
         self._chk_clear_queue.setChecked(bool(always_clear_queue))
-        self._chk_clear_queue.setStyleSheet(
-            "color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;"
-            " QCheckBox::indicator { width: 14px; height: 14px; }"
-            " QCheckBox::indicator:unchecked { border: 2px solid #666; border-radius: 3px; background: #1a1a1a; }"
-            " QCheckBox::indicator:checked { border: 2px solid #b29ae7; border-radius: 3px; background: #5138e6; }"
-        )
         self.content_layout.addWidget(self._chk_clear_queue)
 
         actions = QHBoxLayout()
