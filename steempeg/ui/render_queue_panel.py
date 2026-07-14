@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -35,6 +34,7 @@ from steempeg.ui.layout_defaults import (
 )
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.queue_card_shared import (
     _FONT,
     _LIST_THUMB_H,
@@ -87,12 +87,6 @@ _SCROLL_STYLE = """
 _EMPTY_PANEL_STYLE = (
     "QFrame#queueEmptyPanel {"
     " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
-)
-_EMPTY_CHECK_STYLE = (
-    f"color: #b29ae7; font-size: 11px; font-weight: bold; {_FONT}"
-    " QCheckBox::indicator { width: 14px; height: 14px; }"
-    " QCheckBox::indicator:unchecked { border: 2px solid #666; border-radius: 3px; background: #1a1a1a; }"
-    " QCheckBox::indicator:checked { border: 2px solid #b29ae7; border-radius: 3px; background: #5138e6; }"
 )
 
 
@@ -706,9 +700,7 @@ class RenderQueuePanel(QWidget):
             f" background: transparent; {_FONT}"
         )
 
-        self._empty_dismiss_chk = QCheckBox("Don't show again")
-        self._empty_dismiss_chk.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._empty_dismiss_chk.setStyleSheet(_EMPTY_CHECK_STYLE)
+        self._empty_dismiss_chk = SteempegCheckBox("Don't show again")
         self._empty_dismiss_chk.toggled.connect(self._on_empty_hint_dismiss_toggled)
 
         empty_panel_layout.addWidget(self._empty_label)
