@@ -93,37 +93,36 @@ _HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
 
 _FOLDERS_MENU_STYLE = """
     QMenu {
-        background-color: #383838;
+        background-color: #2d2d2d;
         color: #ffffff;
         border: 2px solid #444444;
-        border-radius: 14px;
+        border-radius: 8px;
         font-family: 'Segoe UI', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
-        padding: 8px 0;
+        padding: 4px 0;
     }
     QMenu::item {
-        padding: 6px 24px 6px 24px;
+        padding: 8px 28px 8px 20px;
         border-radius: 4px;
-        margin: 2px 4px;
+        margin: 2px 6px;
         background: transparent;
         border: none;
     }
     QMenu::item:selected {
         background-color: #6b5a8e;
-        color: #ffffff;
     }
     QMenu::item:disabled {
         color: #ffffff;
         background: transparent;
-        padding: 4px 20px 2px 20px;
+        padding: 6px 20px 4px 20px;
         font-size: 13px;
         font-weight: bold;
     }
     QMenu::separator {
         height: 1px;
         background: #444444;
-        margin: 4px 12px;
+        margin: 4px 10px;
     }
     QWidget#FolderRowFrame {
         background: transparent;
@@ -2075,8 +2074,8 @@ class LibraryMixin:
                     scan_phase="loading",
                 )
 
-        if hasattr(self, "lbl_clip_count"):
-            self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
 
         if pending:
             self._scan_flush_scheduled = True
@@ -2129,8 +2128,8 @@ class LibraryMixin:
         self._backfill_missing_game_icons()
         self._schedule_clip_poster_backfill()
 
-        if hasattr(self, "lbl_clip_count"):
-            self.lbl_clip_count.setText(f"• {self.ui.table_clips.rowCount()} Clips")
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
 
         if not getattr(self, "_preview_clip_path", None):
             self._saved_clips_selection_path = ""
@@ -2213,8 +2212,8 @@ class LibraryMixin:
 
         library_roots = [f for f in self.clips_folders if f and os.path.exists(f)]
         if not library_roots:
-            if hasattr(self, "lbl_clip_count"):
-                self.lbl_clip_count.setText("• 0 Clips")
+            if hasattr(self, "_update_library_count_label"):
+                self._update_library_count_label()
             self._clips_scan_active = False
             if hasattr(self, "update_status_indicator"):
                 self.update_status_indicator("Ready", "ready")
@@ -2226,8 +2225,8 @@ class LibraryMixin:
         self._ensure_clip_health_cache()
         self._clips_scan_active = True
 
-        if hasattr(self, "lbl_clip_count"):
-            self.lbl_clip_count.setText("• … Clips")
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
 

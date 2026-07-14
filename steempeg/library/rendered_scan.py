@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, List
 
-from steempeg.core import games
 from steempeg.core.rendered_media import (
     is_default_rendered_basename,
     load_rendered_companion_meta,
@@ -34,6 +33,7 @@ class ScannedRenderedFile:
     time_str: str
     size_str: str
     needs_poster: bool
+    source_clip_name: str = ""
 
 
 @dataclass
@@ -100,8 +100,9 @@ def scan_single_rendered_file(
     source = _lookup_source_meta(full_path, basename, meta_index)
 
     app_id = source.get("app_id") or parse_app_id_from_name(basename)
-    if not app_id and source.get("clip_path"):
-        app_id = parse_app_id_from_clip_folder(source["clip_path"])
+    clip_path = (source.get("clip_path") or "").strip()
+    if not app_id and clip_path:
+        app_id = parse_app_id_from_clip_folder(clip_path)
 
     icon_path = _icon_path_for_rendered(
         str(app_id) if app_id else None,
@@ -127,6 +128,7 @@ def scan_single_rendered_file(
 
     dt = datetime.fromtimestamp(mtime)
     type_label = _rendered_type_label(ext)
+    source_clip_name = os.path.basename(clip_path) if clip_path else ""
     return ScannedRenderedFile(
         full_path=full_path,
         display_title=title,
@@ -138,6 +140,7 @@ def scan_single_rendered_file(
         time_str=format_clip_time(dt),
         size_str=_format_file_size(size),
         needs_poster=ext.lower() in RENDERED_VIDEO_EXTS,
+        source_clip_name=source_clip_name,
     )
 
 

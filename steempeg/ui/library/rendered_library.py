@@ -883,8 +883,7 @@ class RenderedLibraryMixin:
         roots = self._collect_rendered_scan_roots()
         if not roots:
             self._finish_startup_library_scan_status()
-            if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
-                self.lbl_clip_count.setText("• 0 Files")
+            self._update_library_count_label()
             return
 
         self._rendered_scan_active = True
@@ -892,8 +891,7 @@ class RenderedLibraryMixin:
         self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
         generation = self._rendered_scan_generation
 
-        if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
-            self.lbl_clip_count.setText("• … Files")
+        self._update_library_count_label()
         if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator("Searching rendered files…", "busy", scan_phase="search")
 
@@ -941,14 +939,17 @@ class RenderedLibraryMixin:
             self._append_rendered_grid_card_for_row(table_row)
         label = row.display_title.strip() or os.path.basename(row.full_path)
         pct = int(100 * index / total) if total else 0
+        if row.source_clip_name:
+            status_line = f"Loading {index}/{total} — {label} · {row.source_clip_name} ({pct}%)"
+        else:
+            status_line = f"Loading {index}/{total} — {label} ({pct}%)"
         if hasattr(self, "update_status_indicator") and self._library_scan_status_active("rendered"):
             self.update_status_indicator(
-                f"Loading {index}/{total} — {label} ({pct}%)",
+                status_line,
                 "busy",
                 scan_phase="loading",
             )
-        if hasattr(self, "lbl_clip_count") and self._library_scan_status_active("rendered"):
-            self._update_library_count_label()
+        self._update_library_count_label()
 
     def _on_rendered_scan_finished(self, stats, generation: int) -> None:
         if generation != getattr(self, "_rendered_scan_generation", 0):
@@ -1221,11 +1222,37 @@ class RenderedLibraryMixin:
     def _update_library_count_label(self):
         if not hasattr(self, "lbl_clip_count"):
             return
-        if self._library_panel_mode == "rendered" and hasattr(self, "table_rendered"):
-            n = self.table_rendered.rowCount()
-            hidden = sum(1 for r in range(n) if self.table_rendered.isRowHidden(r))
-            visible = n - hidden
-            self.lbl_clip_count.setText(f"• {visible} Files")
+
+        mode = getattr(self, "_library_panel_mode", "clips")
+
+        if mode == "rendered":
+            if getattr(self, "_rendered_scan_active", False):
+                if hasattr(self, "table_rendered"):
+                    n = self.table_rendered.rowCount()
+                    hidden = sum(1 for r in range(n) if self.table_rendered.isRowHidden(r))
+                    visible = n - hidden
+                    self.lbl_clip_count.setText(
+                        f"• {visible} Files" if visible > 0 else "• … Files"
+                    )
+                else:
+                    self.lbl_clip_count.setText("• … Files")
+            elif getattr(self, "_clips_scan_active", False) or (
+                getattr(self, "_startup_library_scan_active", False)
+                and not getattr(self, "_rendered_scan_active", False)
+            ):
+                self.lbl_clip_count.setText("• … Files")
+            elif hasattr(self, "table_rendered"):
+                n = self.table_rendered.rowCount()
+                hidden = sum(1 for r in range(n) if self.table_rendered.isRowHidden(r))
+                visible = n - hidden
+                self.lbl_clip_count.setText(f"• {visible} Files")
+            else:
+                self.lbl_clip_count.setText("• 0 Files")
+            return
+
+        if getattr(self, "_clips_scan_active", False) and hasattr(self.ui, "table_clips"):
+            n = self.ui.table_clips.rowCount()
+            self.lbl_clip_count.setText(f"• {n} Clips" if n > 0 else "• … Clips")
         elif hasattr(self.ui, "table_clips"):
             n = self.ui.table_clips.rowCount()
             self.lbl_clip_count.setText(f"• {n} Clips")

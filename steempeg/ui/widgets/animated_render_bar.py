@@ -87,12 +87,13 @@ class AnimatedRenderBar(QWidget):
         self.update()
 
     def set_loading_progress(self, percent: float) -> None:
-        """Determinate left-to-right fill while clips are inserted (snap, no lag)."""
+        """Determinate left-to-right fill while library rows load (eased)."""
         self._indeterminate = None
         self._state = "busy"
         clamped = max(0.0, min(100.0, float(percent)))
         self._target = clamped
-        self._display = clamped
+        if clamped < self._display:
+            self._display = clamped
         self._ensure_timer()
         self.update()
 

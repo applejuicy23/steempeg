@@ -21,7 +21,7 @@ _ROUND_BTN_STYLE = """
 
 
 def _drag_value_font() -> QFont:
-    font = QFont("Segoe UI", 11)
+    font = QFont("Segoe UI", 9)
     font.setBold(True)
     return font
 
