@@ -32,6 +32,17 @@ _STEAM_VIDEO_INIT = "init-stream0.m4s"
 _STEAM_VIDEO_CHUNK_TMPL = "chunk-stream0-$Number%05d$.m4s"
 
 
+def preview_bucket_sec(hover_ms: float, duration_ms: float = 0, *, interval: int = 3) -> int:
+    """Map a hover position to the start of its DASH chunk bucket (floor, never round up)."""
+    sec = max(0, int(hover_ms // 1000))
+    bucket = (sec // interval) * interval
+    if duration_ms > 0:
+        last_sec = max(0.0, (float(duration_ms) / 1000.0) - 0.001)
+        last_bucket = int(last_sec // interval) * interval
+        bucket = min(bucket, last_bucket)
+    return bucket
+
+
 def _kill_process_tree(proc, *, label: str = "ffmpeg") -> None:
     """Terminate a subprocess and its children (Windows needs /T)."""
     if proc is None:
@@ -94,6 +105,7 @@ class PreviewSniperWorker(QThread):
         self.chunk_template = ""
         self.chunk_duration_sec = 3.0
         self.start_number = 1
+        self.max_chunk_number = 1
         self.rep_id = "1"
 
     def _kill_ffmpeg_subprocess(self) -> None:
@@ -125,14 +137,19 @@ class PreviewSniperWorker(QThread):
                 self.terminate()
                 self.wait(200)
 
-    def _infer_chunk_start_number(self, stream_idx: int = 0) -> int:
+    def _infer_chunk_number_bounds(self, stream_idx: int = 0) -> tuple[int, int]:
         pattern = os.path.join(self.base_dir, f"chunk-stream{stream_idx}-*.m4s")
         nums = []
         for path in glob.glob(pattern):
             m = re.search(rf"chunk-stream{stream_idx}-(\d+)\.m4s", os.path.basename(path))
             if m and os.path.getsize(path) > 0:
                 nums.append(int(m.group(1)))
-        return min(nums) if nums else 1
+        if not nums:
+            return 1, 1
+        return min(nums), max(nums)
+
+    def _infer_chunk_start_number(self, stream_idx: int = 0) -> int:
+        return self._infer_chunk_number_bounds(stream_idx)[0]
 
     def _apply_steam_dash_defaults(self) -> bool:
         """Fallback when MPD XML parsing misses SegmentTemplate (common on session_fixed.mpd)."""
@@ -146,7 +163,7 @@ class PreviewSniperWorker(QThread):
         self.init_filename = _STEAM_VIDEO_INIT
         self.chunk_template = _STEAM_VIDEO_CHUNK_TMPL
         self.chunk_duration_sec = _STEAM_CHUNK_SEC
-        self.start_number = self._infer_chunk_start_number(0)
+        self.start_number, self.max_chunk_number = self._infer_chunk_number_bounds(0)
         self.rep_id = "0"
         return True
 
@@ -306,6 +323,10 @@ class PreviewSniperWorker(QThread):
             _log.warning("Sniper MPD parse failed for %s: %s", mpd_path, exc)
         if not self.init_filename or not self.chunk_template:
             self._apply_steam_dash_defaults()
+        elif self.base_dir:
+            lo, hi = self._infer_chunk_number_bounds(0)
+            self.start_number = lo
+            self.max_chunk_number = hi
 
     def request_frame(self, media_path, hover_sec):
         self._is_killed = False
@@ -350,22 +371,32 @@ class PreviewSniperWorker(QThread):
             _log.debug("Sniper dash manifest not ready sec=%s", sec)
             return None
 
-        chunk_offset = int(sec // self.chunk_duration_sec)
+        chunk_offset = int(max(0, sec) // self.chunk_duration_sec)
         chunk_num = self.start_number + chunk_offset
+        chunk_num = min(chunk_num, getattr(self, "max_chunk_number", chunk_num))
 
         real_init = self.init_filename.replace('$RepresentationID$', self.rep_id)
         real_chunk = self.chunk_template.replace('$RepresentationID$', self.rep_id)
 
-        match = re.search(r'\$Number([^$]*)\$', real_chunk)
-        if match:
-            format_spec = match.group(1)
-            num_str = format_spec % chunk_num if format_spec else str(chunk_num)
-            real_chunk = real_chunk[:match.start()] + num_str + real_chunk[match.end():]
-        else:
-            real_chunk = real_chunk.replace('$Number$', str(chunk_num))
+        def _chunk_path_for(num: int) -> str:
+            name = real_chunk
+            match = re.search(r'\$Number([^$]*)\$', name)
+            if match:
+                format_spec = match.group(1)
+                num_str = format_spec % num if format_spec else str(num)
+                name = name[:match.start()] + num_str + name[match.end():]
+            else:
+                name = name.replace('$Number$', str(num))
+            return os.path.normpath(os.path.join(self.base_dir, name))
 
         init_path = os.path.normpath(os.path.join(self.base_dir, real_init))
-        chunk_path = os.path.normpath(os.path.join(self.base_dir, real_chunk))
+        chunk_path = _chunk_path_for(chunk_num)
+        while (
+            chunk_num > self.start_number
+            and not self._is_usable_media_file(chunk_path)
+        ):
+            chunk_num -= 1
+            chunk_path = _chunk_path_for(chunk_num)
 
         if not self._is_usable_media_file(init_path) or not self._is_usable_media_file(chunk_path):
             _log.debug(
