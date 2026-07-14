@@ -35,7 +35,22 @@ _DEFAULT_CLIP_SESSION = {
     "trim_end_ms": 0,
     "zoom_level": 1.0,
     "scroll_x": 0,
+    "container": "MP4",
+    "codec_text": "H.264 (AVC)",
+    "audio_format": "AAC",
+    "output_preset": "Custom",
+    "audio_only": False,
+    "mute_audio": False,
 }
+
+
+def _format_mbit(kbps: float | int) -> str:
+    """Show bitrate as Mbit/s with one decimal (e.g. 22.3, 55, 0.3 Mbit)."""
+    mbps = float(kbps) / 1000.0
+    rounded = round(mbps, 1)
+    if abs(rounded - round(rounded)) < 1e-9:
+        return f"{int(round(rounded))} Mbit"
+    return f"{rounded:.1f} Mbit"
 from steempeg.core.dash import discovery, health, mpd, repair
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.icon_assets import warning_pixmap
@@ -48,6 +63,7 @@ from steempeg.render.output_formats import (
     VIDEO_CODEC_ITEMS,
     audio_needs_bitrate,
     is_valid_output_combo,
+    normalize_container,
     output_extension,
     resolve_video_encoder,
 )
@@ -114,7 +130,7 @@ def _fmt_mbps(value: float) -> str:
 
 
 _RENDER_ERROR_DIALOG_STYLE = """
-    QDialog {
+    QWidget#RenderErrorShell {
         background-color: #202020;
         border: 1px solid #444444;
         border-radius: 8px;
@@ -191,6 +207,13 @@ class RenderMixin:
     def _detect_clip_has_audio(self, all_mpds) -> bool:
         """True if any source manifest/folder carries a real audio stream."""
         for mpd_path in all_mpds:
+            try:
+                with open(mpd_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if 'contentType="audio"' in content or 'mimeType="audio' in content:
+                        return True
+            except OSError:
+                pass
             folder = os.path.dirname(mpd_path)
             init_a = os.path.join(folder, "init-stream1.m4s")
             if os.path.isfile(init_a) and os.path.getsize(init_a) > 100:
@@ -201,11 +224,10 @@ class RenderMixin:
                 except OSError:
                     pass
             try:
-                with open(mpd_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    if 'contentType="audio"' in content or 'mimeType="audio' in content:
-                        return True
-            except OSError:
+                kbps = self.get_audio_bitrate_from_mpd(mpd_path)
+                if kbps and int(kbps) > 0:
+                    return True
+            except (TypeError, ValueError):
                 pass
         return False
 
@@ -256,7 +278,7 @@ class RenderMixin:
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
         self._mark_output_preset_custom()
-        self.update_final_setup()
+        self._schedule_update_final_setup()
 
     def on_mute_audio_toggled(self, checked):
         """ Disables audio settings if video-only mode is active """
@@ -270,17 +292,16 @@ class RenderMixin:
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
         self._mark_output_preset_custom()
-        self.update_final_setup()
+        self.refresh_slider_if_needed()
+        self._schedule_update_final_setup()
 
     def _sync_original_audio_controls(self):
         """Freeze audio encode controls when Original is doing stream copy."""
         if not getattr(self, "_current_clip_has_audio", True):
-            # No audio track on the source — keep all audio controls disabled and let
-            # refresh_output_format_availability own the final clamped state.
+            # No source audio — audio-only is impossible; video-only (mute) still works.
             for name in (
                 "label_audio_format", "combo_audio_format", "label_audio_bitrate",
                 "combo_audio_bitrate", "input_custom_abitrate", "check_audio_only",
-                "check_mute_audio",
             ):
                 widget = getattr(self.ui, name, None)
                 if widget is not None:
@@ -420,19 +441,30 @@ class RenderMixin:
             "Original" in quality_text and "Target File" not in quality_text and not audio_only
         )
 
+        _tip_webm_copy = (
+            "Original copies the source stream as-is (H.264/AAC). WebM cannot hold that — use MP4 or MKV."
+        )
+        _tip_wav_mp4 = "WAV (PCM) does not fit in MP4 — use MKV/MOV or pick AAC/FLAC."
+        _tip_wav_webm = "WebM only supports Opus/Vorbis audio — not WAV."
+
         if hasattr(ui, "combo_container"):
             for i in range(ui.combo_container.count()):
                 c = ui.combo_container.itemText(i)
                 ok = is_valid_output_combo(
-                    c, codec, audio_fmt, audio_only=audio_only, mute_audio=mute
+                    c, codec, audio_fmt, audio_only=audio_only, mute_audio=mute,
+                    stream_copy=is_original_copy,
                 )
-                set_combo_item_enabled(ui.combo_container, i, ok)
+                tip = ""
+                if not ok and is_original_copy and c == "WebM":
+                    tip = _tip_webm_copy
+                set_combo_item_enabled(ui.combo_container, i, ok, tooltip=tip)
 
         if hasattr(ui, "combo_codec"):
             for i in range(ui.combo_codec.count()):
                 ctext = ui.combo_codec.itemText(i)
                 ok = is_valid_output_combo(
-                    container, ctext, audio_fmt, audio_only=audio_only, mute_audio=mute
+                    container, ctext, audio_fmt, audio_only=audio_only, mute_audio=mute,
+                    stream_copy=is_original_copy,
                 )
                 set_combo_item_enabled(ui.combo_codec, i, ok)
 
@@ -440,11 +472,18 @@ class RenderMixin:
             for i in range(ui.combo_audio_format.count()):
                 afmt = ui.combo_audio_format.itemText(i)
                 ok = is_valid_output_combo(
-                    container, codec, afmt, audio_only=audio_only, mute_audio=mute
+                    container, codec, afmt, audio_only=audio_only, mute_audio=mute,
+                    stream_copy=is_original_copy,
                 )
                 if afmt == "Copy" and not is_original_copy:
                     ok = False
-                set_combo_item_enabled(ui.combo_audio_format, i, ok)
+                tip = ""
+                if not ok and afmt == "WAV":
+                    if normalize_container(container) == "MP4":
+                        tip = _tip_wav_mp4
+                    elif normalize_container(container) == "WebM":
+                        tip = _tip_wav_webm
+                set_combo_item_enabled(ui.combo_audio_format, i, ok, tooltip=tip)
 
         needs_bitrate = audio_needs_bitrate(audio_fmt) and not is_original_copy
         bitrate_enabled = needs_bitrate and (audio_only or not mute)
@@ -455,19 +494,108 @@ class RenderMixin:
         if hasattr(ui, "input_custom_abitrate"):
             ui.input_custom_abitrate.setEnabled(bitrate_enabled)
 
-        # Source has no audio track: clamp every audio choice off so the user can't
-        # pick a format/bitrate for something that doesn't exist.
+        # Source has no audio track: audio-only is off-limits; video-only export still works.
         if no_audio:
             for name in (
                 "combo_audio_format", "combo_audio_bitrate", "label_audio_format",
                 "label_audio_bitrate", "input_custom_abitrate", "check_audio_only",
-                "check_mute_audio",
             ):
                 widget = getattr(ui, name, None)
                 if widget is not None:
                     widget.setEnabled(False)
+            if hasattr(ui, "check_mute_audio"):
+                ui.check_mute_audio.setEnabled(True)
             if hasattr(ui, "label_abitrate"):
                 ui.label_abitrate.setText("Audio Bitrate: None (no audio track)")
+            if mute and hasattr(ui, "tab_audio"):
+                ui.tab_audio.setEnabled(False)
+            elif hasattr(ui, "tab_audio"):
+                ui.tab_audio.setEnabled(True)
+            if hasattr(ui, "tab_video"):
+                ui.tab_video.setEnabled(True)
+        else:
+            for name in ("check_audio_only", "check_mute_audio"):
+                widget = getattr(ui, name, None)
+                if widget is not None:
+                    widget.setEnabled(True)
+            if audio_only and hasattr(ui, "tab_video"):
+                ui.tab_video.setEnabled(False)
+            elif mute and hasattr(ui, "tab_audio"):
+                ui.tab_audio.setEnabled(False)
+            elif hasattr(ui, "tab_video"):
+                ui.tab_video.setEnabled(True)
+            if hasattr(ui, "tab_audio") and not mute:
+                ui.tab_audio.setEnabled(True)
+
+        if self._fix_invalid_output_combo():
+            self._mark_output_preset_custom()
+            if hasattr(self, "refresh_encode_speed_options"):
+                self.refresh_encode_speed_options()
+
+    def _output_mode_flags(self) -> tuple[str, str, str, bool, bool, bool]:
+        """Current container/codec/audio and mode flags for validation."""
+        ui = self.ui
+        container = ui.combo_container.currentText() if hasattr(ui, "combo_container") else "MP4"
+        codec = ui.combo_codec.currentText() if hasattr(ui, "combo_codec") else ""
+        audio_fmt = ui.combo_audio_format.currentText() if hasattr(ui, "combo_audio_format") else "AAC"
+        audio_only = ui.check_audio_only.isChecked() if hasattr(ui, "check_audio_only") else False
+        mute = ui.check_mute_audio.isChecked() if hasattr(ui, "check_mute_audio") else False
+        quality_text = ui.combo_quality.currentText() if hasattr(ui, "combo_quality") else ""
+        is_original_copy = (
+            "Original" in quality_text and "Target File" not in quality_text and not audio_only
+        )
+        return container, codec, audio_fmt, audio_only, mute, is_original_copy
+
+    def _fix_invalid_output_combo(self) -> bool:
+        """Snap container/codec/audio to the first valid enabled triple."""
+        ui = self.ui
+        container, codec, audio_fmt, audio_only, mute, is_original_copy = self._output_mode_flags()
+        if is_valid_output_combo(
+            container, codec, audio_fmt,
+            audio_only=audio_only, mute_audio=mute, stream_copy=is_original_copy,
+        ):
+            return False
+
+        changed = False
+        for combo_name, field in (
+            ("combo_audio_format", "audio"),
+            ("combo_codec", "codec"),
+            ("combo_container", "container"),
+        ):
+            combo = getattr(ui, combo_name, None)
+            if combo is None:
+                continue
+            model = combo.model()
+            for i in range(combo.count()):
+                if model is not None:
+                    item = model.item(i)
+                    if item is not None and not item.isEnabled():
+                        continue
+                text = combo.itemText(i)
+                test_c, test_codec, test_a = container, codec, audio_fmt
+                if field == "audio":
+                    test_a = text
+                elif field == "codec":
+                    test_codec = text
+                else:
+                    test_c = text
+                if is_valid_output_combo(
+                    test_c, test_codec, test_a,
+                    audio_only=audio_only, mute_audio=mute, stream_copy=is_original_copy,
+                ):
+                    if combo.currentIndex() != i:
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(i)
+                        combo.blockSignals(False)
+                        changed = True
+                    container, codec, audio_fmt = test_c, test_codec, test_a
+                    break
+            if is_valid_output_combo(
+                container, codec, audio_fmt,
+                audio_only=audio_only, mute_audio=mute, stream_copy=is_original_copy,
+            ):
+                break
+        return changed
 
     def _mark_output_preset_custom(self) -> None:
         if getattr(self, "_applying_output_preset", False):
@@ -484,11 +612,20 @@ class RenderMixin:
     def on_output_preset_changed(self, text: str) -> None:
         preset = OUTPUT_PRESETS.get((text or "").strip())
         if not preset:
+            if (text or "").strip() == "Custom":
+                self._reset_export_to_custom_defaults()
             self.refresh_output_format_availability()
+            self._sync_original_audio_controls()
             self.update_final_setup()
             return
 
         ui = self.ui
+        quality_text = ui.combo_quality.currentText() if hasattr(ui, "combo_quality") else ""
+        audio_only = ui.check_audio_only.isChecked() if hasattr(ui, "check_audio_only") else False
+        is_original_copy = (
+            "Original" in quality_text and "Target File" not in quality_text and not audio_only
+        )
+
         self._applying_output_preset = True
         blockers = []
         for name in (
@@ -505,17 +642,18 @@ class RenderMixin:
 
         try:
             if hasattr(ui, "combo_container"):
-                idx = ui.combo_container.findText(preset["container"])
+                idx = find_enabled_combo_text(ui.combo_container, preset["container"])
                 if idx >= 0:
                     ui.combo_container.setCurrentIndex(idx)
-            if hasattr(ui, "combo_codec"):
-                idx = ui.combo_codec.findText(preset["codec"])
-                if idx >= 0:
-                    ui.combo_codec.setCurrentIndex(idx)
-            if hasattr(ui, "combo_audio_format"):
-                idx = ui.combo_audio_format.findText(preset["audio"])
-                if idx >= 0:
-                    ui.combo_audio_format.setCurrentIndex(idx)
+            if not is_original_copy:
+                if hasattr(ui, "combo_codec"):
+                    idx = find_enabled_combo_text(ui.combo_codec, preset["codec"])
+                    if idx >= 0:
+                        ui.combo_codec.setCurrentIndex(idx)
+                if hasattr(ui, "combo_audio_format"):
+                    idx = find_enabled_combo_text(ui.combo_audio_format, preset["audio"])
+                    if idx >= 0:
+                        ui.combo_audio_format.setCurrentIndex(idx)
             if hasattr(ui, "check_audio_only") and ui.check_audio_only.isChecked():
                 ui.check_audio_only.setChecked(False)
             if hasattr(ui, "check_mute_audio") and ui.check_mute_audio.isChecked():
@@ -551,7 +689,29 @@ class RenderMixin:
             return f"{int(rounded)}%"
         return f"{rounded:.1f}%"
 
-    def update_status_indicator(self, text, state="ready", *, scan_phase: str | None = None):
+    @staticmethod
+    def _elide_status_label_text(label, full_text: str) -> str:
+        """Keep «Loading N/M —» visible; elide only the game/file name tail."""
+        metrics = QFontMetrics(label.font())
+        max_w = label.maximumWidth() if label.maximumWidth() > 0 else 280
+        if full_text.startswith("Loading "):
+            match = re.match(r"^(Loading \d+/\d+ — )(.+)$", full_text)
+            if match:
+                prefix, tail = match.group(1), match.group(2)
+                tail_budget = max(24, max_w - metrics.horizontalAdvance(prefix))
+                if metrics.horizontalAdvance(tail) > tail_budget:
+                    tail = metrics.elidedText(tail, Qt.TextElideMode.ElideRight, tail_budget)
+                return prefix + tail
+        return metrics.elidedText(full_text, Qt.TextElideMode.ElideRight, max_w)
+
+    def update_status_indicator(
+        self,
+        text,
+        state="ready",
+        *,
+        scan_phase: str | None = None,
+        status_tooltip: str | None = None,
+    ):
         """Update the macOS-style status dot, label, progress bar and percent label."""
         if not hasattr(self.ui, 'label_status'):
             return
@@ -599,11 +759,15 @@ class RenderMixin:
             f"color: {color}; font-family: Segoe UI, Arial, sans-serif;"
         )
         full_text = display_text
-        max_w = status_label.maximumWidth() if status_label.maximumWidth() > 0 else 280
-        metrics = QFontMetrics(status_label.font())
-        display_text = metrics.elidedText(full_text, Qt.TextElideMode.ElideMiddle, max_w)
+        display_text = self._elide_status_label_text(status_label, full_text)
         status_label.setText(display_text)
-        status_label.setToolTip(full_text if full_text != display_text else "")
+        if status_tooltip:
+            tip = status_tooltip
+        elif full_text != display_text:
+            tip = full_text
+        else:
+            tip = ""
+        status_label.setToolTip(tip)
 
         if state == "success":
             percent = 100.0
@@ -831,6 +995,8 @@ class RenderMixin:
             return
         try:
             from steempeg.core.rendered_media import (
+                duration_from_source_clip,
+                is_sane_media_duration,
                 parse_app_id_from_clip_folder,
                 parse_app_id_from_name,
                 save_rendered_companion_meta,
@@ -838,12 +1004,19 @@ class RenderMixin:
 
             clip_name = os.path.basename(job.clip_path or "")
             app_id = parse_app_id_from_name(clip_name) or parse_app_id_from_clip_folder(clip_name)
+            duration_sec = None
+            s = job.settings
+            if s.is_trim_mode and s.trim_end_ms > s.trim_start_ms:
+                duration_sec = (s.trim_end_ms - s.trim_start_ms) / 1000.0
+            if not is_sane_media_duration(duration_sec):
+                duration_sec = duration_from_source_clip(job.clip_path)
             save_rendered_companion_meta(
                 output_file,
                 app_id=app_id,
                 game_name=job.game_name,
                 clip_path=job.clip_path,
                 game_icon_path=job.game_icon_path,
+                duration_sec=duration_sec,
             )
             self._rendered_output_meta_index = None
         except Exception as exc:
@@ -957,6 +1130,19 @@ class RenderMixin:
             state["zoom_level"] = float(getattr(tl, "zoom_level", 1.0))
             bar = tl.horizontalScrollBar()
             state["scroll_x"] = int(bar.value()) if bar is not None else 0
+        ui = self.ui
+        if hasattr(ui, "combo_container"):
+            state["container"] = ui.combo_container.currentText()
+        if hasattr(ui, "combo_codec"):
+            state["codec_text"] = ui.combo_codec.currentText()
+        if hasattr(ui, "combo_audio_format"):
+            state["audio_format"] = ui.combo_audio_format.currentText()
+        if hasattr(ui, "combo_output_preset"):
+            state["output_preset"] = ui.combo_output_preset.currentText()
+        if hasattr(ui, "check_audio_only"):
+            state["audio_only"] = bool(ui.check_audio_only.isChecked())
+        if hasattr(ui, "check_mute_audio"):
+            state["mute_audio"] = bool(ui.check_mute_audio.isChecked())
         return state
 
     def _session_state_for_clip(self, clip_path: str) -> dict:
@@ -967,14 +1153,106 @@ class RenderMixin:
         job = self.render_queue.find_by_clip_path(clip_path)
         if job:
             s = job.settings
-            return {
-                "is_trim_mode": bool(s.is_trim_mode),
-                "trim_start_ms": int(s.trim_start_ms),
-                "trim_end_ms": int(s.trim_end_ms),
-                "zoom_level": 1.0,
-                "scroll_x": 0,
-            }
+            state = dict(_DEFAULT_CLIP_SESSION)
+            state.update(
+                {
+                    "is_trim_mode": bool(s.is_trim_mode),
+                    "trim_start_ms": int(s.trim_start_ms),
+                    "trim_end_ms": int(s.trim_end_ms),
+                    "container": s.container_format or state["container"],
+                    "codec_text": s.codec_text or state["codec_text"],
+                    "audio_format": s.audio_format or state["audio_format"],
+                    "output_preset": s.output_preset or state["output_preset"],
+                    "audio_only": bool(s.audio_only),
+                    "mute_audio": bool(s.mute_audio),
+                }
+            )
+            return state
         return dict(_DEFAULT_CLIP_SESSION)
+
+    def _enable_all_output_combo_items(self) -> None:
+        ui = self.ui
+        for name in ("combo_container", "combo_codec", "combo_audio_format"):
+            combo = getattr(ui, name, None)
+            if combo is None:
+                continue
+            model = combo.model()
+            if model is None:
+                continue
+            for i in range(combo.count()):
+                item = model.item(i)
+                if item is not None:
+                    item.setEnabled(True)
+
+    def _apply_export_session_state(self, state: dict, *, silent: bool = True) -> None:
+        """Restore per-clip export container/codec/audio toggles."""
+        ui = self.ui
+        defaults = _DEFAULT_CLIP_SESSION
+        self._enable_all_output_combo_items()
+        blockers = []
+        for name in (
+            "combo_container",
+            "combo_codec",
+            "combo_audio_format",
+            "combo_output_preset",
+            "check_audio_only",
+            "check_mute_audio",
+        ):
+            w = getattr(ui, name, None)
+            if w is not None and hasattr(w, "blockSignals"):
+                w.blockSignals(True)
+                blockers.append(w)
+
+        container = state.get("container", defaults["container"])
+        codec = state.get("codec_text", defaults["codec_text"])
+        audio_fmt = state.get("audio_format", defaults["audio_format"])
+        preset = state.get("output_preset", defaults["output_preset"])
+
+        if hasattr(ui, "combo_container"):
+            idx = find_enabled_combo_text(ui.combo_container, container)
+            if idx < 0:
+                idx = find_enabled_combo_text(ui.combo_container, defaults["container"])
+            if idx >= 0:
+                ui.combo_container.setCurrentIndex(idx)
+        if hasattr(ui, "combo_codec"):
+            idx = find_enabled_combo_text(ui.combo_codec, codec)
+            if idx < 0:
+                idx = find_enabled_combo_text(ui.combo_codec, defaults["codec_text"])
+            if idx >= 0:
+                ui.combo_codec.setCurrentIndex(idx)
+        if hasattr(ui, "combo_audio_format"):
+            idx = find_enabled_combo_text(ui.combo_audio_format, audio_fmt)
+            if idx < 0:
+                idx = find_enabled_combo_text(ui.combo_audio_format, defaults["audio_format"])
+            if idx >= 0:
+                ui.combo_audio_format.setCurrentIndex(idx)
+        if hasattr(ui, "combo_output_preset"):
+            idx = ui.combo_output_preset.findText(preset)
+            if idx < 0:
+                idx = ui.combo_output_preset.findText(defaults["output_preset"])
+            if idx >= 0:
+                ui.combo_output_preset.setCurrentIndex(idx)
+        if hasattr(ui, "check_audio_only"):
+            ui.check_audio_only.setChecked(bool(state.get("audio_only", False)))
+        if hasattr(ui, "check_mute_audio"):
+            ui.check_mute_audio.setChecked(bool(state.get("mute_audio", False)))
+
+        for w in blockers:
+            w.blockSignals(False)
+
+        if hasattr(ui, "tab_video"):
+            ui.tab_video.setEnabled(not (hasattr(ui, "check_audio_only") and ui.check_audio_only.isChecked()))
+        if hasattr(ui, "tab_audio"):
+            ui.tab_audio.setEnabled(not (hasattr(ui, "check_mute_audio") and ui.check_mute_audio.isChecked()))
+
+        self.refresh_output_format_availability()
+        self._sync_original_audio_controls()
+        if not silent and hasattr(self, "update_final_setup"):
+            self.update_final_setup()
+
+    def _reset_export_to_custom_defaults(self) -> None:
+        """When the user picks Custom preset, start from standard MP4/H.264/AAC."""
+        self._apply_export_session_state(dict(_DEFAULT_CLIP_SESSION), silent=True)
 
     def _apply_clip_session_state(self, state: dict | None, *, silent: bool = True) -> None:
         state = state or dict(_DEFAULT_CLIP_SESSION)
@@ -990,6 +1268,7 @@ class RenderMixin:
                 float(state.get("zoom_level", 1.0)),
                 int(state.get("scroll_x", 0)),
             )
+        self._apply_export_session_state(state, silent=silent)
 
     def _flush_clip_session_state(self) -> None:
         clip_path = getattr(self, "_preview_clip_path", None)
@@ -1489,6 +1768,23 @@ class RenderMixin:
             self.update_final_setup()
             return
 
+        if "Target File Size" in quality_text:
+            self.ui.combo_bitrate.addItem("Auto (target size slider)")
+            self.ui.combo_bitrate.setEnabled(False)
+            self.ui.combo_bitrate.setCurrentIndex(0)
+            if hasattr(self.ui, 'combo_fps'):
+                self.ui.combo_fps.setEnabled(True)
+            if hasattr(self.ui, 'combo_codec'):
+                self.ui.combo_codec.setEnabled(True)
+            if hasattr(self.ui, 'combo_encoder'):
+                self.ui.combo_encoder.setEnabled(True)
+                self.ui.combo_encoder.setToolTip("")
+            if hasattr(self.ui, 'combo_encode_speed'):
+                self.ui.combo_encode_speed.setEnabled(True)
+            self.ui.combo_bitrate.blockSignals(False)
+            self.update_final_setup()
+            return
+
         self.ui.combo_bitrate.setEnabled(True) 
         if hasattr(self.ui, 'combo_fps'): self.ui.combo_fps.setEnabled(True)
         if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.setEnabled(True)
@@ -1594,6 +1890,23 @@ class RenderMixin:
         match = re.search(r'(\d+)', text)
         return int(match.group(1)) if match else 192
 
+    def _audio_kbps_for_size_plan(self) -> int:
+        """Conservative audio budget (kbps) for Target File Size math."""
+        if hasattr(self.ui, 'check_mute_audio') and self.ui.check_mute_audio.isChecked():
+            return 0
+        audio_fmt = (
+            self.ui.combo_audio_format.currentText()
+            if hasattr(self.ui, "combo_audio_format") else "AAC"
+        )
+        orig = getattr(self, "current_orig_audio_bitrate", 192)
+        if audio_fmt == "WAV":
+            return min(1411, max(orig * 4, 384))
+        if audio_fmt == "FLAC":
+            return min(960, max(orig * 3, 256))
+        if not audio_needs_bitrate(audio_fmt):
+            return orig
+        return self._audio_kbps_from_ui()
+
     def _resolved_fps_from_ui(self) -> int:
         fps = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else ""
         orig_fps = getattr(self, 'current_orig_fps', 60)
@@ -1650,6 +1963,38 @@ class RenderMixin:
                 )
             return f"✂️ {s_m:02d}:{s_s:02d} - {e_m:02d}:{e_s:02d}"
         return getattr(self, "current_clip_duration_str", "Unknown")
+
+    def _schedule_update_final_setup(self, delay_ms: int = 180) -> None:
+        """Debounce heavy export summary/path work while typing the output filename."""
+        timer = getattr(self, "_filename_setup_timer", None)
+        if timer is None:
+            timer = QTimer(self.ui if hasattr(self, "ui") else None)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.update_final_setup)
+            self._filename_setup_timer = timer
+        timer.start(max(0, int(delay_ms)))
+
+    def _on_output_filename_changed(self, _text: str = "") -> None:
+        self._schedule_update_final_setup()
+
+    def _schedule_custom_size_recalc(self, delay_ms: int = 180) -> None:
+        timer = getattr(self, "_custom_size_timer", None)
+        if timer is None:
+            timer = QTimer(self.ui if hasattr(self, "ui") else None)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._run_custom_size_recalc)
+            self._custom_size_timer = timer
+        timer.start(max(0, int(delay_ms)))
+
+    def _run_custom_size_recalc(self) -> None:
+        text = getattr(self, "_pending_custom_size_text", "")
+        if not text.strip():
+            return
+        try:
+            target_mb = int(text)
+            self.calculate_strict_target(target_mb, is_custom=True)
+        except ValueError:
+            pass
 
     def _update_trim_only_summary(self) -> bool:
         """Fast path: patch only the Clip time row while dragging trim handles."""
@@ -1913,7 +2258,14 @@ class RenderMixin:
             self.ui.label_detailed_summary.setText(detailed_text)
 
         combo_valid = is_valid_output_combo(
-            container, codec_raw, audio_format, audio_only=audio_only, mute_audio=mute_audio
+            container,
+            codec_raw,
+            audio_format,
+            audio_only=audio_only,
+            mute_audio=mute_audio,
+            stream_copy=(
+                "Original" in quality and "Target File Size" not in quality and not audio_only
+            ),
         )
         if hasattr(self.ui, 'btn_start') and not getattr(self, '_is_rendering', False):
             self.ui.btn_start.setEnabled(combo_valid)
@@ -2017,7 +2369,9 @@ class RenderMixin:
 
     def show_original_help_popup(self) -> None:
         """Popup anchored to the Original warning icon with a 'don't show again' checkbox."""
-        from PySide6.QtWidgets import QMenu, QWidgetAction, QVBoxLayout, QLabel, QCheckBox, QWidget
+        from PySide6.QtWidgets import QMenu, QWidgetAction, QVBoxLayout, QLabel, QWidget
+
+        from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
         btn = getattr(self.ui, "btn_quality_original_help", None)
         if btn is None:
@@ -2046,10 +2400,8 @@ class RenderMixin:
         body.setFixedWidth(320)
         body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: 'Segoe UI';")
 
-        chk = QCheckBox("Don't show this again")
-        chk.setCursor(Qt.PointingHandCursor)
+        chk = SteempegCheckBox("Don't show this again")
         chk.setChecked(bool(btn.property("warning_dismissed")))
-        chk.setStyleSheet("color: #b29ae7; font-size: 11px; font-family: 'Segoe UI'; padding-top: 4px;")
 
         def _on_toggled(checked):
             self.save_user_settings("original_preset_warning_dismissed", bool(checked))
@@ -2071,19 +2423,20 @@ class RenderMixin:
 
     def on_custom_size_changed(self, text):
         """ Live updates when typing a custom MB value with idiot-proof protection """
+        self._pending_custom_size_text = text
         if not text.strip():
             self.warn_size.hide()
             return
-            
+
         try:
             target_mb = int(text)
-            
+
             # --- Use EFFECTIVE duration for correct calculation! ---
             duration = self.get_effective_duration()
             orig_bitrate = getattr(self, 'current_orig_bitrate', 10)
             orig_mb = int((orig_bitrate * duration) / 8)
             if orig_mb < 1: orig_mb = 1
-            
+
             # Idiot-proof protection lol
             if target_mb < 1:
                 self.warn_size.setToolTip("Oops! Minimum size is 1 MB, otherwise the video will turn to dust")
@@ -2093,9 +2446,9 @@ class RenderMixin:
                 self.warn_size.show()
             else:
                 self.warn_size.hide()
-                
-            self.calculate_strict_target(target_mb, is_custom=True)
-        except: 
+
+            self._schedule_custom_size_recalc()
+        except Exception:
             self.warn_size.hide()
 
     def refresh_slider_if_needed(self):
@@ -2137,14 +2490,7 @@ class RenderMixin:
         # --- read inputs from the UI ---
         orig_video_mbps = getattr(self, 'current_orig_bitrate', 10)
 
-        audio_text = self.ui.combo_audio_bitrate.currentText() if hasattr(self.ui, 'combo_audio_bitrate') else "192 kbps"
-        if hasattr(self.ui, 'check_mute_audio') and self.ui.check_mute_audio.isChecked():
-            audio_kbps = 0
-        elif "Custom" in audio_text:
-            audio_kbps = self._audio_kbps_from_ui()
-        else:
-            match = re.search(r'(\d+)', audio_text)
-            audio_kbps = int(match.group(1)) if match else 192
+        audio_kbps = self._audio_kbps_for_size_plan()
 
         fps_text = self.ui.combo_fps.currentText() if hasattr(self.ui, 'combo_fps') else "60"
         fps = self._resolved_fps_from_ui() if "Custom" in fps_text else None
@@ -2166,8 +2512,9 @@ class RenderMixin:
         self.custom_target_height = plan.height
         self.custom_target_bitrate = plan.video_kbps
         custom_tag = "⚙️ Custom " if is_custom else ""
+        mbit = _format_mbit(plan.video_kbps)
         self.ui.label_target_size.setText(
-            f"Target: <b>{custom_tag}{plan.target_mb} MB</b> | Safe Bitrate: {plan.video_kbps} kbps<br>"
+            f"Target: <b>{custom_tag}{plan.target_mb} MB</b> | Safe Bitrate: <b>{mbit}</b><br>"
             f"Quality: <span style='color:{plan.color}'><b>{plan.label}</b></span>"
         )
         self.update_final_setup()
@@ -2191,7 +2538,7 @@ class RenderMixin:
         """ Validates FPS input and shows warning icon if boundaries are exceeded """
         if not text.strip():
             self.warn_fps.hide()
-            self.update_final_setup()
+            self._schedule_update_final_setup()
             return
             
         try:
@@ -2207,16 +2554,16 @@ class RenderMixin:
                 self.warn_fps.show()
             else:
                 self.warn_fps.hide()
-        except:
+        except Exception:
             self.warn_fps.hide()
-            
-        self.update_final_setup() # Live UI update
+
+        self._schedule_update_final_setup()
 
     def validate_custom_vbitrate(self, text):
         """ Validates video bitrate input and shows warning icon if boundaries are exceeded """
         if not text.strip():
             self.warn_vbitrate.hide()
-            self.update_final_setup()
+            self._schedule_update_final_setup()
             return
             
         try:
@@ -2231,16 +2578,16 @@ class RenderMixin:
                 self.warn_vbitrate.show()
             else:
                 self.warn_vbitrate.hide()
-        except:
+        except Exception:
             self.warn_vbitrate.hide()
-            
-        self.update_final_setup() # Live UI update
+
+        self._schedule_update_final_setup()
 
     def validate_custom_abitrate(self, text):
         """ Validates audio bitrate input and shows warning icon if boundaries are exceeded """
         if not text.strip():
             self.warn_abitrate.hide()
-            self.update_final_setup()
+            self._schedule_update_final_setup()
             return
             
         try:
@@ -2255,10 +2602,10 @@ class RenderMixin:
                 self.warn_abitrate.show()
             else:
                 self.warn_abitrate.hide()
-        except:
+        except Exception:
             self.warn_abitrate.hide()
-            
-        self.update_final_setup() # Live UI update
+
+        self._schedule_update_final_setup()
 
     def add_clip_to_render_queue(self, clip_path: str):
         """Snapshot current settings into a new queued job (stage 2+ UI will call this)."""
@@ -2466,6 +2813,27 @@ class RenderMixin:
         self._update_start_button_label()
         self._persist_render_queue()
         self.update_playback_badge()
+        if not getattr(self, "_is_rendering", False):
+            self._reset_export_ui_after_queue_cleared()
+
+    def _reset_export_ui_after_queue_cleared(self) -> None:
+        """Drop stale export toggles/preset once the queue drains."""
+        if getattr(self, "_loading_queue_job", False):
+            return
+        preview = getattr(self, "_preview_clip_path", None)
+        self._apply_export_session_state(dict(_DEFAULT_CLIP_SESSION), silent=True)
+        if preview and hasattr(self, "_clip_session_memory"):
+            norm = os.path.normpath(preview)
+            mem = self._clip_session_memory.get(norm)
+            if mem is not None:
+                for key in (
+                    "container", "codec_text", "audio_format", "output_preset",
+                    "audio_only", "mute_audio",
+                ):
+                    mem[key] = _DEFAULT_CLIP_SESSION[key]
+        self.refresh_output_format_availability()
+        self._sync_original_audio_controls()
+        self._schedule_update_final_setup()
 
     def _current_header_clip_path(self):
         return self._current_preview_clip_path()
@@ -2812,10 +3180,18 @@ class RenderMixin:
         """Frameless FFmpeg error dialog. Returns True to continue queue, False to stop."""
         dialog = QDialog(self.ui)
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         dialog.setFixedSize(780, 420)
-        dialog.setStyleSheet(_RENDER_ERROR_DIALOG_STYLE)
 
-        main_layout = QHBoxLayout(dialog)
+        shell = QWidget(dialog)
+        shell.setObjectName("RenderErrorShell")
+        shell.setStyleSheet(_RENDER_ERROR_DIALOG_STYLE)
+
+        root = QVBoxLayout(dialog)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(shell)
+
+        main_layout = QHBoxLayout(shell)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
 
@@ -2921,6 +3297,14 @@ class RenderMixin:
         content_layout.addLayout(btn_layout)
         main_layout.addLayout(content_layout)
 
+        def _apply_error_mask():
+            from PySide6.QtGui import QPainterPath, QRegion
+            path = QPainterPath()
+            path.addRoundedRect(0.0, 0.0, 780.0, 420.0, 8.0, 8.0)
+            dialog.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+        _apply_error_mask()
+
         if batch_continue:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
             timer.stop()
@@ -2980,6 +3364,8 @@ class RenderMixin:
                 logging.info("=== BATCH RENDER SUCCESS === %s", output_file)
                 if active_job and output_file:
                     self._save_render_companion_meta(active_job, output_file)
+                    if hasattr(self, "register_new_rendered_output"):
+                        self.register_new_rendered_output(output_file)
                 self.process_next_in_queue()
                 return
             if "cancelled by user" in (error_msg or "").lower():
@@ -3003,6 +3389,8 @@ class RenderMixin:
             logging.info("=== RENDER SUCCESS ===")
             if output_file and active_job:
                 self._save_render_companion_meta(active_job, output_file)
+                if hasattr(self, "register_new_rendered_output"):
+                    self.register_new_rendered_output(output_file)
 
             self.update_status_indicator("Success!", "success")
 
