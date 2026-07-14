@@ -8,7 +8,6 @@ import PySide6.QtCore as qtc
 import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
-
 from steempeg.infra.paths import get_resource_path
 
 
