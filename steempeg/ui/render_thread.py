@@ -320,13 +320,20 @@ class RenderThread(QThread):
                     os.remove(self.output_file)
 
                 if self._stream_copy_used:
-                    # The setts pass above fixes the presentation timeline but leaves the
-                    # raw video track header (mdhd) still reporting the inflated duration,
-                    # which some players (e.g. Windows Media Player) read directly. A
-                    # second -c copy remux rebuilds the headers from the now-clean packet
-                    # timestamps. It's a fast, lossless metadata-only rewrite.
+                    # The setts pass fixes presentation timestamps but MKV/Matroska can
+                    # still inherit a bogus segment Duration when audio track metadata is
+                    # corrupt (Steam A/V offset clips). Remux with -shortest so the
+                    # container length follows the real video packets, not INT64_MAX.
+                    safe_in = temp_files[0].replace("\\", "/")
+                    safe_out = self.output_file.replace("\\", "/")
+                    remux_cmd = (
+                        f'"{self.ffmpeg_exe}" -i "{safe_in}" '
+                        f"-map 0:v:0 -map 0:a:0? -c copy -shortest "
+                        f"-avoid_negative_ts make_zero -fflags +genpts "
+                        f'-y "{safe_out}"'
+                    )
                     remux = subprocess.Popen(
-                        f'"{self.ffmpeg_exe}" -i "{temp_files[0].replace(chr(92), "/")}" -c copy -y "{self.output_file}"',
+                        remux_cmd,
                         shell=False, cwd=self.save_dir, creationflags=creation_flags,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         universal_newlines=True, encoding='utf-8', errors='ignore'
