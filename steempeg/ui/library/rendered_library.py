@@ -697,6 +697,51 @@ class RenderedLibraryMixin:
             self.update_rendered_selection()
         return True
 
+    def register_new_rendered_output(self, file_path: str) -> bool:
+        """Insert one freshly exported file into Rendered videos without a full rescan."""
+        if not file_path or not os.path.isfile(file_path):
+            return False
+        self._ensure_rendered_widgets()
+        norm = os.path.normcase(os.path.normpath(file_path))
+        for row in range(self.table_rendered.rowCount()):
+            cell = self.table_rendered.item(row, 0)
+            if not cell:
+                continue
+            row_path = cell.data(Qt.ItemDataRole.UserRole)
+            if row_path and os.path.normcase(os.path.normpath(row_path)) == norm:
+                return True
+
+        from steempeg.library.rendered_scan import RENDERED_ALL_EXTS, scan_single_rendered_file
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in RENDERED_ALL_EXTS:
+            return False
+
+        try:
+            stat = os.stat(file_path)
+        except OSError:
+            return False
+
+        icons_cache = self._seed_rendered_icons_cache() if hasattr(self, "_seed_rendered_icons_cache") else {}
+        scanned = scan_single_rendered_file(
+            file_path,
+            stat.st_mtime,
+            stat.st_size,
+            ext,
+            meta_index={},
+            cache_dir=self.cache_dir,
+            game_names_cache=self.game_names_cache,
+            icons_cache=icons_cache,
+        )
+        table_row = self._insert_rendered_file_row(scanned)
+        if table_row >= 0:
+            self._append_rendered_grid_card_for_row(table_row)
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        if table_row >= 0 and scanned.needs_poster and hasattr(self, "_schedule_rendered_poster_backfill"):
+            self._schedule_rendered_poster_backfill()
+        return table_row >= 0
+
     def open_in_rendered_videos(self, file_path: str, *, play: bool = True) -> bool:
         """Switch to Rendered videos, select the file, and optionally start preview."""
         if not file_path or not os.path.isfile(file_path):
@@ -704,6 +749,9 @@ class RenderedLibraryMixin:
         self.open_library_panel("rendered")
         if self._select_rendered_path(file_path, play=play):
             return True
+        if hasattr(self, "register_new_rendered_output"):
+            if self.register_new_rendered_output(file_path):
+                return self._select_rendered_path(file_path, play=play)
         from steempeg.ui.message_dialog import steempeg_warning
 
         steempeg_warning(
@@ -819,6 +867,9 @@ class RenderedLibraryMixin:
         rendered_layout.addWidget(self.grid_rendered)
         self.library_stack.addWidget(self.rendered_page)
 
+        self.table_rendered.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.grid_rendered.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
     def _seed_rendered_icons_cache(self) -> dict[str, str]:
         """Reuse game icons already fetched during the Clips Manager scan."""
         seeded: dict[str, str] = {}
@@ -893,10 +944,13 @@ class RenderedLibraryMixin:
             self._rendered_grid_anchor_index = -1
             self.grid_rendered.clear()
 
+        self._sync_library_scrollbars(force_hide=True)
+
         roots = self._collect_rendered_scan_roots()
         if not roots:
             self._finish_startup_library_scan_status()
             self._update_library_count_label()
+            QTimer.singleShot(0, self._sync_library_scrollbars)
             return
 
         self._rendered_scan_active = True
@@ -987,6 +1041,8 @@ class RenderedLibraryMixin:
 
         self._finish_startup_library_scan_status()
 
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+
         logging.info(
             "Rendered scan: roots=%s files=%d",
             stats.scan_roots,
@@ -999,6 +1055,7 @@ class RenderedLibraryMixin:
         self._rendered_scan_worker = None
         logging.error("Rendered scan failed: %s", message)
         self._finish_startup_library_scan_status(text="Scan error", state="error")
+        QTimer.singleShot(0, self._sync_library_scrollbars)
 
     def _insert_rendered_file_row(self, scanned: ScannedRenderedFile) -> int:
         if not hasattr(self, "table_rendered"):
@@ -1294,6 +1351,8 @@ class RenderedLibraryMixin:
             self.grid_rendered.doItemsLayout()
             self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
             self.btn_view_grid.setStyleSheet(self.toggle_style_active)
+
+        QTimer.singleShot(0, self._sync_library_scrollbars)
 
     def _sync_rendered_view_mode(self):
         self._apply_rendered_view_mode()
