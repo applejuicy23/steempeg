@@ -536,6 +536,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.table_clips.verticalHeader().setVisible(False)
             self.ui.table_clips.setFrameShape(qtw.QFrame.NoFrame)
             self.ui.table_clips.setHorizontalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
+            self.ui.table_clips.setVerticalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
             
             self.ui.table_clips.verticalHeader().setDefaultSectionSize(46) 
             self.ui.table_clips.setIconSize(qtc.QSize(26, 26)) 
@@ -577,6 +578,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.grid_clips.setMovement(qtw.QListView.Static)
             self.grid_clips.itemSelectionChanged.connect(self.on_grid_selection_changed)
             self.grid_clips.setStyleSheet(LIBRARY_GRID_STYLE)
+            self.grid_clips.setVerticalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
 
             original_parent_layout = self.ui.table_clips.parentWidget().layout()
             original_idx = -1
@@ -590,6 +592,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             views_layout.setContentsMargins(10, 10, 10, 10)
             
             self.wrap_library_views_in_stack(views_layout)
+
+            from steempeg.ui.library.library_styles import install_library_scroll_sync
+
+            install_library_scroll_sync(self)
 
             # 5. Putting It All Together
             self.left_master_layout = qtw.QVBoxLayout()
@@ -2121,7 +2127,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.combo_fps.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_fps.currentTextChanged.connect(self.refresh_slider_if_needed)
             self.ui.combo_fps.currentTextChanged.connect(self.update_bitrate_options)
-        if hasattr(self.ui, 'input_filename'): self.ui.input_filename.textChanged.connect(self.update_final_setup)
+        if hasattr(self.ui, 'input_filename'): self.ui.input_filename.textChanged.connect(self._on_output_filename_changed)
 
         if hasattr(self.ui, 'combo_encoder'):
             self.ui.combo_encoder.currentTextChanged.connect(self.update_final_setup)
@@ -2156,8 +2162,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.combo_audio_format.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_audio_format.currentTextChanged.connect(self._mark_output_preset_custom)
             self.ui.combo_audio_format.currentTextChanged.connect(self.refresh_output_format_availability)
+            self.ui.combo_audio_format.currentTextChanged.connect(self.refresh_slider_if_needed)
         if hasattr(self.ui, 'combo_audio_bitrate'):
             self.ui.combo_audio_bitrate.currentTextChanged.connect(self.update_final_setup)
+            self.ui.combo_audio_bitrate.currentTextChanged.connect(self.refresh_slider_if_needed)
         if hasattr(self.ui, 'combo_container'):
             self.ui.combo_container.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_container.currentTextChanged.connect(self._mark_output_preset_custom)
