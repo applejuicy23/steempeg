@@ -514,13 +514,12 @@ class RenderedLibraryMixin:
         return {}
 
     def _game_icon_path_for_rendered(self, app_id: str | None, fallback: str = "") -> str:
-        if app_id and hasattr(self, "get_game_icon"):
-            self.get_game_icon(app_id)
-            cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
-            if os.path.isfile(cache_icon):
-                return cache_icon
         if fallback and os.path.isfile(fallback):
             return fallback
+        if app_id:
+            cache_icon = os.path.join(self.cache_dir, f"{app_id}.jpg")
+            if os.path.isfile(cache_icon) and os.path.getsize(cache_icon) > 100:
+                return cache_icon
         return ""
 
     def _library_ui_path(self) -> str:
@@ -820,6 +819,20 @@ class RenderedLibraryMixin:
         rendered_layout.addWidget(self.grid_rendered)
         self.library_stack.addWidget(self.rendered_page)
 
+    def _seed_rendered_icons_cache(self) -> dict[str, str]:
+        """Reuse game icons already fetched during the Clips Manager scan."""
+        seeded: dict[str, str] = {}
+        app_ids: set[str] = set()
+        if hasattr(self, "_collect_library_app_ids"):
+            app_ids.update(str(a) for a in self._collect_library_app_ids())
+        if hasattr(self, "game_icons_cache"):
+            app_ids.update(str(a) for a in self.game_icons_cache)
+        for app_id in app_ids:
+            path = os.path.join(self.cache_dir, f"{app_id}.jpg")
+            if os.path.isfile(path) and os.path.getsize(path) > 100:
+                seeded[app_id] = path
+        return seeded
+
     def _collect_rendered_scan_roots(self) -> list[str]:
         roots: list[str] = []
         dest = (getattr(self, "custom_destination", "") or "").strip()
@@ -900,6 +913,7 @@ class RenderedLibraryMixin:
             self._rendered_output_meta_index,
             self.cache_dir,
             self.game_names_cache,
+            icons_cache=self._seed_rendered_icons_cache(),
             parent=getattr(self, "ui", None),
         )
         self._rendered_scan_worker = worker
@@ -990,7 +1004,17 @@ class RenderedLibraryMixin:
         if not hasattr(self, "table_rendered"):
             return -1
 
-        list_icon = QIcon(scanned.icon_path) if scanned.icon_path and os.path.isfile(scanned.icon_path) else QIcon()
+        icon_path = scanned.icon_path
+        list_icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
+        if list_icon.isNull() and not scanned.is_unknown:
+            app_id = parse_app_id_from_name(os.path.basename(scanned.full_path))
+            if not app_id and scanned.source_clip_name:
+                app_id = parse_app_id_from_clip_folder(scanned.source_clip_name)
+            if app_id:
+                synced = self._seed_rendered_icons_cache()
+                if app_id in synced:
+                    icon_path = synced[app_id]
+                    list_icon = QIcon(icon_path)
         if scanned.is_unknown:
             from steempeg.infra.paths import get_resource_path
 
@@ -1004,7 +1028,7 @@ class RenderedLibraryMixin:
         name_item.setData(Qt.ItemDataRole.UserRole, scanned.full_path)
         name_item.setData(_RENDERED_GAME_FILTER_ROLE, scanned.game_filter_name)
         name_item.setData(_RENDERED_THUMB_ROLE, "")
-        name_item.setData(_RENDERED_ICON_ROLE, scanned.icon_path or "")
+        name_item.setData(_RENDERED_ICON_ROLE, icon_path or "")
         name_item.setToolTip(scanned.full_path)
         self.table_rendered.setItem(row, 0, name_item)
 

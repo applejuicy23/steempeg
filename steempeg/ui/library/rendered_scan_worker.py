@@ -24,6 +24,7 @@ class RenderedScanWorker(QThread):
         meta_index: Dict[str, dict],
         cache_dir: str,
         game_names_cache: Dict[str, str],
+        icons_cache: Dict[str, str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -31,6 +32,7 @@ class RenderedScanWorker(QThread):
         self._meta_index = copy.deepcopy(meta_index)
         self._cache_dir = cache_dir
         self._game_names_cache = dict(game_names_cache)
+        self._icons_cache = dict(icons_cache or {})
         self._stats: RenderedScanStats | None = None
 
     @property
@@ -50,6 +52,7 @@ class RenderedScanWorker(QThread):
                 self._meta_index,
                 self._cache_dir,
                 self._game_names_cache,
+                icons_cache=self._icons_cache,
                 on_discovered=on_discovered,
                 on_file=on_file,
                 should_cancel=self.isInterruptionRequested,

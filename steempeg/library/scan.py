@@ -286,6 +286,8 @@ def _resolve_icon_path(
     app_id: str,
     cache_dir: str,
     icons_cache: Dict[str, str] | None = None,
+    *,
+    allow_download: bool = True,
 ) -> str:
     if icons_cache is not None and app_id in icons_cache:
         return icons_cache[app_id]
@@ -295,7 +297,7 @@ def _resolve_icon_path(
         if icons_cache is not None:
             icons_cache[app_id] = icon_path
         return icon_path
-    if games.download_icon(app_id, icon_path):
+    if allow_download and games.download_icon(app_id, icon_path):
         if icons_cache is not None:
             icons_cache[app_id] = icon_path
         return icon_path

@@ -75,12 +75,14 @@ def _icon_path_for_rendered(
     fallback: str,
     icons_cache: Dict[str, str],
 ) -> str:
-    if app_id:
-        cached = _resolve_icon_path(str(app_id), cache_dir, icons_cache)
-        if cached:
-            return cached
     if fallback and os.path.isfile(fallback):
         return fallback
+    if app_id:
+        cached = _resolve_icon_path(
+            str(app_id), cache_dir, icons_cache, allow_download=False
+        )
+        if cached:
+            return cached
     return ""
 
 
@@ -175,6 +177,7 @@ def run_rendered_scan(
     cache_dir: str,
     game_names_cache: Dict[str, str],
     *,
+    icons_cache: Dict[str, str] | None = None,
     on_discovered: Callable[[int], None] | None = None,
     on_file: Callable[[ScannedRenderedFile, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -184,7 +187,7 @@ def run_rendered_scan(
     if on_discovered is not None:
         on_discovered(total)
 
-    icons_cache: Dict[str, str] = {}
+    resolved_icons: Dict[str, str] = dict(icons_cache or {})
     for index, (full, mtime, size, ext) in enumerate(files, start=1):
         if should_cancel and should_cancel():
             break
@@ -196,7 +199,7 @@ def run_rendered_scan(
             meta_index=meta_index,
             cache_dir=cache_dir,
             game_names_cache=game_names_cache,
-            icons_cache=icons_cache,
+            icons_cache=resolved_icons,
         )
         if on_file is not None:
             on_file(row, index, total)
