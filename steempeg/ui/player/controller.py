@@ -31,6 +31,12 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core.dash import health
+from steempeg.core.rendered_media import (
+    duration_from_source_clip,
+    is_sane_media_duration,
+    load_rendered_companion_meta,
+    probe_media_duration_sec,
+)
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.window_chrome import collapse_content_insets, force_full_redraw, restore_content_insets, set_window_transitions
@@ -406,6 +412,21 @@ class PlayerMixin:
         """ Toggles Play/Pause state in MPV and updates the button icon. """
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
         if getattr(self.player, 'path', None) is None: return
+
+        if self.player.pause:
+            dur = self._playback_duration_sec()
+            try:
+                pos = self.player.time_pos
+            except Exception:
+                pos = None
+            if dur and pos is not None and float(pos) >= float(dur) - 0.05:
+                self._ignore_playback_stall(0.5)
+                try:
+                    self.player.seek(0, reference='absolute', precision='exact')
+                except Exception:
+                    pass
+                if hasattr(self, 'custom_timeline'):
+                    self.custom_timeline.force_jump(0)
 
         self.player.pause = not self.player.pause
         if hasattr(self.ui, 'btn_play'):
@@ -1487,34 +1508,68 @@ class PlayerMixin:
             self.custom_timeline.canvas._batch_thumbs_busy = busy
 
     def _playback_duration_sec(self):
-        """Clip length from MPD for DASH; MPV duration for exported rendered files."""
+        """Clip length from MPD for DASH; MPV/ffprobe for exported rendered files."""
         if getattr(self, "_rendered_media_path", None):
-            try:
-                dur = self.player.duration
-                if dur and dur > 0:
-                    return float(dur)
-            except Exception:
-                pass
-            clip_dur = getattr(self, "current_clip_duration_sec", None)
-            if clip_dur and clip_dur > 0:
-                return float(clip_dur)
-            return None
+            return self._resolved_rendered_duration_sec()
 
         clip_dur = getattr(self, "current_clip_duration_sec", None)
-        if clip_dur and clip_dur > 0:
+        if clip_dur and is_sane_media_duration(clip_dur):
             return float(clip_dur)
         try:
             dur = self.player.duration
-            if dur and dur > 0:
+            if is_sane_media_duration(dur):
                 return float(dur)
         except Exception:
             pass
         return None
 
+    def _resolved_rendered_duration_sec(self) -> float | None:
+        """Duration for a flat exported file — never trust absurd MPV/Matroska headers."""
+        path = getattr(self, "_rendered_media_path", None)
+        if not path:
+            return None
+
+        cache = getattr(self, "_rendered_duration_cache", None)
+        if cache and cache[0] == os.path.normpath(path):
+            return cache[1]
+
+        try:
+            dur = self.player.duration
+            if is_sane_media_duration(dur):
+                val = float(dur)
+                self._rendered_duration_cache = (os.path.normpath(path), val)
+                return val
+        except Exception:
+            pass
+
+        meta = load_rendered_companion_meta(path) or {}
+        meta_dur = meta.get("duration_sec")
+        if is_sane_media_duration(meta_dur):
+            val = float(meta_dur)
+            self._rendered_duration_cache = (os.path.normpath(path), val)
+            return val
+
+        clip_path = (meta.get("clip_path") or "").strip()
+        if clip_path:
+            src_dur = duration_from_source_clip(clip_path)
+            if src_dur is not None:
+                self._rendered_duration_cache = (os.path.normpath(path), src_dur)
+                return src_dur
+
+        probed = probe_media_duration_sec(path)
+        if probed is not None:
+            self._rendered_duration_cache = (os.path.normpath(path), probed)
+            return probed
+
+        clip_dur = getattr(self, "current_clip_duration_sec", None)
+        if is_sane_media_duration(clip_dur):
+            return float(clip_dur)
+        return None
+
     def _apply_playback_duration(self, duration_sec: float) -> None:
-        if duration_sec < 1.0:
+        if not is_sane_media_duration(duration_sec):
             return
-        self.current_clip_duration_sec = duration_sec
+        self.current_clip_duration_sec = float(duration_sec)
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.set_duration(int(duration_sec * 1000))
 
@@ -1528,12 +1583,16 @@ class PlayerMixin:
         from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS
 
         duration_sec = 0.0
-        try:
-            dur = self.player.duration
-            if dur and dur > 0:
-                duration_sec = float(dur)
-        except Exception:
-            pass
+        resolved = self._resolved_rendered_duration_sec()
+        if resolved is not None:
+            duration_sec = resolved
+        else:
+            try:
+                dur = self.player.duration
+                if is_sane_media_duration(dur):
+                    duration_sec = float(dur)
+            except Exception:
+                pass
 
         if duration_sec >= 1.0:
             self._apply_playback_duration(duration_sec)
@@ -1555,6 +1614,13 @@ class PlayerMixin:
         if attempt < 10:
             QTimer.singleShot(120, lambda: self._poll_rendered_media_duration(file_path, switch_gen, attempt + 1))
         else:
+            resolved = self._resolved_rendered_duration_sec()
+            if resolved is not None and resolved >= 1.0:
+                self._apply_playback_duration(resolved)
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext not in RENDERED_AUDIO_EXTS:
+                    abs_path = os.path.abspath(file_path).replace("\\", "/")
+                    self._start_timeline_thumb_batch(abs_path, resolved)
             self._is_switching = False
 
     def _stop_timeline_thumb_batch(self) -> None:
@@ -1637,6 +1703,7 @@ class PlayerMixin:
         self._active_play_media_path = file_path
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
+        self._rendered_duration_cache = None
         self._pending_trim_restore = None
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
@@ -1671,6 +1738,16 @@ class PlayerMixin:
         self._playback_last_time_pos = None
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
+
+        # Pre-seed duration from sidecar / source clip before MPV reports garbage headers.
+        meta = load_rendered_companion_meta(file_path) or {}
+        seed_dur = meta.get("duration_sec")
+        if not is_sane_media_duration(seed_dur):
+            seed_dur = duration_from_source_clip((meta.get("clip_path") or "").strip())
+        if is_sane_media_duration(seed_dur):
+            self._apply_playback_duration(float(seed_dur))
+            self._rendered_duration_cache = (os.path.normpath(file_path), float(seed_dur))
+
         try:
             self.player.play(abs_path)
             self.player.pause = False
@@ -1987,6 +2064,8 @@ class PlayerMixin:
                 return
                 
             duration_ms = int(duration_sec * 1000)
+            max_ms = 48 * 3600 * 1000
+            duration_ms = max(0, min(duration_ms, max_ms))
             
             # MPV sometimes returns None for time_pos at the exact moment the video ends
             if time_sec is None:
@@ -1996,46 +2075,28 @@ class PlayerMixin:
                     return
                     
             current_ms = int(time_sec * 1000)
+            current_ms = max(0, min(current_ms, duration_ms if duration_ms > 0 else max_ms))
 
             if hasattr(self, "_record_salvage_playback_evidence"):
                 self._record_salvage_playback_evidence()
 
-            # --- WATCHDOG: recover a DASH demuxer wedged by the rewind seek ---
-            # With the anchored manifest (see repair.fix_steam_manifest) seek(0) now
-            # lands cleanly at the start. This is just a safety net: if a clip's anchor
-            # couldn't be read and the rewind seek failed to reload the first fragment,
-            # eof_reached stays set — reopen the file for a fresh demuxer instead of
-            # spinning on "Invalid data found".
-            if getattr(self, '_eof_rewind_pending', 0):
-                if getattr(self.player, 'eof_reached', False):
-                    if time.time() - self._eof_rewind_pending >= 0.15:
-                        self._eof_rewind_pending = 0
-                        self._reopen_current_clip_paused()
-                        return
-                else:
-                    self._eof_rewind_pending = 0
+            canvas = getattr(getattr(self, 'custom_timeline', None), 'canvas', None)
+            user_scrubbing = canvas is not None and canvas.drag_state == 'playhead'
+            at_end = (
+                getattr(self.player, 'eof_reached', False)
+                or (duration_ms > 0 and current_ms >= duration_ms - 50)
+            )
 
-            # --- AUTO-REWIND AT THE END OF VIDEO (EOF) ---
-            # If MPV flags end-of-file, or we are within 100ms of the end
-            if not getattr(self, '_eof_rewind_pending', 0) and (
-                getattr(self.player, 'eof_reached', False) or current_ms >= duration_ms - 5
-            ):
-                self.player.pause = True
-                if duration_ms >= 1000:
-                    self.player.seek(0, reference='absolute', precision='exact')
-                    self._eof_rewind_pending = time.time()
-                    current_ms = 0
-                    if hasattr(self, 'custom_timeline'):
-                        self.custom_timeline.force_jump(0)
-                else:
-                    current_ms = duration_ms
-                    if hasattr(self, 'custom_timeline'):
-                        self.custom_timeline.force_jump(duration_ms)
-
-                # Change the pause button back to play
-                if hasattr(self.ui, 'btn_play'):
-                    icon_path = get_resource_path("icon_play.png")
-                    self.ui.btn_play.setIcon(QIcon(icon_path))
+            if at_end:
+                current_ms = min(current_ms, duration_ms)
+                if user_scrubbing:
+                    pass
+                elif not self.player.pause:
+                    self.player.pause = True
+                    if hasattr(self.ui, 'btn_play'):
+                        self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+            else:
+                self._eof_rewind_pending = 0
 
             is_playing = not self.player.pause
 
@@ -2047,11 +2108,12 @@ class PlayerMixin:
             # --- UPDATE TEXT TIMERS (00:00 / 00:00) ---
             def format_time(ms):
                 """ Converts milliseconds into HH:MM:SS or MM:SS format """
+                ms = max(0, min(int(ms), max_ms))
                 s = ms // 1000
                 h = s // 3600
-                m = (s % 3600) // 60 
+                m = (s % 3600) // 60
                 s = s % 60
-                
+
                 if h > 0:
                     return f"{h:02d}:{m:02d}:{s:02d}"
                 return f"{m:02d}:{s:02d}"
