@@ -180,6 +180,11 @@ _CLIP_CURED_ROLE = Qt.UserRole + 4
 
 
 class LibraryMixin:
+    def _sync_library_scrollbars(self, *, force_hide: bool = False) -> None:
+        from steempeg.ui.library.library_styles import sync_library_scrollbars
+
+        sync_library_scrollbars(self, force_hide=force_hide)
+
     # --- Clip health cache (mtime-keyed, persisted between sessions) ---
     def _clip_health_cache_path(self):
         return os.path.join(self.cache_dir, "clip_health_cache.json")
@@ -1282,6 +1287,8 @@ class LibraryMixin:
 
     def _publish_grid_selection(self, *, update_preview: bool = True) -> None:
         """Mirror grid selection into the table; reload preview only on plain LMB clicks."""
+        if not self._clips_library_accepts_selection():
+            return
         if getattr(self, "_library_panel_mode", "clips") != "clips":
             return
         if hasattr(self, "_clear_rendered_selection_visual"):
@@ -1319,6 +1326,8 @@ class LibraryMixin:
 
     def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
         """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
+        if not self._clips_library_accepts_selection():
+            return
         grid = self.grid_clips
         mods = self._event_modifiers(event)
         if force_single:
@@ -1367,6 +1376,8 @@ class LibraryMixin:
         self.show_grid_context_menu(viewport_pos)
 
     def _handle_grid_viewport_press(self, event) -> bool:
+        if not self._clips_library_accepts_selection():
+            return True
         if event.button() != Qt.LeftButton:
             return False
 
@@ -1382,6 +1393,8 @@ class LibraryMixin:
 
     def show_grid_context_menu(self, pos):
         """ Pop-up menu for the grid """
+        if not self._clips_library_accepts_selection():
+            return
         clip_paths = self._context_menu_clip_paths_grid(pos)
         if not clip_paths:
             return
@@ -1397,6 +1410,8 @@ class LibraryMixin:
 
     def show_clip_context_menu(self, pos):
         """ Pop-up menu for a standard list (List/Table) """
+        if not self._clips_library_accepts_selection():
+            return
         clip_paths = self._context_menu_clip_paths_table(pos)
         if not clip_paths:
             return
@@ -1991,6 +2006,9 @@ class LibraryMixin:
         if table.isRowHidden(row):
             item.setHidden(True)
 
+    def _clips_library_accepts_selection(self) -> bool:
+        return not getattr(self, "_clips_scan_active", False)
+
     def _library_scan_status_active(self, source: str) -> bool:
         """Only the visible library panel drives the footer — except during startup."""
         if getattr(self, "_startup_library_scan_active", False):
@@ -2054,32 +2072,39 @@ class LibraryMixin:
                     self._finalize_scan_finished(stats, gen, announce)
             return
 
-        batch = 6
-        for _ in range(min(batch, len(pending))):
+        batch = 4
+        inserted_before = int(getattr(self, "_scan_inserted", 0))
+        n = min(batch, len(pending))
+        last_row = None
+        for _ in range(n):
             row, index, total = pending.pop(0)
             self._insert_scanned_clip_row(row)
+            last_row = row
 
-            if hasattr(self, "update_status_indicator") and getattr(self, "_clips_scan_active", False):
-                inserted = int(getattr(self, "_scan_inserted", 0)) + 1
-                self._scan_inserted = inserted
-                # `_scan_total` is corrected to stats.clip_count once the worker finishes.
-                denom = int(getattr(self, "_scan_total", 0) or 0) or inserted or 1
-                label = row.game_name.strip() or os.path.basename(row.full_path)
-                pct = int(100 * inserted / denom) if denom else 0
-                if inserted >= denom and getattr(self, "_scan_finalize_pending", None) is None:
-                    pct = min(pct, 99)
-                self.update_status_indicator(
-                    f"Loading {inserted}/{denom} — {label} ({pct}%)",
-                    "busy",
-                    scan_phase="loading",
-                )
+        if (
+            last_row is not None
+            and hasattr(self, "update_status_indicator")
+            and getattr(self, "_clips_scan_active", False)
+        ):
+            inserted = inserted_before + n
+            self._scan_inserted = inserted
+            denom = int(getattr(self, "_scan_total", 0) or 0) or inserted or 1
+            label = last_row.game_name.strip() or os.path.basename(last_row.full_path)
+            pct = int(100 * inserted / denom) if denom else 0
+            if inserted >= denom and getattr(self, "_scan_finalize_pending", None) is None:
+                pct = min(pct, 99)
+            self.update_status_indicator(
+                f"Loading {inserted}/{denom} — {label} ({pct}%)",
+                "busy",
+                scan_phase="loading",
+            )
 
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
 
         if pending:
             self._scan_flush_scheduled = True
-            QTimer.singleShot(0, lambda g=generation: self._flush_scanned_clips(g))
+            QTimer.singleShot(20, lambda g=generation: self._flush_scanned_clips(g))
             return
 
         # pending is empty; finalization is handled at the top of this method.
@@ -2146,6 +2171,8 @@ class LibraryMixin:
 
         self._maybe_start_deferred_rendered_scan()
 
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+
         if announce_duplicates and stats.duplicate_count:
             noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
             steempeg_information(
@@ -2176,6 +2203,7 @@ class LibraryMixin:
         self._clips_scan_active = False
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Scan error", "error")
+        QTimer.singleShot(0, self._sync_library_scrollbars)
         self._maybe_start_deferred_rendered_scan()
 
     def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = True):
@@ -2207,6 +2235,8 @@ class LibraryMixin:
             self._grid_anchor_index = -1
             self.grid_clips.clear()
 
+        self._sync_library_scrollbars(force_hide=True)
+
         if not getattr(self, "clips_folders", None):
             self._load_clips_folders_from_settings()
 
@@ -2217,6 +2247,7 @@ class LibraryMixin:
             self._clips_scan_active = False
             if hasattr(self, "update_status_indicator"):
                 self.update_status_indicator("Ready", "ready")
+            self._sync_library_scrollbars()
             self._maybe_start_deferred_rendered_scan()
             return
 
@@ -2296,6 +2327,7 @@ class LibraryMixin:
             self._append_grid_card_for_row(row)
 
         self.sync_grid_from_table_selection()
+        QTimer.singleShot(0, self._sync_library_scrollbars)
 
     def _position_filter_menu(self):
         """Place + size the filter popup relative to the live widget geometry.
@@ -2542,3 +2574,5 @@ class LibraryMixin:
 
             if self.grid_clips.selectedItems():
                 self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])
+
+        QTimer.singleShot(0, self._sync_library_scrollbars)
