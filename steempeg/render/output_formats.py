@@ -93,6 +93,7 @@ def is_valid_output_combo(
     *,
     audio_only: bool = False,
     mute_audio: bool = False,
+    stream_copy: bool = False,
 ) -> bool:
     """Return False for container/codec/audio pairs FFmpeg cannot mux sanely."""
     if mute_audio and not audio_only:
@@ -105,20 +106,24 @@ def is_valid_output_combo(
     if audio_only:
         return audio in AUDIO_FORMATS
 
+    if stream_copy and not audio_only:
+        # Original copies Steam DASH chunks (H.264 + AAC) — WebM cannot remux them.
+        return c != "WebM"
+
     if audio == "Copy":
         return True
 
     if c == "MP4":
         if "VP9" in codec:
             return False
-        if audio in ("Opus", "FLAC"):
+        if audio in ("Opus", "FLAC", "WAV"):
             return False
         return True
 
     if c == "WebM":
         if "H.264" in codec or "H.265" in codec or "HEVC" in codec.upper():
             return False
-        if audio in ("AAC", "MP3"):
+        if audio in ("AAC", "MP3", "FLAC", "WAV"):
             return False
         return True
 
