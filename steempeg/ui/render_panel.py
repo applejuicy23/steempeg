@@ -60,8 +60,8 @@ _STAT_FRAME_QSS = "QFrame { background-color: #303030; border: 1px solid #3a3a3a
 # Target-size readout ("Target: … | Safe Bitrate: … / Quality: …") — a readable info card,
 # not the tiny grey caption it used to borrow.
 _TARGET_READOUT_QSS = ("QLabel { background-color: #303030; border: 1px solid #3a3a3a;"
-                       " border-radius: 10px; padding: 9px 13px; color: #e0e0e0;"
-                       " font-size: 12px; font-weight: normal; " + _FONT + " }")
+                       " border-radius: 10px; padding: 9px 13px; color: #cfcfcf;"
+                       " font-size: 11px; font-weight: normal; line-height: 1.35; " + _FONT + " }")
 
 # The overlay chip blends into the combo body and leaves the drop-down arrow uncovered.
 # (Combo QSS: 2px border, 30px drop-down cell + its 2px left border -> reserve 32px on the right.)
