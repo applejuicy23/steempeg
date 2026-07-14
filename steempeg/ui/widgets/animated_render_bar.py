@@ -91,6 +91,9 @@ class AnimatedRenderBar(QWidget):
         self._indeterminate = None
         self._state = "busy"
         clamped = max(0.0, min(100.0, float(percent)))
+        # Cap step size so bursty scan updates still animate smoothly.
+        if clamped > self._target:
+            clamped = min(clamped, self._target + 2.5)
         self._target = clamped
         if clamped < self._display:
             self._display = clamped
