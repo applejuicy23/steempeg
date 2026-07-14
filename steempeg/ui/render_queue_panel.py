@@ -812,6 +812,8 @@ class RenderQueuePanel(QWidget):
     def _on_empty_hint_dismiss_toggled(self, checked: bool) -> None:
         self._empty_hint_dismissed = bool(checked)
         self.empty_hint_dismissed_changed.emit(self._empty_hint_dismissed)
+        if not self._jobs:
+            self._rebuild_cards()
 
     def _clear_cards(self) -> None:
         while self._list_layout.count():

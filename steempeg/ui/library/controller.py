@@ -1186,7 +1186,7 @@ class LibraryMixin:
                     "Unverified dead clips in the selection will be skipped"
                 )
             action_queue.triggered.connect(
-                lambda paths=list(queueable): self.add_clips_to_render_queue(paths)
+                lambda _checked=False, paths=list(queueable): self.add_clips_to_render_queue(paths)
             )
 
         menu.addSeparator()
