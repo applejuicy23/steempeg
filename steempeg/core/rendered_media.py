@@ -7,6 +7,11 @@ import logging
 import os
 import re
 import subprocess
+import sys
+
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+# Anything above ~48 h is almost certainly corrupt container metadata (Steam copy bugs).
+MAX_SANE_MEDIA_DURATION_SEC = 48 * 3600
 
 _RENDERED_NAME_RE = re.compile(r"^(?:clip|bg|fg)_(\d+)_", re.IGNORECASE)
 _STEAM_CLIP_PREFIXES = ("clip", "bg", "fg")
@@ -47,6 +52,79 @@ def companion_meta_path(file_path: str) -> str:
     return file_path + _COMPANION_SUFFIX
 
 
+def is_sane_media_duration(sec: float | int | None) -> bool:
+    if sec is None:
+        return False
+    try:
+        val = float(sec)
+    except (TypeError, ValueError):
+        return False
+    return 0.0 < val <= MAX_SANE_MEDIA_DURATION_SEC
+
+
+def probe_media_duration_sec(file_path: str) -> float | None:
+    """Return a trustworthy duration in seconds (video stream first, then format)."""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    for stream_sel in ("v:0", "a:0"):
+        try:
+            out = subprocess.check_output(
+                [
+                    "ffprobe", "-v", "error", f"-select_streams", stream_sel,
+                    "-show_entries", "stream=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
+                creationflags=_NO_WINDOW,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=20,
+            ).strip()
+            if out:
+                val = float(out)
+                if is_sane_media_duration(val):
+                    return val
+        except Exception:
+            pass
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file_path,
+            ],
+            creationflags=_NO_WINDOW,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=20,
+        ).strip()
+        if out:
+            val = float(out)
+            if is_sane_media_duration(val):
+                return val
+    except Exception:
+        pass
+    return None
+
+
+def duration_from_source_clip(clip_path: str) -> float | None:
+    """Fallback duration from the Steam source folder (MPD / chunk count)."""
+    if not clip_path or not os.path.isdir(clip_path):
+        return None
+    try:
+        from steempeg.core.dash import discovery
+        from steempeg.core.dash.mpd import estimate_render_duration_sec
+
+        mpds = discovery.find_mpd_paths(clip_path)
+        if not mpds:
+            return None
+        dur = estimate_render_duration_sec(mpds[0])
+        return float(dur) if is_sane_media_duration(dur) else None
+    except Exception:
+        return None
+
+
 def save_rendered_companion_meta(
     file_path: str,
     *,
@@ -54,6 +132,7 @@ def save_rendered_companion_meta(
     game_name: str = "",
     clip_path: str = "",
     game_icon_path: str = "",
+    duration_sec: float | None = None,
 ) -> None:
     """Write ``<video>.steempeg.json`` so renamed exports keep their game metadata."""
     try:
@@ -68,6 +147,12 @@ def save_rendered_companion_meta(
         "size": st.st_size,
         "mtime_ns": st.st_mtime_ns,
     }
+    if duration_sec is None:
+        duration_sec = probe_media_duration_sec(file_path)
+    if not is_sane_media_duration(duration_sec) and clip_path:
+        duration_sec = duration_from_source_clip(clip_path)
+    if is_sane_media_duration(duration_sec):
+        payload["duration_sec"] = round(float(duration_sec), 3)
     try:
         with open(companion_meta_path(file_path), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
