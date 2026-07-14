@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
-from steempeg.ui.player.thumbnails import PreviewSniperWorker
+from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
 
@@ -1012,7 +1012,7 @@ class TimelineCanvas(QWidget):
                 current_thumb_dir = getattr(self, 'thumb_dir', None) if self._thumb_dir_is_valid() else None
                 has_disk_thumb = False
                 
-                bucket_sec = round(sec / 3.0) * 3
+                bucket_sec = preview_bucket_sec(hover_ms, self.duration_ms)
                 if current_thumb_dir:
                     index = (bucket_sec // 3) + 1
                     img_path = os.path.join(current_thumb_dir, f"thumb_{index:04d}.jpg")
@@ -1029,7 +1029,7 @@ class TimelineCanvas(QWidget):
 
                 if has_disk_thumb:
                     if bucket_changed or getattr(self, '_batch_thumbs_busy', False):
-                        self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir)
+                        self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir, self.duration_ms)
                 elif bucket_changed:
                     if bucket_sec in sniper_cache:
                         self.preview_widget.set_preview_pixmap(sniper_cache[bucket_sec])
@@ -1469,11 +1469,10 @@ class ThumbnailPreviewWidget(QWidget):
             )
         self._loading_overlay.stop()
 
-    def load_disk_thumbnail(self, hover_ms, thumb_dir):
+    def load_disk_thumbnail(self, hover_ms, thumb_dir, duration_ms=0):
         if not thumb_dir or not os.path.exists(thumb_dir):
             return False
-        sec = int(hover_ms // 1000)
-        bucket_sec = round(sec / 3.0) * 3
+        bucket_sec = preview_bucket_sec(hover_ms, duration_ms)
         index = (bucket_sec // 3) + 1
         img_path = os.path.join(thumb_dir, f"thumb_{index:04d}.jpg")
         if not os.path.exists(img_path):
