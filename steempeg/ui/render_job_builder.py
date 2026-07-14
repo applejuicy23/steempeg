@@ -193,10 +193,29 @@ def find_clip_metadata(app: SteempegApp, clip_path: str) -> Optional[dict]:
     return None
 
 
-def probe_clip_render_defaults(clip_path: str) -> dict:
+def _mpd_paths_for_clip(app: SteempegApp, clip_path: str) -> list[str]:
+    """Resolve manifests for a clip, including cured/salvage manifests."""
+    clip_path = os.path.normpath(clip_path)
+    if hasattr(app, "_register_salvaged_clip") and hasattr(app, "_is_clip_cured"):
+        try:
+            if app._is_clip_cured(clip_path):
+                app._register_salvaged_clip(clip_path)
+        except Exception:
+            pass
+    mpds = discovery.find_mpd_paths(clip_path)
+    if mpds:
+        return mpds
+    salvage = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []))
+    return salvage
+
+
+def probe_clip_render_defaults(clip_path: str, app: SteempegApp | None = None) -> dict:
     """Per-clip Original preset strings from MPD (for queue add without preview)."""
     clip_path = os.path.normpath(clip_path)
-    mpds = discovery.find_mpd_paths(clip_path)
+    if app is not None:
+        mpds = _mpd_paths_for_clip(app, clip_path)
+    else:
+        mpds = discovery.find_mpd_paths(clip_path)
     if not mpds:
         return {
             "orig_fps": 60,
@@ -378,6 +397,44 @@ def _output_basename_for_clip(app: SteempegApp, clip_path: str, settings: Render
     return default_name
 
 
+def apply_per_clip_export_to_settings(
+    app: SteempegApp, clip_path: str, settings: RenderJobSettings
+) -> None:
+    """When queueing a clip that is not being previewed, use its own export memory."""
+    clip_norm = os.path.normpath(clip_path)
+    preview = getattr(app, "_preview_clip_path", None)
+    if preview and os.path.normpath(preview) == clip_norm:
+        return
+
+    memory = getattr(app, "_clip_session_memory", {}).get(clip_norm, {})
+    if memory:
+        settings.container_format = memory.get("container", "MP4")
+        settings.codec_text = memory.get("codec_text", "H.264 (AVC)")
+        settings.audio_format = memory.get("audio_format", "AAC")
+        settings.output_preset = memory.get("output_preset", "Custom")
+        settings.audio_only = bool(memory.get("audio_only", False))
+        settings.mute_audio = bool(memory.get("mute_audio", False))
+        return
+
+    job = app.render_queue.find_by_clip_path(clip_path) if hasattr(app, "render_queue") else None
+    if job:
+        s = job.settings
+        settings.container_format = s.container_format or "MP4"
+        settings.codec_text = s.codec_text
+        settings.audio_format = s.audio_format
+        settings.output_preset = s.output_preset or "Custom"
+        settings.audio_only = bool(s.audio_only)
+        settings.mute_audio = bool(s.mute_audio)
+        return
+
+    settings.container_format = "MP4"
+    settings.codec_text = "H.264 (AVC)"
+    settings.audio_format = "AAC"
+    settings.output_preset = "Custom"
+    settings.audio_only = False
+    settings.mute_audio = False
+
+
 def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[RenderJob]:
     """Snapshot the current settings panel into a queue job for ``clip_path``."""
     clip_path = os.path.normpath(clip_path)
@@ -385,38 +442,37 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         logging.warning("build_render_job_from_ui: not a clip folder: %s", clip_path)
         return None
 
-    mpds = discovery.find_mpd_paths(clip_path)
+    mpds = _mpd_paths_for_clip(app, clip_path)
     salvage_mpds: list[str] = []
     if not mpds:
-        # Force-play salvage: fall back to the built session_salvage.mpd for revived
-        # dead clips so they can still be rendered.
-        salvage_mpds = list(
-            getattr(app, "_salvaged_clips", {}).get(os.path.normpath(clip_path), [])
-        )
-        if not salvage_mpds:
-            logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
-            return None
+        logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
+        return None
+    if not discovery.find_mpd_paths(clip_path):
+        salvage_mpds = list(mpds)
 
     meta = find_clip_metadata(app, clip_path) or {}
-    settings = snapshot_settings_from_ui(app)
-    settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
-
     preview = getattr(app, "_preview_clip_path", None)
     same_preview = preview and os.path.normpath(preview) == clip_path
-    ui = app.ui
-    ui_quality = (
-        ui.combo_quality.currentText().strip() if hasattr(ui, "combo_quality") else ""
-    )
-    if not (same_preview and ui_quality):
-        defaults = probe_clip_render_defaults(clip_path)
-        settings.quality_text = defaults["quality_text"]
-        settings.fps_text = defaults["fps_text"]
-        settings.bitrate_text = defaults["bitrate_text"]
-        settings.orig_fps = int(defaults["orig_fps"])
-        settings.orig_video_mbps = float(defaults["orig_video_mbps"])
-        settings.orig_audio_kbps = int(defaults["orig_audio_kbps"])
 
-    if not (preview and os.path.normpath(preview) == clip_path):
+    if same_preview:
+        settings = snapshot_settings_from_ui(app)
+    else:
+        defaults = probe_clip_render_defaults(clip_path, app)
+        settings = RenderJobSettings(
+            quality_text=defaults["quality_text"],
+            fps_text=defaults["fps_text"],
+            bitrate_text=defaults["bitrate_text"],
+            orig_fps=int(defaults["orig_fps"]),
+            orig_video_mbps=float(defaults["orig_video_mbps"]),
+            orig_audio_kbps=int(defaults["orig_audio_kbps"]),
+            save_dir=app.custom_destination if app.custom_destination else get_save_directory(),
+            encode_speed="balanced",
+        )
+        apply_per_clip_export_to_settings(app, clip_path, settings)
+
+    settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
+
+    if not same_preview:
         if hasattr(app, "_trim_state_for_clip"):
             trim = app._trim_state_for_clip(clip_path)
             settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
@@ -426,6 +482,14 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
             settings.is_trim_mode = False
             settings.trim_start_ms = 0
             settings.trim_end_ms = 0
+    elif not (
+        preview
+        and hasattr(app, "custom_timeline")
+        and app.custom_timeline.is_trim_mode
+    ):
+        settings.is_trim_mode = False
+        settings.trim_start_ms = 0
+        settings.trim_end_ms = 0
 
     icon_path = game_icon_path_for_clip(app.cache_dir, clip_path)
     if not icon_path or not os.path.exists(icon_path):
