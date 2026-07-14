@@ -10,7 +10,6 @@ from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject
 from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextImageFormat
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -44,6 +43,7 @@ from steempeg.services.release_catalog import (
 )
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.message_dialog import steempeg_question
 from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
 
@@ -118,24 +118,6 @@ _ACK_FRAME_STYLE = """
         background-color: #3a324a;
         border: 1px solid #6b5a8e;
         border-radius: 8px;
-    }
-    QFrame#updateAckFrame QCheckBox {
-        color: #ffffff;
-        font-family: """ + tok.FONT_APP + """;
-        font-size: 11px;
-        background: transparent;
-        spacing: 8px;
-    }
-    QFrame#updateAckFrame QCheckBox::indicator {
-        width: 16px;
-        height: 16px;
-        border: 1px solid #b29ae7;
-        border-radius: 4px;
-        background: #2a2238;
-    }
-    QFrame#updateAckFrame QCheckBox::indicator:checked {
-        background: #6b5a8e;
-        border-color: #b29ae7;
     }
 """
 
@@ -544,8 +526,8 @@ class UpdateCenterDialog(SteempegDialog):
         self._ack_frame.setObjectName("updateAckFrame")
         ack_layout = QHBoxLayout(self._ack_frame)
         ack_layout.setContentsMargins(10, 8, 10, 8)
-        self._ack_check = QCheckBox(
-            "I understand settings, queue, and rendered sidecars may not match the target version."
+        self._ack_check = SteempegCheckBox(
+            "I understand settings, queue, and rendered sidecars may not match the target version.",
         )
         self._ack_check.stateChanged.connect(self._refresh_actions)
         ack_layout.addWidget(self._ack_check)
