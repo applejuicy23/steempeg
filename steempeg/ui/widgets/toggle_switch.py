@@ -34,7 +34,13 @@ class ToggleSwitch(QCheckBox):
 
     def _animate(self, checked):
         self._anim.stop()
-        self._anim.setEndValue(self._on_pos() if checked else self._off_pos())
+        end = self._on_pos() if checked else self._off_pos()
+        if abs(self._offset - end) < 0.5:
+            self._offset = end
+            self.update()
+            return
+        self._anim.setStartValue(self._offset)
+        self._anim.setEndValue(end)
         self._anim.start()
 
     def get_offset(self):
