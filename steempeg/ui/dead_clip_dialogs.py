@@ -5,7 +5,9 @@ from enum import Enum
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
@@ -257,13 +259,8 @@ class DeadClipSalvageVerifyDialog(SteempegDialog):
         row.addLayout(col, 1)
         self.content_layout.addLayout(row)
 
-        self._chk_auto_play = QCheckBox("Always play this clip via salvage without asking")
-        self._chk_auto_play.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._chk_auto_play.setStyleSheet(
-            "color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Segoe UI', Arial, sans-serif;"
-            " QCheckBox::indicator { width: 14px; height: 14px; }"
-            " QCheckBox::indicator:unchecked { border: 2px solid #666; border-radius: 3px; background: #1a1a1a; }"
-            " QCheckBox::indicator:checked { border: 2px solid #b29ae7; border-radius: 3px; background: #5138e6; }"
+        self._chk_auto_play = SteempegCheckBox(
+            "Always play this clip via salvage without asking",
         )
         self.content_layout.addWidget(self._chk_auto_play)
 
