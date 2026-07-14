@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from steempeg.infra.paths import get_resource_path
@@ -189,6 +189,22 @@ class SteempegDialog(QDialog):
         card_layout.addWidget(body_host, 1)
 
         self._apply_card_chrome(bar_color, bg_color)
+
+    def _apply_round_mask(self) -> None:
+        path = QPainterPath()
+        path.addRoundedRect(
+            0.0, 0.0, float(self.width()), float(self.height()),
+            float(_CARD_RADIUS_PX), float(_CARD_RADIUS_PX),
+        )
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_round_mask()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_round_mask()
 
     def _apply_card_chrome(self, bar_color: str, bg_color: str) -> None:
         """Title-bar-colored side rails so the shell does not melt into the desktop."""
