@@ -142,6 +142,8 @@ class ReleaseEntry:
     milestones: tuple[VersionMilestone, ...]
     block_reason: str | None
     published_at: str = ""
+    zip_size: int | None = None
+    zip_sha256: str | None = None
 
     def badge(self, current_version: float) -> str:
         if abs(self.version_float - current_version) < 0.001:
@@ -441,12 +443,18 @@ def jump_warnings(from_version: float, to_version: float) -> list[str]:
     return warnings
 
 
-def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None]:
+def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None, int | None, str | None]:
     for asset in assets:
         name = (asset.get("name") or "").lower()
         if name.endswith(".zip"):
-            return asset.get("browser_download_url"), asset.get("name")
-    return None, None
+            size = asset.get("size")
+            try:
+                size_i = int(size) if size is not None else None
+            except (TypeError, ValueError):
+                size_i = None
+            digest = (asset.get("digest") or "").strip() or None
+            return asset.get("browser_download_url"), asset.get("name"), size_i, digest
+    return None, None, None, None
 
 
 def _block_reason_for(tier: InstallTier, version_float: float) -> str | None:
@@ -464,7 +472,7 @@ def parse_release(data: dict) -> ReleaseEntry | None:
 
     version_str = format_version(version)
     version_float = version_to_float(version)
-    zip_url, zip_name = find_zip_asset(data.get("assets") or [])
+    zip_url, zip_name, zip_size, zip_sha256 = find_zip_asset(data.get("assets") or [])
     era = classify_era(version_float)
     install_tier = classify_install_tier(version_float, zip_url)
     milestones = milestones_for_version(version_float)
@@ -486,6 +494,8 @@ def parse_release(data: dict) -> ReleaseEntry | None:
         milestones=milestones,
         block_reason=block_reason,
         published_at=data.get("published_at") or "",
+        zip_size=zip_size,
+        zip_sha256=zip_sha256,
     )
 
 
@@ -493,21 +503,35 @@ def _rate_limit_from_response(response: requests.Response) -> RateLimitInfo | No
     """Parse GitHub rate-limit headers / body from an API response."""
     reset_raw = response.headers.get("X-RateLimit-Reset")
     limit_raw = response.headers.get("X-RateLimit-Limit", "60")
-    remaining_raw = response.headers.get("X-RateLimit-Remaining", "0")
+    remaining_raw = response.headers.get("X-RateLimit-Remaining")
 
     is_rate_limit = False
     try:
-        if int(remaining_raw) == 0:
+        if remaining_raw is not None and int(remaining_raw) == 0:
             is_rate_limit = True
     except (TypeError, ValueError):
         pass
 
+    body_text = ""
     try:
         body = response.json()
-        if isinstance(body, dict) and "rate limit" in str(body.get("message", "")).lower():
-            is_rate_limit = True
+        if isinstance(body, dict):
+            body_text = str(body.get("message", "")).lower()
+            if "rate limit" in body_text or "secondary rate" in body_text:
+                is_rate_limit = True
     except ValueError:
-        pass
+        body_text = (response.text or "").lower()
+        if "rate limit" in body_text:
+            is_rate_limit = True
+
+    # Bare 403 from api.github.com with reset header — treat as rate limit.
+    if (
+        not is_rate_limit
+        and response.status_code == 403
+        and reset_raw
+        and "github" in (response.url or "")
+    ):
+        is_rate_limit = True
 
     if not is_rate_limit:
         return None
@@ -520,11 +544,66 @@ def _rate_limit_from_response(response: requests.Response) -> RateLimitInfo | No
         limit = 60
 
     try:
-        remaining = int(remaining_raw)
+        remaining = int(remaining_raw) if remaining_raw is not None else 0
     except (TypeError, ValueError):
         remaining = 0
 
+    # Never schedule a reset in the past — bump at least 30s so the dialog can tick.
+    now = int(time.time())
+    if reset_at <= now:
+        reset_at = now + 30
+
     return RateLimitInfo(reset_at=reset_at, limit=limit, remaining=remaining)
+
+
+def probe_github_rate_limit(*, timeout: float = 8.0) -> RateLimitInfo | None:
+    """Ask /rate_limit (does not consume quota). Returns info when core remaining is 0."""
+    try:
+        response = requests.get(
+            "https://api.github.com/rate_limit",
+            headers=HEADERS,
+            timeout=timeout,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code == 403:
+        return _rate_limit_from_response(response)
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        payload = response.json()
+        core = (payload.get("resources") or {}).get("core") or {}
+        remaining = int(core.get("remaining", 1))
+        limit = int(core.get("limit", 60))
+        reset_at = int(core.get("reset") or (time.time() + 3600))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    if remaining > 0:
+        return None
+
+    now = int(time.time())
+    if reset_at <= now:
+        reset_at = now + 30
+    return RateLimitInfo(reset_at=reset_at, limit=limit, remaining=0)
+
+
+def _looks_like_transport_block(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    needles = (
+        "max retries exceeded",
+        "connection aborted",
+        "connection reset",
+        "remotely closed",
+        "timed out",
+        "temporary failure",
+        "name resolution",
+        "failed to establish",
+    )
+    return any(n in text for n in needles)
 
 
 def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
@@ -532,44 +611,80 @@ def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
     releases: list[ReleaseEntry] = []
     page = 1
 
-    while True:
-        response = requests.get(
-            API_BASE,
-            headers=HEADERS,
-            params={"per_page": 100, "page": page},
-            timeout=timeout,
-        )
-        if response.status_code == 403:
-            rate_limit = _rate_limit_from_response(response)
-            if rate_limit:
+    try:
+        while True:
+            response = requests.get(
+                API_BASE,
+                headers=HEADERS,
+                params={"per_page": 100, "page": page},
+                timeout=timeout,
+            )
+            if response.status_code == 403:
+                rate_limit = _rate_limit_from_response(response) or probe_github_rate_limit(
+                    timeout=timeout
+                )
+                if rate_limit:
+                    raise FetchError(
+                        "GitHub API rate limit exceeded.",
+                        status_code=403,
+                        rate_limit=rate_limit,
+                    )
+                raise FetchError("GitHub API access denied.", status_code=403)
+            if response.status_code == 404:
+                raise FetchError("No public releases found for this repository.", status_code=404)
+            if response.status_code == 429:
+                rate_limit = _rate_limit_from_response(response) or probe_github_rate_limit(
+                    timeout=timeout
+                )
+                if rate_limit is None:
+                    now = int(time.time())
+                    rate_limit = RateLimitInfo(reset_at=now + 60, limit=60, remaining=0)
                 raise FetchError(
                     "GitHub API rate limit exceeded.",
-                    status_code=403,
+                    status_code=429,
                     rate_limit=rate_limit,
                 )
-            raise FetchError("GitHub API access denied.", status_code=403)
-        if response.status_code == 404:
-            raise FetchError("No public releases found for this repository.", status_code=404)
-        if response.status_code != 200:
-            raise FetchError(
-                f"GitHub API returned status {response.status_code}.",
-                status_code=response.status_code,
+            if response.status_code != 200:
+                raise FetchError(
+                    f"GitHub API returned status {response.status_code}.",
+                    status_code=response.status_code,
+                )
+
+            batch = response.json()
+            if not batch:
+                break
+
+            for item in batch:
+                if item.get("draft"):
+                    continue
+                entry = parse_release(item)
+                if entry:
+                    releases.append(entry)
+
+            if len(batch) < 100:
+                break
+            page += 1
+    except FetchError:
+        raise
+    except requests.RequestException as exc:
+        # VPN / drop / "Max retries exceeded" often masks a spent hourly quota.
+        rate_limit = probe_github_rate_limit(timeout=min(timeout, 8.0))
+        if rate_limit is None and _looks_like_transport_block(exc):
+            # Soft wait: show countdown dialog instead of a dead red error string.
+            now = int(time.time())
+            rate_limit = RateLimitInfo(reset_at=now + 60, limit=60, remaining=0)
+            logging.warning(
+                "RELEASE_CATALOG: transport error talking to GitHub (%s) — "
+                "opening rate-limit wait dialog",
+                exc,
             )
-
-        batch = response.json()
-        if not batch:
-            break
-
-        for item in batch:
-            if item.get("draft"):
-                continue
-            entry = parse_release(item)
-            if entry:
-                releases.append(entry)
-
-        if len(batch) < 100:
-            break
-        page += 1
+        if rate_limit is not None:
+            raise FetchError(
+                "GitHub API rate limit exceeded.",
+                status_code=403,
+                rate_limit=rate_limit,
+            ) from exc
+        raise FetchError(f"Could not reach GitHub:\n{exc}") from exc
 
     releases.sort(key=lambda entry: entry.version_float, reverse=True)
     logging.info("RELEASE_CATALOG: fetched %s releases", len(releases))
