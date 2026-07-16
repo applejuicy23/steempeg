@@ -2082,19 +2082,35 @@ class PlayerMixin:
 
             canvas = getattr(getattr(self, 'custom_timeline', None), 'canvas', None)
             user_scrubbing = canvas is not None and canvas.drag_state == 'playhead'
+            end_slop = 50
+            if 0 < duration_ms < 5000:
+                # Short clips: don't treat "near end" as EOF until MPV says so,
+                # otherwise the playhead freezes short of the bar.
+                end_slop = 15
             at_end = (
                 getattr(self.player, 'eof_reached', False)
-                or (duration_ms > 0 and current_ms >= duration_ms - 50)
+                or (duration_ms > 0 and current_ms >= duration_ms - end_slop)
             )
 
             if at_end:
-                current_ms = min(current_ms, duration_ms)
+                # Snap to true end so the scrubber fills the purple bar (lost when
+                # we switched from rewind-to-0 to pause-at-EOF in 39.3).
+                current_ms = duration_ms if duration_ms > 0 else current_ms
                 if user_scrubbing:
                     pass
                 elif not self.player.pause:
                     self.player.pause = True
                     if hasattr(self.ui, 'btn_play'):
                         self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+                if (
+                    not user_scrubbing
+                    and hasattr(self, 'custom_timeline')
+                    and duration_ms > 0
+                ):
+                    canvas = getattr(self.custom_timeline, 'canvas', None)
+                    if canvas is not None:
+                        canvas.visual_ms = float(duration_ms)
+                        canvas.target_ms = float(duration_ms)
             else:
                 self._eof_rewind_pending = 0
 
