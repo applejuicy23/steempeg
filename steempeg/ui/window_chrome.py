@@ -141,40 +141,56 @@ class _TrafficLight(QPushButton):
             return
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Hairlines stay crisp without AA mush on a 13px dot.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
-        # Dark hairline — almost shy, like a thin letter "x".
         if self._glyph == "close":
-            color = QColor(35, 14, 12, 170)
+            color = QColor(35, 14, 12, 200)
         elif self._glyph == "minimize":
-            color = QColor(50, 36, 6, 170)
+            color = QColor(50, 36, 6, 200)
         else:
-            color = QColor(10, 42, 16, 170)
+            color = QColor(10, 42, 16, 200)
 
         pen = QPen(color)
-        pen.setWidthF(0.95)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen.setWidthF(1.0)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         cx = self.width() / 2.0
         cy = self.height() / 2.0
-        arm = 2.2
+        # Close / minimize stay near the rim; maximize glyphs sit smaller in the center.
+        inset = 3.0
+        left = inset
+        right = self.width() - inset
+        top = inset
+        bottom = self.height() - inset
 
         if self._glyph == "close":
-            painter.drawLine(QPointF(cx - arm, cy - arm), QPointF(cx + arm, cy + arm))
-            painter.drawLine(QPointF(cx + arm, cy - arm), QPointF(cx - arm, cy + arm))
+            painter.drawLine(QPointF(left, top), QPointF(right, bottom))
+            painter.drawLine(QPointF(right, top), QPointF(left, bottom))
         elif self._glyph == "minimize":
-            painter.drawLine(QPointF(cx - arm, cy), QPointF(cx + arm, cy))
+            painter.drawLine(QPointF(left, cy), QPointF(right, cy))
         elif self._glyph == "restore":
-            # Two offset squares (restore-from-maximize).
-            s = 1.7
-            painter.drawRect(QRectF(cx - s + 0.7, cy - s - 0.7, s * 1.7, s * 1.7))
-            painter.drawRect(QRectF(cx - s - 0.5, cy - s + 0.5, s * 1.7, s * 1.7))
+            # Two offset squares; group bbox centered on (cx, cy).
+            s = 3.0
+            gap = 2.0
+            group = s + gap
+            ox = cx - group / 2.0
+            oy = cy - group / 2.0
+            back = QRectF(ox + gap, oy, s, s)
+            front = QRectF(ox, oy + gap, s, s)
+            painter.drawRect(back)
+            painter.fillRect(
+                QRectF(front.left() + 0.5, front.top() + 0.5, s - 1.0, s - 1.0),
+                QColor(self._hover),
+            )
+            painter.drawRect(front)
         else:
-            s = arm
-            painter.drawRect(QRectF(cx - s, cy - s, s * 2, s * 2))
+            # True geometric center: path midpoint == widget midpoint. No optical nudge.
+            side = 5.0
+            painter.drawRect(QRectF(cx - side / 2.0, cy - side / 2.0, side, side))
 
         painter.end()
 
