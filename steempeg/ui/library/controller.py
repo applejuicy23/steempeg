@@ -2165,7 +2165,11 @@ class LibraryMixin:
         self._clips_scan_active = False
         if hasattr(self, "update_status_indicator"):
             if not will_scan_rendered:
-                self.update_status_indicator("Ready", "ready")
+                if getattr(self, "_startup_library_scan_active", False) and hasattr(self, "preload_render_history"):
+                    self._startup_library_scan_active = False
+                    self.preload_render_history(announce=True)
+                else:
+                    self.update_status_indicator("Ready", "ready")
             else:
                 self.update_status_indicator("Clips loaded — scanning rendered files…", "busy", scan_phase="search")
 

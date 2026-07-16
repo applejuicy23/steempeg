@@ -979,6 +979,7 @@ class RenderMixin:
             return
         try:
             append_batch(self._queue_history_path(), batch)
+            self._invalidate_render_history_cache()
         except OSError as exc:
             logging.warning("Could not save render history: %s", exc)
 
@@ -987,6 +988,7 @@ class RenderMixin:
 
         try:
             append_batch(self._queue_history_path(), snapshot_completed_job(job, output_file))
+            self._invalidate_render_history_cache()
         except OSError as exc:
             logging.warning("Could not save render history: %s", exc)
 
@@ -1079,7 +1081,10 @@ class RenderMixin:
 
         from steempeg.ui import design_tokens as tok
 
-        batches = load_history(self._queue_history_path())
+        batches = getattr(self, "_render_history_cache", None)
+        if batches is None:
+            batches = load_history(self._queue_history_path())
+            self._render_history_cache = batches
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
         dlg = RenderQueueHistoryDialog(
             batches, parent=self.ui, bar_color=theme["title_bar"], bg_color=theme["app_bg"]
@@ -1089,6 +1094,48 @@ class RenderMixin:
         dlg.open_source_clip_requested.connect(self.open_source_clip)
         if dlg.exec() == 2:
             clear_history(self._queue_history_path())
+            self._render_history_cache = []
+            self._rendered_output_meta_index = None
+
+    def preload_render_history(self, *, announce: bool = False) -> None:
+        """Load render history JSON off the UI thread (startup / refresh)."""
+        if getattr(self, "_history_preload_running", False):
+            return
+        if getattr(self, "_render_history_cache", None) is not None and not announce:
+            return
+
+        from steempeg.ui.library.history_load_worker import HistoryLoadWorker
+
+        path = self._queue_history_path()
+        self._history_preload_running = True
+        if announce and hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Loading render history…", "busy", scan_phase="search")
+
+        worker = HistoryLoadWorker(path, parent=self.ui if hasattr(self, "ui") else None)
+        self._history_load_worker = worker
+
+        def _ok(batches):
+            self._history_preload_running = False
+            self._render_history_cache = batches or []
+            self._rendered_output_meta_index = None
+            if announce and hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Render", "ready")
+            logging.info("Render history preloaded: %d batches", len(self._render_history_cache))
+
+        def _fail(msg: str):
+            self._history_preload_running = False
+            self._render_history_cache = []
+            if announce and hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
+            logging.warning("Render history preload failed: %s", msg)
+
+        worker.finished_ok.connect(_ok)
+        worker.failed.connect(_fail)
+        worker.start()
+
+    def _invalidate_render_history_cache(self) -> None:
+        self._render_history_cache = None
+        self._rendered_output_meta_index = None
 
     def _persist_render_queue(self) -> None:
         try:
