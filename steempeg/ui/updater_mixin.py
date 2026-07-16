@@ -101,6 +101,8 @@ class UpdaterMixin:
             keep_backup=keep_backup,
             exe_dir=os.path.dirname(sys.executable),
             chrome_theme=getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME),
+            expected_size=entry.zip_size,
+            expected_sha256=entry.zip_sha256,
         )
         spawn_update_handler(job)
         QApplication.quit()
