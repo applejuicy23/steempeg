@@ -13,8 +13,8 @@ import os
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from steempeg.infra.paths import get_resource_path
@@ -94,47 +94,89 @@ class _MSG(ctypes.Structure):
 
 
 class _TrafficLight(QPushButton):
-    """Single window control dot."""
+    """macOS-style window control dot with a thin painted glyph (no Unicode junk)."""
 
-    def __init__(self, color: str, hover_color: str, symbol: str, parent=None):
+    def __init__(self, color: str, hover_color: str, glyph: str = "close", parent=None):
         super().__init__(parent)
         self._base = color
         self._hover = hover_color
-        self._symbol = symbol
+        # "close" | "minimize" | "maximize"
+        self._glyph = glyph
+        self._hovered = False
         self.setFixedSize(13, 13)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._apply_style(show_symbol=False)
+        self.setText("")
+        self._apply_style()
 
-    def _apply_style(self, *, show_symbol: bool) -> None:
-        fg = "#3b1f1a" if self._base == tok.TRAFFIC_CLOSE else "#4a3a00" if self._base == tok.TRAFFIC_MINIMIZE else "#0f3d18"
-        self.setText(self._symbol if show_symbol else "")
+    def _apply_style(self) -> None:
+        bg = self._hover if self._hovered else self._base
         self.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: {self._base};
-                color: {fg};
+                background-color: {bg};
                 border: none;
                 border-radius: 6px;
-                font-family: {tok.FONT_UI};
-                font-size: 9px;
-                font-weight: bold;
                 padding: 0;
                 margin: 0;
-            }}
-            QPushButton:hover {{
-                background-color: {self._hover};
             }}
             """
         )
 
     def enterEvent(self, event):
-        self._apply_style(show_symbol=True)
+        self._hovered = True
+        self._apply_style()
+        self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._apply_style(show_symbol=False)
+        self._hovered = False
+        self._apply_style()
+        self.update()
         super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._hovered:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Dark hairline — almost shy, like a thin letter "x".
+        if self._glyph == "close":
+            color = QColor(35, 14, 12, 170)
+        elif self._glyph == "minimize":
+            color = QColor(50, 36, 6, 170)
+        else:
+            color = QColor(10, 42, 16, 170)
+
+        pen = QPen(color)
+        pen.setWidthF(0.95)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        cx = self.width() / 2.0
+        cy = self.height() / 2.0
+        arm = 2.2
+
+        if self._glyph == "close":
+            painter.drawLine(QPointF(cx - arm, cy - arm), QPointF(cx + arm, cy + arm))
+            painter.drawLine(QPointF(cx + arm, cy - arm), QPointF(cx - arm, cy + arm))
+        elif self._glyph == "minimize":
+            painter.drawLine(QPointF(cx - arm, cy), QPointF(cx + arm, cy))
+        elif self._glyph == "restore":
+            # Two offset squares (restore-from-maximize).
+            s = 1.7
+            painter.drawRect(QRectF(cx - s + 0.7, cy - s - 0.7, s * 1.7, s * 1.7))
+            painter.drawRect(QRectF(cx - s - 0.5, cy - s + 0.5, s * 1.7, s * 1.7))
+        else:
+            s = arm
+            painter.drawRect(QRectF(cx - s, cy - s, s * 2, s * 2))
+
+        painter.end()
 
 
 class SteempegTitleBar(QWidget):
@@ -194,9 +236,9 @@ class SteempegTitleBar(QWidget):
 
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        self.btn_minimize = _TrafficLight(tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "−")
-        self.btn_maximize = _TrafficLight(tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "⤢")
-        self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "✕")
+        self.btn_minimize = _TrafficLight(tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "minimize")
+        self.btn_maximize = _TrafficLight(tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "maximize")
+        self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "close")
         controls.addWidget(self.btn_minimize, 0, Qt.AlignmentFlag.AlignVCenter)
         controls.addWidget(self.btn_maximize, 0, Qt.AlignmentFlag.AlignVCenter)
         controls.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -235,11 +277,11 @@ class SteempegTitleBar(QWidget):
     def sync_window_state(self) -> None:
         if self._window.isMaximized():
             self.btn_maximize.setToolTip("Restore")
-            self.btn_maximize._symbol = "⤡"
+            self.btn_maximize._glyph = "restore"
         else:
             self.btn_maximize.setToolTip("Maximize")
-            self.btn_maximize._symbol = "⤢"
-        self.btn_maximize._apply_style(show_symbol=self.btn_maximize.underMouse())
+            self.btn_maximize._glyph = "maximize"
+        self.btn_maximize.update()
 
 
 def install_title_bar(main_window) -> SteempegTitleBar:
