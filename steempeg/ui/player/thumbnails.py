@@ -331,7 +331,9 @@ class PreviewSniperWorker(QThread):
     def request_frame(self, media_path, hover_sec):
         self._is_killed = False
 
-        target_sec = round(hover_sec / self.interval) * self.interval
+        # hover_sec is already a floor bucket from preview_bucket_sec — do not re-round.
+        interval = max(1, int(self.interval))
+        target_sec = max(0, int(hover_sec) // interval * interval)
         norm_path = self._norm_media_path(media_path)
 
         if self._norm_media_path(self.video_path) != norm_path:
@@ -514,8 +516,24 @@ class PreviewSniperWorker(QThread):
             return pixmap
         return self._decode_frame_ffmpeg(media_path, sec)
 
+    def _neighbor_buckets(self, sec: int) -> list[int]:
+        """Left/right 3s neighbors after the cursor bucket lands — soft prefill."""
+        interval = max(1, int(self.interval))
+        neighbors: list[int] = []
+        dash = bool(self.base_dir and self.chunk_template)
+        for delta in (-interval, interval):
+            n = sec + delta
+            if n < 0:
+                continue
+            if dash and self.max_chunk_number > 0:
+                chunk = int(n // interval) + int(self.start_number or 0)
+                if chunk > self.max_chunk_number:
+                    continue
+            neighbors.append(n)
+        return neighbors
+
     def _run_on_demand(self, decode_fn):
-        """Decode only the bucket under the cursor — never background prefill."""
+        """Decode the cursor bucket, then quietly fill left/right neighbors."""
         while not self._is_killed:
             sec = self.target_sec
             if sec < 0:
@@ -523,6 +541,26 @@ class PreviewSniperWorker(QThread):
                 continue
 
             if sec in self.cache:
+                # Soft prefill neighbors while the cursor stays put.
+                for neighbor in self._neighbor_buckets(sec):
+                    if self._is_killed or self.target_sec != sec:
+                        break
+                    if neighbor in self.cache or neighbor in self._fail_until:
+                        continue
+                    retry_at = self._fail_until.get(neighbor, 0.0)
+                    if retry_at and time.monotonic() < retry_at:
+                        continue
+                    self._in_flight_sec = neighbor
+                    pixmap = decode_fn(neighbor)
+                    self._in_flight_sec = -1
+                    if self._is_killed or self.target_sec != sec:
+                        break
+                    if pixmap is not None and not pixmap.isNull():
+                        self._fail_until.pop(neighbor, None)
+                        self._remember_cache(neighbor, pixmap)
+                        # Do not emit — only the hovered bucket updates the popup.
+                    else:
+                        self._fail_until[neighbor] = time.monotonic() + 2.0
                 self.msleep(60)
                 continue
 
