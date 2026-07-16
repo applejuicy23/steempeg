@@ -98,7 +98,13 @@ def run_update_handler(job_path: str) -> int:
             logging.exception("UPDATE_HANDLER: install failed")
             fail(str(exc))
 
-    thread = UpdateDownloadThread(job.url, job.exe_dir, job.asset_name)
+    thread = UpdateDownloadThread(
+        job.url,
+        job.exe_dir,
+        job.asset_name,
+        expected_size=getattr(job, "expected_size", None),
+        expected_sha256=getattr(job, "expected_sha256", None),
+    )
     state["thread"] = thread
 
     def on_progress(percent: int, text: str) -> None:
