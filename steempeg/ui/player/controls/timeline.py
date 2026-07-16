@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
-from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec
+from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec, MAX_BATCH_SEC
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
 
@@ -147,6 +147,11 @@ class TimelineCanvas(QWidget):
             self.sniper_timer = QTimer(self)
             self.sniper_timer.setSingleShot(True)
             self.sniper_timer.timeout.connect(self.trigger_sniper)
+
+            # Debounce leave: brief edge flicker shouldn't restart background warm.
+            self._sniper_leave_timer = QTimer(self)
+            self._sniper_leave_timer.setSingleShot(True)
+            self._sniper_leave_timer.timeout.connect(self._start_sniper_background_warm)
         self.pending_sec = -1
         self._hover_preview_bucket = -1
 
@@ -416,7 +421,26 @@ class TimelineCanvas(QWidget):
 
     def trigger_sniper(self):
         if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
+            # Don't waste PyAV on buckets already covered by batch disk thumbs.
+            if self._thumb_dir_is_valid():
+                self.sniper.disk_cover_until_sec = int(MAX_BATCH_SEC)
+            else:
+                self.sniper.disk_cover_until_sec = 0
             self.sniper.request_frame(self.current_video_path, self.pending_sec)
+
+    def _start_sniper_background_warm(self) -> None:
+        if getattr(self, "is_hovering", False):
+            return
+        if hasattr(self, "sniper") and self.sniper:
+            if self._thumb_dir_is_valid():
+                self.sniper.disk_cover_until_sec = int(MAX_BATCH_SEC)
+            self.sniper.pause_hover()
+
+    def _cancel_sniper_leave_warm(self) -> None:
+        if hasattr(self, "_sniper_leave_timer"):
+            self._sniper_leave_timer.stop()
+        if hasattr(self, "sniper") and self.sniper:
+            self.sniper._cancel_background_warm()
 
     def _trim_handle_at(self, x, y):
         """Return 'trim_l', 'trim_r', or None. Vertical grab zone matches paint + hover cursor."""
@@ -946,6 +970,11 @@ class TimelineCanvas(QWidget):
         self.hover_x = float(x)
         self.is_hovering = True 
         self.is_hovering_trim_handle = False
+        # Came back onto the strip — cancel pending leave-warm and any background run.
+        if hasattr(self, "_sniper_leave_timer"):
+            self._sniper_leave_timer.stop()
+        if hasattr(self, "sniper") and self.sniper and getattr(self.sniper, "_background_active", False):
+            self.sniper._cancel_background_warm()
 
         found_marker = None
         for marker in getattr(self, 'markers', []):
@@ -1047,7 +1076,10 @@ class TimelineCanvas(QWidget):
 
                 if not has_disk_thumb and self.current_video_path and bucket_changed:
                     self.pending_sec = bucket_sec
-                    if hasattr(self, 'sniper_timer'):
+                    if bucket_sec in sniper_cache:
+                        # Instant retarget so left/right prefill follows the cursor.
+                        self.trigger_sniper()
+                    elif hasattr(self, 'sniper_timer'):
                         self.sniper_timer.start(100)
 
                 if self.parentWidget() and self.parentWidget().parentWidget():
@@ -1105,6 +1137,11 @@ class TimelineCanvas(QWidget):
         self.hover_x = -1.0
         self.hovered_marker = None
         self._hide_hover_preview()
+        # Debounced: after a real leave, sniper warms ±15s for ~15s wall time, then idles.
+        if hasattr(self, "_sniper_leave_timer"):
+            self._sniper_leave_timer.start(280)
+        elif hasattr(self, 'sniper') and self.sniper:
+            self.sniper.pause_hover()
         if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
         self.setCursor(Qt.ArrowCursor) 
         self.update() 

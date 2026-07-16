@@ -23,10 +23,17 @@ from PySide6.QtGui import QImage, QPixmap
 
 _log = logging.getLogger(__name__)
 
-_SNIPER_CACHE_MAX = 48
+_SNIPER_CACHE_MAX = 160
 # Full-strip batch thumbs are only worth generating for the first N seconds of a clip.
 # Longer clips rely on on-demand sniper hover frames instead of a multi-hour ffmpeg job.
 MAX_BATCH_SEC = 600
+# Only warm ±3s neighbors after the cursor parks on a bucket (fast scrub skips this).
+_NEIGHBOR_STABLE_SEC = 0.18
+# After the cursor leaves the strip: keep warming L/R for this wall-clock budget,
+# then fully idle and leave the strip to batch thumbs (from the start).
+_BACKGROUND_WARM_WINDOW_SEC = 15.0
+_BACKGROUND_WALL_BUDGET_SEC = 15.0
+_BACKGROUND_MAX_FRAMES = 80
 _STEAM_CHUNK_SEC = 3.0
 _STEAM_VIDEO_INIT = "init-stream0.m4s"
 _STEAM_VIDEO_CHUNK_TMPL = "chunk-stream0-$Number%05d$.m4s"
@@ -98,6 +105,21 @@ class PreviewSniperWorker(QThread):
         self._fail_until: dict[int, float] = {}
         self._decode_gen = 0
         self._ffmpeg_proc = None
+        # -1 = left, +1 = right — neighbor prefill prefers scrub direction.
+        self._prefer_dir = 0
+        self._stable_since = 0.0
+        # Buckets below this already have batch disk thumbs — skip sniper prefill there.
+        self.disk_cover_until_sec = 0
+        # After hover leave, warm L/R around the leave point for a wall-clock budget.
+        self._last_hover_bucket_sec = -1
+        self._background_active = False
+        self._background_end_time = 0.0
+        self._background_queue: list[int] = []
+        self._background_center = -1
+        self._background_radius = 0
+        self._background_max_radius = 0
+        self._background_prefer_radius = 0
+        self._background_done_count = 0
 
         # --- Manifest variables ---
         self.base_dir = ""
@@ -128,6 +150,10 @@ class PreviewSniperWorker(QThread):
         self._fail_until.clear()
         self.target_sec = -1
         self._in_flight_sec = -1
+        self._prefer_dir = 0
+        self._stable_since = 0.0
+        self.disk_cover_until_sec = 0
+        self._cancel_background_warm()
         self._decode_gen += 1
         self.base_dir = ""
         self.init_filename = ""
@@ -136,6 +162,90 @@ class PreviewSniperWorker(QThread):
             if not self.wait(800):
                 self.terminate()
                 self.wait(200)
+
+    def pause_hover(self, background_window_sec: float = _BACKGROUND_WARM_WINDOW_SEC) -> None:
+        """Leave the strip: keep warming ±window for a wall-clock budget, then idle.
+
+        After the budget, sniper stops and batch thumbs own the strip again.
+        """
+        center = self._last_hover_bucket_sec
+        self.target_sec = -1
+        self._stable_since = 0.0
+        self._kill_ffmpeg_subprocess()
+
+        if center < 0:
+            self._cancel_background_warm()
+            return
+
+        step = max(1, int(self.interval))
+        window_steps = max(1, int(float(background_window_sec) // float(step)))
+        # Prefer ±window first; if wall budget remains, keep expanding until budget/max frames.
+        expand_steps = max(window_steps, min(_BACKGROUND_MAX_FRAMES // 2, 40))
+        self._background_center = int(center)
+        self._background_radius = 0
+        self._background_max_radius = expand_steps
+        self._background_prefer_radius = window_steps
+        self._background_done_count = 0
+        self._background_queue.clear()
+        self._background_end_time = time.monotonic() + float(_BACKGROUND_WALL_BUDGET_SEC)
+        self._refill_background_queue()
+        self._background_active = True
+        if not self.isRunning():
+            self._is_killed = False
+            self.start()
+        _log.info(
+            "Sniper background warm start center=%s window=±%.0fs budget=%.0fs",
+            center,
+            float(background_window_sec),
+            float(_BACKGROUND_WALL_BUDGET_SEC),
+        )
+
+    def _cancel_background_warm(self) -> None:
+        self._background_active = False
+        self._background_end_time = 0.0
+        self._background_queue.clear()
+        self._background_center = -1
+        self._background_radius = 0
+        self._background_max_radius = 0
+        self._background_prefer_radius = 0
+        self._background_done_count = 0
+
+    def _bucket_allowed_for_warm(self, n: int) -> bool:
+        if n < 0:
+            return False
+        step = max(1, int(self.interval))
+        disk_until = max(0, int(self.disk_cover_until_sec or 0))
+        if disk_until > 0 and n < disk_until:
+            return False
+        if self.base_dir and self.chunk_template and self.max_chunk_number > 0:
+            chunk = int(n // step) + int(self.start_number or 0)
+            if chunk > self.max_chunk_number:
+                return False
+        return True
+
+    def _refill_background_queue(self) -> None:
+        """Push the next L/R ring around the leave center into the background queue."""
+        if self._background_center < 0:
+            return
+        if self._background_done_count >= _BACKGROUND_MAX_FRAMES:
+            return
+        if self._background_radius >= self._background_max_radius:
+            return
+
+        step = max(1, int(self.interval))
+        self._background_radius += 1
+        i = self._background_radius
+        left = self._background_center - i * step
+        right = self._background_center + i * step
+        candidates = (left, right) if self._prefer_dir < 0 else (right, left)
+        for n in candidates:
+            if self._background_done_count + len(self._background_queue) >= _BACKGROUND_MAX_FRAMES:
+                break
+            if not self._bucket_allowed_for_warm(n):
+                continue
+            if n in self.cache or n in self._background_queue:
+                continue
+            self._background_queue.append(n)
 
     def _infer_chunk_number_bounds(self, stream_idx: int = 0) -> tuple[int, int]:
         pattern = os.path.join(self.base_dir, f"chunk-stream{stream_idx}-*.m4s")
@@ -330,6 +440,7 @@ class PreviewSniperWorker(QThread):
 
     def request_frame(self, media_path, hover_sec):
         self._is_killed = False
+        self._cancel_background_warm()
 
         # hover_sec is already a floor bucket from preview_bucket_sec — do not re-round.
         interval = max(1, int(self.interval))
@@ -342,6 +453,9 @@ class PreviewSniperWorker(QThread):
             self._cache_order.clear()
             self._fail_until.clear()
             self._in_flight_sec = -1
+            self._prefer_dir = 0
+            self._stable_since = 0.0
+            self._cancel_background_warm()
             self._decode_gen += 1
             _log.info("Sniper opened %s", os.path.basename(media_path or ""))
             if self._is_dash_manifest(media_path):
@@ -351,18 +465,26 @@ class PreviewSniperWorker(QThread):
                 self.init_filename = ""
                 self.chunk_template = ""
 
+        if self.target_sec >= 0 and target_sec != self.target_sec:
+            self._prefer_dir = 1 if target_sec > self.target_sec else -1
+            self._fail_until.pop(target_sec, None)
+            self._stable_since = time.monotonic()
+        elif self.target_sec != target_sec:
+            self._stable_since = time.monotonic()
+
+        # Always retarget — cache hits must still drive left/right neighbor prefill.
+        self.target_sec = target_sec
+        self._last_hover_bucket_sec = target_sec
+
         if target_sec in self.cache:
             self.preview_ready.emit(target_sec, self.cache[target_sec])
+            if not self.isRunning():
+                self.start()
             return
 
-        if self.target_sec != target_sec:
-            self._fail_until.pop(target_sec, None)
-
-        self.target_sec = target_sec
         if not self.isRunning():
-            self._is_killed = False
             self.start()
-        elif self._in_flight_sec < 0 and target_sec not in self.cache:
+        elif self._in_flight_sec < 0:
             # Worker idle after kill_worker — wake the loop for a new target.
             self._is_killed = False
 
@@ -517,13 +639,27 @@ class PreviewSniperWorker(QThread):
         return self._decode_frame_ffmpeg(media_path, sec)
 
     def _neighbor_buckets(self, sec: int) -> list[int]:
-        """Left/right 3s neighbors after the cursor bucket lands — soft prefill."""
+        """Left/right 3s neighbors after the cursor bucket lands — soft prefill.
+
+        Prefers the side the cursor was scrubbing toward so the next bucket is
+        warm before the hover arrives.
+        """
         interval = max(1, int(self.interval))
+        left, right = sec - interval, sec + interval
+        if self._prefer_dir < 0:
+            candidates = (left, right)
+        else:
+            # Default and rightward scrub: warm the next bucket first.
+            candidates = (right, left)
+
         neighbors: list[int] = []
         dash = bool(self.base_dir and self.chunk_template)
-        for delta in (-interval, interval):
-            n = sec + delta
+        disk_until = max(0, int(self.disk_cover_until_sec or 0))
+        for n in candidates:
             if n < 0:
+                continue
+            # Batch disk thumbs already cover this range — don't burn PyAV on them.
+            if disk_until > 0 and n < disk_until:
                 continue
             if dash and self.max_chunk_number > 0:
                 chunk = int(n // interval) + int(self.start_number or 0)
@@ -533,35 +669,99 @@ class PreviewSniperWorker(QThread):
         return neighbors
 
     def _run_on_demand(self, decode_fn):
-        """Decode the cursor bucket, then quietly fill left/right neighbors."""
+        """Decode the cursor bucket; warm ±3s neighbors only after the cursor parks."""
         while not self._is_killed:
             sec = self.target_sec
             if sec < 0:
+                if self._background_active:
+                    now = time.monotonic()
+                    if now >= self._background_end_time:
+                        done = self._background_done_count
+                        self._cancel_background_warm()
+                        _log.info(
+                            "Sniper background warm done (budget, %d frames) — idle, batch thumbs continue",
+                            done,
+                        )
+                        self.msleep(60)
+                        continue
+
+                    if not self._background_queue:
+                        # Expand next L/R ring. Prefer ±window first; then keep going
+                        # until wall budget / max frames so leave-warm isn't a one-second blip.
+                        before = self._background_radius
+                        self._refill_background_queue()
+                        if not self._background_queue:
+                            if self._background_radius >= self._background_max_radius:
+                                done = self._background_done_count
+                                self._cancel_background_warm()
+                                _log.info(
+                                    "Sniper background warm done (%d frames) — idle, batch thumbs continue",
+                                    done,
+                                )
+                            elif self._background_radius == before:
+                                done = self._background_done_count
+                                self._cancel_background_warm()
+                                _log.info(
+                                    "Sniper background warm done (%d frames) — idle, batch thumbs continue",
+                                    done,
+                                )
+                            self.msleep(40)
+                            continue
+
+                    next_sec = self._background_queue.pop(0)
+                    if next_sec in self.cache:
+                        continue
+                    retry_at = self._fail_until.get(next_sec, 0.0)
+                    if retry_at and time.monotonic() < retry_at:
+                        continue
+                    self._in_flight_sec = next_sec
+                    pixmap = decode_fn(next_sec)
+                    self._in_flight_sec = -1
+                    if self._is_killed:
+                        continue
+                    if pixmap is not None and not pixmap.isNull():
+                        self._fail_until.pop(next_sec, None)
+                        self._remember_cache(next_sec, pixmap)
+                        self._background_done_count += 1
+                    else:
+                        self._fail_until[next_sec] = time.monotonic() + 2.0
+                    continue
+
                 self.msleep(60)
                 continue
 
             if sec in self.cache:
-                # Soft prefill neighbors while the cursor stays put.
-                for neighbor in self._neighbor_buckets(sec):
-                    if self._is_killed or self.target_sec != sec:
-                        break
-                    if neighbor in self.cache or neighbor in self._fail_until:
-                        continue
-                    retry_at = self._fail_until.get(neighbor, 0.0)
-                    if retry_at and time.monotonic() < retry_at:
-                        continue
-                    self._in_flight_sec = neighbor
-                    pixmap = decode_fn(neighbor)
-                    self._in_flight_sec = -1
-                    if self._is_killed or self.target_sec != sec:
-                        break
-                    if pixmap is not None and not pixmap.isNull():
-                        self._fail_until.pop(neighbor, None)
-                        self._remember_cache(neighbor, pixmap)
-                        # Do not emit — only the hovered bucket updates the popup.
-                    else:
-                        self._fail_until[neighbor] = time.monotonic() + 2.0
-                self.msleep(60)
+                parked = (
+                    self._stable_since > 0
+                    and (time.monotonic() - self._stable_since) >= _NEIGHBOR_STABLE_SEC
+                )
+                if parked:
+                    for neighbor in self._neighbor_buckets(sec):
+                        if self._is_killed:
+                            break
+                        if self.target_sec != sec:
+                            break
+                        if neighbor in self.cache:
+                            continue
+                        retry_at = self._fail_until.get(neighbor, 0.0)
+                        if retry_at and time.monotonic() < retry_at:
+                            continue
+                        self._in_flight_sec = neighbor
+                        pixmap = decode_fn(neighbor)
+                        self._in_flight_sec = -1
+                        if self._is_killed:
+                            break
+                        if pixmap is not None and not pixmap.isNull():
+                            self._fail_until.pop(neighbor, None)
+                            self._remember_cache(neighbor, pixmap)
+                            if self.target_sec == neighbor:
+                                self.preview_ready.emit(neighbor, pixmap)
+                                break
+                        else:
+                            self._fail_until[neighbor] = time.monotonic() + 2.0
+                        if self.target_sec != sec:
+                            break
+                self.msleep(40 if not parked else 60)
                 continue
 
             retry_at = self._fail_until.get(sec, 0.0)
@@ -577,13 +777,15 @@ class PreviewSniperWorker(QThread):
             pixmap = decode_fn(sec)
             self._in_flight_sec = -1
 
-            if self._is_killed or self.target_sec != sec:
+            if self._is_killed:
                 continue
 
             if pixmap is not None and not pixmap.isNull():
                 self._fail_until.pop(sec, None)
+                # Keep valid frames even if the cursor already moved — they warm the trail.
                 self._remember_cache(sec, pixmap)
-                self.preview_ready.emit(sec, pixmap)
+                if self.target_sec == sec:
+                    self.preview_ready.emit(sec, pixmap)
             else:
                 self._fail_until[sec] = time.monotonic() + 2.0
                 self.msleep(200)
