@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 
 
 @dataclass
@@ -17,6 +17,8 @@ class UpdateJob:
     keep_backup: bool
     exe_dir: str
     chrome_theme: str = "exp2"
+    expected_size: int | None = None
+    expected_sha256: str | None = None
 
     @property
     def backup_folder_name(self) -> str:
@@ -39,7 +41,10 @@ def save_update_job(job: UpdateJob) -> str:
 def load_update_job(path: str) -> UpdateJob:
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return UpdateJob(**data)
+    # Older jobs lack size/hash fields — keep defaults.
+    known = {f.name for f in fields(UpdateJob)}
+    filtered = {k: v for k, v in data.items() if k in known}
+    return UpdateJob(**filtered)
 
 
 def spawn_update_handler(job: UpdateJob) -> None:
