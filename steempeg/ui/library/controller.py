@@ -708,6 +708,9 @@ class LibraryMixin:
             return
 
         report = self.get_clip_display_health_report(clip_path)
+        self._apply_clip_health_button_style(report)
+
+    def _apply_clip_health_button_style(self, report) -> None:
         color = report.color
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         self.btn_clip_health.setToolTip(report.summary())
