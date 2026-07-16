@@ -481,7 +481,11 @@ class RenderedLibraryMixin:
             from steempeg.render.queue_history import load_history
 
             hist_path = os.path.join(self.cache_dir, "render_queue_history.json")
-            for batch in load_history(hist_path):
+            batches = getattr(self, "_render_history_cache", None)
+            if batches is None:
+                batches = load_history(hist_path)
+                self._render_history_cache = batches
+            for batch in batches:
                 for jdict in batch.jobs:
                     out = jdict.get("output_file")
                     if not out:
@@ -916,12 +920,16 @@ class RenderedLibraryMixin:
         self._rendered_poster_worker = None
 
     def _finish_startup_library_scan_status(self, *, text: str = "Ready", state: str = "ready") -> None:
-        """Drop startup scan flags and update the footer once library scans are done."""
+        """Drop startup scan flags; preload render history before the final Ready."""
         self._rendered_scan_active = False
         was_startup = bool(getattr(self, "_startup_library_scan_active", False))
         if was_startup:
             self._startup_library_scan_active = False
         if not hasattr(self, "update_status_indicator"):
+            return
+        # After clips+rendered, warm history in RAM off the UI thread.
+        if was_startup and state == "ready" and hasattr(self, "preload_render_history"):
+            self.preload_render_history(announce=True)
             return
         if was_startup or self._library_scan_status_active("rendered"):
             self.update_status_indicator(text, state)
@@ -1424,13 +1432,17 @@ class RenderedLibraryMixin:
         QTimer.singleShot(0, self._position_rendered_filter_menu)
 
     def _position_rendered_filter_menu(self):
+        # Same placement math as Clips ``_position_filter_menu``.
         menu = getattr(self, "rendered_filter_menu", None)
         if not menu or not hasattr(self, "btn_filter_pill"):
             return
-        btn = self.btn_filter_pill
-        menu_x = btn.mapToGlobal(QPoint(0, 0)).x()
-        menu_y = btn.mapToGlobal(QPoint(0, btn.height())).y()
-        menu.move(menu_x, menu_y)
+        button_bottom_left = self.btn_filter_pill.mapToGlobal(
+            QPoint(0, self.btn_filter_pill.height())
+        )
+        x_shift = menu.width() - self.btn_filter_pill.width()
+        menu_y = button_bottom_left.y() + 5
+        menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
+
         if hasattr(self, "btn_refresh"):
             footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
             menu.set_content_max_height(max(160, footer_top - menu_y - 8))
@@ -1639,6 +1651,9 @@ class RenderedLibraryMixin:
             self.schedule_play_media_file(file_path)
         elif hasattr(self, "play_media_file"):
             self.play_media_file(file_path)
+        # Match Clips Manager: a newly selected item starts at zoom 1.0 (not the previous file's zoom).
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.set_zoom_state(1.0, 0)
         self._sync_library_mode_chrome()
         self._persist_library_ui_state()
 

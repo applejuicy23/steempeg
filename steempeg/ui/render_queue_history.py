@@ -81,7 +81,8 @@ _FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
 _PILL_BTN_STYLE = """
     QPushButton {
         background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
+        border-radius: 8px; padding: 6px 14px;
+        font-size: 12px; font-weight: 600;
         font-family: 'Segoe UI', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
@@ -209,7 +210,8 @@ class RenderQueueHistoryDialog(SteempegDialog):
             icon.hide()
         text = QLabel(status_lbl)
         text.setStyleSheet(
-            f"color: {color}; font-size: 10px; font-weight: bold; {_FONT} background: transparent;"
+            f"color: {color}; font-size: 10px; font-weight: 600; "
+            f"font-family: 'Segoe UI', Arial, sans-serif; background: transparent;"
         )
         row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)

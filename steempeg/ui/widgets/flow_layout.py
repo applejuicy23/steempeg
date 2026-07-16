@@ -32,6 +32,10 @@ class FlowLayout(QLayout):
         return True
 
     def heightForWidth(self, w):
+        # Width 0/1 would stack every pill on its own row and invent a huge height;
+        # parents then keep that height after reflow → empty gaps (Rendered Type bug).
+        if w < 32:
+            w = 360
         return self.doLayout(QRect(0, 0, w, 0), True)
 
     def setGeometry(self, r):
@@ -42,7 +46,15 @@ class FlowLayout(QLayout):
         return self.minimumSize()
 
     def minimumSize(self):
-        return QSize(0, 0)
+        w = 360
+        parent = self.parentWidget()
+        if parent is not None and parent.width() > 32:
+            w = parent.width()
+        h = self.heightForWidth(w)
+        min_w = 0
+        for item in self.items:
+            min_w = max(min_w, item.sizeHint().width())
+        return QSize(min_w, max(0, h))
 
     def doLayout(self, r, test):
         x, y, line_h = r.x(), r.y(), 0

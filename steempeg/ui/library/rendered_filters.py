@@ -3,73 +3,47 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QLabel,
     QPushButton,
-    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
-    QLabel,
 )
 
 from steempeg.ui.widgets import FlowLayout
 
-_PILL_BTN_STYLE = """
-    QPushButton {
-        background-color: #383838;
-        color: #aaaaaa;
-        border: 2px solid #444444;
-        border-radius: 10px;
-        font-family: 'Segoe UI', Arial, sans-serif;
-        font-weight: bold;
-        font-size: 13px;
-        padding: 4px 12px;
-        min-height: 24px;
-    }
-    QPushButton:hover {
-        background-color: #404040;
-        color: #ffffff;
-        border: 2px solid #555555;
-    }
-    QPushButton:checked {
-        background-color: #404040;
-        color: #ffffff;
-        border: 2px solid #6b5a8e;
-    }
-    QPushButton:checked:hover {
-        background-color: #3a324a;
-        border: 2px solid #b29ae7;
-    }
-"""
-
 
 class RenderedFilterMenu(QWidget):
-    """Clips Manager–style filter popup without health/date/duration sections."""
+    """Rendered filter — Games sits like Type (no scroll padding)."""
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedWidth(460)
+
         self.app = None
         self._game_buttons: dict[str, QPushButton] = {}
         self._type_buttons: dict[str, QPushButton] = {}
 
-        self.container = QFrame()
-        self.container.setObjectName("FilterContainer")
+        self.container = QFrame(self)
+        self.container.setObjectName("MainFilterContainer")
         self.container.setStyleSheet("""
-            QFrame#FilterContainer {
-                background-color: #1e1e1e;
-                border: 1px solid #444444;
+            QFrame#MainFilterContainer {
+                background-color: #252525;
+                border: 1px solid #3d3d3d;
                 border-radius: 16px;
             }
         """)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(self.container)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.addWidget(self.container)
 
         layout = QVBoxLayout(self.container)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        def _capsule(title_text, content_widget):
+        def create_category_capsule(title_text, content_widget):
             capsule = QFrame()
             capsule.setObjectName("CategoryCapsule")
             capsule.setStyleSheet("""
@@ -92,68 +66,60 @@ class RenderedFilterMenu(QWidget):
             cap_layout.setSpacing(8)
             title_lbl = QLabel(title_text)
             title_lbl.setObjectName("CategoryTitle")
-            cap_layout.addWidget(title_lbl)
-            cap_layout.addWidget(content_widget)
+            cap_layout.addWidget(title_lbl, 0)
+            cap_layout.addWidget(content_widget, 0)
             return capsule
 
+        # Games = same structure as Type (FlowLayout directly in capsule).
         self.games_container = QWidget()
         self.games_container.setStyleSheet("background: transparent;")
+        self.games_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self.games_layout = FlowLayout()
         self.games_container.setLayout(self.games_layout)
-
-        self._games_scroll = QScrollArea()
-        self._games_scroll.setWidgetResizable(True)
-        self._games_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._games_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._games_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._games_scroll.setStyleSheet("""
-            QScrollArea { background: transparent; border: none; }
-            QScrollBar:vertical { border: none; background: transparent; width: 8px; margin: 2px; }
-            QScrollBar::handle:vertical { background: #4e4e4e; min-height: 24px; border-radius: 4px; }
-            QScrollBar::handle:vertical:hover { background: #b29ae7; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
-        self._games_scroll.setWidget(self.games_container)
-        layout.addWidget(_capsule("🎮 Games:", self._games_scroll))
+        layout.addWidget(create_category_capsule("🎮 Games:", self.games_container), 0)
 
         self.types_container = QWidget()
+        self.types_container.setStyleSheet("background: transparent;")
+        self.types_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self.types_layout = FlowLayout()
         self.types_container.setLayout(self.types_layout)
-        layout.addWidget(_capsule("📂 Type:", self.types_container))
+        layout.addWidget(create_category_capsule("📂 Type:", self.types_container), 0)
 
         bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(8)
+        bottom_layout.setContentsMargins(0, 10, 0, 0)
 
-        clear_style = """
-            QPushButton {
-                background-color: #2d2d2d;
-                color: #aaaaaa;
-                border: 2px solid #444444;
-                border-radius: 10px;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover { background-color: #383838; color: white; }
-        """
         unified_table_style = """
-            QPushButton {
-                background-color: #5138e6;
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-weight: bold;
-                padding: 8px 16px;
+            QPushButton { 
+                background-color: #383838; 
+                color: #ffffff; 
+                border: 2px solid #444444; 
+                border-radius: 14px; 
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-weight: bold; 
+                font-size: 13px; 
+                padding: 4px 12px; 
+                min-height: 24px; 
             }
-            QPushButton:hover { background-color: #6b5aee; }
+            QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
+            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
+            QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
+            QPushButton::menu-indicator { image: none; }
         """
+        clear_style = unified_table_style.replace(
+            "color: #ffffff;", "color: #ff7777;"
+        ).replace("#6b5a8e", "#e05555").replace("#b29ae7", "#ff7777")
 
-        self.btn_clear = QPushButton("Clear All")
-        self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_clear = QPushButton("🗑 Clear")
+        self.btn_clear.setCursor(Qt.PointingHandCursor)
         self.btn_clear.setStyleSheet(clear_style)
         self.btn_clear.clicked.connect(self._clear_all)
 
-        self.btn_apply = QPushButton("Apply Filters")
-        self.btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_apply = QPushButton("Apply Filters (0)")
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
         self.btn_apply.setStyleSheet(unified_table_style)
         self.btn_apply.clicked.connect(self._apply)
 
@@ -161,18 +127,52 @@ class RenderedFilterMenu(QWidget):
         bottom_layout.addWidget(self.btn_apply)
         layout.addLayout(bottom_layout)
 
-        self.setFixedWidth(460)
+    _PILL_BTN_STYLE = """
+        QPushButton {
+            background-color: #383838;
+            color: #aaaaaa;
+            border: 2px solid #444444;
+            border-radius: 10px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 4px 12px;
+            min-height: 24px;
+        }
+        QPushButton:hover {
+            background-color: #404040;
+            color: #ffffff;
+            border: 2px solid #555555;
+        }
+        QPushButton:checked {
+            background-color: #404040;
+            color: #ffffff;
+            border: 2px solid #6b5a8e;
+        }
+        QPushButton:checked:hover {
+            background-color: #3a324a;
+            border: 2px solid #b29ae7;
+        }
+    """
+
+    def _flow_inner_width(self) -> int:
+        # popup − outer inset − container margins − capsule margins
+        return max(120, self.width() - 10 * 2 - 16 * 2 - 12 * 2)
+
+    def _tighten_flow_sections(self) -> None:
+        """Lock Games/Type height to real wrapped pill rows (no stretch gaps)."""
+        width = self._flow_inner_width()
+        for container, flow in (
+            (self.games_container, self.games_layout),
+            (self.types_container, self.types_layout),
+        ):
+            h = max(1, int(flow.heightForWidth(width)))
+            container.setFixedHeight(h)
+        self.adjustSize()
 
     def set_content_max_height(self, max_px: int) -> None:
-        self._games_scroll.setFixedHeight(0)
-        self.adjustSize()
-        non_games = self.height()
-        cap = max(70, max_px - non_games)
-        width = max(120, self.width() - 84)
-        content = self.games_layout.heightForWidth(width) + 4
-        height = max(40, min(content, cap))
-        self._games_scroll.setFixedHeight(height)
-        self.adjustSize()
+        _ = max_px
+        self._tighten_flow_sections()
 
     def gather_statistics(self, app_window):
         from steempeg.ui.library.rendered_library import (
@@ -212,8 +212,8 @@ class RenderedFilterMenu(QWidget):
                 btn.setChecked(True)
             else:
                 btn.setChecked(name in saved_games)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(_PILL_BTN_STYLE)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_name", name)
             btn.clicked.connect(self._update_apply_label)
             self.games_layout.addWidget(btn)
@@ -233,14 +233,15 @@ class RenderedFilterMenu(QWidget):
                 btn.setChecked(True)
             else:
                 btn.setChecked(type_label in saved_types)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(_PILL_BTN_STYLE)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_type", type_label)
             btn.clicked.connect(self._update_apply_label)
             self.types_layout.addWidget(btn)
             self._type_buttons[type_label] = btn
 
         self._update_apply_label()
+        self._tighten_flow_sections()
 
     def _selected_games(self) -> set[str] | None:
         if not self._game_buttons:
@@ -248,12 +249,7 @@ class RenderedFilterMenu(QWidget):
         selected = {n for n, b in self._game_buttons.items() if b.isChecked()}
         if len(selected) == len(self._game_buttons):
             return None
-        # IMPORTANT:
-        # If user unchecked *all* games, we must treat it as an active filter
-        # selecting zero games (so live count becomes 0 and applying hides all
-        # rows). Returning None here would mean "no filter" => count would
-        # incorrectly stay at the full library size.
-        return selected  # could be an empty set
+        return selected
 
     def _selected_types(self) -> set[str] | None:
         if not self._type_buttons:
@@ -261,8 +257,7 @@ class RenderedFilterMenu(QWidget):
         selected = {t for t, b in self._type_buttons.items() if b.isChecked()}
         if len(selected) == len(self._type_buttons):
             return None
-        # Same semantics as games: an empty selection means "match nothing".
-        return selected  # could be an empty set
+        return selected
 
     def _live_match_count(self) -> int:
         if not self.app:
