@@ -65,11 +65,13 @@ class GitHubRateLimitDialog(SteempegDialog):
         self._bar.set_progress(0.0)
         root.addWidget(self._bar)
 
-        hint = QLabel("This window closes automatically when the API unlocks.")
+        hint = QLabel("This window closes automatically when the API unlocks. Close to cancel.")
         hint.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 10px; background: transparent;")
         root.addWidget(hint)
 
-        self._title_bar.btn_close.setEnabled(False)
+        # Allow cancel — a stuck/wrong reset_at used to trap the user with close disabled.
+        self._title_bar.btn_close.setEnabled(True)
+        self.rejected.connect(self._on_dialog_rejected)
 
         self._tick = QTimer(self)
         self._tick.setInterval(250)
@@ -81,10 +83,16 @@ class GitHubRateLimitDialog(SteempegDialog):
     def timer_completed(self) -> bool:
         return self._timer_completed
 
+    def _on_dialog_rejected(self) -> None:
+        self._timer_completed = False
+        self._tick.stop()
+
     def _on_tick(self) -> None:
-        remaining = max(0, self._reset_at - int(time.time()))
-        elapsed = max(0, int(time.time()) - self._started_at)
-        progress = min(100.0, (elapsed / self._wait_seconds) * 100.0)
+        now = int(time.time())
+        remaining = max(0, self._reset_at - now)
+        elapsed = max(0, now - self._started_at)
+        wait = max(1, self._wait_seconds)
+        progress = min(100.0, (elapsed / wait) * 100.0)
         self._remaining_label.setText(f"Time until unlock: {_format_duration(remaining)}")
         self._bar.set_progress(progress)
 
