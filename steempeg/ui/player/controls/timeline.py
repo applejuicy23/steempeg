@@ -383,7 +383,9 @@ class TimelineCanvas(QWidget):
         if not getattr(self, 'is_hovering', False):
             return
         hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
-        current_target_sec = round((hover_ms // 1000) / 3.0) * 3
+        # Must match preview_bucket_sec / sniper request (floor) — round() discarded
+        # frames on short clips (hover 2.x s → request 0, expect 3 → drop forever).
+        current_target_sec = preview_bucket_sec(hover_ms, self.duration_ms)
         if int(sec) != int(current_target_sec):
             return
         # Disk thumbs are authoritative for 3s buckets; sniper must not overwrite them.
@@ -483,7 +485,13 @@ class TimelineCanvas(QWidget):
             if abs(drift) > 1000: self.visual_ms = self.target_ms 
             else: self.visual_ms += drift * 0.1 
         else:
-            self.visual_ms += (self.target_ms - self.visual_ms) * 0.3
+            drift = self.target_ms - self.visual_ms
+            if abs(drift) < 2.0 or (
+                self.target_ms >= float(self.duration_ms) - 1.0 and abs(drift) < 80.0
+            ):
+                self.visual_ms = self.target_ms
+            else:
+                self.visual_ms += drift * 0.3
 
         self.visual_ms = max(0.0, min(self.visual_ms, float(self.duration_ms)))
         self.update()
