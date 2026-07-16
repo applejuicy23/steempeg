@@ -75,7 +75,7 @@ class _DialogTitleBar(QWidget):
 
         if show_minimize:
             self.btn_minimize = _TrafficLight(
-                tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "\u2212"
+                tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "minimize"
             )
             self.btn_minimize.clicked.connect(dialog.showMinimized)
             root.addWidget(self.btn_minimize, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -83,7 +83,7 @@ class _DialogTitleBar(QWidget):
         else:
             self.btn_minimize = None
 
-        self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "\u2715")
+        self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "close")
         self.btn_close.clicked.connect(self.close_requested.emit)
         root.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
 
