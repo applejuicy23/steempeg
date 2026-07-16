@@ -6,7 +6,7 @@ import os
 import re
 import webbrowser
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject, QTimer
 from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextImageFormat
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWidgets import (
@@ -43,6 +43,7 @@ from steempeg.services.release_catalog import (
 )
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.message_dialog import steempeg_question
 from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
@@ -135,28 +136,84 @@ def _logo_pixmap(size: int = 18) -> QPixmap | None:
 
 
 def _sanitize_notes(text: str) -> str:
-    return text.replace(" — ", ": ").replace("— ", "")
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Em dashes break Qt's markdown list parsing mid-bullet on some releases.
+    text = text.replace(" — ", ": ").replace("— ", "").replace("—", "-")
+    return text
 
 
 _IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_IMG_HTML_RE = re.compile(
+    r'<img\b[^>]*?\bsrc=["\']([^"\']+)["\'][^>]*?/?>',
+    re.IGNORECASE | re.DOTALL,
+)
+_SECTION_BOLD_RE = re.compile(
+    r"^\*\*(.+?):\*\*\s*$",
+    re.MULTILINE,
+)
+
+
 def _image_placeholder(index: int) -> str:
-    return f"_(image {index + 1} loading…)_"
+    # Backtick code survives setMarkdown as searchable plain text.
+    return f"`[[steempeg-img:{index}]]`"
+
+
+def _image_find_token(index: int) -> str:
+    return f"[[steempeg-img:{index}]]"
 
 
 def _split_release_images(body: str) -> tuple[str, list[tuple[str, str]]]:
     images: list[tuple[str, str]] = []
 
-    def repl(match: re.Match) -> str:
-        alt = (match.group(1) or "image").strip()
-        url = match.group(2).strip()
+    def add_image(alt: str, url: str) -> str:
+        url = (url or "").strip()
         if not url:
             return ""
         index = len(images)
-        images.append((alt, url))
-        return f"\n{_image_placeholder(index)}\n"
+        images.append(((alt or "image").strip() or "image", url))
+        return f"\n\n{_image_placeholder(index)}\n\n"
 
-    stripped = _IMG_MD_RE.sub(repl, body or "")
+    def repl_md(match: re.Match) -> str:
+        return add_image(match.group(1) or "image", match.group(2))
+
+    def repl_html(match: re.Match) -> str:
+        return add_image("image", match.group(1))
+
+    stripped = _IMG_HTML_RE.sub(repl_html, body or "")
+    stripped = _IMG_MD_RE.sub(repl_md, stripped)
     return stripped, images
+
+
+def _escape_notes_html_traps(text: str) -> str:
+    """Qt setMarkdown treats <id>/<appid> as HTML tags and eats the rest of the notes.
+
+    Release bodies often use angle-bracket placeholders in paths
+    (Steam/userdata/<id>/760/...). Escape them after real <img> tags are extracted.
+    """
+    # <placeholder> → ‹placeholder› (not HTML; survives setMarkdown)
+    text = re.sub(
+        r"<(/?[A-Za-z][A-Za-z0-9._:-]{0,40})>",
+        r"‹\1›",
+        text,
+    )
+    # Strip any other leftover raw tags that would still poison the document.
+    text = re.sub(r"</?[A-Za-z][^>]{0,60}>", "", text)
+    return text
+
+
+def _prepare_notes_markdown(body: str) -> str:
+    """Normalize GitHub release bodies so Qt setMarkdown keeps bullets + headers."""
+    text = _sanitize_notes(body)
+    # **🚀 NEW FEATURES:** → ### NEW FEATURES  (emoji+bold headers confuse QTextDocument)
+    def _section(match: re.Match) -> str:
+        title = match.group(1).strip()
+        title = re.sub(r"^[\W_]+", "", title).strip() or match.group(1).strip()
+        return f"### {title}"
+
+    text = _SECTION_BOLD_RE.sub(_section, text)
+    # Collapse accidental empty list items from blank lines between bullets.
+    text = re.sub(r"\n-\s*\n(?=-\s)", "\n", text)
+    return text
 
 
 def _notes_document_style() -> str:
@@ -168,18 +225,22 @@ def _notes_document_style() -> str:
         ul, ol {{ margin: 4px 0 8px 16px; }}
         p {{ margin: 4px 0; }}
         a {{ color: {tok.ACCENT_PRIMARY}; text-decoration: none; }}
+        code {{ color: {tok.TEXT_MUTED}; background: transparent; }}
         """
 
 
 def _apply_notes_markdown(edit: QTextEdit, body: str) -> list[tuple[str, str]]:
-    text = _sanitize_notes((body or "").strip() or "_No release notes provided._")
+    text = _prepare_notes_markdown((body or "").strip() or "_No release notes provided._")
     stripped, images = _split_release_images(text)
+    stripped = _escape_notes_html_traps(stripped)
     edit.document().setDefaultStyleSheet(_notes_document_style())
     try:
         edit.setMarkdown(stripped)
     except Exception:
         plain = re.sub(r"\*\*(.+?)\*\*", r"\1", stripped)
+        plain = re.sub(r"`\[\[steempeg-img:(\d+)\]\]`", r"[image \1 loading…]", plain)
         edit.setPlainText(plain)
+    edit.verticalScrollBar().setValue(0)
     return images
 
 
@@ -187,9 +248,12 @@ def _insert_note_image(edit: QTextEdit, placeholder: str, pixmap: QPixmap) -> No
     if pixmap.isNull():
         return
     doc = edit.document()
+    token = placeholder.strip("`")
     cursor = QTextCursor(doc)
     cursor.movePosition(QTextCursor.MoveOperation.Start)
-    found = doc.find(placeholder, cursor)
+    found = doc.find(token, cursor)
+    if found.isNull():
+        found = doc.find(placeholder, cursor)
     if found.isNull():
         return
     found.removeSelectedText()
@@ -231,31 +295,50 @@ class _ReleaseNotesImageLoader(QObject):
             request = QNetworkRequest(QUrl(url))
             request.setRawHeader(
                 b"User-Agent",
-                b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Steempeg",
+                b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Steempeg/UpdateCenter",
+            )
+            request.setAttribute(
+                QNetworkRequest.Attribute.RedirectPolicyAttribute,
+                QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy,
             )
             request.setAttribute(
                 QNetworkRequest.Attribute.CacheLoadControlAttribute,
                 QNetworkRequest.CacheLoadControl.PreferCache,
             )
             reply = self._nam.get(request)
-            placeholder = _image_placeholder(idx)
+            token = _image_find_token(idx)
             reply.finished.connect(
-                lambda r=reply, ph=placeholder: self._on_finished(r, ph)
+                lambda r=reply, ph=token: self._on_finished(r, ph)
             )
             self._replies.append(reply)
+
+    def _replace_placeholder_text(self, placeholder: str, message: str) -> None:
+        doc = self._edit.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        found = doc.find(placeholder, cursor)
+        if found.isNull():
+            found = doc.find(f"`{placeholder}`", cursor)
+        if found.isNull():
+            return
+        found.removeSelectedText()
+        found.insertText(message)
 
     def _on_finished(self, reply: QNetworkReply, placeholder: str) -> None:
         if reply in self._replies:
             self._replies.remove(reply)
         if reply.error() != QNetworkReply.NetworkError.NoError:
+            self._replace_placeholder_text(placeholder, "[image unavailable]")
             reply.deleteLater()
             return
         data = reply.readAll()
         reply.deleteLater()
         if data.isEmpty():
+            self._replace_placeholder_text(placeholder, "[image unavailable]")
             return
         pixmap = QPixmap()
         if not pixmap.loadFromData(data):
+            self._replace_placeholder_text(placeholder, "[image unavailable]")
             return
         _insert_note_image(self._edit, placeholder, pixmap)
 
@@ -454,8 +537,8 @@ class UpdateCenterDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumSize(520, 520)
-        self.resize(560, 600)
+        self.setMinimumSize(560, 640)
+        self.resize(580, 680)
         self._releases: list[ReleaseEntry] = []
         self._local_backups = local_backups
         self._fetch_thread: _ReleaseFetchThread | None = None
@@ -492,20 +575,24 @@ class UpdateCenterDialog(SteempegDialog):
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
         scroll.setWidget(self._list_host)
-        scroll.setMinimumHeight(180)
-        root.addWidget(scroll, 1)
+        scroll.setMinimumHeight(140)
+        scroll.setMaximumHeight(220)
+        root.addWidget(scroll, 0)
 
+        notes_block = QVBoxLayout()
+        notes_block.setContentsMargins(0, 4, 0, 0)
+        notes_block.setSpacing(4)
         notes_label = QLabel("Release notes")
         notes_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
-        root.addWidget(notes_label)
+        notes_block.addWidget(notes_label)
 
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
-        self._notes.setMinimumHeight(110)
-        self._notes.setMaximumHeight(180)
-        self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._notes.setMinimumHeight(140)
+        self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._notes.setPlaceholderText("Select a version.")
-        root.addWidget(self._notes, 0)
+        notes_block.addWidget(self._notes, 1)
+        root.addLayout(notes_block, 1)
 
         self._notice_label = QLabel()
         self._notice_label.setWordWrap(True)
@@ -543,10 +630,25 @@ class UpdateCenterDialog(SteempegDialog):
             self._backup_combo = QComboBox()
             for backup in local_backups:
                 self._backup_combo.addItem(f"v{backup.version_str} ({backup.folder_name})", backup)
-            self._backup_combo.setStyleSheet(
-                "QComboBox { background: #242424; color: #ddd; border: 1px solid #555; "
-                "border-radius: 6px; padding: 4px 8px; }"
-            )
+            # Match video-settings combo chrome, but keep the compact Local backup footprint.
+            self._backup_combo.setStyleSheet(settings_panel_stylesheet("""
+                QComboBox {
+                    border-radius: 6px;
+                    padding: 4px 8px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    min-height: 0px;
+                }
+                QComboBox::drop-down {
+                    width: 22px;
+                    border-top-right-radius: 5px;
+                    border-bottom-right-radius: 5px;
+                }
+                QComboBox QAbstractItemView::item {
+                    min-height: 22px;
+                    padding: 4px 8px;
+                }
+            """))
             backup_row.addWidget(self._backup_combo, 1)
             root.addLayout(backup_row)
         else:
@@ -653,8 +755,9 @@ class UpdateCenterDialog(SteempegDialog):
     def _on_fetch_rate_limited(self, info: RateLimitInfo):
         self._status_label.setText("GitHub API rate limit exceeded — waiting to retry…")
         self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+        # Emit before reject so the parent can capture RateLimitInfo while still connected.
         self.rate_limited.emit(info)
-        self.reject()
+        QTimer.singleShot(0, self.reject)
 
     def _select_entry(self, entry: ReleaseEntry):
         self._selected = entry
