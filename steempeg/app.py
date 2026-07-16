@@ -2525,6 +2525,18 @@ def main():
 
     app = QApplication(sys.argv)
 
+    from steempeg.infra.single_instance import try_acquire_instance_lock
+    from steempeg.ui.already_running_dialog import AlreadyRunningDialog
+
+    _instance_lock, _got_lock = try_acquire_instance_lock()
+    if not _got_lock:
+        dlg = AlreadyRunningDialog()
+        dlg.exec()
+        if not dlg.run_anyway:
+            sys.exit(0)
+        # Second instance: do not hold a lock (primary keeps it).
+        _instance_lock = None
+
     icon_path = get_resource_path("logo.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
@@ -2532,6 +2544,8 @@ def main():
 
     try:
         window = SteempegApp()
+        # Keep the lock alive for the process lifetime (prevent GC unlock).
+        window._instance_lock = _instance_lock
         
         if getattr(window, 'ui', None) is None:
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
