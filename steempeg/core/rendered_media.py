@@ -18,6 +18,27 @@ _STEAM_CLIP_PREFIXES = ("clip", "bg", "fg")
 _COMPANION_SUFFIX = ".steempeg.json"
 
 
+def _bundled_bin_dir() -> str:
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        # steempeg/core/rendered_media.py -> repo root
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(base, "bin")
+
+
+def resolve_ffprobe_exe() -> str:
+    name = "ffprobe.exe" if sys.platform == "win32" else "ffprobe"
+    bundled = os.path.join(_bundled_bin_dir(), name)
+    return bundled if os.path.isfile(bundled) else "ffprobe"
+
+
+def resolve_ffmpeg_exe() -> str:
+    name = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+    bundled = os.path.join(_bundled_bin_dir(), name)
+    return bundled if os.path.isfile(bundled) else "ffmpeg"
+
+
 def file_identity(file_path: str) -> str:
     st = os.stat(file_path)
     norm = os.path.normcase(os.path.normpath(file_path))
@@ -70,7 +91,7 @@ def probe_media_duration_sec(file_path: str) -> float | None:
         try:
             out = subprocess.check_output(
                 [
-                    "ffprobe", "-v", "error", f"-select_streams", stream_sel,
+                    resolve_ffprobe_exe(), "-v", "error", f"-select_streams", stream_sel,
                     "-show_entries", "stream=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1",
                     file_path,
@@ -89,7 +110,7 @@ def probe_media_duration_sec(file_path: str) -> float | None:
     try:
         out = subprocess.check_output(
             [
-                "ffprobe", "-v", "error",
+                resolve_ffprobe_exe(), "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 file_path,
@@ -139,18 +160,31 @@ def save_rendered_companion_meta(
         st = os.stat(file_path)
     except OSError:
         return
-    payload = {
+    existing: dict = {}
+    direct = companion_meta_path(file_path)
+    if os.path.isfile(direct):
+        try:
+            with open(direct, encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, dict):
+                existing = data
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    payload = dict(existing)
+    payload.update({
         "app_id": app_id or "",
-        "game_name": game_name,
-        "clip_path": clip_path,
-        "game_icon_path": game_icon_path,
+        "game_name": game_name or "",
+        "clip_path": clip_path or "",
+        "game_icon_path": game_icon_path or "",
         "size": st.st_size,
         "mtime_ns": st.st_mtime_ns,
-    }
+    })
+    # Prefer explicit duration; else probe the output file; else source clip estimate.
     if duration_sec is None:
         duration_sec = probe_media_duration_sec(file_path)
-    if not is_sane_media_duration(duration_sec) and clip_path:
-        duration_sec = duration_from_source_clip(clip_path)
+    if not is_sane_media_duration(duration_sec) and (clip_path or existing.get("clip_path")):
+        duration_sec = duration_from_source_clip(clip_path or existing.get("clip_path") or "")
     if is_sane_media_duration(duration_sec):
         payload["duration_sec"] = round(float(duration_sec), 3)
     try:

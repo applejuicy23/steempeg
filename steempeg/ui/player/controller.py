@@ -1524,7 +1524,11 @@ class PlayerMixin:
         return None
 
     def _resolved_rendered_duration_sec(self) -> float | None:
-        """Duration for a flat exported file — never trust absurd MPV/Matroska headers."""
+        """Duration for a flat export — trust the file, not trim/source sidecar guesses.
+
+        Old companions often stored trim/source length as ``duration_sec``, which made
+        the purple bar longer/shorter than playable media for every Rendered clip.
+        """
         path = getattr(self, "_rendered_media_path", None)
         if not path:
             return None
@@ -1533,16 +1537,39 @@ class PlayerMixin:
         if cache and cache[0] == os.path.normpath(path):
             return cache[1]
 
+        meta = load_rendered_companion_meta(path) or {}
+
+        def _diverge(a: float, b: float) -> bool:
+            diff = abs(a - b)
+            if diff <= 0.75:
+                return False
+            return diff > max(0.75, min(a, b) * 0.02)
+
+        # 1) Probe the file (stream first via ffprobe).
+        probed = probe_media_duration_sec(path)
+
+        # 2) MPV duration once ready — reject frozen-tail inflation vs probe.
+        mpv_dur = None
         try:
             dur = self.player.duration
             if is_sane_media_duration(dur):
-                val = float(dur)
-                self._rendered_duration_cache = (os.path.normpath(path), val)
-                return val
+                mpv_dur = float(dur)
         except Exception:
             pass
 
-        meta = load_rendered_companion_meta(path) or {}
+        if probed is not None:
+            if mpv_dur is not None and _diverge(probed, mpv_dur) and mpv_dur > probed:
+                val = probed
+            else:
+                val = probed
+            self._rendered_duration_cache = (os.path.normpath(path), val)
+            return val
+
+        if mpv_dur is not None:
+            self._rendered_duration_cache = (os.path.normpath(path), mpv_dur)
+            return mpv_dur
+
+        # 3) Companion duration_sec only as last resort (may be a trim/source guess).
         meta_dur = meta.get("duration_sec")
         if is_sane_media_duration(meta_dur):
             val = float(meta_dur)
@@ -1555,11 +1582,6 @@ class PlayerMixin:
             if src_dur is not None:
                 self._rendered_duration_cache = (os.path.normpath(path), src_dur)
                 return src_dur
-
-        probed = probe_media_duration_sec(path)
-        if probed is not None:
-            self._rendered_duration_cache = (os.path.normpath(path), probed)
-            return probed
 
         clip_dur = getattr(self, "current_clip_duration_sec", None)
         if is_sane_media_duration(clip_dur):
@@ -1739,11 +1761,8 @@ class PlayerMixin:
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
 
-        # Pre-seed duration from sidecar / source clip before MPV reports garbage headers.
-        meta = load_rendered_companion_meta(file_path) or {}
-        seed_dur = meta.get("duration_sec")
-        if not is_sane_media_duration(seed_dur):
-            seed_dur = duration_from_source_clip((meta.get("clip_path") or "").strip())
+        # Pre-seed timeline from probed file length — never trim/source sidecar guesses.
+        seed_dur = probe_media_duration_sec(file_path)
         if is_sane_media_duration(seed_dur):
             self._apply_playback_duration(float(seed_dur))
             self._rendered_duration_cache = (os.path.normpath(file_path), float(seed_dur))
