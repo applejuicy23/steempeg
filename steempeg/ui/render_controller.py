@@ -997,8 +997,6 @@ class RenderMixin:
             return
         try:
             from steempeg.core.rendered_media import (
-                duration_from_source_clip,
-                is_sane_media_duration,
                 parse_app_id_from_clip_folder,
                 parse_app_id_from_name,
                 save_rendered_companion_meta,
@@ -1006,19 +1004,14 @@ class RenderMixin:
 
             clip_name = os.path.basename(job.clip_path or "")
             app_id = parse_app_id_from_name(clip_name) or parse_app_id_from_clip_folder(clip_name)
-            duration_sec = None
-            s = job.settings
-            if s.is_trim_mode and s.trim_end_ms > s.trim_start_ms:
-                duration_sec = (s.trim_end_ms - s.trim_start_ms) / 1000.0
-            if not is_sane_media_duration(duration_sec):
-                duration_sec = duration_from_source_clip(job.clip_path)
+            # duration_sec=None → probe the output file (not trim/source guesses).
             save_rendered_companion_meta(
                 output_file,
                 app_id=app_id,
                 game_name=job.game_name,
                 clip_path=job.clip_path,
                 game_icon_path=job.game_icon_path,
-                duration_sec=duration_sec,
+                duration_sec=None,
             )
             self._rendered_output_meta_index = None
         except Exception as exc:
@@ -1119,7 +1112,7 @@ class RenderMixin:
             self._render_history_cache = batches or []
             self._rendered_output_meta_index = None
             if announce and hasattr(self, "update_status_indicator"):
-                self.update_status_indicator("Render", "ready")
+                self.update_status_indicator("Ready", "ready")
             logging.info("Render history preloaded: %d batches", len(self._render_history_cache))
 
         def _fail(msg: str):
