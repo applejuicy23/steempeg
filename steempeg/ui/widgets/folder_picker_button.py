@@ -2,61 +2,65 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
+from steempeg.ui.ui_density import COMFORT, UiDensity
 
-_FOLDER_PICKER_STYLE = """
-    QPushButton#FolderPickerMain {
+
+def _folder_style(dense: UiDensity) -> str:
+    r = dense.footer_radius
+    return f"""
+    QPushButton#FolderPickerMain {{
         font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 13px;
+        font-size: {dense.footer_font}px;
         font-weight: bold;
         background-color: #383838;
         color: #ffffff;
         border: 2px solid #444444;
         border-right: none;
-        border-top-left-radius: 14px;
-        border-bottom-left-radius: 14px;
+        border-top-left-radius: {r}px;
+        border-bottom-left-radius: {r}px;
         border-top-right-radius: 0px;
         border-bottom-right-radius: 0px;
-        padding: 4px 12px;
-        min-height: 24px;
-    }
-    QPushButton#FolderPickerMain:hover {
+        padding: {dense.footer_pad};
+        min-height: {dense.footer_min_h}px;
+    }}
+    QPushButton#FolderPickerMain:hover {{
         background-color: #404040;
         border: 2px solid #6b5a8e;
         border-right: none;
-    }
-    QPushButton#FolderPickerMain:pressed {
+    }}
+    QPushButton#FolderPickerMain:pressed {{
         background-color: #3a324a;
         border: 2px solid #b29ae7;
         border-right: none;
-    }
-    QPushButton#FolderPickerAdd {
+    }}
+    QPushButton#FolderPickerAdd {{
         background-color: #383838;
         color: #ffffff;
         border: 2px solid #444444;
         border-left: 1px solid #555555;
         border-top-left-radius: 0px;
         border-bottom-left-radius: 0px;
-        border-top-right-radius: 14px;
-        border-bottom-right-radius: 14px;
+        border-top-right-radius: {r}px;
+        border-bottom-right-radius: {r}px;
         font-family: 'Segoe UI', Arial, sans-serif;
-        font-size: 17px;
+        font-size: {17 if not dense.compact else 14}px;
         font-weight: bold;
-        min-width: 40px;
-        max-width: 44px;
-        padding: 4px 0;
-        min-height: 24px;
-    }
-    QPushButton#FolderPickerAdd:hover {
+        min-width: {dense.footer_add_w}px;
+        max-width: {dense.footer_add_w + 4}px;
+        padding: 2px 0;
+        min-height: {dense.footer_min_h}px;
+    }}
+    QPushButton#FolderPickerAdd:hover {{
         background-color: #404040;
         color: #d4c4ff;
         border: 2px solid #6b5a8e;
         border-left: 1px solid #6b5a8e;
-    }
-    QPushButton#FolderPickerAdd:pressed {
+    }}
+    QPushButton#FolderPickerAdd:pressed {{
         background-color: #3a324a;
         border: 2px solid #b29ae7;
         border-left: 1px solid #b29ae7;
-    }
+    }}
 """
 
 
@@ -66,7 +70,7 @@ class FolderPickerButton(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setStyleSheet(_FOLDER_PICKER_STYLE)
+        self._density = COMFORT
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -87,25 +91,27 @@ class FolderPickerButton(QWidget):
         layout.addWidget(self.add_btn)
 
         self._add_visible = True
+        self.apply_density(COMFORT)
+        self._update_main_radius()
+
+    def apply_density(self, dense: UiDensity) -> None:
+        self._density = dense
+        self.setStyleSheet(_folder_style(dense))
         self._update_main_radius()
 
     def _update_main_radius(self):
-        """When the + is hidden, the main button should be fully rounded on both sides.
-
-        Tracks an explicit flag instead of QWidget.isVisible(): during construction (and
-        before the window is shown) isVisible() is always False, which previously made the
-        main button render with the "no +" rounding even though the + was about to show.
-        """
+        """When the + is hidden, the main button should be fully rounded on both sides."""
+        r = self._density.footer_radius
         if self._add_visible:
             self.main_btn.setStyleSheet("")  # inherit composite stylesheet
         else:
             self.main_btn.setStyleSheet(
-                "QPushButton#FolderPickerMain {"
-                " border: 2px solid #444444;"
-                " border-top-right-radius: 14px;"
-                " border-bottom-right-radius: 14px; }"
-                "QPushButton#FolderPickerMain:hover { border: 2px solid #6b5a8e; }"
-                "QPushButton#FolderPickerMain:pressed { border: 2px solid #b29ae7; }"
+                f"QPushButton#FolderPickerMain {{"
+                f" border: 2px solid #444444;"
+                f" border-top-right-radius: {r}px;"
+                f" border-bottom-right-radius: {r}px; }}"
+                f"QPushButton#FolderPickerMain:hover {{ border: 2px solid #6b5a8e; }}"
+                f"QPushButton#FolderPickerMain:pressed {{ border: 2px solid #b29ae7; }}"
             )
 
     def set_add_visible(self, visible):
