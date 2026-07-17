@@ -7,21 +7,34 @@ these constants are always used on launch.
 
 REMEMBER_LAYOUT_BETWEEN_SESSIONS = False
 
+# Steam Deck LCD/OLED native resolution — design floor for the main window.
+# Layout mins switch to "compact" at or below this class of width.
+STEAM_DECK_WIDTH = 1280
+STEAM_DECK_HEIGHT = 800
+TARGET_MIN_WINDOW_WIDTH = STEAM_DECK_WIDTH
+TARGET_MIN_WINDOW_HEIGHT = STEAM_DECK_HEIGHT
+
+# Use compact panel mins when the window is Deck-sized (or a small QEMU window).
+COMPACT_LAYOUT_WIDTH = STEAM_DECK_WIDTH + 80  # ~1360
+
 # [Clips Manager width, player + queue area width]
-# Left pane is clamped to a 620px minimum (two grid columns + full toolbar) in app.py.
-# QSplitter.setSizes distributes proportionally, so the oversized second value forces
-# the left pane down to its 620 minimum on launch (the compact 2-column look) while the
-# player area soaks up the rest, regardless of monitor width / DPI.
-DEFAULT_MAIN_SPLITTER_SIZES = [620, 100000]
+# Comfort left pane fits two grid columns + full toolbar (~620).
+# Compact left pane fits one grid column on a 1280px Deck window.
+MIN_LEFT_PANEL_WIDTH_COMFORT = 620
+MIN_LEFT_PANEL_WIDTH_COMPACT = 360
+DEFAULT_MAIN_SPLITTER_SIZES = [MIN_LEFT_PANEL_WIDTH_COMFORT, 100000]
+DEFAULT_MAIN_SPLITTER_SIZES_COMPACT = [MIN_LEFT_PANEL_WIDTH_COMPACT, 100000]
 
 # [player area, bottom tabs] vertical split inside the right column
 DEFAULT_MAIN_V_SPLITTER_SIZES = [750, 450]
+DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT = [480, 220]
 
 # [player area, render queue] when queue is empty (second value = 0)
 DEFAULT_RIGHT_H_SPLITTER_SIZES = [1200, 0]
 
 # Render Queue panel width when the queue is non-empty (list row: thumb + text + ✕)
 MIN_QUEUE_PANEL_WIDTH = 420
+MIN_QUEUE_PANEL_WIDTH_COMPACT = 280
 DEFAULT_QUEUE_PANEL_WIDTH = 420
 
 # "grid" or "list"
@@ -47,7 +60,6 @@ SETTINGS_STAT_GRID_GAP = 8
 SETTINGS_CONTENT_WIDTH = SETTINGS_STAT_COL_W * 3 + SETTINGS_STAT_GRID_GAP * 2
 
 # Render settings tab content inset (right pane beside neo sidebar).
-# Top aligns with sidebar nav top inset; left adds breathing room from the divider.
 SETTINGS_PAGE_MARGIN_LEFT = 16
 SETTINGS_PAGE_MARGIN_TOP = 15
 SETTINGS_PAGE_MARGIN_RIGHT = 8
@@ -67,3 +79,24 @@ HORIZONTAL_SPLITTER_STYLESHEET = """
 
 # Custom title bar (see ui/window_chrome.py) — canonical value in design_tokens.
 TITLE_BAR_HEIGHT = 28
+
+
+def is_compact_layout(window_width: int) -> bool:
+    """True when the shell should use Deck-sized panel minimums."""
+    return int(window_width or 0) > 0 and int(window_width) <= COMPACT_LAYOUT_WIDTH
+
+
+def left_panel_min_width(window_width: int) -> int:
+    return (
+        MIN_LEFT_PANEL_WIDTH_COMPACT
+        if is_compact_layout(window_width)
+        else MIN_LEFT_PANEL_WIDTH_COMFORT
+    )
+
+
+def queue_panel_min_width(window_width: int) -> int:
+    return (
+        MIN_QUEUE_PANEL_WIDTH_COMPACT
+        if is_compact_layout(window_width)
+        else MIN_QUEUE_PANEL_WIDTH
+    )
