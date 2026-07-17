@@ -48,6 +48,7 @@ from steempeg.ui.queue_card_shared import (
     set_game_icon_label,
     status_dot_style as _status_dot_style,
 )
+from steempeg.ui.ui_density import COMFORT, UiDensity, tab_label
 
 _LIST_TITLE_ICON = 28
 
@@ -106,6 +107,9 @@ class QueueJobCard(QFrame):
         selected: bool = False,
         cache_dir: str | None = None,
         parent=None,
+        *,
+        thumb_w: int = _LIST_THUMB_W,
+        thumb_h: int = _LIST_THUMB_H,
     ):
         super().__init__(parent)
         self._cache_dir = cache_dir
@@ -123,11 +127,15 @@ class QueueJobCard(QFrame):
         self._apply_card_style()
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(8)
 
         thumb_wrap, self._num_label, _ = build_queue_thumb_strip(
-            job, show_game_icon=False, cache_dir=self._cache_dir
+            job,
+            width=thumb_w,
+            height=thumb_h,
+            show_game_icon=False,
+            cache_dir=self._cache_dir,
         )
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
@@ -221,7 +229,7 @@ class QueueJobCard(QFrame):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self.setMinimumHeight(_LIST_THUMB_H + 20)
+        self.setMinimumHeight(thumb_h + 12)
 
         self._refresh_num_style()
 
@@ -504,6 +512,7 @@ class RenderQueuePanel(QWidget):
         self._card_widgets: list = []
         self._jobs: list[RenderJob] = []
         self._empty_hint_dismissed = False
+        self._density = COMFORT
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET)
@@ -515,6 +524,7 @@ class RenderQueuePanel(QWidget):
 
         self._tab = LibraryTabWidget("🎬 Render Queue", "queue", closable=False)
         self._tab.set_active(True)
+        self._lbl_view = None  # set below
         tab_row.addStretch()
         tab_row.addWidget(self._tab)
         tab_row.addStretch()
@@ -527,9 +537,11 @@ class RenderQueuePanel(QWidget):
         toolbar = QFrame()
         toolbar.setObjectName("queueToolbar")
         toolbar.setStyleSheet(_QUEUE_TOOLBAR_BOX)
-        tool_layout = QHBoxLayout(toolbar)
-        tool_layout.setContentsMargins(16, 6, 16, 6)
-        tool_layout.setSpacing(8)
+        self._toolbar = toolbar
+        self._tool_layout = QHBoxLayout(toolbar)
+        self._tool_layout.setContentsMargins(16, 6, 16, 6)
+        self._tool_layout.setSpacing(8)
+        tool_layout = self._tool_layout
 
         self._count_label = QLabel("(0)")
         self._count_label.setStyleSheet(
@@ -587,6 +599,7 @@ class RenderQueuePanel(QWidget):
         actions_layout.addWidget(self._btn_clear)
 
         lbl_view = QLabel("View")
+        self._lbl_view = lbl_view
         lbl_view.setStyleSheet(
             f"color: #777777; font-weight: bold; font-size: 13px; border: none;"
             f" background: transparent; {_FONT}"
@@ -631,7 +644,7 @@ class RenderQueuePanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet(_SCROLL_STYLE)
 
         self._list_host = QueueListHost()
@@ -672,11 +685,11 @@ class RenderQueuePanel(QWidget):
         self._empty_panel = QFrame()
         self._empty_panel.setObjectName("queueEmptyPanel")
         self._empty_panel.setStyleSheet(_EMPTY_PANEL_STYLE)
-        self._empty_panel.setFixedWidth(300)
-        self._empty_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self._empty_panel.setMaximumWidth(300)
+        self._empty_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         empty_panel_layout = QVBoxLayout(self._empty_panel)
-        empty_panel_layout.setContentsMargins(20, 18, 20, 16)
-        empty_panel_layout.setSpacing(8)
+        empty_panel_layout.setContentsMargins(16, 14, 16, 12)
+        empty_panel_layout.setSpacing(6)
         empty_panel_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._empty_label = QLabel("Queue is empty")
@@ -722,7 +735,10 @@ class RenderQueuePanel(QWidget):
 
         self._scroll.viewport().installEventFilter(self)
 
-        self.setMinimumWidth(420)
+        from steempeg.ui.layout_defaults import MIN_QUEUE_PANEL_WIDTH_COMPACT
+
+        # Floor is the compact Deck size; app.py raises it to comfort on wide windows.
+        self.setMinimumWidth(MIN_QUEUE_PANEL_WIDTH_COMPACT)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def eventFilter(self, obj, event):
@@ -744,12 +760,14 @@ class RenderQueuePanel(QWidget):
         self._rebuild_cards()
 
     def _sync_view_toggle_buttons(self) -> None:
+        active = getattr(self, "_toggle_style_active", None) or _QUEUE_TOGGLE_ACTIVE
+        inactive = getattr(self, "_toggle_style_inactive", None) or _QUEUE_TOGGLE_INACTIVE
         if self._view_mode == "list":
-            self._btn_view_list.setStyleSheet(_QUEUE_TOGGLE_ACTIVE)
-            self._btn_view_grid.setStyleSheet(_QUEUE_TOGGLE_INACTIVE)
+            self._btn_view_list.setStyleSheet(active)
+            self._btn_view_grid.setStyleSheet(inactive)
         else:
-            self._btn_view_list.setStyleSheet(_QUEUE_TOGGLE_INACTIVE)
-            self._btn_view_grid.setStyleSheet(_QUEUE_TOGGLE_ACTIVE)
+            self._btn_view_list.setStyleSheet(inactive)
+            self._btn_view_grid.setStyleSheet(active)
 
     def _active_host_layout(self):
         if self._view_mode == "grid":
@@ -786,7 +804,52 @@ class RenderQueuePanel(QWidget):
         cache_dir = self._queue_cache_dir()
         if self._view_mode == "grid":
             return QueueGridJobCard(job, selected=selected, cache_dir=cache_dir)
-        return QueueJobCard(job, selected=selected, cache_dir=cache_dir)
+        d = self._density
+        return QueueJobCard(
+            job,
+            selected=selected,
+            cache_dir=cache_dir,
+            thumb_w=d.queue_thumb_w,
+            thumb_h=d.queue_thumb_h,
+        )
+
+    def apply_density(self, dense: UiDensity) -> None:
+        """Shrink queue chrome for Deck-class windows; rebuild list cards if thumbs change."""
+        prev = self._density
+        self._density = dense
+        self._tab.set_label(tab_label("queue", dense))
+        self._tab.apply_density(dense)
+        self._tool_layout.setContentsMargins(dense.queue_tool_pad_h, 4, dense.queue_tool_pad_h, 4)
+        self._tool_layout.setSpacing(6 if dense.compact else 8)
+        if self._lbl_view is not None:
+            self._lbl_view.setVisible(not dense.compact)
+            self._lbl_view.setStyleSheet(
+                f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
+                f" border: none; background: transparent; {_FONT}"
+            )
+        toggle_active = (
+            f"background-color: #5138e6; color: white; border-radius: 10px; font-weight: bold; "
+            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
+        )
+        toggle_inactive = (
+            f"background-color: transparent; color: #888888; border-radius: 10px; font-weight: bold; "
+            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
+        )
+        # Keep current selection styling via sync helper after stylesheet swap.
+        self._toggle_style_active = toggle_active
+        self._toggle_style_inactive = toggle_inactive
+        self._btn_clear.setFixedHeight(dense.queue_btn_h)
+        self._btn_history.setFixedSize(dense.queue_btn_h, dense.queue_btn_h)
+        clear_font = self._btn_clear.font()
+        clear_font.setPixelSize(dense.footer_font)
+        self._btn_clear.setFont(clear_font)
+        self._empty_panel.setMaximumWidth(dense.queue_empty_w)
+        self._sync_view_toggle_buttons()
+        if (
+            prev.queue_thumb_w != dense.queue_thumb_w
+            or prev.queue_thumb_h != dense.queue_thumb_h
+        ) and self._view_mode == "list" and self._jobs:
+            self._rebuild_cards()
 
     def _wire_card(self, card) -> None:
         card.clicked.connect(self._on_card_clicked)
