@@ -74,8 +74,12 @@ class RenderCompleteDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Render complete", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumWidth(580)
-        self.resize(600, 340)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        mw, _ = scaled_dialog_size(580, 340, parent=parent)
+        rw, rh = scaled_dialog_size(600, 340, parent=parent)
+        self.setMinimumWidth(mw)
+        self.resize(rw, rh)
         self._choice = RenderCompleteChoice.OK
         self._output_file = output_file or ""
 
