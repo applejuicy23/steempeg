@@ -302,15 +302,9 @@ class LifecycleMixin:
                 # If the process is named ffmpeg or ffprobe, terminate it.
                 if "ffmpeg" in child.name().lower() or "ffprobe" in child.name().lower():
                     try:
-                        if os.name == "nt":
-                            subprocess.run(
-                                ["taskkill", "/F", "/T", "/PID", str(child.pid)],
-                                creationflags=subprocess.CREATE_NO_WINDOW,
-                                capture_output=True,
-                                timeout=5,
-                            )
-                        else:
-                            child.kill()
+                        from steempeg.infra.process import kill_process_tree
+
+                        kill_process_tree(child.pid, label=child.name())
                         print(f"Zombie proccess killed: {child.name()}")
                     except Exception:
                         pass
@@ -366,15 +360,9 @@ class LifecycleMixin:
             for child in children:
                 if "ffmpeg" in child.name().lower() or "ffprobe" in child.name().lower():
                     try:
-                        if os.name == "nt":
-                            subprocess.run(
-                                ["taskkill", "/F", "/T", "/PID", str(child.pid)],
-                                creationflags=subprocess.CREATE_NO_WINDOW,
-                                capture_output=True,
-                                timeout=5,
-                            )
-                        else:
-                            child.kill()
+                        from steempeg.infra.process import kill_process_tree
+
+                        kill_process_tree(child.pid, label=child.name())
                         print(f"Killed FFmpeg after exit: {child.name()}")
                     except Exception:
                         pass
@@ -414,7 +402,9 @@ class LifecycleMixin:
         # Make the window itself transparent so only the stylesheet's rounded rect is
         # painted; otherwise the square window background pokes out past the 8px radius.
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        dialog.setFixedSize(620, 470)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        dialog.setFixedSize(*scaled_dialog_size(620, 470, parent=self.ui))
         dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
 
         shell_layout = QVBoxLayout(dialog)
