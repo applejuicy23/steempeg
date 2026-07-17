@@ -74,7 +74,9 @@ def show_report_dialog(app):
     dialog = QDialog(app.ui)
     dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-    dialog.setFixedSize(560, 460)
+    from steempeg.ui.ui_density import scaled_dialog_size
+
+    dialog.setFixedSize(*scaled_dialog_size(560, 460, parent=app.ui))
     dialog.setStyleSheet(_REPORT_DIALOG_STYLE)
 
     shell = QVBoxLayout(dialog)
