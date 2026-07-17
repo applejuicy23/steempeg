@@ -454,9 +454,17 @@ class PlayerMixin:
                 self.custom_timeline.canvas.playback_speed = speed_float
 
     def _keep_deprecated_library_pill_hidden(self):
-        """mega_top_pill was replaced by tab buttons; never show it (orphan window on Windows)."""
-        if hasattr(self, 'mega_top_pill'):
-            self.mega_top_pill.hide()
+        """Old Clips Manager title pill — only hide if still the orphaned legacy widget.
+
+        The live Grid/List + Sorting toolbar is ``library_toolbar_pill``; do not hide it
+        when leaving theatre/fullscreen (that used to wipe the sort/filter row).
+        """
+        pill = getattr(self, "mega_top_pill", None)
+        toolbar = getattr(self, "library_toolbar_pill", None)
+        # Legacy name accidentally pointed at the toolbar — never hide that.
+        if pill is not None and pill is not toolbar:
+            if pill.objectName() == "deprecatedLibraryPill":
+                pill.hide()
 
     def _set_left_library_panel_visible(self, visible: bool):
         """Toggle the whole library column — do not show/hide tab children individually."""
@@ -2460,13 +2468,10 @@ class PlayerMixin:
 
     @staticmethod
     def _open_file_with_default_app(path: str) -> None:
+        from steempeg.infra.paths import open_path_with_default_app
+
         try:
-            if sys.platform == "win32":
-                os.startfile(os.path.normpath(path))  # noqa: S606
-            elif sys.platform == "darwin":
-                subprocess.run(["open", path], check=False)
-            else:
-                subprocess.run(["xdg-open", path], check=False)
+            open_path_with_default_app(path)
         except OSError as exc:
             logging.error("Failed to open file %s: %s", path, exc)
 
