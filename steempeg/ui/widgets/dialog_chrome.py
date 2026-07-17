@@ -106,6 +106,15 @@ class _DialogTitleBar(QWidget):
     # --- Drag the frameless dialog by its title bar -----------------------
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            # Wayland/X11: compositor-owned move (manual QWidget.move is often ignored).
+            handle = self._dialog.windowHandle()
+            if handle is not None:
+                try:
+                    if handle.startSystemMove():
+                        event.accept()
+                        return
+                except Exception:
+                    pass
             self._drag_offset = (
                 event.globalPosition().toPoint() - self._dialog.frameGeometry().topLeft()
             )
@@ -189,6 +198,25 @@ class SteempegDialog(QDialog):
         card_layout.addWidget(body_host, 1)
 
         self._apply_card_chrome(bar_color, bg_color)
+        self._comfort_size: tuple[int, int] | None = None
+
+    def set_comfort_size(self, width: int, height: int) -> None:
+        """Design size at desktop density; auto-shrinks on Deck-class screens."""
+        self._comfort_size = (int(width), int(height))
+        self._apply_scaled_size()
+
+    def _apply_scaled_size(self) -> None:
+        if not self._comfort_size:
+            return
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        w, h = scaled_dialog_size(*self._comfort_size, parent=self.parent())
+        self.setFixedSize(w, h)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_scaled_size()
+        self._apply_round_mask()
 
     def _apply_round_mask(self) -> None:
         path = QPainterPath()
@@ -197,10 +225,6 @@ class SteempegDialog(QDialog):
             float(_CARD_RADIUS_PX), float(_CARD_RADIUS_PX),
         )
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._apply_round_mask()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
