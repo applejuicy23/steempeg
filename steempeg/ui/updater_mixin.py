@@ -142,7 +142,9 @@ class UpdaterMixin:
         if backup_folder and backup_folder != "None" and clicked == 0:
             backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
             if os.path.exists(backup_path):
-                os.startfile(backup_path)
+                from steempeg.infra.paths import open_path_with_default_app
+
+                open_path_with_default_app(backup_path)
 
     def restore_local_backup(self, backup_folder_name: str):
         """Swap the live install with a backed-up tree via restore.bat."""
