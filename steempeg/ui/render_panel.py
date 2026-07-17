@@ -385,6 +385,7 @@ def _settings_page_margins():
 
 def _page_title(text):
     title = QLabel(text)
+    title.setObjectName("settingsPageTitle")
     title.setStyleSheet(_TITLE_QSS)
     return title
 
@@ -392,6 +393,7 @@ def _page_title(text):
 def _content_width_wrap(inner: QWidget) -> QWidget:
     """Clamp a block to the settings-tab content column (Source Info right edge)."""
     wrap = QWidget()
+    wrap.setObjectName("settingsContentWrap")
     wrap.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
     wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
     lay = QVBoxLayout(wrap)
@@ -750,7 +752,8 @@ def restyle_source_page(ui):
     grid.setSpacing(8)
     for i, (caption, name) in enumerate(specs):
         block = _stat_block(caption, getattr(ui, name))
-        block.setFixedWidth(210)  # uniform, capped to the widest content -> no full-width sprawl
+        block.setObjectName("settingsStatBlock")
+        block.setFixedWidth(210)  # uniform; density resize via apply_settings_panel_density
         grid.addWidget(block, i // 3, i % 3)
     grid.setColumnStretch(3, 1)  # extra panel width pools on the right, blocks stay put
     root.addLayout(grid)
@@ -811,6 +814,7 @@ def restyle_export_page(ui):
     card_box.addWidget(cap)
     card_box.addWidget(summary)
     card.setFixedWidth(SETTINGS_CONTENT_WIDTH)
+    card.setProperty("settingsContentFixed", True)
     card_row = QHBoxLayout()
     card_row.setContentsMargins(0, 0, 0, 0)
     card_row.addWidget(card)
@@ -971,3 +975,57 @@ def set_settings_panel_locked(app, locked: bool):
         app.right_scroll.setEnabled(True)
     if hasattr(app, 'neo_wrapper'):
         app.neo_wrapper.setEnabled(True)
+_EXPORT_COMBO_NAMES = frozenset({"combo_output_preset", "combo_container"})
+
+
+def apply_settings_panel_density(ui, dense) -> None:
+    """Resize Source/Video/Audio/Export chrome for Deck-class windows."""
+    content_w = int(dense.settings_content_w)
+    combo_w = int(dense.settings_combo_w)
+    stat_w = int(dense.settings_stat_w)
+    export_w = max(120, (content_w - 16) // 2)
+    title_font = int(dense.settings_title_font)
+    margins = dense.settings_page_margin
+
+    tabs = getattr(ui, "settings_tabs", None)
+    root = tabs if tabs is not None else ui
+
+    for wrap in root.findChildren(QWidget, "settingsContentWrap"):
+        wrap.setMaximumWidth(content_w)
+
+    for block in root.findChildren(QFrame, "settingsStatBlock"):
+        block.setFixedWidth(stat_w)
+
+    for card in root.findChildren(QFrame, "summaryCard"):
+        card.setFixedWidth(content_w)
+
+    for path_row in root.findChildren(QFrame, "outputPathRow"):
+        path_row.setMaximumWidth(content_w)
+
+    src = getattr(ui, "source_label", None)
+    if src is not None:
+        src.setMinimumWidth(content_w)
+        src.setMaximumWidth(content_w)
+
+    for title in root.findChildren(QLabel, "settingsPageTitle"):
+        title.setStyleSheet(
+            f"color: #ffffff; font-size: {title_font}px; font-weight: bold; "
+            f"background: transparent; {_FONT}"
+        )
+
+    for combo in root.findChildren(QComboBox):
+        name = combo.objectName() or ""
+        if name in _EXPORT_COMBO_NAMES:
+            combo.setFixedWidth(export_w)
+        elif combo.minimumWidth() > 0 or combo.maximumWidth() < 16777215:
+            combo.setFixedWidth(combo_w)
+
+    for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export"):
+        page = getattr(ui, page_attr, None)
+        if page is None:
+            continue
+        lay = page.layout()
+        if lay is not None:
+            lay.setContentsMargins(*margins)
+            lay.setSpacing(6 if dense.compact else 10)
+
