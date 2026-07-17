@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -443,17 +444,72 @@ def jump_warnings(from_version: float, to_version: float) -> list[str]:
     return warnings
 
 
+def release_platform_tag() -> str:
+    """Host platform tag used in zip names (``Steempeg_vX.Y_windows.zip``)."""
+    if sys.platform == "win32":
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def _asset_matches_platform(name: str, platform: str) -> bool:
+    """True if this zip is clearly meant for ``platform``."""
+    n = name.lower()
+    markers = (f"_{platform}.", f"-{platform}.", f"_{platform}_", f"-{platform}-")
+    return any(m in n for m in markers)
+
+
+def _asset_is_other_platform(name: str, platform: str) -> bool:
+    """True if zip is tagged for a different OS than ``platform``."""
+    n = name.lower()
+    for other in ("windows", "linux", "macos", "darwin"):
+        if other == platform:
+            continue
+        if other == "darwin" and platform == "macos":
+            continue
+        if _asset_matches_platform(n, other):
+            return True
+        # legacy / alternate spellings
+        if other == "darwin" and _asset_matches_platform(n, "macos"):
+            return True
+    return False
+
+
 def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None, int | None, str | None]:
-    for asset in assets:
-        name = (asset.get("name") or "").lower()
-        if name.endswith(".zip"):
-            size = asset.get("size")
-            try:
-                size_i = int(size) if size is not None else None
-            except (TypeError, ValueError):
-                size_i = None
-            digest = (asset.get("digest") or "").strip() or None
-            return asset.get("browser_download_url"), asset.get("name"), size_i, digest
+    """Pick the install zip for *this* OS.
+
+    Prefers ``*_windows.zip`` / ``*_linux.zip``. On Windows, untagged legacy
+    ``Steempeg_vX.Y.zip`` is still accepted. Cross-platform zips are never chosen
+    (Linux must not offer a Windows build and vice versa).
+    """
+    platform = release_platform_tag()
+    zips = [a for a in (assets or []) if str(a.get("name") or "").lower().endswith(".zip")]
+
+    def _unpack(asset: dict) -> tuple[str | None, str | None, int | None, str | None]:
+        size = asset.get("size")
+        try:
+            size_i = int(size) if size is not None else None
+        except (TypeError, ValueError):
+            size_i = None
+        digest = (asset.get("digest") or "").strip() or None
+        return asset.get("browser_download_url"), asset.get("name"), size_i, digest
+
+    for asset in zips:
+        name = str(asset.get("name") or "")
+        if _asset_matches_platform(name, platform):
+            return _unpack(asset)
+        if platform == "macos" and _asset_matches_platform(name, "darwin"):
+            return _unpack(asset)
+
+    # Windows-only legacy: untagged zip from the .exe era.
+    if platform == "windows":
+        for asset in zips:
+            name = str(asset.get("name") or "")
+            if _asset_is_other_platform(name, platform):
+                continue
+            return _unpack(asset)
+
     return None, None, None, None
 
 
@@ -658,8 +714,13 @@ def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
                 if item.get("draft"):
                     continue
                 entry = parse_release(item)
-                if entry:
-                    releases.append(entry)
+                if not entry:
+                    continue
+                # Linux/macOS: only list releases that ship a matching zip.
+                # Windows keeps the full history (legacy untagged zips still match).
+                if entry.zip_url is None and release_platform_tag() != "windows":
+                    continue
+                releases.append(entry)
 
             if len(batch) < 100:
                 break
