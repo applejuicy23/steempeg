@@ -47,7 +47,16 @@ class MainWindow(QDialog):
 
     def showEvent(self, event):
         refresh_dwm_chrome(self)
+        host = self._app_host
+        if host is not None and hasattr(host, "on_main_window_resized"):
+            host.on_main_window_resized()
         super().showEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        host = self._app_host
+        if host is not None and hasattr(host, "on_main_window_resized"):
+            host.on_main_window_resized()
 
     def nativeEvent(self, eventType, message):
         result = handle_native_event(self, eventType, message)
