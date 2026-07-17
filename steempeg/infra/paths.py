@@ -55,6 +55,35 @@ def display_path(path: str) -> str:
     return path
 
 
+def open_path_with_default_app(path: str) -> None:
+    """Open a file or folder with the OS default handler."""
+    if not path:
+        return
+    norm = os.path.normpath(path)
+    if not os.path.exists(norm):
+        return
+    if sys.platform == "win32":
+        os.startfile(norm)  # noqa: S606
+    elif sys.platform == "darwin":
+        subprocess.run(["open", norm], check=False)
+    else:
+        subprocess.run(["xdg-open", norm], check=False)
+
+
+def open_text_file(path: str) -> None:
+    """Open a text/log file in a sensible editor for the current OS."""
+    if not path or not os.path.isfile(path):
+        return
+    norm = os.path.abspath(path)
+    if sys.platform == "win32":
+        subprocess.Popen(["notepad.exe", norm])
+        return
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-t", norm])
+        return
+    open_path_with_default_app(norm)
+
+
 def open_in_file_manager(path, *, reveal: bool = False):
     """Open a file or folder in the OS file manager.
 
@@ -66,14 +95,7 @@ def open_in_file_manager(path, *, reveal: bool = False):
     if reveal:
         reveal_in_file_manager(norm)
         return
-    if not os.path.exists(norm):
-        return
-    if sys.platform == "win32":
-        os.startfile(norm)  # noqa: S606
-    elif sys.platform == "darwin":
-        subprocess.run(["open", norm], check=False)
-    else:
-        subprocess.run(["xdg-open", norm], check=False)
+    open_path_with_default_app(norm)
 
 
 def reveal_in_file_manager(path: str) -> None:
