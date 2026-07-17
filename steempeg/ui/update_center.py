@@ -537,8 +537,12 @@ class UpdateCenterDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumSize(560, 640)
-        self.resize(580, 680)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        mw, mh = scaled_dialog_size(560, 640, parent=parent)
+        rw, rh = scaled_dialog_size(580, 680, parent=parent)
+        self.setMinimumSize(mw, mh)
+        self.resize(rw, rh)
         self._releases: list[ReleaseEntry] = []
         self._local_backups = local_backups
         self._fetch_thread: _ReleaseFetchThread | None = None
