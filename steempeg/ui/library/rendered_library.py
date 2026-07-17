@@ -147,7 +147,11 @@ class RenderedLibraryMixin:
         self._startup_library_scan_active = False
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
-        tab = LibraryTabWidget(label, mode)
+        from steempeg.ui.ui_density import COMFORT, tab_label
+
+        dense = getattr(self, "_ui_density", None) or COMFORT
+        tab = LibraryTabWidget(tab_label(mode, dense), mode)
+        tab.apply_density(dense)
         tab.activated.connect(self.set_library_panel)
         tab.close_requested.connect(self._close_library_tab)
         return tab
@@ -174,7 +178,9 @@ class RenderedLibraryMixin:
         cm_row.addWidget(self.btn_library_add)
         cm_row.addStretch()
 
-        if hasattr(self, "mega_top_pill"):
+        if hasattr(self, "library_toolbar_pill"):
+            pass  # live toolbar — never hide
+        elif hasattr(self, "mega_top_pill"):
             self.mega_top_pill.hide()
 
         for key, tab in self._library_tabs.items():
