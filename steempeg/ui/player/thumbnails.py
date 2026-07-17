@@ -51,30 +51,10 @@ def preview_bucket_sec(hover_ms: float, duration_ms: float = 0, *, interval: int
 
 
 def _kill_process_tree(proc, *, label: str = "ffmpeg") -> None:
-    """Terminate a subprocess and its children (Windows needs /T)."""
-    if proc is None:
-        return
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                capture_output=True,
-                timeout=5,
-            )
-        else:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1)
-    except Exception as exc:
-        _log.debug("Could not kill %s pid=%s: %s", label, getattr(proc, "pid", "?"), exc)
-        try:
-            proc.kill()
-        except Exception:
-            pass
+    """Terminate a subprocess and its children."""
+    from steempeg.infra.process import kill_process_tree
+
+    kill_process_tree(proc, label=label)
 
 
 def _ensure_thumb_dir(path: str) -> None:
