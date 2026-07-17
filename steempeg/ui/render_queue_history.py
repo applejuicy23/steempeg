@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -78,11 +79,12 @@ _STATUS_ICON = 14
 
 _FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
 
+# Match Render Queue Clear / Refresh: Segoe UI bold 13px.
 _PILL_BTN_STYLE = """
     QPushButton {
         background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 6px 14px;
-        font-size: 12px; font-weight: 600;
+        border-radius: 8px; padding: 4px 12px;
+        font-size: 13px; font-weight: bold;
         font-family: 'Segoe UI', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
@@ -104,8 +106,12 @@ class RenderQueueHistoryDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Render History", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumSize(520, 510)
-        self.resize(560, 590)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        mw, mh = scaled_dialog_size(520, 510, parent=parent)
+        rw, rh = scaled_dialog_size(560, 590, parent=parent)
+        self.setMinimumSize(mw, mh)
+        self.resize(rw, rh)
         self._batches = batches
         # Append frame/label rules on top of the shared card stylesheet.
         self.setStyleSheet(self.styleSheet() + _DIALOG_STYLE + _BATCH_FRAME + _JOB_FRAME)
@@ -130,6 +136,10 @@ class RenderQueueHistoryDialog(SteempegDialog):
         btn_clear.setIcon(load_icon("clear.png", 16))
         btn_clear.setIconSize(QSize(16, 16))
         btn_clear.setStyleSheet(_PILL_BTN_STYLE)
+        clear_font = QFont("Segoe UI")
+        clear_font.setBold(True)
+        clear_font.setPixelSize(13)
+        btn_clear.setFont(clear_font)
         btn_clear.clicked.connect(self._confirm_clear)
         header.addWidget(btn_clear)
         root.addLayout(header)
