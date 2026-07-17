@@ -90,7 +90,10 @@ class SteempegMessageDialog(SteempegDialog):
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent), **theme_kwargs}
         super().__init__(title, parent, **theme_kwargs)
-        self.setMinimumWidth(min_width)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        scaled_w, _ = scaled_dialog_size(min_width, 200, parent=parent)
+        self.setMinimumWidth(scaled_w)
         self._clicked_index = -1
 
         body = QLabel(message)
