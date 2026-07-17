@@ -52,7 +52,13 @@ def _format_mbit(kbps: float | int) -> str:
         return f"{int(round(rounded))} Mbit"
     return f"{rounded:.1f} Mbit"
 from steempeg.core.dash import discovery, health, mpd, repair
-from steempeg.infra.paths import get_resource_path, get_save_directory
+from steempeg.core.rendered_media import resolve_ffmpeg_exe
+from steempeg.infra.paths import (
+    get_resource_path,
+    get_save_directory,
+    open_path_with_default_app,
+    open_text_file,
+)
 from steempeg.ui.icon_assets import warning_pixmap
 from steempeg.render import bitrate
 from steempeg.render.output_formats import (
@@ -841,7 +847,7 @@ class RenderMixin:
         """Open a rendered output with the system default app."""
         try:
             if os.path.isfile(file_path):
-                os.startfile(file_path)
+                open_path_with_default_app(file_path)
         except OSError as exc:
             logging.warning("Could not open rendered file %s: %s", file_path, exc)
 
@@ -3021,11 +3027,16 @@ class RenderMixin:
             if sizes[1] <= 0:
                 from steempeg.ui.layout_defaults import (
                     DEFAULT_QUEUE_PANEL_WIDTH,
-                    MIN_QUEUE_PANEL_WIDTH,
+                    queue_panel_min_width,
                 )
 
+                win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
+                min_q = queue_panel_min_width(win_w) if win_w else DEFAULT_QUEUE_PANEL_WIDTH
                 queue_w = self.get_layout_setting("queue_panel_width", DEFAULT_QUEUE_PANEL_WIDTH)
-                queue_w = max(MIN_QUEUE_PANEL_WIDTH, min(int(queue_w), total))
+                queue_w = max(min_q, min(int(queue_w), total))
+                # On Deck-class widths, prefer the compact floor so the player keeps room.
+                if win_w and queue_w > min_q and total - queue_w < 360:
+                    queue_w = min_q
                 self.right_h_splitter.setSizes([total - queue_w, queue_w])
         else:
             self.render_queue_panel.show()
@@ -3094,9 +3105,13 @@ class RenderMixin:
 
     def _start_render_job(self, job, batch_mode: bool = False) -> None:
         job.refresh_output_path()
-        ffmpeg_exe = os.path.join(_bin_dir, "ffmpeg.exe")
-        if not os.path.exists(ffmpeg_exe):
-            steempeg_critical(self.ui, "Error", "ffmpeg.exe not found!")
+        from shutil import which
+
+        ffmpeg_exe = resolve_ffmpeg_exe()
+        if not os.path.isfile(ffmpeg_exe):
+            ffmpeg_exe = which(ffmpeg_exe) or which("ffmpeg") or ""
+        if not ffmpeg_exe:
+            steempeg_critical(self.ui, "Error", "ffmpeg not found!")
             if batch_mode:
                 self._stop_queue_batch()
             return
@@ -3288,7 +3303,7 @@ class RenderMixin:
 
         def open_log_file():
             if hasattr(self, "current_log_file") and os.path.exists(self.current_log_file):
-                subprocess.Popen(["notepad.exe", os.path.abspath(self.current_log_file)])
+                open_text_file(self.current_log_file)
 
         if batch_continue:
             btn_log.clicked.connect(open_log_file)
