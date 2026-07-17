@@ -39,6 +39,15 @@ else:
 _bin_dir = os.path.join(_base_dir, "bin")
 os.environ["PATH"] = _bin_dir + os.pathsep + _base_dir + os.pathsep + os.environ["PATH"]
 
+# libmpv aborts/segfaults if LC_NUMERIC is a non-C locale (SteamOS/Deck default).
+os.environ.setdefault("LC_NUMERIC", "C")
+try:
+    import locale as _locale
+
+    _locale.setlocale(_locale.LC_NUMERIC, "C")
+except Exception:
+    pass
+
 import mpv
 
 from PySide6.QtCore import Qt, QTimer, QSize, QObject
@@ -420,12 +429,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 target_layout = self.ui.right_panel.layout()
                 insert_idx = 0
 
-            #2. CREATE A BEAUTIFUL TABLET (Without a counter)
             cm_row = qtw.QHBoxLayout()
             cm_row.setContentsMargins(0, 0, 0, 4)
             cm_row.setSpacing(8)
-            
+
+            # Legacy title pill (unused — tabs replaced it). Keep orphaned & hidden.
             self.mega_top_pill = qtw.QFrame()
+            self.mega_top_pill.setObjectName("deprecatedLibraryPill")
+            self.mega_top_pill.hide()
             self.mega_top_pill.setStyleSheet("""
                 QFrame {
                     background-color: #2d2d2d;
@@ -452,8 +463,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             # Container for external padding
             top_bar_layout = qtw.QHBoxLayout()
             top_bar_layout.setContentsMargins(12, 0, 12, 0)
+            self._left_toolbar_outer = top_bar_layout
             
             mega_top_pill = qtw.QFrame()
+            self.library_toolbar_pill = mega_top_pill
+            mega_top_pill.setObjectName("libraryToolbarPill")
             mega_top_pill.setStyleSheet("""
                 QFrame {
                     background-color: #2d2d2d;
@@ -477,9 +491,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             top_pill_layout = qtw.QHBoxLayout(mega_top_pill)
             top_pill_layout.setContentsMargins(16, 6, 16, 6) # Capsule Internal Padding
             top_pill_layout.setSpacing(14)
+            self._top_pill_layout = top_pill_layout
 
             # "View" Text
             lbl_view = qtw.QLabel("View")
+            self._lbl_view = lbl_view
             lbl_view.setStyleSheet("color: #777777; font-weight: bold; font-size: 13px;")
 
             # Grid / List Toggle
@@ -625,15 +641,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         # 1. Create a text label (like the one in View)
         lbl_sorting = QLabel("Sorting")
+        self._lbl_sorting = lbl_sorting
         lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Segoe UI'; font-size: 13px;")
 
         # 2. Creating a stylish sorting dropdown list
         self.combo_sort = QComboBox()
         self.combo_sort.setCursor(Qt.PointingHandCursor)
-        # Size to the widest entry ("Default (Don't touch)") and never shrink below it,
-        # so the label can't get clipped when the Clips Manager panel gets narrow.
+        # Size to the widest entry, but allow shrink on Deck-class left panes
+        # (compact min ~360). Popup still uses the full longest-entry width.
         self.combo_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.combo_sort.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.combo_sort.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.combo_sort.setStyleSheet(compact_combo_stylesheet(settings_popup=True))
 
         # 3. Adding elements with attractive icons
@@ -686,10 +703,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             group_layout = QHBoxLayout(group_widget)
             group_layout.setContentsMargins(0, 0, 0, 0)
             group_layout.setSpacing(0)
+            self._sort_filter_group_layout = group_layout
 
             # 4.3. Placing elements into our new super-container
             group_layout.addWidget(lbl_sorting)
             group_layout.addSpacing(14)
+            self._sort_label_spacing_idx = group_layout.count() - 1
             group_layout.addWidget(self.combo_sort)
             group_layout.addSpacing(2)
             group_layout.addWidget(filter_btn)
@@ -741,12 +760,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             
             # 3. LEFT CIRCLE (Sidebar)
             sidebar_frame = QFrame()
+            self._neo_sidebar = sidebar_frame
             sidebar_frame.setFixedWidth(220)
             sidebar_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
             sidebar_frame.setStyleSheet("""
                 QFrame { background: transparent; border: none; border-right: 1px solid #383838; }
             """)
             sidebar_layout = QVBoxLayout(sidebar_frame)
+            self._neo_sidebar_layout = sidebar_layout
             sidebar_layout.setAlignment(Qt.AlignTop)
             sidebar_layout.setContentsMargins(10, 15, 10, 15)
             sidebar_layout.setSpacing(10)
@@ -760,6 +781,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 QPushButton:hover { background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }
                 QPushButton:checked { background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }
             """
+            self._neo_nav_pill_style_template = True
             
             self.neo_nav_buttons = []
             custom_names = ["ℹ️  Source Info", "🎬  Video Settings", "🎵  Audio Settings", "🚀  Export Settings"]
@@ -986,10 +1008,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         # 1. CREATE ONE COMMON MEGA-CAPSULATE
         mega_pill = QFrame()
+        self._footer_mega_pill = mega_pill
         mega_pill.setStyleSheet(pill_style)
         mega_layout = QVBoxLayout(mega_pill)
         mega_layout.setContentsMargins(6, 6, 6, 6) # Slightly increased the margins from the edges of the circle
         mega_layout.setSpacing(4) # Distance between floors
+        self._footer_mega_layout = mega_layout
+        self._footer_unified_style = unified_table_style
 
         #2. CREATE TWO FLOORS INSIDE THE CAPSULE
         top_row = QHBoxLayout()
@@ -1931,8 +1956,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 
                 self.main_v_splitter.setCollapsible(0, False) # The player is immortal
                 self.main_v_splitter.setCollapsible(1, True)  # Tabs can be collapsed/hidden
-                from steempeg.ui.layout_defaults import DEFAULT_MAIN_V_SPLITTER_SIZES
-                self.main_v_splitter.setSizes(DEFAULT_MAIN_V_SPLITTER_SIZES)
+                from steempeg.ui.layout_defaults import (
+                    DEFAULT_MAIN_V_SPLITTER_SIZES,
+                    DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT,
+                    STEAM_DECK_HEIGHT,
+                    STEAM_DECK_WIDTH,
+                    is_compact_layout,
+                )
+
+                _avail_h = self.ui.height() or STEAM_DECK_HEIGHT
+                _avail_w = self.ui.width() or STEAM_DECK_WIDTH
+                self.main_v_splitter.setSizes(
+                    DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT
+                    if is_compact_layout(_avail_w) or _avail_h <= STEAM_DECK_HEIGHT + 40
+                    else DEFAULT_MAIN_V_SPLITTER_SIZES
+                )
                 # Beautiful modern splitter handle
                 
                 self.main_v_splitter.setStyleSheet("""
@@ -1967,13 +2005,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 from steempeg.ui.layout_defaults import (
                     DEFAULT_QUEUE_VIEW,
                     DEFAULT_RIGHT_H_SPLITTER_SIZES,
-                    MIN_QUEUE_PANEL_WIDTH,
+                    STEAM_DECK_WIDTH,
+                    queue_panel_min_width,
                 )
                 from steempeg.ui.render_queue_panel import RenderQueuePanel
 
                 queue_view = self.get_layout_setting("queue_view_mode", DEFAULT_QUEUE_VIEW)
                 self.render_queue_panel = RenderQueuePanel(initial_view_mode=queue_view)
-                self.render_queue_panel.setMinimumWidth(MIN_QUEUE_PANEL_WIDTH)
+                self.render_queue_panel.setMinimumWidth(
+                    queue_panel_min_width(self.ui.width() or STEAM_DECK_WIDTH)
+                )
                 self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
                 self.render_queue_panel.job_remove_requested.connect(self.remove_queue_job)
                 self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
@@ -2051,18 +2092,45 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.aspect_frame = self.mpv_wrapper.aspect_frame
         self.mpv_screen = self.mpv_wrapper.mpv_screen
 
-        self.player = mpv.MPV(
-            vo='gpu',
-            panscan=1.0,
-            keepaspect='no',
-            wid=int(self.mpv_screen.winId()), 
-            hwdec='auto',         
-            keep_open='yes',      
-            ao='wasapi',         
-            log_file=mpv_log_path_str,
-            loglevel='info'
-        )
-        self.player['af'] = 'rubberband'
+        # Windows: gpu + wasapi. Linux/SteamOS (esp. QEMU): avoid Vulkan/Zink
+        # paths that segfault without a real GPU; wasapi does not exist there.
+        mpv_opts = {
+            "panscan": 1.0,
+            "keepaspect": "no",
+            "wid": int(self.mpv_screen.winId()),
+            "keep_open": "yes",
+            "log_file": mpv_log_path_str,
+            "loglevel": "info",
+        }
+        if sys.platform == "win32":
+            mpv_opts.update(vo="gpu", hwdec="auto", ao="wasapi")
+        else:
+            soft = os.environ.get("STEEMPEG_SOFT_VIDEO", "1") != "0"
+            if soft:
+                # QEMU / no real GPU: force Mesa software GL before libmpv loads.
+                os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+                os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
+            # Override: STEEMPEG_VO=x11|gpu|null
+            vo = (os.environ.get("STEEMPEG_VO") or "").strip() or ("gpu" if soft else "gpu")
+            mpv_opts.update(
+                vo=vo,
+                hwdec="no",
+                ao=os.environ.get("STEEMPEG_AO", "null"),
+            )
+            if vo == "gpu":
+                # Prefer X11 GL path over Vulkan/Zink (crashes in QEMU).
+                mpv_opts["gpu_context"] = os.environ.get("STEEMPEG_GPU_CONTEXT", "x11")
+        try:
+            self.player = mpv.MPV(**mpv_opts)
+        except Exception as exc:
+            logging.error("mpv init failed (%s); retrying vo=null", exc)
+            mpv_opts.pop("gpu_context", None)
+            mpv_opts.update(vo="null", hwdec="no", ao="null")
+            self.player = mpv.MPV(**mpv_opts)
+        try:
+            self.player["af"] = "rubberband"
+        except Exception as exc:
+            logging.warning("mpv rubberband af unavailable: %s", exc)
         self._init_preview_quality()
         self._apply_saved_preview_quality_to_player()
         self._install_mpv_geometry_hooks()
@@ -2202,18 +2270,26 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._start_startup_scans_pending = True
 
         if hasattr(self.ui, 'main_splitter'):
-            from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
-
-            self.ui.main_splitter.setSizes(
-                self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
+            from steempeg.ui.layout_defaults import (
+                DEFAULT_MAIN_SPLITTER_SIZES,
+                DEFAULT_MAIN_SPLITTER_SIZES_COMPACT,
+                STEAM_DECK_WIDTH,
+                is_compact_layout,
+                left_panel_min_width,
             )
-            # Guarantee the Clips Manager is always wide enough for two grid columns
-            # AND for the full sorting toolbar (the combo no longer shrinks). A 254px
-            # card + 15px spacing needs ~553px of viewport; add the scrollbar, frame and
-            # toolbar headroom and we land at ~620. 580 sat right on the 2-column
-            # threshold, which left a dead zone of "1 column + empty space" on other
-            # screens / DPIs (it only looked fine on the dev PC).
-            self.ui.left_panel.setMinimumWidth(620)
+
+            # Prefer comfort sizes on big screens; Deck-class windows use compact.
+            avail_w = self.ui.width() or STEAM_DECK_WIDTH
+            default_sizes = (
+                DEFAULT_MAIN_SPLITTER_SIZES_COMPACT
+                if is_compact_layout(avail_w)
+                else DEFAULT_MAIN_SPLITTER_SIZES
+            )
+            self.ui.main_splitter.setSizes(
+                self.get_layout_setting("main_splitter_sizes", default_sizes)
+            )
+            self.ui.left_panel.setMinimumWidth(left_panel_min_width(avail_w))
+            self._apply_responsive_layout_mins()
 
         self._apply_dark_shell()
 
@@ -2341,6 +2417,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
     def _sync_startup_layout(self):
         """Re-apply splitter sizes once the maximized window has real geometry."""
+        self._ui_density = None  # force chrome density for the real window size
         self._apply_startup_splitter_sizes()
         if hasattr(self, "_restore_library_ui_state"):
             self._restore_library_ui_state()
@@ -2367,12 +2444,272 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         QTimer.singleShot(0, _start)
 
-    def _apply_startup_splitter_sizes(self):
-        from steempeg.ui.layout_defaults import DEFAULT_MAIN_SPLITTER_SIZES
+    def on_main_window_resized(self):
+        """Keep panel minimums + chrome density in sync with window width."""
+        self._apply_responsive_layout_mins()
 
-        main_sizes = self.get_layout_setting("main_splitter_sizes", DEFAULT_MAIN_SPLITTER_SIZES)
+    def _apply_responsive_layout_mins(self):
+        """Switch panel mins and shrink chrome for Deck-class (~1280) windows."""
+        from steempeg.ui.layout_defaults import (
+            left_panel_min_width,
+            queue_panel_min_width,
+        )
+        from steempeg.ui.ui_density import density_for_width
+
+        w = int(self.ui.width() or 0)
+        if w <= 0:
+            return
+        if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
+            self.ui.left_panel.setMinimumWidth(left_panel_min_width(w))
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            panel.setMinimumWidth(queue_panel_min_width(w))
+        dense = density_for_width(w)
+        if getattr(self, "_ui_density", None) is dense:
+            return
+        self._ui_density = dense
+        self._apply_ui_density(dense)
+
+    def _apply_ui_density(self, dense):
+        """Resize fonts/paddings/labels for comfort vs compact (Steam Deck)."""
+        from steempeg.ui.ui_density import (
+            NEO_NAV_COMFORT,
+            NEO_NAV_COMPACT,
+            folder_button_label,
+            tab_label,
+            updates_button_label,
+        )
+        from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+
+        # --- Library tabs ---
+        tabs = getattr(self, "_library_tabs", None) or {}
+        for mode, tab in tabs.items():
+            if hasattr(tab, "set_label"):
+                tab.set_label(tab_label(mode, dense))
+            if hasattr(tab, "apply_density"):
+                tab.apply_density(dense)
+        add_btn = getattr(self, "btn_library_add", None)
+        if add_btn is not None:
+            sz = dense.add_tab_size
+            add_btn.setFixedSize(sz, sz)
+            add_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #2d2d2d; color: #ffffff; border: 1px solid #353535;
+                    border-radius: {dense.tab_radius}px; font-weight: 800;
+                    font-size: {18 if not dense.compact else 14}px; padding: 0px;
+                    min-width: {sz}px; max-width: {sz}px;
+                    min-height: {sz}px; max-height: {sz}px;
+                }}
+                QPushButton:hover {{ background-color: #3a3a3a; border-color: #6b5a8e; }}
+            """)
+
+        # --- Left toolbar ---
+        outer = getattr(self, "_left_toolbar_outer", None)
+        if outer is not None:
+            outer.setContentsMargins(dense.toolbar_margin_h, 0, dense.toolbar_margin_h, 0)
+        pill_lay = getattr(self, "_top_pill_layout", None)
+        if pill_lay is not None:
+            pill_lay.setContentsMargins(
+                dense.toolbar_pad_h, dense.toolbar_pad_v, dense.toolbar_pad_h, dense.toolbar_pad_v
+            )
+            pill_lay.setSpacing(dense.toolbar_spacing)
+        for attr in ("_lbl_view", "_lbl_sorting"):
+            lbl = getattr(self, attr, None)
+            if lbl is not None:
+                lbl.setVisible(not dense.compact)
+                lbl.setStyleSheet(
+                    f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
+                )
+        count = getattr(self, "lbl_clip_count", None)
+        if count is not None:
+            count.setStyleSheet(
+                f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
+            )
+        self.toggle_style_active = (
+            f"background-color: #5138e6; color: white; border-radius: 10px; font-weight: bold; "
+            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
+        )
+        self.toggle_style_inactive = (
+            f"background-color: transparent; color: #888888; border-radius: 10px; font-weight: bold; "
+            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
+        )
+        # Re-apply current view toggle styles
+        mode = getattr(self, "_clips_view_mode", None) or getattr(self, "current_view_mode", "grid")
+        if hasattr(self, "btn_view_grid") and hasattr(self, "btn_view_list"):
+            if mode == "list":
+                self.btn_view_list.setStyleSheet(self.toggle_style_active)
+                self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+            else:
+                self.btn_view_grid.setStyleSheet(self.toggle_style_active)
+                self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
+
+        filt = getattr(self, "btn_filter_pill", None)
+        if filt is not None and hasattr(filt, "apply_density"):
+            filt.apply_density(dense)
+
+        combo = getattr(self, "combo_sort", None)
+        if combo is not None:
+            combo_qss = f"""
+                QComboBox {{
+                    background-color: #383838; color: #ffffff; border: 2px solid #444444;
+                    border-radius: 8px; padding: {dense.combo_pad}; font-weight: bold;
+                    font-family: 'Segoe UI', Arial, sans-serif; font-size: {dense.combo_font}px;
+                    min-height: {dense.combo_min_h}px;
+                }}
+                QComboBox:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
+                QComboBox:on {{ background-color: #383838; }}
+                QComboBox::drop-down {{ border: none; padding-right: 5px; background: transparent; }}
+            """ + COMBO_POPUP_ITEM_RULES
+            combo.setStyleSheet(combo_qss)
+            fnt = combo.font()
+            fnt.setPixelSize(dense.combo_font)
+            combo.setFont(fnt)
+
+        # List view fixed columns: Deck can't fit Type+Date+Duration at comfort widths.
+        table = getattr(self.ui, "table_clips", None)
+        if table is not None and table.columnCount() >= 4:
+            if dense.compact:
+                table.setColumnWidth(1, 0)  # Type — hide
+                table.setColumnHidden(1, True)
+                table.setColumnWidth(2, 110)  # Date
+                table.setColumnWidth(3, 70)  # Duration
+            else:
+                table.setColumnHidden(1, False)
+                table.setColumnWidth(1, 100)
+                table.setColumnWidth(2, 160)
+                table.setColumnWidth(3, 100)
+
+        # --- Footer ---
+        footer_style = f"""
+            QPushButton {{
+                background-color: #383838; color: #ffffff; border: 2px solid #444444;
+                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', Arial, sans-serif;
+                font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
+                min-height: {dense.footer_min_h}px;
+            }}
+            QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+            QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}
+            QPushButton::menu-indicator {{ image: none; }}
+        """
+        self._footer_unified_style = footer_style
+        btn_about = getattr(self.ui, "btn_about", None)
+        btn_update = getattr(self.ui, "btn_update_check", None)
+        if btn_about is not None:
+            btn_about.setStyleSheet(footer_style)
+        if btn_update is not None:
+            btn_update.setStyleSheet(footer_style)
+            btn_update.setText(updates_button_label(dense))
+            btn_update.setToolTip("Check for updates")
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "apply_density"):
+            picker.apply_density(dense)
+            folders = getattr(self, "clips_folders", None) or []
+            n = len(folders) if folders else 0
+            if hasattr(self, "update_folder_button_label"):
+                self.update_folder_button_label()
+            else:
+                picker.set_folder_label(folder_button_label(max(n, 1) if n else 0, dense))
+        refresh = getattr(self, "btn_refresh", None)
+        if refresh is not None and hasattr(refresh, "apply_density"):
+            refresh.apply_density(dense)
+
+        # --- Neo settings sidebar ---
+        neo = getattr(self, "_neo_sidebar", None)
+        if neo is not None:
+            neo.setFixedWidth(dense.neo_sidebar_w)
+        neo_lay = getattr(self, "_neo_sidebar_layout", None)
+        if neo_lay is not None:
+            m = 6 if dense.compact else 10
+            t = 8 if dense.compact else 15
+            neo_lay.setContentsMargins(m, t, m, t)
+            neo_lay.setSpacing(6 if dense.compact else 10)
+        nav_names = NEO_NAV_COMPACT if dense.compact else NEO_NAV_COMFORT
+        pill = f"""
+            QPushButton {{
+                background-color: transparent; color: #a0a0a0;
+                border: 2px solid transparent; border-radius: {10 if dense.compact else 14}px;
+                padding: {dense.neo_nav_pad}; text-align: left;
+                font-size: {dense.neo_nav_font}px; font-weight: 700;
+            }}
+            QPushButton:hover {{ background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }}
+            QPushButton:checked {{ background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }}
+        """
+        for i, btn in enumerate(getattr(self, "neo_nav_buttons", []) or []):
+            if i < len(nav_names):
+                btn.setText(nav_names[i])
+            btn.setStyleSheet(pill)
+
+        # --- Player transport ---
+        for btn, w, h in (
+            (getattr(self.ui, "btn_skip_back", None), dense.skip_w, dense.skip_h),
+            (getattr(self.ui, "btn_skip_forward", None), dense.skip_w, dense.skip_h),
+            (getattr(self.ui, "btn_play", None), dense.play_w, dense.play_h),
+        ):
+            if btn is not None:
+                btn.setMinimumSize(w, h)
+
+        chip = dense.chrome_chip
+        for attr in (
+            "btn_theater",
+            "btn_fullscreen",
+            "btn_add_marker",
+            "btn_screenshot",
+            "btn_clipcut1",
+            "btn_clipcut2",
+            "btn_clipcutback",
+        ):
+            b = getattr(self, attr, None) or getattr(self.ui, attr, None)
+            if b is not None and hasattr(b, "setFixedSize"):
+                b.setFixedSize(chip, chip)
+
+        # --- Render settings (Source / Video / Audio / Export) ---
+        from steempeg.ui.render_panel import apply_settings_panel_density
+
+        apply_settings_panel_density(self.ui, dense)
+        if hasattr(self, "right_scroll") and self.right_scroll is not None:
+            from PySide6.QtCore import Qt as _Qt
+
+            self.right_scroll.setHorizontalScrollBarPolicy(
+                _Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+
+        # --- Render queue ---
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None and hasattr(panel, "apply_density"):
+            panel.apply_density(dense)
+
+    def _apply_startup_splitter_sizes(self):
+        from steempeg.ui.layout_defaults import (
+            DEFAULT_MAIN_SPLITTER_SIZES,
+            DEFAULT_MAIN_SPLITTER_SIZES_COMPACT,
+            DEFAULT_MAIN_V_SPLITTER_SIZES,
+            DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT,
+            STEAM_DECK_HEIGHT,
+            STEAM_DECK_WIDTH,
+            is_compact_layout,
+        )
+
+        avail_w = self.ui.width() or STEAM_DECK_WIDTH
+        avail_h = self.ui.height() or STEAM_DECK_HEIGHT
+        compact = is_compact_layout(avail_w)
+        default_main = (
+            DEFAULT_MAIN_SPLITTER_SIZES_COMPACT if compact else DEFAULT_MAIN_SPLITTER_SIZES
+        )
+        main_sizes = self.get_layout_setting("main_splitter_sizes", default_main)
         if hasattr(self.ui, "main_splitter"):
             self.ui.main_splitter.setSizes(main_sizes)
+        self._apply_responsive_layout_mins()
+        v_splitter = getattr(self, "main_v_splitter", None)
+        if v_splitter is not None:
+            default_v = (
+                DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT
+                if compact or avail_h <= STEAM_DECK_HEIGHT + 40
+                else DEFAULT_MAIN_V_SPLITTER_SIZES
+            )
+            v_sizes = self.get_layout_setting("main_v_splitter_sizes", default_v)
+            v_splitter.setSizes(v_sizes)
+
     def _setup_bitrate_labels(self):
         # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
         # Instead of stuffing multiple lines into one label, we create separate
@@ -2498,7 +2835,8 @@ def main():
     from PySide6.QtGui import QIcon
     from PySide6.QtCore import QTimer
     
-    os.environ["QT_MEDIA_BACKEND"] = "windows"
+    if sys.platform == "win32":
+        os.environ.setdefault("QT_MEDIA_BACKEND", "windows")
     
 
     parser = argparse.ArgumentParser()
@@ -2513,15 +2851,17 @@ def main():
         sys.exit(run_update_handler(args.job))
 
 
-    try:
-        import ctypes
-        # MUST stay constant across versions. A version-specific AppUserModelID makes
-        # Windows treat every update as a brand-new app with no cached icon, so the
-        # taskbar falls back to the generic icon until the cache catches up — this was
-        # the long-standing "icon disappears after update" bug.
-        myappid = 'Steempeg.SteempegApp'
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-    except: pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            # MUST stay constant across versions. A version-specific AppUserModelID makes
+            # Windows treat every update as a brand-new app with no cached icon, so the
+            # taskbar falls back to the generic icon until the cache catches up — this was
+            # the long-standing "icon disappears after update" bug.
+            myappid = 'Steempeg.SteempegApp'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
 
     app = QApplication(sys.argv)
 
@@ -2575,9 +2915,21 @@ def main():
         # Inset the rect so a restored (non-maximized) window stays on screen. With
         # custom title bar the top inset is smaller than the old native caption.
         window._apply_dark_shell()
+        from steempeg.ui.layout_defaults import (
+            TARGET_MIN_WINDOW_HEIGHT,
+            TARGET_MIN_WINDOW_WIDTH,
+        )
+
         _screen = app.primaryScreen()
         if _screen is not None:
-            window.ui.setGeometry(_screen.availableGeometry().adjusted(60, 36, -60, -40))
+            _avail = _screen.availableGeometry()
+            # Floor is Steam Deck 1280×800; clamp if the real screen is smaller (QEMU).
+            _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
+            _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
+            window.ui.setMinimumSize(_min_w, _min_h)
+            window.ui.setGeometry(_avail.adjusted(60, 36, -60, -40))
+        else:
+            window.ui.setMinimumSize(TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
         window.ui.showMaximized()
         QApplication.processEvents()
         window._sync_startup_layout()
