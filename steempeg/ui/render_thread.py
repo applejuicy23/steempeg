@@ -92,8 +92,11 @@ class RenderThread(QThread):
         self.is_cancelled = True
         if self.current_process:
             try:
-                subprocess.call(['taskkill', '/F', '/T', '/PID', str(self.current_process.pid)])
-            except: pass
+                from steempeg.infra.process import kill_process_tree
+
+                kill_process_tree(self.current_process, label="ffmpeg")
+            except Exception:
+                pass
 
     def toggle_pause(self):
         """ Pauses or resumes FFmpeg at the OS level. """
