@@ -1508,17 +1508,15 @@ class LibraryMixin:
         picker = getattr(self, "folder_picker", None)
         if picker is None:
             return
+        from steempeg.ui.ui_density import COMFORT, folder_button_label
+
         folders = getattr(self, "clips_folders", [])
         # The + only exists once at least one folder is set; with no folders the user
         # must pick a main folder first via Choose Folder.
         picker.set_add_visible(bool(folders))
-        if len(folders) <= 1:
-            picker.set_folder_label("📂 Choose Folder…")
-        else:
-            picker.set_folder_label(
-                f"📂 Choose Folder… ({len(folders)})",
-                "Library folders:\n" + "\n".join(folders),
-            )
+        dense = getattr(self, "_ui_density", None) or COMFORT
+        tip = ("Library folders:\n" + "\n".join(folders)) if len(folders) > 1 else ""
+        picker.set_folder_label(folder_button_label(len(folders), dense), tip)
 
     def _default_clips_dialog_path(self):
         return default_clips_dialog_path(getattr(self, "clips_folders", None))
