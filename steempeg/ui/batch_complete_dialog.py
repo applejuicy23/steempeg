@@ -144,8 +144,12 @@ class BatchCompleteDialog(SteempegDialog):
         always_clear_queue: bool = True,
     ):
         super().__init__("Batch render complete", parent, bar_color=bar_color, bg_color=bg_color)
-        self.setMinimumSize(520, 420)
-        self.resize(580, 560)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        mw, mh = scaled_dialog_size(520, 420, parent=parent)
+        rw, rh = scaled_dialog_size(580, 560, parent=parent)
+        self.setMinimumSize(mw, mh)
+        self.resize(rw, rh)
         self._choice = BatchCompleteChoice.OK
         self.setStyleSheet(self.styleSheet() + _JOB_FRAME)
 
