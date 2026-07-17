@@ -3,51 +3,33 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
-_TAB_INACTIVE = """
-    QFrame#libraryTab {
+from steempeg.ui.ui_density import COMFORT, UiDensity
+
+
+def _tab_qss(font_px: int, radius: int, *, active: bool, hover: bool) -> str:
+    if active:
+        border, color = "#6b5a8e", "#ffffff"
+    elif hover:
+        border, color = "#555555", "#ffffff"
+    else:
+        border, color = "#353535", "#aaaaaa"
+    return f"""
+    QFrame#libraryTab {{
         background-color: #2d2d2d;
-        border: 1px solid #353535;
-        border-radius: 16px;
-    }
-    QLabel#libraryTabText {
-        color: #aaaaaa;
+        border: 1px solid {border};
+        border-radius: {radius}px;
+    }}
+    QLabel#libraryTabText {{
+        color: {color};
         background: transparent;
         border: none;
         font-weight: bold;
-        font-size: 14px;
+        font-size: {font_px}px;
         font-family: 'Segoe UI', Arial, sans-serif;
-    }
+    }}
 """
-_TAB_ACTIVE = """
-    QFrame#libraryTab {
-        background-color: #2d2d2d;
-        border: 1px solid #6b5a8e;
-        border-radius: 16px;
-    }
-    QLabel#libraryTabText {
-        color: #ffffff;
-        background: transparent;
-        border: none;
-        font-weight: bold;
-        font-size: 14px;
-        font-family: 'Segoe UI', Arial, sans-serif;
-    }
-"""
-_TAB_HOVER_INACTIVE = """
-    QFrame#libraryTab {
-        background-color: #2d2d2d;
-        border: 1px solid #555555;
-        border-radius: 16px;
-    }
-    QLabel#libraryTabText {
-        color: #ffffff;
-        background: transparent;
-        border: none;
-        font-weight: bold;
-        font-size: 14px;
-        font-family: 'Segoe UI', Arial, sans-serif;
-    }
-"""
+
+
 _CLOSE_HIDDEN = """
     QPushButton {
         background: transparent;
@@ -85,19 +67,19 @@ class LibraryTabWidget(QFrame):
         self._closable = closable
         self._active = False
         self._hovered = False
+        self._label = label
+        self._density = COMFORT
         self.setObjectName("libraryTab")
-        self.setFixedHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(14, 0, 6 if closable else 14, 0)
-        row.setSpacing(2)
+        self._row = QHBoxLayout(self)
+        self._row.setSpacing(2)
 
         self._text = QLabel(label)
         self._text.setObjectName("libraryTabText")
         self._text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        row.addWidget(self._text)
+        self._row.addWidget(self._text)
 
         self._close = QPushButton("×")
         self._close.setFixedSize(18, 18)
@@ -108,14 +90,32 @@ class LibraryTabWidget(QFrame):
         if not closable:
             self._close.hide()
             self._close.setEnabled(False)
-        row.addWidget(self._close, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._row.addWidget(self._close, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        text_w = self._text.fontMetrics().horizontalAdvance(label)
-        close_w = 18 if closable else 0
-        side_pad = 14 + (6 if closable else 14)
-        self.setMinimumWidth(text_w + close_w + side_pad + 8)
-
+        self.apply_density(COMFORT)
         self.set_active(False)
+
+    def set_label(self, label: str) -> None:
+        self._label = label
+        self._text.setText(label)
+        self._recompute_min_width()
+
+    def apply_density(self, dense: UiDensity) -> None:
+        self._density = dense
+        self.setFixedHeight(dense.tab_height)
+        pad_r = dense.tab_pad_r if self._closable else dense.tab_pad_l
+        self._row.setContentsMargins(dense.tab_pad_l, 0, pad_r, 0)
+        close_sz = 16 if dense.compact else 18
+        self._close.setFixedSize(close_sz, close_sz)
+        self._apply_style()
+        self._recompute_min_width()
+
+    def _recompute_min_width(self) -> None:
+        d = self._density
+        text_w = self._text.fontMetrics().horizontalAdvance(self._label)
+        close_w = self._close.width() if self._closable else 0
+        pad_r = d.tab_pad_r if self._closable else d.tab_pad_l
+        self.setMinimumWidth(text_w + close_w + d.tab_pad_l + pad_r + 6)
 
     def set_active(self, active: bool) -> None:
         self._active = bool(active)
@@ -125,12 +125,15 @@ class LibraryTabWidget(QFrame):
         self.close_requested.emit(self.mode)
 
     def _apply_style(self) -> None:
-        if self._active:
-            self.setStyleSheet(_TAB_ACTIVE)
-        elif self._hovered:
-            self.setStyleSheet(_TAB_HOVER_INACTIVE)
-        else:
-            self.setStyleSheet(_TAB_INACTIVE)
+        d = self._density
+        self.setStyleSheet(
+            _tab_qss(
+                d.tab_font,
+                d.tab_radius,
+                active=self._active,
+                hover=self._hovered and not self._active,
+            )
+        )
 
     def enterEvent(self, event):
         self._hovered = True
