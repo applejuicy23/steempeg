@@ -45,6 +45,72 @@ from steempeg.ui.message_dialog import steempeg_information
 
 
 class PlayerMixin:
+    def _ensure_linux_mpv_vo(self) -> bool:
+        """Create libmpv on Linux at first play (never at app startup).
+
+        Embedding via wid= freezes Bazzite/NVIDIA (black unkillable window).
+        Use a separate mpv window instead (force_window), keep Qt on Wayland.
+        """
+        if sys.platform == "win32":
+            return True
+
+        import mpv as _mpv
+
+        soft = os.environ.get("STEEMPEG_SOFT_VIDEO", "0") == "1"
+        if soft:
+            os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+            os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
+
+        vo = (os.environ.get("STEEMPEG_VO") or "").strip() or ("gpu" if soft else "gpu")
+        ao = (os.environ.get("STEEMPEG_AO") or "").strip() or "pulse"
+        log_path = getattr(self, "current_mpv_log_file", None) or ""
+
+        if getattr(self, "player", None) is None:
+            opts = {
+                "panscan": 1.0,
+                "keepaspect": "yes",
+                "keep_open": "yes",
+                "loglevel": "info",
+                "vo": vo,
+                "hwdec": "no",
+                "ao": ao,
+                "osc": "no",
+                "input_default_bindings": "no",
+                "input_vo_keyboard": "no",
+                "load_scripts": "no",
+                # Separate window — no wid= into Qt (avoids hard GPU freezes).
+                "force_window": "immediate",
+                "title": "Steempeg Player",
+            }
+            if log_path:
+                opts["log_file"] = log_path
+            try:
+                self.player = _mpv.MPV(**opts)
+            except Exception as exc:
+                logging.error("Linux mpv create failed (%s); trying vo=x11", exc)
+                opts["vo"] = "x11"
+                try:
+                    self.player = _mpv.MPV(**opts)
+                except Exception as exc2:
+                    logging.error("Linux mpv create failed again: %s", exc2)
+                    self.player = None
+                    return False
+            try:
+                self.player["af"] = "rubberband"
+            except Exception as exc:
+                logging.warning("mpv rubberband af unavailable: %s", exc)
+            self._linux_mpv_vo_attached = True
+            logging.info("Linux mpv created: vo=%s (external window)", opts.get("vo"))
+            if hasattr(self, "_apply_saved_preview_quality_to_player"):
+                self._apply_saved_preview_quality_to_player()
+            return True
+
+        if getattr(self, "_linux_mpv_vo_attached", False):
+            return True
+        # Player exists from an older path — just mark attached.
+        self._linux_mpv_vo_attached = True
+        return True
+
     def _clear_player_surface(self):
         """Stop mpv and return the player area to the empty placeholder.
 
@@ -398,6 +464,7 @@ class PlayerMixin:
             return
         try:
             self._ignore_playback_stall(0.8)
+            self._ensure_linux_mpv_vo()
             self.player.play(path)
             self.player.pause = True
             if hasattr(self.ui, 'btn_play'):
@@ -411,7 +478,7 @@ class PlayerMixin:
     def toggle_play(self):
         """ Toggles Play/Pause state in MPV and updates the button icon. """
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        if getattr(self.player, 'path', None) is None: return
+        if not getattr(self, 'player', None) or getattr(self.player, 'path', None) is None: return
 
         if self.player.pause:
             dur = self._playback_duration_sec()
@@ -1776,6 +1843,7 @@ class PlayerMixin:
             self._rendered_duration_cache = (os.path.normpath(file_path), float(seed_dur))
 
         try:
+            self._ensure_linux_mpv_vo()
             self.player.play(abs_path)
             self.player.pause = False
         except Exception as exc:
@@ -1995,6 +2063,7 @@ class PlayerMixin:
         self._ignore_playback_stall(0.35)
 
         try:
+            self._ensure_linux_mpv_vo()
             self.player.play(abs_path)
             self.player.pause = False
         except Exception as exc:

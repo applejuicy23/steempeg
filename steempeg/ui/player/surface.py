@@ -1,9 +1,17 @@
 """The video surface that libmpv renders into, plus a 16:9 aspect helper.
 
-MPVWrapper owns the native child window the mpv player attaches to, draws an
+MPVWrapper owns the child window the mpv player attaches to (Windows), draws an
 optional highlight border and keeps the video centered at 16:9. VideoAspectKeeper
 caps a widget's height to a 16:9 ratio so black bars do not appear above and below.
+
+On Linux we deliberately do NOT use WA_NativeWindow: those X11 child surfaces
+under XWayland+NVIDIA hard-freeze the compositor (black window, unkillable)
+even when libmpv is never created. Linux playback uses an external mpv window.
 """
+from __future__ import annotations
+
+import sys
+
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QWidget
 
@@ -11,28 +19,32 @@ from PySide6.QtWidgets import QWidget
 class MPVWrapper(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.aspect_frame = self 
-        
-        # Frame Status Flag
+        self.aspect_frame = self
+
         self._is_border_active = False
+        # Windows: real native child for wid= embed. Linux: plain Qt widgets only.
+        self._native_embed = sys.platform == "win32"
 
-        #  1. VIDEO (Native, Hardcore)
         self.mpv_screen = QWidget(self)
-        self.mpv_screen.setAttribute(Qt.WA_NativeWindow)
-        self.mpv_screen.setAttribute(Qt.WA_DontCreateNativeAncestors)
-        self.mpv_screen.setAttribute(Qt.WA_OpaquePaintEvent)
-        self.mpv_screen.setAttribute(Qt.WA_NoSystemBackground)
+        if self._native_embed:
+            self.mpv_screen.setAttribute(Qt.WA_NativeWindow)
+            self.mpv_screen.setAttribute(Qt.WA_DontCreateNativeAncestors)
+            self.mpv_screen.setAttribute(Qt.WA_OpaquePaintEvent)
+            self.mpv_screen.setAttribute(Qt.WA_NoSystemBackground)
+        else:
+            # Placeholder panel — video plays in a separate mpv window on Linux.
+            self.mpv_screen.setStyleSheet("background-color: #0a0a0a;")
 
-        # 2. 4 LINES (Also native, to avoid lag with video)
         self.lines = []
         for _ in range(4):
             line = QWidget(self)
-            line.setAttribute(Qt.WA_NativeWindow) 
-            line.setAttribute(Qt.WA_DontCreateNativeAncestors)
+            if self._native_embed:
+                line.setAttribute(Qt.WA_NativeWindow)
+                line.setAttribute(Qt.WA_DontCreateNativeAncestors)
             line.setStyleSheet("background-color: #ffcc00;")
             line.hide()
             self.lines.append(line)
-            
+
         self.top_line, self.bottom_line, self.left_line, self.right_line = self.lines
 
         self.setStyleSheet("background-color: transparent;")
@@ -47,60 +59,53 @@ class MPVWrapper(QWidget):
     def update_geometry(self):
         w = self.width()
         h = self.height()
-        
-        # Closed Splitter Fix
+
         if w < 5 or h < 5:
-            # The native window won't hide itself! Let's collapse it—and hide it with a sledgehammer!
             self.mpv_screen.setGeometry(0, 0, 0, 0)
             self.mpv_screen.hide()
-            for line in self.lines: 
+            for line in self.lines:
                 line.hide()
-            if getattr(self, 'hud_reference', None) and self.hud_reference.parent() == self:
+            if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
                 self.hud_reference.hide()
             return
-            
-        # If the splitter is reopened, we bring everything back to life.
+
         if self.mpv_screen.isHidden():
             self.mpv_screen.show()
-            if getattr(self, '_is_border_active', False):
-                for line in self.lines: line.show()
-            if getattr(self, 'hud_reference', None) and self.hud_reference.parent() == self:
+            if getattr(self, "_is_border_active", False):
+                for line in self.lines:
+                    line.show()
+            if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
                 self.hud_reference.show()
 
+        b = 3 if getattr(self, "_is_border_active", False) else 0
 
-        b = 3 if getattr(self, '_is_border_active', False) else 0
-        
         avail_w = w - (b * 2)
         avail_h = h - (b * 2)
-        
+
         if avail_w * 9 > avail_h * 16:
             video_h = avail_h
             video_w = int(avail_h * 16 / 9)
         else:
             video_w = avail_w
             video_h = int(avail_w * 9 / 16)
-            
+
         total_w = video_w + (b * 2)
         total_h = video_h + (b * 2)
-        
+
         x = (w - total_w) // 2
         y = (h - total_h) // 2
-        
-        # 1. Embed the video
+
         self.mpv_screen.setGeometry(x + b, y + b, video_w, video_h)
 
-        # 2. Place the frame (only if enabled)
-        if getattr(self, '_is_border_active', False):
+        if getattr(self, "_is_border_active", False):
             self.top_line.setGeometry(x, y, total_w, b)
             self.bottom_line.setGeometry(x, y + total_h - b, total_w, b)
             self.left_line.setGeometry(x, y + b, b, video_h)
             self.right_line.setGeometry(x + total_w - b, y + b, b, video_h)
-            # Bring the lines to the front so they don't get hidden.
             for line in self.lines:
                 line.raise_()
 
-        #3. Our HUD (Button Panel)
-        if getattr(self, 'hud_reference', None) and self.hud_reference.parent() == self:
+        if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
             hud = self.hud_reference
             hud_h = max(55, hud.sizeHint().height())
             hud_w = min(800, w - 40)
@@ -112,7 +117,6 @@ class MPVWrapper(QWidget):
         super().resizeEvent(event)
 
     def moveEvent(self, event):
-        # Native mpv HWND does not always track parent moves during splitter drags.
         self.update_geometry()
         super().moveEvent(event)
 
@@ -121,10 +125,9 @@ class MPVWrapper(QWidget):
         super().showEvent(event)
 
     def set_border_active(self, active):
-        if not hasattr(self, 'lines'):
+        if not hasattr(self, "lines"):
             return
-            
-        #Save the state and toggle visibility.
+
         self._is_border_active = active
         for line in self.lines:
             if active:
@@ -132,13 +135,13 @@ class MPVWrapper(QWidget):
                 line.raise_()
             else:
                 line.hide()
-                
 
         self.update_geometry()
 
 
 class VideoAspectKeeper(QObject):
-    """ Keeps the widget strictly within the 16:9 aspect ratio, preventing black bars from appearing at the top and bottom. """
+    """Keeps the widget strictly within the 16:9 aspect ratio."""
+
     def __init__(self, video_widget):
         super().__init__(video_widget)
         self.video_widget = video_widget
@@ -146,13 +149,9 @@ class VideoAspectKeeper(QObject):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Resize:
-            # Find out the current width of the video widget
             w = event.size().width()
-            # Calculate the ideal height for the 16:9 format
             ideal_height = int(w * 9 / 16)
-            
-            # If the height exceeds the ideal, we block its further growth
             if self.video_widget.maximumHeight() != ideal_height:
                 self.video_widget.setMaximumHeight(ideal_height)
-                
+
         return super().eventFilter(obj, event)

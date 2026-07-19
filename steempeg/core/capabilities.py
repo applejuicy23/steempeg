@@ -3,6 +3,7 @@
 Pure logic - no Qt. Runs tiny throwaway ffmpeg encodes to see which encoders
 work here, and relies on ffmpeg being on PATH (the app prepends ./bin at startup).
 """
+import os
 import subprocess
 import sys
 
@@ -49,6 +50,11 @@ def _encoder_works(test_code):
 def detect_supported_encoders():
     """Return a list of (display_name, codec) for every encoder that works here.
     CPU is always included as a fallback."""
+    # Linux/Bazzite: probing nvenc/amf/qsv at startup can poke the GPU driver and
+    # contribute to freezes with embedded mpv. Opt in with STEEMPEG_PROBE_HWENC=1.
+    if sys.platform != "win32" and os.environ.get("STEEMPEG_PROBE_HWENC", "0") != "1":
+        return [("CPU (Software)", "libx264")]
+
     supported = [(name, expose) for name, expose, test in _ENCODERS if _encoder_works(test)]
     if not supported:
         supported = [("CPU (Software)", "libx264")]

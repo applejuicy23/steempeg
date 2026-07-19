@@ -1,14 +1,18 @@
 """The main application window, replacing the runtime-loaded smpegui13.ui.
- 
+
 Wraps the pyside6-uic-generated Ui_Dialog so the rest of the app keeps using
 self.ui.<widget_name> exactly as it did under QUiLoader. setupUi() builds the
-widgets and parents them to this dialog; we then mirror them as attributes on
-the window so existing references (self.ui.table_clips, self.ui.combo_quality, ...)
-resolve unchanged.
+widgets and parents them to this window; we then mirror them as attributes so
+existing references (self.ui.table_clips, self.ui.combo_quality, ...) resolve.
+
+On Linux we use QWidget (not QDialog): Wayland/KDE often never maps a QDialog
+toplevel to the screen even when Qt reports visible=True.
 """
+import sys
+
 from PySide6.QtCore import QEvent
-from PySide6.QtWidgets import QDialog
- 
+from PySide6.QtWidgets import QDialog, QWidget
+
 from steempeg.ui.main_window_ui import Ui_Dialog
 from steempeg.ui.window_chrome import (
     handle_native_event,
@@ -17,8 +21,10 @@ from steempeg.ui.window_chrome import (
     refresh_dwm_chrome,
 )
 
+_WindowBase = QDialog if sys.platform == "win32" else QWidget
 
-class MainWindow(QDialog):
+
+class MainWindow(_WindowBase):
     def __init__(self, parent=None, app_host=None):
         super().__init__(parent)
         self._app_host = app_host

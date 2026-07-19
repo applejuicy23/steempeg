@@ -48,6 +48,11 @@ try:
 except Exception:
     pass
 
+# Must run before ``import mpv``: ctypes.find_library ignores PATH on Linux.
+from steempeg.infra.libmpv_bootstrap import bootstrap_libmpv
+
+bootstrap_libmpv()
+
 import mpv
 
 from PySide6.QtCore import Qt, QTimer, QSize, QObject
@@ -2092,47 +2097,35 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.aspect_frame = self.mpv_wrapper.aspect_frame
         self.mpv_screen = self.mpv_wrapper.mpv_screen
 
-        # Windows: gpu + wasapi. Linux/SteamOS (esp. QEMU): avoid Vulkan/Zink
-        # paths that segfault without a real GPU; wasapi does not exist there.
-        mpv_opts = {
-            "panscan": 1.0,
-            "keepaspect": "no",
-            "wid": int(self.mpv_screen.winId()),
-            "keep_open": "yes",
-            "log_file": mpv_log_path_str,
-            "loglevel": "info",
-        }
+        # Windows: create embedded mpv immediately.
+        # Linux/Bazzite: do NOT create libmpv at startup — even vo=null still
+        # loads scripts and, with QT xcb + NVIDIA, the window can hard-freeze
+        # (black, unkillable). Player is created lazily on first play().
+        self._linux_mpv_vo_attached = False
+        self.current_mpv_log_file = mpv_log_path_str
         if sys.platform == "win32":
-            mpv_opts.update(vo="gpu", hwdec="auto", ao="wasapi")
+            mpv_opts = {
+                "panscan": 1.0,
+                "keepaspect": "no",
+                "keep_open": "yes",
+                "log_file": mpv_log_path_str,
+                "loglevel": "info",
+                "wid": int(self.mpv_screen.winId()),
+                "vo": "gpu",
+                "hwdec": "auto",
+                "ao": "wasapi",
+            }
+            self.player = mpv.MPV(**mpv_opts)
+            try:
+                self.player["af"] = "rubberband"
+            except Exception as exc:
+                logging.warning("mpv rubberband af unavailable: %s", exc)
+            self._init_preview_quality()
+            self._apply_saved_preview_quality_to_player()
         else:
-            soft = os.environ.get("STEEMPEG_SOFT_VIDEO", "1") != "0"
-            if soft:
-                # QEMU / no real GPU: force Mesa software GL before libmpv loads.
-                os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
-                os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
-            # Override: STEEMPEG_VO=x11|gpu|null
-            vo = (os.environ.get("STEEMPEG_VO") or "").strip() or ("gpu" if soft else "gpu")
-            mpv_opts.update(
-                vo=vo,
-                hwdec="no",
-                ao=os.environ.get("STEEMPEG_AO", "null"),
-            )
-            if vo == "gpu":
-                # Prefer X11 GL path over Vulkan/Zink (crashes in QEMU).
-                mpv_opts["gpu_context"] = os.environ.get("STEEMPEG_GPU_CONTEXT", "x11")
-        try:
-            self.player = mpv.MPV(**mpv_opts)
-        except Exception as exc:
-            logging.error("mpv init failed (%s); retrying vo=null", exc)
-            mpv_opts.pop("gpu_context", None)
-            mpv_opts.update(vo="null", hwdec="no", ao="null")
-            self.player = mpv.MPV(**mpv_opts)
-        try:
-            self.player["af"] = "rubberband"
-        except Exception as exc:
-            logging.warning("mpv rubberband af unavailable: %s", exc)
-        self._init_preview_quality()
-        self._apply_saved_preview_quality_to_player()
+            self.player = None
+            logging.info("Linux mpv: lazy create (no libmpv until first play)")
+            self._init_preview_quality()
         self._install_mpv_geometry_hooks()
 
         # --- FULLSCREEN SYSTEM INITIALIZATION ---
@@ -2347,7 +2340,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
     def _shell_stylesheet(self, bg_color: str) -> str:
         """Window stylesheet: dialog background + shared tooltip chrome."""
         return f"""
-            QDialog#Dialog {{ background-color: {bg_color}; }}
+            QDialog#Dialog, QWidget#Dialog {{ background-color: {bg_color}; }}
 
             QToolTip {{
                 background-color: #2d2d2d;
@@ -2863,7 +2856,38 @@ def main():
         except Exception:
             pass
 
+    # Linux: never force xcb — XWayland+NVIDIA hard-freezes after show.
+    # Let Qt pick wayland on Bazzite. Soft GL made the window invisible on
+    # Wayland; only enable with STEEMPEG_SOFT_GL=1 if needed.
+    # Optional: STEEMPEG_QT_PLATFORM=wayland|xcb
+    if sys.platform != "win32":
+        forced = (os.environ.get("STEEMPEG_QT_PLATFORM") or "").strip()
+        if forced:
+            os.environ["QT_QPA_PLATFORM"] = forced
+        if os.environ.get("STEEMPEG_SOFT_GL", "0") == "1":
+            os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+            os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
+            os.environ.setdefault("QT_OPENGL", "software")
+
+    from PySide6.QtCore import Qt as _Qt
+
+    if sys.platform != "win32" and os.environ.get("STEEMPEG_SOFT_GL", "0") == "1":
+        try:
+            QApplication.setAttribute(_Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
+    app.setApplicationName("Steempeg")
+    app.setApplicationDisplayName("Steempeg")
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        QGuiApplication.setDesktopFileName("steempeg")
+    except Exception:
+        pass
+    if sys.platform != "win32":
+        print(f"[steempeg] Qt platform={app.platformName()!r}", flush=True)
 
     from steempeg.infra.single_instance import try_acquire_instance_lock
     from steempeg.ui.already_running_dialog import AlreadyRunningDialog
@@ -2891,29 +2915,32 @@ def main():
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
             sys.exit(1)
             
-        if os.path.exists(icon_path): 
+        if os.path.exists(icon_path):
             window.ui.setWindowIcon(QIcon(icon_path))
-            
-        # --- CUSTOM WINDOW CHROME ---
-        # Keep a fully native window (frame, shadow, Aero Snap, min/max animations);
-        # the caption is hidden later via WM_NCCALCSIZE, not by stripping styles.
-        from PySide6.QtCore import Qt
-        window.ui.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
 
-        # Pre-size to (almost) the screen work area BEFORE showing. showMaximized()
-        # on this QDialog can otherwise set the maximized *state* while the geometry
-        # stays at the designer size (1277x817) — the window opens as a small square
-        # in the corner with the title-bar showing the 'restore' icon. Heavy startup
-        # work (restoring a render-queue clip) made that race reliable. Pre-sizing to
-        # a large geometry removes both the grow animation and the desync.
-        #
-        # Inset the rect so a restored (non-maximized) window stays on screen. With
-        # custom title bar the top inset is smaller than the old native caption.
+        from PySide6.QtCore import Qt
+        if sys.platform == "win32":
+            # Custom Win32 chrome: keep native frame styles, hide painted caption later.
+            window.ui.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowMinimizeButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowCloseButtonHint
+            )
+        else:
+            # QDialog defaults to a transient "dialog" role on Wayland — KDE often
+            # never maps it to the taskbar / screen (Qt says visible=True, user sees
+            # nothing). Force a normal application toplevel instead.
+            window.ui.setModal(False)
+            window.ui.setWindowModality(Qt.WindowModality.NonModal)
+            window.ui.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowMinimizeButtonHint
+                | Qt.WindowType.WindowMaximizeButtonHint
+                | Qt.WindowType.WindowCloseButtonHint
+            )
+
+        # Pre-size to (almost) the screen work area BEFORE showing.
         window._apply_dark_shell()
         from steempeg.ui.layout_defaults import (
             TARGET_MIN_WINDOW_HEIGHT,
@@ -2923,16 +2950,68 @@ def main():
         _screen = app.primaryScreen()
         if _screen is not None:
             _avail = _screen.availableGeometry()
-            # Floor is Steam Deck 1280×800; clamp if the real screen is smaller (QEMU).
             _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
             _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
             window.ui.setMinimumSize(_min_w, _min_h)
-            window.ui.setGeometry(_avail.adjusted(60, 36, -60, -40))
+            window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
+            logging.info(
+                "Primary screen %r avail=%sx%s",
+                _screen.name(),
+                _avail.width(),
+                _avail.height(),
+            )
         else:
             window.ui.setMinimumSize(TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
-        window.ui.showMaximized()
+
+        window.ui.show()
+        window.ui.raise_()
+        window.ui.activateWindow()
+        try:
+            wh = window.ui.windowHandle()
+            if wh is not None:
+                wh.requestActivate()
+        except Exception:
+            pass
+        QApplication.processEvents()
+        if sys.platform == "win32":
+            window.ui.showMaximized()
+        else:
+            # Delay maximize — immediate showMaximized on Wayland can map oddly.
+            QTimer.singleShot(200, window.ui.showMaximized)
         QApplication.processEvents()
         window._sync_startup_layout()
+        geo = window.ui.geometry()
+        logging.info(
+            "Main window shown (platform=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
+            app.platformName(),
+            window.ui.isVisible(),
+            geo.width(),
+            geo.height(),
+            geo.x(),
+            geo.y(),
+            os.environ.get("STEEMPEG_SOFT_GL", "0") == "1",
+        )
+        if sys.platform != "win32":
+            try:
+                import subprocess as _sp
+
+                _sp.Popen(
+                    [
+                        "notify-send",
+                        "-a",
+                        "Steempeg",
+                        "Steempeg",
+                        "Window should be open — check the taskbar / other Activity.",
+                    ],
+                    stdout=_sp.DEVNULL,
+                    stderr=_sp.DEVNULL,
+                )
+            except Exception:
+                pass
+        if app.platformName() == "xcb":
+            logging.warning(
+                "UI is on xcb/XWayland — resize/minimize may hard-freeze on NVIDIA"
+            )
 
         def _apply_custom_shell_native():
             from steempeg.ui.window_chrome import enable_frameless
@@ -2960,14 +3039,15 @@ def main():
         error_text = traceback.format_exc()
         print(error_text)
         try:
-            import logging
-            logging.critical("="*40)
+            # Do NOT "import logging" here — it shadows the module-level import and
+            # breaks logging.info(...) earlier in main (UnboundLocalError).
+            logging.critical("=" * 40)
             logging.critical("FATAL ERROR:")
             logging.critical(error_text)
-            logging.critical("="*40)
-        except:
-            pass # If the logger has not yet been created
-            
+            logging.critical("=" * 40)
+        except Exception:
+            pass
+
         QMessageBox.critical(None, "FATAL ERROR", f"APP ERROR:\n{error_text}")
 sys.excepthook = global_exception_handler
 if __name__ == "__main__":

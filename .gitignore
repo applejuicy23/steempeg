@@ -33,7 +33,6 @@ temp_concat_list.txt
 Thumbs.db
 
 # --- Local dev scaffolding (dismantled during refactor) ---
-newver_compilator.py
 pacher.py
 docs/ROADMAP.md
 steempeg/.footer_lane_experiment_archive.py
@@ -42,6 +41,14 @@ steempeg/.footer_lane_experiment_notes.md
 
 # --- Local tooling, not shipped ---
 tools/
+_tmp_*.py
+_diskpart_*
+_format_usb*
+_run_diskpart*
+_usb_*
+_zero_and_format*
+*_snip.txt
+steempeg_instance.lock
 
 # --- Engines live in ./bin, shipped via Releases ---
 bin/
