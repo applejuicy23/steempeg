@@ -24,12 +24,17 @@ TRAFFIC_MAXIMIZE = "#28c840"
 TRAFFIC_MAXIMIZE_HOVER = "#1aad2e"
 
 # Typography — FONT_APP matches render panel, About, and queue cards.
-# Segoe/Cascadia on Windows; Noto/DejaVu fallbacks on Linux/SteamOS.
-FONT_APP = "'Segoe UI', 'Noto Sans', 'DejaVu Sans', Arial, sans-serif"
-FONT_SEMIBOLD = "'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', 'DejaVu Sans', Arial, sans-serif"
+# Segoe/Cascadia on Windows; Noto/DejaVu + color emoji on Linux/SteamOS/Bazzite.
+# Twemoji BEFORE Noto Color Emoji: Fedora/Bazzite ship COLRv1 Noto, which Qt
+# selects then fails to paint (blank buttons). Twemoji (CBDT) renders fine.
+_EMOJI = "'Twemoji', 'Noto Emoji', 'Segoe UI Emoji', 'Noto Color Emoji'"
+FONT_APP = f"'Segoe UI', 'Noto Sans', 'DejaVu Sans', {_EMOJI}, Arial, sans-serif"
+FONT_SEMIBOLD = (
+    f"'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', 'DejaVu Sans', {_EMOJI}, Arial, sans-serif"
+)
 FONT_UI = (
     "'Cascadia UI', 'Segoe UI Variable', 'Segoe UI', "
-    "'Noto Sans', 'DejaVu Sans', sans-serif"
+    f"'Noto Sans', 'DejaVu Sans', {_EMOJI}, sans-serif"
 )
 FONT_TITLE_SIZE = 10
 FONT_SUBTITLE_SIZE = 10
