@@ -269,11 +269,20 @@ class LifecycleMixin:
 
         # 1. Kill the player if it is active.
         if hasattr(self, 'player') and self.player:
-            self.player.pause = True 
             try:
-                self.player.command('stop') 
-            except:
+                self.player.pause = True
+            except Exception:
                 pass
+            try:
+                self.player.command('stop')
+            except Exception:
+                pass
+            try:
+                # Tear down libmpv so close doesn't race a dead core.
+                self.player.terminate()
+            except Exception:
+                pass
+            self.player = None
 
         if hasattr(self, '_stop_timeline_thumb_batch'):
             self._stop_timeline_thumb_batch()
