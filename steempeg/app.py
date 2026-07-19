@@ -319,7 +319,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     padding: 4px 12px; 
                     border-bottom: 1px solid #282828; 
                     color: #e0e0e0; 
-                    font-family: 'Segoe UI', sans-serif;
+                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', sans-serif;
                     font-size: 13px;
                     font-weight: 600; 
                 }
@@ -651,7 +651,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # 1. Create a text label (like the one in View)
         lbl_sorting = QLabel("Sorting")
         self._lbl_sorting = lbl_sorting
-        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Segoe UI'; font-size: 13px;")
+        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 13px;")
 
         # 2. Creating a stylish sorting dropdown list
         self.combo_sort = QComboBox()
@@ -876,33 +876,40 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             # repaints the whole subtree, which shows up as vertical band artifacts
             # during a splitter drag. Debounce it so the mask is rebuilt once the drag
             # stops instead of on every pixel.
-            class RoundedCornerFilter(QObject):
-                def __init__(self, target):
-                    super().__init__(target)
-                    self._target = target
-                    self._timer = QTimer(self)
-                    self._timer.setSingleShot(True)
-                    self._timer.timeout.connect(self._apply_mask)
+            #
+            # Linux/XWayland+NVIDIA: skip entirely. Even a debounced setMask next to
+            # an embedded mpv wid= surface shears the shell when the right splitter
+            # grows the player into the queue (ghost chrome / black bands).
+            if sys.platform == "win32":
+                class RoundedCornerFilter(QObject):
+                    def __init__(self, target):
+                        super().__init__(target)
+                        self._target = target
+                        self._timer = QTimer(self)
+                        self._timer.setSingleShot(True)
+                        self._timer.timeout.connect(self._apply_mask)
 
-                def eventFilter(self, obj, event):
-                    if event.type() == QEvent.Type.Resize:
-                        self._timer.start(60)
-                    return False
+                    def eventFilter(self, obj, event):
+                        if event.type() == QEvent.Type.Resize:
+                            self._timer.start(60)
+                        return False
 
-                def _apply_mask(self):
-                    obj = self._target
-                    if obj is None or obj.width() <= 0 or obj.height() <= 0:
-                        return
-                    try:
-                        from PySide6.QtGui import QPainterPath, QRegion
-                        path = QPainterPath()
-                        path.addRoundedRect(0.0, 0.0, float(obj.width()), float(obj.height()), 16.0, 16.0)
-                        obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
-                    except Exception:
-                        pass
-            
-            self.corner_mask = RoundedCornerFilter(self.right_scroll)
-            self.right_scroll.installEventFilter(self.corner_mask)
+                    def _apply_mask(self):
+                        obj = self._target
+                        if obj is None or obj.width() <= 0 or obj.height() <= 0:
+                            return
+                        try:
+                            from PySide6.QtGui import QPainterPath, QRegion
+                            path = QPainterPath()
+                            path.addRoundedRect(
+                                0.0, 0.0, float(obj.width()), float(obj.height()), 16.0, 16.0
+                            )
+                            obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
+                        except Exception:
+                            pass
+
+                self.corner_mask = RoundedCornerFilter(self.right_scroll)
+                self.right_scroll.installEventFilter(self.corner_mask)
             
             neo_layout.addWidget(self.right_scroll)
             
@@ -924,7 +931,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if hasattr(self.ui, 'settings_tabs'):
             from PySide6.QtWidgets import QComboBox as _QComboBox
             _combo_qss = settings_panel_stylesheet(
-                "QComboBox { font-family: 'Segoe UI', Arial, sans-serif;"
+                "QComboBox { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
                 " font-size: 13px; font-weight: bold; }"
             )
             for _combo in self.ui.settings_tabs.findChildren(_QComboBox):
@@ -993,7 +1000,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 background-color: #2d2d2d; 
                 border-radius: 16px; 
                 border: 1px solid #383838;
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
             }
         """
         
@@ -1003,7 +1010,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -1100,7 +1107,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # Logs 
             btn_logs_style = """
-                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #383838; color: #ffffff; border: 2px solid #444444; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #383838; color: #ffffff; border: 2px solid #444444; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
                 QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1109,7 +1116,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             
             # Start (Green — OUR BENCHMARK)
             start_btn_style = """
-                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #2e6b32; color: #ffffff; border: 2px solid #3e8e41; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #2e6b32; color: #ffffff; border: 2px solid #3e8e41; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }
                 QPushButton:pressed { background-color: #235226; border: 2px solid #3e8e41; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1117,7 +1124,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # Pause (Yellow-Orange Copy of the Green One)
             btn_pause_style = """
-                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8c7314; color: #ffffff; border: 2px solid #a88b11; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #8c7314; color: #ffffff; border: 2px solid #a88b11; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #a88b11; border: 2px solid #c9a716; }
                 QPushButton:pressed { background-color: #6b570d; border: 2px solid #a88b11; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1126,7 +1133,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             
             # Cancellation (Red copy of the green one)
             btn_cancel_style = """
-                QPushButton { font-family: 'Segoe UI'; font-size: 12px; font-weight: bold; background-color: #8a2525; color: #ffffff; border: 2px solid #a82e2e; border-radius: 8px; padding: 6px 14px; }
+                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #8a2525; color: #ffffff; border: 2px solid #a82e2e; border-radius: 8px; padding: 6px 14px; }
                 QPushButton:hover { background-color: #a82e2e; border: 2px solid #cc3939; }
                 QPushButton:pressed { background-color: #661a1a; border: 2px solid #a82e2e; }
                 QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
@@ -1167,7 +1174,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             dash_layout.setContentsMargins(18, 16, 18, 16)
             dash_layout.setSpacing(12)
 
-            _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
+            _status_font = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
 
             header_block = qtw.QVBoxLayout()
             header_block.setSpacing(12)
@@ -1299,7 +1306,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     old_style = btn.styleSheet()
                     
                     # 2. Hardcode the 13px font, just like on the Refresh button!
-                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
+                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
                     
                     btn_row.addWidget(btn)
 
@@ -1445,7 +1452,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.label_playback_badge = QLabel()
         self.label_playback_badge.setStyleSheet(
             "color: #ffffff; font-weight: bold; font-size: 12px;"
-            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
         )
         self.label_playback_badge.hide()
         status_row.addWidget(self.label_playback_badge)
@@ -1470,7 +1477,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         _HEADER_CHIP = (
             "border-radius: 8px;"
             "padding: 0px;"
-            "font-family: 'Segoe UI', Arial, sans-serif;"
+            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
         )
 
         self.btn_preview_settings = QPushButton()
@@ -2351,7 +2358,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 color: #ffffff;
                 border: 1px solid #444444;
                 border-radius: 4px;
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
                 font-size: 11px;
                 font-weight: bold;
                 padding: 4px 8px;
@@ -2550,7 +2557,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 QComboBox {{
                     background-color: #383838; color: #ffffff; border: 2px solid #444444;
                     border-radius: 8px; padding: {dense.combo_pad}; font-weight: bold;
-                    font-family: 'Segoe UI', Arial, sans-serif; font-size: {dense.combo_font}px;
+                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: {dense.combo_font}px;
                     min-height: {dense.combo_min_h}px;
                 }}
                 QComboBox:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
@@ -2580,7 +2587,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         footer_style = f"""
             QPushButton {{
                 background-color: #383838; color: #ffffff; border: 2px solid #444444;
-                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', Arial, sans-serif;
+                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
                 font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
                 min-height: {dense.footer_min_h}px;
             }}
@@ -2953,13 +2960,12 @@ def main():
                 | Qt.WindowType.WindowCloseButtonHint
             )
         else:
-            # QDialog defaults to a transient "dialog" role on Wayland — KDE often
-            # never maps it to the taskbar / screen (Qt says visible=True, user sees
-            # nothing). Force a normal application toplevel instead.
-            window.ui.setModal(False)
+            # Frameless QWidget + SteempegTitleBar (drag via startSystemMove).
+            # Skip setModal — MainWindow is QWidget on Linux, not QDialog.
             window.ui.setWindowModality(Qt.WindowModality.NonModal)
             window.ui.setWindowFlags(
                 Qt.WindowType.Window
+                | Qt.WindowType.FramelessWindowHint
                 | Qt.WindowType.WindowMinimizeButtonHint
                 | Qt.WindowType.WindowMaximizeButtonHint
                 | Qt.WindowType.WindowCloseButtonHint
@@ -3016,23 +3022,6 @@ def main():
             geo.y(),
             os.environ.get("STEEMPEG_SOFT_GL", "0") == "1",
         )
-        if sys.platform != "win32":
-            try:
-                import subprocess as _sp
-
-                _sp.Popen(
-                    [
-                        "notify-send",
-                        "-a",
-                        "Steempeg",
-                        "Steempeg",
-                        "Window should be open — check the taskbar / other Activity.",
-                    ],
-                    stdout=_sp.DEVNULL,
-                    stderr=_sp.DEVNULL,
-                )
-            except Exception:
-                pass
         if app.platformName() == "xcb":
             logging.warning(
                 "UI is on xcb/XWayland — resize/minimize may hard-freeze on NVIDIA"

@@ -8,6 +8,7 @@ state through self.
 import logging
 import os
 import re
+import sys
 
 import psutil
 
@@ -36,7 +37,7 @@ _LOGS_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;
@@ -218,12 +219,14 @@ class LifecycleMixin:
         return super().eventFilter(source, event)
     
     def _sync_mpv_surface_geometry(self, *args):
-        """Re-pin the native mpv child HWND after splitter drags move the player panel."""
+        """Re-pin the native mpv child after splitter / panel layout changes."""
         wrapper = getattr(self, "mpv_wrapper", None)
         if wrapper is not None:
             wrapper.update_geometry()
 
     def _install_mpv_geometry_hooks(self):
+        # Windows formula: hook both splitters so the embed stays clipped while
+        # the player panel moves. update_geometry early-outs on unchanged rects.
         for splitter in (
             getattr(self.ui, "main_splitter", None),
             getattr(self, "right_h_splitter", None),
