@@ -20,6 +20,19 @@ from steempeg.render.output_formats import build_audio_args, video_encoder_extra
 from steempeg.core.dash.mpd import estimate_render_duration_sec
 
 
+def _popen_cmdline(cmd: str, *, cwd: str | None, creation_flags: int, **kwargs):
+    """Run a Windows-style quoted command line on any OS.
+
+    On Windows, ``Popen(string, shell=False)`` is a command line. On POSIX the
+    same call treats the entire string as argv[0] and fails with ENOENT.
+    """
+    if sys.platform == "win32":
+        return subprocess.Popen(
+            cmd, shell=False, cwd=cwd, creationflags=creation_flags, **kwargs
+        )
+    return subprocess.Popen(cmd, shell=True, cwd=cwd, **kwargs)
+
+
 class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
@@ -247,10 +260,15 @@ class RenderThread(QThread):
                 )
 
                 # Launch FFmpeg
-                self.current_process = subprocess.Popen( 
-                    cmd, shell=False, cwd=os.path.dirname(mpd),
-                    creationflags=creation_flags, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, universal_newlines=True, encoding='utf-8', errors='ignore'
+                self.current_process = _popen_cmdline(
+                    cmd,
+                    cwd=os.path.dirname(mpd),
+                    creation_flags=creation_flags,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    encoding="utf-8",
+                    errors="ignore",
                 )
 
                 ffmpeg_duration = 0.0
@@ -335,11 +353,15 @@ class RenderThread(QThread):
                         f"-avoid_negative_ts make_zero -fflags +genpts "
                         f'-y "{safe_out}"'
                     )
-                    remux = subprocess.Popen(
+                    remux = _popen_cmdline(
                         remux_cmd,
-                        shell=False, cwd=self.save_dir, creationflags=creation_flags,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        universal_newlines=True, encoding='utf-8', errors='ignore'
+                        cwd=self.save_dir,
+                        creation_flags=creation_flags,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        universal_newlines=True,
+                        encoding="utf-8",
+                        errors="ignore",
                     )
                     self.current_process = remux
                     remux_tail = []
@@ -378,10 +400,12 @@ class RenderThread(QThread):
                         f.write(f"file '{safe_path}'\n")
 
                 # Run the merge without compression (-c copy)
-                self.current_process = subprocess.Popen(
-                    f'"{self.ffmpeg_exe}" -f concat -safe 0 -i "{concat_file}" -c copy -y "{self.output_file}"', 
-                    shell=False, cwd=self.save_dir,
-                    creationflags=creation_flags, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                self.current_process = _popen_cmdline(
+                    f'"{self.ffmpeg_exe}" -f concat -safe 0 -i "{concat_file}" -c copy -y "{self.output_file}"',
+                    cwd=self.save_dir,
+                    creation_flags=creation_flags,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                 )
                 self.current_process.wait()
 
