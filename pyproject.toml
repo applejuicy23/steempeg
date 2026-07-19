@@ -14,6 +14,7 @@ dependencies = [
     "PySide6",
     "python-mpv",   # imported in code as: import mpv
     "av",           # PyAV - i-frame preview
+    "Pillow",       # PyAV frame -> QImage path in sniper
     "psutil",
     "requests",
 ]
