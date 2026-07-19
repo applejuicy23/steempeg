@@ -168,7 +168,7 @@ class TimelineCanvas(QWidget):
         self.text_tooltip = QLabel()
         self.text_tooltip.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Segoe UI'; font-size: 12px; }")
+        self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; }")
         self.text_tooltip.hide()
 
         self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
@@ -806,7 +806,7 @@ class TimelineCanvas(QWidget):
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 8px; 
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
                 font-size: 13px;
                 font-weight: bold;
             }
@@ -869,7 +869,7 @@ class TimelineCanvas(QWidget):
     def show_track_context_menu(self, pos, time_ms):
         menu = QMenu(self)
         menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444; border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; font-weight: bold; }
+            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444; border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; font-weight: bold; }
             QMenu::item { padding: 6px 24px 6px 24px; border-radius: 4px; margin: 2px 4px; }
             QMenu::item:selected { background-color: #6b5a8e; }
         """)

@@ -2435,7 +2435,7 @@ class RenderMixin:
         lay.setSpacing(8)
 
         title = QLabel("Original preset warning")
-        title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px; font-family: 'Segoe UI';")
+        title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';")
         body = QLabel(
             "Original uses fast stream copy / block merge without re-encoding.\n\n"
             "If Steam DASH chunks are slightly broken, the output duration can be wrong "
@@ -2444,7 +2444,7 @@ class RenderMixin:
         )
         body.setWordWrap(True)
         body.setFixedWidth(320)
-        body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: 'Segoe UI';")
+        body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';")
 
         chk = SteempegCheckBox("Don't show this again")
         chk.setChecked(bool(btn.property("warning_dismissed")))
@@ -2943,7 +2943,7 @@ class RenderMixin:
             f"border: 2px solid {color};"
             "border-radius: 8px; padding: 4px 10px;"
             "font-weight: bold; font-size: 13px;"
-            "font-family: 'Segoe UI';"
+            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
         )
         self.label_playback_badge.show()
         if hasattr(self, "update_clip_health_button"):

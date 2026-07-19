@@ -58,7 +58,7 @@ _LIBRARY_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
     }
@@ -97,7 +97,7 @@ _FOLDERS_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;
@@ -135,7 +135,7 @@ _FOLDERS_MENU_STYLE = """
     }
     QLabel#FolderRowLabel {
         color: #ffffff;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         background: transparent;
@@ -726,7 +726,7 @@ class LibraryMixin:
             f"font-weight: bold;"
             f"font-size: 13px;"
             f"padding: 2px 10px 2px 8px;"
-            f"font-family: 'Segoe UI';"
+            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
             f"}}"
             f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
         )
@@ -760,7 +760,7 @@ class LibraryMixin:
         title_lbl = QLabel(display.label)
         title_lbl.setStyleSheet(
             f"color: {display.color}; font-weight: bold; font-size: 13px;"
-            f" font-family: 'Segoe UI'; background: transparent;"
+            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; background: transparent;"
         )
         title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
         title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)

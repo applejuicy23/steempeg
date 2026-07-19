@@ -43,7 +43,7 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
-_FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
 # Match Video Settings combo text (see combo_chrome.SETTINGS_COMBO_FIELD_RULES + app.py).
 _FONT_COMBO = _FONT + " font-size: 13px; font-weight: bold;"
 _COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge

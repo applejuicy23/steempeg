@@ -15,7 +15,7 @@ _PREVIEW_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0px;

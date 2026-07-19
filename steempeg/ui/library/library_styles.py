@@ -23,7 +23,7 @@ LIBRARY_TABLE_STYLE = """
         border-bottom: 1px solid #282828;
         color: #d1d1d1;
         font-size: 13px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QTableWidget::item:hover {
         background-color: #303030;

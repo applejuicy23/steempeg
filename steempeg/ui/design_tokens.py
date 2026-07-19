@@ -24,18 +24,20 @@ TRAFFIC_MAXIMIZE = "#28c840"
 TRAFFIC_MAXIMIZE_HOVER = "#1aad2e"
 
 # Typography — FONT_APP matches render panel, About, and queue cards.
-# Segoe/Cascadia on Windows; Noto/DejaVu + color emoji on Linux/SteamOS/Bazzite.
-# Twemoji BEFORE Noto Color Emoji: Fedora/Bazzite ship COLRv1 Noto, which Qt
-# selects then fails to paint (blank buttons). Twemoji (CBDT) renders fine.
-_EMOJI = "'Twemoji', 'Noto Emoji', 'Segoe UI Emoji', 'Noto Color Emoji'"
-FONT_APP = f"'Segoe UI', 'Noto Sans', 'DejaVu Sans', {_EMOJI}, Arial, sans-serif"
+# Segoe/Cascadia on Windows; Noto/DejaVu + Twemoji on Linux/SteamOS/Bazzite.
+# Twemoji BEFORE DejaVu / Noto Color Emoji: stylesheets that only list Segoe
+# paint blank emoji, and COLRv1 Noto Color Emoji is selected then drawn empty by Qt.
+_EMOJI = "'Twemoji', 'Noto Emoji', 'Segoe UI Emoji'"
+FONT_APP = f"'Segoe UI', 'Noto Sans', {_EMOJI}, 'DejaVu Sans', Arial, sans-serif"
 FONT_SEMIBOLD = (
-    f"'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', 'DejaVu Sans', {_EMOJI}, Arial, sans-serif"
+    f"'Segoe UI Semibold', 'Segoe UI', 'Noto Sans', {_EMOJI}, 'DejaVu Sans', Arial, sans-serif"
 )
 FONT_UI = (
     "'Cascadia UI', 'Segoe UI Variable', 'Segoe UI', "
-    f"'Noto Sans', 'DejaVu Sans', {_EMOJI}, sans-serif"
+    f"'Noto Sans', {_EMOJI}, 'DejaVu Sans', sans-serif"
 )
+# Drop-in CSS fragment for stylesheets that need the emoji-capable stack.
+FONT_FAMILY_CSS = f"font-family: {FONT_APP}"
 FONT_TITLE_SIZE = 10
 FONT_SUBTITLE_SIZE = 10
 

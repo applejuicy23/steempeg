@@ -29,7 +29,7 @@ _BTN_PRIMARY = """
     QPushButton {
         background-color: #4a3d66; color: #f0ecff; border: 2px solid #6b5a8e;
         border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #5a4d76; border-color: #b29ae7; }
     QPushButton:pressed { background-color: #3a324a; }
@@ -39,7 +39,7 @@ _BTN_SECONDARY = """
     QPushButton {
         background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
         border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
@@ -49,7 +49,7 @@ _PILL_BTN_STYLE = """
     QPushButton {
         background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
         border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }

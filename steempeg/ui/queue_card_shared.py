@@ -9,7 +9,7 @@ from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 
-_FONT = "font-family: 'Segoe UI', Arial, sans-serif;"
+_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
 
 _LIST_THUMB_W = 128
@@ -23,7 +23,7 @@ _QUEUE_MENU_STYLE = """
         color: #ffffff;
         border: 2px solid #444444;
         border-radius: 8px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         padding: 4px 0;

@@ -9,7 +9,7 @@ def _folder_style(dense: UiDensity) -> str:
     r = dense.footer_radius
     return f"""
     QPushButton#FolderPickerMain {{
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: {dense.footer_font}px;
         font-weight: bold;
         background-color: #383838;
@@ -42,7 +42,7 @@ def _folder_style(dense: UiDensity) -> str:
         border-bottom-left-radius: 0px;
         border-top-right-radius: {r}px;
         border-bottom-right-radius: {r}px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: {17 if not dense.compact else 14}px;
         font-weight: bold;
         min-width: {dense.footer_add_w}px;

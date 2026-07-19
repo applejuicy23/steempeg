@@ -14,7 +14,7 @@ _PLAY_LABEL_FONT.setBold(True)
 
 _PLAY_SPLIT_STYLE = """
     QPushButton#PlayMain {
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         background-color: #383838;
@@ -47,7 +47,7 @@ _PLAY_SPLIT_STYLE = """
         border-bottom-left-radius: 0px;
         border-top-right-radius: 14px;
         border-bottom-right-radius: 14px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 12px;
         font-weight: bold;
         min-width: 28px;
@@ -75,7 +75,7 @@ _PLAY_SPLIT_STYLE = """
     QLabel#PlayText {
         background: transparent;
         border: none;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         font-weight: bold;
         color: #ffffff;

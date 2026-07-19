@@ -25,7 +25,7 @@ def _tab_qss(font_px: int, radius: int, *, active: bool, hover: bool) -> str:
         border: none;
         font-weight: bold;
         font-size: {font_px}px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }}
 """
 

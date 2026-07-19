@@ -85,7 +85,7 @@ _PILL_BTN_STYLE = """
         background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
         border-radius: 8px; padding: 4px 12px;
         font-size: 13px; font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
@@ -221,7 +221,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         text = QLabel(status_lbl)
         text.setStyleSheet(
             f"color: {color}; font-size: 10px; font-weight: 600; "
-            f"font-family: 'Segoe UI', Arial, sans-serif; background: transparent;"
+            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; background: transparent;"
         )
         row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)

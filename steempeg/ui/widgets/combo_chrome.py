@@ -14,7 +14,7 @@ COMBO_POPUP_ITEM_RULES = """
         outline: none;
         selection-background-color: transparent;
         selection-color: #ffffff;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QComboBox QAbstractItemView::item {
         min-height: 28px;
@@ -52,7 +52,7 @@ SETTINGS_COMBO_FIELD_RULES = """
         background-color: #383838; color: #ffffff;
         border: 2px solid #4a4a4a; border-radius: 12px;
         padding: 7px 10px; font-size: 12px; font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
     QComboBox:disabled, QLineEdit:disabled {
@@ -84,7 +84,7 @@ COMPACT_COMBO_POPUP_ITEM_RULES = """
         outline: none;
         selection-background-color: transparent;
         selection-color: #ffffff;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-weight: normal;
     }
     QComboBox QAbstractItemView::item {
@@ -127,7 +127,7 @@ COMPACT_COMBO_RULES = """
         border-radius: 8px;
         padding: 4px 10px;
         font-weight: bold;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-size: 13px;
         min-height: 24px;
     }

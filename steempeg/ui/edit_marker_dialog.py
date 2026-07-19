@@ -12,7 +12,7 @@ _FIELD_STYLE = """
     QLineEdit, QTextEdit {
         background-color: #2d2d2d; color: #f0f0f0; border: 1px solid #555;
         border-radius: 6px; padding: 6px 8px; font-size: 12px;
-        font-family: 'Segoe UI', Arial, sans-serif;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QLineEdit:focus, QTextEdit:focus { border-color: #6b5a8e; }
 """
