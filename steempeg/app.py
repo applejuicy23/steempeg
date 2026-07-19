@@ -387,7 +387,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             
             # 2. Enter Bold Text
             from PySide6.QtGui import QFont
-            custom_font = QFont("Segoe UI", 10) 
+            custom_font = QFont()
+            custom_font.setFamilies(
+                ["Segoe UI", "Noto Sans", "Twemoji", "Noto Emoji", "Noto Color Emoji", "DejaVu Sans"]
+            )
+            custom_font.setPointSize(10)
             custom_font.setWeight(QFont.DemiBold)
             self.ui.table_clips.setFont(custom_font)
             
@@ -2888,6 +2892,27 @@ def main():
         pass
     if sys.platform != "win32":
         print(f"[steempeg] Qt platform={app.platformName()!r}", flush=True)
+
+    # Color emoji fallbacks. Prefer Twemoji over Noto Color Emoji: Bazzite's
+    # Noto is COLRv1, which Qt will pick then paint as blank (📁🎬 etc. vanish).
+    try:
+        from PySide6.QtGui import QFont
+
+        _ui_font = QFont()
+        _ui_font.setFamilies(
+            [
+                "Segoe UI",
+                "Noto Sans",
+                "Twemoji",
+                "Noto Emoji",
+                "Noto Color Emoji",
+                "DejaVu Sans",
+            ]
+        )
+        _ui_font.setPointSize(10)
+        app.setFont(_ui_font)
+    except Exception:
+        pass
 
     from steempeg.infra.single_instance import try_acquire_instance_lock
     from steempeg.ui.already_running_dialog import AlreadyRunningDialog

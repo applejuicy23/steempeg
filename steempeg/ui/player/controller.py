@@ -50,6 +50,9 @@ class PlayerMixin:
 
         Embedding via wid= freezes Bazzite/NVIDIA (black unkillable window).
         Use a separate mpv window instead (force_window), keep Qt on Wayland.
+
+        Homebrew libmpv is RPATHed to brew Mesa EGL — on NVIDIA that becomes
+        llvmpipe and ``vo=gpu`` often paints black; prefer xv/x11 there.
         """
         if sys.platform == "win32":
             return True
@@ -61,17 +64,43 @@ class PlayerMixin:
             os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
             os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
 
-        vo = (os.environ.get("STEEMPEG_VO") or "").strip() or ("gpu" if soft else "gpu")
-        ao = (os.environ.get("STEEMPEG_AO") or "").strip() or "pulse"
+        env_vo = (os.environ.get("STEEMPEG_VO") or "").strip()
+        ao = (os.environ.get("STEEMPEG_AO") or "").strip() or ("null" if soft else "pulse")
         log_path = getattr(self, "current_mpv_log_file", None) or ""
 
+        def _brew_mesa() -> bool:
+            for lib in (
+                "/home/linuxbrew/.linuxbrew/lib/libmpv.so",
+                os.path.expanduser("~/.linuxbrew/lib/libmpv.so"),
+            ):
+                if not os.path.isfile(lib):
+                    continue
+                try:
+                    import subprocess
+
+                    out = subprocess.check_output(
+                        ["ldd", lib], text=True, stderr=subprocess.DEVNULL
+                    )
+                except (OSError, subprocess.CalledProcessError):
+                    return "linuxbrew" in lib
+                return "linuxbrew" in out and "libEGL" in out
+            return False
+
+        if env_vo:
+            vo_attempts = [env_vo]
+        elif soft:
+            vo_attempts = ["gpu", "x11", "null"]
+        elif _brew_mesa():
+            vo_attempts = ["xv", "x11", "gpu"]
+        else:
+            vo_attempts = ["gpu", "xv", "x11"]
+
         if getattr(self, "player", None) is None:
-            opts = {
+            base = {
                 "panscan": 1.0,
                 "keepaspect": "yes",
                 "keep_open": "yes",
                 "loglevel": "info",
-                "vo": vo,
                 "hwdec": "no",
                 "ao": ao,
                 "osc": "no",
@@ -83,24 +112,26 @@ class PlayerMixin:
                 "title": "Steempeg Player",
             }
             if log_path:
-                opts["log_file"] = log_path
-            try:
-                self.player = _mpv.MPV(**opts)
-            except Exception as exc:
-                logging.error("Linux mpv create failed (%s); trying vo=x11", exc)
-                opts["vo"] = "x11"
+                base["log_file"] = log_path
+            last_exc = None
+            for vo in vo_attempts:
+                opts = dict(base, vo=vo)
                 try:
                     self.player = _mpv.MPV(**opts)
-                except Exception as exc2:
-                    logging.error("Linux mpv create failed again: %s", exc2)
+                    logging.info("Linux mpv created: vo=%s (external window)", vo)
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    logging.warning("Linux mpv create failed vo=%s: %s", vo, exc)
                     self.player = None
-                    return False
+            if self.player is None:
+                logging.error("Linux mpv create exhausted attempts: %s", last_exc)
+                return False
             try:
                 self.player["af"] = "rubberband"
             except Exception as exc:
                 logging.warning("mpv rubberband af unavailable: %s", exc)
             self._linux_mpv_vo_attached = True
-            logging.info("Linux mpv created: vo=%s (external window)", opts.get("vo"))
             if hasattr(self, "_apply_saved_preview_quality_to_player"):
                 self._apply_saved_preview_quality_to_player()
             return True
