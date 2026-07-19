@@ -21,6 +21,8 @@ import av
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
 
+from steempeg.core.rendered_media import resolve_ffmpeg_exe
+
 _log = logging.getLogger(__name__)
 
 _SNIPER_CACHE_MAX = 160
@@ -315,7 +317,7 @@ class PreviewSniperWorker(QThread):
             return None
         gen = self._decode_gen
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(max(0, sec)),
             "-i", media_path,
             "-frames:v", "1",
@@ -833,7 +835,7 @@ class ThumbnailBatchThread(QThread):
         _ensure_thumb_dir(self.thumb_dir)
 
         cmd = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
             "-hwaccel", "auto",
             "-threads", "2",
             "-t", str(batch_sec),
@@ -858,9 +860,14 @@ class ThumbnailBatchThread(QThread):
         t0 = time.perf_counter()
         self.process = subprocess.Popen(cmd, creationflags=creationflags)
         try:
-            while self.process.poll() is None:
+            while True:
+                proc = self.process
+                if proc is None:
+                    break
+                if proc.poll() is not None:
+                    break
                 if self._cancelled:
-                    _kill_process_tree(self.process, label="batch-thumbs")
+                    _kill_process_tree(proc, label="batch-thumbs")
                     _log.debug("Batch thumbs cancelled: %s", self.mpd_path)
                     return
                 time.sleep(0.1)
