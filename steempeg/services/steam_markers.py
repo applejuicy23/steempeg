@@ -72,32 +72,54 @@ def _markers_meta_path(cache_dir, app_id):
     return os.path.join(_markers_cache_dir(cache_dir, app_id), "meta.json")
 
 
-def fetch_markers_cdn_info(app_id, timeout=7):
+def fetch_markers_cdn_info(app_id, timeout=20):
     """Resolve CDN URL and version stamp for a game's timeline marker sprite.
 
-    Returns ``{"url": str, "timeline_marker_updated": str|None}`` or None when the
-    game has no ``timeline_marker_svg`` entry (no custom timeline icons on CDN).
+    Returns ``{"url": str, "urls": list[str], "timeline_marker_updated": ...}`` or None.
     """
     app_id = str(app_id)
-    try:
-        resp = requests.get(
-            _STEAMCMD_INFO_URL.format(app_id=app_id),
-            headers=_BROWSER_HEADERS,
-            timeout=timeout,
-        )
-        if not resp.ok:
-            return None
-        common = resp.json().get("data", {}).get(app_id, {}).get("common", {})
-        rel = common.get("timeline_marker_svg")
-        if not rel:
-            return None
-        rel = rel.lstrip("/")
-        return {
-            "url": f"{_MARKERS_CDN_BASE}/{app_id}/{rel}",
-            "timeline_marker_updated": common.get("timeline_marker_updated"),
-        }
-    except (requests.RequestException, ValueError, TypeError):
-        return None
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(
+                _STEAMCMD_INFO_URL.format(app_id=app_id),
+                headers=_BROWSER_HEADERS,
+                timeout=timeout,
+            )
+            if not resp.ok:
+                last_err = f"HTTP {resp.status_code}"
+                continue
+            payload = resp.json()
+            common = payload.get("data", {}).get(app_id, {}).get("common", {})
+            rel = common.get("timeline_marker_svg")
+            if not rel:
+                logging.info(
+                    "No timeline_marker_svg in steamcmd metadata for app %s", app_id
+                )
+                return None
+            rel = str(rel).lstrip("/")
+            if not rel.endswith("markers.svg"):
+                rel = f"{rel.rstrip('/')}/markers.svg"
+            urls = [
+                f"https://cdn.cloudflare.steamstatic.com/app_config/timeline/{app_id}/{rel}",
+                f"{_MARKERS_CDN_BASE}/{app_id}/{rel}",
+                f"https://shared.akamai.steamstatic.com/app_config/timeline/{app_id}/{rel}",
+            ]
+            return {
+                "url": urls[0],
+                "urls": urls,
+                "timeline_marker_updated": common.get("timeline_marker_updated"),
+            }
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            last_err = exc
+            logging.warning(
+                "steamcmd markers meta attempt %s failed for app %s: %s",
+                attempt + 1,
+                app_id,
+                exc,
+            )
+    logging.warning("Could not resolve markers CDN info for app %s (%s)", app_id, last_err)
+    return None
 
 
 def _read_markers_meta(cache_dir, app_id):
@@ -127,7 +149,7 @@ def _write_markers_meta(cache_dir, app_id, info):
         logging.debug("Could not write markers meta for app %s: %s", app_id, exc)
 
 
-def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=15):
+def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=20):
     """Download markers.svg from the Steam CDN. Returns True on success."""
     app_id = str(app_id)
     info = info or fetch_markers_cdn_info(app_id, timeout=timeout)
@@ -135,19 +157,29 @@ def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=1
         return False
     if cache_dir is None:
         cache_dir = os.path.dirname(os.path.dirname(os.path.dirname(dest_path)))
-    try:
-        resp = requests.get(info["url"], headers=_BROWSER_HEADERS, timeout=timeout)
-        if not resp.ok or not resp.content:
-            return False
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(dest_path, "wb") as handle:
-            handle.write(resp.content)
-        _write_markers_meta(cache_dir, app_id, info)
-        logging.info("Downloaded timeline markers for app %s", app_id)
-        return True
-    except (requests.RequestException, OSError) as exc:
-        logging.debug("Markers CDN download failed for app %s: %s", app_id, exc)
-        return False
+    urls = list(info.get("urls") or [info["url"]])
+    last_err = None
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=timeout)
+            if not resp.ok or not resp.content:
+                last_err = f"{url} -> HTTP {getattr(resp, 'status_code', '?')}"
+                continue
+            head = resp.content[:800].lower()
+            if b"<svg" not in head and b"<svg" not in resp.content.lower():
+                last_err = f"{url} -> not svg ({len(resp.content)} bytes)"
+                continue
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as handle:
+                handle.write(resp.content)
+            _write_markers_meta(cache_dir, app_id, {**info, "url": url})
+            logging.info("Downloaded timeline markers for app %s from %s", app_id, url)
+            return True
+        except (requests.RequestException, OSError) as exc:
+            last_err = exc
+            logging.warning("Markers CDN download failed for app %s: %s", app_id, exc)
+    logging.warning("All markers CDN mirrors failed for app %s (%s)", app_id, last_err)
+    return False
 
 
 def _steempeg_cache_is_fresh(cache_dir, app_id, info):
