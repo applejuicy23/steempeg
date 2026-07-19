@@ -459,12 +459,22 @@ class PlayerMixin:
         Reopening the file tears down that broken demuxer and lands cleanly on
         frame 0. The surface already shows video_container, so there's no flash.
         """
-        path = getattr(self, '_current_mpd_abs_path', None)
+        path = getattr(self, '_current_play_abs_path', None) or getattr(self, '_current_mpd_abs_path', None)
         if not path or not hasattr(self, 'player') or not self.player:
             return
         try:
             self._ignore_playback_stall(0.8)
             self._ensure_linux_mpv_vo()
+            # Prefer cached remux when the source was an MPD (Linux bridge).
+            src = getattr(self, '_current_mpd_abs_path', None)
+            if src and str(src).lower().endswith(".mpd"):
+                try:
+                    from steempeg.core.dash.mpd_playback import resolve_playback_media_path
+
+                    path = resolve_playback_media_path(src).replace("\\", "/")
+                    self._current_play_abs_path = path
+                except Exception:
+                    pass
             self.player.play(path)
             self.player.pause = True
             if hasattr(self.ui, 'btn_play'):
@@ -2049,13 +2059,28 @@ class PlayerMixin:
         # A Reliable Path for Windows:
         abs_path = os.path.abspath(mpd_path).replace('\\', '/')
 
+        # Linux/libmpv often lacks DASH demux — remux to a seekable cache file.
+        play_path = abs_path
+        try:
+            from steempeg.core.dash.mpd_playback import resolve_playback_media_path
+
+            play_path = resolve_playback_media_path(abs_path).replace("\\", "/")
+            if play_path != abs_path:
+                logging.info("MPV play via DASH remux cache: %s", play_path)
+        except Exception as exc:
+            logging.error("DASH playback remux failed for %s: %s", abs_path, exc)
+            self._is_switching = False
+            return
+
         if hasattr(self, 'custom_timeline'):
-            self.custom_timeline.current_video_path = abs_path
+            # Sniper/hover thumbs skip raw .mpd — point them at the playable media.
+            self.custom_timeline.current_video_path = play_path
             self.custom_timeline.thumb_dir = None
 
         # Remember the source so the EOF watchdog can reopen it if a rewind wedges
         # ffmpeg's DASH demuxer (see update_ui_from_vlc / _reopen_current_clip_paused).
         self._current_mpd_abs_path = abs_path
+        self._current_play_abs_path = play_path
         self._eof_rewind_pending = 0
 
         self._playback_last_time_pos = None
@@ -2064,10 +2089,12 @@ class PlayerMixin:
 
         try:
             self._ensure_linux_mpv_vo()
-            self.player.play(abs_path)
+            self.player.play(play_path)
             self.player.pause = False
         except Exception as exc:
-            logging.error("MPV play failed for %s: %s", abs_path, exc)
+            logging.error("MPV play failed for %s: %s", play_path, exc)
+            # libmpv may already be dead (e.g. waylandvk embed failure) — don't
+            # leave the UI half-switched; caller can click another clip after restart.
             self._is_switching = False
             return
 
@@ -2088,7 +2115,8 @@ class PlayerMixin:
 
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
         if clip_dur >= 1.0:
-            self._start_timeline_thumb_batch(abs_path, clip_dur)
+            # Prefer remuxed media for thumbs when present (same demux story).
+            self._start_timeline_thumb_batch(play_path, clip_dur)
         elif hasattr(self, 'custom_timeline'):
             self.custom_timeline.thumb_dir = None
             self._set_timeline_batch_thumbs_busy(False)
