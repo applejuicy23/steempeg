@@ -45,19 +45,44 @@ from steempeg.ui.message_dialog import steempeg_information
 
 
 class PlayerMixin:
+    def _discard_dead_linux_mpv(self) -> None:
+        """Drop a ShutdownError'd libmpv handle so the next ensure recreates it."""
+        player = getattr(self, "player", None)
+        if player is None:
+            return
+        try:
+            player.terminate()
+        except Exception:
+            pass
+        self.player = None
+        self._linux_mpv_vo_attached = False
+
+    def _mpv_core_alive(self) -> bool:
+        player = getattr(self, "player", None)
+        if player is None:
+            return False
+        try:
+            # Touches the core; raises ShutdownError when dead.
+            _ = player.path
+            return True
+        except Exception:
+            return False
+
     def _ensure_linux_mpv_vo(self) -> bool:
         """Create libmpv on Linux at first play (never at app startup).
 
-        Embedding via wid= freezes Bazzite/NVIDIA (black unkillable window).
-        Use a separate mpv window instead (force_window), keep Qt on Wayland.
-
-        Homebrew libmpv is RPATHed to brew Mesa EGL — on NVIDIA that becomes
-        llvmpipe and ``vo=gpu`` often paints black; prefer xv/x11 there.
+        Prefer ``wid`` embed + xv/x11 (works on Bazzite/NVIDIA with Homebrew Mesa).
+        ``vo=gpu`` via brew EGL falls to llvmpipe and often paints black.
+        Set ``STEEMPEG_MPV_EXTERNAL=1`` to force a separate mpv window instead.
         """
         if sys.platform == "win32":
             return True
 
         import mpv as _mpv
+
+        if getattr(self, "player", None) is not None and not self._mpv_core_alive():
+            logging.warning("Linux mpv core dead — recreating")
+            self._discard_dead_linux_mpv()
 
         soft = os.environ.get("STEEMPEG_SOFT_VIDEO", "0") == "1"
         if soft:
@@ -67,6 +92,7 @@ class PlayerMixin:
         env_vo = (os.environ.get("STEEMPEG_VO") or "").strip()
         ao = (os.environ.get("STEEMPEG_AO") or "").strip() or ("null" if soft else "pulse")
         log_path = getattr(self, "current_mpv_log_file", None) or ""
+        external = os.environ.get("STEEMPEG_MPV_EXTERNAL", "0") == "1"
 
         def _brew_mesa() -> bool:
             for lib in (
@@ -89,41 +115,66 @@ class PlayerMixin:
         if env_vo:
             vo_attempts = [env_vo]
         elif soft:
-            vo_attempts = ["gpu", "x11", "null"]
+            vo_attempts = ["x11", "xv", "gpu", "null"]
         elif _brew_mesa():
             vo_attempts = ["xv", "x11", "gpu"]
         else:
             vo_attempts = ["gpu", "xv", "x11"]
 
         if getattr(self, "player", None) is None:
-            base = {
-                "panscan": 1.0,
-                "keepaspect": "yes",
-                "keep_open": "yes",
-                "loglevel": "info",
-                "hwdec": "no",
-                "ao": ao,
-                "osc": "no",
-                "input_default_bindings": "no",
-                "input_vo_keyboard": "no",
-                "load_scripts": "no",
-                # Separate window — no wid= into Qt (avoids hard GPU freezes).
-                "force_window": "immediate",
-                "title": "Steempeg Player",
-            }
-            if log_path:
-                base["log_file"] = log_path
-            last_exc = None
-            for vo in vo_attempts:
-                opts = dict(base, vo=vo)
+            wid = None
+            if not external and hasattr(self, "mpv_screen") and self.mpv_screen is not None:
                 try:
-                    self.player = _mpv.MPV(**opts)
-                    logging.info("Linux mpv created: vo=%s (external window)", vo)
-                    break
+                    wrapper = getattr(self, "mpv_wrapper", None)
+                    if wrapper is not None and hasattr(wrapper, "prepare_native_embed"):
+                        wrapper.prepare_native_embed()
+                    self.mpv_screen.show()
+                    wid = int(self.mpv_screen.winId())
                 except Exception as exc:
-                    last_exc = exc
-                    logging.warning("Linux mpv create failed vo=%s: %s", vo, exc)
-                    self.player = None
+                    logging.warning("Linux mpv wid unavailable: %s", exc)
+
+            modes = []
+            if wid is not None:
+                modes.append("embed")
+            modes.append("external")
+
+            last_exc = None
+            for mode in modes:
+                for vo in vo_attempts:
+                    opts = {
+                        "panscan": 1.0,
+                        "keepaspect": "no" if mode == "embed" else "yes",
+                        "keep_open": "yes",
+                        "loglevel": "info",
+                        "hwdec": "no",
+                        "ao": ao,
+                        "osc": "no",
+                        "input_default_bindings": "no",
+                        "input_vo_keyboard": "no",
+                        "load_scripts": "no",
+                        "vo": vo,
+                    }
+                    if log_path:
+                        opts["log_file"] = log_path
+                    if mode == "embed":
+                        opts["wid"] = wid
+                    else:
+                        opts["force_window"] = "immediate"
+                        opts["title"] = "Steempeg Player"
+                    try:
+                        self.player = _mpv.MPV(**opts)
+                        logging.info("Linux mpv created: vo=%s mode=%s", vo, mode)
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        logging.warning(
+                            "Linux mpv create failed vo=%s mode=%s: %s", vo, mode, exc
+                        )
+                        self.player = None
+                if self.player is not None:
+                    break
+
             if self.player is None:
                 logging.error("Linux mpv create exhausted attempts: %s", last_exc)
                 return False
@@ -138,7 +189,6 @@ class PlayerMixin:
 
         if getattr(self, "_linux_mpv_vo_attached", False):
             return True
-        # Player exists from an older path — just mark attached.
         self._linux_mpv_vo_attached = True
         return True
 
@@ -518,28 +568,41 @@ class PlayerMixin:
     # VIDEO PLAYER CONTROLS
     def toggle_play(self):
         """ Toggles Play/Pause state in MPV and updates the button icon. """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        if not getattr(self, 'player', None) or getattr(self.player, 'path', None) is None: return
+        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
+            return
+        if not getattr(self, 'player', None):
+            return
+        try:
+            if getattr(self.player, 'path', None) is None:
+                return
+        except Exception:
+            # Dead libmpv core — drop handle; next clip click recreates it.
+            self._discard_dead_linux_mpv()
+            return
 
-        if self.player.pause:
-            dur = self._playback_duration_sec()
-            try:
-                pos = self.player.time_pos
-            except Exception:
-                pos = None
-            if dur and pos is not None and float(pos) >= float(dur) - 0.05:
-                self._ignore_playback_stall(0.5)
+        try:
+            if self.player.pause:
+                dur = self._playback_duration_sec()
                 try:
-                    self.player.seek(0, reference='absolute', precision='exact')
+                    pos = self.player.time_pos
                 except Exception:
-                    pass
-                if hasattr(self, 'custom_timeline'):
-                    self.custom_timeline.force_jump(0)
+                    pos = None
+                if dur and pos is not None and float(pos) >= float(dur) - 0.05:
+                    self._ignore_playback_stall(0.5)
+                    try:
+                        self.player.seek(0, reference='absolute', precision='exact')
+                    except Exception:
+                        pass
+                    if hasattr(self, 'custom_timeline'):
+                        self.custom_timeline.force_jump(0)
 
-        self.player.pause = not self.player.pause
-        if hasattr(self.ui, 'btn_play'):
-            icon_path = get_resource_path("icon_play.png") if self.player.pause else get_resource_path("icon_pause.png")
-            self.ui.btn_play.setIcon(QIcon(icon_path))
+            self.player.pause = not self.player.pause
+            if hasattr(self.ui, 'btn_play'):
+                icon_path = get_resource_path("icon_play.png") if self.player.pause else get_resource_path("icon_pause.png")
+                self.ui.btn_play.setIcon(QIcon(icon_path))
+        except Exception as exc:
+            logging.warning("toggle_play ignored (mpv dead?): %s", exc)
+            self._discard_dead_linux_mpv()
                 
     def set_vlc_volume(self, value):
         """ Passes the volume value to MPV with a perceptual logarithmic curve for human hearing """
@@ -890,7 +953,7 @@ class PlayerMixin:
                 " padding: 12px 24px;"
                 " border-radius: 6px;"
                 " font-size: 15px;"
-                " font-family: 'Segoe UI', Arial, sans-serif;"
+                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
                 "}"
             )
             self._immersive_esc_hint = hint
@@ -2119,15 +2182,25 @@ class PlayerMixin:
         self._ignore_playback_stall(0.35)
 
         try:
-            self._ensure_linux_mpv_vo()
+            if not self._ensure_linux_mpv_vo():
+                self._is_switching = False
+                return
             self.player.play(play_path)
             self.player.pause = False
         except Exception as exc:
-            logging.error("MPV play failed for %s: %s", play_path, exc)
-            # libmpv may already be dead (e.g. waylandvk embed failure) — don't
-            # leave the UI half-switched; caller can click another clip after restart.
-            self._is_switching = False
-            return
+            logging.warning("MPV play failed (%s); recreating core once", exc)
+            self._discard_dead_linux_mpv()
+            try:
+                if not self._ensure_linux_mpv_vo():
+                    self._is_switching = False
+                    return
+                self.player.play(play_path)
+                self.player.pause = False
+            except Exception as exc2:
+                logging.error("MPV play failed for %s: %s", play_path, exc2)
+                self._discard_dead_linux_mpv()
+                self._is_switching = False
+                return
 
         QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
@@ -2190,6 +2263,9 @@ class PlayerMixin:
     def update_ui_from_vlc(self):
         """ Updates UI and Timeline from MPV engine """
         if not hasattr(self, 'player') or not self.player:
+            return
+        if sys.platform != "win32" and not self._mpv_core_alive():
+            self._discard_dead_linux_mpv()
             return
             
         # If the strip is off, prevent the timer from toggling it!
@@ -2535,7 +2611,7 @@ class PlayerMixin:
         pick = QMenu(self.ui)
         pick.setStyleSheet("""
             QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
-                    border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; }
+                    border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; }
             QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
             QMenu::item:selected { background-color: #6b5a8e; }
         """)
@@ -2583,7 +2659,7 @@ class PlayerMixin:
         pick = QMenu(self.ui)
         pick.setStyleSheet("""
             QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
-                    border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; }
+                    border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; }
             QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
             QMenu::item:selected { background-color: #6b5a8e; }
         """)
@@ -2626,7 +2702,7 @@ class PlayerMixin:
                 "QFrame#screenshotToast { background-color: #1f1f1f; border: 1px solid #6b5a8e;"
                 " border-radius: 10px; }"
                 " QLabel { color: #e8e8e8; background: transparent; font-size: 12px;"
-                " font-family: 'Segoe UI', Arial, sans-serif; }"
+                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; }"
                 " QPushButton { background-color: #4a3f63; color: #ffffff; border: none;"
                 " border-radius: 7px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
                 " QPushButton:hover { background-color: #6b5a8e; }"
