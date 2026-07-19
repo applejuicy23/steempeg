@@ -266,6 +266,23 @@ class SteempegTitleBar(QWidget):
 
         self._apply_bar_style(tok.BG_TITLE_BAR)
 
+    def mousePressEvent(self, event) -> None:
+        # Windows uses WM_NCHITTEST → HTCAPTION. Elsewhere drag via Qt.
+        if os.name != "nt" and event.button() == Qt.MouseButton.LeftButton:
+            handle = self._window.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if os.name != "nt" and event.button() == Qt.MouseButton.LeftButton:
+            self.maximize_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def _apply_bar_style(self, bg_color: str) -> None:
         self._bar_bg = bg_color
         self.setStyleSheet(
