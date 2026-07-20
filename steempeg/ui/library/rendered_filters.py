@@ -127,6 +127,104 @@ class RenderedFilterMenu(QWidget):
         bottom_layout.addWidget(self.btn_apply)
         layout.addLayout(bottom_layout)
 
+        self._outer_layout = main_layout
+        self._inner_layout = layout
+        self._bottom_layout = bottom_layout
+
+    def apply_density(self, dense) -> None:
+        """Shrink popup chrome for Deck / ultra-narrow windows."""
+        compact = bool(getattr(dense, "compact", False))
+        width = 340 if compact else 460
+        self.setFixedWidth(width)
+
+        font = 11 if compact else 13
+        pad_v = 2 if compact else 4
+        pad_h = 8 if compact else 12
+        min_h = 18 if compact else 24
+        radius = 8 if compact else 10
+        border = 1 if compact else 2
+        outer_m = 6 if compact else 10
+        inner_m = 8 if compact else 16
+        gap = 6 if compact else 12
+        cap_m = 8 if compact else 12
+        title_font = 11 if compact else 13
+        pill_r = 10 if compact else 14
+
+        if getattr(self, "_outer_layout", None) is not None:
+            self._outer_layout.setContentsMargins(outer_m, outer_m, outer_m, outer_m)
+        if getattr(self, "_inner_layout", None) is not None:
+            self._inner_layout.setContentsMargins(inner_m, inner_m, inner_m, inner_m)
+            self._inner_layout.setSpacing(gap)
+        if getattr(self, "_bottom_layout", None) is not None:
+            self._bottom_layout.setContentsMargins(0, 6 if compact else 10, 0, 0)
+
+        self.container.setStyleSheet(
+            f"QFrame#MainFilterContainer {{ background-color: #252525; "
+            f"border: 1px solid #3d3d3d; border-radius: {pill_r + 2}px; }}"
+        )
+        for capsule in self.findChildren(QFrame, "CategoryCapsule"):
+            capsule.setStyleSheet(f"""
+                QFrame#CategoryCapsule {{
+                    background-color: #2d2d2d;
+                    border: 1px solid #383838;
+                    border-radius: {pill_r}px;
+                }}
+                QLabel#CategoryTitle {{
+                    color: #cccccc; border: none; background: transparent;
+                    font-size: {title_font}px; font-weight: bold;
+                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
+                }}
+            """)
+            lay = capsule.layout()
+            if lay is not None:
+                lay.setContentsMargins(cap_m, cap_m, cap_m, cap_m)
+                lay.setSpacing(4 if compact else 8)
+
+        self._PILL_BTN_STYLE = f"""
+            QPushButton {{
+                background-color: #383838; color: #aaaaaa;
+                border: {border}px solid #444444; border-radius: {radius}px;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-weight: bold; font-size: {font}px;
+                padding: {pad_v}px {pad_h}px; min-height: {min_h}px;
+            }}
+            QPushButton:hover {{
+                background-color: #404040; color: #ffffff; border: {border}px solid #555555;
+            }}
+            QPushButton:checked {{
+                background-color: #404040; color: #ffffff; border: {border}px solid #6b5a8e;
+            }}
+            QPushButton:checked:hover {{
+                background-color: #3a324a; border: {border}px solid #b29ae7;
+            }}
+        """
+        for btn in self.findChildren(QPushButton):
+            if btn in (self.btn_clear, self.btn_apply):
+                continue
+            if btn.isCheckable():
+                btn.setStyleSheet(self._PILL_BTN_STYLE)
+
+        unified = f"""
+            QPushButton {{
+                background-color: #383838; color: #ffffff;
+                border: {border}px solid #444444; border-radius: {radius + 2}px;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-weight: bold; font-size: {font}px;
+                padding: {pad_v}px {pad_h}px; min-height: {min_h}px;
+            }}
+            QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}
+            QPushButton:disabled {{ background-color: #222222; color: #555555; border: {border}px solid #2d2d2d; }}
+            QPushButton::menu-indicator {{ image: none; }}
+        """
+        clear_style = (
+            unified.replace("color: #ffffff;", "color: #ff7777;")
+            .replace("#6b5a8e", "#e05555")
+            .replace("#b29ae7", "#ff7777")
+        )
+        self.btn_clear.setStyleSheet(clear_style)
+        self.btn_apply.setStyleSheet(unified)
+
     _PILL_BTN_STYLE = """
         QPushButton {
             background-color: #383838;
