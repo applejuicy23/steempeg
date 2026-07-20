@@ -477,21 +477,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             mega_top_pill = qtw.QFrame()
             self.library_toolbar_pill = mega_top_pill
             mega_top_pill.setObjectName("libraryToolbarPill")
-            mega_top_pill.setStyleSheet("""
-                QFrame {
-                    background-color: #2d2d2d;
-                    border: 1px solid #353535;
-                    border-radius: 20px;
-                }
-                QLabel { border: none; background: transparent; }
-            """)
+            from steempeg.ui.ui_density import (
+                COMFORT as _DENSITY_COMFORT,
+                toolbar_mega_pill_style,
+                view_toggle_button_styles,
+                view_toggle_track_style,
+            )
+            mega_top_pill.setStyleSheet(
+                toolbar_mega_pill_style(_DENSITY_COMFORT, object_name="libraryToolbarPill")
+            )
 
             # 2. Making the Text White
             lbl_view = qtw.QLabel("View")
             lbl_view.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
 
             # 3. Create a List button (inactive) with white text.
-            self.toggle_style_inactive = "background-color: transparent; color: #ffffff; border-radius: 12px; font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
+            _active0, _inactive0 = view_toggle_button_styles(_DENSITY_COMFORT)
+            self.toggle_style_inactive = _inactive0
 
             # 4. Making the Clip Counter White
             self.lbl_clip_count = qtw.QLabel("• 0 Clips")
@@ -509,7 +511,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # Grid / List Toggle
             self.toggle_pill = qtw.QFrame()
-            self.toggle_pill.setStyleSheet("QFrame { background-color: #141414; border-radius: 14px; border: none; }")
+            self.toggle_pill.setStyleSheet(view_toggle_track_style())
             pill_layout = qtw.QHBoxLayout(self.toggle_pill)
             pill_layout.setContentsMargins(2, 2, 2, 2)
             pill_layout.setSpacing(0)
@@ -517,8 +519,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.btn_view_grid = qtw.QPushButton("Grid")
             self.btn_view_list = qtw.QPushButton("List")
             
-            self.toggle_style_active = "background-color: #5138e6; color: white; border-radius: 12px; font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
-            self.toggle_style_inactive = "background-color: transparent; color: #888888; border-radius: 12px; font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
+            self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(
+                _DENSITY_COMFORT
+            )
 
             self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
             self.btn_view_grid.setStyleSheet(self.toggle_style_active)
@@ -676,9 +679,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort2.png")), "Duration (Longest)")
         self.combo_sort.setMaxVisibleItems(12)
 
-        # Use the Source Info value font so the sort combo matches the rest of the UI.
-        # An ancestor stylesheet font does NOT reliably style a non-editable combo's
-        # painted text, so set family + weight + size explicitly on the widget.
+        # Same face as Refresh: Segoe UI bold 13. QSS alone does not reliably
+        # style a non-editable combo's painted text, so set it on the widget.
         _sort_font = self.combo_sort.font()
         _sort_font.setFamily("Segoe UI")
         _sort_font.setBold(True)
@@ -1105,55 +1107,64 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # 1. OUR ORIGINAL, BEAUTIFUL STYLES
 
-            # Logs 
-            btn_logs_style = """
-                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #383838; color: #ffffff; border: 2px solid #444444; border-radius: 8px; padding: 6px 14px; }
-                QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
-                QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-                QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
-                QPushButton::menu-indicator { image: none; }
-            """
-            
-            # Start (Green — OUR BENCHMARK)
-            start_btn_style = """
-                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #2e6b32; color: #ffffff; border: 2px solid #3e8e41; border-radius: 8px; padding: 6px 14px; }
-                QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }
-                QPushButton:pressed { background-color: #235226; border: 2px solid #3e8e41; }
-                QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
-            """
+            # Logs / Start / Pause / Cancel — density reapplies font + padding later.
+            self._dash_btn_style_logs = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #383838; color: #ffffff; "
+                "border: 2px solid #444444; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}"
+                "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+                "QPushButton::menu-indicator {{ image: none; }}"
+            )
+            self._dash_btn_style_start = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #2e6b32; color: #ffffff; "
+                "border: 2px solid #3e8e41; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #3e8e41; border: 2px solid #57c75b; }}"
+                "QPushButton:pressed {{ background-color: #235226; border: 2px solid #3e8e41; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+            )
+            self._dash_btn_style_pause = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #8c7314; color: #ffffff; "
+                "border: 2px solid #a88b11; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #a88b11; border: 2px solid #c9a716; }}"
+                "QPushButton:pressed {{ background-color: #6b570d; border: 2px solid #a88b11; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+                "QPushButton::menu-indicator {{ image: none; }}"
+            )
+            self._dash_btn_style_cancel = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #8a2525; color: #ffffff; "
+                "border: 2px solid #a82e2e; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #a82e2e; border: 2px solid #cc3939; }}"
+                "QPushButton:pressed {{ background-color: #661a1a; border: 2px solid #a82e2e; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+                "QPushButton::menu-indicator {{ image: none; }}"
+            )
 
-            # Pause (Yellow-Orange Copy of the Green One)
-            btn_pause_style = """
-                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #8c7314; color: #ffffff; border: 2px solid #a88b11; border-radius: 8px; padding: 6px 14px; }
-                QPushButton:hover { background-color: #a88b11; border: 2px solid #c9a716; }
-                QPushButton:pressed { background-color: #6b570d; border: 2px solid #a88b11; }
-                QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
-                QPushButton::menu-indicator { image: none; }
-            """
-            
-            # Cancellation (Red copy of the green one)
-            btn_cancel_style = """
-                QPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; font-weight: bold; background-color: #8a2525; color: #ffffff; border: 2px solid #a82e2e; border-radius: 8px; padding: 6px 14px; }
-                QPushButton:hover { background-color: #a82e2e; border: 2px solid #cc3939; }
-                QPushButton:pressed { background-color: #661a1a; border: 2px solid #a82e2e; }
-                QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
-                QPushButton::menu-indicator { image: none; }
-            """
+            def _fmt_dash_btn(template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px") -> str:
+                return template.format(font=font, radius=radius, pad=pad)
 
             # FORCE INJECT STYLES DIRECTLY INTO BUTTONS
             if hasattr(self.ui, 'btn_start'): 
-                self.ui.btn_start.setStyleSheet(start_btn_style)
+                self.ui.btn_start.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_start))
+                self.ui.btn_start.setMinimumSize(0, 0)
             elif hasattr(self.ui, 'btn_render'): 
-                self.ui.btn_render.setStyleSheet(start_btn_style)
+                self.ui.btn_render.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_start))
                 
             if hasattr(self.ui, 'btn_pause'): 
-                self.ui.btn_pause.setStyleSheet(btn_pause_style)
+                self.ui.btn_pause.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_pause))
+                self.ui.btn_pause.setMinimumSize(0, 0)
                 
             if hasattr(self.ui, 'btn_cancel'): 
-                self.ui.btn_cancel.setStyleSheet(btn_cancel_style)
+                self.ui.btn_cancel.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_cancel))
+                self.ui.btn_cancel.setMinimumSize(0, 0)
                 
             if hasattr(self.ui, 'btn_logs'): 
-                self.ui.btn_logs.setStyleSheet(btn_logs_style)
+                self.ui.btn_logs.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_logs))
+                self.ui.btn_logs.setMinimumSize(0, 0)
 
             # 2. Remove Padding from the Parent Element for Perfect Width Symmetry
             parent_widget = self.ui.btn_start.parentWidget() if hasattr(self.ui, 'btn_start') else None
@@ -1165,9 +1176,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # 3. Creating Our Single Monolithic Circle
             self.render_dashboard = qtw.QFrame()
+            self.render_dashboard.setObjectName("renderDashboard")
             self.render_dashboard.setStyleSheet("""
-                QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }
-                QLabel { border: none; background: transparent; }
+                QFrame#renderDashboard { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }
+                QFrame#renderDashboard QLabel { border: none; background: transparent; }
             """)
             
             dash_layout = qtw.QVBoxLayout(self.render_dashboard)
@@ -1178,6 +1190,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             header_block = qtw.QVBoxLayout()
             header_block.setSpacing(12)
+            self._dash_header_block = header_block
 
             top_row = qtw.QHBoxLayout()
             top_row.setSpacing(4)
@@ -1193,20 +1206,28 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.bottom_icon_label = qtw.QLabel()
                 self.bottom_icon_label.setFixedSize(24, 24)
 
-                self.bottom_text_label = qtw.QLabel()
+                self.bottom_text_label = ElidedLabel()
                 self.bottom_text_label.setStyleSheet(
                     f"color: #e0e0e0; font-size: 14px; font-weight: bold; {_status_font}"
                 )
+                self.bottom_text_label.setMinimumWidth(0)
+                self.bottom_text_label.setSizePolicy(
+                    qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
+                )
 
                 summary_left_layout.addWidget(self.bottom_icon_label, 0, qtc.Qt.AlignVCenter)
-                summary_left_layout.addWidget(self.bottom_text_label, 0, qtc.Qt.AlignVCenter)
-                top_row.addWidget(summary_left, 0, qtc.Qt.AlignVCenter)
+                summary_left_layout.addWidget(self.bottom_text_label, 1, qtc.Qt.AlignVCenter)
+                summary_left.setMinimumWidth(0)
+                summary_left.setSizePolicy(
+                    qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
+                )
+                top_row.addWidget(summary_left, 1, qtc.Qt.AlignVCenter)
 
                 def reset_bottom_summary():
                     css_icon = get_resource_path("unknown_icon.png").replace('\\', '/')
 
                     self.bottom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
-                    self.bottom_text_label.setText("<b>Select a clip to begin...</b>")
+                    self.bottom_text_label.setText("Select a clip to begin...")
 
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
                         self.custom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
@@ -1220,8 +1241,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
                 self.reset_bottom_summary = reset_bottom_summary
                 self.reset_bottom_summary()
-
-            top_row.addStretch(1)
 
             _PCT_COL_WIDTH = 40
             _STATUS_ROW_H = 24
@@ -1290,7 +1309,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             # BOTTOM ROW: PERFECTLY ALIGNED, FULL-WIDTH BUTTONS
             btn_row = qtw.QHBoxLayout()
             btn_row.setContentsMargins(0, 0, 0, 0)
-            btn_row.setSpacing(12) # Beautiful, even spacing between buttons
+            btn_row.setSpacing(12)
+            self._dash_btn_row = btn_row
             
             # Strict Sequence
             buttons_queue = ['btn_start', 'btn_pause', 'btn_cancel', 'btn_logs']
@@ -2017,16 +2037,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 from steempeg.ui.layout_defaults import (
                     DEFAULT_QUEUE_VIEW,
                     DEFAULT_RIGHT_H_SPLITTER_SIZES,
-                    STEAM_DECK_WIDTH,
-                    queue_panel_min_width,
                 )
                 from steempeg.ui.render_queue_panel import RenderQueuePanel
 
                 queue_view = self.get_layout_setting("queue_view_mode", DEFAULT_QUEUE_VIEW)
                 self.render_queue_panel = RenderQueuePanel(initial_view_mode=queue_view)
-                self.render_queue_panel.setMinimumWidth(
-                    queue_panel_min_width(self.ui.width() or STEAM_DECK_WIDTH)
-                )
+                # Closed at startup (sizes […, 0]); keep min at 0 until the pane opens
+                # so nested mins cannot fight Clips Manager on the outer splitter.
+                self.render_queue_panel.setMinimumWidth(0)
                 self.render_queue_panel.job_selected.connect(self.on_queue_job_selected)
                 self.render_queue_panel.job_remove_requested.connect(self.remove_queue_job)
                 self.render_queue_panel.job_reorder_requested.connect(self.reorder_queue_job)
@@ -2051,10 +2069,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.right_h_splitter.setHandleWidth(6)
                 self.right_h_splitter.setChildrenCollapsible(True)
                 self.right_h_splitter.setCollapsible(0, False)
-                # Collapsible(1) toggled in _sync_queue_splitter_visibility:
-                # False while jobs are open (prevent crush → DWM ghosts), True when empty.
+                # Always collapsible — locking the queue open made nested mins
+                # shove the outer Clips Manager splitter around on narrow windows.
                 self.right_h_splitter.setCollapsible(1, True)
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
+                self.right_h_splitter.splitterMoved.connect(self._on_right_h_splitter_moved)
 
                 right_layout.addWidget(self.right_content_wrap)
 
@@ -2094,12 +2113,20 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             QWidget().setLayout(self.ui.video_container.layout())
             
         self.ui.video_container.setStyleSheet("background-color: transparent; border: none;")
+        # UI file pins min height 280 — that makes the embed overflow when the
+        # player column is crushed. Allow the surface to shrink with the layout.
+        self.ui.video_container.setMinimumSize(0, 0)
         
         # We place our smart wrapper into the standard layout.
         layout = QVBoxLayout(self.ui.video_container)
         layout.setContentsMargins(0, 0, 0, 0)
         
         self.mpv_wrapper = MPVWrapper()
+        self.mpv_wrapper.setMinimumSize(0, 0)
+        from PySide6.QtWidgets import QSizePolicy as _QSizePolicy
+        self.mpv_wrapper.setSizePolicy(
+            _QSizePolicy.Policy.Expanding, _QSizePolicy.Policy.Expanding
+        )
         layout.addWidget(self.mpv_wrapper)
         
         
@@ -2467,10 +2494,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
     def _apply_responsive_layout_mins(self, *, apply_density: bool = True):
         """Lerp panel mins + chrome density with window width (no binary cliff)."""
-        from steempeg.ui.layout_defaults import (
-            left_panel_min_width,
-            queue_panel_min_width,
-        )
+        from steempeg.ui.layout_defaults import left_panel_min_width
         from steempeg.ui.ui_density import chrome_equal, density_for_width
 
         w = int(self.ui.width() or 0)
@@ -2478,16 +2502,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             return
 
         left_min = left_panel_min_width(w)
-        queue_min = queue_panel_min_width(w)
 
         if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
             self.ui.left_panel.setMinimumWidth(left_min)
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None:
-            panel.setMinimumWidth(queue_min)
+            # Nested queue must stay minWidth 0. A hard min propagates through
+            # right_h_splitter into main_splitter and shoves Clips Manager /
+            # grows the window when the pane is opened on a mid-width shell.
+            panel.setMinimumWidth(0)
 
         # Clamp splitter sizes to new mins without resetting to comfort defaults.
-        self._clamp_splitters_to_mins(left_min=left_min, queue_min=queue_min)
+        self._clamp_splitters_to_mins(left_min=left_min)
 
         if not apply_density:
             return
@@ -2501,33 +2527,89 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._ui_density = dense
         self._apply_ui_density(dense)
 
-    def _clamp_splitters_to_mins(self, *, left_min: int, queue_min: int) -> None:
-        """Keep current splitter ratios; only ensure mins are satisfiable."""
+    def _on_right_h_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        """Debounced snap: collapse queue scraps after drag ends."""
+        timer = getattr(self, "_right_h_snap_timer", None)
+        if timer is None:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self.ui if hasattr(self, "ui") else None)
+            timer.setSingleShot(True)
+            timer.setInterval(100)
+            timer.timeout.connect(self._snap_right_h_splitter_after_drag)
+            self._right_h_snap_timer = timer
+        timer.start()
+
+    def _snap_right_h_splitter_after_drag(self) -> None:
+        """Snap near-zero queue widths shut — no minimumWidth, no size growth."""
+        rhs = getattr(self, "right_h_splitter", None)
+        panel = getattr(self, "render_queue_panel", None)
+        if rhs is None or panel is None:
+            return
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            return
+        sizes = rhs.sizes()
+        if len(sizes) < 2:
+            return
+        total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
+        queue_w = int(sizes[1])
+        if total <= 0:
+            return
+        panel.setMinimumWidth(0)
+        if queue_w <= 0:
+            jobs = getattr(self, "render_queue", None)
+            if jobs is not None and len(jobs) > 0:
+                self._queue_user_collapsed = True
+            return
+        # User dragged almost shut → fully close (like a normal collapsible pane).
+        if queue_w < 48:
+            rhs.setSizes([max(int(total), 1), 0])
+            self._queue_user_collapsed = True
+            return
+        self._queue_user_collapsed = False
+        # Keep player usable if the drag left it crushed — shrink queue only.
+        self._clamp_splitters_to_mins(left_min=None)
+
+    def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
+        """Protect floors without growing the nested queue (growth fights the shell)."""
+        from steempeg.ui.layout_defaults import PLAYER_COLUMN_FLOOR, left_panel_min_width
+
+        if left_min is None:
+            w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
+            left_min = left_panel_min_width(w) if w else 360
+
+        rhs = getattr(self, "right_h_splitter", None)
+        # Nested: only shrink an open queue if the player column went below floor.
+        # Never grow the queue here — that is what shoved the pane "to the right"
+        # and destabilized mid-width windows on open.
+        if rhs is not None:
+            sizes = rhs.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
+            if total > 0 and len(sizes) >= 2 and sizes[1] > 0:
+                queue_w = int(sizes[1])
+                player_w = int(sizes[0])
+                if player_w < PLAYER_COLUMN_FLOOR and total > PLAYER_COLUMN_FLOOR:
+                    queue_w = max(0, total - PLAYER_COLUMN_FLOOR)
+                    player_w = total - queue_w
+                    if player_w != sizes[0] or queue_w != sizes[1]:
+                        rhs.setSizes([player_w, queue_w])
+                elif queue_w > 0 and queue_w < 48:
+                    # Scrap width left by a shrink — close fully.
+                    rhs.setSizes([max(int(total), 1), 0])
+
         main = getattr(self.ui, "main_splitter", None)
         if main is not None:
             sizes = main.sizes()
             total = sum(sizes)
             if total > 0 and len(sizes) >= 2:
-                left = max(left_min, sizes[0])
-                right = total - left
-                if right < 200:
-                    left = max(left_min, total - 200)
+                left = int(sizes[0])
+                right = int(sizes[1])
+                # Restore left floor by taking from the right column only.
+                if left < left_min:
+                    left = min(left_min, max(0, total - 200))
                     right = total - left
-                if left != sizes[0] or right != sizes[1]:
-                    main.setSizes([left, right])
-
-        rhs = getattr(self, "right_h_splitter", None)
-        if rhs is not None and getattr(self, "render_queue_panel", None) is not None:
-            sizes = rhs.sizes()
-            total = sum(sizes) if sum(sizes) > 0 else rhs.width()
-            if total > 0 and len(sizes) >= 2 and sizes[1] > 0:
-                queue_w = max(queue_min, sizes[1])
-                player_w = total - queue_w
-                if player_w < 360:
-                    queue_w = max(queue_min, total - 360)
-                    player_w = total - queue_w
-                if queue_w != sizes[1]:
-                    rhs.setSizes([player_w, queue_w])
+                    if left != sizes[0] or right != sizes[1]:
+                        main.setSizes([left, right])
 
         v_split = getattr(self, "main_v_splitter", None)
         if v_split is not None:
@@ -2546,6 +2628,39 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     # Extremely crushed bottom — nudge toward a sane restore ratio.
                     v_split.setSizes(restore_v_splitter_sizes(total))
 
+    def _open_queue_in_right_splitter(self) -> None:
+        """Open the queue pane using the splitter's real width only (no minWidth)."""
+        from steempeg.ui.layout_defaults import (
+            PLAYER_COLUMN_FLOOR,
+            queue_panel_open_width,
+        )
+
+        rhs = getattr(self, "right_h_splitter", None)
+        panel = getattr(self, "render_queue_panel", None)
+        if rhs is None or panel is None:
+            return
+        panel.setMinimumWidth(0)
+        sizes = rhs.sizes()
+        # Prefer the widget's live width — stale size sums (e.g. [1200, 0]) lie
+        # when the shell is mid-compact and the right column is much narrower.
+        total = max(int(rhs.width() or 0), int(sum(sizes) if sizes else 0), 1)
+        win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
+        ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else 280
+        saved = self.get_layout_setting("queue_panel_width", None)
+        queue_w = ideal
+        if saved is not None:
+            try:
+                queue_w = int(saved)
+            except (TypeError, ValueError):
+                queue_w = ideal
+            queue_w = min(max(queue_w, 0), ideal) if ideal > 0 else queue_w
+        max_q = max(0, total - PLAYER_COLUMN_FLOOR)
+        if max_q < 80:
+            # Not enough room inside the right column — do not steal from Clips.
+            return
+        queue_w = max(80, min(int(queue_w), max_q))
+        rhs.setSizes([total - queue_w, queue_w])
+
     def _apply_ui_density(self, dense):
         """Resize fonts/paddings/labels along the continuous density scale."""
         from steempeg.ui.ui_density import (
@@ -2555,7 +2670,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             tab_label,
             updates_button_label,
         )
-        from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
 
         # --- Library tabs ---
         tabs = getattr(self, "_library_tabs", None) or {}
@@ -2601,14 +2715,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             count.setStyleSheet(
                 f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
             )
-        self.toggle_style_active = (
-            f"background-color: #5138e6; color: white; border-radius: 10px; font-weight: bold; "
-            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
+        from steempeg.ui.ui_density import (
+            toolbar_mega_pill_style,
+            view_toggle_button_styles,
+            view_toggle_track_style,
         )
-        self.toggle_style_inactive = (
-            f"background-color: transparent; color: #888888; border-radius: 10px; font-weight: bold; "
-            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
-        )
+
+        lib_pill = getattr(self, "library_toolbar_pill", None)
+        if lib_pill is not None:
+            lib_pill.setStyleSheet(
+                toolbar_mega_pill_style(dense, object_name="libraryToolbarPill")
+            )
+        toggle_track = getattr(self, "toggle_pill", None)
+        if toggle_track is not None:
+            toggle_track.setStyleSheet(view_toggle_track_style(dense))
+        self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(dense)
         # Re-apply current view toggle styles
         mode = getattr(self, "_clips_view_mode", None) or getattr(self, "current_view_mode", "grid")
         if hasattr(self, "btn_view_grid") and hasattr(self, "btn_view_list"):
@@ -2625,20 +2746,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         combo = getattr(self, "combo_sort", None)
         if combo is not None:
-            combo_qss = f"""
-                QComboBox {{
-                    background-color: #383838; color: #ffffff; border: 2px solid #444444;
-                    border-radius: 8px; padding: {dense.combo_pad}; font-weight: bold;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: {dense.combo_font}px;
-                    min-height: {dense.combo_min_h}px;
-                }}
-                QComboBox:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
-                QComboBox:on {{ background-color: #383838; }}
-                QComboBox::drop-down {{ border: none; padding-right: 5px; background: transparent; }}
-            """ + combo_popup_item_rules(dense)
-            combo.setStyleSheet(combo_qss)
+            from steempeg.ui.widgets.combo_chrome import compact_combo_stylesheet
+
+            combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
             fnt = combo.font()
-            fnt.setPixelSize(dense.combo_font)
+            fnt.setFamily("Segoe UI")
+            fnt.setBold(True)
+            fnt.setPixelSize(int(dense.footer_font))  # match Refresh
             combo.setFont(fnt)
 
         # List view fixed columns: Deck can't fit Type+Date+Duration at comfort widths.
@@ -2785,6 +2899,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         dash = getattr(self, "render_dashboard", None)
         if dash is None:
             return
+        if not dash.objectName():
+            dash.setObjectName("renderDashboard")
         lay = dash.layout()
         if lay is not None:
             lay.setContentsMargins(
@@ -2794,32 +2910,84 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 dense.dash_margin_v,
             )
             lay.setSpacing(dense.dash_spacing)
+        # Gap between summary row and progress bar — was stuck at 12px forever.
+        header = getattr(self, "_dash_header_block", None)
+        if header is not None:
+            header.setSpacing(dense.dash_spacing)
+        btn_row = getattr(self, "_dash_btn_row", None)
+        if btn_row is not None:
+            btn_row.setSpacing(8 if dense.compact else 12)
+        # Keep a stable card radius (not tied to button height).
+        dash_r = 10 if dense.compact else 12
+        dash.setStyleSheet(
+            f"QFrame#renderDashboard {{ background-color: #2d2d2d; border: 1px solid #353535; "
+            f"border-radius: {dash_r}px; }}"
+            f"QFrame#renderDashboard QLabel {{ border: none; background: transparent; }}"
+        )
         _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
         bottom_text = getattr(self, "bottom_text_label", None)
         if bottom_text is not None:
             bottom_text.setStyleSheet(
                 f"color: #e0e0e0; font-size: {dense.dash_font}px; font-weight: bold; {_status_font}"
             )
+            if dense.compact:
+                bottom_text.setMaximumHeight(dense.dash_font + 6)
+            else:
+                bottom_text.setMaximumHeight(16777215)
+        # Preserve Ready/Rendering colour — density used to wipe it to default white.
+        status_color = getattr(self, "_status_indicator_color", None)
+        if not status_color:
+            dot = getattr(self, "status_dot", None)
+            cur = (dot.styleSheet() if dot is not None else "") or ""
+            status_color = "#4CAF50"
+            if "background-color:" in cur:
+                try:
+                    status_color = cur.split("background-color:")[1].split(";")[0].strip()
+                except Exception:
+                    pass
         status = getattr(self.ui, "label_status", None)
         if status is not None:
             status.setStyleSheet(
                 f"background: transparent; border: none; font-size: {dense.dash_font}px; "
-                f"font-weight: bold; {_status_font}"
+                f"font-weight: bold; color: {status_color}; {_status_font}"
             )
-            status.setMinimumWidth(80 if dense.compact else 120)
+            status.setMinimumWidth(48 if dense.compact else 120)
         pct = getattr(self, "label_pct", None)
         if pct is not None:
             pct.setStyleSheet(
-                f"color: #ffffff; font-weight: bold; font-size: {max(11, dense.dash_font - 1)}px; {_status_font}"
+                f"color: #ffffff; font-weight: bold; font-size: {max(9, dense.dash_font - 1)}px; {_status_font}"
             )
         icon = getattr(self, "bottom_icon_label", None)
         if icon is not None:
-            icon_sz = 20 if dense.compact else 24
+            icon_sz = 14 if dense.compact else 24
             icon.setFixedSize(icon_sz, icon_sz)
-        for btn_name in ("btn_start", "btn_pause", "btn_cancel", "btn_logs"):
+        dot = getattr(self, "status_dot", None)
+        if dot is not None:
+            dot_sz = 8 if dense.compact else 12
+            dot.setFixedSize(dot_sz, dot_sz)
+            dot.setStyleSheet(
+                f"background-color: {status_color}; border-radius: {dot_sz // 2}px;"
+            )
+
+        pad = "1px 8px" if dense.compact else "6px 14px"
+        radius = max(8, dense.dash_btn_h // 2)
+        font = dense.dash_font
+        style_map = {
+            "btn_start": getattr(self, "_dash_btn_style_start", None),
+            "btn_pause": getattr(self, "_dash_btn_style_pause", None),
+            "btn_cancel": getattr(self, "_dash_btn_style_cancel", None),
+            "btn_logs": getattr(self, "_dash_btn_style_logs", None),
+        }
+        for btn_name, template in style_map.items():
             btn = getattr(self.ui, btn_name, None)
-            if btn is not None:
-                btn.setMinimumHeight(dense.dash_btn_h)
+            if btn is None:
+                continue
+            btn.setMinimumSize(0, 0)
+            btn.setFixedHeight(dense.dash_btn_h)
+            if template:
+                btn.setStyleSheet(
+                    template.format(font=font, radius=radius, pad=pad)
+                )
 
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import (
