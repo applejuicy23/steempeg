@@ -19,23 +19,26 @@ class FilterPillButton(QPushButton):
 
     def apply_density(self, dense: UiDensity) -> None:
         sz = dense.filter_size
-        icon = max(12, sz // 2 - 2)
+        # Keep the glyph inside the circle — comfort ~16px icon on 36px, compact ~11 on 22.
+        icon = max(10, sz // 2 - (1 if dense.compact else 2))
         radius = sz // 2
+        border = 1 if dense.compact else 2
+        pad = 1 if dense.compact else 2
         self.setFixedSize(sz, sz)
         self.setIconSize(QSize(icon, icon))
         self.setStyleSheet(f"""
         QPushButton#FilterPill {{
             background-color: #383838;
-            border: 2px solid #444444;
+            border: {border}px solid #444444;
             border-radius: {radius}px;
-            padding: 2px;
+            padding: {pad}px;
         }}
         QPushButton#FilterPill:hover {{
             background-color: #404040;
-            border: 2px solid #6b5a8e;
+            border: {border}px solid #6b5a8e;
         }}
         QPushButton#FilterPill:pressed {{
             background-color: #3a324a;
-            border: 2px solid #b29ae7;
+            border: {border}px solid #b29ae7;
         }}
     """)
