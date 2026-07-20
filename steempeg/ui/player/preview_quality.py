@@ -73,22 +73,48 @@ def _preset(preset_id: str) -> PreviewQualityPreset:
 
 
 def _source_height(player) -> int:
-    try:
-        return max(0, int(player.height or 0))
-    except Exception:
-        return 0
+    """Best-effort decoded video height (Linux often has height=0 until params settle)."""
+    for attr in ("video-params/h", "dheight", "height"):
+        try:
+            # python-mpv exposes nested props via mapping / getattr.
+            if "/" in attr:
+                val = player[attr]
+            else:
+                val = getattr(player, attr, None)
+                if val is None:
+                    try:
+                        val = player[attr]
+                    except Exception:
+                        val = None
+            h = int(val or 0)
+            if h > 0:
+                return h
+        except Exception:
+            continue
+    return 0
 
 
 def _vf_candidates(player, max_height: int) -> tuple[str, ...]:
-    """Build filter bodies; prefer D3D11 VPP on Windows when frame size is known."""
+    """Build filter bodies; Windows can use D3D11 VPP, Linux prefers software scale."""
     out: list[str] = []
     src_h = _source_height(player)
+    h = max_height
+
     if src_h > max_height and os.name == "nt":
         factor = max_height / src_h
         if 0.0 < factor < 1.0:
             out.append(f"d3d11vpp=scale={factor:.6f}")
 
-    h = max_height
+    # Linux (xv/x11 embed): software scale first — lavfi+hwdownload fails without HW frames.
+    if os.name != "nt":
+        out.extend(
+            (
+                f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease",
+                f"lavfi=[scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease]",
+                f"scale=-2:{h}:force_original_aspect_ratio=decrease",
+            )
+        )
+
     out.extend(
         (
             f"lavfi=[hwdownload,scale=-2:{h}:force_original_aspect_ratio=decrease]",
@@ -96,7 +122,14 @@ def _vf_candidates(player, max_height: int) -> tuple[str, ...]:
             f"scale=-2:{h}:force_original_aspect_ratio=decrease",
         )
     )
-    return tuple(out)
+    # Dedupe while preserving order.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for body in out:
+        if body not in seen:
+            seen.add(body)
+            unique.append(body)
+    return tuple(unique)
 
 
 def _labeled(body: str) -> str:
