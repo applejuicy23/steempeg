@@ -1459,6 +1459,9 @@ class RenderedLibraryMixin:
 
         self.rendered_filter_menu = RenderedFilterMenu(self.ui)
         self.rendered_filter_menu.gather_statistics(self)
+        dense = getattr(self, "_ui_density", None)
+        if dense is not None and hasattr(self.rendered_filter_menu, "apply_density"):
+            self.rendered_filter_menu.apply_density(dense)
         self._position_rendered_filter_menu()
         self.rendered_filter_menu.show()
         QTimer.singleShot(0, self._position_rendered_filter_menu)
