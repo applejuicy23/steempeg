@@ -2717,6 +2717,9 @@ class LibraryMixin:
         # 2. Creating a brand-new menu from scratch
         self.filter_menu = FilterMenu(self.ui)
         self.filter_menu.gather_statistics(self)
+        dense = getattr(self, "_ui_density", None)
+        if dense is not None and hasattr(self.filter_menu, "apply_density"):
+            self.filter_menu.apply_density(dense)
 
         # Best-effort placement before show, then correct once shown (handles the
         # first-launch case where the window geometry isn't settled yet).
