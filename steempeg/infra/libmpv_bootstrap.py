@@ -5,8 +5,10 @@ often misses Fedora's ``libmpv.so.2`` (no unversioned ``.so``) or our
 ``bin/`` copy next to the frozen app. End users should not install system
 mpv or run ldconfig hacks — we ship the library with the release zip.
 
-Note: changing LD_LIBRARY_PATH after process start does not affect dlopen on
-glibc, so we CDLL every bundled .so with RTLD_GLOBAL before import mpv.
+Critical (NVIDIA / Bazzite): never RTLD_GLOBAL-preload Homebrew Mesa
+(``libgallium``, ``libLLVM``, ``libEGL``, …). That hijacks Qt's GL stack and
+hard-freezes the UI on XWayland. ``./run-linux.sh`` works because it does not
+do that — only ``LD_LIBRARY_PATH`` for mpv, after Qt is free to use NVIDIA.
 """
 from __future__ import annotations
 
@@ -16,11 +18,38 @@ import glob
 import os
 import sys
 
+# Shared objects that must NEVER be force-loaded into the Qt process.
+_GL_POISON_PREFIXES = (
+    "libgallium",
+    "libLLVM",
+    "libGL.so",
+    "libGLX",
+    "libGLdispatch",
+    "libEGL.so",
+    "libGLESv",
+    "libOpenGL.so",
+    "libglapi",
+    "libvulkan",
+    "libdrm_amdgpu",
+    "libdrm_intel",
+    "libdrm_radeon",
+    "libdrm_nouveau",
+    "libxcb-glx",
+    "libX11",  # let Qt/system resolve display libs
+    "libwayland",
+)
+
+
+def _is_gl_poison(path_or_name: str) -> bool:
+    base = os.path.basename(path_or_name)
+    return any(base.startswith(p) for p in _GL_POISON_PREFIXES)
+
 
 def _candidate_dirs() -> list[str]:
     dirs: list[str] = []
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        # Wrapper renames ELF to *.bin — still same directory.
         meipass = getattr(sys, "_MEIPASS", None)
         for root in (
             exe_dir,
@@ -40,6 +69,7 @@ def _candidate_dirs() -> list[str]:
             os.path.join(repo, "bin", "linux"),
             os.path.join(repo, "bin", "linux", "mpv"),
             os.path.join(repo, "bin"),
+            os.path.join(repo, "bin", "mpv"),
         ):
             if os.path.isdir(root) and root not in dirs:
                 dirs.append(root)
@@ -63,21 +93,25 @@ def find_bundled_libmpv() -> str | None:
     return None
 
 
-def _preload_bundle_dir(directory: str) -> None:
-    """Load every shared object in directory with RTLD_GLOBAL (deps before use)."""
+def _preload_mpv_deps(directory: str) -> None:
+    """Load non-GL deps of bundled mpv with RTLD_GLOBAL (libmpv last).
+
+    Skips Mesa/LLVM/EGL — those belong to the GPU driver stack Qt already uses.
+    """
     if not os.path.isdir(directory):
         return
     mode = getattr(ctypes, "RTLD_GLOBAL", 0) or 0
-    # Several passes: missing deps may succeed once siblings are loaded.
-    paths = []
+    paths: list[str] = []
     for pattern in ("*.so", "*.so.*"):
         paths.extend(glob.glob(os.path.join(directory, pattern)))
-    # Prefer real files; skip dangling names
+
     unique: list[str] = []
     seen: set[str] = set()
     for p in paths:
         rp = os.path.realpath(p)
         if rp in seen or not os.path.isfile(rp):
+            continue
+        if _is_gl_poison(rp):
             continue
         seen.add(rp)
         unique.append(rp)
@@ -112,7 +146,7 @@ def bootstrap_libmpv() -> str | None:
 
     lib_dirs = [d for d in _candidate_dirs() if os.path.isdir(d)]
     for d in lib_dirs:
-        _preload_bundle_dir(d)
+        _preload_mpv_deps(d)
 
     bundled = find_bundled_libmpv()
     if not bundled:

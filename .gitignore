@@ -52,3 +52,8 @@ steempeg_instance.lock
 
 # --- Engines live in ./bin, shipped via Releases ---
 bin/
+# --- Local Linux build / run helpers (not shipped in git) ---
+newver_compilator.py
+run-linux.sh
+Steempeg_v*.zip
+Steempeg-linux/

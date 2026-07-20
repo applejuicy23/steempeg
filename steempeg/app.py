@@ -2867,14 +2867,32 @@ def main():
         except Exception:
             pass
 
-    # Linux: never force xcb — XWayland+NVIDIA hard-freezes after show.
-    # Let Qt pick wayland on Bazzite. Soft GL made the window invisible on
-    # Wayland; only enable with STEEMPEG_SOFT_GL=1 if needed.
-    # Optional: STEEMPEG_QT_PLATFORM=wayland|xcb
+    # Linux: default to xcb (XWayland). libmpv wid= embed needs an X11 window;
+    # plain Wayland often maps the shell then stalls (this packaged freeze).
+    # Override: STEEMPEG_QT_PLATFORM=wayland|xcb
+    #
+    # Do NOT auto-enable STEEMPEG_SOFT_GL / llvmpipe — that software-renders the
+    # whole 1440p shell on CPU and melts the machine. Optional escape hatch only:
+    #   STEEMPEG_SOFT_GL=1
+    # NVIDIA + XWayland: disable Qt's GLX integration so widgets stay on the
+    # cheap raster path (avoids the hard-freeze without llvmpipe).
     if sys.platform != "win32":
         forced = (os.environ.get("STEEMPEG_QT_PLATFORM") or "").strip()
         if forced:
             os.environ["QT_QPA_PLATFORM"] = forced
+        else:
+            os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+        nvidia = (
+            os.path.exists("/proc/driver/nvidia/version")
+            or os.path.exists("/dev/nvidia0")
+            or os.path.isdir("/sys/module/nvidia")
+        )
+        if (
+            nvidia
+            and os.environ.get("QT_QPA_PLATFORM", "").startswith("xcb")
+            and "QT_XCB_GL_INTEGRATION" not in os.environ
+        ):
+            os.environ["QT_XCB_GL_INTEGRATION"] = "none"
         if os.environ.get("STEEMPEG_SOFT_GL", "0") == "1":
             os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
             os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
@@ -2971,7 +2989,7 @@ def main():
                 | Qt.WindowType.WindowCloseButtonHint
             )
 
-        # Pre-size to (almost) the screen work area BEFORE showing.
+        # Pre-size to the screen work area BEFORE showing.
         window._apply_dark_shell()
         from steempeg.ui.layout_defaults import (
             TARGET_MIN_WINDOW_HEIGHT,
@@ -2984,7 +3002,13 @@ def main():
             _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
             _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
             window.ui.setMinimumSize(_min_w, _min_h)
-            window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
+            if sys.platform == "win32":
+                # Inset; showMaximized() below fills the work area natively.
+                window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
+            else:
+                # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
+                # Fake-maximize by filling the work area (taskbar still visible).
+                window.ui.setGeometry(_avail)
             logging.info(
                 "Primary screen %r avail=%sx%s",
                 _screen.name(),
@@ -3007,8 +3031,7 @@ def main():
         if sys.platform == "win32":
             window.ui.showMaximized()
         else:
-            # Delay maximize — immediate showMaximized on Wayland can map oddly.
-            QTimer.singleShot(200, window.ui.showMaximized)
+            logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
         QApplication.processEvents()
         window._sync_startup_layout()
         geo = window.ui.geometry()
@@ -3024,7 +3047,7 @@ def main():
         )
         if app.platformName() == "xcb":
             logging.warning(
-                "UI is on xcb/XWayland — resize/minimize may hard-freeze on NVIDIA"
+                "UI is on xcb/XWayland — native maximize/minimize may hard-freeze on NVIDIA"
             )
 
         def _apply_custom_shell_native():

@@ -445,7 +445,58 @@ def jump_warnings(from_version: float, to_version: float) -> list[str]:
 
 
 def release_platform_tag() -> str:
-    """Host platform tag used in zip names (``Steempeg_vX.Y_windows.zip``)."""
+    """Update channel for this build: ``windows`` | ``linux`` | ``steamdeck`` | ``macos``.
+
+    From **40T** onward the channel is ``APP_UPDATE_CHANNEL`` (display version
+    stays short, e.g. ``40T``):
+
+    * ``""`` / ``windows`` → Windows (legacy untagged zips still accepted)
+    * ``linux`` → Linux desktop zips
+    * ``steamdeck`` → Steam Deck zips
+
+    Legacy ``40T-linux`` / ``40T-steamdeck`` version strings still resolve.
+    Pre-40T builds fall back to the host OS.
+    Override anytime with ``STEEMPEG_UPDATE_CHANNEL=windows|linux|steamdeck``.
+    """
+    return update_channel()
+
+
+def update_channel(*, version_str: str | None = None) -> str:
+    """Resolve the update stream for *version_str* (default: running app)."""
+    env = (os.environ.get("STEEMPEG_UPDATE_CHANNEL") or "").strip().lower()
+    if env in ("windows", "linux", "steamdeck", "macos"):
+        return env
+
+    from steempeg.version import APP_UPDATE_CHANNEL, APP_VERSION_FLOAT, APP_VERSION_STR
+
+    if version_str is None:
+        baked = (APP_UPDATE_CHANNEL or "").strip().lower()
+        if baked in ("windows", "linux", "steamdeck", "macos"):
+            return baked
+        if baked in ("", "win", "win32") and APP_VERSION_FLOAT >= 40.0 - 0.001:
+            return "windows"
+
+    text = (version_str if version_str is not None else APP_VERSION_STR) or ""
+    text = text.strip().lower()
+    match = re.search(r"[-_](linux|steamdeck|windows|macos)\s*$", text)
+    if match:
+        return match.group(1)
+
+    # Bare version (no suffix): from 40T onward → Windows stream.
+    major_match = re.match(r"v?(\d+(?:\.\d+)?)", text)
+    if major_match:
+        try:
+            if float(major_match.group(1)) >= 40.0 - 0.001:
+                return "windows"
+        except ValueError:
+            pass
+    if version_str is None and APP_VERSION_FLOAT >= 40.0 - 0.001:
+        return "windows"
+
+    return _host_platform_tag()
+
+
+def _host_platform_tag() -> str:
     if sys.platform == "win32":
         return "windows"
     if sys.platform == "darwin":
@@ -461,27 +512,28 @@ def _asset_matches_platform(name: str, platform: str) -> bool:
 
 
 def _asset_is_other_platform(name: str, platform: str) -> bool:
-    """True if zip is tagged for a different OS than ``platform``."""
+    """True if zip is tagged for a different OS/channel than ``platform``."""
     n = name.lower()
-    for other in ("windows", "linux", "macos", "darwin"):
+    for other in ("windows", "linux", "macos", "darwin", "steamdeck"):
         if other == platform:
             continue
         if other == "darwin" and platform == "macos":
             continue
+        if other == "macos" and platform == "darwin":
+            continue
         if _asset_matches_platform(n, other):
             return True
-        # legacy / alternate spellings
         if other == "darwin" and _asset_matches_platform(n, "macos"):
             return True
     return False
 
 
 def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None, int | None, str | None]:
-    """Pick the install zip for *this* OS.
+    """Pick the install zip for this build's update channel.
 
-    Prefers ``*_windows.zip`` / ``*_linux.zip``. On Windows, untagged legacy
-    ``Steempeg_vX.Y.zip`` is still accepted. Cross-platform zips are never chosen
-    (Linux must not offer a Windows build and vice versa).
+    Prefers ``*_windows.zip`` / ``*_linux.zip`` / ``*_steamdeck.zip``.
+    On the Windows channel, untagged legacy ``Steempeg_vX.Y.zip`` is still accepted.
+    Cross-channel zips are never chosen.
     """
     platform = release_platform_tag()
     zips = [a for a in (assets or []) if str(a.get("name") or "").lower().endswith(".zip")]
@@ -502,7 +554,7 @@ def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None, int | No
         if platform == "macos" and _asset_matches_platform(name, "darwin"):
             return _unpack(asset)
 
-    # Windows-only legacy: untagged zip from the .exe era.
+    # Windows channel only: untagged zip from the .exe / early-zip era.
     if platform == "windows":
         for asset in zips:
             name = str(asset.get("name") or "")

@@ -7,7 +7,7 @@ import webbrowser
 
 from PySide6.QtWidgets import QApplication
 
-from steempeg.infra.paths import get_save_directory
+from steempeg.infra.paths import get_install_root, get_save_directory, open_path_with_default_app
 from steempeg.services.release_catalog import LocalBackup, ReleaseEntry, find_local_backups
 from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
@@ -38,7 +38,7 @@ class UpdaterMixin:
             logging.info("--- UPDATER: check_for_updates finished ---")
 
     def _open_update_center(self):
-        exe_dir = os.path.dirname(sys.executable)
+        exe_dir = get_install_root()
         backups = find_local_backups(exe_dir)
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
 
@@ -99,7 +99,7 @@ class UpdaterMixin:
             from_version=APP_VERSION_STR,
             target_version=entry.version_str,
             keep_backup=keep_backup,
-            exe_dir=os.path.dirname(sys.executable),
+            exe_dir=get_install_root(),
             chrome_theme=getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME),
             expected_size=entry.zip_size,
             expected_sha256=entry.zip_sha256,
@@ -142,29 +142,28 @@ class UpdaterMixin:
         if backup_folder and backup_folder != "None" and clicked == 0:
             backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
             if os.path.exists(backup_path):
-                from steempeg.infra.paths import open_path_with_default_app
-
                 open_path_with_default_app(backup_path)
 
     def restore_local_backup(self, backup_folder_name: str):
-        """Swap the live install with a backed-up tree via restore.bat."""
-        exe_dir = os.path.dirname(sys.executable)
+        """Swap the live install with a backed-up tree (Windows .bat / Linux .sh)."""
+        from steempeg.services.update_install import find_app_executable
+
+        exe_dir = get_install_root()
         backup_path = os.path.join(exe_dir, backup_folder_name)
         if not os.path.isdir(backup_path):
             steempeg_warning(self.ui, "Restore Failed", f"Backup folder not found:\n{backup_folder_name}")
             return
 
-        exe_name = os.path.basename(sys.executable)
-        for file in os.listdir(backup_path):
-            if file.endswith(".exe") and "ffmpeg" not in file.lower() and "ffprobe" not in file.lower():
-                exe_name = file
-                break
-
+        exe_name = find_app_executable(backup_path)
         staging_folder = f"pre_restore_v{APP_VERSION_STR}"
         pid = os.getpid()
-        bat_path = os.path.join(exe_dir, "restore.bat")
+        env = os.environ.copy()
+        env.pop("_MEIPASS2", None)
+        env.pop("_MEIPASS", None)
 
-        bat_content = f"""@echo off
+        if sys.platform == "win32":
+            bat_path = os.path.join(exe_dir, "restore.bat")
+            bat_content = f"""@echo off
 title Steempeg Restore
 echo Waiting for Steempeg to close completely...
 
@@ -191,13 +190,35 @@ echo Starting restored version...
 start "" "{exe_name}"
 del "%~f0"
 """
-        with open(bat_path, "w", encoding="utf-8") as f:
-            f.write(bat_content)
+            with open(bat_path, "w", encoding="utf-8") as f:
+                f.write(bat_content)
+            subprocess.Popen([bat_path], shell=True, cwd=exe_dir, creationflags=0x08000000, env=env)
+        else:
+            sh_path = os.path.join(exe_dir, "restore.sh")
+            sh_content = f"""#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+while kill -0 {pid} 2>/dev/null; do sleep 0.4; done
+sleep 0.4
+rm -rf "{staging_folder}"
+mkdir -p "{staging_folder}"
+for item in * .[!.]* ..?*; do
+  [[ -e "$item" ]] || continue
+  [[ "$item" == "restore.sh" ]] && continue
+  [[ "$item" == "{backup_folder_name}" ]] && continue
+  [[ "$item" == "{staging_folder}" ]] && continue
+  [[ "$item" == "logs" || "$item" == "cache" ]] && continue
+  mv -- "$item" "{staging_folder}/"
+done
+cp -a "{backup_folder_name}"/. .
+chmod +x "{exe_name}" Steempeg-linux Steempeg.sh Steempeg 2>/dev/null || true
+rm -f "$0"
+exec ./"{exe_name}"
+"""
+            with open(sh_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(sh_content)
+            os.chmod(sh_path, 0o755)
+            subprocess.Popen(["/bin/bash", sh_path], cwd=exe_dir, start_new_session=True, env=env)
 
-        env = os.environ.copy()
-        env.pop("_MEIPASS2", None)
-        env.pop("_MEIPASS", None)
-
-        subprocess.Popen([bat_path], shell=True, cwd=exe_dir, creationflags=0x08000000, env=env)
         QApplication.quit()
         sys.exit(0)

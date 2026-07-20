@@ -16,7 +16,9 @@ from steempeg.services.update_install import (
     find_app_executable,
     resolve_extract_source,
     spawn_deferred_install,
+    spawn_deferred_install_unix,
     write_deferred_install_bat,
+    write_deferred_install_sh,
 )
 from steempeg.services.update_job import UpdateJob, load_update_job
 from steempeg.services.updater import UpdateDownloadThread
@@ -76,17 +78,30 @@ def run_update_handler(job_path: str) -> int:
             dialog.set_detail("Preparing file replacement…")
             QApplication.processEvents()
 
-            bat_path = write_deferred_install_bat(
-                handler_pid=os.getpid(),
-                exe_dir=job.exe_dir,
-                source_dir=source_dir,
-                extract_root=extract_root,
-                keep_backup=job.keep_backup,
-                from_version=job.from_version,
-                new_exe_name=new_exe_name,
-                tmp_asset_name=asset_name,
-            )
-            spawn_deferred_install(bat_path, job.exe_dir)
+            if sys.platform == "win32":
+                bat_path = write_deferred_install_bat(
+                    handler_pid=os.getpid(),
+                    exe_dir=job.exe_dir,
+                    source_dir=source_dir,
+                    extract_root=extract_root,
+                    keep_backup=job.keep_backup,
+                    from_version=job.from_version,
+                    new_exe_name=new_exe_name,
+                    tmp_asset_name=asset_name,
+                )
+                spawn_deferred_install(bat_path, job.exe_dir)
+            else:
+                sh_path = write_deferred_install_sh(
+                    handler_pid=os.getpid(),
+                    exe_dir=job.exe_dir,
+                    source_dir=source_dir,
+                    extract_root=extract_root,
+                    keep_backup=job.keep_backup,
+                    from_version=job.from_version,
+                    new_exe_name=new_exe_name,
+                    tmp_asset_name=asset_name,
+                )
+                spawn_deferred_install_unix(sh_path, job.exe_dir)
 
             dialog.set_phase("launch")
             dialog.set_detail("Closing updater, then installing and starting Steempeg…")

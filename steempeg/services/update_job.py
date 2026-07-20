@@ -53,10 +53,25 @@ def spawn_update_handler(job: UpdateJob) -> None:
     env = os.environ.copy()
     env.pop("_MEIPASS2", None)
     env.pop("_MEIPASS", None)
-    subprocess.Popen(
-        [sys.executable, "--update-handler", "--job", job_path],
-        cwd=job.exe_dir,
-        creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
-        close_fds=False,
-        env=env,
-    )
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--update-handler", "--job", job_path]
+    else:
+        # Portable Linux pack / dev: sys.executable is venv python.
+        cmd = [sys.executable, "-m", "steempeg", "--update-handler", "--job", job_path]
+        root = job.exe_dir
+        prev = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = root + (os.pathsep + prev if prev else "")
+
+    popen_kwargs: dict = {
+        "cwd": job.exe_dir,
+        "env": env,
+    }
+    if sys.platform == "win32":
+        popen_kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+        popen_kwargs["close_fds"] = False
+    else:
+        popen_kwargs["start_new_session"] = True
+        popen_kwargs["close_fds"] = True
+
+    subprocess.Popen(cmd, **popen_kwargs)

@@ -16,10 +16,35 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _ASSETS_DIRNAME = "assets"
 
 
+def get_install_root() -> str:
+    """Folder that owns the Steempeg install (launchers, bin/, logs/, cache/).
+
+    * Frozen (PyInstaller): directory of the executable.
+    * Portable Linux pack: directory with ``Steempeg-linux`` + ``venv/`` + ``steempeg/``.
+    * Dev checkout: repository root.
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+
+    # Portable pack often runs as ``venv/bin/python -m steempeg`` — climb out of venv.
+    exe = os.path.abspath(sys.executable)
+    parts = exe.replace("\\", "/").split("/")
+    if "venv" in parts:
+        idx = parts.index("venv")
+        candidate = os.sep.join(parts[:idx]) if idx > 0 else str(_PROJECT_ROOT)
+        if os.path.isfile(os.path.join(candidate, "Steempeg-linux")) or os.path.isdir(
+            os.path.join(candidate, "steempeg")
+        ):
+            return candidate
+    if os.path.isfile(os.path.join(str(_PROJECT_ROOT), "Steempeg-linux")):
+        return str(_PROJECT_ROOT)
+    return str(_PROJECT_ROOT)
+
+
 def get_resource_path(relative_path):
     """Resolve a bundled asset (lives under assets/) for both the frozen build and a plain source run."""
     if getattr(sys, "frozen", False):
-        base_dir = os.path.dirname(sys.executable)
+        base_dir = get_install_root()
         direct_path = os.path.join(base_dir, _ASSETS_DIRNAME, relative_path)
         if os.path.exists(direct_path):
             return direct_path
@@ -27,14 +52,16 @@ def get_resource_path(relative_path):
         if hasattr(sys, "_MEIPASS"):
             return os.path.join(sys._MEIPASS, _ASSETS_DIRNAME, relative_path)
         return direct_path
+    # Portable pack + dev: assets next to install root.
+    pack = os.path.join(get_install_root(), _ASSETS_DIRNAME, relative_path)
+    if os.path.exists(pack):
+        return pack
     return os.path.join(str(_PROJECT_ROOT), _ASSETS_DIRNAME, relative_path)
 
 
 def get_save_directory():
     """Return the default folder where the program saves videos, caches and logs."""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return str(_PROJECT_ROOT)
+    return get_install_root()
 
 
 def display_path(path: str) -> str:

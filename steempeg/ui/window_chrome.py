@@ -9,6 +9,7 @@ Terminal do frameless — unlike stripping WS_CAPTION, it preserves snap & anima
 from __future__ import annotations
 
 import os
+import sys
 
 import ctypes
 from ctypes import POINTER, cast, wintypes
@@ -308,7 +309,22 @@ class SteempegTitleBar(QWidget):
         self._apply_bar_style(bg_color)
 
     def sync_window_state(self) -> None:
-        if self._window.isMaximized():
+        # Linux fake-maximize uses work-area geometry (isMaximized() stays False).
+        maximized = self._window.isMaximized()
+        if not maximized and sys.platform != "win32":
+            from PySide6.QtWidgets import QApplication
+
+            screen = self._window.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                geo = self._window.geometry()
+                maximized = (
+                    abs(geo.x() - avail.x()) <= 16
+                    and abs(geo.y() - avail.y()) <= 16
+                    and abs(geo.width() - avail.width()) <= 48
+                    and abs(geo.height() - avail.height()) <= 48
+                )
+        if maximized:
             self.btn_maximize.setToolTip("Restore")
             self.btn_maximize._glyph = "restore"
         else:
@@ -390,7 +406,28 @@ def win32_window_command(window: QWidget, action: str) -> None:
         elif action == "minimize":
             window.showMinimized()
         elif action == "maximize_toggle":
-            window.showNormal() if window.isMaximized() else window.showMaximized()
+            # Native showMaximized hard-freezes Qt on NVIDIA XWayland. Fake maximize
+            # by snapping to the screen work area (and restore the inset window).
+            from PySide6.QtWidgets import QApplication
+
+            screen = window.screen() or QApplication.primaryScreen()
+            if screen is None:
+                return
+            avail = screen.availableGeometry()
+            geo = window.geometry()
+            nearly_max = (
+                abs(geo.x() - avail.x()) <= 16
+                and abs(geo.y() - avail.y()) <= 16
+                and abs(geo.width() - avail.width()) <= 48
+                and abs(geo.height() - avail.height()) <= 48
+            )
+            if window.isMaximized() or nearly_max:
+                window.showNormal()
+                window.setGeometry(avail.adjusted(80, 60, -80, -60))
+            else:
+                if window.isMaximized():
+                    window.showNormal()
+                window.setGeometry(avail)
         return
 
     hwnd = int(window.winId())
