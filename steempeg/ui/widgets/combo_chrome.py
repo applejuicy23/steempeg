@@ -3,49 +3,63 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QComboBox
 
-# Popup list: pill rows, purple ring on the active/selected row, muted disabled rows.
-COMBO_POPUP_ITEM_RULES = """
-    QComboBox QAbstractItemView {
+from steempeg.ui.ui_density import COMFORT, UiDensity
+
+
+def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
+    """Popup list row chrome scaled with UI density (avoids fat lists on Deck)."""
+    d = dense or COMFORT
+    h = d.combo_popup_item_h
+    pv = d.combo_popup_item_pad_v
+    ph = d.combo_popup_item_pad_h
+    radius = 6 if d.scale >= 0.5 else 4
+    border = 2 if d.scale >= 0.45 else 1
+    return f"""
+    QComboBox QAbstractItemView {{
         background-color: #1e1e1e;
         color: #e0e0e0;
         border: 2px solid #4a4a4a;
         border-radius: 10px;
-        padding: 4px;
+        padding: {max(2, pv - 2)}px;
         outline: none;
         selection-background-color: transparent;
         selection-color: #ffffff;
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    }
-    QComboBox QAbstractItemView::item {
-        min-height: 28px;
-        padding: 7px 10px;
-        border-radius: 6px;
-        margin: 2px 2px;
+    }}
+    QComboBox QAbstractItemView::item {{
+        min-height: {h}px;
+        padding: {pv}px {ph}px;
+        border-radius: {radius}px;
+        margin: 1px 2px;
         background-color: #333333;
         color: #e0e0e0;
-        border: 2px solid transparent;
-    }
-    QComboBox QAbstractItemView::item:hover:enabled {
+        border: {border}px solid transparent;
+    }}
+    QComboBox QAbstractItemView::item:hover:enabled {{
         background-color: #404040;
         color: #ffffff;
-        border: 2px solid #6b5a8e;
-    }
-    QComboBox QAbstractItemView::item:selected {
+        border: {border}px solid #6b5a8e;
+    }}
+    QComboBox QAbstractItemView::item:selected {{
         background-color: #3a3350;
         color: #ffffff;
-        border: 2px solid #b29ae7;
-    }
-    QComboBox QAbstractItemView::item:selected:enabled {
+        border: {border}px solid #b29ae7;
+    }}
+    QComboBox QAbstractItemView::item:selected:enabled {{
         background-color: #3a3350;
         color: #ffffff;
-        border: 2px solid #b29ae7;
-    }
-    QComboBox QAbstractItemView::item:disabled {
+        border: {border}px solid #b29ae7;
+    }}
+    QComboBox QAbstractItemView::item:disabled {{
         background-color: #262626;
         color: #5a5a5a;
-        border: 2px solid #333333;
-    }
+        border: {border}px solid #333333;
+    }}
 """
+
+
+# Default comfort popup (backward-compatible import for static QSS builders).
+COMBO_POPUP_ITEM_RULES = combo_popup_item_rules(COMFORT)
 
 SETTINGS_COMBO_FIELD_RULES = """
     QComboBox, QLineEdit {
@@ -137,14 +151,23 @@ COMPACT_COMBO_RULES = """
 """
 
 
-def settings_panel_stylesheet(extra: str = "") -> str:
+def settings_panel_stylesheet(extra: str = "", dense: UiDensity | None = None) -> str:
     """QSS for the render settings tab widget (combos + popup chrome)."""
-    return SETTINGS_COMBO_FIELD_RULES + COMBO_POPUP_ITEM_RULES + (extra or "")
+    return SETTINGS_COMBO_FIELD_RULES + combo_popup_item_rules(dense) + (extra or "")
 
 
-def compact_combo_stylesheet(*, settings_popup: bool = False) -> str:
+def compact_combo_stylesheet(
+    *,
+    settings_popup: bool = False,
+    dense: UiDensity | None = None,
+) -> str:
     """Clips Manager combo chrome; ``settings_popup=True`` matches render panel lists."""
-    popup = COMBO_POPUP_ITEM_RULES if settings_popup else COMPACT_COMBO_POPUP_ITEM_RULES
+    if settings_popup:
+        popup = combo_popup_item_rules(dense)
+    elif dense is not None and dense.scale < 0.85:
+        popup = combo_popup_item_rules(dense)
+    else:
+        popup = COMPACT_COMBO_POPUP_ITEM_RULES
     return COMPACT_COMBO_RULES + popup
 
 

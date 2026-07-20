@@ -1973,19 +1973,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.main_v_splitter.setCollapsible(0, False) # The player is immortal
                 self.main_v_splitter.setCollapsible(1, True)  # Tabs can be collapsed/hidden
                 from steempeg.ui.layout_defaults import (
-                    DEFAULT_MAIN_V_SPLITTER_SIZES,
-                    DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT,
                     STEAM_DECK_HEIGHT,
                     STEAM_DECK_WIDTH,
-                    is_compact_layout,
+                    default_main_v_splitter_sizes,
                 )
 
                 _avail_h = self.ui.height() or STEAM_DECK_HEIGHT
                 _avail_w = self.ui.width() or STEAM_DECK_WIDTH
                 self.main_v_splitter.setSizes(
-                    DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT
-                    if is_compact_layout(_avail_w) or _avail_h <= STEAM_DECK_HEIGHT + 40
-                    else DEFAULT_MAIN_V_SPLITTER_SIZES
+                    default_main_v_splitter_sizes(_avail_w, _avail_h)
                 )
                 # Beautiful modern splitter handle
                 
@@ -2453,7 +2449,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._apply_responsive_layout_mins()
 
     def _apply_responsive_layout_mins(self):
-        """Switch panel mins and shrink chrome for Deck-class (~1280) windows."""
+        """Lerp panel mins + chrome density with window width (no binary cliff)."""
         from steempeg.ui.layout_defaults import (
             left_panel_min_width,
             queue_panel_min_width,
@@ -2463,19 +2459,73 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         w = int(self.ui.width() or 0)
         if w <= 0:
             return
+
+        left_min = left_panel_min_width(w)
+        queue_min = queue_panel_min_width(w)
+
         if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
-            self.ui.left_panel.setMinimumWidth(left_panel_min_width(w))
+            self.ui.left_panel.setMinimumWidth(left_min)
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None:
-            panel.setMinimumWidth(queue_panel_min_width(w))
+            panel.setMinimumWidth(queue_min)
+
+        # Clamp splitter sizes to new mins without resetting to comfort defaults.
+        self._clamp_splitters_to_mins(left_min=left_min, queue_min=queue_min)
+
         dense = density_for_width(w)
-        if getattr(self, "_ui_density", None) is dense:
+        prev = getattr(self, "_ui_density", None)
+        if prev is not None and prev == dense:
             return
         self._ui_density = dense
         self._apply_ui_density(dense)
 
+    def _clamp_splitters_to_mins(self, *, left_min: int, queue_min: int) -> None:
+        """Keep current splitter ratios; only ensure mins are satisfiable."""
+        main = getattr(self.ui, "main_splitter", None)
+        if main is not None:
+            sizes = main.sizes()
+            total = sum(sizes)
+            if total > 0 and len(sizes) >= 2:
+                left = max(left_min, sizes[0])
+                right = total - left
+                if right < 200:
+                    left = max(left_min, total - 200)
+                    right = total - left
+                if left != sizes[0] or right != sizes[1]:
+                    main.setSizes([left, right])
+
+        rhs = getattr(self, "right_h_splitter", None)
+        if rhs is not None and getattr(self, "render_queue_panel", None) is not None:
+            sizes = rhs.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else rhs.width()
+            if total > 0 and len(sizes) >= 2 and sizes[1] > 0:
+                queue_w = max(queue_min, sizes[1])
+                player_w = total - queue_w
+                if player_w < 360:
+                    queue_w = max(queue_min, total - 360)
+                    player_w = total - queue_w
+                if queue_w != sizes[1]:
+                    rhs.setSizes([player_w, queue_w])
+
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is not None:
+            from steempeg.ui.layout_defaults import restore_v_splitter_sizes
+
+            h = int(self.ui.height() or 0)
+            sizes = v_split.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else v_split.height()
+            if h > 0 and total > 0 and len(sizes) >= 2 and sizes[1] > 0:
+                max_bottom = max(180, int(h * 0.35))
+                if sizes[1] > max_bottom:
+                    bottom = max_bottom
+                    top = max(total - bottom, 200)
+                    v_split.setSizes([top, bottom])
+                elif sizes[1] < 120 and sizes[1] > 0:
+                    # Extremely crushed bottom — nudge toward a sane restore ratio.
+                    v_split.setSizes(restore_v_splitter_sizes(total))
+
     def _apply_ui_density(self, dense):
-        """Resize fonts/paddings/labels for comfort vs compact (Steam Deck)."""
+        """Resize fonts/paddings/labels along the continuous density scale."""
         from steempeg.ui.ui_density import (
             NEO_NAV_COMFORT,
             NEO_NAV_COMPACT,
@@ -2483,7 +2533,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             tab_label,
             updates_button_label,
         )
-        from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+        from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
 
         # --- Library tabs ---
         tabs = getattr(self, "_library_tabs", None) or {}
@@ -2563,7 +2613,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 QComboBox:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
                 QComboBox:on {{ background-color: #383838; }}
                 QComboBox::drop-down {{ border: none; padding-right: 5px; background: transparent; }}
-            """ + COMBO_POPUP_ITEM_RULES
+            """ + combo_popup_item_rules(dense)
             combo.setStyleSheet(combo_qss)
             fnt = combo.font()
             fnt.setPixelSize(dense.combo_font)
@@ -2624,10 +2674,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             neo.setFixedWidth(dense.neo_sidebar_w)
         neo_lay = getattr(self, "_neo_sidebar_layout", None)
         if neo_lay is not None:
-            m = 6 if dense.compact else 10
-            t = 8 if dense.compact else 15
+            m = int(round(6 + (10 - 6) * dense.scale))
+            t = int(round(8 + (15 - 8) * dense.scale))
             neo_lay.setContentsMargins(m, t, m, t)
-            neo_lay.setSpacing(6 if dense.compact else 10)
+            neo_lay.setSpacing(int(round(6 + (10 - 6) * dense.scale)))
         nav_names = NEO_NAV_COMPACT if dense.compact else NEO_NAV_COMFORT
         pill = f"""
             QPushButton {{
@@ -2654,6 +2704,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 btn.setMinimumSize(w, h)
 
         chip = dense.chrome_chip
+        chip_r = chip // 2
+        icon_sz = max(16, chip - 14)
+        chip_qss = (
+            f"QPushButton {{ background: transparent; border-radius: {chip_r}px; border: none; }}"
+        )
         for attr in (
             "btn_theater",
             "btn_fullscreen",
@@ -2666,6 +2721,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             b = getattr(self, attr, None) or getattr(self.ui, attr, None)
             if b is not None and hasattr(b, "setFixedSize"):
                 b.setFixedSize(chip, chip)
+                b.setStyleSheet(chip_qss)
+                if hasattr(b, "setIconSize") and not b.icon().isNull():
+                    from PySide6.QtCore import QSize
+
+                    b.setIconSize(QSize(icon_sz, icon_sz))
+
+        for ctrl_attr in ("volume_control", "speed_control"):
+            ctrl = getattr(self, ctrl_attr, None)
+            if ctrl is not None and hasattr(ctrl, "apply_density"):
+                ctrl.apply_density(dense)
+
+        # Pill frames around theater/fullscreen stay circular-ish
+        for pill_attr in ("pill_container", "trim_tools_pill"):
+            frame = getattr(self, pill_attr, None)
+            if frame is not None:
+                frame.setStyleSheet(
+                    f"QFrame {{ background-color: #4e4e4e; border-radius: {chip_r}px; border: none; }}"
+                )
 
         # --- Render settings (Source / Video / Audio / Export) ---
         from steempeg.ui.render_panel import apply_settings_panel_density
@@ -2678,20 +2751,63 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 _Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
 
+        # --- Render status dashboard ---
+        self._apply_render_dashboard_density(dense)
+
         # --- Render queue ---
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None and hasattr(panel, "apply_density"):
             panel.apply_density(dense)
 
+    def _apply_render_dashboard_density(self, dense) -> None:
+        dash = getattr(self, "render_dashboard", None)
+        if dash is None:
+            return
+        lay = dash.layout()
+        if lay is not None:
+            lay.setContentsMargins(
+                dense.dash_margin_h,
+                dense.dash_margin_v,
+                dense.dash_margin_h,
+                dense.dash_margin_v,
+            )
+            lay.setSpacing(dense.dash_spacing)
+        _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
+        bottom_text = getattr(self, "bottom_text_label", None)
+        if bottom_text is not None:
+            bottom_text.setStyleSheet(
+                f"color: #e0e0e0; font-size: {dense.dash_font}px; font-weight: bold; {_status_font}"
+            )
+        status = getattr(self.ui, "label_status", None)
+        if status is not None:
+            status.setStyleSheet(
+                f"background: transparent; border: none; font-size: {dense.dash_font}px; "
+                f"font-weight: bold; {_status_font}"
+            )
+            status.setMinimumWidth(80 if dense.compact else 120)
+        pct = getattr(self, "label_pct", None)
+        if pct is not None:
+            pct.setStyleSheet(
+                f"color: #ffffff; font-weight: bold; font-size: {max(11, dense.dash_font - 1)}px; {_status_font}"
+            )
+        icon = getattr(self, "bottom_icon_label", None)
+        if icon is not None:
+            icon_sz = 20 if dense.compact else 24
+            icon.setFixedSize(icon_sz, icon_sz)
+        for btn_name in ("btn_start", "btn_pause", "btn_cancel", "btn_logs"):
+            btn = getattr(self.ui, btn_name, None)
+            if btn is not None:
+                btn.setMinimumHeight(dense.dash_btn_h)
+
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import (
             DEFAULT_MAIN_SPLITTER_SIZES,
             DEFAULT_MAIN_SPLITTER_SIZES_COMPACT,
-            DEFAULT_MAIN_V_SPLITTER_SIZES,
-            DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT,
             STEAM_DECK_HEIGHT,
             STEAM_DECK_WIDTH,
+            default_main_v_splitter_sizes,
             is_compact_layout,
+            left_panel_min_width,
         )
 
         avail_w = self.ui.width() or STEAM_DECK_WIDTH
@@ -2700,18 +2816,22 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         default_main = (
             DEFAULT_MAIN_SPLITTER_SIZES_COMPACT if compact else DEFAULT_MAIN_SPLITTER_SIZES
         )
+        # Prefer continuous left min when remembering is off / defaults.
+        if not compact:
+            default_main = [left_panel_min_width(avail_w), 100000]
         main_sizes = self.get_layout_setting("main_splitter_sizes", default_main)
         if hasattr(self.ui, "main_splitter"):
             self.ui.main_splitter.setSizes(main_sizes)
         self._apply_responsive_layout_mins()
         v_splitter = getattr(self, "main_v_splitter", None)
         if v_splitter is not None:
-            default_v = (
-                DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT
-                if compact or avail_h <= STEAM_DECK_HEIGHT + 40
-                else DEFAULT_MAIN_V_SPLITTER_SIZES
-            )
+            default_v = default_main_v_splitter_sizes(avail_w, avail_h)
             v_sizes = self.get_layout_setting("main_v_splitter_sizes", default_v)
+            # Cap remembered bottom pane on short screens.
+            if avail_h > 0 and len(v_sizes) >= 2:
+                max_bottom = max(180, int(avail_h * 0.35))
+                if v_sizes[1] > max_bottom:
+                    v_sizes = [max(avail_h - max_bottom, 200), max_bottom]
             v_splitter.setSizes(v_sizes)
 
     def _setup_bitrate_labels(self):

@@ -1,18 +1,27 @@
-"""UI density: comfort (desktop) vs compact (Steam Deck ~1280×800).
+"""UI density: continuous scale between compact (Steam Deck ~1280×800) and comfort.
 
 Panel splitter mins live in layout_defaults; this module covers chrome —
 fonts, paddings, fixed control sizes, and short labels.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, fields
 
-from steempeg.ui.layout_defaults import is_compact_layout
+from steempeg.ui.layout_defaults import (
+    clamp01,
+    is_compact_layout,
+    layout_scale,
+    lerp_int,
+)
+
+_PAD_TOKEN_RE = re.compile(r"(\d+)px")
 
 
 @dataclass(frozen=True)
 class UiDensity:
     compact: bool
+    scale: float  # 0.0 compact … 1.0 comfort
 
     # Library tabs
     tab_height: int
@@ -68,9 +77,36 @@ class UiDensity:
     play_h: int
     chrome_chip: int  # theater / fullscreen / marker / etc.
 
+    # Render status dashboard
+    dash_margin_h: int
+    dash_margin_v: int
+    dash_spacing: int
+    dash_font: int
+    dash_btn_h: int
+
+    # Combo popup list rows
+    combo_popup_item_h: int
+    combo_popup_item_pad_v: int
+    combo_popup_item_pad_h: int
+
+
+def _lerp_pad_str(a: str, b: str, t: float) -> str:
+    """Lerp CSS padding strings like '6px 16px' or '10px 15px'."""
+    ta = [int(x) for x in _PAD_TOKEN_RE.findall(a)]
+    tb = [int(x) for x in _PAD_TOKEN_RE.findall(b)]
+    if not ta or len(ta) != len(tb):
+        return b if t >= 0.5 else a
+    parts = [f"{lerp_int(x, y, t)}px" for x, y in zip(ta, tb)]
+    return " ".join(parts)
+
+
+def _lerp_margin_tuple(a: tuple, b: tuple, t: float) -> tuple:
+    return tuple(lerp_int(int(x), int(y), t) for x, y in zip(a, b))
+
 
 COMFORT = UiDensity(
     compact=False,
+    scale=1.0,
     tab_height=40,
     tab_font=14,
     tab_pad_l=14,
@@ -111,10 +147,19 @@ COMFORT = UiDensity(
     play_w=80,
     play_h=48,
     chrome_chip=40,
+    dash_margin_h=18,
+    dash_margin_v=16,
+    dash_spacing=12,
+    dash_font=14,
+    dash_btn_h=36,
+    combo_popup_item_h=28,
+    combo_popup_item_pad_v=7,
+    combo_popup_item_pad_h=10,
 )
 
 COMPACT = UiDensity(
     compact=True,
+    scale=0.0,
     tab_height=30,
     tab_font=11,
     tab_pad_l=8,
@@ -156,6 +201,14 @@ COMPACT = UiDensity(
     play_w=64,
     play_h=40,
     chrome_chip=32,
+    dash_margin_h=10,
+    dash_margin_v=8,
+    dash_spacing=6,
+    dash_font=12,
+    dash_btn_h=28,
+    combo_popup_item_h=20,
+    combo_popup_item_pad_v=3,
+    combo_popup_item_pad_h=6,
 )
 
 # Short chrome labels used only in compact density.
@@ -184,8 +237,34 @@ NEO_NAV_COMPACT = [
 ]
 
 
+def lerp_density(t: float) -> UiDensity:
+    """Build chrome density between COMPACT (t=0) and COMFORT (t=1)."""
+    t = clamp01(t)
+    if t <= 0.0:
+        return COMPACT
+    if t >= 1.0:
+        return COMFORT
+
+    kwargs = {"compact": t < 0.5, "scale": t}
+    for f in fields(UiDensity):
+        name = f.name
+        if name in ("compact", "scale"):
+            continue
+        a = getattr(COMPACT, name)
+        b = getattr(COMFORT, name)
+        if isinstance(a, int) and isinstance(b, int):
+            kwargs[name] = lerp_int(a, b, t)
+        elif isinstance(a, str) and isinstance(b, str):
+            kwargs[name] = _lerp_pad_str(a, b, t)
+        elif isinstance(a, tuple) and isinstance(b, tuple):
+            kwargs[name] = _lerp_margin_tuple(a, b, t)
+        else:
+            kwargs[name] = b if t >= 0.5 else a
+    return UiDensity(**kwargs)
+
+
 def density_for_width(window_width: int) -> UiDensity:
-    return COMPACT if is_compact_layout(window_width) else COMFORT
+    return lerp_density(layout_scale(window_width))
 
 
 def tab_label(mode: str, dense: UiDensity) -> str:
@@ -218,7 +297,7 @@ def scaled_dialog_size(
     parent=None,
     factor: float = 0.82,
 ) -> tuple[int, int]:
-    """Shrink dialog footprint on Deck-class screens; leave desktop sizes alone."""
+    """Shrink dialog footprint continuously toward Deck-class screens."""
     from PySide6.QtWidgets import QApplication
 
     win_w = 0
@@ -231,6 +310,7 @@ def scaled_dialog_size(
         aw = QApplication.activeWindow()
         if aw is not None:
             win_w = int(aw.width())
-    if not is_compact_layout(win_w):
-        return int(width), int(height)
-    return max(300, int(width * factor)), max(240, int(height * factor))
+    t = layout_scale(win_w)
+    # t=1 → no shrink; t=0 → full factor shrink
+    scale = factor + (1.0 - factor) * t
+    return max(300, int(width * scale)), max(240, int(height * scale))

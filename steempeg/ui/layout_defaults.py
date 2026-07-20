@@ -8,14 +8,19 @@ these constants are always used on launch.
 REMEMBER_LAYOUT_BETWEEN_SESSIONS = False
 
 # Steam Deck LCD/OLED native resolution — design floor for the main window.
-# Layout mins switch to "compact" at or below this class of width.
 STEAM_DECK_WIDTH = 1280
 STEAM_DECK_HEIGHT = 800
 TARGET_MIN_WINDOW_WIDTH = STEAM_DECK_WIDTH
 TARGET_MIN_WINDOW_HEIGHT = STEAM_DECK_HEIGHT
 
-# Use compact panel mins when the window is Deck-sized (or a small QEMU window).
-COMPACT_LAYOUT_WIDTH = STEAM_DECK_WIDTH + 80  # ~1360
+# Continuous layout scale: t=0 at Deck width, t=1 at comfort width and above.
+LAYOUT_SCALE_MIN_WIDTH = STEAM_DECK_WIDTH  # full compact
+LAYOUT_SCALE_MAX_WIDTH = 1520  # full comfort
+LAYOUT_SCALE_MIN_HEIGHT = STEAM_DECK_HEIGHT
+LAYOUT_SCALE_MAX_HEIGHT = 960
+
+# Legacy cliff alias (~1360). Prefer layout_scale(); kept for call sites / docs.
+COMPACT_LAYOUT_WIDTH = STEAM_DECK_WIDTH + 80
 
 # [Clips Manager width, player + queue area width]
 # Comfort left pane fits two grid columns + full toolbar (~620).
@@ -81,22 +86,109 @@ HORIZONTAL_SPLITTER_STYLESHEET = """
 TITLE_BAR_HEIGHT = 28
 
 
+def clamp01(t: float) -> float:
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+    return float(t)
+
+
+def lerp_int(a: int, b: int, t: float) -> int:
+    """Interpolate integers; t=0 → a (compact), t=1 → b (comfort)."""
+    return int(round(a + (b - a) * clamp01(t)))
+
+
+def layout_scale(window_width: int) -> float:
+    """Continuous shell scale: 0.0 = Deck compact, 1.0 = desktop comfort."""
+    w = int(window_width or 0)
+    if w <= 0:
+        return 1.0
+    if w <= LAYOUT_SCALE_MIN_WIDTH:
+        return 0.0
+    if w >= LAYOUT_SCALE_MAX_WIDTH:
+        return 1.0
+    return (w - LAYOUT_SCALE_MIN_WIDTH) / (LAYOUT_SCALE_MAX_WIDTH - LAYOUT_SCALE_MIN_WIDTH)
+
+
+def height_layout_scale(window_height: int) -> float:
+    """Vertical scale for bottom-pane caps; 0.0 at Deck height, 1.0 at comfort."""
+    h = int(window_height or 0)
+    if h <= 0:
+        return 1.0
+    if h <= LAYOUT_SCALE_MIN_HEIGHT:
+        return 0.0
+    if h >= LAYOUT_SCALE_MAX_HEIGHT:
+        return 1.0
+    return (h - LAYOUT_SCALE_MIN_HEIGHT) / (LAYOUT_SCALE_MAX_HEIGHT - LAYOUT_SCALE_MIN_HEIGHT)
+
+
 def is_compact_layout(window_width: int) -> bool:
-    """True when the shell should use Deck-sized panel minimums."""
-    return int(window_width or 0) > 0 and int(window_width) <= COMPACT_LAYOUT_WIDTH
+    """True when short labels / compact bool heuristics should win (scale < 0.5)."""
+    return layout_scale(window_width) < 0.5
 
 
 def left_panel_min_width(window_width: int) -> int:
-    return (
-        MIN_LEFT_PANEL_WIDTH_COMPACT
-        if is_compact_layout(window_width)
-        else MIN_LEFT_PANEL_WIDTH_COMFORT
+    return lerp_int(
+        MIN_LEFT_PANEL_WIDTH_COMPACT,
+        MIN_LEFT_PANEL_WIDTH_COMFORT,
+        layout_scale(window_width),
     )
 
 
 def queue_panel_min_width(window_width: int) -> int:
-    return (
-        MIN_QUEUE_PANEL_WIDTH_COMPACT
-        if is_compact_layout(window_width)
-        else MIN_QUEUE_PANEL_WIDTH
+    return lerp_int(
+        MIN_QUEUE_PANEL_WIDTH_COMPACT,
+        MIN_QUEUE_PANEL_WIDTH,
+        layout_scale(window_width),
     )
+
+
+def queue_panel_open_width(window_width: int, *, total_splitter: int = 0) -> int:
+    """Preferred queue width when opening — lerp mins, capped ~25% of window."""
+    t = layout_scale(window_width)
+    ideal = lerp_int(MIN_QUEUE_PANEL_WIDTH_COMPACT, DEFAULT_QUEUE_PANEL_WIDTH, t)
+    min_q = queue_panel_min_width(window_width)
+    win_w = int(window_width or 0)
+    max_by_pct = max(min_q, int(win_w * 0.25)) if win_w else ideal
+    queue_w = max(min_q, min(ideal, max_by_pct))
+    if total_splitter > 0:
+        # Keep player column usable.
+        player_floor = 360
+        queue_w = min(queue_w, max(min_q, total_splitter - player_floor))
+    return queue_w
+
+
+def default_main_v_splitter_sizes(
+    window_width: int = 0,
+    window_height: int = 0,
+) -> list[int]:
+    """Lerp vertical split defaults; cap bottom pane on short windows."""
+    tw = layout_scale(window_width) if window_width else 1.0
+    th = height_layout_scale(window_height) if window_height else 1.0
+    t = min(tw, th)
+    top = lerp_int(
+        DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT[0],
+        DEFAULT_MAIN_V_SPLITTER_SIZES[0],
+        t,
+    )
+    bottom = lerp_int(
+        DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT[1],
+        DEFAULT_MAIN_V_SPLITTER_SIZES[1],
+        t,
+    )
+    h = int(window_height or 0)
+    if h > 0:
+        max_bottom = max(180, int(h * 0.35))
+        if bottom > max_bottom:
+            bottom = max_bottom
+            top = max(h - bottom, 200)
+    return [top, bottom]
+
+
+def restore_v_splitter_sizes(splitter_height: int) -> list[int]:
+    """Fallback when HideWatcher has no saved sizes — density-aware, not [750,250]."""
+    total = max(int(splitter_height or 0), 1)
+    bottom = min(max(int(total * 0.28), 180), int(total * 0.35))
+    bottom = min(bottom, max(total - 200, 1))
+    return [total - bottom, bottom]

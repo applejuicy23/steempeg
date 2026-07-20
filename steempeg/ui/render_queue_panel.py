@@ -840,6 +840,17 @@ class RenderQueuePanel(QWidget):
         self._toggle_style_inactive = toggle_inactive
         self._btn_clear.setFixedHeight(dense.queue_btn_h)
         self._btn_history.setFixedSize(dense.queue_btn_h, dense.queue_btn_h)
+        hist_r = dense.queue_btn_h // 2
+        icon_sz = max(12, dense.queue_btn_h - 10)
+        self._btn_history.setIconSize(QSize(icon_sz, icon_sz))
+        self._btn_history.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #383838; color: #ffffff; border: 2px solid #444444;
+                border-radius: {hist_r}px; padding: 2px;
+            }}
+            QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+        """)
         clear_font = self._btn_clear.font()
         clear_font.setPixelSize(dense.footer_font)
         self._btn_clear.setFont(clear_font)

@@ -1020,12 +1020,23 @@ def apply_settings_panel_density(ui, dense) -> None:
         elif combo.minimumWidth() > 0 or combo.maximumWidth() < 16777215:
             combo.setFixedWidth(combo_w)
 
+    from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
+
+    combo_qss = settings_panel_stylesheet(
+        "QComboBox { font-family: 'Segoe UI', Arial, sans-serif;"
+        " font-size: 13px; font-weight: bold; }",
+        dense=dense,
+    )
+    for combo in root.findChildren(QComboBox):
+        combo.setStyleSheet(combo_qss)
+
     for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export"):
         page = getattr(ui, page_attr, None)
         if page is None:
             continue
         lay = page.layout()
         if lay is not None:
+            gap = int(round(6 + (10 - 6) * getattr(dense, "scale", 0.0 if dense.compact else 1.0)))
             lay.setContentsMargins(*margins)
-            lay.setSpacing(6 if dense.compact else 10)
+            lay.setSpacing(gap)
 

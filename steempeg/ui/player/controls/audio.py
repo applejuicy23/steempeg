@@ -15,9 +15,13 @@ from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets import SmartSliderFilter
 
 _ROUND_BTN_STYLE = """
-    QPushButton { background-color: #4e4e4e; border-radius: 20px; }
-    QPushButton:hover { background-color: #5a5a5a; }
+    QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
+    QPushButton:hover {{ background-color: #5a5a5a; }}
 """
+
+
+def _round_btn_style(size: int = 40) -> str:
+    return _ROUND_BTN_STYLE.format(radius=max(1, size // 2))
 
 
 def _drag_value_font() -> QFont:
@@ -59,7 +63,7 @@ class VolumeControlWidget(QWidget):
         self.btn_icon.move(0, 0)
         self.btn_icon.setCursor(Qt.PointingHandCursor)
         self.btn_icon.setToolTip("Mute / Unmute Volume")
-        self.btn_icon.setStyleSheet(_ROUND_BTN_STYLE)
+        self.btn_icon.setStyleSheet(_round_btn_style(40))
         
         # Set maximum volume (3) by default
         if not self.icon_vol3.isNull():
@@ -190,9 +194,10 @@ class VolumeControlWidget(QWidget):
         # Now it will smoothly animate its width down to 44px first.
         
         self.anim.setStartValue(self.width())
-        self.anim.setEndValue(44) 
+        collapsed = getattr(self, "_collapsed_w", 44)
+        self.anim.setEndValue(collapsed)
         self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(44)
+        self.anim_max.setEndValue(collapsed)
         
         self.anim.start()
         self.anim_max.start()
@@ -217,16 +222,29 @@ class VolumeControlWidget(QWidget):
             self.anim_max.stop()
             
             self.anim.setStartValue(self.width())
-            self.anim.setEndValue(44) 
+            collapsed = getattr(self, "_collapsed_w", 44)
+            self.anim.setEndValue(collapsed)
             self.anim_max.setStartValue(self.width())
-            self.anim_max.setEndValue(44)
-            
+            self.anim_max.setEndValue(collapsed)
+
             self.anim.start()
             self.anim_max.start()
-            
+
             QTimer.singleShot(200, self.hide_items)
 
     def hide_items(self):
-        if self.width() <= 48:
+        if self.width() <= getattr(self, "_collapsed_w", 44) + 4:
             self.slider.hide()
             self.lbl_percent.hide()
+
+    def apply_density(self, dense) -> None:
+        """Scale round mute button with chrome density (keep circular radius)."""
+        sz = int(getattr(dense, "chrome_chip", 40) or 40)
+        self.setFixedHeight(sz)
+        collapsed = sz + 4
+        self.setFixedWidth(collapsed)
+        self.btn_icon.setFixedSize(sz, sz)
+        self.btn_icon.setStyleSheet(_round_btn_style(sz))
+        icon = max(16, sz - 16)
+        self.btn_icon.setIconSize(QSize(icon, icon))
+        self._collapsed_w = collapsed

@@ -216,7 +216,44 @@ class SteempegDialog(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_scaled_size()
+        self._center_on_parent()
         self._apply_round_mask()
+
+    def _center_on_parent(self) -> None:
+        """Place the dialog on the parent (or available screen) so HD/Deck windows stay in view."""
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        ref: QWidget | None = None
+        parent = self.parentWidget()
+        if isinstance(parent, QWidget) and parent.isVisible():
+            ref = parent.window() if parent.window() is not None else parent
+        if ref is None:
+            aw = QApplication.activeWindow()
+            if isinstance(aw, QWidget):
+                ref = aw
+
+        if ref is not None and ref.isVisible():
+            geo = ref.frameGeometry()
+            x = geo.x() + (geo.width() - self.width()) // 2
+            y = geo.y() + (geo.height() - self.height()) // 2
+        else:
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                return
+            avail = screen.availableGeometry()
+            x = avail.x() + (avail.width() - self.width()) // 2
+            y = avail.y() + (avail.height() - self.height()) // 2
+
+        # Keep fully inside the screen that contains the reference point.
+        screen = QGuiApplication.screenAt(ref.frameGeometry().center()) if ref else None
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = max(avail.x(), min(x, avail.x() + avail.width() - self.width()))
+            y = max(avail.y(), min(y, avail.y() + avail.height() - self.height()))
+        self.move(x, y)
 
     def _apply_round_mask(self) -> None:
         path = QPainterPath()

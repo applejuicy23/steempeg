@@ -3071,17 +3071,26 @@ class RenderMixin:
             self.render_queue_panel.show()
             if sizes[1] <= 0:
                 from steempeg.ui.layout_defaults import (
-                    DEFAULT_QUEUE_PANEL_WIDTH,
                     queue_panel_min_width,
+                    queue_panel_open_width,
                 )
 
                 win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
-                min_q = queue_panel_min_width(win_w) if win_w else DEFAULT_QUEUE_PANEL_WIDTH
-                queue_w = self.get_layout_setting("queue_panel_width", DEFAULT_QUEUE_PANEL_WIDTH)
+                min_q = queue_panel_min_width(win_w) if win_w else 280
+                saved = self.get_layout_setting("queue_panel_width", None)
+                ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else min_q
+                if saved is not None:
+                    queue_w = max(min_q, min(int(saved), total))
+                    # Prefer open-width helper when saved comfort width would crush the player.
+                    if win_w and total - queue_w < 360:
+                        queue_w = ideal
+                    else:
+                        queue_w = min(queue_w, ideal) if win_w and queue_w > ideal else queue_w
+                else:
+                    queue_w = ideal
                 queue_w = max(min_q, min(int(queue_w), total))
-                # On Deck-class widths, prefer the compact floor so the player keeps room.
-                if win_w and queue_w > min_q and total - queue_w < 360:
-                    queue_w = min_q
+                if win_w and total - queue_w < 360:
+                    queue_w = min(ideal, max(min_q, total - 360))
                 self.right_h_splitter.setSizes([total - queue_w, queue_w])
         else:
             self.render_queue_panel.show()

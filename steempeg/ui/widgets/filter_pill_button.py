@@ -19,14 +19,15 @@ class FilterPillButton(QPushButton):
 
     def apply_density(self, dense: UiDensity) -> None:
         sz = dense.filter_size
-        icon = 14 if dense.compact else 16
+        icon = max(12, sz // 2 - 2)
+        radius = sz // 2
         self.setFixedSize(sz, sz)
         self.setIconSize(QSize(icon, icon))
         self.setStyleSheet(f"""
         QPushButton#FilterPill {{
             background-color: #383838;
             border: 2px solid #444444;
-            border-radius: 8px;
+            border-radius: {radius}px;
             padding: 2px;
         }}
         QPushButton#FilterPill:hover {{

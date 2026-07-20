@@ -448,8 +448,9 @@ class RenderedLibraryMixin:
             total = max(int(total), 1)
             if show_bottom:
                 if len(sizes) >= 2 and sizes[1] <= 0:
-                    from steempeg.ui.layout_defaults import DEFAULT_MAIN_V_SPLITTER_SIZES
-                    self.main_v_splitter.setSizes(DEFAULT_MAIN_V_SPLITTER_SIZES)
+                    from steempeg.ui.layout_defaults import restore_v_splitter_sizes
+
+                    self.main_v_splitter.setSizes(restore_v_splitter_sizes(total))
             else:
                 self.main_v_splitter.setSizes([total, 0])
 

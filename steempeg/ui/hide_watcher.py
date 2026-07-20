@@ -5,6 +5,8 @@ collapses its bottom pane; when it shows again, the pane is restored.
 """
 from PySide6.QtCore import QEvent, QObject
 
+from steempeg.ui.layout_defaults import restore_v_splitter_sizes
+
 
 class HideWatcher(QObject):
     def __init__(self, splitter):
@@ -29,5 +31,5 @@ class HideWatcher(QObject):
             if self._saved_sizes and len(self._saved_sizes) >= 2 and self._saved_sizes[1] > 0:
                 self.splitter.setSizes(self._saved_sizes)
             else:
-                self.splitter.setSizes([750, 250])
+                self.splitter.setSizes(restore_v_splitter_sizes(self.splitter.height()))
         return False
