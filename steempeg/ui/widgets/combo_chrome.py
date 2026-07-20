@@ -65,7 +65,7 @@ SETTINGS_COMBO_FIELD_RULES = """
     QComboBox, QLineEdit {
         background-color: #383838; color: #ffffff;
         border: 2px solid #4a4a4a; border-radius: 12px;
-        padding: 7px 10px; font-size: 12px; font-weight: bold;
+        padding: 7px 10px; font-size: 13px; font-weight: bold;
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
     QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
@@ -85,6 +85,50 @@ SETTINGS_COMBO_FIELD_RULES = """
         border-top: 6px solid #cccccc;
     }
 """
+
+def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
+    """Render-settings combo/line-edit chrome scaled for compact windows.
+
+    Typeface matches Refresh (Segoe UI bold + footer_font); only the box densifies.
+    """
+    d = dense or COMFORT
+    font = int(d.footer_font)
+    if d.scale >= 0.85:
+        # Comfort base already 13/bold; keep historical padding/chrome.
+        return SETTINGS_COMBO_FIELD_RULES
+    pad = "3px 6px"
+    radius = 8
+    drop_w = 22
+    drop_r = 6
+    border = 1
+    arrow = 4
+    min_h = max(18, int(getattr(d, "combo_min_h", 18) or 18))
+    return f"""
+    QComboBox, QLineEdit {{
+        background-color: #383838; color: #ffffff;
+        border: {border}px solid #4a4a4a; border-radius: {radius}px;
+        padding: {pad}; font-size: {font}px; font-weight: bold;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        min-height: {min_h}px;
+    }}
+    QComboBox:hover, QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}
+    QComboBox:disabled, QLineEdit:disabled {{
+        background-color: #262626; color: #5a5a5a; border: {border}px solid #333333;
+    }}
+    QComboBox::drop-down:disabled {{ background-color: #1f1f1f; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: top right;
+        width: {drop_w}px; background-color: #262626;
+        border-left: {border}px solid #4a4a4a;
+        border-top-right-radius: {drop_r}px; border-bottom-right-radius: {drop_r}px;
+    }}
+    QComboBox::down-arrow {{
+        width: 0; height: 0;
+        border-left: {arrow}px solid transparent; border-right: {arrow}px solid transparent;
+        border-top: {arrow + 1}px solid #cccccc;
+    }}
+"""
+
 
 # Slimmer popup for the compact combos (Sorting / Filter in the Clips Manager):
 # flat rows, normal weight, row height matched to the collapsed combo box.
@@ -151,9 +195,37 @@ COMPACT_COMBO_RULES = """
 """
 
 
+def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
+    """Clips Manager sort combo — same typeface as Refresh; chrome densifies."""
+    d = dense or COMFORT
+    if d.scale >= 0.85:
+        return COMPACT_COMBO_RULES
+    font = int(d.footer_font)
+    pad = d.combo_pad
+    min_h = max(18, int(d.combo_min_h))
+    radius = max(6, min_h // 2)
+    border = 1
+    return f"""
+    QComboBox {{
+        background-color: #383838;
+        color: #ffffff;
+        border: {border}px solid #444444;
+        border-radius: {radius}px;
+        padding: {pad};
+        font-weight: bold;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-size: {font}px;
+        min-height: {min_h}px;
+    }}
+    QComboBox:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
+    QComboBox:on {{ background-color: #383838; }}
+    QComboBox::drop-down {{ border: none; padding-right: 4px; background: transparent; }}
+"""
+
+
 def settings_panel_stylesheet(extra: str = "", dense: UiDensity | None = None) -> str:
     """QSS for the render settings tab widget (combos + popup chrome)."""
-    return SETTINGS_COMBO_FIELD_RULES + combo_popup_item_rules(dense) + (extra or "")
+    return settings_combo_field_rules(dense) + combo_popup_item_rules(dense) + (extra or "")
 
 
 def compact_combo_stylesheet(
@@ -168,7 +240,7 @@ def compact_combo_stylesheet(
         popup = combo_popup_item_rules(dense)
     else:
         popup = COMPACT_COMBO_POPUP_ITEM_RULES
-    return COMPACT_COMBO_RULES + popup
+    return compact_combo_field_rules(dense) + popup
 
 
 def set_combo_item_enabled(
