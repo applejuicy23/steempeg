@@ -197,6 +197,183 @@ class LibraryMixin:
         self._ensure_clip_health_cache()
         json_cache.write_json(self._clip_health_cache_path(), self._clip_health_cache)
 
+    # --- Rendered export health cache (mtime+size keyed) ---
+    def _rendered_health_cache_path(self):
+        return os.path.join(self.cache_dir, "rendered_health_cache.json")
+
+    def _ensure_rendered_health_cache(self):
+        if not hasattr(self, "_rendered_health_cache"):
+            self._rendered_health_cache = json_cache.read_json(
+                self._rendered_health_cache_path(), default={}
+            )
+
+    def _save_rendered_health_cache(self):
+        self._ensure_rendered_health_cache()
+        json_cache.write_json(self._rendered_health_cache_path(), self._rendered_health_cache)
+
+    def _store_rendered_health_cache(self, file_path: str, assessment) -> None:
+        """Persist assess result keyed by path + mtime + size."""
+        from steempeg.core.rendered_health import (
+            RENDERED_HEALTH_RULES_VERSION,
+            RenderedHealthAssessment,
+        )
+
+        if not file_path or not isinstance(assessment, RenderedHealthAssessment):
+            return
+        self._ensure_rendered_health_cache()
+        norm = os.path.normpath(file_path)
+        try:
+            st = os.stat(file_path)
+            mtime = st.st_mtime
+            size = st.st_size
+        except OSError:
+            mtime, size = 0.0, 0
+        self._rendered_health_cache[norm] = {
+            "mtime": mtime,
+            "size": size,
+            "rules_version": RENDERED_HEALTH_RULES_VERSION,
+            "level": assessment.report.level.value,
+            "issues": list(assessment.report.issues),
+            "duration_sec": assessment.duration_sec,
+            "duration_stream_sec": assessment.duration_stream_sec,
+            "duration_format_sec": assessment.duration_format_sec,
+        }
+        self._save_rendered_health_cache()
+
+    def _seed_rendered_health_cache_row(self, row) -> None:
+        """Seed cache from companion fields collected during rendered scan (no ffprobe)."""
+        from steempeg.core.rendered_health import RenderedHealthAssessment
+
+        level_raw = getattr(row, "health_level", "") or ""
+        if not level_raw:
+            return
+        try:
+            level = health.ClipHealth(level_raw)
+        except ValueError:
+            return
+        if level == health.ClipHealth.CURED:
+            level = (
+                health.ClipHealth.DEGRADED
+                if getattr(row, "health_issues", None)
+                else health.ClipHealth.HEALTHY
+            )
+        assessment = RenderedHealthAssessment(
+            health.ClipHealthReport(level, list(getattr(row, "health_issues", None) or [])),
+            duration_stream_sec=getattr(row, "duration_stream_sec", None),
+            duration_format_sec=getattr(row, "duration_format_sec", None),
+            duration_sec=getattr(row, "duration_sec", None),
+        )
+        self._ensure_rendered_health_cache()
+        norm = os.path.normpath(row.full_path)
+        self._rendered_health_cache[norm] = {
+            "mtime": float(getattr(row, "file_mtime", 0.0) or 0.0),
+            "size": int(getattr(row, "file_size", 0) or 0),
+            "level": assessment.report.level.value,
+            "issues": list(assessment.report.issues),
+            "duration_sec": assessment.duration_sec,
+            "duration_stream_sec": assessment.duration_stream_sec,
+            "duration_format_sec": assessment.duration_format_sec,
+        }
+        dirty = getattr(self, "_rendered_health_cache_dirty", 0) + 1
+        self._rendered_health_cache_dirty = dirty
+        if dirty >= 25:
+            self._save_rendered_health_cache()
+            self._rendered_health_cache_dirty = 0
+
+    def _resolve_rendered_health(
+        self, file_path: str, *, force: bool = False
+    ):
+        """Return RenderedHealthAssessment, using disk cache when mtime/size match."""
+        from steempeg.core.rendered_health import (
+            RENDERED_HEALTH_RULES_VERSION,
+            RenderedHealthAssessment,
+            assess_rendered_health,
+        )
+        from steempeg.core.rendered_media import (
+            is_sane_media_duration,
+            load_rendered_companion_meta,
+        )
+
+        if not file_path or not os.path.isfile(file_path):
+            return RenderedHealthAssessment(
+                health.ClipHealthReport(health.ClipHealth.DEAD, ["File missing or unreadable"]),
+            )
+
+        self._ensure_rendered_health_cache()
+        norm = os.path.normpath(file_path)
+        try:
+            st = os.stat(file_path)
+            mtime = st.st_mtime
+            size = st.st_size
+        except OSError:
+            mtime, size = 0.0, 0
+
+        if not force:
+            entry = self._rendered_health_cache.get(norm)
+            if (
+                entry
+                and entry.get("mtime") == mtime
+                and entry.get("size") == size
+                and entry.get("rules_version") == RENDERED_HEALTH_RULES_VERSION
+            ):
+                try:
+                    level = health.ClipHealth(entry["level"])
+                except ValueError:
+                    level = health.ClipHealth.DEAD
+                return RenderedHealthAssessment(
+                    health.ClipHealthReport(level, list(entry.get("issues") or [])),
+                    duration_stream_sec=entry.get("duration_stream_sec"),
+                    duration_format_sec=entry.get("duration_format_sec"),
+                    duration_sec=entry.get("duration_sec"),
+                )
+
+            meta = load_rendered_companion_meta(file_path) or {}
+            if (
+                meta.get("mtime_ns") == getattr(st, "st_mtime_ns", None)
+                and meta.get("size") == size
+                and meta.get("health")
+                and meta.get("health_rules_version") == RENDERED_HEALTH_RULES_VERSION
+            ):
+                issues = list(meta.get("health_issues") or [])
+                try:
+                    level = health.ClipHealth(str(meta.get("health")))
+                    if level == health.ClipHealth.CURED:
+                        level = (
+                            health.ClipHealth.DEGRADED
+                            if issues
+                            else health.ClipHealth.HEALTHY
+                        )
+                except ValueError:
+                    level = health.ClipHealth.HEALTHY
+                assessment = RenderedHealthAssessment(
+                    health.ClipHealthReport(level, issues),
+                    duration_stream_sec=meta.get("duration_stream_sec"),
+                    duration_format_sec=meta.get("duration_format_sec"),
+                    duration_sec=meta.get("duration_sec"),
+                )
+                self._store_rendered_health_cache(file_path, assessment)
+                return assessment
+
+        expected = None
+        meta = load_rendered_companion_meta(file_path) or {}
+        raw = meta.get("expected_duration_sec")
+        if is_sane_media_duration(raw):
+            expected = float(raw)
+        assessment = assess_rendered_health(file_path, expected_duration_sec=expected)
+        self._store_rendered_health_cache(file_path, assessment)
+        return assessment
+
+    def get_rendered_health_report(self, file_path: str):
+        return self._resolve_rendered_health(file_path).report
+
+    def get_rendered_display_health_report(self, file_path: str):
+        from steempeg.core.rendered_health import display_report_from_companion
+        from steempeg.core.rendered_media import load_rendered_companion_meta
+
+        assessment = self._resolve_rendered_health(file_path)
+        meta = load_rendered_companion_meta(file_path)
+        return display_report_from_companion(meta, assessment.report)
+
     def _resolve_clip_health(
         self, full_path: str, *, fast: bool, force: bool = False
     ) -> health.ClipHealthReport:
@@ -691,8 +868,16 @@ class LibraryMixin:
         if not hasattr(self, "btn_clip_health"):
             return
 
+        # Rendered exports: show flat-file health for the active preview file.
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
-            self.btn_clip_health.hide()
+            file_path = getattr(self, "_rendered_media_path", None) or getattr(
+                self, "_preview_clip_path", None
+            )
+            if not file_path or not os.path.isfile(file_path):
+                self.btn_clip_health.hide()
+                return
+            report = self.get_rendered_display_health_report(file_path)
+            self._apply_clip_health_button_style(report)
             return
 
         clip_path = None
@@ -733,6 +918,14 @@ class LibraryMixin:
         self.btn_clip_health.show()
 
     def show_clip_health_menu(self):
+        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+            file_path = getattr(self, "_rendered_media_path", None) or getattr(
+                self, "_preview_clip_path", None
+            )
+            if file_path and os.path.isfile(file_path):
+                self._show_rendered_health_menu(file_path)
+            return
+
         clip_path = None
         if hasattr(self, "_current_header_clip_path"):
             clip_path = self._current_header_clip_path()
@@ -800,6 +993,165 @@ class LibraryMixin:
                 bulk_act.triggered.connect(self.delete_all_dead_clips)
 
         menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
+
+    def _show_rendered_health_menu(self, file_path: str) -> None:
+        display = self.get_rendered_display_health_report(file_path)
+        assessment = self._resolve_rendered_health(file_path)
+        menu = QMenu(self.ui)
+        menu.setStyleSheet(_HEALTH_MENU_STYLE)
+
+        title_host = QWidget(menu)
+        title_row = QHBoxLayout(title_host)
+        title_row.setContentsMargins(12, 8, 16, 8)
+        title_row.setSpacing(8)
+        title_icon = QLabel()
+        title_icon.setPixmap(health_icon(display.level, 16).pixmap(16, 16))
+        title_icon.setFixedSize(16, 16)
+        title_lbl = QLabel(display.label)
+        title_lbl.setStyleSheet(
+            f"color: {display.color}; font-weight: bold; font-size: 13px;"
+            f" font-family: 'Segoe UI'; background: transparent;"
+        )
+        title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
+        title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+        title_act = QWidgetAction(menu)
+        title_act.setDefaultWidget(title_host)
+        title_act.setEnabled(True)
+        menu.addAction(title_act)
+        menu.addSeparator()
+
+        if display.issues:
+            for issue in display.issues:
+                act = menu.addAction(f"• {issue}")
+                act.setEnabled(False)
+        else:
+            act = menu.addAction("Duration metadata looks consistent.")
+            act.setEnabled(False)
+
+        scope = menu.addAction(
+            "Scope: duration metadata only — not mid-file A/V corruption."
+        )
+        scope.setEnabled(False)
+
+        stream_sec = assessment.duration_stream_sec or assessment.duration_sec
+        fmt_sec = assessment.duration_format_sec
+        if stream_sec or fmt_sec:
+            menu.addSeparator()
+            detail_parts = []
+            if stream_sec:
+                detail_parts.append(f"Stream {float(stream_sec):.2f}s")
+            if fmt_sec:
+                detail_parts.append(f"Container {float(fmt_sec):.2f}s")
+            detail = menu.addAction(" · ".join(detail_parts))
+            detail.setEnabled(False)
+
+        if stream_sec and assessment.report.level != health.ClipHealth.DEAD:
+            menu.addSeparator()
+            fix_act = menu.addAction("Fix timeline length (sidecar only)")
+            fix_act.setToolTip(
+                "Rewrite the .steempeg.json duration so the purple bar matches "
+                "stream length. Does not re-encode or repair broken A/V."
+            )
+            fix_act.triggered.connect(lambda: self.fix_rendered_duration(file_path))
+
+            remux_act = menu.addAction("Remux shortest (container header)")
+            remux_act.setToolTip(
+                "ffmpeg -c copy -shortest: fix container duration vs real packets "
+                "(frozen-tail / Original). Does not fix mid-file corruption."
+            )
+            remux_act.triggered.connect(lambda: self.remux_rendered_shortest(file_path))
+
+        menu.exec(self.btn_clip_health.mapToGlobal(QPoint(0, self.btn_clip_health.height())))
+
+    def fix_rendered_duration(self, file_path: str) -> None:
+        """Rewrite companion duration_sec from stream probe and mark cured."""
+        from steempeg.core.rendered_health import apply_assessment_to_companion
+        from steempeg.core.rendered_media import is_sane_media_duration
+
+        if not file_path or not os.path.isfile(file_path):
+            return
+        assessment = self._resolve_rendered_health(file_path, force=True)
+        playable = assessment.duration_stream_sec or assessment.duration_sec
+        if not is_sane_media_duration(playable):
+            steempeg_warning(
+                self.ui,
+                "Fix duration",
+                "Could not read a usable stream duration for this file.",
+            )
+            return
+        apply_assessment_to_companion(file_path, assessment, cured=True)
+        self._store_rendered_health_cache(file_path, assessment)
+        self._refresh_rendered_playback_duration(file_path, float(playable))
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
+        steempeg_information(
+            self.ui,
+            "Fix timeline length",
+            f"Purple-bar / sidecar duration set to {float(playable):.2f}s.\n\n"
+            "This does not repair video or audio content.",
+        )
+
+    def remux_rendered_shortest(self, file_path: str) -> None:
+        """Remux with -shortest, re-assess, mark cured, reload preview if needed."""
+        from steempeg.core.rendered_health import (
+            apply_assessment_to_companion,
+            remux_shortest,
+        )
+        from steempeg.core.rendered_media import is_sane_media_duration, resolve_ffmpeg_exe
+
+        if not file_path or not os.path.isfile(file_path):
+            return
+        if not steempeg_question(
+            self.ui,
+            "Remux shortest",
+            "Re-mux this file with ffmpeg -c copy -shortest?\n\n"
+            "Rewrites the container so duration follows real packets "
+            "(helps frozen-tail / bad Original headers).\n"
+            "Does not re-encode and will not fix mid-file corruption.",
+        ):
+            return
+
+        ffmpeg_exe = resolve_ffmpeg_exe()
+        ok = remux_shortest(file_path, ffmpeg_exe=ffmpeg_exe)
+        if not ok:
+            steempeg_warning(
+                self.ui,
+                "Remux shortest",
+                "Remux failed. The original file was left unchanged when possible.",
+            )
+            return
+
+        assessment = self._resolve_rendered_health(file_path, force=True)
+        apply_assessment_to_companion(file_path, assessment, cured=True)
+        self._store_rendered_health_cache(file_path, assessment)
+        playable = assessment.duration_stream_sec or assessment.duration_sec
+        if is_sane_media_duration(playable):
+            self._refresh_rendered_playback_duration(file_path, float(playable))
+        playing = getattr(self, "_rendered_media_path", None)
+        if playing and os.path.normpath(playing) == os.path.normpath(file_path):
+            if hasattr(self, "play_media_file"):
+                self.play_media_file(file_path)
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
+        steempeg_information(
+            self.ui,
+            "Remux shortest",
+            "Container remuxed and duration metadata re-checked.\n"
+            "This does not repair mid-file A/V corruption.",
+        )
+
+    def _refresh_rendered_playback_duration(self, file_path: str, duration_sec: float) -> None:
+        from steempeg.core.rendered_media import is_sane_media_duration
+
+        if not is_sane_media_duration(duration_sec):
+            return
+        playing = getattr(self, "_rendered_media_path", None)
+        if not playing or os.path.normpath(playing) != os.path.normpath(file_path):
+            return
+        self._rendered_duration_cache = (os.path.normpath(file_path), float(duration_sec))
+        if hasattr(self, "_apply_playback_duration"):
+            self._apply_playback_duration(float(duration_sec))
 
     def force_play_dead_clip(
         self, clip_path: str, *, skip_confirm: bool = False, skip_verify: bool = False

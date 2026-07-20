@@ -83,8 +83,66 @@ def is_sane_media_duration(sec: float | int | None) -> bool:
     return 0.0 < val <= MAX_SANE_MEDIA_DURATION_SEC
 
 
+_DURATION_HMS_RE = re.compile(
+    r"^(?P<h>-?\d+):(?P<m>\d{1,2}):(?P<s>\d{1,2}(?:\.\d+)?)$"
+)
+
+
+def parse_media_duration_text(raw: str | None) -> float | None:
+    """Parse ffprobe duration text: seconds float, or Matroska ``HH:MM:SS.nnn`` tags."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text or text.upper() == "N/A":
+        return None
+    try:
+        val = float(text)
+        return val if is_sane_media_duration(val) else None
+    except ValueError:
+        pass
+    m = _DURATION_HMS_RE.match(text)
+    if not m:
+        return None
+    try:
+        hours = int(m.group("h"))
+        minutes = int(m.group("m"))
+        seconds = float(m.group("s"))
+    except (TypeError, ValueError):
+        return None
+    if hours < 0 or minutes < 0 or seconds < 0:
+        return None
+    total = hours * 3600 + minutes * 60 + seconds
+    return total if is_sane_media_duration(total) else None
+
+
+def probe_matroska_tag_duration_sec(file_path: str) -> float | None:
+    """MKV/WebM often store length only in ``TAG:DURATION`` (stream/format stay N/A)."""
+    if not file_path or not os.path.isfile(file_path):
+        return None
+    try:
+        out = subprocess.check_output(
+            [
+                resolve_ffprobe_exe(), "-v", "error",
+                "-show_entries", "format_tags=DURATION:stream_tags=DURATION",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                file_path,
+            ],
+            creationflags=_NO_WINDOW,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=20,
+        )
+    except Exception:
+        return None
+    for line in out.splitlines():
+        val = parse_media_duration_text(line)
+        if val is not None:
+            return val
+    return None
+
+
 def probe_media_duration_sec(file_path: str) -> float | None:
-    """Return a trustworthy duration in seconds (video stream first, then format)."""
+    """Return a trustworthy duration in seconds (video stream first, then format, then tags)."""
     if not file_path or not os.path.isfile(file_path):
         return None
     for stream_sel in ("v:0", "a:0"):
@@ -101,10 +159,9 @@ def probe_media_duration_sec(file_path: str) -> float | None:
                 text=True,
                 timeout=20,
             ).strip()
-            if out:
-                val = float(out)
-                if is_sane_media_duration(val):
-                    return val
+            val = parse_media_duration_text(out.splitlines()[0] if out else None)
+            if val is not None:
+                return val
         except Exception:
             pass
     try:
@@ -120,13 +177,12 @@ def probe_media_duration_sec(file_path: str) -> float | None:
             text=True,
             timeout=20,
         ).strip()
-        if out:
-            val = float(out)
-            if is_sane_media_duration(val):
-                return val
+        val = parse_media_duration_text(out.splitlines()[0] if out else None)
+        if val is not None:
+            return val
     except Exception:
         pass
-    return None
+    return probe_matroska_tag_duration_sec(file_path)
 
 
 def duration_from_source_clip(clip_path: str) -> float | None:
@@ -154,6 +210,14 @@ def save_rendered_companion_meta(
     clip_path: str = "",
     game_icon_path: str = "",
     duration_sec: float | None = None,
+    duration_stream_sec: float | None = None,
+    duration_format_sec: float | None = None,
+    expected_duration_sec: float | None = None,
+    health: str | None = None,
+    health_issues: list[str] | None = None,
+    health_cured: bool | None = None,
+    health_rules_version: int | None = None,
+    stream_copy: bool | None = None,
 ) -> None:
     """Write ``<video>.steempeg.json`` so renamed exports keep their game metadata."""
     try:
@@ -187,6 +251,22 @@ def save_rendered_companion_meta(
         duration_sec = duration_from_source_clip(clip_path or existing.get("clip_path") or "")
     if is_sane_media_duration(duration_sec):
         payload["duration_sec"] = round(float(duration_sec), 3)
+    if is_sane_media_duration(duration_stream_sec):
+        payload["duration_stream_sec"] = round(float(duration_stream_sec), 3)
+    if is_sane_media_duration(duration_format_sec):
+        payload["duration_format_sec"] = round(float(duration_format_sec), 3)
+    if is_sane_media_duration(expected_duration_sec):
+        payload["expected_duration_sec"] = round(float(expected_duration_sec), 3)
+    if health:
+        payload["health"] = str(health)
+    if health_issues is not None:
+        payload["health_issues"] = list(health_issues)
+    if health_cured is not None:
+        payload["health_cured"] = bool(health_cured)
+    if health_rules_version is not None:
+        payload["health_rules_version"] = int(health_rules_version)
+    if stream_copy is not None:
+        payload["stream_copy"] = bool(stream_copy)
     try:
         with open(companion_meta_path(file_path), "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)

@@ -1031,6 +1031,8 @@ class RenderedLibraryMixin:
                 "busy",
                 scan_phase="loading",
             )
+        if hasattr(self, "_seed_rendered_health_cache_row"):
+            self._seed_rendered_health_cache_row(row)
         self._update_library_count_label()
 
     def _on_rendered_scan_finished(self, stats, generation: int) -> None:
@@ -1054,6 +1056,12 @@ class RenderedLibraryMixin:
         self._update_library_count_label()
 
         self._finish_startup_library_scan_status()
+
+        if hasattr(self, "_save_rendered_health_cache") and getattr(
+            self, "_rendered_health_cache_dirty", 0
+        ):
+            self._save_rendered_health_cache()
+            self._rendered_health_cache_dirty = 0
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
 
@@ -1644,7 +1652,10 @@ class RenderedLibraryMixin:
                 self.custom_icon_label.clear()
 
         if hasattr(self, "btn_clip_health"):
-            self.btn_clip_health.hide()
+            if hasattr(self, "update_clip_health_button"):
+                self.update_clip_health_button()
+            else:
+                self.btn_clip_health.hide()
 
         if hasattr(self.ui, "btn_start"):
             self.ui.btn_start.setEnabled(False)

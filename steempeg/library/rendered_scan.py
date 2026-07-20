@@ -34,6 +34,13 @@ class ScannedRenderedFile:
     size_str: str
     needs_poster: bool
     source_clip_name: str = ""
+    file_mtime: float = 0.0
+    file_size: int = 0
+    health_level: str = ""
+    health_issues: list[str] | None = None
+    duration_sec: float | None = None
+    duration_stream_sec: float | None = None
+    duration_format_sec: float | None = None
 
 
 @dataclass
@@ -131,6 +138,13 @@ def scan_single_rendered_file(
     dt = datetime.fromtimestamp(mtime)
     type_label = _rendered_type_label(ext)
     source_clip_name = os.path.basename(clip_path) if clip_path else ""
+
+    health_level = str(source.get("health") or "")
+    health_issues = list(source.get("health_issues") or []) if source.get("health_issues") else None
+    duration_sec = source.get("duration_sec")
+    duration_stream_sec = source.get("duration_stream_sec")
+    duration_format_sec = source.get("duration_format_sec")
+
     return ScannedRenderedFile(
         full_path=full_path,
         display_title=title,
@@ -143,6 +157,13 @@ def scan_single_rendered_file(
         size_str=_format_file_size(size),
         needs_poster=ext.lower() in RENDERED_VIDEO_EXTS,
         source_clip_name=source_clip_name,
+        file_mtime=mtime,
+        file_size=size,
+        health_level=health_level,
+        health_issues=health_issues,
+        duration_sec=float(duration_sec) if duration_sec is not None else None,
+        duration_stream_sec=float(duration_stream_sec) if duration_stream_sec is not None else None,
+        duration_format_sec=float(duration_format_sec) if duration_format_sec is not None else None,
     )
 
 

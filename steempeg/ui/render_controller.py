@@ -1002,7 +1002,13 @@ class RenderMixin:
         if not output_file or not job:
             return
         try:
+            from steempeg.core.rendered_health import (
+                apply_assessment_to_companion,
+                assess_rendered_health,
+            )
             from steempeg.core.rendered_media import (
+                duration_from_source_clip,
+                is_sane_media_duration,
                 parse_app_id_from_clip_folder,
                 parse_app_id_from_name,
                 save_rendered_companion_meta,
@@ -1010,7 +1016,20 @@ class RenderMixin:
 
             clip_name = os.path.basename(job.clip_path or "")
             app_id = parse_app_id_from_name(clip_name) or parse_app_id_from_clip_folder(clip_name)
-            # duration_sec=None → probe the output file (not trim/source guesses).
+            expected_sec = None
+            s = job.settings
+            if s.is_trim_mode and s.trim_end_ms > s.trim_start_ms:
+                expected_sec = (s.trim_end_ms - s.trim_start_ms) / 1000.0
+            elif not s.is_trim_mode:
+                # Full-clip job: source length is a fair abort/mismatch check.
+                # Trim jobs must NOT use full source — that caused false "849s vs 12s".
+                expected_sec = duration_from_source_clip(job.clip_path)
+            if not is_sane_media_duration(expected_sec):
+                expected_sec = None
+
+            quality = getattr(s, "quality_text", "") or ""
+            stream_copy = "Original" in quality and "Target File" not in quality
+
             save_rendered_companion_meta(
                 output_file,
                 app_id=app_id,
@@ -1018,7 +1037,27 @@ class RenderMixin:
                 clip_path=job.clip_path,
                 game_icon_path=job.game_icon_path,
                 duration_sec=None,
+                expected_duration_sec=expected_sec,
+                stream_copy=stream_copy,
             )
+            assessment = assess_rendered_health(
+                output_file, expected_duration_sec=expected_sec
+            )
+            apply_assessment_to_companion(
+                output_file,
+                assessment,
+                cured=False,
+                stream_copy=stream_copy,
+                expected_duration_sec=expected_sec,
+                extra={
+                    "app_id": app_id or "",
+                    "game_name": job.game_name or "",
+                    "clip_path": job.clip_path or "",
+                    "game_icon_path": job.game_icon_path or "",
+                },
+            )
+            if hasattr(self, "_store_rendered_health_cache"):
+                self._store_rendered_health_cache(output_file, assessment)
             self._rendered_output_meta_index = None
         except Exception as exc:
             logging.debug("Rendered companion meta not saved: %s", exc)
