@@ -48,7 +48,14 @@ from steempeg.ui.queue_card_shared import (
     set_game_icon_label,
     status_dot_style as _status_dot_style,
 )
-from steempeg.ui.ui_density import COMFORT, UiDensity, tab_label
+from steempeg.ui.ui_density import (
+    COMFORT,
+    UiDensity,
+    tab_label,
+    toolbar_mega_pill_style,
+    view_toggle_button_styles,
+    view_toggle_track_style,
+)
 
 _LIST_TITLE_ICON = 28
 
@@ -63,10 +70,6 @@ _SPLITTER_GUTTER = 10
 _GRID_GAP = 10
 _ROUNDED_LIST_BOX = (
     "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
-)
-_QUEUE_TOOLBAR_BOX = (
-    "QFrame#queueToolbar { background-color: #2d2d2d; border: 1px solid #353535;"
-    " border-radius: 20px; }"
 )
 _QUEUE_TOGGLE_ACTIVE = (
     "background-color: #5138e6; color: #ffffff; border-radius: 12px;"
@@ -590,7 +593,9 @@ class RenderQueuePanel(QWidget):
 
         toolbar = QFrame()
         toolbar.setObjectName("queueToolbar")
-        toolbar.setStyleSheet(_QUEUE_TOOLBAR_BOX)
+        toolbar.setStyleSheet(
+            toolbar_mega_pill_style(COMFORT, object_name="queueToolbar")
+        )
         self._toolbar = toolbar
         self._tool_layout = QHBoxLayout(toolbar)
         self._tool_layout.setContentsMargins(16, 6, 16, 6)
@@ -660,9 +665,7 @@ class RenderQueuePanel(QWidget):
         )
 
         self._view_toggle_pill = QFrame()
-        self._view_toggle_pill.setStyleSheet(
-            "QFrame { background-color: #141414; border-radius: 14px; border: none; }"
-        )
+        self._view_toggle_pill.setStyleSheet(view_toggle_track_style(COMFORT))
         toggle_layout = QHBoxLayout(self._view_toggle_pill)
         toggle_layout.setContentsMargins(2, 2, 2, 2)
         toggle_layout.setSpacing(0)
@@ -672,6 +675,7 @@ class RenderQueuePanel(QWidget):
         for btn in (self._btn_view_grid, self._btn_view_list):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFlat(True)
+        self._toggle_style_active, self._toggle_style_inactive = view_toggle_button_styles(COMFORT)
         self._btn_view_list.clicked.connect(lambda: self._set_view_mode("list"))
         self._btn_view_grid.clicked.connect(lambda: self._set_view_mode("grid"))
 
@@ -789,10 +793,9 @@ class RenderQueuePanel(QWidget):
 
         self._scroll.viewport().installEventFilter(self)
 
-        from steempeg.ui.layout_defaults import MIN_QUEUE_PANEL_WIDTH_COMPACT
-
-        # Floor is the compact Deck size; app.py raises it to comfort on wide windows.
-        self.setMinimumWidth(MIN_QUEUE_PANEL_WIDTH_COMPACT)
+        # 0 while closed — app.py raises this only when the queue pane is open,
+        # so a nested minWidth cannot crush Clips Manager via main_splitter.
+        self.setMinimumWidth(0)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def eventFilter(self, obj, event):
@@ -894,18 +897,28 @@ class RenderQueuePanel(QWidget):
                 f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
                 f" border: none; background: transparent; {_FONT}"
             )
-        toggle_active = (
-            f"background-color: #5138e6; color: white; border-radius: 10px; font-weight: bold; "
-            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
-        )
-        toggle_inactive = (
-            f"background-color: transparent; color: #888888; border-radius: 10px; font-weight: bold; "
-            f"font-size: {dense.toggle_font}px; padding: {dense.toggle_pad}; border: none;"
-        )
+        toggle_active, toggle_inactive = view_toggle_button_styles(dense)
         # Keep current selection styling via sync helper after stylesheet swap.
         self._toggle_style_active = toggle_active
         self._toggle_style_inactive = toggle_inactive
+        self._view_toggle_pill.setStyleSheet(view_toggle_track_style(dense))
+        if hasattr(self, "_toolbar") and self._toolbar is not None:
+            self._toolbar.setStyleSheet(
+                toolbar_mega_pill_style(dense, object_name="queueToolbar")
+            )
+        clear_r = max(6, dense.queue_btn_h // 2 - 2)
         self._btn_clear.setFixedHeight(dense.queue_btn_h)
+        self._btn_clear.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
+                border-radius: {clear_r}px; padding: 2px 10px; font-size: {dense.footer_font}px;
+                font-weight: bold;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            }}
+            QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+            QPushButton:disabled {{ background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }}
+        """)
         self._btn_history.setFixedSize(dense.queue_btn_h, dense.queue_btn_h)
         hist_r = dense.queue_btn_h // 2
         icon_sz = max(12, dense.queue_btn_h - 10)
