@@ -144,19 +144,51 @@ def queue_panel_min_width(window_width: int) -> int:
     )
 
 
+# Soft floor for the player/settings column inside right_h_splitter.
+PLAYER_COLUMN_FLOOR = 360
+
+
+def horizontal_shell_chrome() -> int:
+    """Non-content horizontal chrome (side insets + queue gutter + handle)."""
+    return RIGHT_PANEL_SIDE_INSET * 2 + QUEUE_SPLITTER_GUTTER + 6
+
+
+def affordable_queue_min_width(
+    window_width: int,
+    *,
+    left_min: int | None = None,
+    queue_open: bool = True,
+) -> int:
+    """Queue ``minimumWidth`` that cannot starve Clips Manager or the player.
+
+    When the queue is closed, returns 0 so the nested splitter does not push
+    the outer ``main_splitter`` left handle around.
+    """
+    if not queue_open:
+        return 0
+    ideal = queue_panel_min_width(window_width)
+    left = int(left_min if left_min is not None else left_panel_min_width(window_width))
+    win_w = int(window_width or 0)
+    if win_w <= 0:
+        return ideal
+    rest = win_w - left - horizontal_shell_chrome()
+    max_q = max(0, rest - PLAYER_COLUMN_FLOOR)
+    return min(ideal, max_q)
+
+
 def queue_panel_open_width(window_width: int, *, total_splitter: int = 0) -> int:
     """Preferred queue width when opening — lerp mins, capped ~25% of window."""
     t = layout_scale(window_width)
     ideal = lerp_int(MIN_QUEUE_PANEL_WIDTH_COMPACT, DEFAULT_QUEUE_PANEL_WIDTH, t)
-    min_q = queue_panel_min_width(window_width)
+    min_q = affordable_queue_min_width(window_width, queue_open=True)
     win_w = int(window_width or 0)
     max_by_pct = max(min_q, int(win_w * 0.25)) if win_w else ideal
     queue_w = max(min_q, min(ideal, max_by_pct))
     if total_splitter > 0:
-        # Keep player column usable.
-        player_floor = 360
-        queue_w = min(queue_w, max(min_q, total_splitter - player_floor))
-    return queue_w
+        # Keep player column usable; allow shrinking below ideal min if needed.
+        floor_q = min(min_q, max(0, total_splitter - PLAYER_COLUMN_FLOOR))
+        queue_w = min(queue_w, max(floor_q, total_splitter - PLAYER_COLUMN_FLOOR))
+    return max(0, int(queue_w))
 
 
 def default_main_v_splitter_sizes(
