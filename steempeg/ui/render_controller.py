@@ -760,8 +760,11 @@ class RenderMixin:
             )
 
         status_label = self.ui.label_status
+        dense = getattr(self, "_ui_density", None)
+        status_font = int(getattr(dense, "dash_font", 14) or 14)
+        self._status_indicator_color = color
         status_label.setStyleSheet(
-            f"background: transparent; border: none; font-size: 14px; font-weight: bold; "
+            f"background: transparent; border: none; font-size: {status_font}px; font-weight: bold; "
             f"color: {color}; font-family: Segoe UI, Arial, sans-serif;"
         )
         full_text = display_text
@@ -2389,11 +2392,17 @@ class RenderMixin:
             place_icon = logo_path if os.path.exists(logo_path) else unknown_icon_path
 
         if audio_only:
-            text_part = f"<span style='font-size: 14px;'><b>{game_name} &nbsp;•&nbsp; AUDIO ONLY: {audio_format} {audio_bitrate_clean}</b></span>"
+            text_part = f"{game_name}  •  AUDIO ONLY: {audio_format} {audio_bitrate_clean}"
         elif mute_audio:
-            text_part = f"<span style='font-size: 14px;'><b>{game_name} &nbsp;•&nbsp; {q_word}, {fps_display} &nbsp;•&nbsp; {video_bitrate_display} &nbsp;•&nbsp; {codec} (Muted)</b></span>"
+            text_part = (
+                f"{game_name}  •  {q_word}, {fps_display}  •  "
+                f"{video_bitrate_display}  •  {codec} (Muted)"
+            )
         else:
-            text_part = f"<span style='font-size: 14px;'><b>{game_name} &nbsp;•&nbsp; {q_word}, {fps_display} &nbsp;•&nbsp; {video_bitrate_display} &nbsp;•&nbsp; {codec}</b></span>"
+            text_part = (
+                f"{game_name}  •  {q_word}, {fps_display}  •  "
+                f"{video_bitrate_display}  •  {codec}"
+            )
             
         # GIVE ORDER TO OUR NEW CSS WIDGETS
         if hasattr(self, 'bottom_text_label'):
@@ -3069,42 +3078,36 @@ class RenderMixin:
             total = sum(self.right_h_splitter.sizes()) or self.right_h_splitter.width()
             self.right_h_splitter.setSizes([max(int(total), 1), 0])
             return
+
+        # Always allow collapse — locking the pane open while jobs exist made the
+        # nested minimumWidth shove Clips Manager on the outer splitter.
+        self.right_h_splitter.setCollapsible(1, True)
+
         sizes = self.right_h_splitter.sizes()
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
-        if len(self.render_queue) > 0:
-            # Do not let the user (or window shrink) crush an open queue to scraps.
-            self.right_h_splitter.setCollapsible(1, False)
-            self.render_queue_panel.show()
-            if sizes[1] <= 0:
-                from steempeg.ui.layout_defaults import (
-                    queue_panel_min_width,
-                    queue_panel_open_width,
-                )
+        has_jobs = len(self.render_queue) > 0
+        had_jobs = bool(getattr(self, "_queue_sync_had_jobs", False))
+        self._queue_sync_had_jobs = has_jobs
 
-                win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
-                min_q = queue_panel_min_width(win_w) if win_w else 280
-                saved = self.get_layout_setting("queue_panel_width", None)
-                ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else min_q
-                if saved is not None:
-                    queue_w = max(min_q, min(int(saved), total))
-                    # Prefer open-width helper when saved comfort width would crush the player.
-                    if win_w and total - queue_w < 360:
-                        queue_w = ideal
-                    else:
-                        queue_w = min(queue_w, ideal) if win_w and queue_w > ideal else queue_w
-                else:
-                    queue_w = ideal
-                queue_w = max(min_q, min(int(queue_w), total))
-                if win_w and total - queue_w < 360:
-                    queue_w = min(ideal, max(min_q, total - 360))
-                self.right_h_splitter.setSizes([total - queue_w, queue_w])
+        if has_jobs:
+            self.render_queue_panel.show()
+            if not had_jobs:
+                # Fresh jobs — clear any prior user-collapse and open once.
+                self._queue_user_collapsed = False
+            # Re-open when shut unless the user explicitly dragged it closed.
+            # (Theatre collapse does not set the flag, so exit restores the dock.)
+            should_open = (
+                sizes[1] <= 0 and not bool(getattr(self, "_queue_user_collapsed", False))
+            )
+            if should_open and hasattr(self, "_open_queue_in_right_splitter"):
+                self._open_queue_in_right_splitter()
         else:
-            self.right_h_splitter.setCollapsible(1, True)
+            self._queue_user_collapsed = False
             self.render_queue_panel.show()
             if sizes[1] > 0:
                 self._selected_queue_job_id = None
                 self.right_h_splitter.setSizes([total, 0])
-
+            self.render_queue_panel.setMinimumWidth(0)
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""
         logging.info("Queue selection: %s", job_id)
