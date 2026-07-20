@@ -41,7 +41,7 @@ from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
 from steempeg.ui.window_chrome import collapse_content_insets, force_full_redraw, restore_content_insets, set_window_transitions
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
-from steempeg.ui.message_dialog import steempeg_information
+from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
 
 
 class PlayerMixin:
@@ -527,6 +527,8 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
+        # Switching gate can clear as soon as the new picture is visible.
+        self._finish_preview_switch(getattr(self, "_preview_switch_gen", None))
         if hasattr(self, '_maybe_offer_salvage_verification'):
             self._maybe_offer_salvage_verification()
 
@@ -546,16 +548,6 @@ class PlayerMixin:
         try:
             self._ignore_playback_stall(0.8)
             self._ensure_linux_mpv_vo()
-            # Prefer cached remux when the source was an MPD (Linux bridge).
-            src = getattr(self, '_current_mpd_abs_path', None)
-            if src and str(src).lower().endswith(".mpd"):
-                try:
-                    from steempeg.core.dash.mpd_playback import resolve_playback_media_path
-
-                    path = resolve_playback_media_path(src).replace("\\", "/")
-                    self._current_play_abs_path = path
-                except Exception:
-                    pass
             self.player.play(path)
             self.player.pause = True
             if hasattr(self.ui, 'btn_play'):
@@ -1679,8 +1671,36 @@ class PlayerMixin:
                 self.player.pause = True
             except Exception:
                 pass
+            # Drop the previous demuxer immediately so the last frame cannot linger
+            # under the blank page while the next clip opens.
+            try:
+                self.player.command("stop")
+            except Exception:
+                try:
+                    self.player.stop()
+                except Exception:
+                    pass
+
+        if hasattr(self, "custom_timeline"):
+            try:
+                self.custom_timeline.set_vlc_time(0, False)
+                self.custom_timeline.force_jump(0)
+            except Exception:
+                pass
 
         return self._media_switch_gen
+
+    def _finish_preview_switch(self, switch_gen: int | None = None) -> None:
+        """Clear the switching gate and apply deferred trim once duration is ready."""
+        if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        if hasattr(self, "custom_timeline"):
+            self.custom_timeline.setEnabled(True)
+        self._is_switching = False
+        if getattr(self, "_pending_trim_restore", None):
+            QTimer.singleShot(50, self._deferred_apply_trim_restore)
+        elif hasattr(self, "_loading_queue_job"):
+            self._loading_queue_job = False
 
     def _set_timeline_batch_thumbs_busy(self, busy: bool) -> None:
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
@@ -2042,9 +2062,17 @@ class PlayerMixin:
 
         self._pending_trim_restore = trim_restore
 
-        # 1. STOP CURRENT PLAYBACK
+        # Clear previous clip chrome immediately (trim/markers/last frame).
+        switch_gen = self._begin_preview_switch()
+        self._preview_switch_gen = switch_gen
         self._is_switching = True
         self._force_pause = False
+
+        # Blank page before open so the old picture cannot linger.
+        self.ui.video_container.setStyleSheet("background-color: transparent;")
+        self._awaiting_first_frame = True
+        if hasattr(self, "video_stack") and hasattr(self, "video_blank_frame"):
+            self.video_stack.setCurrentWidget(self.video_blank_frame)
 
         # 2. GET THE CLIP FOLDER PATH
         
@@ -2055,21 +2083,43 @@ class PlayerMixin:
             self._is_switching = False
             return
 
-        mpd_path = all_mpds[0] 
+        mpd_path = all_mpds[0]
+        abs_path = os.path.abspath(mpd_path).replace("\\", "/")
+
+        # Linux: libmpv cannot demux Steam .mpd — remux to cached .mkv (or use cache).
+        # Start remux ASAP so it overlaps timeline JSON work below.
+        from steempeg.core.dash.mpd_playback import (
+            existing_playback_cache_for_play,
+            host_libmpv_needs_mpd_bridge,
+        )
+
+        pending_remux = False
+        early_play_path = abs_path
+        if host_libmpv_needs_mpd_bridge() and abs_path.lower().endswith(".mpd"):
+            cached = existing_playback_cache_for_play(abs_path)
+            if cached:
+                early_play_path = cached.replace("\\", "/")
+            else:
+                pending_remux = True
+                # No spinner — remux in background; play as soon as the file grows.
+                self._start_clip_remux_async(switch_gen, abs_path, clip_path)
 
         # STEP 2: AUTO-SEARCH JSON TIMELINE
-        # STEP 2: AUTO-SEARCH JSON TIMELINE
         offset_ms = 0
-        
+
         def find_json_in_dir(directory):
-            if not directory or not os.path.isdir(directory): 
+            if not directory or not os.path.isdir(directory):
                 return None
-            # Searching for the Right Timeline
+            try:
+                for name in os.listdir(directory):
+                    if name.startswith("timeline_") and name.endswith(".json"):
+                        return os.path.join(directory, name)
+            except OSError:
+                pass
             for root_dir, dirs, files in os.walk(directory):
                 for file in files:
                     if file.startswith("timeline_") and file.endswith(".json"):
                         return os.path.join(root_dir, file)
-            # Backup Option
             for root_dir, dirs, files in os.walk(directory):
                 for file in files:
                     if file.endswith(".json") and "settings" not in file and "games" not in file:
@@ -2129,15 +2179,7 @@ class PlayerMixin:
 
 
         # 3. PREPARE THE CANVAS
-        # Show a plain BLACK page (not the bare mpv surface, not the "Ready to play"
-        # poster) until the new clip's first frame is actually decoded. Switching to the
-        # mpv surface immediately exposed mpv's stale/last frame for a split second on
-        # every load — the flash the user saw (most reliably right after Refresh).
-        # _reveal_video_when_ready flips to the live video once the first frame exists.
-        self.ui.video_container.setStyleSheet("background-color: transparent;")
-        self._awaiting_first_frame = True
-        if hasattr(self, 'video_stack') and hasattr(self, 'video_blank_frame'):
-            self.video_stack.setCurrentWidget(self.video_blank_frame)
+        # Blank page already shown at switch start; keep awaiting first frame.
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         if hasattr(self, 'update_playback_badge'):
@@ -2147,27 +2189,177 @@ class PlayerMixin:
         if hasattr(self, 'custom_timeline'): 
             self.custom_timeline.setEnabled(True)
 
-        # 4. FEED THE RAW STEAM DASH FILE DIRECTLY TO MPV
+        # 4. Open media. Cold remux finishes via _on_clip_remux_finished.
         logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
-        
-        # A Reliable Path for Windows:
-        abs_path = os.path.abspath(mpd_path).replace('\\', '/')
+        if pending_remux:
+            return
 
-        # Linux/libmpv often lacks DASH demux — remux to a seekable cache file.
-        play_path = abs_path
+        play_path = early_play_path
+        if play_path != abs_path:
+            logging.info("MPV play via DASH remux cache: %s", play_path)
+        self._start_clip_playback(switch_gen, abs_path, play_path, clip_path)
+
+    def _prefetch_clip_playback_media(self, clip_path: str) -> None:
+        """Warm Linux DASH remux cache early without starting playback."""
+        if sys.platform == "win32" or not clip_path:
+            return
         try:
-            from steempeg.core.dash.mpd_playback import resolve_playback_media_path
+            from steempeg.core.dash.mpd_playback import (
+                existing_playback_cache_for_play,
+                host_libmpv_needs_mpd_bridge,
+                remux_mpd_for_playback,
+            )
+        except Exception:
+            return
+        if not host_libmpv_needs_mpd_bridge():
+            return
+        try:
+            mpds = self.get_all_mpd_paths(clip_path)
+        except Exception:
+            return
+        if not mpds:
+            return
+        abs_path = os.path.abspath(mpds[0]).replace("\\", "/")
+        if existing_playback_cache_for_play(abs_path):
+            return
+        inflight = getattr(self, "_prefetch_remux_paths", None)
+        if inflight is None:
+            inflight = set()
+            self._prefetch_remux_paths = inflight
+        if abs_path in inflight:
+            return
+        inflight.add(abs_path)
 
-            play_path = resolve_playback_media_path(abs_path).replace("\\", "/")
-            if play_path != abs_path:
-                logging.info("MPV play via DASH remux cache: %s", play_path)
+        import threading
+
+        def _worker():
+            try:
+                remux_mpd_for_playback(abs_path)
+            except Exception as exc:
+                logging.debug("Prefetch remux failed for %s: %s", abs_path, exc)
+            finally:
+                inflight.discard(abs_path)
+
+        threading.Thread(target=_worker, name="steempeg-mpd-prefetch", daemon=True).start()
+
+    def _start_clip_remux_async(self, switch_gen: int, abs_path: str, clip_path: str) -> None:
+        """Cold remux without a loader: play the growing file as soon as it has data."""
+        import threading
+
+        from steempeg.core.dash.mpd_playback import RemuxJob, start_remux_job
+
+        prev = getattr(self, "_progressive_remux", None)
+        if prev is not None:
+            old_gen, old_job = prev
+            if old_gen != switch_gen and isinstance(old_job, RemuxJob):
+                try:
+                    old_job.abort()
+                except Exception:
+                    pass
+            self._progressive_remux = None
+
+        try:
+            started = start_remux_job(abs_path)
         except Exception as exc:
-            logging.error("DASH playback remux failed for %s: %s", abs_path, exc)
+            logging.error("DASH remux start failed for %s: %s", abs_path, exc)
             self._is_switching = False
+            try:
+                steempeg_warning(self.ui, "Clip prepare failed", str(exc)[:400])
+            except Exception:
+                pass
+            return
+
+        if isinstance(started, str):
+            logging.info("MPV play via DASH remux cache: %s", started)
+            self._start_clip_playback(switch_gen, abs_path, started.replace("\\", "/"), abs_path)
+            return
+
+        job: RemuxJob = started
+        self._progressive_remux = (switch_gen, job)
+        early_started = {"done": False}
+
+        def _on_ui(play_path: str = "", err_text: str = "", finished: bool = False) -> None:
+            if switch_gen != getattr(self, "_media_switch_gen", 0):
+                return
+            if err_text:
+                self._is_switching = False
+                try:
+                    steempeg_warning(self.ui, "Clip prepare failed", err_text[:400])
+                except Exception:
+                    pass
+                return
+            if not play_path:
+                return
+            if finished:
+                if early_started["done"]:
+                    self._current_play_abs_path = play_path
+                    if hasattr(self, "custom_timeline"):
+                        self.custom_timeline.current_video_path = play_path
+                    logging.info("DASH remux finished (already playing): %s", play_path)
+                    return
+                logging.info("MPV play via DASH remux cache: %s", play_path)
+                self._start_clip_playback(switch_gen, abs_path, play_path, abs_path)
+                return
+            if early_started["done"]:
+                return
+            early_started["done"] = True
+            logging.info("MPV play via growing remux: %s", play_path)
+            self._start_clip_playback(switch_gen, abs_path, play_path, abs_path)
+
+        def _tick() -> None:
+            if switch_gen != getattr(self, "_media_switch_gen", 0):
+                try:
+                    job.abort()
+                except Exception:
+                    pass
+                return
+            if not early_started["done"]:
+                early = job.early_play_path()
+                if early:
+                    _on_ui(play_path=early.replace("\\", "/"))
+            if job.poll() is None:
+                QTimer.singleShot(120, _tick)
+                return
+
+            def _finish_worker() -> None:
+                play_path = ""
+                err_text = ""
+                try:
+                    from steempeg.core.dash.mpd_playback import RemuxAborted
+
+                    play_path = job.finalize().replace("\\", "/")
+                except RemuxAborted:
+                    return
+                except Exception as abs_exc:
+                    # Already playing the growing file — don't nuke UI / sniper path.
+                    if early_started["done"]:
+                        logging.debug(
+                            "DASH remux finalize after early play: %s (%s)", abs_path, abs_exc
+                        )
+                        return
+                    err_text = str(abs_exc)
+                    logging.error("DASH playback remux failed for %s: %s", abs_path, abs_exc)
+                if switch_gen != getattr(self, "_media_switch_gen", 0):
+                    return
+                QTimer.singleShot(
+                    0,
+                    lambda: _on_ui(play_path=play_path, err_text=err_text, finished=True),
+                )
+
+            threading.Thread(
+                target=_finish_worker, name="steempeg-mpd-remux-fin", daemon=True
+            ).start()
+
+        QTimer.singleShot(80, _tick)
+
+    def _start_clip_playback(
+        self, switch_gen: int, abs_path: str, play_path: str, clip_path: str
+    ) -> None:
+        """Open *play_path* in mpv after switch/remux. No-op if a newer switch won."""
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
             return
 
         if hasattr(self, 'custom_timeline'):
-            # Sniper/hover thumbs skip raw .mpd — point them at the playable media.
             self.custom_timeline.current_video_path = play_path
             self.custom_timeline.thumb_dir = None
 
@@ -2214,27 +2406,18 @@ class PlayerMixin:
         QTimer.singleShot(30, self._reveal_video_when_ready)
 
         # --- BACKGROUND THUMBNAIL BATCH GENERATION (THE MATRIX 2.0) ---
-        if hasattr(self, 'thumb_thread') and self.thumb_thread.isRunning():
+        if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
             self.thumb_thread.stop()
 
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
         if clip_dur >= 1.0:
-            # Prefer remuxed media for thumbs when present (same demux story).
             self._start_timeline_thumb_batch(play_path, clip_dur)
         elif hasattr(self, 'custom_timeline'):
             self.custom_timeline.thumb_dir = None
             self._set_timeline_batch_thumbs_busy(False)
         
-        if hasattr(self, 'custom_timeline'):
-            def finish_switch():
-                self.custom_timeline.setEnabled(True)
-                self._is_switching = False
-                if getattr(self, "_pending_trim_restore", None):
-                    QTimer.singleShot(150, self._deferred_apply_trim_restore)
-                elif hasattr(self, "_loading_queue_job"):
-                    self._loading_queue_job = False
-
-            QTimer.singleShot(500, finish_switch)
+        # Safety: if first-frame reveal never fires, still drop the switching gate.
+        QTimer.singleShot(800, lambda g=switch_gen: self._finish_preview_switch(g))
 
         if hasattr(self, '_maybe_offer_salvage_verification'):
             QTimer.singleShot(600, self._maybe_offer_salvage_verification)
