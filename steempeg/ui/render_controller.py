@@ -953,7 +953,7 @@ class RenderMixin:
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
         self._populate_quality_options_for_clip(clip_path)
-        self._apply_clip_session_state(trim_restore, silent=True)
+        self._apply_export_session_state(trim_restore, silent=True)
 
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
@@ -1695,6 +1695,9 @@ class RenderMixin:
         if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
             logging.warning("Ignored invalid clip selection: %s", clip_path)
             return
+        # Warm remux cache while Source Info fills (Linux).
+        if hasattr(self, "_prefetch_clip_playback_media"):
+            self._prefetch_clip_playback_media(clip_path)
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
@@ -1702,7 +1705,10 @@ class RenderMixin:
         self._rendered_media_path = None
         session = self._session_state_for_clip(clip_path)
         self._populate_quality_options_for_clip(clip_path)
-        self._apply_clip_session_state(session, silent=True)
+        # Export/settings only here — trim/markers restore after the new clip's
+        # duration is known (generate_and_play_preview trim_restore). Applying trim
+        # against the previous clip's timeline length made the yellow bar "stick".
+        self._apply_export_session_state(session, silent=True)
 
         game_item = self.ui.table_clips.item(selected_row, 0)
         game_name = game_item.text()
@@ -2741,7 +2747,7 @@ class RenderMixin:
             self._selected_queue_job_id = job_id
             self._preview_clip_path = job.clip_path
             session = self._session_state_for_clip(job.clip_path)
-            self._apply_clip_session_state(session, silent=True)
+            self._apply_export_session_state(session, silent=True)
             self._apply_header_from_job(job)
             self._populate_quality_options_for_clip(
                 job.clip_path, preserve_ui_selection=False,
