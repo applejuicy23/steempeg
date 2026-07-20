@@ -173,42 +173,42 @@ COMPACT = UiDensity(
     toolbar_label_font=11,
     toggle_pad="3px 8px",
     toggle_font=11,
-    filter_size=28,
-    combo_font=11,
+    filter_size=22,
+    combo_font=13,
     combo_min_h=18,
-    combo_pad="2px 6px",
-    footer_font=11,
-    footer_pad="2px 6px",
-    footer_min_h=18,
-    footer_radius=10,
-    footer_add_w=28,
-    neo_sidebar_w=132,
-    neo_nav_font=11,
-    neo_nav_pad="5px 6px",
-    queue_empty_w=240,
-    queue_thumb_w=88,
-    queue_thumb_h=50,
-    queue_tool_pad_h=8,
-    queue_btn_h=26,
-    # Fits center column with neo sidebar on Deck (~600px free): 132 + ~400
-    settings_stat_w=118,
-    settings_content_w=370,  # 118*3 + 6*2
-    settings_combo_w=260,
-    settings_title_font=13,
-    settings_page_margin=(8, 8, 4, 4),
-    skip_w=32,
-    skip_h=40,
-    play_w=64,
-    play_h=40,
-    chrome_chip=32,
-    dash_margin_h=10,
-    dash_margin_v=8,
-    dash_spacing=6,
-    dash_font=12,
-    dash_btn_h=28,
-    combo_popup_item_h=20,
-    combo_popup_item_pad_v=3,
-    combo_popup_item_pad_h=6,
+    combo_pad="1px 5px",
+    footer_font=10,
+    footer_pad="2px 5px",
+    footer_min_h=16,
+    footer_radius=9,
+    footer_add_w=26,
+    neo_sidebar_w=118,
+    neo_nav_font=10,
+    neo_nav_pad="3px 5px",
+    queue_empty_w=220,
+    queue_thumb_w=80,
+    queue_thumb_h=46,
+    queue_tool_pad_h=6,
+    queue_btn_h=24,
+    # Fits center column with neo sidebar on Deck (~600px free): 118 + ~360
+    settings_stat_w=108,
+    settings_content_w=340,
+    settings_combo_w=230,
+    settings_title_font=11,
+    settings_page_margin=(4, 4, 2, 2),
+    skip_w=30,
+    skip_h=36,
+    play_w=58,
+    play_h=36,
+    chrome_chip=28,
+    dash_margin_h=4,
+    dash_margin_v=4,
+    dash_spacing=3,
+    dash_font=10,
+    dash_btn_h=20,
+    combo_popup_item_h=18,
+    combo_popup_item_pad_v=2,
+    combo_popup_item_pad_h=5,
 )
 
 # Short chrome labels used only in compact density.
@@ -284,6 +284,83 @@ def chrome_equal(a: UiDensity | None, b: UiDensity | None) -> bool:
         if getattr(a, f.name) != getattr(b, f.name):
             return False
     return True
+
+
+# Sensible pill radii — Qt Style Sheets often fail/ignore absurd values like 999px.
+_TOGGLE_BTN_R_COMFORT = 12
+_TOOLBAR_PILL_R_COMFORT = 20
+
+
+def _toggle_pad_v(dense: UiDensity) -> int:
+    parts = [int(x) for x in _PAD_TOKEN_RE.findall(dense.toggle_pad or "")]
+    return parts[0] if parts else 4
+
+
+def toggle_segment_radius(dense: UiDensity) -> int:
+    """Half of the approximate Grid/List segment height → capsule ends."""
+    h = dense.toggle_font + _toggle_pad_v(dense) * 2 + 2
+    return max(8, min(_TOGGLE_BTN_R_COMFORT, h // 2))
+
+
+def toggle_track_radius(dense: UiDensity) -> int:
+    return max(10, toggle_segment_radius(dense) + 2)
+
+
+def toolbar_pill_radius(dense: UiDensity | None = None) -> int:
+    if dense is None:
+        return _TOOLBAR_PILL_R_COMFORT
+    # Comfort 20 → compact ~14
+    return max(12, lerp_int(14, _TOOLBAR_PILL_R_COMFORT, dense.scale))
+
+
+def view_toggle_track_style(dense: UiDensity | None = None) -> str:
+    """Dark track behind Grid/List."""
+    d = dense if dense is not None else COMFORT
+    r = toggle_track_radius(d)
+    return (
+        f"QFrame {{ background-color: #141414; border-radius: {r}px; border: none; }}"
+    )
+
+
+def view_toggle_button_styles(dense: UiDensity) -> tuple[str, str]:
+    """Active / inactive Grid·List segment styles."""
+    r = toggle_segment_radius(dense)
+    active = (
+        f"background-color: #5138e6; color: white; border-radius: {r}px; "
+        f"font-weight: bold; font-size: {dense.toggle_font}px; "
+        f"padding: {dense.toggle_pad}; border: none;"
+    )
+    inactive = (
+        f"background-color: transparent; color: #888888; border-radius: {r}px; "
+        f"font-weight: bold; font-size: {dense.toggle_font}px; "
+        f"padding: {dense.toggle_pad}; border: none;"
+    )
+    return active, inactive
+
+
+def toolbar_mega_pill_style(dense: UiDensity | None = None, *, object_name: str = "") -> str:
+    """Outer floating island (library / queue toolbar). Prefer objectName to avoid cascade."""
+    r = toolbar_pill_radius(dense)
+    if object_name:
+        return f"""
+            QFrame#{object_name} {{
+                background-color: #2d2d2d;
+                border: 1px solid #353535;
+                border-radius: {r}px;
+            }}
+            QFrame#{object_name} > QLabel {{
+                border: none;
+                background: transparent;
+            }}
+        """
+    return f"""
+        QFrame {{
+            background-color: #2d2d2d;
+            border: 1px solid #353535;
+            border-radius: {r}px;
+        }}
+        QLabel {{ border: none; background: transparent; }}
+    """
 
 
 def tab_label(mode: str, dense: UiDensity) -> str:
