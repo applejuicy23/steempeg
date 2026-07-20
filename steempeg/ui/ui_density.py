@@ -267,6 +267,25 @@ def density_for_width(window_width: int) -> UiDensity:
     return lerp_density(layout_scale(window_width))
 
 
+def chrome_equal(a: UiDensity | None, b: UiDensity | None) -> bool:
+    """True when discrete chrome metrics match (ignore float ``scale``).
+
+    Continuous layout_scale changes ``scale`` on every pixel of resize. Comparing
+    full UiDensity would re-apply styles / rebuild queue cards constantly and
+    thrash DWM next to the mpv surface.
+    """
+    if a is None or b is None:
+        return False
+    if a is b:
+        return True
+    for f in fields(UiDensity):
+        if f.name == "scale":
+            continue
+        if getattr(a, f.name) != getattr(b, f.name):
+            return False
+    return True
+
+
 def tab_label(mode: str, dense: UiDensity) -> str:
     table = TAB_LABELS_COMPACT if dense.compact else TAB_LABELS_COMFORT
     return table.get(mode, mode)

@@ -484,11 +484,33 @@ _RDW_ALLCHILDREN = 0x0080
 _RDW_FRAME = 0x0400
 
 
+def soft_full_redraw(window) -> None:
+    """Invalidate + erase the window tree without changing size.
+
+    Prefer this after ordinary resizes: a 1px SetWindowPos nudge re-enters
+    resizeEvent and can leave extra DWM ghost frames when the queue panel is open.
+    """
+    if os.name != "nt":
+        window.update()
+        return
+    try:
+        hwnd = int(window.winId())
+        redraw = (
+            _RDW_INVALIDATE | _RDW_ERASE | _RDW_ERASENOW
+            | _RDW_UPDATENOW | _RDW_ALLCHILDREN | _RDW_FRAME
+        )
+        ctypes.windll.user32.RedrawWindow(hwnd, None, None, redraw)
+        window.update()
+    except Exception:
+        window.update()
+
+
 def force_full_redraw(window) -> None:
     """Clear a stale native/DWM ghost left after switching into immersive fullscreen.
 
     A 1px size nudge alone doesn't erase hidden child regions, so also force a
-    full RedrawWindow that invalidates + erases every child (mpv surface included)."""
+    full RedrawWindow that invalidates + erases every child (mpv surface included).
+    Do not call this from resizeEvent — use soft_full_redraw instead."""
     if os.name != "nt":
         window.update()
         return

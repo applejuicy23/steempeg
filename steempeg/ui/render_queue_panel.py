@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize, QTimer
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import (
     QApplication,
@@ -170,23 +170,21 @@ class QueueJobCard(QFrame):
         title_row.addWidget(title_wrap, 1, Qt.AlignmentFlag.AlignVCenter)
         text_col.addWidget(title_row_host)
 
-        meta = QLabel(format_job_datetime_line(job))
+        meta = ElidedLabel(format_job_datetime_line(job))
         meta.setStyleSheet(f"color: #888888; font-size: 11px; {_FONT}")
-        meta.setWordWrap(False)
         meta.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         meta.setMinimumWidth(0)
         self._meta_label = meta
 
-        preset = QLabel(format_job_preset(job.settings))
+        preset = ElidedLabel(format_job_preset(job.settings))
         preset.setStyleSheet(f"color: #c4b5e8; font-size: 11px; {_FONT}")
-        preset.setWordWrap(False)
         preset.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         preset.setMinimumWidth(0)
         self._preset_label = preset
 
         trim_text = format_job_trim(job.settings)
         has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
-        trim_lbl = QLabel(trim_text)
+        trim_lbl = ElidedLabel(trim_text)
         trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
         trim_lbl.setVisible(has_trim)
         trim_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -229,9 +227,65 @@ class QueueJobCard(QFrame):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setMinimumWidth(0)
         self.setMinimumHeight(thumb_h + 12)
-
+        self._thumb_wrap = thumb_wrap
+        self._text_host = text_host
+        self._title_row_host = title_row_host
+        self._thumb_w = thumb_w
+        self._thumb_h = thumb_h
+        self._compact_level = -1
         self._refresh_num_style()
+        # Defer once so the first layout pass can apply compact mode.
+        QTimer.singleShot(0, self._adapt_to_width)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._adapt_to_width()
+
+    def _adapt_to_width(self) -> None:
+        """Collapse card chrome when the queue column is too narrow for full list rows.
+
+        Full list rows need thumb + text + remove. Below that, hide the thumb and
+        secondary lines so labels don't overflow into floating text fragments
+        (and stress DWM next to the mpv surface).
+        """
+        w = int(self.width() or 0)
+        if w <= 1:
+            return
+        # 0 = full, 1 = no thumb, 2 = title+path only
+        need = self._thumb_w + 26 + 80  # thumb + remove + min text
+        if w < need - 40:
+            level = 2 if w < max(160, self._thumb_w) else 1
+        else:
+            level = 0
+        if level == self._compact_level:
+            return
+        self._compact_level = level
+
+        show_thumb = level == 0
+        show_meta = level < 2
+        if hasattr(self, "_thumb_wrap") and self._thumb_wrap is not None:
+            self._thumb_wrap.setVisible(show_thumb)
+        if hasattr(self, "_game_icon"):
+            self._game_icon.setVisible(level < 2)
+        if self._btn_remove is not None:
+            self._btn_remove.setVisible(level < 2)
+        if hasattr(self, "_meta_label"):
+            self._meta_label.setVisible(show_meta)
+        if hasattr(self, "_preset_label"):
+            self._preset_label.setVisible(show_meta)
+        if hasattr(self, "_trim_label"):
+            has_trim = (
+                self._job.settings.is_trim_mode
+                and self._job.settings.trim_end_ms > self._job.settings.trim_start_ms
+            )
+            self._trim_label.setVisible(show_meta and has_trim)
+        # Keep title + output path always — they elide.
+        if show_thumb:
+            self.setMinimumHeight(self._thumb_h + 12)
+        else:
+            self.setMinimumHeight(48 if level == 1 else 40)
 
     def apply_job(self, job: RenderJob, *, selected: bool) -> None:
         """Update card visuals without rebuilding the widget."""
@@ -250,14 +304,14 @@ class QueueJobCard(QFrame):
             self._preset_label.setText(format_job_preset(job.settings))
         if hasattr(self, "_trim_label"):
             trim_text = format_job_trim(job.settings)
-            has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
             self._trim_label.setText(trim_text)
-            self._trim_label.setVisible(has_trim)
         if hasattr(self, "_out_label"):
             self._out_label.setText(format_job_output(job))
         self.setAcceptDrops(_job_accepts_drop(job))
         self._refresh_num_style()
         self._apply_card_style()
+        self._compact_level = -1
+        self._adapt_to_width()
 
     def set_selected(self, selected: bool) -> None:
         if self._selected == selected:
@@ -742,14 +796,27 @@ class RenderQueuePanel(QWidget):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
     def eventFilter(self, obj, event):
-        if (
-            obj == self._scroll.viewport()
-            and event.type() == QEvent.Type.Resize
-            and self._view_mode == "grid"
-            and self._jobs
-        ):
-            self._relayout_grid_cards()
+        if obj == self._scroll.viewport() and event.type() == QEvent.Type.Resize:
+            if self._view_mode == "grid" and self._jobs:
+                self._relayout_grid_cards()
+            elif self._view_mode == "list" and self._card_widgets:
+                # Defer until list layout has applied the new viewport width to cards.
+                QTimer.singleShot(0, self._refresh_list_card_widths)
         return super().eventFilter(obj, event)
+
+    def _refresh_list_card_widths(self) -> None:
+        if self._view_mode != "list" or not self._card_widgets:
+            return
+        vw = max(1, self._scroll.viewport().width())
+        # Cap cards to the viewport so labels can't paint past the panel edge
+        # (Qt does not clip child widgets to parent bounds by default).
+        max_w = max(80, vw - 4)
+        for card in self._card_widgets:
+            if not isinstance(card, QueueJobCard):
+                continue
+            card.setMaximumWidth(max_w)
+            card._compact_level = -1
+            card._adapt_to_width()
 
     def _set_view_mode(self, mode: str) -> None:
         if mode not in ("list", "grid") or mode == self._view_mode:
@@ -860,6 +927,16 @@ class RenderQueuePanel(QWidget):
             prev.queue_thumb_w != dense.queue_thumb_w
             or prev.queue_thumb_h != dense.queue_thumb_h
         ) and self._view_mode == "list" and self._jobs:
+            # Debounce — live resize can step thumb size several times in a row.
+            if not hasattr(self, "_thumb_rebuild_timer"):
+                self._thumb_rebuild_timer = QTimer(self)
+                self._thumb_rebuild_timer.setSingleShot(True)
+                self._thumb_rebuild_timer.setInterval(150)
+                self._thumb_rebuild_timer.timeout.connect(self._rebuild_cards_after_thumb_change)
+            self._thumb_rebuild_timer.start()
+
+    def _rebuild_cards_after_thumb_change(self) -> None:
+        if self._view_mode == "list" and self._jobs:
             self._rebuild_cards()
 
     def _wire_card(self, card) -> None:
@@ -926,6 +1003,7 @@ class RenderQueuePanel(QWidget):
             for card in self._card_widgets:
                 self._list_layout.addWidget(card)
             self._list_layout.addStretch()
+            QTimer.singleShot(0, self._refresh_list_card_widths)
 
         self._scroll_to_selected()
 

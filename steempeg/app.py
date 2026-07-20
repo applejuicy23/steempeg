@@ -2051,6 +2051,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.right_h_splitter.setHandleWidth(6)
                 self.right_h_splitter.setChildrenCollapsible(True)
                 self.right_h_splitter.setCollapsible(0, False)
+                # Collapsible(1) toggled in _sync_queue_splitter_visibility:
+                # False while jobs are open (prevent crush → DWM ghosts), True when empty.
                 self.right_h_splitter.setCollapsible(1, True)
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
 
@@ -2446,15 +2448,30 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
     def on_main_window_resized(self):
         """Keep panel minimums + chrome density in sync with window width."""
-        self._apply_responsive_layout_mins()
+        # Mins must track live; density restyle is deferred so continuous
+        # lerp doesn't thrash queue cards / DWM on every pixel.
+        self._apply_responsive_layout_mins(apply_density=False)
+        timer = getattr(self, "_density_resize_timer", None)
+        if timer is None:
+            from PySide6.QtCore import QTimer
 
-    def _apply_responsive_layout_mins(self):
+            timer = QTimer(self.ui if hasattr(self, "ui") else None)
+            timer.setSingleShot(True)
+            timer.setInterval(120)
+            timer.timeout.connect(self._flush_ui_density_after_resize)
+            self._density_resize_timer = timer
+        timer.start()
+
+    def _flush_ui_density_after_resize(self):
+        self._apply_responsive_layout_mins(apply_density=True)
+
+    def _apply_responsive_layout_mins(self, *, apply_density: bool = True):
         """Lerp panel mins + chrome density with window width (no binary cliff)."""
         from steempeg.ui.layout_defaults import (
             left_panel_min_width,
             queue_panel_min_width,
         )
-        from steempeg.ui.ui_density import density_for_width
+        from steempeg.ui.ui_density import chrome_equal, density_for_width
 
         w = int(self.ui.width() or 0)
         if w <= 0:
@@ -2472,9 +2489,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # Clamp splitter sizes to new mins without resetting to comfort defaults.
         self._clamp_splitters_to_mins(left_min=left_min, queue_min=queue_min)
 
+        if not apply_density:
+            return
+
         dense = density_for_width(w)
         prev = getattr(self, "_ui_density", None)
-        if prev is not None and prev == dense:
+        # Ignore float scale — otherwise every resize pixel restyles the whole UI
+        # and rebuilds queue cards (DWM ghosts + floating text scraps).
+        if chrome_equal(prev, dense):
             return
         self._ui_density = dense
         self._apply_ui_density(dense)

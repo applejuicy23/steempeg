@@ -2904,6 +2904,8 @@ class RenderMixin:
         self._update_start_button_label()
         self._persist_render_queue()
         self.update_playback_badge()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         if not getattr(self, "_is_rendering", False):
             self._reset_export_ui_after_queue_cleared()
 
@@ -3052,6 +3054,8 @@ class RenderMixin:
         if sync_splitter:
             self._sync_queue_splitter_visibility()
         self.update_playback_badge()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
     def _sync_queue_splitter_visibility(self):
         if not hasattr(self, "right_h_splitter"):
@@ -3068,6 +3072,8 @@ class RenderMixin:
         sizes = self.right_h_splitter.sizes()
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
         if len(self.render_queue) > 0:
+            # Do not let the user (or window shrink) crush an open queue to scraps.
+            self.right_h_splitter.setCollapsible(1, False)
             self.render_queue_panel.show()
             if sizes[1] <= 0:
                 from steempeg.ui.layout_defaults import (
@@ -3093,6 +3099,7 @@ class RenderMixin:
                     queue_w = min(ideal, max(min_q, total - 360))
                 self.right_h_splitter.setSizes([total - queue_w, queue_w])
         else:
+            self.right_h_splitter.setCollapsible(1, True)
             self.render_queue_panel.show()
             if sizes[1] > 0:
                 self._selected_queue_job_id = None
@@ -3199,6 +3206,8 @@ class RenderMixin:
             queue_job.status = JobStatus.RENDERING
             self.refresh_render_queue_panel()
         self.update_playback_badge()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
         logging.info(f"Source: {job.clip_path}")
         logging.info(f"Saving in: {params.output_file}")
@@ -3258,6 +3267,8 @@ class RenderMixin:
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
         self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         self._show_batch_complete_dialog()
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
@@ -3278,6 +3289,8 @@ class RenderMixin:
             self.update_status_indicator("Cancelled", "cancelled")
             steempeg_information(self.ui, "Cancelled", "Queue render was cancelled.")
         self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
     def _show_steempeg_render_error_dialog(
         self,
@@ -3523,6 +3536,8 @@ class RenderMixin:
             self.update_status_indicator("Ready", "ready")
 
         self.update_final_setup()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
     def inject_custom_input(self, combo_widget, placeholder):
         container = QWidget()

@@ -463,9 +463,26 @@ class RenderedLibraryMixin:
             return ext in RENDERED_ALL_EXTS
         return False
 
+    def _render_dock_kept_alive(self) -> bool:
+        """True while the user still needs Start / Pause / Cancel / Logs.
+
+        Render Queue open (any jobs) or an in-flight single/batch render must keep
+        the bottom dock visible even on the Rendered Videos tab. Theatre and
+        fullscreen still hide it via ``_should_show_render_dock``.
+        """
+        if getattr(self, "_is_rendering", False):
+            return True
+        if getattr(self, "_queue_batch_active", False):
+            return True
+        rq = getattr(self, "render_queue", None)
+        return bool(rq) and len(rq) > 0
+
     def _should_show_render_dock(self) -> bool:
         if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
             return False
+        if self._render_dock_kept_alive():
+            return True
+        # Idle Rendered Videos / finished-export preview: hide settings + controls.
         return not self._is_previewing_rendered_media()
 
     def _meta_from_render_job(self, job) -> dict:
