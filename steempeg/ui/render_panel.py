@@ -11,6 +11,10 @@ Mbps / kbps) sits next to the drop-down arrow. The combo stays NON-editable, so
 currentText() still returns "Custom …" and every value-reading branch in render_controller
 keeps working untouched — we only expose the edit + warning icon on `ui`.
 """
+from __future__ import annotations
+
+import re
+
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -49,13 +53,13 @@ _FONT_COMBO = _FONT + " font-size: 13px; font-weight: bold;"
 _COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge
 # Two export-tab combos side-by-side must fit inside SETTINGS_CONTENT_WIDTH.
 _EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - 16) // 2
-_FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
+_FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _FONT
 _TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT
 _TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _FONT
 _PATHBOX_QSS = ("QLabel { background-color: #252525; border-radius: 10px; padding: 8px 12px;"
                 " color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Consolas', monospace; }")
-_STAT_CAP_QSS = "color: #8a8a8a; font-size: 10px; font-weight: bold; background: transparent; border: none; " + _FONT
-_STAT_VAL_QSS = "color: #ffffff; font-size: 14px; font-weight: bold; background: transparent; border: none; " + _FONT
+_STAT_CAP_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; border: none; " + _FONT
+_STAT_VAL_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_FRAME_QSS = "QFrame { background-color: #303030; border: 1px solid #3a3a3a; border-radius: 12px; }"
 # Target-size readout ("Target: … | Safe Bitrate: … / Quality: …") — a readable info card,
 # not the tiny grey caption it used to borrow.
@@ -249,18 +253,41 @@ class SummaryLabel(QWidget):
     key/value grid (sized to its content, not stretched). Exposes setText() so the controller
     keeps writing to it exactly like the old QLabel did."""
 
-    _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 12px; " + _FONT
-    _VAL_QSS = "color: #ffffff; background: transparent; " + _FONT_COMBO
+    # Match post-density comfort sizes (settings_title_font 15 → keys 13 / values 15).
+    # Hardcoding the pre-density 12px made first paint look wrong until a window resize
+    # re-ran apply_settings_panel_density — and every setText/_rebuild wiped that fix.
+    _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 13px; " + _FONT
+    _VAL_QSS = (
+        "color: #ffffff; background: transparent; font-size: 15px; font-weight: bold; "
+        + _FONT
+    )
 
     def __init__(self):
         super().__init__()
         self._pairs = []
         self._plain = None
         self._cols = 2
+        self._key_qss = self._KEY_QSS
+        self._val_qss = self._VAL_QSS
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setVerticalSpacing(7)
         self._grid.setHorizontalSpacing(10)
+
+    def apply_density(self, dense) -> None:
+        """Keep key/value faces in sync with settings density across rebuilds."""
+        title = int(getattr(dense, "settings_title_font", 15) or 15)
+        key_px = max(9, title - 2)
+        val_px = max(10, title)
+        self._key_qss = (
+            f"color: #8a8a8a; background: transparent; font-size: {key_px}px; {_FONT}"
+        )
+        self._val_qss = (
+            f"color: #ffffff; background: transparent; font-size: {val_px}px; "
+            f"font-weight: bold; {_FONT}"
+        )
+        if self._plain is not None or self._pairs:
+            self._rebuild()
 
     def setText(self, text):
         norm = (text or "").replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
@@ -318,15 +345,19 @@ class SummaryLabel(QWidget):
             self._grid.setColumnMinimumWidth(col, 0)
 
         if self._plain is not None:
-            self._grid.addWidget(self._label(self._plain, self._VAL_QSS), 0, 0)
+            self._grid.addWidget(self._label(self._plain, self._val_qss), 0, 0)
             return
 
         cols = self._cols
         for idx, (k, v) in enumerate(self._pairs):
             r, c = idx // cols, idx % cols
             base = c * 3  # left pair -> cols 0/1, right pair -> cols 3/4, col 2 is the gutter
-            self._grid.addWidget(self._label(k, self._KEY_QSS), r, base, Qt.AlignLeft | Qt.AlignVCenter)
-            self._grid.addWidget(self._label(v, self._VAL_QSS), r, base + 1, Qt.AlignLeft | Qt.AlignVCenter)
+            self._grid.addWidget(
+                self._label(k, self._key_qss), r, base, Qt.AlignLeft | Qt.AlignVCenter
+            )
+            self._grid.addWidget(
+                self._label(v, self._val_qss), r, base + 1, Qt.AlignLeft | Qt.AlignVCenter
+            )
 
         # No column stretch -> columns hug their content so the whole grid stays compact.
         if cols == 2:
@@ -986,6 +1017,10 @@ def apply_settings_panel_density(ui, dense) -> None:
     export_w = max(120, (content_w - 16) // 2)
     title_font = int(dense.settings_title_font)
     margins = dense.settings_page_margin
+    label_font = max(9, title_font - 2)
+    value_font = max(10, title_font)
+    # Same face as RefreshButton: Segoe UI bold + footer_font.
+    field_font = int(dense.footer_font)
 
     tabs = getattr(ui, "settings_tabs", None)
     root = tabs if tabs is not None else ui
@@ -1013,6 +1048,29 @@ def apply_settings_panel_density(ui, dense) -> None:
             f"background: transparent; {_FONT}"
         )
 
+    summary = getattr(ui, "label_detailed_summary", None)
+    if summary is not None and hasattr(summary, "apply_density"):
+        summary.apply_density(dense)
+
+    # Field / toggle / caption labels that used fixed comfort sizes.
+    for label in root.findChildren(QLabel):
+        name = label.objectName() or ""
+        if name == "settingsPageTitle":
+            continue
+        ss = label.styleSheet() or ""
+        if "font-size:" not in ss:
+            continue
+        # Keep monospace path chips / purple accents, just retarget size.
+        if "Consolas" in ss or "monospace" in ss.lower():
+            new_size = label_font
+        elif "#ffffff" in ss and "font-weight: bold" in ss:
+            new_size = value_font
+        else:
+            new_size = label_font
+        label.setStyleSheet(
+            re.sub(r"font-size:\s*\d+px", f"font-size: {new_size}px", ss, count=1)
+        )
+
     for combo in root.findChildren(QComboBox):
         name = combo.objectName() or ""
         if name in _EXPORT_COMBO_NAMES:
@@ -1023,12 +1081,17 @@ def apply_settings_panel_density(ui, dense) -> None:
     from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
 
     combo_qss = settings_panel_stylesheet(
-        "QComboBox { font-family: 'Segoe UI', Arial, sans-serif;"
-        " font-size: 13px; font-weight: bold; }",
+        f"QComboBox {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        f" font-size: {field_font}px; font-weight: bold; }}",
         dense=dense,
     )
     for combo in root.findChildren(QComboBox):
         combo.setStyleSheet(combo_qss)
+        fnt = combo.font()
+        fnt.setFamily("Segoe UI")
+        fnt.setBold(True)
+        fnt.setPixelSize(field_font)
+        combo.setFont(fnt)
 
     for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export"):
         page = getattr(ui, page_attr, None)
@@ -1036,7 +1099,7 @@ def apply_settings_panel_density(ui, dense) -> None:
             continue
         lay = page.layout()
         if lay is not None:
-            gap = int(round(6 + (10 - 6) * getattr(dense, "scale", 0.0 if dense.compact else 1.0)))
+            gap = int(round(4 + (10 - 4) * getattr(dense, "scale", 0.0 if dense.compact else 1.0)))
             lay.setContentsMargins(*margins)
             lay.setSpacing(gap)
 
