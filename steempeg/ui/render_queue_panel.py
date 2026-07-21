@@ -572,6 +572,7 @@ class RenderQueuePanel(QWidget):
         self._density = COMFORT
 
         outer = QVBoxLayout(self)
+        self._outer_layout = outer
         outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET)
         outer.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
 
@@ -935,6 +936,11 @@ class RenderQueuePanel(QWidget):
         clear_font.setPixelSize(dense.footer_font)
         self._btn_clear.setFont(clear_font)
         self._empty_panel.setMaximumWidth(dense.queue_empty_w)
+        gutter = 0 if dense.compact else _SPLITTER_GUTTER
+        if hasattr(self, "_outer_layout") and self._outer_layout is not None:
+            self._outer_layout.setContentsMargins(
+                gutter, 0, 0, RENDER_QUEUE_BOTTOM_INSET
+            )
         self._sync_view_toggle_buttons()
         if (
             prev.queue_thumb_w != dense.queue_thumb_w

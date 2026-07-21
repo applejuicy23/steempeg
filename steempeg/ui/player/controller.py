@@ -764,7 +764,7 @@ class PlayerMixin:
                 else:
                     self.btn_theater.setText("🎦")
             if hasattr(self, "_sync_chrome_button_icon_size"):
-                self._sync_chrome_button_icon_size(self.btn_theater)
+                self._sync_chrome_button_icon_size(self.btn_theater, theater=True)
 
             self.btn_theater.clearFocus()
             QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
@@ -1180,7 +1180,7 @@ class PlayerMixin:
                     else:
                         self.btn_theater.setText("🎦")
                     if hasattr(self, "_sync_chrome_button_icon_size"):
-                        self._sync_chrome_button_icon_size(self.btn_theater)
+                        self._sync_chrome_button_icon_size(self.btn_theater, theater=True)
 
             self._set_hide_watcher_suppressed(True)
             self._save_immersive_splitter_sizes()

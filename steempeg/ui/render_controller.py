@@ -2407,12 +2407,20 @@ class RenderMixin:
         # GIVE ORDER TO OUR NEW CSS WIDGETS
         if hasattr(self, 'bottom_text_label'):
             self.bottom_text_label.setText(text_part)
-            icon_css = target_icon.replace('\\', '/')
-            self.bottom_icon_label.setStyleSheet(f"image: url('{icon_css}'); background: transparent; border: none;")
-            
+            if hasattr(self, "_set_bottom_summary_icon"):
+                self._set_bottom_summary_icon(target_icon)
+            else:
+                icon_css = target_icon.replace('\\', '/')
+                self.bottom_icon_label.setStyleSheet(
+                    f"image: url('{icon_css}'); background: transparent; border: none;"
+                )
+
             # We are updating the TOP panel of the player!
             if hasattr(self, 'custom_text_label') and hasattr(self, 'custom_icon_label'):
-                self.custom_icon_label.setStyleSheet(f"image: url('{icon_css}'); background: transparent; border: none;")
+                icon_css = target_icon.replace('\\', '/')
+                self.custom_icon_label.setStyleSheet(
+                    f"image: url('{icon_css}'); background: transparent; border: none;"
+                )
                 
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
@@ -3090,24 +3098,34 @@ class RenderMixin:
         self._queue_sync_had_jobs = has_jobs
 
         if has_jobs:
-            self.render_queue_panel.show()
+            if not bool(getattr(self, "_queue_user_collapsed", False)):
+                self.render_queue_panel.show()
             if not had_jobs:
                 # Fresh jobs — clear any prior user-collapse and open once.
                 self._queue_user_collapsed = False
             # Re-open when shut unless the user explicitly dragged it closed.
             # (Theatre collapse does not set the flag, so exit restores the dock.)
             should_open = (
-                sizes[1] <= 0 and not bool(getattr(self, "_queue_user_collapsed", False))
+                sizes[1] <= 0
+                and not bool(getattr(self, "_queue_user_collapsed", False))
+                and not bool(getattr(self, "_splitter_dragging", False))
             )
             if should_open and hasattr(self, "_open_queue_in_right_splitter"):
                 self._open_queue_in_right_splitter()
         else:
-            self._queue_user_collapsed = False
-            self.render_queue_panel.show()
-            if sizes[1] > 0:
-                self._selected_queue_job_id = None
-                self.right_h_splitter.setSizes([total, 0])
             self.render_queue_panel.setMinimumWidth(0)
+            self.render_queue_panel.show()
+            if bool(getattr(self, "_queue_user_collapsed", False)) or (
+                had_jobs and sizes[1] > 0
+            ):
+                self._selected_queue_job_id = None
+                if hasattr(self, "_close_queue_pane"):
+                    self._close_queue_pane()
+                else:
+                    self.right_h_splitter.setSizes([max(int(total), 1), 0])
+            elif sizes[1] <= 0 and hasattr(self, "_set_queue_pane_closed"):
+                # Empty + already shut: keep maxWidth clamped, handle visible.
+                self._set_queue_pane_closed(True)
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""
         logging.info("Queue selection: %s", job_id)

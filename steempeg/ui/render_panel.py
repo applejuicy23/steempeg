@@ -1093,6 +1093,47 @@ def apply_settings_panel_density(ui, dense) -> None:
         fnt.setPixelSize(field_font)
         combo.setFont(fnt)
 
+    from steempeg.ui.widgets.combo_chrome import settings_combo_field_rules
+
+    field_qss = settings_combo_field_rules(dense)
+    field_h = max(18, int(dense.combo_min_h))
+    border = 1 if dense.compact else 2
+    btn_r = max(8, int(dense.footer_radius) - 4) if dense.compact else 12
+    fname = getattr(ui, "input_filename", None)
+    if fname is not None:
+        fname.setStyleSheet(field_qss)
+        fname.setFixedHeight(field_h)
+        fnt = fname.font()
+        fnt.setFamily("Segoe UI")
+        fnt.setBold(True)
+        fnt.setPixelSize(field_font)
+        fname.setFont(fnt)
+
+    dest = getattr(ui, "destination_button", None)
+    if dest is not None:
+        dest.setFixedHeight(field_h)
+        dest.setStyleSheet(
+            f"QPushButton {{ background-color: #383838; color: #ffffff;"
+            f" border: {border}px solid #444444; border-radius: {btn_r}px;"
+            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-weight: bold; font-size: {field_font}px; padding: {dense.footer_pad};"
+            f" min-height: {field_h}px; }}"
+            f" QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}"
+            f" QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}"
+        )
+        fnt = dest.font()
+        fnt.setFamily("Segoe UI")
+        fnt.setBold(True)
+        fnt.setPixelSize(field_font)
+        dest.setFont(fnt)
+
+    for path_row in root.findChildren(QFrame, "outputPathRow"):
+        lay = path_row.layout()
+        if lay is not None:
+            m = 6 if dense.compact else 12
+            v = 4 if dense.compact else 8
+            lay.setContentsMargins(m, v, v, v)
+
     for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export"):
         page = getattr(ui, page_attr, None)
         if page is None:

@@ -428,6 +428,8 @@ class RenderedLibraryMixin:
     def _sync_library_mode_chrome(self):
         """Hide export settings while previewing finished media, not only on the tab."""
         show_bottom = self._should_show_render_dock()
+        prev_show = getattr(self, "_render_dock_visible", None)
+        self._render_dock_visible = show_bottom
 
         # The player wrapper reserves a 10px gap above the splitter handle. With the
         # dock hidden there is no handle, so drop that gap — otherwise a stray mini
@@ -447,7 +449,13 @@ class RenderedLibraryMixin:
             total = sum(sizes) if sum(sizes) > 0 else self.main_v_splitter.height()
             total = max(int(total), 1)
             if show_bottom:
-                if len(sizes) >= 2 and sizes[1] <= 0:
+                # Only restore when leaving Rendered preview (dock was mode-hidden),
+                # NOT on every sync while the user collapsed the v-splitter by hand.
+                if (
+                    prev_show is False
+                    and len(sizes) >= 2
+                    and sizes[1] <= 0
+                ):
                     from steempeg.ui.layout_defaults import restore_v_splitter_sizes
 
                     self.main_v_splitter.setSizes(restore_v_splitter_sizes(total))

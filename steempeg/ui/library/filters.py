@@ -332,6 +332,9 @@ class FilterMenu(QWidget):
         """
         
         smart_input_style = raw_style.replace("UP_ARROW_PATH", up_path).replace("DOWN_ARROW_PATH", down_path)
+        self._filter_date_arrow_up = up_path
+        self._filter_date_arrow_down = down_path
+        self._date_time_input_style = smart_input_style
 
         # --- DATE CAPSULE (WITH CALENDAR POPUP & ICONS) ---
         date_container = QWidget()
@@ -455,6 +458,85 @@ class FilterMenu(QWidget):
         self._inner_layout = layout
         self._bottom_layout = bottom_layout
         self._density = None
+
+    def _date_time_input_style_for(self, dense) -> str:
+        """QDateEdit / QTimeEdit chrome — comfort uses init style; compact shrinks."""
+        if not bool(getattr(dense, "compact", False)):
+            return getattr(self, "_date_time_input_style", "")
+
+        font = 10
+        pad_v, pad_h = 1, 5
+        min_h = 18
+        radius = 6
+        border = 1
+        drop_w = 18
+        spin_w = 16
+        arrow_sz = 8
+        up = getattr(self, "_filter_date_arrow_up", "")
+        down = getattr(self, "_filter_date_arrow_down", "")
+        return f"""
+            QDateEdit, QTimeEdit {{
+                background-color: #383838;
+                color: #ffffff;
+                border: {border}px solid #444444;
+                border-radius: {radius}px;
+                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-weight: bold;
+                font-size: {font}px;
+                padding: {pad_v}px {pad_h}px;
+                min-height: {min_h}px;
+                max-height: {min_h + 2}px;
+            }}
+            QDateEdit:hover, QTimeEdit:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
+            QDateEdit:focus, QTimeEdit:focus {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}
+            QDateEdit::drop-down {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: {drop_w}px;
+                border-left: 1px solid #444444;
+                border-top-right-radius: {radius - 1}px;
+                border-bottom-right-radius: {radius - 1}px;
+                background-color: #333333;
+            }}
+            QTimeEdit::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: {spin_w}px;
+                border-left: 1px solid #444444;
+                border-bottom: 1px solid #444444;
+                border-top-right-radius: {radius - 1}px;
+                background-color: #333333;
+            }}
+            QTimeEdit::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: {spin_w}px;
+                border-left: 1px solid #444444;
+                border-bottom-right-radius: {radius - 1}px;
+                background-color: #333333;
+            }}
+            QDateEdit::drop-down:hover, QTimeEdit::up-button:hover, QTimeEdit::down-button:hover {{
+                background-color: #6b5a8e;
+            }}
+            QDateEdit::drop-down:pressed, QTimeEdit::up-button:pressed, QTimeEdit::down-button:pressed {{
+                background-color: #b29ae7;
+            }}
+            QTimeEdit::up-arrow {{
+                image: url("{up}");
+                width: {arrow_sz}px; height: {arrow_sz}px;
+            }}
+            QTimeEdit::down-arrow, QDateEdit::down-arrow {{
+                image: url("{down}");
+                width: {arrow_sz}px; height: {arrow_sz}px;
+            }}
+            QCalendarWidget QWidget {{ alternate-background-color: #2d2d2d; background-color: #252525; color: white; }}
+            QCalendarWidget QToolButton {{ color: white; background-color: #383838; border-radius: 4px; padding: 2px; }}
+            QCalendarWidget QToolButton:hover {{ background-color: #6b5a8e; }}
+            QCalendarWidget QAbstractItemView:enabled {{
+                color: white; background-color: #252525;
+                selection-background-color: #6b5a8e; selection-color: white; border-radius: 4px;
+            }}
+        """
 
     def apply_density(self, dense) -> None:
         """Shrink popup chrome for Deck / ultra-narrow windows."""
@@ -594,6 +676,26 @@ class FilterMenu(QWidget):
                 "border: 1px solid #333;", "border: 2px solid #ff4444;"
             )
             combo.setStyleSheet(combo.style_normal if combo.is_valid() else combo.style_error)
+
+        dt_style = self._date_time_input_style_for(dense)
+        if dt_style:
+            cap_lbl = f"color: #888888; font-weight: bold; font-size: {10 if compact else 12}px;"
+            for w in self.findChildren(QDateEdit):
+                w.setStyleSheet(dt_style)
+                if compact:
+                    w.setMaximumWidth(112)
+                else:
+                    w.setMaximumWidth(16777215)
+            for w in self.findChildren(QTimeEdit):
+                w.setStyleSheet(dt_style)
+                if compact:
+                    w.setMaximumWidth(88)
+                else:
+                    w.setMaximumWidth(16777215)
+            for lbl in self.findChildren(QLabel):
+                ss = lbl.styleSheet() or ""
+                if "#888888" in ss and "font-weight: bold" in ss:
+                    lbl.setStyleSheet(cap_lbl)
 
     _PILL_BTN_STYLE = """
         QPushButton {

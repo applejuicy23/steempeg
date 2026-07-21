@@ -91,6 +91,17 @@ _PILL_BTN_STYLE = """
     QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
 """
 
+_ACTION_BTN_STYLE = """
+    QPushButton {
+        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
+        border-radius: 8px; padding: 4px 12px;
+        font-size: 13px; font-weight: normal;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+    }
+    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
+    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
+"""
+
 
 class RenderQueueHistoryDialog(SteempegDialog):
     open_output_requested = Signal(str)
@@ -322,17 +333,17 @@ class RenderQueueHistoryDialog(SteempegDialog):
             btn_row.addStretch()
             btn_folder = QPushButton("Open folder")
             btn_folder.setCursor(Qt.PointingHandCursor)
-            btn_folder.setStyleSheet(_PILL_BTN_STYLE)
+            btn_folder.setStyleSheet(_ACTION_BTN_STYLE)
             btn_folder.clicked.connect(
                 lambda _=False, p=out_path: reveal_in_file_manager(p)
             )
             btn_open = QPushButton("Open file")
             btn_open.setCursor(Qt.PointingHandCursor)
-            btn_open.setStyleSheet(_PILL_BTN_STYLE)
+            btn_open.setStyleSheet(_ACTION_BTN_STYLE)
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
             btn_library = QPushButton("Rendered videos")
             btn_library.setCursor(Qt.PointingHandCursor)
-            btn_library.setStyleSheet(_PILL_BTN_STYLE)
+            btn_library.setStyleSheet(_ACTION_BTN_STYLE)
             btn_library.clicked.connect(
                 lambda _=False, p=out_path: self._request_open_in_rendered(p)
             )
