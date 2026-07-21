@@ -2694,15 +2694,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         btn.setIconSize(QSize(sz, sz))
 
     def _apply_theater_button_icon(self, *, closed: bool = False) -> None:
-        """Set theatre pill icon at the same iconSize as fullscreen."""
+        """Theatre icon: same height as fullscreen, full purple plate (may be wider)."""
         btn = getattr(self, "btn_theater", None)
         if btn is None:
             return
+        from PySide6.QtCore import QSize
         from steempeg.ui.icon_assets import theater_mode_icon
 
         sz = self._player_chrome_icon_size()
-        btn.setIcon(theater_mode_icon(sz, closed=closed))
-        self._sync_chrome_button_icon_size(btn, sz)
+        icon = theater_mode_icon(sz, closed=closed)
+        btn.setIcon(icon)
+        sizes = icon.availableSizes()
+        if sizes:
+            btn.setIconSize(sizes[0])
+        else:
+            btn.setIconSize(QSize(sz, sz))
 
     def _apply_ui_density(self, dense):
         """Resize fonts/paddings/labels along the continuous density scale."""
