@@ -1096,13 +1096,17 @@ def apply_settings_panel_density(ui, dense) -> None:
     from steempeg.ui.widgets.combo_chrome import settings_combo_field_rules
 
     field_qss = settings_combo_field_rules(dense)
-    field_h = max(18, int(dense.combo_min_h))
+    # combo_min_h is the inner chrome target for QComboBox. QLineEdit / Save-as also
+    # carry QSS padding + borders, so locking them to combo_min_h alone clips glyphs
+    # (half-cut filename, crushed "Save as…").
     border = 1 if dense.compact else 2
+    pad_v = 7 if dense.scale >= 0.85 else 3
+    line_h = max(int(dense.combo_min_h), field_font + pad_v * 2 + border * 2 + 2)
     btn_r = max(8, int(dense.footer_radius) - 4) if dense.compact else 12
     fname = getattr(ui, "input_filename", None)
     if fname is not None:
         fname.setStyleSheet(field_qss)
-        fname.setFixedHeight(field_h)
+        fname.setFixedHeight(line_h)
         fnt = fname.font()
         fnt.setFamily("Segoe UI")
         fnt.setBold(True)
@@ -1111,13 +1115,15 @@ def apply_settings_panel_density(ui, dense) -> None:
 
     dest = getattr(ui, "destination_button", None)
     if dest is not None:
-        dest.setFixedHeight(field_h)
+        dest.setFixedHeight(line_h)
+        # Horizontal pad only — vertical centering comes from fixed height.
+        # Avoid min-height + vertical padding fighting setFixedHeight (crushed label).
+        ph = 12 if dense.scale >= 0.85 else 8
         dest.setStyleSheet(
             f"QPushButton {{ background-color: #383838; color: #ffffff;"
             f" border: {border}px solid #444444; border-radius: {btn_r}px;"
             f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-            f" font-weight: bold; font-size: {field_font}px; padding: {dense.footer_pad};"
-            f" min-height: {field_h}px; }}"
+            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
             f" QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}"
             f" QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}"
         )
