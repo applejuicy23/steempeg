@@ -1738,7 +1738,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 t_icon_path = get_resource_path("theatremode.png")
                 if os.path.exists(t_icon_path):
                     self.btn_theater.setIcon(QIcon(t_icon_path))
-                    self.btn_theater.setIconSize(QSize(26, 26))
+                    self.btn_theater.setIconSize(QSize(22, 22))
                 else:
                     self.btn_theater.setText("🎦")
 
@@ -1755,10 +1755,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 fs_icon_path = get_resource_path("btn_fullscreen.png")
                 if os.path.exists(fs_icon_path):
                     self.btn_fullscreen.setIcon(QIcon(fs_icon_path))
-                    # --- OPTIMIZED ACCORDING TO SMPEGUI13.UI BALANCE ---
-                    self.btn_fullscreen.setIconSize(QSize(22, 22)) 
+                    self.btn_fullscreen.setIconSize(QSize(22, 22))
                 else:
                     self.btn_fullscreen.setText("🔲")
+
+                # Theater glyph must match fullscreen size exactly.
+                if not self.btn_theater.icon().isNull():
+                    self.btn_theater.setIconSize(self.btn_fullscreen.iconSize())
 
                 # Connect button signals
                 self.btn_theater.clicked.connect(self.toggle_theater_mode)
@@ -2068,9 +2071,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.right_h_splitter.setObjectName("right_h_splitter")
                 self.right_h_splitter.setHandleWidth(6)
                 self.right_h_splitter.setChildrenCollapsible(True)
-                self.right_h_splitter.setCollapsible(0, False)
-                # Always collapsible — locking the queue open made nested mins
-                # shove the outer Clips Manager splitter around on narrow windows.
+                # Player column may collapse to 0 so the two handles can "kiss"
+                # (Clips | Queue with no middle scrap). False here + a 360px floor
+                # made the right handle constantly bounce back.
+                self.right_h_splitter.setCollapsible(0, True)
                 self.right_h_splitter.setCollapsible(1, True)
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
                 self.right_h_splitter.splitterMoved.connect(self._on_right_h_splitter_moved)
@@ -2079,9 +2083,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
                 panel_idx = self.ui.main_splitter.indexOf(self.ui.right_panel)
                 self.ui.right_panel.setParent(None)
+                self.ui.right_panel.setMinimumWidth(0)
                 self.right_h_splitter.addWidget(self.ui.right_panel)
                 self.right_h_splitter.addWidget(self.render_queue_panel)
                 self.ui.main_splitter.insertWidget(panel_idx, self.right_h_splitter)
+                # Allow Clips to push the whole right column away (kiss from the left).
+                self.ui.main_splitter.setChildrenCollapsible(True)
+                self.ui.main_splitter.setCollapsible(0, True)
+                self.ui.main_splitter.setCollapsible(1, True)
+                self.ui.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
                 self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
 
                 if hasattr(self, "_load_persisted_render_queue"):
@@ -2182,6 +2192,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             icon_path = get_resource_path("btn_fullscreen.png")
             if os.path.exists(icon_path):
                 self.ui.btn_fullscreen.setIcon(QIcon(icon_path))
+                self._sync_chrome_button_icon_size(self.ui.btn_fullscreen)
             self.ui.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
 
 
@@ -2527,8 +2538,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._ui_density = dense
         self._apply_ui_density(dense)
 
+    def _on_main_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        """Debounce kiss-snap when Clips pushes into the player column."""
+        self._on_right_h_splitter_moved()
+
     def _on_right_h_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
-        """Debounced snap: collapse queue scraps after drag ends."""
+        """Debounced snap: collapse queue / player scraps after drag ends."""
         timer = getattr(self, "_right_h_snap_timer", None)
         if timer is None:
             from PySide6.QtCore import QTimer
@@ -2541,7 +2556,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         timer.start()
 
     def _snap_right_h_splitter_after_drag(self) -> None:
-        """Snap near-zero queue widths shut — no minimumWidth, no size growth."""
+        """Finish a near-kiss: zero scrap panes. Never inflate the player back."""
         rhs = getattr(self, "right_h_splitter", None)
         panel = getattr(self, "render_queue_panel", None)
         if rhs is None or panel is None:
@@ -2552,50 +2567,52 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if len(sizes) < 2:
             return
         total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
+        player_w = int(sizes[0])
         queue_w = int(sizes[1])
         if total <= 0:
             return
         panel.setMinimumWidth(0)
-        if queue_w <= 0:
+
+        # Queue dragged shut → fully close.
+        if queue_w <= 0 or queue_w < 48:
+            if queue_w != 0:
+                rhs.setSizes([max(int(total), 1), 0])
             jobs = getattr(self, "render_queue", None)
             if jobs is not None and len(jobs) > 0:
                 self._queue_user_collapsed = True
+            # Player scrap with queue closed: collapse the whole right column.
+            sizes = rhs.sizes()
+            total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
+            player_w = int(sizes[0]) if len(sizes) >= 2 else 0
+            if 0 < player_w < 48:
+                main = getattr(self.ui, "main_splitter", None)
+                if main is not None:
+                    ms = main.sizes()
+                    if len(ms) >= 2:
+                        main.setSizes([max(sum(ms), 1), 0])
             return
-        # User dragged almost shut → fully close (like a normal collapsible pane).
-        if queue_w < 48:
-            rhs.setSizes([max(int(total), 1), 0])
-            self._queue_user_collapsed = True
-            return
+
         self._queue_user_collapsed = False
-        # Keep player usable if the drag left it crushed — shrink queue only.
-        self._clamp_splitters_to_mins(left_min=None)
+        # Player scrap between Clips handle and Queue handle → complete the kiss.
+        if 0 < player_w < 48:
+            rhs.setSizes([0, max(int(total), 1)])
 
     def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
-        """Protect floors without growing the nested queue (growth fights the shell)."""
-        from steempeg.ui.layout_defaults import PLAYER_COLUMN_FLOOR, left_panel_min_width
+        """Keep Clips floor only — never re-inflate a kissed-away player column."""
+        from steempeg.ui.layout_defaults import left_panel_min_width
 
         if left_min is None:
             w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
             left_min = left_panel_min_width(w) if w else 360
 
         rhs = getattr(self, "right_h_splitter", None)
-        # Nested: only shrink an open queue if the player column went below floor.
-        # Never grow the queue here — that is what shoved the pane "to the right"
-        # and destabilized mid-width windows on open.
+        # Only snap microscopic queue scraps shut. Do NOT push player back up to
+        # PLAYER_COLUMN_FLOOR — that was the constant bounce/lag on kiss.
         if rhs is not None:
             sizes = rhs.sizes()
             total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
-            if total > 0 and len(sizes) >= 2 and sizes[1] > 0:
-                queue_w = int(sizes[1])
-                player_w = int(sizes[0])
-                if player_w < PLAYER_COLUMN_FLOOR and total > PLAYER_COLUMN_FLOOR:
-                    queue_w = max(0, total - PLAYER_COLUMN_FLOOR)
-                    player_w = total - queue_w
-                    if player_w != sizes[0] or queue_w != sizes[1]:
-                        rhs.setSizes([player_w, queue_w])
-                elif queue_w > 0 and queue_w < 48:
-                    # Scrap width left by a shrink — close fully.
-                    rhs.setSizes([max(int(total), 1), 0])
+            if total > 0 and len(sizes) >= 2 and 0 < sizes[1] < 48:
+                rhs.setSizes([max(int(total), 1), 0])
 
         main = getattr(self.ui, "main_splitter", None)
         if main is not None:
@@ -2603,10 +2620,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             total = sum(sizes)
             if total > 0 and len(sizes) >= 2:
                 left = int(sizes[0])
-                right = int(sizes[1])
-                # Restore left floor by taking from the right column only.
-                if left < left_min:
-                    left = min(left_min, max(0, total - 200))
+                # Soft Clips floor only when the right column still has room.
+                # Allow a full kiss (right ≈ 0) without yanking left back.
+                if left < left_min and sizes[1] > 48:
+                    left = min(left_min, max(0, total - 48))
                     right = total - left
                     if left != sizes[0] or right != sizes[1]:
                         main.setSizes([left, right])
@@ -2660,6 +2677,28 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             return
         queue_w = max(80, min(int(queue_w), max_q))
         rhs.setSizes([total - queue_w, queue_w])
+
+    def _player_chrome_icon_size(self, dense=None) -> int:
+        """Theater / fullscreen / trim chip glyph size — identical for all of them.
+
+        Comfort chip 40 → 22px; compact 28 → 15px. Linear so restoring a wide
+        window actually grows the glyph again (the old max(14, chip-18) floor
+        left icons stuck at 14px until ~1520px wide).
+        """
+        if dense is None:
+            dense = getattr(self, "_ui_density", None)
+        chip = int(getattr(dense, "chrome_chip", 40) or 40)
+        return max(12, int(round(chip * 22 / 40)))
+
+    def _sync_chrome_button_icon_size(self, btn, icon_sz: int | None = None) -> None:
+        if btn is None or not hasattr(btn, "setIconSize"):
+            return
+        if btn.icon().isNull():
+            return
+        from PySide6.QtCore import QSize
+
+        sz = int(icon_sz if icon_sz is not None else self._player_chrome_icon_size())
+        btn.setIconSize(QSize(sz, sz))
 
     def _apply_ui_density(self, dense):
         """Resize fonts/paddings/labels along the continuous density scale."""
@@ -2841,15 +2880,38 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         chip = dense.chrome_chip
         chip_r = chip // 2
-        icon_sz = max(16, chip - 14)
-        chip_qss = (
-            f"QPushButton {{ background: transparent; border-radius: {chip_r}px; border: none; }}"
-        )
+        # Same face for theater + fullscreen + trim chips. Scale with the chip
+        # (was max(14, chip-18) which froze icons at 14px until ~1520px wide).
+        icon_sz = self._player_chrome_icon_size(dense)
+        chip_qss = f"""
+            QPushButton {{
+                background: transparent;
+                border-radius: {chip_r}px;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 40);
+            }}
+            QPushButton:pressed {{
+                background: rgba(255, 255, 255, 60);
+            }}
+        """
+        marker_qss = f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 30);
+                border-radius: {max(6, chip_r // 3)}px;
+            }}
+            QPushButton:pressed {{
+                background: rgba(255, 255, 255, 50);
+            }}
+        """
         for attr in (
             "btn_theater",
             "btn_fullscreen",
-            "btn_add_marker",
-            "btn_screenshot",
             "btn_clipcut1",
             "btn_clipcut2",
             "btn_clipcutback",
@@ -2858,10 +2920,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             if b is not None and hasattr(b, "setFixedSize"):
                 b.setFixedSize(chip, chip)
                 b.setStyleSheet(chip_qss)
-                if hasattr(b, "setIconSize") and not b.icon().isNull():
-                    from PySide6.QtCore import QSize
+                self._sync_chrome_button_icon_size(b, icon_sz)
 
-                    b.setIconSize(QSize(icon_sz, icon_sz))
+        for attr in ("btn_add_marker", "btn_screenshot"):
+            b = getattr(self, attr, None) or getattr(self.ui, attr, None)
+            if b is not None and hasattr(b, "setFixedSize"):
+                b.setFixedSize(chip, chip)
+                b.setStyleSheet(marker_qss)
+                self._sync_chrome_button_icon_size(b, icon_sz)
 
         for ctrl_attr in ("volume_control", "speed_control"):
             ctrl = getattr(self, ctrl_attr, None)
