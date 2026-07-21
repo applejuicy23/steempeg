@@ -14,7 +14,7 @@ import time
 
 import PySide6.QtWidgets as qtw
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,7 +22,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -519,7 +522,19 @@ class TimelineCanvas(QWidget):
 
         self.visual_ms = max(0.0, min(self.visual_ms, float(self.duration_ms)))
         self.update()
-        
+        self._refresh_overview_playhead_marker()
+
+    def _refresh_overview_playhead_marker(self) -> None:
+        """Repaint the zoom scrollbar's Steam-style full-duration playhead tick."""
+        host = self.parentWidget()
+        while host is not None:
+            if isinstance(host, CustomTimelineWidget):
+                bar = host.horizontalScrollBar()
+                if bar is not None and bar.isVisible():
+                    bar.update()
+                return
+            host = host.parentWidget()
+
     def paintEvent(self, event):
         
         painter = QPainter(self)
@@ -1123,6 +1138,7 @@ class TimelineCanvas(QWidget):
         self.target_ms = self.visual_ms 
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
+        self._refresh_overview_playhead_marker()
         
     def force_jump(self, new_position_ms):
         if self.duration_ms <= 0: return
@@ -1131,7 +1147,7 @@ class TimelineCanvas(QWidget):
         self.user_seek_lock_time = time.time() + 0.15 
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
-
+        self._refresh_overview_playhead_marker()
     def leaveEvent(self, event):
         self.is_hovering = False
         self.hover_x = -1.0
@@ -1161,6 +1177,62 @@ class TimelineCanvas(QWidget):
         event.ignore()
 
 
+class TimelineOverviewScrollBar(QScrollBar):
+    """Zoom overview bar with a Steam-style playhead marker on the full duration."""
+
+    _MARKER_HALF_W = 4.0
+    _MARKER_H = 5.0
+    _MARKER_COLOR = QColor("#e8e8e8")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.isVisible():
+            return
+
+        area = self.parentWidget()
+        canvas = getattr(area, "canvas", None) if area is not None else None
+        if canvas is None:
+            return
+        duration = float(getattr(canvas, "duration_ms", 0) or 0)
+        if duration <= 1.0:
+            return
+        ms = float(getattr(canvas, "visual_ms", 0) or 0)
+        ratio = max(0.0, min(1.0, ms / duration))
+
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        groove = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ScrollBar,
+            opt,
+            QStyle.SubControl.SC_ScrollBarGroove,
+            self,
+        )
+        if groove.width() <= 0:
+            # Stylesheet margins are 4px L/R on the horizontal bar.
+            groove = self.rect().adjusted(4, 0, -4, 0)
+        if groove.width() <= 0:
+            return
+
+        x = groove.left() + ratio * float(groove.width())
+        # Sit the inverted triangle on the top edge of the groove (Steam overview tick).
+        top = float(groove.top())
+        half = self._MARKER_HALF_W
+        tip = top + self._MARKER_H
+        poly = QPolygonF(
+            [
+                QPointF(x - half, top),
+                QPointF(x + half, top),
+                QPointF(x, tip),
+            ]
+        )
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._MARKER_COLOR)
+        painter.drawPolygon(poly)
+        painter.end()
+
 
 class CustomTimelineWidget(QScrollArea):
     pause_requested = Signal()        
@@ -1178,6 +1250,7 @@ class CustomTimelineWidget(QScrollArea):
         super().__init__(parent)
         
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setHorizontalScrollBar(TimelineOverviewScrollBar(Qt.Orientation.Horizontal, self))
         
         self.canvas = TimelineCanvas(self)
         self.setWidget(self.canvas)
