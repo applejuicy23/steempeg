@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage
-from PySide6.QtCore import Qt, QRect
+from PySide6.QtCore import Qt
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
 from steempeg.infra.paths import get_resource_path
@@ -97,11 +97,11 @@ def preview_settings_icon(size: int = 16) -> QIcon:
 
 
 def theater_mode_icon(size: int = 22, *, closed: bool = False) -> QIcon:
-    """Theatre chrome icon in the same square box as fullscreen.
+    """Theatre chrome icon matched to fullscreen *height*, full plate visible.
 
-    ``theatremode.png`` is wider than tall, so plain KeepAspectRatio makes the
-    purple plate shorter than ``btn_fullscreen.png``. Crop empty padding, then
-    fill ``size×size`` (keep the plate — no colour stripping).
+    Asset is wider than tall. Scaling into a square with KeepAspectRatio leaves it
+    short; Expanding crops the sides. Instead: strip empty padding only, then
+    scale so height == ``size`` (same as fullscreen). Width may be a bit wider.
     """
     key = (bool(closed), int(size))
     cached = _THEATER_ICON_CACHE.get(key)
@@ -136,17 +136,17 @@ def theater_mode_icon(size: int = 22, *, closed: bool = False) -> QIcon:
     else:
         cropped = src
 
-    # Fill the same square as fullscreen; crop overflow from the wide plate.
+    cw = max(1, cropped.width())
+    ch = max(1, cropped.height())
+    out_h = int(size)
+    out_w = max(out_h, int(round(cw * (out_h / float(ch)))))
     scaled = cropped.scaled(
-        size,
-        size,
-        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        out_w,
+        out_h,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
     )
-    x0 = max(0, (scaled.width() - size) // 2)
-    y0 = max(0, (scaled.height() - size) // 2)
-    filled = scaled.copy(QRect(x0, y0, size, size))
-    icon = _icon_from_pixmap(filled)
+    icon = _icon_from_pixmap(scaled)
     _THEATER_ICON_CACHE[key] = icon
     return icon
 
