@@ -682,9 +682,12 @@ class LifecycleMixin:
         if hasattr(self, 'player'):
             self.player.command("stop")
         if hasattr(self, 'video_wrapper'):
-            self.video_wrapper.layout().setCurrentIndex(1) 
-        self.ui.btn_start.setEnabled(False)
-        self.ui.btn_start.setText("Choose clip for render")
+            self.video_wrapper.layout().setCurrentIndex(1)
+        if hasattr(self, "_sync_start_render_enabled"):
+            self._sync_start_render_enabled()
+        else:
+            self.ui.btn_start.setEnabled(False)
+            self.ui.btn_start.setText("Choose clip for render")
 
         if hasattr(self.ui, 'label_time'):
             self.ui.label_time.setText("00:00 / 00:00")
@@ -735,6 +738,9 @@ class LifecycleMixin:
         if hasattr(self.ui, 'label_location'):
             self.ui.label_location.setText("—")
             
-        # 5. Hard-Block the Render Button
+        # 5. Hard-Block the Render Button — unless the queue still has pending work.
         if hasattr(self.ui, 'btn_start'):
-            self.ui.btn_start.setEnabled(False)
+            if hasattr(self, "_sync_start_render_enabled"):
+                self._sync_start_render_enabled()
+            else:
+                self.ui.btn_start.setEnabled(False)

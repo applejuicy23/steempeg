@@ -1687,7 +1687,7 @@ class RenderedLibraryMixin:
                 self.btn_clip_health.hide()
 
         if hasattr(self.ui, "btn_start"):
-            self.ui.btn_start.setEnabled(False)
+            self._sync_start_render_enabled()
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         if hasattr(self, "update_playback_badge"):

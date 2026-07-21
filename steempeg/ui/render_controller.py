@@ -1195,11 +1195,44 @@ class RenderMixin:
     def _update_start_button_label(self) -> None:
         if not hasattr(self.ui, "btn_start"):
             return
-        pending = self.render_queue.pending_count() if hasattr(self, "render_queue") else 0
+        pending = self._queue_pending_count()
         if pending > 0:
             self.ui.btn_start.setText(f"🚩 Render Queue ({pending})")
         else:
             self.ui.btn_start.setText("🚩 START RENDER")
+        # Any label refresh must not leave a pending queue with a dead Start button.
+        if pending > 0 and not getattr(self, "_is_rendering", False):
+            self.ui.btn_start.setEnabled(True)
+        if getattr(self, "_portable_shell", False):
+            from steempeg.ui.portable import sync_portable_render_button
+
+            sync_portable_render_button(self)
+
+    def _queue_pending_count(self) -> int:
+        if not hasattr(self, "render_queue"):
+            return 0
+        return int(self.render_queue.pending_count())
+
+    def _sync_start_render_enabled(self, *, combo_valid: bool | None = None) -> None:
+        """Enable Start for a selected clip, or whenever the queue has pending jobs."""
+        if not hasattr(self.ui, "btn_start"):
+            return
+        if getattr(self, "_is_rendering", False):
+            self.ui.btn_start.setEnabled(False)
+        else:
+            pending = self._queue_pending_count()
+            if pending > 0:
+                enabled = True
+            elif combo_valid is not None:
+                enabled = bool(combo_valid)
+            else:
+                enabled = bool(self._resolve_export_clip_path())
+            self.ui.btn_start.setEnabled(enabled)
+        self._update_start_button_label()
+        if getattr(self, "_portable_shell", False):
+            from steempeg.ui.portable import sync_portable_render_button
+
+            sync_portable_render_button(self)
 
     def _capture_trim_state(self) -> dict:
         if not hasattr(self, "custom_timeline"):
@@ -1702,6 +1735,7 @@ class RenderMixin:
             if hasattr(self.ui, 'label_vbitrate'): self.ui.label_vbitrate.setText("Video Bitrate:")
             if hasattr(self.ui, 'label_abitrate'): self.ui.label_abitrate.setText("Audio Bitrate:")
             self.update_playback_badge()
+            self._sync_start_render_enabled()
             return
         if hasattr(self, 'grid_clips'):
             selected_rows = {
@@ -2108,6 +2142,8 @@ class RenderMixin:
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
             if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
+            # Queue can still render with no preview selection.
+            self._sync_start_render_enabled()
             return
 
         if trim_only and self._update_trim_only_summary():
@@ -2362,7 +2398,7 @@ class RenderMixin:
             ),
         )
         if hasattr(self.ui, 'btn_start') and not getattr(self, '_is_rendering', False):
-            self.ui.btn_start.setEnabled(combo_valid)
+            self._sync_start_render_enabled(combo_valid=combo_valid)
 
         # 6. Short Summary ABOVE Ready 
         q_word = quality.split()[0] if quality.split() else "Unknown"
@@ -2787,7 +2823,7 @@ class RenderMixin:
             len(self.render_queue),
         )
         self.refresh_render_queue_panel()
-        self._update_start_button_label()
+        self._sync_start_render_enabled()
         self._persist_render_queue()
 
     def activate_queue_job(self, job_id: str) -> None:
@@ -2878,7 +2914,7 @@ class RenderMixin:
             self.activate_queue_job(nxt.id)
         else:
             self.refresh_render_queue_panel()
-            self._update_start_button_label()
+            self._sync_start_render_enabled()
 
     def clear_render_queue(self) -> None:
         if getattr(self, "_queue_batch_active", False):
@@ -2918,7 +2954,7 @@ class RenderMixin:
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
         self.refresh_render_queue_panel()
-        self._update_start_button_label()
+        self._sync_start_render_enabled()
         self._persist_render_queue()
         self.update_playback_badge()
         if hasattr(self, "_sync_library_mode_chrome"):
@@ -3136,7 +3172,7 @@ class RenderMixin:
         if getattr(self, '_is_rendering', False):
             return
 
-        if self._queue_is_active() and self.render_queue.pending_count() > 0:
+        if self.render_queue.pending_count() > 0:
             self.start_queue_batch_render()
             return
 
