@@ -370,9 +370,12 @@ class PlayerMixin:
         if hasattr(self.ui, 'label_location'):
             self.ui.label_location.setText("—")
             
-        # We're locking down the render button
+        # Keep Start enabled when the queue still has work, even with no preview clip.
         if hasattr(self.ui, 'btn_start'):
-            self.ui.btn_start.setEnabled(False)
+            if hasattr(self, "_sync_start_render_enabled"):
+                self._sync_start_render_enabled()
+            else:
+                self.ui.btn_start.setEnabled(False)
 
         self._reset_player_placeholder_default()
 
@@ -641,9 +644,25 @@ class PlayerMixin:
                 self.ui.table_clips.setVisible(visible)
         self._keep_deprecated_library_pill_hidden()
 
+    def apply_portable_theatre_shell(self):
+        """Steam Deck / portable shell: theatre-only, no docks. Locked until shell changes."""
+        self._portable_shell = True
+        if getattr(self, "is_fullscreen", False):
+            return
+        if not getattr(self, "is_theater", False):
+            self.toggle_theater_mode()
+        if hasattr(self, "btn_theater"):
+            self.btn_theater.hide()
+        from steempeg.ui.portable import ensure_portable_chrome
+
+        ensure_portable_chrome(self)
+
     def toggle_theater_mode(self):
         """ Safely collapses side and bottom panels, aware of Fullscreen state, and swaps icon. """
-        
+        # Portable shell stays in theatre — exit would bring docks/splitters back.
+        if getattr(self, "_portable_shell", False) and getattr(self, "is_theater", False):
+            return
+
         if getattr(self, 'is_fullscreen', False):
             self.toggle_fullscreen() 
             
@@ -749,7 +768,9 @@ class PlayerMixin:
 
         # --- THE MAGIC SWAP ---
         if hasattr(self, 'btn_theater'):
-            if self.is_theater:
+            if hasattr(self, "_apply_theater_button_icon"):
+                self._apply_theater_button_icon(closed=bool(self.is_theater))
+            elif self.is_theater:
                 icon_path = get_resource_path("theatremodeclosed.png")
                 if not os.path.exists(icon_path): icon_path = get_resource_path("theatremodeclosed.jpg")
                 
@@ -763,8 +784,8 @@ class PlayerMixin:
                     self.btn_theater.setIcon(QIcon(icon_path))
                 else:
                     self.btn_theater.setText("🎦")
-            if hasattr(self, "_sync_chrome_button_icon_size"):
-                self._sync_chrome_button_icon_size(self.btn_theater, theater=True)
+                if hasattr(self, "_sync_chrome_button_icon_size"):
+                    self._sync_chrome_button_icon_size(self.btn_theater)
 
             self.btn_theater.clearFocus()
             QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
@@ -1173,14 +1194,16 @@ class PlayerMixin:
             came_from_theater = getattr(self, 'is_theater', False)
             if came_from_theater:
                 self.is_theater = False
-                if hasattr(self, 'btn_theater'):
+                if hasattr(self, "_apply_theater_button_icon"):
+                    self._apply_theater_button_icon(closed=False)
+                elif hasattr(self, 'btn_theater'):
                     icon_path = get_resource_path("theatremode.png")
                     if os.path.exists(icon_path):
                         self.btn_theater.setIcon(QIcon(icon_path))
                     else:
                         self.btn_theater.setText("🎦")
                     if hasattr(self, "_sync_chrome_button_icon_size"):
-                        self._sync_chrome_button_icon_size(self.btn_theater, theater=True)
+                        self._sync_chrome_button_icon_size(self.btn_theater)
 
             self._set_hide_watcher_suppressed(True)
             self._save_immersive_splitter_sizes()
@@ -1293,6 +1316,9 @@ class PlayerMixin:
             
         else:
             self._exit_immersive_mode()
+            # Fullscreen enter clears is_theater; portable must land back in theatre.
+            if getattr(self, "_portable_shell", False):
+                QTimer.singleShot(0, self.apply_portable_theatre_shell)
 
     
     def align_fullscreen_hud(self):
@@ -2047,7 +2073,10 @@ class PlayerMixin:
                 if hasattr(self, "set_player_header_clip_controls_visible"):
                     self.set_player_header_clip_controls_visible(False)
                 if hasattr(self.ui, 'btn_start'):
-                    self.ui.btn_start.setEnabled(False)
+                    if hasattr(self, "_sync_start_render_enabled"):
+                        self._sync_start_render_enabled()
+                    else:
+                        self.ui.btn_start.setEnabled(False)
                 if hasattr(self, 'update_playback_badge'):
                     self.update_playback_badge()
                 if hasattr(self, 'update_clip_health_button'):
