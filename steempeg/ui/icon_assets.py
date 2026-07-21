@@ -1,8 +1,8 @@
 """Shared pixmap/icon loaders for bundled UI assets."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage
+from PySide6.QtCore import Qt, QRect
 
 from steempeg.core.dash.health import WARNING_ICON_FILE, ClipHealth, HEALTH_ICON_FILES
 from steempeg.infra.paths import get_resource_path
@@ -94,6 +94,64 @@ def close_clip_icon(size: int = 16) -> QIcon:
 def preview_settings_icon(size: int = 16) -> QIcon:
     """settings.png for the player header preview-quality chip."""
     return load_icon("settings.png", size)
+
+
+def theater_mode_icon(size: int = 22, *, closed: bool = False) -> QIcon:
+    """Theatre chrome icon in the same square box as fullscreen.
+
+    ``theatremode.png`` is wider than tall, so plain KeepAspectRatio makes the
+    purple plate shorter than ``btn_fullscreen.png``. Crop empty padding, then
+    fill ``size×size`` (keep the plate — no colour stripping).
+    """
+    key = (bool(closed), int(size))
+    cached = _THEATER_ICON_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    name = "theatremodeclosed.png" if closed else "theatremode.png"
+    src = QPixmap(get_resource_path(name))
+    if src.isNull():
+        return QIcon()
+
+    img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    w, h = img.width(), img.height()
+    min_x, min_y, max_x, max_y = w, h, -1, -1
+    for y in range(h):
+        for x in range(w):
+            if img.pixelColor(x, y).alpha() < 16:
+                continue
+            if x < min_x:
+                min_x = x
+            if y < min_y:
+                min_y = y
+            if x > max_x:
+                max_x = x
+            if y > max_y:
+                max_y = y
+
+    if max_x >= min_x and max_y >= min_y:
+        cropped = QPixmap.fromImage(
+            img.copy(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+        )
+    else:
+        cropped = src
+
+    # Fill the same square as fullscreen; crop overflow from the wide plate.
+    scaled = cropped.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    x0 = max(0, (scaled.width() - size) // 2)
+    y0 = max(0, (scaled.height() - size) // 2)
+    filled = scaled.copy(QRect(x0, y0, size, size))
+    icon = _icon_from_pixmap(filled)
+    _THEATER_ICON_CACHE[key] = icon
+    return icon
+
+
+_THEATER_ICON_CACHE: dict[tuple[bool, int], QIcon] = {}
 
 
 def health_icon(level: ClipHealth, size: int = 16) -> QIcon:
