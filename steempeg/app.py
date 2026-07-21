@@ -1735,11 +1735,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     QPushButton:hover { background: rgba(255, 255, 255, 40); }
                 """)
                 
-                t_icon_path = get_resource_path("theatremode.png")
-                if os.path.exists(t_icon_path):
-                    self.btn_theater.setIcon(QIcon(t_icon_path))
-                    self.btn_theater.setIconSize(QSize(22, 22))
-                else:
+                self._apply_theater_button_icon(closed=False)
+                if self.btn_theater.icon().isNull():
                     self.btn_theater.setText("🎦")
 
                 # 2. FULLSCREEN MODE BUTTON
@@ -1758,10 +1755,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     self.btn_fullscreen.setIconSize(QSize(22, 22))
                 else:
                     self.btn_fullscreen.setText("🔲")
-
-                # Theater glyph must match fullscreen size exactly.
-                if not self.btn_theater.icon().isNull():
-                    self.btn_theater.setIconSize(self.btn_fullscreen.iconSize())
 
                 # Connect button signals
                 self.btn_theater.clicked.connect(self.toggle_theater_mode)
@@ -2700,6 +2693,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         sz = int(icon_sz if icon_sz is not None else self._player_chrome_icon_size())
         btn.setIconSize(QSize(sz, sz))
 
+    def _apply_theater_button_icon(self, *, closed: bool = False) -> None:
+        """Set theatre pill icon at the same iconSize as fullscreen."""
+        btn = getattr(self, "btn_theater", None)
+        if btn is None:
+            return
+        from steempeg.ui.icon_assets import theater_mode_icon
+
+        sz = self._player_chrome_icon_size()
+        btn.setIcon(theater_mode_icon(sz, closed=closed))
+        self._sync_chrome_button_icon_size(btn, sz)
+
     def _apply_ui_density(self, dense):
         """Resize fonts/paddings/labels along the continuous density scale."""
         from steempeg.ui.ui_density import (
@@ -2920,7 +2924,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             if b is not None and hasattr(b, "setFixedSize"):
                 b.setFixedSize(chip, chip)
                 b.setStyleSheet(chip_qss)
-                self._sync_chrome_button_icon_size(b, icon_sz)
+                if attr == "btn_theater" and hasattr(self, "_apply_theater_button_icon"):
+                    self._apply_theater_button_icon(
+                        closed=bool(getattr(self, "is_theater", False))
+                    )
+                else:
+                    self._sync_chrome_button_icon_size(b, icon_sz)
 
         for attr in ("btn_add_marker", "btn_screenshot"):
             b = getattr(self, attr, None) or getattr(self.ui, attr, None)
@@ -3331,11 +3340,25 @@ def main():
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
+    from PySide6.QtWidgets import QDialog
+    from steempeg.ui.shell_chooser import (
+        ShellChooserDialog,
+        UI_SHELL_PORTABLE,
+        save_ui_shell,
+    )
+
+    # Always ask — Desktop vs Portable (saved for later settings / diagnostics).
+    chooser = ShellChooserDialog()
+    if chooser.exec() != QDialog.DialogCode.Accepted or not chooser.chosen_shell:
+        sys.exit(0)
+    ui_shell = chooser.chosen_shell
+    save_ui_shell(ui_shell)
 
     try:
         window = SteempegApp()
         # Keep the lock alive for the process lifetime (prevent GC unlock).
         window._instance_lock = _instance_lock
+        window._ui_shell = ui_shell
         
         if getattr(window, 'ui', None) is None:
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
@@ -3410,10 +3433,15 @@ def main():
             logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
         QApplication.processEvents()
         window._sync_startup_layout()
+        if ui_shell == UI_SHELL_PORTABLE:
+            window.apply_portable_theatre_shell()
+            # Library restore (500ms) must not fight theatre — re-assert after it.
+            QTimer.singleShot(600, window.apply_portable_theatre_shell)
         geo = window.ui.geometry()
         logging.info(
-            "Main window shown (platform=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
+            "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
             app.platformName(),
+            ui_shell,
             window.ui.isVisible(),
             geo.width(),
             geo.height(),
