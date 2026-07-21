@@ -525,13 +525,23 @@ class TimelineCanvas(QWidget):
         self._refresh_overview_playhead_marker()
 
     def _refresh_overview_playhead_marker(self) -> None:
-        """Repaint the zoom scrollbar's Steam-style full-duration playhead tick."""
+        """Repaint the zoom scrollbar's playhead caret."""
+        bar = getattr(self, "_overview_bar", None)
+        if bar is not None and bar.isVisible():
+            if hasattr(bar, "refresh_caret"):
+                bar.refresh_caret()
+            else:
+                bar.update()
+            return
         host = self.parentWidget()
         while host is not None:
             if isinstance(host, CustomTimelineWidget):
                 bar = host.horizontalScrollBar()
                 if bar is not None and bar.isVisible():
-                    bar.update()
+                    if hasattr(bar, "refresh_caret"):
+                        bar.refresh_caret()
+                    else:
+                        bar.update()
                 return
             host = host.parentWidget()
 
@@ -1178,59 +1188,107 @@ class TimelineCanvas(QWidget):
 
 
 class TimelineOverviewScrollBar(QScrollBar):
-    """Zoom overview bar with a Steam-style playhead marker on the full duration."""
+    """Rounded zoom overview strip + white playhead stick on full duration."""
 
-    _MARKER_HALF_W = 4.0
-    _MARKER_H = 5.0
-    _MARKER_COLOR = QColor("#e8e8e8")
+    # Match the filled pill look from the player chrome screenshots.
+    _TRACK = QColor("#4a4a4a")
+    _THUMB = QColor("#9f8dba")
+    _THUMB_HOVER = QColor("#cdbfe6")
+    _MARK = QColor("#ffffff")
+    _M_L = 4
+    _M_R = 4
+    _M_T = 0
+    _M_B = 5
 
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.isVisible():
-            return
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._canvas = None
+        self.setMouseTracking(True)
 
-        area = self.parentWidget()
-        canvas = getattr(area, "canvas", None) if area is not None else None
-        if canvas is None:
-            return
-        duration = float(getattr(canvas, "duration_ms", 0) or 0)
-        if duration <= 1.0:
-            return
-        ms = float(getattr(canvas, "visual_ms", 0) or 0)
-        ratio = max(0.0, min(1.0, ms / duration))
+    def set_canvas(self, canvas) -> None:
+        self._canvas = canvas
 
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.update()
+
+    def refresh_caret(self) -> None:
+        self.update()
+
+    def _groove_rect(self) -> QRect:
+        return self.rect().adjusted(self._M_L, self._M_T, -self._M_R, -self._M_B)
+
+    def _thumb_rect(self, groove: QRect) -> QRect:
         opt = QStyleOptionSlider()
         self.initStyleOption(opt)
-        groove = self.style().subControlRect(
+        thumb = self.style().subControlRect(
             QStyle.ComplexControl.CC_ScrollBar,
             opt,
-            QStyle.SubControl.SC_ScrollBarGroove,
+            QStyle.SubControl.SC_ScrollBarSlider,
             self,
         )
-        if groove.width() <= 0:
-            # Stylesheet margins are 4px L/R on the horizontal bar.
-            groove = self.rect().adjusted(4, 0, -4, 0)
-        if groove.width() <= 0:
-            return
+        if thumb.width() > 1 and thumb.height() > 1:
+            return QRect(thumb.x(), groove.y(), thumb.width(), groove.height())
 
-        x = groove.left() + ratio * float(groove.width())
-        # Sit the inverted triangle on the top edge of the groove (Steam overview tick).
-        top = float(groove.top())
-        half = self._MARKER_HALF_W
-        tip = top + self._MARKER_H
-        poly = QPolygonF(
-            [
-                QPointF(x - half, top),
-                QPointF(x + half, top),
-                QPointF(x, tip),
-            ]
-        )
+        gmin, gmax = int(self.minimum()), int(self.maximum())
+        page = max(1, int(self.pageStep()))
+        span = gmax - gmin
+        gw = max(1, groove.width())
+        if span <= 0:
+            return QRect(groove.left(), groove.top(), gw, groove.height())
+        thumb_w = max(30, int(round(gw * page / float(span + page))))
+        thumb_w = min(thumb_w, gw)
+        usable = max(0, gw - thumb_w)
+        x = groove.left() + int(round(usable * (int(self.value()) - gmin) / float(span)))
+        return QRect(x, groove.top(), thumb_w, groove.height())
+
+    def paintEvent(self, event):
+        # Full custom paint so the white stick cannot be covered by QSS.
+        groove = self._groove_rect()
+        if groove.width() <= 1 or groove.height() <= 1:
+            return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._MARKER_COLOR)
-        painter.drawPolygon(poly)
+        painter.fillRect(self.rect(), QColor("#1e1e1e"))
+
+        # Capsule track (full round ends).
+        radius = float(groove.height()) * 0.5
+        painter.setBrush(self._TRACK)
+        painter.drawRoundedRect(QRectF(groove), radius, radius)
+
+        thumb = self._thumb_rect(groove)
+        if thumb.width() > 0 and thumb.height() > 0:
+            active = self.underMouse() or self.isSliderDown()
+            painter.setBrush(self._THUMB_HOVER if active else self._THUMB)
+            painter.drawRoundedRect(QRectF(thumb), radius, radius)
+
+        canvas = self._canvas
+        if canvas is not None:
+            duration = float(getattr(canvas, "duration_ms", 0) or 0)
+            if duration > 1.0:
+                ms = float(getattr(canvas, "visual_ms", 0) or 0)
+                ratio = max(0.0, min(1.0, ms / duration))
+                x = float(groove.left()) + ratio * float(groove.width())
+                x = max(float(groove.left()) + 2.0, min(float(groove.right()) - 2.0, x))
+                stick_w = 3.0
+                painter.setBrush(self._MARK)
+                painter.drawRoundedRect(
+                    QRectF(
+                        x - stick_w * 0.5,
+                        float(groove.top()) + 1.0,
+                        stick_w,
+                        max(2.0, float(groove.height()) - 2.0),
+                    ),
+                    1.0,
+                    1.0,
+                )
+
         painter.end()
 
 
@@ -1250,11 +1308,14 @@ class CustomTimelineWidget(QScrollArea):
         super().__init__(parent)
         
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setHorizontalScrollBar(TimelineOverviewScrollBar(Qt.Orientation.Horizontal, self))
-        
+        overview = TimelineOverviewScrollBar(Qt.Orientation.Horizontal, self)
+        self.setHorizontalScrollBar(overview)
+
         self.canvas = TimelineCanvas(self)
+        overview.set_canvas(self.canvas)
+        self.canvas._overview_bar = overview
         self.setWidget(self.canvas)
-        self.setWidgetResizable(False) 
+        self.setWidgetResizable(False)
         
         self.canvas.pause_requested.connect(self.pause_requested.emit)
         self.canvas.seek_requested.connect(self.seek_requested.emit)
@@ -1297,18 +1358,30 @@ class CustomTimelineWidget(QScrollArea):
             
             QScrollBar:horizontal {{
                 height: {bar_h}px;
-                background: #4e4e4e; 
-                border-radius: 3px;
+                background: transparent;
+                border: none;
                 /* margin: top (top_gap), right (4), bottom (bottom_gap), left (4) */
                 margin: {top_gap}px 4px {bottom_gap}px 4px; 
             }}
             QScrollBar::handle:horizontal {{
-                background: #9f8dba; 
-                border-radius: 2px;
+                background: transparent;
                 min-width: 30px;
             }}
-            QScrollBar::handle:horizontal:hover {{
-                background: #cdbfe6; 
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+        """)
+        # Own stylesheet on the bar so parent QSS cannot repaint over the stick.
+        overview.setStyleSheet(f"""
+            QScrollBar:horizontal {{
+                height: {bar_h}px;
+                background: transparent;
+                border: none;
+                margin: {top_gap}px 4px {bottom_gap}px 4px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: transparent;
+                min-width: 30px;
             }}
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
                 width: 0px;
@@ -1340,6 +1413,11 @@ class CustomTimelineWidget(QScrollArea):
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.updateGeometry()
+        bar = self.horizontalScrollBar()
+        if bar is not None and hasattr(bar, "refresh_caret"):
+            bar.refresh_caret()
+        elif bar is not None and bar.isVisible():
+            bar.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
