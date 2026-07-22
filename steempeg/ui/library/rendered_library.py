@@ -1807,7 +1807,10 @@ class RenderedLibraryMixin:
         menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
 
     def _handle_rendered_grid_card_context_menu(self, item, event) -> None:
-        viewport_pos = self.grid_rendered.viewport().mapFromGlobal(event.globalPosition().toPoint())
+        # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
+        viewport_pos = self.grid_rendered.viewport().mapFromGlobal(
+            event.globalPosition().toPoint()
+        )
         self.show_rendered_grid_context_menu(viewport_pos)
 
     def open_rendered_folder(self, file_path: str) -> None:
@@ -1856,16 +1859,13 @@ class RenderedLibraryMixin:
         ):
             return
 
-        playing = getattr(self, "_rendered_media_path", None) or getattr(self, "_preview_clip_path", None)
+        # Unload first if any target is the active preview — Windows locks open files.
+        if hasattr(self, "release_media_before_delete_any"):
+            self.release_media_before_delete_any(paths)
+
         failed: list[str] = []
         for file_path in paths:
             try:
-                if playing and os.path.normpath(playing) == os.path.normpath(file_path):
-                    if hasattr(self, "close_current_clip"):
-                        self.close_current_clip()
-                    elif hasattr(self, "player") and self.player:
-                        self.player.pause = True
-                    playing = None
                 os.remove(file_path)
                 from steempeg.core.rendered_media import companion_meta_path
 
