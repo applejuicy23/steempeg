@@ -647,6 +647,9 @@ class PlayerMixin:
     def apply_portable_theatre_shell(self):
         """Steam Deck / portable shell: theatre-only, no docks. Locked until shell changes."""
         self._portable_shell = True
+        # Keep comfort chrome — Deck-narrow width must not lerp settings/combos down.
+        if hasattr(self, "_apply_responsive_layout_mins"):
+            self._apply_responsive_layout_mins(apply_density=True)
         if getattr(self, "is_fullscreen", False):
             return
         if not getattr(self, "is_theater", False):
@@ -1445,6 +1448,11 @@ class PlayerMixin:
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.hide()
             self._apply_video_border(False)
+        from steempeg.ui.player.controls.adaptive_trim_tools import (
+            sync_trim_tools_placement,
+        )
+
+        sync_trim_tools_placement(self)
 
     def apply_trim_state(
         self,
