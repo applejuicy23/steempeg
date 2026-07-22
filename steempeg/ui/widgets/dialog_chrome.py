@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QFont, QPainterPath, QPixmap, QRegion
+from PySide6.QtCore import Qt, QPoint, QRectF, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from steempeg.infra.paths import get_resource_path
@@ -134,6 +134,32 @@ class _DialogTitleBar(QWidget):
         super().mouseReleaseEvent(event)
 
 
+class _DialogCard(QWidget):
+    """Rounded shell painted with antialiasing — avoids jagged QRegion masks."""
+
+    def __init__(self, parent=None, *, radius: int = _CARD_RADIUS_PX, fill: str = "#1a1a1a"):
+        super().__init__(parent)
+        self._radius = float(radius)
+        self._fill = QColor(fill)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def set_fill(self, color: str) -> None:
+        self._fill = QColor(color)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        # Inset by 0.5px so the AA edge sits on pixel centers (less staircasing).
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(rect, self._radius, self._radius)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(path, self._fill)
+
+
 class SteempegDialog(QDialog):
     """Frameless dialog with the shared Steempeg title bar.
 
@@ -166,9 +192,8 @@ class SteempegDialog(QDialog):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        self._card = QWidget(self)
+        self._card = _DialogCard(self, radius=_CARD_RADIUS_PX, fill=bar_color)
         self._card.setObjectName("SteempegDialogCard")
-        self._card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         outer.addWidget(self._card)
 
         card_layout = QVBoxLayout(self._card)
@@ -199,6 +224,8 @@ class SteempegDialog(QDialog):
 
         self._apply_card_chrome(bar_color, bg_color)
         self._comfort_size: tuple[int, int] | None = None
+        # Never use QRegion masks for rounding — they are binary and look jagged.
+        self.clearMask()
 
     def set_comfort_size(self, width: int, height: int) -> None:
         """Design size at desktop density; auto-shrinks on Deck-class screens."""
@@ -217,7 +244,7 @@ class SteempegDialog(QDialog):
         super().showEvent(event)
         self._apply_scaled_size()
         self._center_on_parent()
-        self._apply_round_mask()
+        self.clearMask()
 
     def _center_on_parent(self) -> None:
         """Place the dialog on the parent (or available screen) so HD/Deck windows stay in view."""
@@ -255,27 +282,22 @@ class SteempegDialog(QDialog):
             y = max(avail.y(), min(y, avail.y() + avail.height() - self.height()))
         self.move(x, y)
 
-    def _apply_round_mask(self) -> None:
-        path = QPainterPath()
-        path.addRoundedRect(
-            0.0, 0.0, float(self.width()), float(self.height()),
-            float(_CARD_RADIUS_PX), float(_CARD_RADIUS_PX),
-        )
-        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._apply_round_mask()
+        self.clearMask()
 
     def _apply_card_chrome(self, bar_color: str, bg_color: str) -> None:
         """Title-bar-colored side rails so the shell does not melt into the desktop."""
+        if hasattr(self._card, "set_fill"):
+            self._card.set_fill(bar_color)
         inner_radius = max(_CARD_RADIUS_PX - _SIDE_RAIL_PX, 0)
+        # Card fill is painted in _DialogCard.paintEvent (antialiased).
+        # Children keep stylesheet radii so their opaque rects match the shell.
         self.setStyleSheet(
             f"""
             QWidget#SteempegDialogCard {{
-                background-color: {bar_color};
-                border: 2px solid {bar_color};
-                border-radius: {_CARD_RADIUS_PX}px;
+                background-color: transparent;
+                border: none;
             }}
             QWidget#SteempegDialogBodyHost {{
                 background-color: transparent;
