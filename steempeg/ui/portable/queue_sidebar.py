@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -67,34 +67,13 @@ QFrame#portableQueueHeader, QFrame#portableQueueList {
 }
 """
 
-_ROW_IDLE = f"""
-QFrame#portableQueueRow {{
-    background-color: #2a2a2a;
-    border: 1px solid #444444;
-    border-radius: 10px;
-}}
-QFrame#portableQueueRow:hover {{
-    border-color: #7a6aa8;
-}}
-QFrame#portableQueueRow QLabel {{
-    background: transparent;
-    border: none;
-    {_FONT}
-}}
-"""
-
-_ROW_SELECTED = f"""
-QFrame#portableQueueRow {{
-    background-color: #322a45;
-    border: 2px solid #8e7cc3;
-    border-radius: 10px;
-}}
-QFrame#portableQueueRow QLabel {{
-    background: transparent;
-    border: none;
-    {_FONT}
-}}
-"""
+# Status outline only (no card fill by status) — pipeline colors.
+_BORDER_IDLE = "#555555"          # waiting further back
+_BORDER_READY = "#ffcc00"         # next to render (full yellow)
+_BORDER_NEXT = "#d4b84a"          # soft yellow while someone else renders
+_BORDER_RENDER = "#ff9800"        # actively rendering
+_BORDER_DONE = "#4CAF50"          # completed
+_BORDER_ERROR = "#ff4444"
 
 _REMOVE_BTN_STYLE = """
 QPushButton#portableQueueRemoveBtn {
@@ -140,9 +119,71 @@ QPushButton#portableQueueAdd:disabled {{
 }}
 """
 
+_BTN_HISTORY = f"""
+QPushButton#portableQueueHistory {{
+    background-color: #383838;
+    border: 2px solid #444444;
+    border-radius: 8px;
+    padding: 4px;
+}}
+QPushButton#portableQueueHistory:hover {{
+    background-color: #404040;
+    border: 2px solid #6b5a8e;
+}}
+QPushButton#portableQueueHistory:pressed {{
+    background-color: #3a324a;
+    border: 2px solid #b29ae7;
+}}
+"""
+
 
 def _queue_cache_dir(app) -> str:
     return getattr(app, "cache_dir", None) or os.path.join(get_save_directory(), "cache")
+
+
+def _status_border_for_job(job: RenderJob, jobs: list[RenderJob]) -> tuple[str, int]:
+    """Return (border_color, border_px) for the render pipeline outline.
+
+    Gray = further back · yellow = next ready · soft yellow = up next while
+    another job renders · orange = rendering · green = done.
+    """
+    st = getattr(job, "status", None)
+    if st == JobStatus.COMPLETED:
+        return _BORDER_DONE, 2
+    if st == JobStatus.ERROR:
+        return _BORDER_ERROR, 2
+    if st == JobStatus.RENDERING:
+        return _BORDER_RENDER, 2
+
+    # QUEUED (and anything unknown): place in the waiting line.
+    rendering = any(getattr(j, "status", None) == JobStatus.RENDERING for j in jobs)
+    queued = [j for j in jobs if getattr(j, "status", None) == JobStatus.QUEUED]
+    if queued and job.id == queued[0].id:
+        if rendering:
+            return _BORDER_NEXT, 2
+        return _BORDER_READY, 2
+    return _BORDER_IDLE, 1
+
+
+def _row_stylesheet(*, selected: bool, border: str, border_w: int) -> str:
+    bg = "#322a45" if selected else "#2a2a2a"
+    # Hover keeps the status color visible (slightly brighter purple only on idle gray).
+    hover = "#7a6aa8" if border == _BORDER_IDLE and not selected else border
+    return f"""
+QFrame#portableQueueRow {{
+    background-color: {bg};
+    border: {border_w}px solid {border};
+    border-radius: 10px;
+}}
+QFrame#portableQueueRow:hover {{
+    border-color: {hover};
+}}
+QFrame#portableQueueRow QLabel {{
+    background: transparent;
+    border: none;
+    {_FONT}
+}}
+"""
 
 
 class _PortableQueueRow(QFrame):
@@ -157,6 +198,8 @@ class _PortableQueueRow(QFrame):
         index: int,
         selected: bool,
         *,
+        border_color: str = _BORDER_IDLE,
+        border_w: int = 1,
         cache_dir: str | None = None,
         parent=None,
     ):
@@ -165,9 +208,11 @@ class _PortableQueueRow(QFrame):
         self._job = job
         self._job_id = job.id
         self._selected = selected
+        self._border_color = border_color
+        self._border_w = border_w
         self._press_on_remove = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.set_selected(selected)
+        self._apply_chrome()
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
@@ -272,7 +317,21 @@ class _PortableQueueRow(QFrame):
 
     def set_selected(self, selected: bool) -> None:
         self._selected = bool(selected)
-        self.setStyleSheet(_ROW_SELECTED if self._selected else _ROW_IDLE)
+        self._apply_chrome()
+
+    def set_status_border(self, border_color: str, border_w: int = 2) -> None:
+        self._border_color = border_color
+        self._border_w = int(border_w)
+        self._apply_chrome()
+
+    def _apply_chrome(self) -> None:
+        self.setStyleSheet(
+            _row_stylesheet(
+                selected=self._selected,
+                border=self._border_color,
+                border_w=self._border_w,
+            )
+        )
 
     def _hit_remove_button(self, event) -> bool:
         if self._btn_remove is None or not self._btn_remove.isVisible():
@@ -384,6 +443,23 @@ class PortableQueueSidebar(QWidget):
         )
         head_lay.addWidget(self._title, 1, Qt.AlignmentFlag.AlignVCenter)
 
+        # History — same chrome as desktop queue toolbar (left of Add).
+        hist_h = max(28, int(_HEADER_MIN_H) + 4)
+        self._btn_history = QPushButton()
+        self._btn_history.setObjectName("portableQueueHistory")
+        self._btn_history.setFixedSize(hist_h, hist_h)
+        self._btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_history.setToolTip("Render History — past batches and exports")
+        self._btn_history.setStyleSheet(_BTN_HISTORY)
+        hist_icon = get_resource_path("history.png")
+        if hist_icon and os.path.isfile(hist_icon):
+            self._btn_history.setIcon(QIcon(hist_icon))
+            self._btn_history.setIconSize(QSize(16, 16))
+        else:
+            self._btn_history.setText("⏱")
+        self._btn_history.clicked.connect(self._on_history)
+        head_lay.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
+
         # Heavy plus (U+FF0B fullwidth) reads bolder than ASCII "+" at the same px size.
         self._btn_add = QPushButton("Add ＋")
         self._btn_add.setObjectName("portableQueueAdd")
@@ -440,11 +516,8 @@ class PortableQueueSidebar(QWidget):
             if w is not None:
                 w.deleteLater()
 
-        jobs = [
-            j
-            for j in list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
-            if getattr(j, "status", None) != JobStatus.COMPLETED
-        ]
+        # Keep completed jobs so the green "done" outline is visible in the rail.
+        jobs = list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
         live_ids = {j.id for j in jobs}
         self._selected_ids = {jid for jid in self._selected_ids if jid in live_ids}
         active = getattr(self._app, "_selected_queue_job_id", None)
@@ -455,7 +528,12 @@ class PortableQueueSidebar(QWidget):
                 next(iter(self._selected_ids), None)
             )
 
-        self._title.setText(f"Queue ({len(jobs)})")
+        pending = sum(
+            1
+            for j in jobs
+            if getattr(j, "status", None) in (JobStatus.QUEUED, JobStatus.RENDERING)
+        )
+        self._title.setText(f"Queue ({pending})" if pending else f"Queue ({len(jobs)})")
         self._row_ids = []
         self._rows = {}
 
@@ -470,10 +548,13 @@ class PortableQueueSidebar(QWidget):
 
         cache_dir = _queue_cache_dir(self._app)
         for pending_i, job in enumerate(jobs, start=1):
+            border, border_w = _status_border_for_job(job, jobs)
             row = _PortableQueueRow(
                 job,
                 pending_i,
                 job.id in self._selected_ids,
+                border_color=border,
+                border_w=border_w,
                 cache_dir=cache_dir,
                 parent=self._host,
             )
@@ -548,3 +629,7 @@ class PortableQueueSidebar(QWidget):
         if hasattr(self._app, "add_clip_to_render_queue"):
             self._app.add_clip_to_render_queue(path)
         self.refresh()
+
+    def _on_history(self) -> None:
+        if hasattr(self._app, "show_render_queue_history"):
+            self._app.show_render_queue_history()
