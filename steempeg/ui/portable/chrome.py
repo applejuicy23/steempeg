@@ -4,6 +4,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton
 
+from steempeg.ui.player.controls.adaptive_trim_tools import (
+    ensure_adaptive_trim_hook,
+    sync_trim_tools_placement,
+)
 from steempeg.ui.portable.sheets import (
     PortableClipPickerDialog,
     PortableRenderSettingsDialog,
@@ -46,6 +50,8 @@ def ensure_portable_chrome(app) -> None:
     """Create (once) and show portable theatre CTAs."""
     _ensure_add_clip_button(app)
     _ensure_render_button(app)
+    ensure_adaptive_trim_hook(app)
+    sync_trim_tools_placement(app)
     if hasattr(app, "btn_portable_add_clip"):
         app.btn_portable_add_clip.show()
     if hasattr(app, "btn_portable_render"):
@@ -69,6 +75,11 @@ def ensure_portable_chrome(app) -> None:
 
 
 def hide_portable_chrome(app) -> None:
+    # Restore tools left-of-Trim without clearing the portable shell flag.
+    was = getattr(app, "_portable_shell", False)
+    app._portable_shell = False
+    sync_trim_tools_placement(app)
+    app._portable_shell = was
     for name in (
         "btn_portable_add_clip",
         "btn_portable_render",
@@ -158,12 +169,14 @@ def open_portable_render_settings(app) -> None:
         return
     app._portable_render_settings_open = True
     try:
-        # Re-fit Export filename / Save-as after density may have crushed them.
-        dense = getattr(app, "_ui_density", None)
-        if dense is not None and hasattr(app, "ui"):
-            from steempeg.ui.render_panel import apply_settings_panel_density
+        # Portable sheet must stay at comfort sizing — never re-apply a crushed
+        # density snapshot from a Deck-narrow shell window.
+        from steempeg.ui.render_panel import apply_settings_panel_density
+        from steempeg.ui.ui_density import COMFORT
 
-            apply_settings_panel_density(app.ui, dense)
+        if hasattr(app, "ui"):
+            app._ui_density = COMFORT
+            apply_settings_panel_density(app.ui, COMFORT)
         dlg = PortableRenderSettingsDialog(app, parent=app.ui)
         dlg.exec()
     finally:
