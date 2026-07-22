@@ -837,6 +837,27 @@ class RenderMixin:
             elif not preserve_progress and state in ("ready", "error"):
                 self.label_pct.setText("0%")
 
+        self._sync_portable_render_strip(full_text, state, percent)
+
+    def _sync_portable_render_strip(
+        self,
+        text: str | None = None,
+        state: str | None = None,
+        percent: float | None = None,
+    ) -> None:
+        strip = getattr(self, "_portable_render_strip", None)
+        if strip is None:
+            return
+        try:
+            if text is not None and state is not None and hasattr(strip, "apply_status"):
+                strip.apply_status(text, state, percent)
+            elif hasattr(strip, "sync_from_app"):
+                strip.sync_from_app()
+            if hasattr(strip, "sync_game_header"):
+                strip.sync_game_header()
+        except RuntimeError:
+            self._portable_render_strip = None
+
     def open_rendered_folder(self, file_path):
         """Open the file manager with the rendered output selected."""
         from steempeg.infra.paths import reveal_in_file_manager
@@ -891,24 +912,37 @@ class RenderMixin:
         """Steam clip folder for single export — survives library tab switches."""
         preview = getattr(self, "_preview_clip_path", None)
         if self._is_export_clip_path(preview):
-            return os.path.normpath(preview)
+            path = os.path.normpath(preview)
+            self._last_export_clip_path = path
+            return path
 
         saved = getattr(self, "_saved_clips_selection_path", "")
         if self._is_export_clip_path(saved):
-            return os.path.normpath(saved)
+            path = os.path.normpath(saved)
+            self._last_export_clip_path = path
+            return path
 
         if hasattr(self.ui, "table_clips") and self.ui.table_clips.currentRow() >= 0:
             item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
             if item:
                 path = item.data(Qt.UserRole)
                 if self._is_export_clip_path(path):
-                    return os.path.normpath(path)
+                    path = os.path.normpath(path)
+                    self._last_export_clip_path = path
+                    return path
 
         job_id = getattr(self, "_selected_queue_job_id", None)
         if job_id:
             job = self.render_queue.get(job_id)
             if job and self._is_export_clip_path(job.clip_path):
-                return os.path.normpath(job.clip_path)
+                path = os.path.normpath(job.clip_path)
+                self._last_export_clip_path = path
+                return path
+
+        # Sticky: keep last Steam clip after preview switches to a rendered file.
+        sticky = getattr(self, "_last_export_clip_path", None)
+        if self._is_export_clip_path(sticky):
+            return os.path.normpath(sticky)
 
         return None
 
@@ -945,6 +979,8 @@ class RenderMixin:
         self._saved_rendered_selection_path = ""
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
+        if self._is_export_clip_path(clip_path):
+            self._last_export_clip_path = os.path.normpath(clip_path)
         self._apply_header_from_table_row(selected_row)
 
         queue_job = self.render_queue.find_by_clip_path(clip_path)
@@ -1233,6 +1269,8 @@ class RenderMixin:
             from steempeg.ui.portable import sync_portable_render_button
 
             sync_portable_render_button(self)
+        elif hasattr(self, "_sync_portable_render_strip"):
+            self._sync_portable_render_strip()
 
     def _capture_trim_state(self) -> dict:
         if not hasattr(self, "custom_timeline"):
@@ -1779,6 +1817,8 @@ class RenderMixin:
         self._saved_rendered_selection_path = ""
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
+        if self._is_export_clip_path(clip_path):
+            self._last_export_clip_path = os.path.normpath(clip_path)
         session = self._session_state_for_clip(clip_path)
         self._populate_quality_options_for_clip(clip_path)
         # Export/settings only here — trim/markers restore after the new clip's
@@ -3104,6 +3144,12 @@ class RenderMixin:
             self.render_queue.jobs,
             selected_id,
         )
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None and hasattr(sidebar, "refresh"):
+            try:
+                sidebar.refresh()
+            except RuntimeError:
+                self._portable_queue_sidebar = None
         if sync_splitter:
             self._sync_queue_splitter_visibility()
         self.update_playback_badge()
@@ -3593,6 +3639,9 @@ class RenderMixin:
             self.update_status_indicator("Ready", "ready")
 
         self.update_final_setup()
+        self._sync_start_render_enabled()
+        if hasattr(self, "_sync_portable_render_strip"):
+            self._sync_portable_render_strip()
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
 
