@@ -266,6 +266,51 @@ class PlayerMixin:
             "color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;"
         )
 
+    def _media_path_is_in_use(self, path: str) -> bool:
+        """True if *path* (file or clip folder) is the active preview / playback."""
+        if not path:
+            return False
+        norm = os.path.normpath(path)
+        candidates = (
+            getattr(self, "_preview_clip_path", None),
+            getattr(self, "_active_play_media_path", None),
+            getattr(self, "_rendered_media_path", None),
+            getattr(self, "_current_mpd_abs_path", None),
+            getattr(self, "_current_play_abs_path", None),
+        )
+        for candidate in candidates:
+            if not candidate:
+                continue
+            cn = os.path.normpath(str(candidate))
+            if cn == norm:
+                return True
+            # Clip folder ↔ file inside it (Steam clips, future screenshot folders, …)
+            if cn.startswith(norm + os.sep) or norm.startswith(cn + os.sep):
+                return True
+        return False
+
+    def release_media_before_delete(self, path: str) -> bool:
+        """Unload playback if *path* is currently open, so Windows can delete it.
+
+        Resets the player to the idle placeholder (Please select a clip…).
+        Returns True when playback was cleared.
+        """
+        if not self._media_path_is_in_use(path):
+            return False
+        self.close_current_clip()
+        # Give mpv a beat to drop file handles before the caller deletes on disk.
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        return True
+
+    def release_media_before_delete_any(self, paths) -> bool:
+        """Unload once if any of *paths* is the active preview / playback."""
+        for path in paths or ():
+            if self._media_path_is_in_use(path):
+                return self.release_media_before_delete(path)
+        return False
+
     def close_current_clip(self):
         """ Completely destroys the current clip and clears the interface. """
         if getattr(self, '_is_switching', False):
