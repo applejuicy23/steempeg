@@ -50,9 +50,14 @@ from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 _FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
 # Match Video Settings combo text (see combo_chrome.SETTINGS_COMBO_FIELD_RULES + app.py).
 _FONT_COMBO = _FONT + " font-size: 13px; font-weight: bold;"
-_COMBO_W = 340  # every combo is exactly this wide -> uniform, not stretched to the edge
-# Two export-tab combos side-by-side must fit inside SETTINGS_CONTENT_WIDTH.
-_EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - 16) // 2
+# Video/Audio: two combos + warn slots must fit inside SETTINGS_CONTENT_WIDTH (Source Info).
+_GRID_H = 16
+_WARN_GAP = 8
+_WARN_SLOT = 16
+_WARN_RESERVE = _WARN_GAP + _WARN_SLOT  # 24 — spacing + icon column after each combo
+_COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H - 2 * _WARN_RESERVE) // 2  # 291
+# Two export-tab combos side-by-side (no warn slots) must fit inside SETTINGS_CONTENT_WIDTH.
+_EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H) // 2
 _FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _FONT
 _TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT
 _TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _FONT
@@ -446,19 +451,42 @@ def _field_export(label, combo):
     return box
 
 
-def _field(label, combo):
-    """A labelled field cell: small caption directly above a fixed-width pill control.
+def _icon_slot(side_widget: QWidget | None = None) -> QWidget:
+    """Fixed 16×16 column reserved for help / validation icons (may be empty)."""
+    slot = QWidget()
+    slot.setFixedSize(_WARN_SLOT, _WARN_SLOT)
+    lay = QHBoxLayout(slot)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    if side_widget is not None:
+        lay.addWidget(side_widget)
+    return slot
 
-    Both are left-aligned so the caption sits exactly over its combo and every combo
-    lines up in uniform columns.
+
+def _combo_row_with_slot(combo, side_widget: QWidget | None = None) -> QHBoxLayout:
+    """Combo + reserved warn/help slot so Video/Audio columns share one grid."""
+    combo.setFixedWidth(_COMBO_W)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(_WARN_GAP)
+    row.addWidget(combo, 0, Qt.AlignLeft)
+    row.addWidget(_icon_slot(side_widget), 0, Qt.AlignVCenter)
+    row.addStretch()
+    return row
+
+
+def _field(label, combo):
+    """A labelled field cell: caption above a fixed-width combo + empty icon slot.
+
+    The empty slot keeps Codec / Encoder / Audio Format aligned with Quality / FPS
+    rows that show a warning triangle.
     """
     box = QVBoxLayout()
     box.setSpacing(4)
     box.setContentsMargins(0, 0, 0, 0)
     label.setStyleSheet(_FIELD_LABEL_QSS)
-    combo.setFixedWidth(_COMBO_W)
     box.addWidget(label, alignment=Qt.AlignLeft)
-    box.addWidget(combo, alignment=Qt.AlignLeft)
+    box.addLayout(_combo_row_with_slot(combo))
     return box
 
 
@@ -473,15 +501,8 @@ def _quality_field(ui, label, combo):
     box.setContentsMargins(0, 0, 0, 0)
 
     label.setStyleSheet(_FIELD_LABEL_QSS)
-    combo.setFixedWidth(_COMBO_W)
 
-    help_slot = QWidget()
-    help_slot.setFixedSize(16, 16)
-    help_slot_layout = QHBoxLayout(help_slot)
-    help_slot_layout.setContentsMargins(0, 0, 0, 0)
-    help_slot_layout.setSpacing(0)
-
-    help_btn = QPushButton(help_slot)
+    help_btn = QPushButton()
     help_btn.setIcon(warning_icon(16))
     help_btn.setIconSize(QSize(16, 16))
     help_btn.setFlat(True)
@@ -499,11 +520,6 @@ def _quality_field(ui, label, combo):
         "Re-encoding usually fixes those timeline glitches."
     )
     help_btn.hide()
-    help_slot_layout.addWidget(help_btn)
-
-    row = QHBoxLayout()
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(8)
 
     def _sync_help(text):
         dismissed = bool(help_btn.property("warning_dismissed"))
@@ -514,12 +530,8 @@ def _quality_field(ui, label, combo):
     _sync_help(combo.currentText())
     ui.btn_quality_original_help = help_btn
 
-    row.addWidget(combo, 0, Qt.AlignLeft)
-    row.addWidget(help_slot, 0, Qt.AlignVCenter)
-    row.addStretch()
-
     box.addWidget(label, alignment=Qt.AlignLeft)
-    box.addLayout(row)
+    box.addLayout(_combo_row_with_slot(combo, help_btn))
     return box
 
 
@@ -530,7 +542,6 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     warn_attr) so render_controller can attach validators and read input.text().
     """
     label.setStyleSheet(_FIELD_LABEL_QSS)
-    combo.setFixedWidth(_COMBO_W)
 
     overlay = QFrame(combo)                      # child of the combo -> paints on top of its body
     overlay.setObjectName("customOverlay")
@@ -554,14 +565,8 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     positioner = _OverlayPositioner(combo, overlay)
     overlay._positioner = positioner             # keep a reference alive
 
-    warn_slot = QWidget()
-    warn_slot.setFixedSize(16, 16)
-    warn_slot_layout = QHBoxLayout(warn_slot)
-    warn_slot_layout.setContentsMargins(0, 0, 0, 0)
-    warn_slot_layout.setSpacing(0)
-
-    warn = QLabel(warn_slot)
-    warn.setFixedSize(16, 16)
+    warn = QLabel()
+    warn.setFixedSize(_WARN_SLOT, _WARN_SLOT)
     warn.hide()
 
     setattr(ui, input_attr, edit)
@@ -581,17 +586,11 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     combo.currentTextChanged.connect(_sync)
     _sync(combo.currentText())
 
-    row = QHBoxLayout()
-    row.setSpacing(8)
-    row.addWidget(combo, 0, Qt.AlignLeft)
-    row.addWidget(warn_slot, 0, Qt.AlignVCenter)
-    row.addStretch()
-
     box = QVBoxLayout()
     box.setSpacing(4)
     box.setContentsMargins(0, 0, 0, 0)
     box.addWidget(label, alignment=Qt.AlignLeft)
-    box.addLayout(row)
+    box.addLayout(_combo_row_with_slot(combo, warn))
     return box
 
 
