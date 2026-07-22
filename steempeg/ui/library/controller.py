@@ -827,20 +827,12 @@ class LibraryMixin:
         ):
             return
 
-        current = getattr(self, "_preview_clip_path", None)
-        if current:
-            current = os.path.normpath(current)
+        if hasattr(self, "release_media_before_delete_any"):
+            self.release_media_before_delete_any(dead_paths)
 
         failed = []
         for clip_path in dead_paths:
-            norm = os.path.normpath(clip_path)
             try:
-                if current and norm == current:
-                    if hasattr(self, "close_current_clip"):
-                        self.close_current_clip()
-                    elif hasattr(self, "_clear_player_surface"):
-                        self._clear_player_surface()
-                    current = None
                 if os.path.exists(clip_path):
                     shutil.rmtree(clip_path)
                     logging.info(f"Deleted dead clip folder: {clip_path}")
@@ -1679,6 +1671,45 @@ class LibraryMixin:
     _MULTI_SELECT_MODIFIERS = Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier
     _TOGGLE_SELECT_MODIFIERS = Qt.ControlModifier | Qt.AltModifier
 
+    def _table_apply_click_modifiers(self, table, pos, mods) -> None:
+        """Ctrl/Alt toggle or Shift-range select a table row (Ctrl/Alt/Shift+LMB)."""
+        if table is None:
+            return
+        index = table.indexAt(pos)
+        if not index.isValid():
+            return
+        sm = table.selectionModel()
+        model = table.model()
+        if sm is None or model is None:
+            return
+        if (mods & self._TOGGLE_SELECT_MODIFIERS) and not (mods & Qt.ShiftModifier):
+            sm.select(
+                index,
+                QItemSelectionModel.SelectionFlag.Toggle
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            table.setCurrentIndex(index)
+            return
+        if mods & Qt.ShiftModifier:
+            from PySide6.QtCore import QItemSelection
+
+            anchor = table.currentIndex()
+            if not anchor.isValid():
+                anchor = index
+            lo, hi = sorted((anchor.row(), index.row()))
+            selection = QItemSelection()
+            last_col = max(0, table.columnCount() - 1)
+            for row in range(lo, hi + 1):
+                if table.isRowHidden(row):
+                    continue
+                selection.select(model.index(row, 0), model.index(row, last_col))
+            sm.select(
+                selection,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            table.setCurrentIndex(index)
+
     def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
         """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
         if not self._clips_library_accepts_selection():
@@ -1722,11 +1753,7 @@ class LibraryMixin:
         self._publish_grid_selection(update_preview=update_preview)
 
     def _handle_grid_card_context_menu(self, item, event) -> None:
-        # Right-click only opens the menu; it never changes the selection.
-        # The menu resolves its target from the clip under the cursor (see
-        # _context_menu_clip_paths_grid), so left-click stays the only way to select.
-        # The card sends a position relative to itself, so map it back to the grid
-        # viewport to pop the menu exactly where the cursor is (not the card center).
+        # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
         viewport_pos = self.grid_clips.viewport().mapFromGlobal(event.globalPosition().toPoint())
         self.show_grid_context_menu(viewport_pos)
 
@@ -1800,12 +1827,9 @@ class LibraryMixin:
             return
 
         try:
-            # Stop MPV playback if the deleted clip is currently playing
-            selected_row = self.ui.table_clips.currentRow()
-            if selected_row >= 0:
-                playing_path = self.ui.table_clips.item(selected_row, 0).data(Qt.UserRole)
-                if playing_path == clip_path and hasattr(self, 'player'):
-                    self.player.stop()
+            # Must unload first — Windows won't delete a clip folder mpv still holds.
+            if hasattr(self, "release_media_before_delete"):
+                self.release_media_before_delete(clip_path)
 
             shutil.rmtree(clip_path)
             logging.info(f"Deleted clip folder: {clip_path}")
