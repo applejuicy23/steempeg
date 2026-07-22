@@ -681,7 +681,9 @@ class RenderMixin:
     def _on_render_progress(self, msg):
         """Helper to safely receive thread signals on the main GUI thread."""
         if getattr(self, "_queue_batch_active", False):
-            msg = f"({self._batch_current}/{self._batch_total}) {msg}"
+            total = max(1, int(getattr(self, "_batch_total", 0) or 0))
+            current = max(1, min(int(getattr(self, "_batch_current", 0) or 0), total))
+            msg = f"({current}/{total}) {msg}"
         self.update_status_indicator(msg, "rendering")
 
     @staticmethod
@@ -2845,14 +2847,14 @@ class RenderMixin:
             name = os.path.basename(paths[0])
             message = (
                 f"“{name}” is already in the render queue.\n\n"
-                "A new job was added with the current settings — "
-                "useful for exporting the same clip at different qualities "
-                "(Discord, Drive, Telegram, …)."
+                "A duplicate will be added to the Queue with the starting "
+                "Original preset."
             )
         else:
             message = (
                 f"{len(paths)} selected clip(s) were already in the render queue.\n\n"
-                "New job(s) were still added with the current settings."
+                "Duplicates will be added to the Queue with the starting "
+                "Original preset."
             )
         dont_ask = steempeg_information_dont_ask(
             self.ui,
@@ -3170,20 +3172,21 @@ class RenderMixin:
             if path and os.path.exists(path):
                 self.custom_icon_label.setPixmap(QPixmap(path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
-    def _sync_queue_job_render_status(self, clip_path, success, error_msg, output_file: str = ""):
-        job = self.render_queue.find_by_clip_path(clip_path)
-        if not job:
+    def _sync_queue_job_render_status(self, job, success, error_msg, output_file: str = ""):
+        """Update the *specific* queue job (by id) — clip_path is not unique when duplicates exist."""
+        if job is None:
             return
+        target = self.render_queue.get(getattr(job, "id", "")) or job
         if success:
-            job.status = JobStatus.COMPLETED
+            target.status = JobStatus.COMPLETED
             if output_file:
-                job.output_file = output_file
+                target.output_file = output_file
         elif "cancelled by user" in (error_msg or "").lower():
-            job.status = JobStatus.QUEUED
-            job.error_message = ""
+            target.status = JobStatus.QUEUED
+            target.error_message = ""
         else:
-            job.status = JobStatus.ERROR
-            job.error_message = (error_msg or "")[:240]
+            target.status = JobStatus.ERROR
+            target.error_message = (error_msg or "")[:240]
 
     def _clear_queue_selection(self) -> None:
         """Clear the active queue card highlight when preview leaves the queue."""
@@ -3366,10 +3369,10 @@ class RenderMixin:
 
         self._is_rendering = True
         self._active_render_job = job
-        queue_job = self.render_queue.find_by_clip_path(job.clip_path)
-        if queue_job:
-            queue_job.status = JobStatus.RENDERING
-            self.refresh_render_queue_panel()
+        # Mark this job only — find_by_clip_path would hit an earlier duplicate of the same clip.
+        live = self.render_queue.get(getattr(job, "id", "")) or job
+        live.status = JobStatus.RENDERING
+        self.refresh_render_queue_panel()
         self.update_playback_badge()
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
@@ -3584,13 +3587,11 @@ class RenderMixin:
         content_layout.addLayout(btn_layout)
         main_layout.addLayout(content_layout)
 
-        def _apply_error_mask():
-            from PySide6.QtGui import QPainterPath, QRegion
-            path = QPainterPath()
-            path.addRoundedRect(0.0, 0.0, 780.0, 420.0, 8.0, 8.0)
-            dialog.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
-        _apply_error_mask()
+        # Soft rounding via stylesheet only — QRegion masks look jagged.
+        dialog.setStyleSheet(
+            (dialog.styleSheet() or "")
+            + "QDialog { border-radius: 10px; }"
+        )
 
         if batch_continue:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
@@ -3637,7 +3638,7 @@ class RenderMixin:
         active_job = getattr(self, "_active_render_job", None)
         if active_job:
             self._sync_queue_job_render_status(
-                active_job.clip_path, success, error_msg, output_file or ""
+                active_job, success, error_msg, output_file or ""
             )
 
         self._is_rendering = False
