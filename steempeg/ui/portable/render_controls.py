@@ -18,8 +18,8 @@ _FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, s
 
 _STRIP_FRAME = """
 QFrame#portableRenderStrip {
-    background-color: #252525;
-    border: 1px solid #353535;
+    background-color: #2d2d2d;
+    border: 1px solid #383838;
     border-radius: 10px;
 }
 QFrame#portableRenderStrip QLabel {
@@ -76,6 +76,8 @@ _STATUS_COLORS = {
 
 _DOT_SIZE = 12
 _PCT_COL = 40
+_STATUS_ROW_H = 24
+_GAME_ICON = 24
 
 
 def _fmt_dash(template: str, *, font: int = 13, radius: int = 8, pad: str = "6px 12px") -> str:
@@ -97,38 +99,68 @@ class PortableRenderControlStrip(QFrame):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(8)
 
-        # Row 1: game (compact) | status dot + label
+        # Row 1: game summary (desktop sizing) | Ready text + dot above %
         top = QHBoxLayout()
-        top.setSpacing(6)
+        top.setSpacing(4)
+
+        summary_left = QWidget()
+        summary_left.setMinimumWidth(0)
+        summary_left.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        summary_layout = QHBoxLayout(summary_left)
+        summary_layout.setContentsMargins(0, 0, 0, 2)
+        summary_layout.setSpacing(8)
 
         self.game_icon = QLabel()
-        self.game_icon.setFixedSize(18, 18)
+        self.game_icon.setFixedSize(_GAME_ICON, _GAME_ICON)
         self.game_icon.setStyleSheet("background: transparent; border: none;")
-        top.addWidget(self.game_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        summary_layout.addWidget(self.game_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.game_label = QLabel("Select a clip…")
         self.game_label.setStyleSheet(
-            f"color: #c8c8c8; font-size: 11px; font-weight: bold; {_FONT}"
+            f"color: #e0e0e0; font-size: 14px; font-weight: bold; {_FONT}"
         )
         self.game_label.setMinimumWidth(0)
         self.game_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
-        top.addWidget(self.game_label, 1)
+        summary_layout.addWidget(self.game_label, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        self.status_dot = QLabel()
-        self.status_dot.setFixedSize(_DOT_SIZE, _DOT_SIZE)
-        self._set_dot_color(_STATUS_COLORS["ready"])
-        top.addWidget(self.status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(summary_left, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        ready_cluster = QWidget()
+        ready_cluster.setFixedHeight(_STATUS_ROW_H)
+        ready_layout = QHBoxLayout(ready_cluster)
+        ready_layout.setContentsMargins(0, 0, 0, 0)
+        ready_layout.setSpacing(4)
 
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet(
-            f"color: {_STATUS_COLORS['ready']}; font-size: 12px; font-weight: bold; {_FONT}"
+            f"color: {_STATUS_COLORS['ready']}; font-size: 14px; font-weight: bold; {_FONT}"
         )
         self.status_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        top.addWidget(self.status_label, 0)
+        self.status_label.setMinimumWidth(120)
+        self.status_label.setMaximumWidth(280)
+        ready_layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        dot_col = QWidget()
+        dot_col.setFixedSize(_PCT_COL, _STATUS_ROW_H)
+        dot_col_layout = QHBoxLayout(dot_col)
+        dot_col_layout.setContentsMargins(0, 0, 0, 0)
+        dot_col_layout.setSpacing(0)
+        dot_col_layout.addStretch()
+        self.status_dot = QLabel()
+        self.status_dot.setFixedSize(_DOT_SIZE, _DOT_SIZE)
+        self.status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._set_dot_color(_STATUS_COLORS["ready"])
+        dot_col_layout.addWidget(self.status_dot, 0, Qt.AlignmentFlag.AlignCenter)
+        dot_col_layout.addStretch()
+        ready_layout.addWidget(dot_col, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        top.addWidget(ready_cluster, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(top)
 
         # Row 2: smooth AnimatedRenderBar + %
@@ -246,7 +278,7 @@ class PortableRenderControlStrip(QFrame):
         display = (text or "Ready").strip() or "Ready"
         self.status_label.setText(display)
         self.status_label.setStyleSheet(
-            f"color: {color}; font-size: 13px; font-weight: bold; {_FONT}"
+            f"color: {color}; font-size: 14px; font-weight: bold; {_FONT}"
         )
         self.status_label.setToolTip(display)
         self._set_dot_color(color)
