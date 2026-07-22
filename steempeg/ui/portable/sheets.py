@@ -7,6 +7,7 @@ from dataclasses import asdict, fields
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QPushButton,
     QSizePolicy,
@@ -23,7 +24,99 @@ from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 RENDER_SETTINGS_KEY = "render_export_settings"
 
+# Host shell ≤ this width → compact portable Render sheet (Deck / ~1400 laptops).
+# Wider shells (e.g. 1920×1080) keep full comfort chrome — no trim hacks.
+PORTABLE_SHEET_COMPACT_MAX_W = 1600
+
+# Compact-only neo rail trim (comfort default is 220).
+_PORTABLE_NEO_SIDEBAR_W = 200
+_PORTABLE_NEO_SIDEBAR_MARGINS = (10, 15, 6, 15)
+
 _log = logging.getLogger(__name__)
+
+
+def portable_render_sheet_compact(host) -> bool:
+    """True when the shell is Deck / small-laptop class — use space-saving sheet chrome."""
+    w = 0
+    if host is not None:
+        try:
+            w = int(host.width() or 0)
+        except Exception:
+            w = 0
+    if w <= 0:
+        try:
+            from PySide6.QtWidgets import QApplication
+
+            aw = QApplication.activeWindow()
+            if aw is not None:
+                w = int(aw.width() or 0)
+        except Exception:
+            w = 0
+    if w <= 0:
+        return True  # safe default: compact fits more places
+    return w <= PORTABLE_SHEET_COMPACT_MAX_W
+
+
+def apply_portable_neo_chrome(app) -> None:
+    """Tighten neo sidebar width for compact portable Render sheets only."""
+    if getattr(app, "_portable_neo_chrome_on", False):
+        return
+    if not getattr(app, "_portable_sheet_compact", True):
+        return
+    sidebar = getattr(app, "_neo_sidebar", None)
+    lay = getattr(app, "_neo_sidebar_layout", None)
+    if sidebar is None:
+        return
+
+    app._portable_neo_chrome_on = True
+    app._portable_neo_sidebar_w_saved = sidebar.width()
+    if lay is not None:
+        m = lay.contentsMargins()
+        app._portable_neo_margins_saved = (m.left(), m.top(), m.right(), m.bottom())
+        app._portable_neo_spacing_saved = lay.spacing()
+        lay.setContentsMargins(*_PORTABLE_NEO_SIDEBAR_MARGINS)
+
+    sidebar.setFixedWidth(_PORTABLE_NEO_SIDEBAR_W)
+
+    # Keep desktop content inset from the nav divider (comfort left pad = 16).
+    from steempeg.ui.ui_density import COMFORT
+
+    left, top, right, bottom = COMFORT.settings_page_margin
+    tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
+    if tabs is not None:
+        for i in range(tabs.count()):
+            page = tabs.widget(i)
+            pl = page.layout() if page is not None else None
+            if pl is not None:
+                pl.setContentsMargins(left, top, right, bottom)
+
+
+def restore_portable_neo_chrome(app) -> None:
+    """Undo portable neo tightening when the Render sheet closes."""
+    if not getattr(app, "_portable_neo_chrome_on", False):
+        return
+    sidebar = getattr(app, "_neo_sidebar", None)
+    lay = getattr(app, "_neo_sidebar_layout", None)
+
+    saved_w = getattr(app, "_portable_neo_sidebar_w_saved", None)
+    if sidebar is not None and saved_w is not None:
+        sidebar.setFixedWidth(int(saved_w))
+
+    saved_m = getattr(app, "_portable_neo_margins_saved", None)
+    if lay is not None and saved_m is not None:
+        lay.setContentsMargins(*saved_m)
+        sp = getattr(app, "_portable_neo_spacing_saved", None)
+        if sp is not None:
+            lay.setSpacing(int(sp))
+
+    app._portable_neo_chrome_on = False
+    for attr in (
+        "_portable_neo_sidebar_w_saved",
+        "_portable_neo_margins_saved",
+        "_portable_neo_spacing_saved",
+    ):
+        if hasattr(app, attr):
+            delattr(app, attr)
 
 
 def persist_render_settings(app) -> None:
@@ -117,31 +210,66 @@ class PortableRenderSettingsDialog(SteempegDialog):
         from steempeg.ui.portable.queue_sidebar import PortableQueueSidebar
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        self.setMinimumSize(900, 420)
         host = parent or getattr(app, "ui", None)
-        w, h = scaled_dialog_size(1180, 600, parent=host, factor=0.92)
-        self.setFixedSize(max(1020, w), max(480, h))
-        self.content_layout.setContentsMargins(12, 8, 12, 12)
+        compact = portable_render_sheet_compact(host)
+        app._portable_sheet_compact = compact
+
+        self.setMinimumSize(1040, 420)
+        if compact:
+            # Deck / small: near-full shell so 291px combos + queue rail fit.
+            w, h = scaled_dialog_size(1480, 620, parent=host, factor=0.98)
+            if host is not None:
+                hw = int(host.width() or 0)
+                hh = int(host.height() or 0)
+                if hw > 0:
+                    w = min(max(w, 1240), hw - 8, 1520)
+                    w = min(w, hw - 8)
+                if hh > 0:
+                    h = min(max(h, 480), hh - 40)
+                self.setFixedSize(w, max(480, h))
+            else:
+                self.setFixedSize(max(1240, w), max(480, h))
+        else:
+            # Roomy shell: comfort footprint with breathing room — no squeeze hacks.
+            w, h = scaled_dialog_size(1480, 700, parent=host, factor=0.90)
+            if host is not None:
+                hw = int(host.width() or 0)
+                hh = int(host.height() or 0)
+                if hw > 0:
+                    w = min(max(w, 1280), hw - 48)
+                if hh > 0:
+                    h = min(max(h, 560), hh - 64)
+                self.setFixedSize(w, max(560, h))
+            else:
+                self.setFixedSize(max(1280, w), max(560, h))
+        self.content_layout.setContentsMargins(12, 8, 12, 0)
         self.content_layout.setSpacing(10)
 
         body = QHBoxLayout()
         body.setSpacing(10)
 
-        self._queue = PortableQueueSidebar(app, self)
+        self._queue = PortableQueueSidebar(app, self, compact=compact)
         self._queue.job_selected.connect(self._on_queue_job)
         body.addWidget(self._queue, 0)
         app._portable_queue_sidebar = self._queue
+
+        # Right column: settings + launch strip. Bottoms align with the queue list panel.
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(10)
 
         if self._neo is None:
             from PySide6.QtWidgets import QLabel
 
             empty = QLabel("Render settings panel is not available.")
             empty.setStyleSheet(f"color: {tok.TEXT_MUTED};")
-            body.addWidget(empty, 1)
+            right.addWidget(empty, 1)
         else:
             self._home = _borrow_widget(self._neo)
             self._neo.show()
             self._neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            if compact:
+                apply_portable_neo_chrome(app)
             # Theatre / portable hide settings_tabs separately from neo_wrapper —
             # without this the sheet opens empty (sidebar only / blank content).
             tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
@@ -156,24 +284,35 @@ class PortableRenderSettingsDialog(SteempegDialog):
                     w.show()
             if hasattr(app, "fit_settings_tab_to_page"):
                 QTimer.singleShot(0, app.fit_settings_tab_to_page)
-            body.addWidget(self._neo, 1)
-
-        self.content_layout.addLayout(body, 1)
+            right.addWidget(self._neo, 1)
 
         self._strip = PortableRenderControlStrip(app, self)
-        self.content_layout.addWidget(self._strip)
+        right.addWidget(self._strip, 0)
         app._portable_render_strip = self._strip
 
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        actions.addStretch(1)
+        body.addLayout(right, 1)
+        self.content_layout.addLayout(body, 1)
+
+        # Full-width dark footer — Save only (queue + strip sit above).
+        footer = QFrame()
+        footer.setObjectName("portableRenderSaveBar")
+        footer.setStyleSheet(
+            "QFrame#portableRenderSaveBar {"
+            " background-color: #141414; border: none;"
+            " border-top: 1px solid #2a2a2a; }"
+        )
+        footer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        footer_lay = QHBoxLayout(footer)
+        footer_lay.setContentsMargins(12, 10, 12, 12)
+        footer_lay.setSpacing(8)
+        footer_lay.addStretch(1)
 
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_SECONDARY)
         btn_save.clicked.connect(self._on_save)
-        actions.addWidget(btn_save)
-        self.content_layout.addLayout(actions)
+        footer_lay.addWidget(btn_save)
+        self.content_layout.addWidget(footer, 0)
 
     def _on_queue_job(self, job_id: str) -> None:
         if hasattr(self._app, "activate_queue_job"):
@@ -197,6 +336,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self.accept()
 
     def done(self, result: int) -> None:
+        restore_portable_neo_chrome(self._app)
+        if hasattr(self._app, "_portable_sheet_compact"):
+            delattr(self._app, "_portable_sheet_compact")
         if getattr(self._app, "_portable_render_strip", None) is self._strip:
             self._app._portable_render_strip = None
         if getattr(self._app, "_portable_queue_sidebar", None) is self._queue:
