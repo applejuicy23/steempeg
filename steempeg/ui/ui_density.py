@@ -139,7 +139,8 @@ COMFORT = UiDensity(
     queue_btn_h=32,
     settings_stat_w=210,
     settings_content_w=646,  # 210*3 + 8*2
-    settings_combo_w=340,
+    # Video/Audio: (content - grid16 - 2*(gap8+slot16)) // 2
+    settings_combo_w=(646 - 16 - 2 * (8 + 16)) // 2,  # 291
     settings_title_font=15,
     settings_page_margin=(16, 15, 8, 8),
     skip_w=40,
@@ -193,7 +194,8 @@ COMPACT = UiDensity(
     # Fits center column with neo sidebar on Deck (~600px free): 118 + ~360
     settings_stat_w=108,
     settings_content_w=340,
-    settings_combo_w=230,
+    # Same Video/Audio formula as comfort, from compact content width.
+    settings_combo_w=(340 - 16 - 2 * (8 + 16)) // 2,  # 138
     settings_title_font=11,
     settings_page_margin=(4, 4, 2, 2),
     skip_w=30,
