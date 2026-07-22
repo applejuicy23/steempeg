@@ -1660,10 +1660,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     self.custom_timeline.canvas.marker_store.set_cache_dir(self.cache_dir)
                 v_layout.addWidget(self.custom_timeline)
                 v_layout.addSpacing(6)
-                # ROW 2: The Time Label AND Theater Button (Perfectly centered)
-                time_layout = QHBoxLayout()
-
-                # --- IRONCLAD CENTERING (3 EQUAL BLOCKS) ---
+                # ROW 2: Volume/Speed | pinned timer | tools — timer never leaves center
+                from steempeg.ui.player.controls.center_pinned_row import CenterPinnedRow
 
                 # 1. LEFT BLOCK (Volume & Speed)
                 left_wrap = QWidget()
@@ -1681,14 +1679,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 lw.addWidget(self.speed_control, alignment=Qt.AlignLeft | Qt.AlignVCenter)
                 lw.addStretch() # Pushes both buttons nicely to the left!
 
-                # 2. CENTER BLOCK (Timer)
-                center_wrap = QWidget()
-                cw = QHBoxLayout(center_wrap)
-                cw.setContentsMargins(0, 0, 0, 0)
-                self.ui.label_time.setParent(self.player_footer_frame)
+                # 2. CENTER (Timer) — overlaid on geometric midpoint by CenterPinnedRow
                 self.ui.label_time.setAlignment(Qt.AlignCenter)
-                self.ui.label_time.setStyleSheet("color: #cccccc; font-size: 13px; font-weight: bold; background: transparent;")
-                cw.addWidget(self.ui.label_time, alignment=Qt.AlignCenter)
+                self.ui.label_time.setStyleSheet(
+                    "color: #cccccc; font-size: 13px; font-weight: bold; background: transparent;"
+                )
+                self.ui.label_time.setMinimumWidth(90)
 
                 # 3. RIGHT BLOCK (Theater + trim buttons)
                 right_wrap = QWidget()
@@ -1876,12 +1872,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 # Remember original layout index for seamless restoring
                 self.controls_layout_index = controls_index
 
-                # Glue the 3 blocks together with EQUAL weight (stretch=1) so the center is ABSOLUTE!
-                time_layout.addWidget(left_wrap, 1)
-                time_layout.addWidget(center_wrap, 1)
-                time_layout.addWidget(right_wrap, 1)
-
-                v_layout.addLayout(time_layout)
+                self._footer_controls_row = CenterPinnedRow(
+                    left_wrap, self.ui.label_time, right_wrap, self.player_footer_frame
+                )
+                v_layout.addWidget(self._footer_controls_row)
                 
                 # ROW 3: The Playback Buttons (Centered horizontally)
                 
@@ -2520,9 +2514,22 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._clamp_splitters_to_mins(left_min=left_min)
 
         if not apply_density:
+            if getattr(self, "_portable_shell", False):
+                from steempeg.ui.player.controls.adaptive_trim_tools import (
+                    sync_trim_tools_placement,
+                )
+
+                sync_trim_tools_placement(self)
             return
 
-        dense = density_for_width(w)
+        # Portable theatre already fits its chrome — don't crush settings/combos
+        # just because the shell window is Deck-narrow.
+        if getattr(self, "_portable_shell", False):
+            from steempeg.ui.ui_density import COMFORT
+
+            dense = COMFORT
+        else:
+            dense = density_for_width(w)
         prev = getattr(self, "_ui_density", None)
         # Ignore float scale — otherwise every resize pixel restyles the whole UI
         # and rebuilds queue cards (DWM ghosts + floating text scraps).
@@ -2856,14 +2863,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # --- Neo settings sidebar ---
         neo = getattr(self, "_neo_sidebar", None)
         if neo is not None:
-            neo.setFixedWidth(dense.neo_sidebar_w)
+            if getattr(self, "_portable_neo_chrome_on", False):
+                from steempeg.ui.portable.sheets import _PORTABLE_NEO_SIDEBAR_W
+
+                neo.setFixedWidth(_PORTABLE_NEO_SIDEBAR_W)
+            else:
+                neo.setFixedWidth(dense.neo_sidebar_w)
         neo_lay = getattr(self, "_neo_sidebar_layout", None)
         if neo_lay is not None:
-            m = int(round(6 + (10 - 6) * dense.scale))
-            t = int(round(8 + (15 - 8) * dense.scale))
-            neo_lay.setContentsMargins(m, t, m, t)
-            neo_lay.setSpacing(int(round(6 + (10 - 6) * dense.scale)))
+            if getattr(self, "_portable_neo_chrome_on", False):
+                from steempeg.ui.portable.sheets import _PORTABLE_NEO_SIDEBAR_MARGINS
+
+                neo_lay.setContentsMargins(*_PORTABLE_NEO_SIDEBAR_MARGINS)
+            else:
+                m = int(round(6 + (10 - 6) * dense.scale))
+                t = int(round(8 + (15 - 8) * dense.scale))
+                neo_lay.setContentsMargins(m, t, m, t)
+                neo_lay.setSpacing(int(round(6 + (10 - 6) * dense.scale)))
         nav_names = NEO_NAV_COMPACT if dense.compact else NEO_NAV_COMFORT
+        # Portable sheet keeps comfort pill chrome — only the rail width is trimmed.
         pill = f"""
             QPushButton {{
                 background-color: transparent; color: #a0a0a0;
