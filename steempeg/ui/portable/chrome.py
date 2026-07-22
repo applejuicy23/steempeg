@@ -1,10 +1,9 @@
-"""Portable theatre chrome — Add a Clip / Render / Render settings."""
+"""Portable theatre chrome — Add a Clip / Render (opens settings+control sheet)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QHBoxLayout, QPushButton
 
-from steempeg.ui.icon_assets import preview_settings_icon
 from steempeg.ui.portable.sheets import (
     PortableClipPickerDialog,
     PortableRenderSettingsDialog,
@@ -42,28 +41,19 @@ _RENDER_STYLE = (
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
 
-_SETTINGS_CHIP = (
-    "QPushButton {"
-    "background-color: rgba(74, 159, 216, 0.18);"
-    "color: #4a9fd8;"
-    "border: 2px solid #4a9fd8;"
-    "border-radius: 15px; padding: 0px;"
-    "}"
-    "QPushButton:hover { background-color: rgba(74, 159, 216, 0.32); }"
-    "QPushButton:pressed { background-color: rgba(74, 159, 216, 0.45); }"
-)
-
 
 def ensure_portable_chrome(app) -> None:
     """Create (once) and show portable theatre CTAs."""
     _ensure_add_clip_button(app)
-    _ensure_render_buttons(app)
+    _ensure_render_button(app)
     if hasattr(app, "btn_portable_add_clip"):
         app.btn_portable_add_clip.show()
     if hasattr(app, "btn_portable_render"):
         app.btn_portable_render.show()
-    if hasattr(app, "btn_portable_render_settings"):
-        app.btn_portable_render_settings.show()
+    # Legacy gear — hide if an older session created it.
+    gear = getattr(app, "btn_portable_render_settings", None)
+    if gear is not None:
+        gear.hide()
     if hasattr(app, "set_view_mode"):
         app.set_view_mode("grid")
     toggle = getattr(app, "toggle_pill", None)
@@ -115,8 +105,15 @@ def _ensure_add_clip_button(app) -> None:
     lay.insertWidget(insert_at, btn)
 
 
-def _ensure_render_buttons(app) -> None:
+def _ensure_render_button(app) -> None:
     if getattr(app, "btn_portable_render", None) is not None:
+        # Rebind click to open the combined sheet (upgrade older instant-start wiring).
+        try:
+            app.btn_portable_render.clicked.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        app.btn_portable_render.clicked.connect(lambda: open_portable_render_settings(app))
+        app.btn_portable_render.setToolTip("Render settings and progress")
         return
 
     pill = getattr(app, "pill_container", None)
@@ -134,28 +131,15 @@ def _ensure_render_buttons(app) -> None:
     btn_render.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_render.setFixedHeight(30)
     btn_render.setStyleSheet(_RENDER_STYLE)
-    btn_render.setToolTip("Render current clip")
-    btn_render.clicked.connect(lambda: app.start_render_thread())
+    btn_render.setToolTip("Render settings and progress")
+    btn_render.clicked.connect(lambda: open_portable_render_settings(app))
     app.btn_portable_render = btn_render
-
-    btn_settings = QPushButton()
-    btn_settings.setObjectName("portableRenderSettings")
-    btn_settings.setFixedSize(30, 30)
-    btn_settings.setIcon(preview_settings_icon(16))
-    btn_settings.setIconSize(QSize(16, 16))
-    btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn_settings.setStyleSheet(_SETTINGS_CHIP)
-    btn_settings.setToolTip("Render settings")
-    btn_settings.clicked.connect(lambda: open_portable_render_settings(app))
-    app.btn_portable_render_settings = btn_settings
 
     idx = host_layout.indexOf(pill) if pill is not None else -1
     if idx < 0:
         host_layout.addWidget(btn_render)
-        host_layout.addWidget(btn_settings)
     else:
         host_layout.insertWidget(idx, btn_render)
-        host_layout.insertWidget(idx + 1, btn_settings)
 
 
 def open_portable_clip_picker(app) -> None:
@@ -181,23 +165,29 @@ def open_portable_render_settings(app) -> None:
 
             apply_settings_panel_density(app.ui, dense)
         dlg = PortableRenderSettingsDialog(app, parent=app.ui)
-        result = dlg.exec()
-        if result == QDialog.DialogCode.Accepted and getattr(dlg, "_start_after", False):
-            app.start_render_thread()
+        dlg.exec()
     finally:
         app._portable_render_settings_open = False
+        app._portable_render_strip = None
+        app._portable_queue_sidebar = None
+        sync_portable_render_button(app)
 
 
 def sync_portable_render_button(app) -> None:
-    """Mirror Start Render enabled/label onto the portable Render CTA."""
+    """Theatre Render CTA: always opens the sheet; enable when a clip/queue is ready."""
     btn = getattr(app, "btn_portable_render", None)
     if btn is None:
         return
-    start = getattr(app.ui, "btn_start", None) if hasattr(app, "ui") else None
-    if start is not None:
-        btn.setEnabled(start.isEnabled())
     pending = app.render_queue.pending_count() if hasattr(app, "render_queue") else 0
     if pending > 0:
         btn.setText(f"🚩 Render ({pending})")
     else:
         btn.setText("🚩 Render")
+
+    # Keep the theatre CTA clickable so the user can open the sheet even mid-render
+    # (to watch progress / Pause / Cancel). Always enabled in portable shell.
+    btn.setEnabled(True)
+
+    strip = getattr(app, "_portable_render_strip", None)
+    if strip is not None and hasattr(strip, "sync_from_app"):
+        strip.sync_from_app()
