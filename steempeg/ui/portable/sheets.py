@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
 
 from steempeg.render.queue import RenderJobSettings
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
+from steempeg.ui.message_dialog import _BTN_SECONDARY, dialog_theme
+from steempeg.ui.portable.render_controls import PortableRenderControlStrip
 from steempeg.ui.render_job_builder import apply_job_settings_to_ui, snapshot_settings_from_ui
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
@@ -101,34 +102,67 @@ def _return_widget(
 
 
 class PortableRenderSettingsDialog(SteempegDialog):
-    """Embed desktop neo export panel; Save / Save & Render."""
+    """Embed desktop neo export panel + queue rail + portable render control strip."""
 
     def __init__(self, app, parent=None):
         theme = dialog_theme(parent or getattr(app, "ui", None))
-        super().__init__("Render settings", parent or app.ui, **theme)
+        super().__init__("Render", parent or app.ui, **theme)
         self._app = app
-        self._start_after = False
         self._neo = getattr(app, "neo_wrapper", None)
         self._home = (None, None, -1, "orphan")
         self._hw = getattr(app, "hide_watcher", None)
         if self._hw is not None:
             self._hw.set_suppressed(True)
 
-        self.setMinimumSize(720, 480)
+        from steempeg.ui.portable.queue_sidebar import PortableQueueSidebar
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        self.setMinimumSize(900, 420)
+        host = parent or getattr(app, "ui", None)
+        w, h = scaled_dialog_size(1180, 600, parent=host, factor=0.92)
+        self.setFixedSize(max(1020, w), max(480, h))
         self.content_layout.setContentsMargins(12, 8, 12, 12)
         self.content_layout.setSpacing(10)
+
+        body = QHBoxLayout()
+        body.setSpacing(10)
+
+        self._queue = PortableQueueSidebar(app, self)
+        self._queue.job_selected.connect(self._on_queue_job)
+        body.addWidget(self._queue, 0)
+        app._portable_queue_sidebar = self._queue
 
         if self._neo is None:
             from PySide6.QtWidgets import QLabel
 
             empty = QLabel("Render settings panel is not available.")
             empty.setStyleSheet(f"color: {tok.TEXT_MUTED};")
-            self.content_layout.addWidget(empty)
+            body.addWidget(empty, 1)
         else:
             self._home = _borrow_widget(self._neo)
             self._neo.show()
             self._neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            self.content_layout.addWidget(self._neo, 1)
+            # Theatre / portable hide settings_tabs separately from neo_wrapper —
+            # without this the sheet opens empty (sidebar only / blank content).
+            tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
+            if tabs is not None:
+                tabs.show()
+                # Landing tab for a "Render settings" sheet — not Source Info.
+                if tabs.count() > 1:
+                    tabs.setCurrentIndex(1)
+            for name in ("_neo_sidebar", "right_scroll"):
+                w = getattr(app, name, None)
+                if w is not None:
+                    w.show()
+            if hasattr(app, "fit_settings_tab_to_page"):
+                QTimer.singleShot(0, app.fit_settings_tab_to_page)
+            body.addWidget(self._neo, 1)
+
+        self.content_layout.addLayout(body, 1)
+
+        self._strip = PortableRenderControlStrip(app, self)
+        self.content_layout.addWidget(self._strip)
+        app._portable_render_strip = self._strip
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -138,41 +172,44 @@ class PortableRenderSettingsDialog(SteempegDialog):
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_SECONDARY)
         btn_save.clicked.connect(self._on_save)
-
-        btn_go = QPushButton("Save & Render")
-        btn_go.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_go.setStyleSheet(_BTN_PRIMARY)
-        btn_go.clicked.connect(self._on_save_and_render)
-
         actions.addWidget(btn_save)
-        actions.addWidget(btn_go)
         self.content_layout.addLayout(actions)
 
-        # Size relative to main window
-        host = parent or getattr(app, "ui", None)
-        if host is not None:
-            geo = host.geometry()
-            self.resize(max(720, int(geo.width() * 0.72)), max(480, int(geo.height() * 0.72)))
+    def _on_queue_job(self, job_id: str) -> None:
+        if hasattr(self._app, "activate_queue_job"):
+            self._app.activate_queue_job(job_id)
+        if hasattr(self._strip, "sync_game_header"):
+            self._strip.sync_game_header()
+        self._strip.sync_from_app()
+        self._queue.refresh()
 
     def _on_save(self) -> None:
         persist_render_settings(self._app)
-        self._start_after = False
+        # Persist edits onto the selected queue job when applicable.
+        if hasattr(self._app, "_sync_active_queue_job_from_ui"):
+            try:
+                if self._app._sync_active_queue_job_from_ui():
+                    if hasattr(self._app, "_persist_render_queue"):
+                        self._app._persist_render_queue()
+                    self._queue.refresh()
+            except Exception:
+                pass
         self.accept()
-
-    def _on_save_and_render(self) -> None:
-        persist_render_settings(self._app)
-        self._start_after = True
-        self.accept()
-
-    def reject(self) -> None:
-        self._start_after = False
-        super().reject()
 
     def done(self, result: int) -> None:
+        if getattr(self._app, "_portable_render_strip", None) is self._strip:
+            self._app._portable_render_strip = None
+        if getattr(self._app, "_portable_queue_sidebar", None) is self._queue:
+            self._app._portable_queue_sidebar = None
         if self._neo is not None:
             parent, layout, index, kind = self._home
             _return_widget(self._neo, parent, layout, index, kind, visible=False)
             self._neo = None
+            # Keep tabs hidden while portable theatre remains active.
+            if getattr(self._app, "is_theater", False):
+                tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
+                if tabs is not None:
+                    tabs.hide()
         if self._hw is not None:
             self._hw.set_suppressed(False)
             self._hw = None
