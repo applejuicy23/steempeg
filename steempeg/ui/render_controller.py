@@ -111,6 +111,7 @@ from steempeg.ui.render_thread import RenderThread
 from steempeg.ui.message_dialog import (
     steempeg_critical,
     steempeg_information,
+    steempeg_information_dont_ask,
     steempeg_question,
     steempeg_warning,
 )
@@ -2791,8 +2792,16 @@ class RenderMixin:
 
         self._schedule_update_final_setup()
 
-    def add_clip_to_render_queue(self, clip_path: str):
-        """Snapshot current settings into a new queued job (stage 2+ UI will call this)."""
+    def add_clip_to_render_queue(self, clip_path: str, *, sync_ui: bool = True):
+        """Snapshot current settings into a new queued job.
+
+        The same clip may be queued more than once (e.g. Discord vs Drive presets).
+        When ``sync_ui`` is True (portable Add, single-clip callers), refresh the
+        queue panel and optionally notify about an existing duplicate.
+        """
+        was_duplicate = bool(
+            clip_path and self.render_queue.contains_clip(clip_path)
+        )
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
             if report.level == health.ClipHealth.DEAD:
@@ -2812,42 +2821,73 @@ class RenderMixin:
             job.game_name,
             job.output_file,
         )
+        if sync_ui:
+            self.refresh_render_queue_panel()
+            self._sync_start_render_enabled()
+            self._persist_render_queue()
+            sidebar = getattr(self, "_portable_queue_sidebar", None)
+            if sidebar is not None and hasattr(sidebar, "refresh"):
+                sidebar.refresh()
+            if was_duplicate:
+                self._maybe_notify_queue_duplicate([clip_path])
         return job
 
+    def _maybe_notify_queue_duplicate(self, clip_paths) -> None:
+        """Inform that a clip was already queued; skip if user opted out."""
+        if not clip_paths:
+            return
+        if bool(self.load_user_settings().get("render_queue_duplicate_notice_dismissed")):
+            return
+        paths = [p for p in clip_paths if p]
+        if not paths:
+            return
+        if len(paths) == 1:
+            name = os.path.basename(paths[0])
+            message = (
+                f"“{name}” is already in the render queue.\n\n"
+                "A new job was added with the current settings — "
+                "useful for exporting the same clip at different qualities "
+                "(Discord, Drive, Telegram, …)."
+            )
+        else:
+            message = (
+                f"{len(paths)} selected clip(s) were already in the render queue.\n\n"
+                "New job(s) were still added with the current settings."
+            )
+        dont_ask = steempeg_information_dont_ask(
+            self.ui,
+            "Render Queue",
+            message,
+            checkbox_label="Don't ask again",
+        )
+        if dont_ask:
+            self.save_user_settings("render_queue_duplicate_notice_dismissed", True)
+
     def add_clips_to_render_queue(self, clip_paths):
-        """Add one or more clips using the current render settings snapshot."""
+        """Add one or more clips using the current render settings snapshot.
+
+        Duplicates are allowed (same clip, different presets). No success popup —
+        only failures and an optional one-time duplicate notice.
+        """
         added = 0
-        skipped = 0
         failed = []
+        duplicates = []
 
         self._flush_current_trim_state()
         for clip_path in clip_paths:
-            if self.render_queue.contains_clip(clip_path):
-                skipped += 1
-                continue
-            job = self.add_clip_to_render_queue(clip_path)
+            was_duplicate = self.render_queue.contains_clip(clip_path)
+            job = self.add_clip_to_render_queue(clip_path, sync_ui=False)
             if job is None:
                 failed.append(os.path.basename(clip_path))
             else:
                 added += 1
+                if was_duplicate:
+                    duplicates.append(clip_path)
 
-        if not added and not skipped and not failed:
+        if not added and not failed:
             return
 
-        if added:
-            lines = [f"Added {added} clip(s) to the render queue."]
-            if skipped:
-                lines.append(f"{skipped} already in queue.")
-            if failed:
-                lines.append(f"Could not queue: {', '.join(failed)}")
-            steempeg_information(self.ui, "Render Queue", "\n".join(lines))
-        elif skipped and not failed:
-            steempeg_information(
-                self.ui,
-                "Render Queue",
-                "All selected clips are already in the queue.",
-            )
-        elif failed:
+        if failed:
             steempeg_warning(
                 self.ui,
                 "Render Queue",
@@ -2855,16 +2895,22 @@ class RenderMixin:
                 + "\n".join(failed),
             )
 
+        if duplicates:
+            self._maybe_notify_queue_duplicate(duplicates)
+
         logging.info(
-            "Queue update: added=%s skipped=%s failed=%s total=%s",
+            "Queue update: added=%s duplicates=%s failed=%s total=%s",
             added,
-            skipped,
+            len(duplicates),
             len(failed),
             len(self.render_queue),
         )
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None and hasattr(sidebar, "refresh"):
+            sidebar.refresh()
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
@@ -2938,13 +2984,26 @@ class RenderMixin:
                 self._sync_grid_card_visuals()
 
     def remove_queue_job(self, job_id: str) -> None:
-        job = self.render_queue.get(job_id)
-        if not job:
+        self.remove_queue_jobs([job_id])
+
+    def remove_queue_jobs(self, job_ids) -> None:
+        """Remove one or more queued jobs (skips the job currently rendering)."""
+        ids = [jid for jid in (job_ids or []) if jid]
+        if not ids:
             return
-        if job.status == JobStatus.RENDERING:
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        was_selected = selected_id in ids
+        removed_any = False
+        for job_id in ids:
+            job = self.render_queue.get(job_id)
+            if not job:
+                continue
+            if job.status == JobStatus.RENDERING:
+                continue
+            if self.render_queue.remove(job_id):
+                removed_any = True
+        if not removed_any:
             return
-        was_selected = getattr(self, "_selected_queue_job_id", None) == job_id
-        self.render_queue.remove(job_id)
         self._persist_render_queue()
         if not self.render_queue:
             self._on_queue_became_empty()
@@ -2955,6 +3014,9 @@ class RenderMixin:
         else:
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
+            sidebar = getattr(self, "_portable_queue_sidebar", None)
+            if sidebar is not None and hasattr(sidebar, "refresh"):
+                sidebar.refresh()
 
     def clear_render_queue(self) -> None:
         if getattr(self, "_queue_batch_active", False):
