@@ -46,7 +46,7 @@ def format_job_trim(settings: RenderJobSettings) -> str:
     if settings.is_trim_mode and settings.trim_end_ms > settings.trim_start_ms:
         start = ms_to_clock(settings.trim_start_ms)
         end = ms_to_clock(settings.trim_end_ms)
-        return f"✂️ {start} → {end}"
+        return f"✂️ {start} — {end}"
     return "Full clip"
 
 
