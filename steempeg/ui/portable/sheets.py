@@ -7,6 +7,7 @@ from dataclasses import asdict, fields
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QPushButton,
@@ -418,6 +419,8 @@ class PortableClipPickerDialog(SteempegDialog):
         if lbl is not None:
             lbl.hide()
 
+        # Keep ExtendedSelection so Ctrl/Alt/Shift+LMB multi-select works.
+        # Plain LMB still closes the sheet via _on_pick; modifier clicks stay open.
         widgets = []
         for name in ("grid_clips", "grid_rendered"):
             w = getattr(app, name, None)
@@ -431,7 +434,7 @@ class PortableClipPickerDialog(SteempegDialog):
         for w in widgets:
             prev = w.selectionMode()
             self._prev_sel_modes.append((w, prev))
-            w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            w.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
         if hasattr(app, "grid_clips"):
             app.grid_clips.itemSelectionChanged.connect(self._on_pick)
@@ -447,6 +450,15 @@ class PortableClipPickerDialog(SteempegDialog):
 
     def _on_pick(self) -> None:
         if not self._armed:
+            return
+        mods = QApplication.keyboardModifiers()
+        # Ctrl/Alt/Shift+LMB builds a multi-selection (context menu / queue) —
+        # don't dismiss the Clips Manager sheet.
+        if mods & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+        ):
             return
         self._armed = False
         QTimer.singleShot(0, self.accept)
