@@ -12,7 +12,7 @@ import sys
 
 import psutil
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, QItemSelectionModel
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -153,32 +153,26 @@ class LifecycleMixin:
                 self.mpv_wrapper.update_geometry()
             return False
 
-        # 1. Disable right-click selection in the Table (List)
+        # 1. Table (List) — Ctrl/Alt/Shift+LMB multi-select; RMB opens context menu only
         if hasattr(self.ui, 'table_clips') and source == self.ui.table_clips.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
-                    click_pos = event.position().toPoint()
-                    self.show_clip_context_menu(click_pos)
+                    self.show_clip_context_menu(event.position().toPoint())
                     return True
                 if event.button() == Qt.LeftButton:
                     mods = event.modifiers()
-                    if (mods & Qt.AltModifier) and not (mods & Qt.ShiftModifier):
-                        index = self.ui.table_clips.indexAt(event.position().toPoint())
-                        if index.isValid():
-                            self.ui.table_clips.selectionModel().select(
-                                index,
-                                QItemSelectionModel.SelectionFlag.Toggle
-                                | QItemSelectionModel.SelectionFlag.Rows,
+                    if mods & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier):
+                        if hasattr(self, "_table_apply_click_modifiers"):
+                            self._table_apply_click_modifiers(
+                                self.ui.table_clips, event.position().toPoint(), mods
                             )
-                            self.ui.table_clips.setCurrentIndex(index)
                             return True
                     
-        # 2. Disable right-click selection in the Grid; handle LMB selection on cards manually
+        # 2. Grid — RMB opens menu; LMB multi-select is handled on cards / empty viewport
         if hasattr(self, 'grid_clips') and source == self.grid_clips.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
-                    click_pos = event.position().toPoint()
-                    self.show_grid_context_menu(click_pos)
+                    self.show_grid_context_menu(event.position().toPoint())
                     return True
                 if event.button() == Qt.LeftButton and hasattr(self, '_handle_grid_viewport_press'):
                     return self._handle_grid_viewport_press(event)
@@ -193,23 +187,18 @@ class LifecycleMixin:
                     return True
                 if event.button() == Qt.LeftButton:
                     mods = event.modifiers()
-                    if (mods & (Qt.ControlModifier | Qt.AltModifier)) and not (mods & Qt.ShiftModifier):
-                        index = self.table_rendered.indexAt(event.position().toPoint())
-                        if index.isValid():
-                            self.table_rendered.selectionModel().select(
-                                index,
-                                QItemSelectionModel.SelectionFlag.Toggle
-                                | QItemSelectionModel.SelectionFlag.Rows,
+                    if mods & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier):
+                        if hasattr(self, "_table_apply_click_modifiers"):
+                            self._table_apply_click_modifiers(
+                                self.table_rendered, event.position().toPoint(), mods
                             )
-                            self.table_rendered.setCurrentIndex(index)
                             return True
 
         if hasattr(self, 'grid_rendered') and source == self.grid_rendered.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
-                    click_pos = event.position().toPoint()
                     if hasattr(self, 'show_rendered_grid_context_menu'):
-                        self.show_rendered_grid_context_menu(click_pos)
+                        self.show_rendered_grid_context_menu(event.position().toPoint())
                     return True
                 if event.button() == Qt.LeftButton and hasattr(self, '_handle_rendered_grid_viewport_press'):
                     return self._handle_rendered_grid_viewport_press(event)
