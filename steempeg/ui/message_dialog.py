@@ -175,6 +175,33 @@ def steempeg_information(parent, title: str, message: str, *, detail: str | None
     )
 
 
+def steempeg_information_dont_ask(
+    parent,
+    title: str,
+    message: str,
+    *,
+    detail: str | None = None,
+    checkbox_label: str = "Don't ask again",
+) -> bool:
+    """Info dialog with a dismiss checkbox. Returns True if the checkbox was checked on OK."""
+    theme = dialog_theme(parent)
+    dlg = SteempegMessageDialog(
+        title,
+        message,
+        parent,
+        detail=detail,
+        buttons=(DialogButton("OK", "primary", accept=True),),
+        **theme,
+    )
+    from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+
+    chk = SteempegCheckBox(checkbox_label)
+    # Insert above the action row (last layout item).
+    dlg.content_layout.insertWidget(dlg.content_layout.count() - 1, chk)
+    dlg.exec()
+    return bool(chk.isChecked())
+
+
 def steempeg_warning(parent, title: str, message: str, *, detail: str | None = None) -> None:
     _show(
         parent,
