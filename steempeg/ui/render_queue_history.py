@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
@@ -177,11 +177,21 @@ class RenderQueueHistoryDialog(SteempegDialog):
             hint.setStyleSheet(f"color: #8a8a8a; font-size: 12px; padding-bottom: 32px; {_FONT}")
             host_layout.addWidget(empty)
             host_layout.addWidget(hint)
+            host_layout.addStretch()
         else:
-            for batch in batches:
-                host_layout.addWidget(self._build_batch_card(batch))
+            # Build cards in chunks so the dialog paints immediately (portable open lag).
+            self._pending_batches = list(batches)
+            self._history_host_layout = host_layout
+            loading = QLabel("Loading history…")
+            loading.setAlignment(Qt.AlignCenter)
+            loading.setObjectName("historyLoadingLabel")
+            loading.setStyleSheet(
+                f"color: #8a8a8a; font-size: 13px; padding: 24px; {_FONT}"
+            )
+            host_layout.addWidget(loading)
+            host_layout.addStretch()
+            QTimer.singleShot(0, self._pump_history_batches)
 
-        host_layout.addStretch()
         scroll.setWidget(host)
         root.addWidget(scroll, 1)
 
@@ -200,6 +210,33 @@ class RenderQueueHistoryDialog(SteempegDialog):
         btn_close.clicked.connect(self.accept)
         close_row.addWidget(btn_close)
         root.addLayout(close_row)
+
+    def _pump_history_batches(self) -> None:
+        layout = getattr(self, "_history_host_layout", None)
+        pending = getattr(self, "_pending_batches", None)
+        if layout is None or pending is None:
+            return
+        # Drop the loading label on first pump.
+        if layout.count() >= 2:
+            item = layout.itemAt(0)
+            w = item.widget() if item is not None else None
+            if w is not None and w.objectName() == "historyLoadingLabel":
+                layout.takeAt(0)
+                w.setParent(None)
+                w.deleteLater()
+        chunk = 2
+        stretch_idx = layout.count() - 1
+        for _ in range(chunk):
+            if not pending:
+                break
+            batch = pending.pop(0)
+            layout.insertWidget(max(0, stretch_idx), self._build_batch_card(batch))
+            stretch_idx = layout.count() - 1
+        if pending:
+            QTimer.singleShot(0, self._pump_history_batches)
+        else:
+            self._pending_batches = None
+            self._history_host_layout = None
 
     def _confirm_clear(self) -> None:
         if not self._batches:
