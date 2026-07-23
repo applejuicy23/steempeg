@@ -384,6 +384,10 @@ def updates_button_label(dense: UiDensity) -> str:
     return "🔄 Updates" if dense.compact else "🔄 Check for updates"
 
 
+def settings_button_label(dense: UiDensity) -> str:
+    return "⚙️ Settings"
+
+
 def refresh_button_label(dense: UiDensity) -> str:
     return "🔄 Refresh"  # already short; keep emoji
 
