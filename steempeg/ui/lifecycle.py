@@ -104,6 +104,18 @@ _ABOUT_DIALOG_STYLE = """
     QPushButton#AboutReportBtn:pressed {
         background-color: #3a1d1d;
     }
+    QPushButton#AboutUpdateBtn {
+        background-color: #4a3d66;
+        border: 1px solid #6b5a8e;
+        color: #f0ecff;
+    }
+    QPushButton#AboutUpdateBtn:hover {
+        background-color: #5a4d76;
+        border: 1px solid #b29ae7;
+    }
+    QPushButton#AboutUpdateBtn:pressed {
+        background-color: #3a324a;
+    }
 """
 
 
@@ -506,10 +518,21 @@ class LifecycleMixin:
         btn_report.setObjectName("AboutReportBtn")
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
+        btn_update = QPushButton("Check for updates")
+        btn_update.setObjectName("AboutUpdateBtn")
+        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def _open_updates_from_about():
+            dialog.accept()
+            # Let About tear down before stacking Update Center.
+            QTimer.singleShot(0, self.check_for_updates)
+
+        btn_update.clicked.connect(_open_updates_from_about)
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
+        btn_row.addWidget(btn_update)
         btn_row.addWidget(btn_close)
         content.addLayout(btn_row)
 
