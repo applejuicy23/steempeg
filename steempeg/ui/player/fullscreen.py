@@ -36,8 +36,17 @@ class FullscreenEventFilter(QObject):
 
             # 2. ESC: leave fullscreen, but NEVER let it close the main window
             elif event.key() == Qt.Key_Escape:
+                # A stuck immersive transition cover (top-level Tool) can outlive
+                # is_fullscreen and eat the screen — always drop it on Esc first.
+                cover = getattr(self.app_instance, '_immersive_transition_cover', None)
+                cover_was_up = cover is not None and cover.isVisible()
+                if cover_was_up and hasattr(self.app_instance, '_hide_immersive_transition_cover'):
+                    self.app_instance._hide_immersive_transition_cover()
                 if getattr(self.app_instance, 'is_fullscreen', False):
                     self.app_instance.toggle_fullscreen()
+                    return True
+                if cover_was_up:
+                    # Exit path died with is_fullscreen already False — Esc recovers.
                     return True
                 # Let child popups / modal dialogs (About, file picker, marker input,
                 # combo dropdowns) keep their own Esc-to-close behavior.
