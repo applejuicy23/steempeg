@@ -5,10 +5,17 @@ import subprocess
 import sys
 import webbrowser
 
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QApplication
 
 from steempeg.infra.paths import get_install_root, get_save_directory, open_path_with_default_app
-from steempeg.services.release_catalog import LocalBackup, ReleaseEntry, find_local_backups
+from steempeg.services.release_catalog import (
+    FetchError,
+    LocalBackup,
+    ReleaseEntry,
+    find_local_backups,
+    latest_release_version,
+)
 from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.github_rate_limit_dialog import GitHubRateLimitDialog
@@ -20,7 +27,26 @@ from steempeg.ui.message_dialog import (
 )
 from steempeg.ui.update_center import UpdateCenterDialog
 from steempeg.ui.update_confirm_dialog import UpdateConfirmChoice, UpdateConfirmDialog
-from steempeg.version import APP_VERSION_STR
+from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
+
+
+class _SilentUpdateCheckThread(QThread):
+    """Background GitHub catalog probe — never opens UI by itself."""
+
+    finished_ok = Signal(list)
+    finished_noop = Signal()
+
+    def run(self):
+        try:
+            from steempeg.services.release_catalog import fetch_releases
+
+            releases = fetch_releases()
+            self.finished_ok.emit(releases)
+        except FetchError:
+            self.finished_noop.emit()
+        except Exception:
+            logging.exception("UPDATER: silent update check failed")
+            self.finished_noop.emit()
 
 
 class UpdaterMixin:
@@ -36,6 +62,64 @@ class UpdaterMixin:
         finally:
             self.set_status("Ready")
             logging.info("--- UPDATER: check_for_updates finished ---")
+
+    def schedule_silent_update_check(self, delay_ms: int = 2500) -> None:
+        """Defer a quiet catalog check so the title-bar badge can appear."""
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(delay_ms, self._start_silent_update_check)
+
+    def _start_silent_update_check(self) -> None:
+        if getattr(self, "_silent_update_check_running", False):
+            return
+        self._silent_update_check_running = True
+        thread = _SilentUpdateCheckThread(self.ui)
+        self._silent_update_check_thread = thread
+        thread.finished_ok.connect(self._on_silent_update_check_ok)
+        thread.finished_noop.connect(self._on_silent_update_check_done)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _on_silent_update_check_done(self) -> None:
+        self._silent_update_check_running = False
+
+    def _on_silent_update_check_ok(self, releases: list) -> None:
+        self._silent_update_check_running = False
+        try:
+            if not releases:
+                self._set_title_bar_update_available(False)
+                return
+            latest = latest_release_version(releases)
+            if latest > APP_VERSION_FLOAT + 0.001:
+                latest_entry = releases[0]
+                self._set_title_bar_update_available(
+                    True, version=latest_entry.version_str
+                )
+            else:
+                self._set_title_bar_update_available(False)
+        except Exception:
+            logging.exception("UPDATER: failed applying silent update result")
+            self._set_title_bar_update_available(False)
+
+    def _set_title_bar_update_available(
+        self, available: bool, *, version: str | None = None
+    ) -> None:
+        tb = getattr(self.ui, "title_bar", None)
+        if tb is None or not hasattr(tb, "set_update_available"):
+            return
+        tb.set_update_available(available, version=version)
+
+    def _wire_title_bar_about_updates(self) -> None:
+        tb = getattr(self.ui, "title_bar", None)
+        if tb is None:
+            return
+        if getattr(tb, "_about_updates_wired", False):
+            return
+        tb._about_updates_wired = True
+        if hasattr(tb, "about_requested"):
+            tb.about_requested.connect(self.show_about_dialog)
+        if hasattr(tb, "update_available_clicked"):
+            tb.update_available_clicked.connect(self.check_for_updates)
 
     def _open_update_center(self):
         exe_dir = get_install_root()
