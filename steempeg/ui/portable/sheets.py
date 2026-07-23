@@ -142,6 +142,25 @@ def restore_render_settings(app) -> None:
         _log.exception("Failed to restore render settings")
 
 
+def _find_layout_index(layout, widget: QWidget):
+    """Return (layout, index) for widget in this layout or any nested sub-layout."""
+    if layout is None:
+        return None
+    idx = layout.indexOf(widget)
+    if idx >= 0:
+        return layout, idx
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        if item is None:
+            continue
+        child = item.layout()
+        if child is not None:
+            found = _find_layout_index(child, widget)
+            if found is not None:
+                return found
+    return None
+
+
 def _borrow_widget(widget: QWidget):
     """Detach widget from layout or QSplitter parent.
 
@@ -149,12 +168,12 @@ def _borrow_widget(widget: QWidget):
     """
     parent = widget.parentWidget()
     layout = parent.layout() if parent is not None else None
-    if layout is not None:
-        index = layout.indexOf(widget)
-        if index >= 0:
-            layout.removeWidget(widget)
-            widget.setParent(None)
-            return parent, layout, index, "layout"
+    found = _find_layout_index(layout, widget) if layout is not None else None
+    if found is not None:
+        host_layout, index = found
+        host_layout.removeWidget(widget)
+        widget.setParent(None)
+        return parent, host_layout, index, "layout"
 
     # QSplitter (main library column) has no QLayout.
     from PySide6.QtWidgets import QSplitter
@@ -198,10 +217,11 @@ def _return_widget(
 class PortableRenderSettingsDialog(SteempegDialog):
     """Embed desktop neo export panel + queue rail + portable render control strip."""
 
-    def __init__(self, app, parent=None):
+    def __init__(self, app, parent=None, *, warm: bool = False):
         theme = dialog_theme(parent or getattr(app, "ui", None))
-        super().__init__("Render", parent or app.ui, **theme)
+        super().__init__("Render", parent or app.ui, suppress_map=bool(warm), **theme)
         self._app = app
+        self._warm = bool(warm)
         self._neo = getattr(app, "neo_wrapper", None)
         self._home = (None, None, -1, "orphan")
         self._hw = getattr(app, "hide_watcher", None)
@@ -267,24 +287,27 @@ class PortableRenderSettingsDialog(SteempegDialog):
             right.addWidget(empty, 1)
         else:
             self._home = _borrow_widget(self._neo)
-            self._neo.show()
+            # Warm/prewarm: keep neo hidden — showing it forces a top-level HWND flash.
+            if not self._warm:
+                self._neo.show()
             self._neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             if compact:
                 apply_portable_neo_chrome(app)
             # Theatre / portable hide settings_tabs separately from neo_wrapper —
             # without this the sheet opens empty (sidebar only / blank content).
             tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
-            if tabs is not None:
+            if tabs is not None and not self._warm:
                 tabs.show()
                 # Landing tab for a "Render settings" sheet — not Source Info.
                 if tabs.count() > 1:
                     tabs.setCurrentIndex(1)
-            for name in ("_neo_sidebar", "right_scroll"):
-                w = getattr(app, name, None)
-                if w is not None:
-                    w.show()
-            if hasattr(app, "fit_settings_tab_to_page"):
-                QTimer.singleShot(0, app.fit_settings_tab_to_page)
+            if not self._warm:
+                for name in ("_neo_sidebar", "right_scroll"):
+                    w = getattr(app, name, None)
+                    if w is not None:
+                        w.show()
+                if hasattr(app, "fit_settings_tab_to_page"):
+                    QTimer.singleShot(0, app.fit_settings_tab_to_page)
             right.addWidget(self._neo, 1)
 
         self._strip = PortableRenderControlStrip(app, self)
@@ -315,6 +338,47 @@ class PortableRenderSettingsDialog(SteempegDialog):
         footer_lay.addWidget(btn_save)
         self.content_layout.addWidget(footer, 0)
 
+        if self._warm:
+            # Prewarm builds the sheet hidden — don't leave hide_watcher suppressed.
+            if self._hw is not None:
+                self._hw.set_suppressed(False)
+            garage = self.parentWidget()
+            self._park_as_embedded_widget(garage)
+
+    def prepare_for_show(self) -> None:
+        """Re-arm a warm sheet before exec (no reparent)."""
+        host = getattr(self._app, "ui", None)
+        if hasattr(self, "release_map_suppression"):
+            self.release_map_suppression(host)
+        self._hw = getattr(self._app, "hide_watcher", None)
+        if self._hw is not None:
+            self._hw.set_suppressed(True)
+        self._app._portable_queue_sidebar = self._queue
+        self._app._portable_render_strip = self._strip
+        if self._neo is not None:
+            self._neo.show()
+            tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
+            if tabs is not None:
+                tabs.show()
+                if tabs.count() > 1:
+                    tabs.setCurrentIndex(1)
+            for name in ("_neo_sidebar", "right_scroll"):
+                w = getattr(self._app, name, None)
+                if w is not None:
+                    w.show()
+        if hasattr(self._queue, "refresh"):
+            self._queue.refresh()
+        if hasattr(self._strip, "sync_from_app"):
+            self._strip.sync_from_app()
+        if hasattr(self._app, "fit_settings_tab_to_page"):
+            QTimer.singleShot(0, self._app.fit_settings_tab_to_page)
+
+    def dispose_warm(self) -> None:
+        """Return borrowed neo to the main shell and destroy this dialog."""
+        self._warm = False
+        self.done(0)
+        self.deleteLater()
+
     def _on_queue_job(self, job_id: str) -> None:
         if hasattr(self._app, "activate_queue_job"):
             self._app.activate_queue_job(job_id)
@@ -337,6 +401,22 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self.accept()
 
     def done(self, result: int) -> None:
+        if self._warm:
+            # Keep neo embedded — next open is show/hide, not reparent thrash.
+            if self._hw is not None:
+                self._hw.set_suppressed(False)
+            if getattr(self._app, "is_theater", False):
+                tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
+                if tabs is not None:
+                    tabs.hide()
+            # Exit modal loop without tearing down the embedded neo panel.
+            from PySide6.QtWidgets import QDialog
+
+            QDialog.done(self, result)
+            # Keep Dialog HWND — only unmap. Demoting to Widget made every reopen slow.
+            self._park_hidden_dialog()
+            return
+
         restore_portable_neo_chrome(self._app)
         if hasattr(self._app, "_portable_sheet_compact"):
             delattr(self._app, "_portable_sheet_compact")
@@ -362,17 +442,26 @@ class PortableRenderSettingsDialog(SteempegDialog):
 class PortableClipPickerDialog(SteempegDialog):
     """Theatre overlay: Clips Manager (grid) + Rendered tab."""
 
-    def __init__(self, app, parent=None):
+    def __init__(self, app, parent=None, *, warm: bool = False):
         theme = dialog_theme(parent or getattr(app, "ui", None))
-        super().__init__("Add a Clip", parent or app.ui, **theme)
+        super().__init__("Choose a Clip", parent or app.ui, suppress_map=bool(warm), **theme)
         self._app = app
+        self._warm = bool(warm)
         self._panel = getattr(app.ui, "left_panel", None)
         self._home = (None, None, -1, "orphan")
         self._armed = False
+        self._pick_wired = False
         self._prev_clips_mode = None
         self._prev_rendered_mode = None
         self._prev_sel_modes: list[tuple[object, object]] = []
         self._toggle_was_visible = True
+        self._folder_refresh_mounted = False
+        self._folder_home = None
+        self._refresh_home = None
+        self._folder_size_policy = None
+        self._refresh_size_policy = None
+        self._folder_max_width = None
+        self._refresh_max_width = None
 
         self.setMinimumSize(640, 480)
         self.content_layout.setContentsMargins(10, 6, 10, 10)
@@ -386,17 +475,68 @@ class PortableClipPickerDialog(SteempegDialog):
         else:
             self._prepare_library_for_sheet()
             self._home = _borrow_widget(self._panel)
-            self._panel.show()
+            # Warm: do not show the panel — parent.show() forces a top-level HWND flash.
+            if not self._warm:
+                self._panel.show()
             self._panel.setMinimumWidth(0)
             self._panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.content_layout.addWidget(self._panel, 1)
 
         host = parent or getattr(app, "ui", None)
-        if host is not None:
+        if host is not None and not self._warm:
             geo = host.geometry()
             self.resize(max(640, int(geo.width() * 0.78)), max(480, int(geo.height() * 0.78)))
+        elif self._warm:
+            # Size hint for later promote; stay embedded (no top-level resize flash).
+            ui = getattr(app, "ui", None)
+            if ui is not None:
+                geo = ui.geometry()
+                self.resize(max(640, int(geo.width() * 0.78)), max(480, int(geo.height() * 0.78)))
 
-        QTimer.singleShot(350, self._arm_selection_close)
+        if not self._warm:
+            QTimer.singleShot(350, self._arm_selection_close)
+        else:
+            garage = self.parentWidget()
+            self._park_as_embedded_widget(garage)
+
+    def prepare_for_show(self) -> None:
+        """Re-arm a warm picker before exec (panel already embedded)."""
+        host = getattr(self._app, "ui", None)
+        if hasattr(self, "release_map_suppression"):
+            self.release_map_suppression(host)
+        self._armed = False
+        # Theatre / fullscreen may have called left_panel.hide() while the panel
+        # lived in this sheet — without show() Add a Clip opens a blank dialog.
+        if self._panel is not None:
+            try:
+                self._panel.show()
+                self._panel.setMinimumWidth(0)
+                self._panel.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                )
+            except RuntimeError:
+                self._panel = None
+        if self._panel is None:
+            panel = getattr(getattr(self._app, "ui", None), "left_panel", None)
+            if panel is not None:
+                self._panel = panel
+                self._prepare_library_for_sheet()
+                self._home = _borrow_widget(self._panel)
+                self._panel.show()
+                self._panel.setMinimumWidth(0)
+                self._panel.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                )
+                self.content_layout.addWidget(self._panel, 1)
+        else:
+            self._wire_pick_signals()
+        self._mount_folder_refresh_in_toolbar()
+        QTimer.singleShot(200, self._arm_selection_close)
+
+    def dispose_warm(self) -> None:
+        self._warm = False
+        self.done(0)
+        self.deleteLater()
 
     def _prepare_library_for_sheet(self) -> None:
         app = self._app
@@ -431,11 +571,92 @@ class PortableClipPickerDialog(SteempegDialog):
         if hasattr(app, "table_rendered") and app.table_rendered is not None:
             widgets.append(app.table_rendered)
 
+        self._prev_sel_modes = []
         for w in widgets:
             prev = w.selectionMode()
             self._prev_sel_modes.append((w, prev))
             w.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
+        self._wire_pick_signals()
+        self._mount_folder_refresh_in_toolbar()
+
+    def _mount_folder_refresh_in_toolbar(self) -> None:
+        """Put Choose Folder + Refresh on the left of the sort/filter toolbar row."""
+        if self._folder_refresh_mounted:
+            return
+        app = self._app
+        layout = getattr(app, "_top_pill_layout", None)
+        folder = getattr(app, "folder_picker", None)
+        refresh = getattr(app, "btn_refresh", None)
+        if layout is None or folder is None or refresh is None:
+            return
+
+        self._folder_home = _borrow_widget(folder)
+        self._refresh_home = _borrow_widget(refresh)
+        self._folder_size_policy = folder.sizePolicy()
+        self._refresh_size_policy = refresh.sizePolicy()
+        self._folder_max_width = folder.maximumWidth()
+        self._refresh_max_width = refresh.maximumWidth()
+
+        folder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        folder.setMaximumWidth(320)
+        refresh.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        refresh.setMaximumWidth(160)
+
+        # Left cluster: folder + refresh; sort/filter already sit after the stretch.
+        layout.insertWidget(0, folder)
+        layout.insertWidget(1, refresh)
+        folder.show()
+        refresh.show()
+
+        footer = getattr(app, "_footer_mega_pill", None)
+        if footer is not None:
+            footer.hide()
+
+        self._folder_refresh_mounted = True
+
+    def _unmount_folder_refresh_from_toolbar(self) -> None:
+        if not self._folder_refresh_mounted:
+            return
+        app = self._app
+        folder = getattr(app, "folder_picker", None)
+        refresh = getattr(app, "btn_refresh", None)
+        layout = getattr(app, "_top_pill_layout", None)
+
+        if layout is not None:
+            if folder is not None:
+                idx = layout.indexOf(folder)
+                if idx >= 0:
+                    layout.removeWidget(folder)
+            if refresh is not None:
+                idx = layout.indexOf(refresh)
+                if idx >= 0:
+                    layout.removeWidget(refresh)
+
+        if folder is not None and self._folder_home is not None:
+            if self._folder_size_policy is not None:
+                folder.setSizePolicy(self._folder_size_policy)
+            if self._folder_max_width is not None:
+                folder.setMaximumWidth(self._folder_max_width)
+            parent, lay, index, kind = self._folder_home
+            _return_widget(folder, parent, lay, index, kind, visible=False)
+
+        if refresh is not None and self._refresh_home is not None:
+            if self._refresh_size_policy is not None:
+                refresh.setSizePolicy(self._refresh_size_policy)
+            if self._refresh_max_width is not None:
+                refresh.setMaximumWidth(self._refresh_max_width)
+            parent, lay, index, kind = self._refresh_home
+            _return_widget(refresh, parent, lay, index, kind, visible=False)
+
+        self._folder_refresh_mounted = False
+        self._folder_home = None
+        self._refresh_home = None
+
+    def _wire_pick_signals(self) -> None:
+        if self._pick_wired:
+            return
+        app = self._app
         if hasattr(app, "grid_clips"):
             app.grid_clips.itemSelectionChanged.connect(self._on_pick)
         if hasattr(app, "grid_rendered"):
@@ -444,26 +665,11 @@ class PortableClipPickerDialog(SteempegDialog):
             app.ui.table_clips.itemSelectionChanged.connect(self._on_pick)
         if hasattr(app, "table_rendered"):
             app.table_rendered.itemSelectionChanged.connect(self._on_pick)
+        self._pick_wired = True
 
-    def _arm_selection_close(self) -> None:
-        self._armed = True
-
-    def _on_pick(self) -> None:
-        if not self._armed:
+    def _unwire_pick_signals(self) -> None:
+        if not self._pick_wired:
             return
-        mods = QApplication.keyboardModifiers()
-        # Ctrl/Alt/Shift+LMB builds a multi-selection (context menu / queue) —
-        # don't dismiss the Clips Manager sheet.
-        if mods & (
-            Qt.KeyboardModifier.ControlModifier
-            | Qt.KeyboardModifier.ShiftModifier
-            | Qt.KeyboardModifier.AltModifier
-        ):
-            return
-        self._armed = False
-        QTimer.singleShot(0, self.accept)
-
-    def _restore_library(self) -> None:
         app = self._app
         try:
             if hasattr(app, "grid_clips"):
@@ -485,12 +691,37 @@ class PortableClipPickerDialog(SteempegDialog):
                 app.table_rendered.itemSelectionChanged.disconnect(self._on_pick)
         except (TypeError, RuntimeError):
             pass
+        self._pick_wired = False
+
+    def _arm_selection_close(self) -> None:
+        self._armed = True
+
+    def _on_pick(self) -> None:
+        if not self._armed:
+            return
+        mods = QApplication.keyboardModifiers()
+        # Ctrl/Alt/Shift+LMB builds a multi-selection (context menu / queue) —
+        # don't dismiss the Clips Manager sheet.
+        if mods & (
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier
+        ):
+            return
+        self._armed = False
+        QTimer.singleShot(0, self.accept)
+
+    def _restore_library(self) -> None:
+        app = self._app
+        self._unwire_pick_signals()
+        self._unmount_folder_refresh_from_toolbar()
 
         for w, mode in self._prev_sel_modes:
             try:
                 w.setSelectionMode(mode)
             except RuntimeError:
                 pass
+        self._prev_sel_modes = []
 
         toggle = getattr(app, "toggle_pill", None)
         lbl = getattr(app, "_lbl_view", None)
@@ -509,13 +740,25 @@ class PortableClipPickerDialog(SteempegDialog):
                     app._apply_rendered_view_mode()
 
     def done(self, result: int) -> None:
+        if self._warm:
+            self._armed = False
+            self._unwire_pick_signals()
+            from PySide6.QtWidgets import QDialog
+
+            QDialog.done(self, result)
+            self._park_hidden_dialog()
+            return
+
         self._restore_library()
         if self._panel is not None:
             parent, layout, index, kind = self._home
             _return_widget(self._panel, parent, layout, index, kind, visible=False)
             if kind == "splitter" and parent is not None:
                 try:
-                    parent.handle(1).setVisible(False)
+                    if parent.count() > 1:
+                        handle = parent.handle(1)
+                        if handle is not None:
+                            handle.setVisible(False)
                 except Exception:
                     pass
             self._panel = None
