@@ -248,17 +248,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._clip_session_memory = {}
 
         
-        # list of all supported resolutions for rendering
-        self.all_qualities = [
-            ("2160p (Best Quality)", 2160),
-            ("1440p (Very good Quality)", 1440),
-            ("1080p (Good Quality)", 1080),
-            ("720p (Mid Quality)", 720),
-            ("480p (Bad Quality)", 480),
-            ("360p (Very bad Quality)", 360),
-            ("260p (Worst Quality)", 260),
-            ("144p (Old VHS tape)", 144)
-        ]
+        # Export quality ladder (Divine 4K / Goddess 8K+); rebuilt per clip when taller.
+        from steempeg.render.quality_presets import build_quality_presets
+
+        self.all_qualities = build_quality_presets()
 
         self.set_status("Ready")
 
@@ -1068,6 +1061,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             btn_about.parentWidget().layout().removeWidget(btn_about)
         if btn_update and btn_update.parentWidget() and btn_update.parentWidget().layout():
             btn_update.parentWidget().layout().removeWidget(btn_update)
+
+        from steempeg.ui.ui_density import settings_button_label
+        from steempeg.ui.ui_density import density_for_width
+
+        btn_settings = QPushButton(settings_button_label(density_for_width(self.ui.width())))
+        btn_settings.setObjectName("btn_settings")
+        self.ui.btn_settings = btn_settings
             
         # 5. Color the buttons and add cursors
         if btn_about:
@@ -1078,13 +1078,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             btn_update.setStyleSheet(unified_table_style)
             btn_update.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             btn_update.setCursor(Qt.PointingHandCursor)
+        btn_settings.setStyleSheet(unified_table_style)
+        btn_settings.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        btn_settings.setCursor(Qt.PointingHandCursor)
             
-        # 6. LAY OUT THE BUTTONS BY FLOORS (70/30 on top, 50/50 on the bottom)
+        # 6. LAY OUT THE BUTTONS BY FLOORS (About · Updates · Settings)
         top_row.addWidget(self.folder_picker, 7)
         top_row.addWidget(self.btn_refresh, 3)
         
-        if btn_about: bottom_row.addWidget(btn_about, 5)
-        if btn_update: bottom_row.addWidget(btn_update, 5)
+        if btn_about: bottom_row.addWidget(btn_about, 1)
+        if btn_update: bottom_row.addWidget(btn_update, 1)
+        bottom_row.addWidget(btn_settings, 1)
         
         # 7. RECOVERING SIGNALS (Presses)
         self.btn_refresh.main_btn.clicked.connect(self.refresh_library)
@@ -1096,6 +1100,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.destination_button.clicked.connect(self.choose_destination)
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)
         if btn_update: btn_update.clicked.connect(self.check_for_updates)
+        btn_settings.clicked.connect(self.show_settings_dialog)
         if hasattr(self, "_wire_title_bar_about_updates"):
             self._wire_title_bar_about_updates()
         self.ui.btn_start.clicked.connect(self.start_render_thread)
@@ -2872,12 +2877,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._footer_unified_style = footer_style
         btn_about = getattr(self.ui, "btn_about", None)
         btn_update = getattr(self.ui, "btn_update_check", None)
+        btn_settings = getattr(self.ui, "btn_settings", None)
         if btn_about is not None:
             btn_about.setStyleSheet(footer_style)
         if btn_update is not None:
             btn_update.setStyleSheet(footer_style)
             btn_update.setText(updates_button_label(dense))
             btn_update.setToolTip("Check for updates")
+        if btn_settings is not None:
+            from steempeg.ui.ui_density import settings_button_label
+
+            btn_settings.setStyleSheet(footer_style)
+            btn_settings.setText(settings_button_label(dense))
+            btn_settings.setToolTip("Settings")
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "apply_density"):
             picker.apply_density(dense)
@@ -3527,7 +3539,18 @@ def main():
             QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
         if hasattr(window, "schedule_silent_update_check"):
             # Quiet badge probe — never auto-installs; user still chooses backup/update.
-            window.schedule_silent_update_check(2800)
+            # Opt-out via Settings → Check for updates on startup.
+            from steempeg.ui.settings_dialog import KEY_CHECK_UPDATES_ON_STARTUP
+
+            check_on_start = True
+            try:
+                check_on_start = bool(
+                    window.load_user_settings().get(KEY_CHECK_UPDATES_ON_STARTUP, True)
+                )
+            except Exception:
+                check_on_start = True
+            if check_on_start:
+                window.schedule_silent_update_check(2800)
         geo = window.ui.geometry()
         logging.info(
             "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
