@@ -57,6 +57,35 @@ def info_icon(size: int = 14) -> QIcon:
     return load_icon("info.png", size)
 
 
+def title_bar_info_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted info.png for the title-bar About (i), centered in ``size``.
+
+    Source clips the ring bottom slightly — scale inset by 1px so the arc stays round.
+    """
+    inner = max(size - 1, 10)
+    src = tinted_pixmap("info.png", color, inner)
+    if src.isNull():
+        return src
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    x = (size - src.width()) // 2
+    y = (size - src.height()) // 2
+    painter.drawPixmap(x, y, src)
+    painter.end()
+    return out
+
+
+def title_bar_info_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Idle (soft gray) + hot (near-white) icons for the title-bar About (i)."""
+    # Slightly muted vs Steempeg title white — not as gray as TitleBarSubtitle (#858585).
+    idle = _icon_from_pixmap(title_bar_info_pixmap("#b8b8b8", size))
+    hot = _icon_from_pixmap(title_bar_info_pixmap("#e8e8e8", size))
+    return idle, hot
+
+
 def tinted_pixmap(name: str, color: str | QColor, size: int = 16) -> QPixmap:
     """Recolor a bundled asset (keeps alpha) via SourceIn tint."""
     src = QPixmap(get_resource_path(name))
@@ -89,6 +118,11 @@ def tinted_icon(name: str, color: str | QColor, size: int = 16) -> QIcon:
 def close_clip_icon(size: int = 16) -> QIcon:
     """Red-tinted cancel.png for the player header close chip."""
     return tinted_icon("cancel.png", "#e05555", size)
+
+
+def add_clip_icon(size: int = 18) -> QIcon:
+    """Purple-tinted addclip.png for the portable «Choose a Clip» chip."""
+    return tinted_icon("addclip.png", "#d4c8f5", size)
 
 
 def preview_settings_icon(size: int = 16) -> QIcon:
