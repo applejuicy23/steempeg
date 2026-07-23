@@ -39,7 +39,16 @@ from steempeg.core.rendered_media import (
 )
 from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui.player.immersive_chrome import enter_immersive_chrome, exit_immersive_chrome
-from steempeg.ui.window_chrome import collapse_content_insets, force_full_redraw, restore_content_insets, set_window_transitions
+from steempeg.ui.window_chrome import (
+    collapse_content_insets,
+    enable_frameless,
+    force_full_redraw,
+    poke_frame,
+    refresh_dwm_chrome,
+    restore_content_insets,
+    set_window_transitions,
+    soft_full_redraw,
+)
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
 from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
 
@@ -240,12 +249,30 @@ class PlayerMixin:
 
         if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
             self.video_stack.setCurrentWidget(self.placeholder_frame)
+        self._park_mpv_embed_when_not_showing()
 
         if hasattr(self.ui, 'label_time'):
             self.ui.label_time.setText("00:00 / 00:00")
 
         if hasattr(self.ui, 'btn_play'):
             self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+
+    def _park_mpv_embed_when_not_showing(self):
+        """Hide the native mpv HWND while the stack shows placeholder/blank."""
+        wrapper = getattr(self, 'mpv_wrapper', None)
+        if wrapper is not None and hasattr(wrapper, '_park_mpv_screen'):
+            wrapper._park_mpv_screen()
+        elif hasattr(self, 'mpv_screen') and self.mpv_screen is not None:
+            self.mpv_screen.hide()
+
+    def _on_video_stack_page_changed(self, _index: int = 0):
+        """Keep native embed parked whenever video_container is not the top page."""
+        stack = getattr(self, 'video_stack', None)
+        container = getattr(self.ui, 'video_container', None) if hasattr(self, 'ui') else None
+        if stack is None or container is None:
+            return
+        if stack.currentWidget() is not container:
+            self._park_mpv_embed_when_not_showing()
 
     def _reset_player_placeholder_default(self):
         """Restore the idle Steempeg poster (centered logo, no game icon overlay)."""
@@ -629,10 +656,7 @@ class PlayerMixin:
                     pos = None
                 if dur and pos is not None and float(pos) >= float(dur) - 0.05:
                     self._ignore_playback_stall(0.5)
-                    try:
-                        self.player.seek(0, reference='absolute', precision='exact')
-                    except Exception:
-                        pass
+                    self._safe_mpv_seek(0)
                     if hasattr(self, 'custom_timeline'):
                         self.custom_timeline.force_jump(0)
 
@@ -679,6 +703,14 @@ class PlayerMixin:
 
     def _set_left_library_panel_visible(self, visible: bool):
         """Toggle the whole library column — do not show/hide tab children individually."""
+        # Warm Clips Manager borrows left_panel into its sheet. Hiding it for
+        # theatre/fullscreen would leave Add a Clip opening an empty dialog.
+        if (
+            not visible
+            and hasattr(self.ui, "left_panel")
+            and self._portable_clip_picker_owns_library()
+        ):
+            return
         if hasattr(self.ui, 'left_panel'):
             self.ui.left_panel.setVisible(visible)
         elif hasattr(self.ui, 'table_clips'):
@@ -688,6 +720,22 @@ class PlayerMixin:
             else:
                 self.ui.table_clips.setVisible(visible)
         self._keep_deprecated_library_pill_hidden()
+
+    def _portable_clip_picker_owns_library(self) -> bool:
+        """True when left_panel currently lives inside the warm Clips Manager sheet."""
+        panel = getattr(getattr(self, "ui", None), "left_panel", None)
+        dlg = getattr(self, "_portable_clip_picker_dlg", None)
+        if panel is None or dlg is None:
+            return False
+        try:
+            w = panel
+            while w is not None:
+                if w is dlg:
+                    return True
+                w = w.parentWidget()
+        except RuntimeError:
+            return False
+        return False
 
     def apply_portable_theatre_shell(self):
         """Steam Deck / portable shell: theatre-only, no docks. Locked until shell changes."""
@@ -728,7 +776,7 @@ class PlayerMixin:
         self._set_left_library_panel_visible(not self.is_theater)
 
         if hasattr(self.ui, 'main_splitter'):
-            self.ui.main_splitter.handle(1).setVisible(not self.is_theater)
+            self._set_splitter_handle_visible(self.ui.main_splitter, not self.is_theater)
 
         if hasattr(self, 'bottom_v_wrap'):
             self.bottom_v_wrap.setVisible(not self.is_theater)
@@ -756,17 +804,17 @@ class PlayerMixin:
             # same thickness as the left splitter (it is not always equal to
             # QUEUE_SPLITTER_GUTTER).
             self._pre_theater_right_handle_width = self.right_h_splitter.handleWidth()
-            try:
-                self._pre_theater_right_handle_visible = self.right_h_splitter.handle(1).isVisible()
-            except Exception:
-                self._pre_theater_right_handle_visible = True
+            handle = self._splitter_handle(self.right_h_splitter, 1)
+            self._pre_theater_right_handle_visible = (
+                handle.isVisible() if handle is not None else True
+            )
             # Collapse the queue splitter handle itself — otherwise a thick dark
             # strip remains on the right and breaks symmetry with the left edge.
             self._hide_right_h_splitter_handle()
 
-        if hasattr(self, 'btn_refresh'):
-            browse_wrapper = self.btn_refresh.parentWidget()
-            if browse_wrapper: browse_wrapper.setVisible(not self.is_theater)
+        footer = getattr(self, "_footer_mega_pill", None)
+        if footer is not None:
+            footer.setVisible(not self.is_theater)
             
         if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(not self.is_theater)
         if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(not self.is_theater)
@@ -809,7 +857,7 @@ class PlayerMixin:
             restored_visible = getattr(self, '_pre_theater_right_handle_visible', None)
             if restored_visible is None:
                 restored_visible = True
-            self.right_h_splitter.handle(1).setVisible(bool(restored_visible))
+            self._set_splitter_handle_visible(self.right_h_splitter, bool(restored_visible))
 
         # Theatre keeps the normal content padding (only true fullscreen goes flush).
         restore_content_insets(self.ui)
@@ -848,15 +896,30 @@ class PlayerMixin:
             return
         setattr(self, attr_name, splitter.sizes())
 
+    @staticmethod
+    def _splitter_handle(splitter, index: int = 1):
+        """Return splitter handle or None (portable may be single-pane → no handle)."""
+        if splitter is None:
+            return None
+        try:
+            if splitter.count() <= index:
+                return None
+            return splitter.handle(index)
+        except Exception:
+            return None
+
+    def _set_splitter_handle_visible(self, splitter, visible: bool, index: int = 1) -> None:
+        handle = self._splitter_handle(splitter, index)
+        if handle is not None:
+            handle.setVisible(bool(visible))
+
     def _save_right_h_splitter_handle(self, width_attr: str, visible_attr: str) -> None:
         splitter = getattr(self, "right_h_splitter", None)
         if splitter is None:
             return
         setattr(self, width_attr, splitter.handleWidth())
-        try:
-            setattr(self, visible_attr, splitter.handle(1).isVisible())
-        except Exception:
-            setattr(self, visible_attr, True)
+        handle = self._splitter_handle(splitter, 1)
+        setattr(self, visible_attr, handle.isVisible() if handle is not None else True)
 
     def _restore_right_h_splitter_handle(self) -> None:
         splitter = getattr(self, "right_h_splitter", None)
@@ -873,19 +936,13 @@ class PlayerMixin:
         if visible is None:
             visible = True
         splitter.setHandleWidth(int(width))
-        try:
-            splitter.handle(1).setVisible(bool(visible))
-        except Exception:
-            pass
+        self._set_splitter_handle_visible(splitter, bool(visible))
 
     def _hide_right_h_splitter_handle(self) -> None:
         splitter = getattr(self, "right_h_splitter", None)
         if splitter is None:
             return
-        try:
-            splitter.handle(1).setVisible(False)
-        except Exception:
-            pass
+        self._set_splitter_handle_visible(splitter, False)
         splitter.setHandleWidth(0)
 
     def _collapse_splitter(self, splitter, keep_index):
@@ -941,9 +998,21 @@ class PlayerMixin:
         self.ui.raise_()
         self.ui.activateWindow()
 
+    def _is_player_idle_placeholder(self) -> bool:
+        """True when the stack shows the idle 'Please select a clip…' page."""
+        return (
+            hasattr(self, 'video_stack')
+            and hasattr(self, 'placeholder_frame')
+            and self.video_stack.currentWidget() is self.placeholder_frame
+        )
+
     def _show_immersive_transition_cover(self):
+        # Always mask enter/exit (idle and with clip). Skipping the cover on idle
+        # made the un-maximize animate visibly and stomped normalGeometry — the
+        # old "raise min size to max" hack. Gray cover ~0.1–0.5s is the lesser evil.
         if getattr(self, '_immersive_transition_cover', None) is None:
             cover = QWidget()
+            cover.setObjectName('immersiveTransitionCover')
             cover.setWindowFlags(
                 Qt.WindowType.Tool
                 | Qt.WindowType.FramelessWindowHint
@@ -957,37 +1026,101 @@ class PlayerMixin:
         cover.show()
         cover.raise_()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        # Generation so a stale failsafe from enter cannot uncover mid-exit.
+        self._immersive_cover_gen = getattr(self, '_immersive_cover_gen', 0) + 1
+        gen = self._immersive_cover_gen
+        QTimer.singleShot(900, lambda g=gen: self._hide_immersive_transition_cover_if(g))
+
+    def _hide_immersive_transition_cover_if(self, gen: int) -> None:
+        if getattr(self, '_immersive_cover_gen', 0) != gen:
+            return
+        self._hide_immersive_transition_cover()
 
     def _hide_immersive_transition_cover(self):
         cover = getattr(self, '_immersive_transition_cover', None)
         if cover is not None:
             cover.hide()
 
+    def _reassert_frameless_caption(self) -> None:
+        """Force NCCALCSIZE + dark DWM so native Aero caption cannot paint a frame."""
+        try:
+            # Full style re-assert (not only SetWindowPos) — cold first maximize
+            # after fullscreen otherwise paints Aero for a frame.
+            enable_frameless(self.ui)
+            poke_frame(self.ui)
+            refresh_dwm_chrome(self.ui)
+            soft_full_redraw(self.ui)
+        except Exception:
+            pass
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _warmup_frameless_caption_under_cover(self) -> None:
+        """One-shot under the gray cover: show title bar + enable_frameless.
+
+        First fullscreen EXIT is the first time DWM sees title_bar visible again
+        after a maximize — that cold path flashes Aero. Priming it on ENTER (still
+        covered) makes the first EXIT behave like the second.
+        """
+        if getattr(self, "_frameless_caption_warmed", False):
+            return
+        if os.name != "nt":
+            self._frameless_caption_warmed = True
+            return
+        tb = getattr(self.ui, "title_bar", None)
+        was_hidden = tb is not None and not tb.isVisible()
+        try:
+            if tb is not None:
+                tb.show()
+                tb.sync_window_state()
+            self._reassert_frameless_caption()
+            if tb is not None:
+                tb.update()
+            self.ui.repaint()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        finally:
+            if was_hidden and tb is not None:
+                tb.hide()
+            self._frameless_caption_warmed = True
+
     def _finish_fullscreen_enter(self):
         """Drop the transition cover once the restore animation is done + repainted."""
-        if not getattr(self, 'is_fullscreen', False):
-            self._hide_immersive_transition_cover()
+        try:
+            if not getattr(self, 'is_fullscreen', False):
+                set_window_transitions(self.ui, True)
+                return
+            # Re-assert full-monitor geometry: clearing the maximized state queues a
+            # restore to the old (small) normalGeometry which, with transitions disabled,
+            # overrides the setGeometry done in enter_immersive_chrome. Applying it here
+            # (after Qt processed the state change) makes the fullscreen size stick.
+            self.ui.setGeometry(self._immersive_screen_geometry())
+            self.ui.raise_()
+            self.ui.activateWindow()
+            self.ui.update()
+            force_full_redraw(self.ui)
+            # Flush the paint before lifting the cover so the first visible frame is
+            # the finished fullscreen layout (no transparent edges / animation tail).
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+            )
+            # Prime caption suppress while still covered — kills first-exit Aero flash.
+            self._warmup_frameless_caption_under_cover()
+            if hasattr(self, 'player_footer_frame'):
+                self.player_footer_frame.show()
+                self.player_footer_frame.raise_()
+            # Restore native min/max/restore animations that were disabled for the switch.
             set_window_transitions(self.ui, True)
-            return
-        # Re-assert full-monitor geometry: clearing the maximized state queues a
-        # restore to the old (small) normalGeometry which, with transitions disabled,
-        # overrides the setGeometry done in enter_immersive_chrome. Applying it here
-        # (after Qt processed the state change) makes the fullscreen size stick.
-        self.ui.setGeometry(self._immersive_screen_geometry())
-        self.ui.raise_()
-        self.ui.activateWindow()
-        self.ui.update()
-        force_full_redraw(self.ui)
-        # Flush the paint before lifting the cover so the first visible frame is the
-        # finished fullscreen layout (no transparent edges / animation tail).
-        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-        if hasattr(self, 'player_footer_frame'):
-            self.player_footer_frame.show()
-            self.player_footer_frame.raise_()
-        self._hide_immersive_transition_cover()
-        # Restore native min/max/restore animations that were disabled for the switch.
-        set_window_transitions(self.ui, True)
-        self._show_immersive_esc_hint()
+            self._show_immersive_esc_hint()
+        finally:
+            self._hide_immersive_transition_cover()
+            if getattr(self, 'is_fullscreen', False) and hasattr(self, 'player_footer_frame'):
+                self.player_footer_frame.show()
+                self.player_footer_frame.raise_()
+                self.align_fullscreen_hud()
+                if self._is_player_idle_placeholder() and hasattr(self, 'fs_timer'):
+                    self.fs_timer.stop()
+            if getattr(self, 'is_fullscreen', False):
+                self.ui.activateWindow()
+                self.ui.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _activate_window_layouts(self):
         for layout in (
@@ -1089,10 +1222,9 @@ class PlayerMixin:
             bw = self.ui.btn_start.parentWidget()
             if bw and "Splitter" not in type(bw).__name__ and bw.objectName() != "centralwidget":
                 bw.setVisible(not is_t)
-        if hasattr(self, 'btn_refresh'):
-            rw = self.btn_refresh.parentWidget()
-            if rw:
-                rw.setVisible(not is_t)
+        footer = getattr(self, "_footer_mega_pill", None)
+        if footer is not None:
+            footer.setVisible(not is_t)
         if hasattr(self.ui, 'btn_about'):
             self.ui.btn_about.setVisible(not is_t)
         if hasattr(self.ui, 'btn_update_check'):
@@ -1101,9 +1233,9 @@ class PlayerMixin:
         if hasattr(self, 'player_header_frame'):
             self.player_header_frame.show()
         if hasattr(self.ui, 'main_splitter'):
-            self.ui.main_splitter.handle(1).setVisible(not is_t)
+            self._set_splitter_handle_visible(self.ui.main_splitter, not is_t)
         if hasattr(self, 'main_v_splitter'):
-            self.main_v_splitter.handle(1).setVisible(not is_t)
+            self._set_splitter_handle_visible(self.main_v_splitter, not is_t)
 
         if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
             margin_bottom = 0 if is_t else 10
@@ -1193,34 +1325,70 @@ class PlayerMixin:
             # Show the title bar *before* restoring the window state so WM_NCCALCSIZE
             # sees it visible and re-applies the maximized inset (otherwise a restored
             # maximized window overhangs the monitor / covers the taskbar).
-            if hasattr(self.ui, "title_bar"):
-                self.ui.title_bar.show()
-            exit_immersive_chrome(self.ui)
-            if hasattr(self.ui, "title_bar"):
-                self.ui.title_bar.sync_window_state()
-            self._activate_window_layouts()
-            footer.show()
-            if right_layout:
-                right_layout.activate()
-            if hasattr(self, 'btn_fullscreen'):
-                self.btn_fullscreen.clearFocus()
-                QApplication.postEvent(self.btn_fullscreen, QEvent(QEvent.Type.Leave))
-            if hasattr(self, 'btn_theater'):
-                self.btn_theater.clearFocus()
-                QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
-            self._set_hide_watcher_suppressed(False)
-            self._hide_immersive_transition_cover()
-            set_window_transitions(self.ui, True)
-            # The fullscreen HUD footer was a floating Tool window; after reparenting
-            # it back, force a full relayout + repaint so no ghost copy lingers at the
-            # bottom edge of the restored window.
-            if right_layout:
-                right_layout.activate()
-            self.ui.right_panel.updateGeometry()
-            self.ui.update()
-            self.ui.repaint()
+            gen = getattr(self, '_immersive_cover_gen', 0)
+            try:
+                if hasattr(self.ui, "title_bar"):
+                    self.ui.title_bar.show()
+                # Soft-redraw after maximize fights the cover and can flash Aero
+                # chrome at the edges — pause it until uncover settles.
+                self.ui._suppress_dwm_ghost_timer = True
+                exit_immersive_chrome(self.ui)
+                # showMaximized re-adds the native Aero caption for a frame or two —
+                # poke under the cover before uncovering (changeEvent alone races).
+                self._reassert_frameless_caption()
+                if hasattr(self.ui, "title_bar"):
+                    self.ui.title_bar.sync_window_state()
+                self._activate_window_layouts()
+                footer.show()
+                if right_layout:
+                    right_layout.activate()
+                if hasattr(self, 'btn_fullscreen'):
+                    self.btn_fullscreen.clearFocus()
+                    QApplication.postEvent(self.btn_fullscreen, QEvent(QEvent.Type.Leave))
+                if hasattr(self, 'btn_theater'):
+                    self.btn_theater.clearFocus()
+                    QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
+                self._set_hide_watcher_suppressed(False)
+                # Keep transitions off until after uncover settle — turning them on
+                # here lets SW_RESTORE/maximize Aero paint bleed through the cover.
+                if right_layout:
+                    right_layout.activate()
+                self.ui.right_panel.updateGeometry()
+                self.ui.update()
+                self.ui.repaint()
+                # First EXIT is colder (DWM hasn't seen title_bar+maximize yet this
+                # session unless enter warmup ran). Hold cover longer + double poke.
+                first_exit = not getattr(self, "_fullscreen_exit_settled", False)
+                settle_ms = 320 if first_exit else 140
+                QTimer.singleShot(
+                    settle_ms, lambda g=gen, first=first_exit: self._finish_exit_uncover(g, first)
+                )
+            except Exception:
+                self.ui._suppress_dwm_ghost_timer = False
+                set_window_transitions(self.ui, True)
+                self._hide_immersive_transition_cover()
 
         QTimer.singleShot(0, finish_exit)
+
+    def _finish_exit_uncover(self, gen: int, first_exit: bool = False) -> None:
+        if getattr(self, '_immersive_cover_gen', 0) != gen:
+            return
+        try:
+            self._reassert_frameless_caption()
+            if first_exit:
+                # Second pass after a tick — first maximize after FS still races once.
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                self._reassert_frameless_caption()
+            if hasattr(self.ui, "title_bar") and self.ui.title_bar.isVisible():
+                self.ui.title_bar.sync_window_state()
+                self.ui.title_bar.update()
+            self.ui.repaint()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        finally:
+            self._fullscreen_exit_settled = True
+            self.ui._suppress_dwm_ghost_timer = False
+            set_window_transitions(self.ui, True)
+            self._hide_immersive_transition_cover()
 
     def toggle_fullscreen(self):
         """Immersive player mode: hide chrome inside the current window (no showFullScreen)."""
@@ -1284,16 +1452,16 @@ class PlayerMixin:
             if hasattr(self.ui, 'btn_start'):
                 bw = self.ui.btn_start.parentWidget()
                 if bw and "Splitter" not in type(bw).__name__ and bw.objectName() != "centralwidget": bw.hide()
-            if hasattr(self, 'btn_refresh'):
-                rw = self.btn_refresh.parentWidget()
-                if rw: rw.hide()
+            footer = getattr(self, "_footer_mega_pill", None)
+            if footer is not None:
+                footer.hide()
             if hasattr(self.ui, 'btn_about'): self.ui.btn_about.hide()
             if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.hide()
 
             if hasattr(self.ui, 'main_splitter'):
-                self.ui.main_splitter.handle(1).hide()
+                self._set_splitter_handle_visible(self.ui.main_splitter, False)
             if hasattr(self, 'main_v_splitter'):
-                self.main_v_splitter.handle(1).hide()
+                self._set_splitter_handle_visible(self.main_v_splitter, False)
             
             if hasattr(self, 'bottom_v_wrap'): 
                 self.bottom_v_wrap.hide()
@@ -1305,6 +1473,11 @@ class PlayerMixin:
             # Set the background to black (removes gray bars at the edges of the video)
             if hasattr(self, 'video_wrapper'):
                 self.video_wrapper.setStyleSheet("background-color: black; border: none;")
+
+            # Idle fullscreen: keep the native mpv HWND parked so it cannot cover
+            # the "Please select a clip…" placeholder with an empty gray surface.
+            if self._is_player_idle_placeholder():
+                self._park_mpv_embed_when_not_showing()
             
             main_layout = self.ui.layout()
             if main_layout:
@@ -1358,9 +1531,11 @@ class PlayerMixin:
                 self.wake_up_fullscreen_controls()
 
             QTimer.singleShot(50, self.align_fullscreen_hud)
-            # Transitions are disabled, so the switch is instant — a short cover is
-            # enough to hide the single-frame swap, then restore animations.
-            QTimer.singleShot(80, self._finish_fullscreen_enter)
+            if self._is_player_idle_placeholder():
+                QTimer.singleShot(120, self.align_fullscreen_hud)
+            # Same gray-cover path for idle and with-clip — no fast un-maximize
+            # animation that corrupts the restore size.
+            QTimer.singleShot(120, self._finish_fullscreen_enter)
             
         else:
             self._exit_immersive_mode()
@@ -1373,27 +1548,30 @@ class PlayerMixin:
         """ Calculates global coordinates and aligns the floating panel. """
         if not getattr(self, 'is_fullscreen', False) or not hasattr(self, 'player_footer_frame'):
             return
-            
-        
+
+        footer = self.player_footer_frame
+        footer.adjustSize()
         w = self.ui.width()
         h = self.ui.height()
-        footer_h = self.player_footer_frame.sizeHint().height()
-        
+        footer_h = max(footer.sizeHint().height(), footer.size().height(), 120)
+
         # Get the global coordinates of the window itself.
         global_pos = self.ui.mapToGlobal(self.ui.rect().topLeft())
-        
-        hud_w = w - 80
+
+        hud_w = max(320, w - 80)
         hud_x = global_pos.x() + 40
         hud_y = global_pos.y() + h - footer_h - 15
-        
+
         # Place the glass shard exactly in the center.
-        self.player_footer_frame.setGeometry(hud_x, hud_y, hud_w, footer_h)
-        
+        footer.setGeometry(hud_x, hud_y, hud_w, footer_h)
+        footer.show()
+        footer.raise_()
+
         #Applying the Rounding Mask
         path = QPainterPath()
         path.addRoundedRect(0.0, 0.0, float(hud_w), float(footer_h), 16.0, 16.0)
         region = QRegion(path.toFillPolygon().toPolygon())
-        self.player_footer_frame.setMask(region)
+        footer.setMask(region)
     def hide_hud_on_minimize(self, state):
 
         # The buffering pill is an always-on-top tool window; hide it whenever the
@@ -1435,12 +1613,27 @@ class PlayerMixin:
         
         self.ui.setCursor(Qt.ArrowCursor) 
         if hasattr(self, 'player_footer_frame'):
-            self.player_footer_frame.show()   
+            self.player_footer_frame.show()
+            self.player_footer_frame.raise_()
+        # Same as desktop with a clip playing — auto-hide the bar. Idle (no clip)
+        # keeps the floating HUD up: it is the only exit affordance on a gray canvas.
+        if self._is_player_idle_placeholder():
+            if hasattr(self, 'fs_timer'):
+                self.fs_timer.stop()
+            return
         self.fs_timer.start()           
 
     def sleep_fullscreen_controls(self):
         """ Completely terminates cursor rendering and hides controls layer after 3 seconds of stagnation. """
         if not getattr(self, 'is_fullscreen', False): return
+        if self._is_player_idle_placeholder():
+            # Do not blank the cursor / hide the bar — matches desktop expectation
+            # that the player chrome stays present when nothing is loaded.
+            if hasattr(self, 'player_footer_frame'):
+                self.player_footer_frame.show()
+                self.player_footer_frame.raise_()
+            self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+            return
         
         if hasattr(self, 'player_footer_frame') and self.player_footer_frame.underMouse():
             self.fs_timer.start() 
@@ -1634,38 +1827,68 @@ class PlayerMixin:
         if not hasattr(self, 'custom_timeline'): return
         self.custom_timeline.force_jump(self.custom_timeline.trim_start_ms)
 
+    def _mpv_has_media(self) -> bool:
+        """True when mpv has a playable path (seek/pause are safe)."""
+        player = getattr(self, "player", None)
+        if not player:
+            return False
+        try:
+            path = getattr(player, "path", None)
+        except Exception:
+            self._discard_dead_linux_mpv()
+            return False
+        return bool(path)
+
+    def _safe_mpv_seek(self, position_sec: float, *, precision: str = "exact") -> bool:
+        """Absolute seek that never raises — mpv COMMAND (-12) when idle/loading.
+
+        Returns True if the seek was issued without error.
+        """
+        if not self._mpv_has_media():
+            return False
+        if getattr(self, "_is_switching", False) or getattr(self, "_awaiting_first_frame", False):
+            return False
+        player = self.player
+        try:
+            player.seek(float(position_sec), reference="absolute", precision=precision)
+            return True
+        except SystemError as exc:
+            # libmpv MPV_ERROR_COMMAND (-12) — nothing loaded / demuxer not ready.
+            logging.debug("mpv seek ignored: %s", exc)
+            return False
+        except Exception as exc:
+            logging.debug("mpv seek failed: %s", exc)
+            return False
+
     def on_timeline_press(self):
         """ Triggered when the user clicks on the timeline track. """
-        if hasattr(self, 'player') and self.player:
-            # Check if video is playing (if pause is False, it means it is playing)
+        if not self._mpv_has_media():
+            self.was_playing_before_drag = False
+            return
+        try:
             self.was_playing_before_drag = not self.player.pause
-            
-            # Pause the video while the user is dragging the playhead
             self.player.pause = True
+        except Exception:
+            self.was_playing_before_drag = False
 
     def on_timeline_seek(self, position_ms):
         """ Commands MPV to jump. """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): 
+        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
             return
-            
-        if hasattr(self, 'player') and self.player:
-            if getattr(self.player, 'duration', None):
-                self.player.seek(position_ms / 1000.0, reference='absolute', precision='exact')
-                self._ignore_playback_stall(0.6)
-
+        if self._safe_mpv_seek(position_ms / 1000.0):
+            self._ignore_playback_stall(0.6)
 
     def on_timeline_release(self):
         """ Triggered when the user releases the mouse button after dragging. """
-        if hasattr(self, 'player') and self.player:
-            
-            # Restore playback state if it was playing before we clicked
+        if not self._mpv_has_media():
+            return
+        try:
             if getattr(self, 'was_playing_before_drag', False):
                 self.player.pause = False
-                
-            # If you have a variable 'is_muted' in your scope, apply it to MPV like this:
-            # (Replace the old audio_set_mute line with this one)
             if hasattr(self, 'is_muted'):
                 self.player.mute = self.is_muted
+        except Exception:
+            pass
 
     def skip_backward(self):
         """ Rewind 15 seconds using the Independent Timeline Engine """
@@ -2769,13 +2992,14 @@ class PlayerMixin:
         filepath = os.path.join(self.screenshots_dir, filename).replace('\\', '/')
         
         need_seek = False
-        original_pos = getattr(self.player, 'time_pos', 0) * 1000
+        original_pos = getattr(self.player, 'time_pos', 0) or 0
+        original_pos_ms = float(original_pos) * 1000
         
         # If we right-click far away from the slider, we need to jump there for a split second
-        if target_ms is not None and abs(target_ms - original_pos) > 200:
-            need_seek = True
-            self.player.seek(pos_ms / 1000.0, reference='absolute', precision='exact')
-            time.sleep(0.15) 
+        if target_ms is not None and abs(target_ms - original_pos_ms) > 200:
+            need_seek = self._safe_mpv_seek(pos_ms / 1000.0)
+            if need_seek:
+                time.sleep(0.15) 
             
         saved_ok = False
         try:
@@ -2787,7 +3011,7 @@ class PlayerMixin:
             
         # We jump back in as if nothing had happened.
         if need_seek:
-            self.player.seek(original_pos / 1000.0, reference='absolute', precision='exact')
+            self._safe_mpv_seek(original_pos_ms / 1000.0)
 
         if saved_ok:
             self._show_screenshot_toast(self.screenshots_dir, screenshot_path=filepath)
