@@ -53,6 +53,34 @@ _HEADER_RADIUS = int(COMFORT.footer_radius)
 _HEADER_PAD = COMFORT.footer_pad
 _HEADER_MIN_H = int(COMFORT.footer_min_h)
 
+# Hidden sink so discarded queue rows never become top-level X11 windows.
+_DISPOSE_SINK: QWidget | None = None
+
+
+def _dispose_sink() -> QWidget:
+    global _DISPOSE_SINK
+    if _DISPOSE_SINK is None:
+        sink = QWidget()
+        sink.setObjectName("portableQueueDisposeSink")
+        sink.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        sink.hide()
+        _DISPOSE_SINK = sink
+    return _DISPOSE_SINK
+
+
+def _dispose_list_child(w: QWidget) -> None:
+    """Detach a list row without mapping a top-level window (Linux X11 flash/hang)."""
+    try:
+        w.hide()
+        w.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        # Never setParent(None) on xcb — that promotes the card to a real window
+        # (compressed Muse Dash block floating alone) and can freeze the app.
+        w.setParent(_dispose_sink())
+    except RuntimeError:
+        return
+    w.deleteLater()
+
+
 _TOGGLE_SELECT_MODIFIERS = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
 _MULTI_SELECT_MODIFIERS = (
     Qt.KeyboardModifier.ControlModifier
@@ -634,8 +662,7 @@ class PortableQueueSidebar(QWidget):
             item = self._list.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+                _dispose_list_child(w)
 
         # Keep completed jobs so the green "done" outline is visible in the rail.
         jobs = list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
@@ -690,6 +717,16 @@ class PortableQueueSidebar(QWidget):
     def _apply_selection_styles(self) -> None:
         for job_id, row in self._rows.items():
             row.set_selected(job_id in self._selected_ids)
+
+    def sync_selection(self, job_id: str | None) -> None:
+        """Highlight one job without rebuilding rows (avoids Linux detach flash)."""
+        if job_id:
+            self._selected_ids = {job_id}
+            self._anchor_id = job_id
+        else:
+            self._selected_ids = set()
+            self._anchor_id = None
+        self._apply_selection_styles()
 
     def _on_row_clicked(self, job_id: str, mods) -> None:
         mods = mods or Qt.KeyboardModifier.NoModifier

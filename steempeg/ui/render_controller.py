@@ -3212,14 +3212,30 @@ class RenderMixin:
             if job and os.path.normpath(job.clip_path) != os.path.normpath(preview_path):
                 selected_id = None
                 self._selected_queue_job_id = None
-        self.render_queue_panel.refresh(
-            self.render_queue.jobs,
-            selected_id,
-        )
+        skip_rebuild = bool(getattr(self, "_skip_portable_queue_rebuild", False))
+        if skip_rebuild:
+            # Portable queue click: selection-only. Rebuilding desktop cards with
+            # setParent(None) flashes orphan windows on Linux and can hang Qt.
+            panel = self.render_queue_panel
+            panel._selected_id = selected_id
+            for card in getattr(panel, "_card_widgets", []) or []:
+                try:
+                    card.set_selected(getattr(card, "_job_id", None) == selected_id)
+                except RuntimeError:
+                    pass
+        else:
+            self.render_queue_panel.refresh(
+                self.render_queue.jobs,
+                selected_id,
+            )
         sidebar = getattr(self, "_portable_queue_sidebar", None)
-        if sidebar is not None and hasattr(sidebar, "refresh"):
+        if sidebar is not None:
             try:
-                sidebar.refresh()
+                if skip_rebuild:
+                    if hasattr(sidebar, "sync_selection"):
+                        sidebar.sync_selection(selected_id)
+                elif hasattr(sidebar, "refresh"):
+                    sidebar.refresh()
             except RuntimeError:
                 self._portable_queue_sidebar = None
         if sync_splitter:

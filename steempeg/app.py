@@ -2558,8 +2558,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 sync_trim_tools_placement(self)
             return
 
-        # Portable theatre already fits its chrome — don't crush settings/combos
-        # just because the shell window is Deck-narrow.
+        # Portable has no splitters / Deck density — keep comfort chrome. Only the
+        # Render + Clips Manager sheet *windows* scale to the shell footprint.
         if getattr(self, "_portable_shell", False):
             from steempeg.ui.ui_density import COMFORT
 

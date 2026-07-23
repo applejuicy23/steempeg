@@ -14,6 +14,7 @@ from steempeg.ui.player.controls.adaptive_trim_tools import (
 from steempeg.ui.portable.sheets import (
     PortableClipPickerDialog,
     PortableRenderSettingsDialog,
+    portable_render_sheet_compact,
     restore_render_settings,
 )
 
@@ -252,12 +253,7 @@ def prewarm_portable_sheets(app) -> None:
                 dlg.silent_promote_for_prewarm(host)
             app._portable_clip_picker_dlg = dlg
         if getattr(app, "_portable_render_sheet_dlg", None) is None:
-            from steempeg.ui.render_panel import apply_settings_panel_density
-            from steempeg.ui.ui_density import COMFORT
-
-            if hasattr(app, "ui"):
-                app._ui_density = COMFORT
-                apply_settings_panel_density(app.ui, COMFORT)
+            _apply_portable_shell_density(app)
             dlg = PortableRenderSettingsDialog(app, parent=garage, warm=True)
             dlg._park_as_embedded_widget(garage)
             if host is not None and hasattr(dlg, "silent_promote_for_prewarm"):
@@ -305,6 +301,10 @@ def open_portable_clip_picker(app) -> None:
         return
     app._portable_clip_picker_open = True
     try:
+        # Toolbar / tabs / combos live in left_panel — refresh density for the
+        # current shell width before the sheet borrows that chrome.
+        _apply_portable_shell_density(app)
+
         dlg = getattr(app, "_portable_clip_picker_dlg", None)
         try:
             if dlg is not None:
@@ -330,17 +330,57 @@ def open_portable_clip_picker(app) -> None:
         app._portable_clip_picker_open = False
 
 
+def _apply_portable_shell_density(app) -> None:
+    """Portable keeps comfort UI chrome — never crush Source/Video/library to Deck scale.
+
+    Sheet *windows* still resize to the shell; only density stays comfort.
+    """
+    ui = getattr(app, "ui", None)
+    if ui is None:
+        return
+    from steempeg.ui.render_panel import apply_settings_panel_density
+    from steempeg.ui.ui_density import COMFORT
+
+    app._ui_density = COMFORT
+    apply_settings_panel_density(ui, COMFORT)
+    if hasattr(app, "_apply_ui_density"):
+        try:
+            app._apply_ui_density(COMFORT)
+        except Exception:
+            _log.exception("Portable comfort density apply failed")
+
+
+def _dispose_portable_render_sheet(app) -> None:
+    """Tear down a warm Render sheet so it can be rebuilt for a new compact mode."""
+    dlg = getattr(app, "_portable_render_sheet_dlg", None)
+    if dlg is None:
+        return
+    try:
+        if hasattr(dlg, "dispose_warm"):
+            dlg.dispose_warm()
+        else:
+            dlg.close()
+            dlg.deleteLater()
+    except RuntimeError:
+        pass
+    except Exception:
+        _log.exception("Dispose portable Render sheet failed")
+    app._portable_render_sheet_dlg = None
+    if hasattr(app, "_portable_sheet_compact"):
+        try:
+            delattr(app, "_portable_sheet_compact")
+        except Exception:
+            pass
+
+
 def open_portable_render_settings(app) -> None:
     if getattr(app, "_portable_render_settings_open", False):
         return
     app._portable_render_settings_open = True
     try:
-        from steempeg.ui.render_panel import apply_settings_panel_density
-        from steempeg.ui.ui_density import COMFORT
+        _apply_portable_shell_density(app)
 
-        if hasattr(app, "ui"):
-            app._ui_density = COMFORT
-            apply_settings_panel_density(app.ui, COMFORT)
+        want_compact = portable_render_sheet_compact(getattr(app, "ui", None), app=app)
 
         dlg = getattr(app, "_portable_render_sheet_dlg", None)
         try:
@@ -349,6 +389,19 @@ def open_portable_render_settings(app) -> None:
         except RuntimeError:
             dlg = None
             app._portable_render_sheet_dlg = None
+
+        # Prewarm may have baked spacious chrome while the shell was fake-maximized
+        # (common on Linux). Rebuild when the live shell crossed the 1600px cliff.
+        if dlg is not None:
+            have = getattr(dlg, "_sheet_compact", getattr(app, "_portable_sheet_compact", None))
+            if have is None or bool(have) != bool(want_compact):
+                _log.info(
+                    "Portable Render sheet compact %s → %s; rebuilding",
+                    have,
+                    want_compact,
+                )
+                _dispose_portable_render_sheet(app)
+                dlg = None
 
         if dlg is None:
             garage = _ensure_sheet_garage(app)

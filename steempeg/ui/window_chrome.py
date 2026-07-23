@@ -14,10 +14,11 @@ import sys
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -588,7 +589,280 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     main_window.title_bar = title_bar
     main_window._custom_chrome_shell = shell
+    # Windows gets edge/corner resize via WM_NCHITTEST. Frameless on Linux has no
+    # native thick frame — manual grips on xcb, startSystemResize on Wayland.
+    if os.name != "nt":
+        enable_linux_edge_resize(main_window)
     return title_bar
+
+
+_LINUX_RESIZE_BORDER = 8
+_LINUX_RESIZE_CORNER = 18
+
+
+def _linux_nearly_maximized(window: QWidget) -> bool:
+    if window.isMaximized():
+        return True
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is None:
+        return False
+    avail = screen.availableGeometry()
+    geo = window.frameGeometry()
+    return (
+        abs(geo.x() - avail.x()) <= 16
+        and abs(geo.y() - avail.y()) <= 16
+        and abs(geo.width() - avail.width()) <= 48
+        and abs(geo.height() - avail.height()) <= 48
+    )
+
+
+def _linux_edges_at(window: QWidget, global_pos: QPoint):
+    """Map a global mouse position to Qt resize edges, or None if not on a grip."""
+    tb = getattr(window, "title_bar", None)
+    if tb is None or not tb.isVisible():
+        return None
+    if _linux_nearly_maximized(window):
+        return None
+
+    # frameGeometry includes any WM frame; for frameless equals geometry.
+    geo = window.frameGeometry()
+    x, y = global_pos.x(), global_pos.y()
+    left, top = geo.x(), geo.y()
+    right, bottom = left + geo.width(), top + geo.height()
+    border, corner = _LINUX_RESIZE_BORDER, _LINUX_RESIZE_CORNER
+
+    on_left = left <= x < left + border
+    on_right = right - border <= x < right
+    on_top = top <= y < top + border
+    on_bottom = bottom - border <= y < bottom
+    in_left_c = left <= x < left + corner
+    in_right_c = right - corner <= x < right
+    in_top_c = top <= y < top + corner
+    in_bottom_c = bottom - corner <= y < bottom
+
+    if in_top_c and in_left_c:
+        return Qt.Edge.TopEdge | Qt.Edge.LeftEdge
+    if in_top_c and in_right_c:
+        return Qt.Edge.TopEdge | Qt.Edge.RightEdge
+    if in_bottom_c and in_left_c:
+        return Qt.Edge.BottomEdge | Qt.Edge.LeftEdge
+    if in_bottom_c and in_right_c:
+        return Qt.Edge.BottomEdge | Qt.Edge.RightEdge
+    if on_left:
+        return Qt.Edge.LeftEdge
+    if on_right:
+        return Qt.Edge.RightEdge
+    if on_top:
+        return Qt.Edge.TopEdge
+    if on_bottom:
+        return Qt.Edge.BottomEdge
+    return None
+
+
+def _linux_cursor_for_edges(edges) -> Qt.CursorShape:
+    left = bool(edges & Qt.Edge.LeftEdge)
+    right = bool(edges & Qt.Edge.RightEdge)
+    top = bool(edges & Qt.Edge.TopEdge)
+    bottom = bool(edges & Qt.Edge.BottomEdge)
+    if (top and left) or (bottom and right):
+        return Qt.CursorShape.SizeFDiagCursor
+    if (top and right) or (bottom and left):
+        return Qt.CursorShape.SizeBDiagCursor
+    if left or right:
+        return Qt.CursorShape.SizeHorCursor
+    return Qt.CursorShape.SizeVerCursor
+
+
+def _linux_prefer_manual_resize() -> bool:
+    """XWayland/xcb often mishandles startSystemResize for frameless windows."""
+    app = QApplication.instance()
+    if app is None:
+        return True
+    name = (app.platformName() or "").lower()
+    return name in ("xcb", "offscreen", "minimal")
+
+
+def _linux_apply_manual_resize(
+    window: QWidget,
+    edges,
+    origin: QPoint,
+    start_geo,
+    global_pos: QPoint,
+) -> None:
+    dx = global_pos.x() - origin.x()
+    dy = global_pos.y() - origin.y()
+    x, y, w, h = start_geo.x(), start_geo.y(), start_geo.width(), start_geo.height()
+    min_w = max(window.minimumWidth(), 200)
+    min_h = max(window.minimumHeight(), 150)
+
+    if edges & Qt.Edge.LeftEdge:
+        new_w = max(min_w, w - dx)
+        x = x + (w - new_w)
+        w = new_w
+    if edges & Qt.Edge.RightEdge:
+        w = max(min_w, w + dx)
+    if edges & Qt.Edge.TopEdge:
+        new_h = max(min_h, h - dy)
+        y = y + (h - new_h)
+        h = new_h
+    if edges & Qt.Edge.BottomEdge:
+        h = max(min_h, h + dy)
+
+    window.setGeometry(x, y, w, h)
+
+
+class _LinuxEdgeResizeFilter(QObject):
+    """Edge/corner resize for frameless Linux windows.
+
+    On xcb (XWayland) use manual setGeometry — startSystemResize feels jumpy /
+    mirrored. On native Wayland, prefer compositor startSystemResize.
+    """
+
+    def __init__(self, window: QWidget):
+        super().__init__(window)
+        self._window = window
+        self._overriding = False
+        self._drag_edges = None
+        self._drag_origin: QPoint | None = None
+        self._drag_geo = None
+        self._manual = _linux_prefer_manual_resize()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if not isinstance(obj, QWidget):
+            return False
+        try:
+            if obj.window() is not self._window:
+                return False
+        except RuntimeError:
+            return False
+
+        window = self._window
+        if not window.isVisible():
+            self._end_drag()
+            self._clear_cursor()
+            return False
+
+        et = event.type()
+
+        # Active drag: only track moves/releases globally for our window tree.
+        if self._drag_edges is not None:
+            if et == QEvent.Type.MouseMove:
+                global_pos = (
+                    event.globalPosition().toPoint()
+                    if hasattr(event, "globalPosition")
+                    else event.globalPos()
+                )
+                if self._manual and self._drag_origin is not None and self._drag_geo is not None:
+                    _linux_apply_manual_resize(
+                        window,
+                        self._drag_edges,
+                        self._drag_origin,
+                        self._drag_geo,
+                        global_pos,
+                    )
+                    return True
+                return False
+            if et == QEvent.Type.MouseButtonRelease:
+                self._end_drag()
+                self._clear_cursor()
+                return True
+            return False
+
+        if et in (
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverMove,
+            QEvent.Type.Enter,
+            QEvent.Type.HoverEnter,
+        ):
+            global_pos = None
+            if hasattr(event, "globalPosition"):
+                global_pos = event.globalPosition().toPoint()
+            elif hasattr(event, "globalPos"):
+                global_pos = event.globalPos()
+            if global_pos is None:
+                return False
+            edges = _linux_edges_at(window, global_pos)
+            if edges:
+                shape = _linux_cursor_for_edges(edges)
+                if not self._overriding:
+                    QApplication.setOverrideCursor(QCursor(shape))
+                    self._overriding = True
+                else:
+                    QApplication.changeOverrideCursor(QCursor(shape))
+            else:
+                self._clear_cursor()
+            return False
+
+        if et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+            if obj is window and self._drag_edges is None:
+                self._clear_cursor()
+            return False
+
+        if et == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+            global_pos = (
+                event.globalPosition().toPoint()
+                if hasattr(event, "globalPosition")
+                else event.globalPos()
+            )
+            edges = _linux_edges_at(window, global_pos)
+            if not edges:
+                return False
+
+            if self._manual:
+                self._drag_edges = edges
+                self._drag_origin = QPoint(global_pos)
+                self._drag_geo = window.geometry()
+                window.grabMouse()
+                event.accept()
+                return True
+
+            handle = window.windowHandle()
+            if handle is None:
+                return False
+            self._clear_cursor()
+            if handle.startSystemResize(edges):
+                event.accept()
+                return True
+            # Fallback if compositor refuses.
+            self._manual = True
+            self._drag_edges = edges
+            self._drag_origin = QPoint(global_pos)
+            self._drag_geo = window.geometry()
+            window.grabMouse()
+            event.accept()
+            return True
+
+        return False
+
+    def _end_drag(self) -> None:
+        if self._drag_edges is not None:
+            try:
+                self._window.releaseMouse()
+            except Exception:
+                pass
+        self._drag_edges = None
+        self._drag_origin = None
+        self._drag_geo = None
+
+    def _clear_cursor(self) -> None:
+        if self._overriding:
+            QApplication.restoreOverrideCursor()
+            self._overriding = False
+
+
+def enable_linux_edge_resize(window: QWidget) -> None:
+    """Enable corner/edge resize for frameless windows on Linux (and macOS)."""
+    if os.name == "nt":
+        return
+    existing = getattr(window, "_linux_edge_resize_filter", None)
+    if existing is not None:
+        return
+    window._linux_edge_resize_filter = _LinuxEdgeResizeFilter(window)
 
 
 def _hex_to_colorref(hex_color: str) -> int:

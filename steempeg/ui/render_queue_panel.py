@@ -59,6 +59,27 @@ from steempeg.ui.ui_density import (
 
 _LIST_TITLE_ICON = 28
 
+_DISPOSE_SINK: QWidget | None = None
+
+
+def _dispose_queue_card(w: QWidget) -> None:
+    """Hide + sink-parent before delete — setParent(None) flashes top-level windows on xcb."""
+    global _DISPOSE_SINK
+    try:
+        w.hide()
+        w.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        if _DISPOSE_SINK is None:
+            sink = QWidget()
+            sink.setObjectName("queuePanelDisposeSink")
+            sink.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            sink.hide()
+            _DISPOSE_SINK = sink
+        w.setParent(_DISPOSE_SINK)
+    except RuntimeError:
+        return
+    w.deleteLater()
+
+
 from steempeg.ui.render_queue_grid import (
     QueueGridJobCard,
     _CARD_W as _GRID_CARD_W,
@@ -982,15 +1003,13 @@ class RenderQueuePanel(QWidget):
             item = self._list_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+                _dispose_queue_card(w)
 
         while self._grid_layout.count():
             item = self._grid_layout.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
-                w.deleteLater()
+                _dispose_queue_card(w)
 
         self._card_widgets.clear()
 

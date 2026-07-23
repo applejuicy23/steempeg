@@ -36,26 +36,94 @@ _PORTABLE_NEO_SIDEBAR_MARGINS = (10, 15, 6, 15)
 _log = logging.getLogger(__name__)
 
 
-def portable_render_sheet_compact(host) -> bool:
-    """True when the shell is Deck / small-laptop class — use space-saving sheet chrome."""
-    w = 0
+def portable_shell_widget(app=None, host=None):
+    """Main Steempeg window used for portable size/compact decisions.
+
+    Prewarm parents sheets under a 0×0 garage widget — never treat that as the
+    shell width (Linux then fell back to a maximized activeWindow and baked
+    spacious chrome forever).
+    """
+    ui = getattr(app, "ui", None) if app is not None else None
+    if ui is not None:
+        return ui
     if host is not None:
         try:
-            w = int(host.width() or 0)
+            if int(host.width() or 0) > 32 and int(host.height() or 0) > 32:
+                return host
         except Exception:
-            w = 0
-    if w <= 0:
-        try:
-            from PySide6.QtWidgets import QApplication
+            pass
+    try:
+        aw = QApplication.activeWindow()
+        if aw is not None and int(aw.width() or 0) > 32:
+            return aw
+    except Exception:
+        pass
+    return None
 
-            aw = QApplication.activeWindow()
-            if aw is not None:
-                w = int(aw.width() or 0)
+
+def portable_shell_width(app=None, host=None) -> int:
+    """Logical width of the main shell (or primary work area as last resort)."""
+    shell = portable_shell_widget(app, host)
+    if shell is not None:
+        try:
+            w = int(shell.width() or 0)
+            if w > 32:
+                return w
         except Exception:
-            w = 0
+            pass
+    try:
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            return int(screen.availableGeometry().width() or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def portable_render_sheet_compact(host=None, app=None) -> bool:
+    """True when the shell is Deck / small-laptop class — use space-saving sheet chrome."""
+    w = portable_shell_width(app=app, host=host)
     if w <= 0:
         return True  # safe default: compact fits more places
     return w <= PORTABLE_SHEET_COMPACT_MAX_W
+
+
+def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
+    """Fixed dialog size for the current shell footprint."""
+    from steempeg.ui.ui_density import scaled_dialog_size
+
+    hw = 0
+    hh = 0
+    if shell is not None:
+        try:
+            hw = int(shell.width() or 0)
+            hh = int(shell.height() or 0)
+        except Exception:
+            hw = hh = 0
+
+    if compact:
+        w, h = scaled_dialog_size(1480, 620, parent=shell, factor=0.98)
+        if hw > 0:
+            w = min(max(w, 1240), hw - 8, 1520)
+            w = min(w, hw - 8)
+        else:
+            w = max(1240, w)
+        if hh > 0:
+            h = min(max(h, 480), hh - 40)
+        else:
+            h = max(480, h)
+        return max(640, w), max(480, h)
+
+    w, h = scaled_dialog_size(1480, 700, parent=shell, factor=0.90)
+    if hw > 0:
+        w = min(max(w, 1280), hw - 48)
+    else:
+        w = max(1280, w)
+    if hh > 0:
+        h = min(max(h, 560), hh - 64)
+    else:
+        h = max(560, h)
+    return max(640, w), max(560, h)
 
 
 def apply_portable_neo_chrome(app) -> None:
@@ -229,40 +297,16 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._hw.set_suppressed(True)
 
         from steempeg.ui.portable.queue_sidebar import PortableQueueSidebar
-        from steempeg.ui.ui_density import scaled_dialog_size
 
-        host = parent or getattr(app, "ui", None)
-        compact = portable_render_sheet_compact(host)
+        # Prefer app.ui — parent is often the 0×0 prewarm garage.
+        shell = portable_shell_widget(app, parent)
+        compact = portable_render_sheet_compact(shell, app=app)
+        self._sheet_compact = bool(compact)
         app._portable_sheet_compact = compact
 
         self.setMinimumSize(1040, 420)
-        if compact:
-            # Deck / small: near-full shell so 291px combos + queue rail fit.
-            w, h = scaled_dialog_size(1480, 620, parent=host, factor=0.98)
-            if host is not None:
-                hw = int(host.width() or 0)
-                hh = int(host.height() or 0)
-                if hw > 0:
-                    w = min(max(w, 1240), hw - 8, 1520)
-                    w = min(w, hw - 8)
-                if hh > 0:
-                    h = min(max(h, 480), hh - 40)
-                self.setFixedSize(w, max(480, h))
-            else:
-                self.setFixedSize(max(1240, w), max(480, h))
-        else:
-            # Roomy shell: comfort footprint with breathing room — no squeeze hacks.
-            w, h = scaled_dialog_size(1480, 700, parent=host, factor=0.90)
-            if host is not None:
-                hw = int(host.width() or 0)
-                hh = int(host.height() or 0)
-                if hw > 0:
-                    w = min(max(w, 1280), hw - 48)
-                if hh > 0:
-                    h = min(max(h, 560), hh - 64)
-                self.setFixedSize(w, max(560, h))
-            else:
-                self.setFixedSize(max(1280, w), max(560, h))
+        w, h = portable_render_sheet_size(compact=compact, shell=shell)
+        self.setFixedSize(w, h)
         self.content_layout.setContentsMargins(12, 8, 12, 0)
         self.content_layout.setSpacing(10)
 
@@ -355,6 +399,11 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._hw.set_suppressed(True)
         self._app._portable_queue_sidebar = self._queue
         self._app._portable_render_strip = self._strip
+        # Keep footprint in sync when the user resized the shell after prewarm.
+        compact = bool(getattr(self, "_sheet_compact", True))
+        self._app._portable_sheet_compact = compact
+        w, h = portable_render_sheet_size(compact=compact, shell=host)
+        self.setFixedSize(w, h)
         if self._neo is not None:
             self._neo.show()
             tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
@@ -363,9 +412,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
                 if tabs.count() > 1:
                     tabs.setCurrentIndex(1)
             for name in ("_neo_sidebar", "right_scroll"):
-                w = getattr(self._app, name, None)
-                if w is not None:
-                    w.show()
+                wdg = getattr(self._app, name, None)
+                if wdg is not None:
+                    wdg.show()
         if hasattr(self._queue, "refresh"):
             self._queue.refresh()
         if hasattr(self._strip, "sync_from_app"):
@@ -380,12 +429,21 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self.deleteLater()
 
     def _on_queue_job(self, job_id: str) -> None:
-        if hasattr(self._app, "activate_queue_job"):
-            self._app.activate_queue_job(job_id)
+        # Selection chrome is already updated by the sidebar click handler.
+        # Skip the portable list rebuild inside activate_queue_job — on Linux,
+        # setParent(None) while tearing down rows maps brief top-level windows.
+        app = self._app
+        app._skip_portable_queue_rebuild = True
+        try:
+            if hasattr(app, "activate_queue_job"):
+                app.activate_queue_job(job_id)
+        finally:
+            app._skip_portable_queue_rebuild = False
         if hasattr(self._strip, "sync_game_header"):
             self._strip.sync_game_header()
         self._strip.sync_from_app()
-        self._queue.refresh()
+        if hasattr(self._queue, "sync_selection"):
+            self._queue.sync_selection(job_id)
 
     def _on_save(self) -> None:
         persist_render_settings(self._app)
@@ -482,16 +540,7 @@ class PortableClipPickerDialog(SteempegDialog):
             self._panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.content_layout.addWidget(self._panel, 1)
 
-        host = parent or getattr(app, "ui", None)
-        if host is not None and not self._warm:
-            geo = host.geometry()
-            self.resize(max(640, int(geo.width() * 0.78)), max(480, int(geo.height() * 0.78)))
-        elif self._warm:
-            # Size hint for later promote; stay embedded (no top-level resize flash).
-            ui = getattr(app, "ui", None)
-            if ui is not None:
-                geo = ui.geometry()
-                self.resize(max(640, int(geo.width() * 0.78)), max(480, int(geo.height() * 0.78)))
+        self._sync_size_to_shell()
 
         if not self._warm:
             QTimer.singleShot(350, self._arm_selection_close)
@@ -499,12 +548,28 @@ class PortableClipPickerDialog(SteempegDialog):
             garage = self.parentWidget()
             self._park_as_embedded_widget(garage)
 
+    def _sync_size_to_shell(self) -> None:
+        """Fit the sheet to the live main window (not the 0×0 prewarm garage)."""
+        shell = portable_shell_widget(self._app, getattr(self._app, "ui", None))
+        if shell is None:
+            return
+        try:
+            geo = shell.geometry()
+        except Exception:
+            return
+        self.resize(
+            max(640, int(geo.width() * 0.78)),
+            max(480, int(geo.height() * 0.78)),
+        )
+
     def prepare_for_show(self) -> None:
         """Re-arm a warm picker before exec (panel already embedded)."""
         host = getattr(self._app, "ui", None)
         if hasattr(self, "release_map_suppression"):
             self.release_map_suppression(host)
         self._armed = False
+        # Prewarm may have sized against a maximized shell — re-fit now.
+        self._sync_size_to_shell()
         # Theatre / fullscreen may have called left_panel.hide() while the panel
         # lived in this sheet — without show() Add a Clip opens a blank dialog.
         if self._panel is not None:
