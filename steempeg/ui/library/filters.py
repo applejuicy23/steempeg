@@ -212,7 +212,9 @@ class FilterMenu(QWidget):
         self.types_container.setMouseTracking(True)
         self.types_container.installEventFilter(self)
 
-        # --- HEALTH CAPSULE (static three-tier classification) ---
+        # --- HEALTH CAPSULE ---
+        # Healthy / Issues / Dead always; Cured only when the library has cured clips
+        # (synced in gather_statistics — was always showing even with zero cured).
         self.health_container = QWidget()
         self.health_layout = FlowLayout()
         self.health_container.setLayout(self.health_layout)
@@ -220,14 +222,14 @@ class FilterMenu(QWidget):
         self.health_container.setMouseTracking(True)
         self.health_container.installEventFilter(self)
 
-        _HEALTH_PILL_TEXT = {
+        self._HEALTH_PILL_TEXT = {
             ClipHealth.HEALTHY: "Healthy",
             ClipHealth.DEGRADED: "Issues",
             ClipHealth.DEAD: "Dead",
             ClipHealth.CURED: "Cured",
         }
         for level in (ClipHealth.HEALTHY, ClipHealth.DEGRADED, ClipHealth.DEAD, ClipHealth.CURED):
-            btn = QPushButton(f" {_HEALTH_PILL_TEXT[level]}")
+            btn = QPushButton(f" {self._HEALTH_PILL_TEXT[level]}")
             btn.setIcon(health_icon(level, 14))
             btn.setIconSize(QSize(14, 14))
             btn.setCheckable(True)
@@ -236,6 +238,8 @@ class FilterMenu(QWidget):
             btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("health_level", level.value)
             btn.clicked.connect(self.update_live_count)
+            if level == ClipHealth.CURED:
+                btn.hide()
             self.health_layout.addWidget(btn)
 
         # --- 3. SMART INPUTS STYLE (Clean, small pills + Rounded Spinners) ---
@@ -835,9 +839,32 @@ class FilterMenu(QWidget):
         levels = []
         for i in range(self.health_layout.count()):
             w = self.health_layout.itemAt(i).widget()
-            if w and w.isChecked():
+            if w and w.isVisible() and w.isChecked():
                 levels.append(w.property("health_level"))
         return levels
+
+    def _library_has_cured_clips(self) -> bool:
+        app = getattr(self, "app", None)
+        table = getattr(getattr(app, "ui", None), "table_clips", None)
+        if table is None:
+            return False
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item and item.data(_CLIP_CURED_ROLE):
+                return True
+        return False
+
+    def _sync_cured_health_pill(self) -> None:
+        """Show the Cured chip only when at least one library row is cured."""
+        has_cured = self._library_has_cured_clips()
+        for i in range(self.health_layout.count()):
+            w = self.health_layout.itemAt(i).widget()
+            if not w or w.property("health_level") != ClipHealth.CURED.value:
+                continue
+            w.setVisible(has_cured)
+            if not has_cured:
+                w.setChecked(True)
+            break
 
     def _get_checked_names(self, layout):
         names = []
@@ -1150,6 +1177,8 @@ class FilterMenu(QWidget):
             else:
                 w.setChecked(True)
 
+        self._sync_cured_health_pill()
+
         self.input_min_date.dateChanged.connect(self.update_live_count)
         self.input_max_date.dateChanged.connect(self.update_live_count)
         self.input_min_time.timeChanged.connect(self.update_live_count)
@@ -1179,6 +1208,8 @@ class FilterMenu(QWidget):
             if not w:
                 continue
             w.setChecked(True)
+
+        self._sync_cured_health_pill()
 
         min_dt = full_stats['min_dt'] or QDateTime.currentDateTime().addMonths(-1)
         max_dt = full_stats['max_dt'] or QDateTime.currentDateTime()
