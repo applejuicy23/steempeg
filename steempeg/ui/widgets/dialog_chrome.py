@@ -165,6 +165,11 @@ class SteempegDialog(QDialog):
 
     Subclasses add their content to ``self.content_layout``. Colors default to the
     active chrome theme so dialogs match the main window's title bar / background.
+
+    ``suppress_map=True`` (portable prewarm): the dialog is demoted to a plain
+    ``Qt.Widget`` inside a hidden garage — no top-level HWND, so Windows never
+    flashes a native «Steempeg» caption. Call ``release_map_suppression(host)``
+    before ``exec()`` to promote it back to a real frameless dialog.
     """
 
     def __init__(
@@ -176,8 +181,21 @@ class SteempegDialog(QDialog):
         bg_color: str | None = None,
         content_margins: tuple[int, int, int, int] = (16, 16, 16, 16),
         show_minimize: bool = False,
+        suppress_map: bool = False,
     ):
         super().__init__(parent)
+        self._map_suppressed = bool(suppress_map)
+        self._map_host = None
+        if self._map_suppressed:
+            # Demote BEFORE any polish/winId — embedded widget, not a top-level window.
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        else:
+            self.setWindowFlags(
+                Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+            )
+
         theme = tok.chrome_theme_colors(tok.DEFAULT_CHROME_THEME)
         bar_color = bar_color or theme["title_bar"]
         bg_color = bg_color or theme["app_bg"]
@@ -185,8 +203,9 @@ class SteempegDialog(QDialog):
         self._bg_color = bg_color
 
         self.setWindowTitle(title)
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Translucent only when allowed on screen — otherwise DWM paints a gray ghost.
+        if not self._map_suppressed:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -227,6 +246,103 @@ class SteempegDialog(QDialog):
         # Never use QRegion masks for rounding — they are binary and look jagged.
         self.clearMask()
 
+        if self._map_suppressed:
+            self.hide()
+
+    def setVisible(self, visible: bool) -> None:
+        if self._map_suppressed and visible:
+            return
+        super().setVisible(visible)
+
+    def _park_as_embedded_widget(self, garage: QWidget | None = None) -> None:
+        """First-time park: embed as Qt.Widget in the garage (no top-level HWND).
+
+        Only used during prewarm construction. After the first real open we keep a
+        Dialog HWND and use ``_park_hidden_dialog`` instead — demoting every close
+        forced a full setWindowFlags recreate on each Add a Clip (slow open).
+        """
+        self._map_suppressed = True
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setWindowFlags(Qt.WindowType.Widget)
+        if garage is not None:
+            self.setParent(garage)
+        self.hide()
+
+    def _park_hidden_dialog(self) -> None:
+        """Keep the Dialog HWND alive but unmapped between opens (fast reopen)."""
+        self._map_suppressed = True
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        # Do NOT clear WA_TranslucentBackground here — after winId() exists,
+        # flipping it off/on leaves opaque black corners on the next show.
+        self.hide()
+
+    # Back-compat name used by portable sheets / chrome.
+    def _park_offscreen(self) -> None:
+        flags = self.windowFlags()
+        if flags & Qt.WindowType.Dialog:
+            self._park_hidden_dialog()
+        else:
+            self._park_as_embedded_widget(self.parentWidget())
+
+    def release_map_suppression(self, host: QWidget | None = None) -> None:
+        """Promote / unsuspend immediately before exec()/show()."""
+        if host is not None:
+            self._map_host = host
+        host = self._map_host or host
+        flags = self.windowFlags()
+        already_dialog = bool(flags & Qt.WindowType.Dialog)
+
+        self._map_suppressed = False
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+
+        if not already_dialog:
+            # One-time promote from garage Widget → frameless Dialog.
+            if host is not None:
+                self.setParent(host)
+            self.setWindowFlags(
+                Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+            )
+            self.hide()
+
+        # Must be True before the window is exposed — opaque HWND = black corners
+        # around the rounded card.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setWindowOpacity(1.0)
+
+    def silent_promote_for_prewarm(self, host: QWidget) -> None:
+        """After garage build: create the Dialog HWND once while still unmapped.
+
+        Pays the setWindowFlags cost during idle startup so the first Add a Clip
+        click does not stall on HWND creation.
+        """
+        if not self._map_suppressed:
+            return
+        if self.windowFlags() & Qt.WindowType.Dialog:
+            return
+        self._map_host = host
+        # Stay DontShowOnScreen for the entire promote — no visible flash.
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self.setParent(host)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        # Build the HWND already translucent so later opens keep rounded corners.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setWindowOpacity(0.0)
+        self.hide()
+        self._map_suppressed = True
+        # Touch winId only while DontShowOnScreen is set so DWM does not map us.
+        try:
+            _ = int(self.winId())
+        except Exception:
+            pass
+        self.hide()
+        self.setWindowOpacity(0.0)
+
     def set_comfort_size(self, width: int, height: int) -> None:
         """Design size at desktop density; auto-shrinks on Deck-class screens."""
         self._comfort_size = (int(width), int(height))
@@ -241,6 +357,10 @@ class SteempegDialog(QDialog):
         self.setFixedSize(w, h)
 
     def showEvent(self, event):
+        if self._map_suppressed:
+            event.ignore()
+            self.hide()
+            return
         super().showEvent(event)
         self._apply_scaled_size()
         self._center_on_parent()
@@ -295,6 +415,9 @@ class SteempegDialog(QDialog):
         # Children keep stylesheet radii so their opaque rects match the shell.
         self.setStyleSheet(
             f"""
+            QDialog {{
+                background-color: transparent;
+            }}
             QWidget#SteempegDialogCard {{
                 background-color: transparent;
                 border: none;
