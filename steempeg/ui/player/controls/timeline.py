@@ -100,41 +100,47 @@ class TimelineCanvas(QWidget):
         p = QImage(get_resource_path("scrolleback.png"))
         
         if not (h.isNull() or b.isNull() or p.isNull()):
-            # Compress to Compact Dimensions
-            h_s = h.scaledToWidth(8, Qt.SmoothTransformation)
-            b_s = b.scaledToWidth(4, Qt.SmoothTransformation)
-            p_s = p.scaledToWidth(4, Qt.SmoothTransformation)
+            # Three-part needle: head + tiled body + foot.
+            # Keep even widths so the stem stays pixel-centered under the head
+            # (odd body_w under even head_w shifted by 0.5px and looked "off").
+            head_w = 10
+            body_w = 6
+            h_s = h.scaledToWidth(head_w, Qt.SmoothTransformation)
+            b_s = b.scaledToWidth(body_w, Qt.SmoothTransformation)
+            p_s = p.scaledToWidth(body_w, Qt.SmoothTransformation)
             
             self.master_head_h = float(h_s.height())
             
-            # Your hardcoded constant from paintEvent (height of the purple bar)
-            track_h = 12 
+            # Stem spans the purple track (+ a hair taller than the bar).
+            track_h = 13
             total_h = h_s.height() + track_h + p_s.height()
+            body_x = (head_w - body_w) // 2
             
             # Create an absolutely empty, transparent canvas for our monolith.
-            master = QImage(8, total_h, QImage.Format_ARGB32)
+            master = QImage(head_w, total_h, QImage.Format_ARGB32)
             master.fill(Qt.transparent)
             
             mp = QPainter(master)
             mp.setRenderHint(QPainter.Antialiasing, True)
             mp.setRenderHint(QPainter.SmoothPixmapTransform, True)
             
-            # 1. Draw the torso exactly in the center (Offset X=2, Width=4)
-            # Overlap by 1px at the top and bottom to avoid any gaps
-            body_rect = QRect(2, h_s.height() - 1, 4, track_h + 2)
+            # 1. Draw the torso exactly in the center. Overlap by 1px to avoid gaps.
+            body_rect = QRect(body_x, h_s.height() - 1, body_w, track_h + 2)
             brush = QBrush(b_s)
             mp.setBrushOrigin(body_rect.topLeft())
             mp.fillRect(body_rect, brush)
             
-            # 2. Stamp the Head (X=0, Width=8) and the Bottom (X=2, Width=4) on top.
+            # 2. Stamp the Head and the Bottom on top.
             mp.drawImage(0, 0, h_s)
-            mp.drawImage(2, h_s.height() + track_h, p_s)
+            mp.drawImage(body_x, h_s.height() + track_h, p_s)
             mp.end()
             
             self.master_scroller_img = master
+            self.master_scroller_w = float(head_w)
             self.has_custom_scroller = True
         else:
             self.has_custom_scroller = False
+            self.master_scroller_w = 4.0
 
         self.hover_x = -1.0
         self.is_hovering = False
@@ -742,11 +748,22 @@ class TimelineCanvas(QWidget):
             painter.setOpacity(1.0)
             draw_marker(hovered_m, True)
 
-        # Hide the prediction (ghost) on icon hover.
+        # Hover ghost: semi-transparent playhead needle (not the ancient fade strip).
         if getattr(self, 'is_hovering', False) and not getattr(self, 'is_hovering_trim_handle', False) and self.drag_state == 'none' and not getattr(self, 'hovered_marker', None):
-            ghost_w = 4.0
-            ghost_x = max(pad, min(self.hover_x - (ghost_w / 2.0), width - pad - ghost_w))
-            painter.fillRect(QRectF(ghost_x, track_y - 4.0, ghost_w, track_height + 8.0), QColor(255, 255, 255, 80))
+            if getattr(self, 'has_custom_scroller', False):
+                ghost_w = float(getattr(self, 'master_scroller_w', self.master_scroller_img.width()))
+                ghost_x = max(pad, min(self.hover_x - (ghost_w / 2.0), width - pad - ghost_w))
+                ghost_y = track_y - self.master_head_h
+                painter.save()
+                painter.setRenderHint(QPainter.Antialiasing, True)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+                painter.setOpacity(0.38)
+                painter.drawImage(QPointF(ghost_x, ghost_y), self.master_scroller_img)
+                painter.restore()
+            else:
+                ghost_w = 4.0
+                ghost_x = max(pad, min(self.hover_x - (ghost_w / 2.0), width - pad - ghost_w))
+                painter.fillRect(QRectF(ghost_x, track_y - 4.0, ghost_w, track_height + 8.0), QColor(255, 255, 255, 80))
 
         #  ULTRA SCROLLER ASSEMBLY 
         if not getattr(self, 'has_custom_scroller', False):
@@ -757,10 +774,9 @@ class TimelineCanvas(QWidget):
             painter.fillRect(QRectF(handle_x, track_y - 4.0, handle_w, track_height + 8.0), self.handle_color)
         else:
             
-            handle_w = 8.0
+            handle_w = float(getattr(self, 'master_scroller_w', 10.0))
             
-            # FIX 1: Center the scroller image! 
-            # Subtract exactly half the width (4px) so the needle points precisely at the time.
+            # Center the scroller image so the needle points at the time.
             handle_x = fill_x_end - (handle_w / 2.0) 
             handle_y = track_y - self.master_head_h
             
