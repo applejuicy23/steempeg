@@ -1092,9 +1092,6 @@ def apply_settings_panel_density(ui, dense) -> None:
         fnt.setPixelSize(field_font)
         combo.setFont(fnt)
 
-    from steempeg.ui.widgets.combo_chrome import settings_combo_field_rules
-
-    field_qss = settings_combo_field_rules(dense)
     # combo_min_h is the inner chrome target for QComboBox. QLineEdit / Save-as also
     # carry QSS padding + borders, so locking them to combo_min_h alone clips glyphs
     # (half-cut filename, crushed "Save as…").
@@ -1102,10 +1099,23 @@ def apply_settings_panel_density(ui, dense) -> None:
     pad_v = 7 if dense.scale >= 0.85 else 3
     line_h = max(int(dense.combo_min_h), field_font + pad_v * 2 + border * 2 + 2)
     btn_r = max(8, int(dense.footer_radius) - 4) if dense.compact else 12
+    ph = 12 if dense.scale >= 0.85 else 8
     fname = getattr(ui, "input_filename", None)
     if fname is not None:
-        fname.setStyleSheet(field_qss)
+        # Same trick as Save as…: vertical centering from fixed height only.
+        # QSS padding-top/bottom + setFixedHeight pushes glyphs onto the floor
+        # (underscores / descenders clipped).
+        fname.setStyleSheet(
+            f"QLineEdit {{ background-color: #383838; color: #ffffff;"
+            f" border: {border}px solid #4a4a4a; border-radius: {btn_r}px;"
+            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
+            f" QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}"
+            f" QLineEdit:disabled {{ background-color: #262626; color: #5a5a5a;"
+            f" border: {border}px solid #333333; }}"
+        )
         fname.setFixedHeight(line_h)
+        fname.setTextMargins(0, 0, 0, 0)
         fnt = fname.font()
         fnt.setFamily("Segoe UI")
         fnt.setBold(True)
@@ -1117,7 +1127,6 @@ def apply_settings_panel_density(ui, dense) -> None:
         dest.setFixedHeight(line_h)
         # Horizontal pad only — vertical centering comes from fixed height.
         # Avoid min-height + vertical padding fighting setFixedHeight (crushed label).
-        ph = 12 if dense.scale >= 0.85 else 8
         dest.setStyleSheet(
             f"QPushButton {{ background-color: #383838; color: #ffffff;"
             f" border: {border}px solid #444444; border-radius: {btn_r}px;"
