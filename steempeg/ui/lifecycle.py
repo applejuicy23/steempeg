@@ -402,6 +402,12 @@ class LifecycleMixin:
         row.addStretch()
         return row
 
+    def show_settings_dialog(self):
+        """App-wide Settings (library footer) — updates, shell, notify, hints, performance."""
+        from steempeg.ui.settings_dialog import show_settings_dialog
+
+        show_settings_dialog(self)
+
     def show_about_dialog(self):
         """ Frameless About dialog styled like the FFmpeg render-error window. """
         if getattr(self, '_about_is_open', False):
