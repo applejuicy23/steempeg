@@ -86,6 +86,18 @@ def title_bar_info_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     return idle, hot
 
 
+def title_bar_settings_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted settings2.png for the title-bar Settings control."""
+    return tinted_pixmap("settings2.png", color, size)
+
+
+def title_bar_settings_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Idle + hot icons for the title-bar Settings (settings2.png)."""
+    idle = _icon_from_pixmap(title_bar_settings_pixmap("#b8b8b8", size))
+    hot = _icon_from_pixmap(title_bar_settings_pixmap("#e8e8e8", size))
+    return idle, hot
+
+
 def tinted_pixmap(name: str, color: str | QColor, size: int = 16) -> QPixmap:
     """Recolor a bundled asset (keeps alpha) via SourceIn tint."""
     src = QPixmap(get_resource_path(name))
