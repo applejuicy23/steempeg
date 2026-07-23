@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from steempeg.infra.paths import get_resource_path
 from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.icon_assets import title_bar_info_icons
+from steempeg.ui.icon_assets import title_bar_info_icons, title_bar_settings_icons
 
 _CONTROL_STRIP_WIDTH = 84
 
@@ -214,6 +214,7 @@ class SteempegTitleBar(QWidget):
     minimize_requested = Signal()
     maximize_requested = Signal()
     about_requested = Signal()
+    settings_requested = Signal()
     update_available_clicked = Signal()
 
     def __init__(self, window: QWidget, *, title: str, subtitle: str = "", parent=None):
@@ -300,6 +301,35 @@ class SteempegTitleBar(QWidget):
         root.addSpacing(4)
         root.addWidget(info_wrap)
 
+        # Settings (settings2.png) — same hitbox geometry as About (i).
+        self.btn_title_settings = QToolButton()
+        self.btn_title_settings.setObjectName("TitleBarSettings")
+        self.btn_title_settings.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.btn_title_settings.setAutoRaise(True)
+        self._settings_icon_idle, self._settings_icon_hot = title_bar_settings_icons(_info_px)
+        self.btn_title_settings.setIcon(self._settings_icon_idle)
+        self.btn_title_settings.setIconSize(QSize(_info_px, _info_px))
+        self.btn_title_settings.setFixedSize(_hit_px, _hit_px)
+        self.btn_title_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_title_settings.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_title_settings.setToolTip("Settings")
+        self.btn_title_settings.clicked.connect(self.settings_requested.emit)
+        self.btn_title_settings.installEventFilter(self)
+
+        settings_wrap = QWidget()
+        settings_wrap.setObjectName("TitleBarSettingsWrap")
+        settings_wrap.setFixedHeight(bar_h)
+        settings_wrap.setFixedWidth(_hit_px)
+        settings_lay = QVBoxLayout(settings_wrap)
+        settings_lay.setContentsMargins(0, 0, 0, 0)
+        settings_lay.setSpacing(0)
+        settings_lay.addStretch(1)
+        settings_lay.addWidget(self.btn_title_settings, 0, Qt.AlignmentFlag.AlignHCenter)
+        settings_lay.addStretch(1)
+
+        root.addSpacing(2)
+        root.addWidget(settings_wrap)
+
         # Compact Health-style chip; hidden until a silent check finds a newer release.
         self.btn_update_available = QPushButton("Update Available")
         self.btn_update_available.setObjectName("TitleBarUpdateAvailable")
@@ -334,19 +364,29 @@ class SteempegTitleBar(QWidget):
         self.set_update_available(False)
 
     def eventFilter(self, watched, event):
-        btn = getattr(self, "btn_about_info", None)
-        if btn is not None and watched is btn:
+        pairs = (
+            (
+                getattr(self, "btn_about_info", None),
+                getattr(self, "_about_info_icon_idle", None),
+                getattr(self, "_about_info_icon_hot", None),
+            ),
+            (
+                getattr(self, "btn_title_settings", None),
+                getattr(self, "_settings_icon_idle", None),
+                getattr(self, "_settings_icon_hot", None),
+            ),
+        )
+        for btn, idle, hot in pairs:
+            if btn is None or watched is not btn or idle is None or hot is None:
+                continue
             et = event.type()
             if et in (QEvent.Type.Enter, QEvent.Type.MouseButtonPress):
-                btn.setIcon(self._about_info_icon_hot)
+                btn.setIcon(hot)
             elif et == QEvent.Type.Leave:
-                btn.setIcon(self._about_info_icon_idle)
+                btn.setIcon(idle)
             elif et == QEvent.Type.MouseButtonRelease:
-                btn.setIcon(
-                    self._about_info_icon_hot
-                    if btn.underMouse()
-                    else self._about_info_icon_idle
-                )
+                btn.setIcon(hot if btn.underMouse() else idle)
+            break
         return super().eventFilter(watched, event)
 
     def _title_bar_press_is_interactive(self, pos: QPoint) -> bool:
@@ -414,17 +454,20 @@ class SteempegTitleBar(QWidget):
                 font-family: {tok.FONT_UI};
                 padding-left: 4px;
             }}
-            QToolButton#TitleBarAboutInfo {{
+            QToolButton#TitleBarAboutInfo,
+            QToolButton#TitleBarSettings {{
                 background: transparent;
                 border: none;
                 padding: 0;
                 margin: 0;
             }}
-            QToolButton#TitleBarAboutInfo:hover {{
+            QToolButton#TitleBarAboutInfo:hover,
+            QToolButton#TitleBarSettings:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
                 border-radius: 13px;
             }}
-            QToolButton#TitleBarAboutInfo:pressed {{
+            QToolButton#TitleBarAboutInfo:pressed,
+            QToolButton#TitleBarSettings:pressed {{
                 background-color: rgba(255, 255, 255, 0.12);
                 border-radius: 13px;
             }}
