@@ -14,15 +14,25 @@ import sys
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.icon_assets import title_bar_info_icons
 
 _CONTROL_STRIP_WIDTH = 84
-_RESIZE_BORDER = 6
 
 # Win32 constants
 _GWL_STYLE = -16
@@ -39,6 +49,7 @@ _SWP_FRAMECHANGED = 0x0020
 
 _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
+_WM_NCLBUTTONDOWN = 0x00A1
 _WM_SYSCOMMAND = 0x0112
 
 _SC_CLOSE = 0xF060
@@ -202,6 +213,8 @@ class SteempegTitleBar(QWidget):
     close_requested = Signal()
     minimize_requested = Signal()
     maximize_requested = Signal()
+    about_requested = Signal()
+    update_available_clicked = Signal()
 
     def __init__(self, window: QWidget, *, title: str, subtitle: str = "", parent=None):
         super().__init__(parent)
@@ -209,6 +222,8 @@ class SteempegTitleBar(QWidget):
         self.setObjectName("SteempegTitleBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
+        # Caption drag area must stay arrow; only the (i) / Update chip use hand.
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
         bar_h = tok.TITLE_BAR_HEIGHT
         root = QHBoxLayout(self)
@@ -222,6 +237,7 @@ class SteempegTitleBar(QWidget):
             icon_lbl.setFixedHeight(bar_h)
             icon_lbl.setFixedWidth(16)
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+            icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(icon_lbl)
             root.addSpacing(7)
 
@@ -235,6 +251,7 @@ class SteempegTitleBar(QWidget):
         title_lbl.setFixedHeight(bar_h)
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         title_lbl.setContentsMargins(0, 0, 0, 2)
+        title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(title_lbl)
 
         if subtitle:
@@ -247,7 +264,55 @@ class SteempegTitleBar(QWidget):
             sub_lbl.setFixedHeight(bar_h)
             sub_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
             sub_lbl.setContentsMargins(0, 0, 0, 2)
+            sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(sub_lbl)
+
+        # About (i) — glyph size stays 16px; hitbox is centered in the title bar
+        # (ceiling↔floor), not on the v40 text baseline. QToolButton centers the
+        # icon inside the hitbox more reliably than QPushButton on Windows.
+        _info_px = 16
+        _hit_px = 26
+        self.btn_about_info = QToolButton()
+        self.btn_about_info.setObjectName("TitleBarAboutInfo")
+        self.btn_about_info.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.btn_about_info.setAutoRaise(True)
+        self._about_info_icon_idle, self._about_info_icon_hot = title_bar_info_icons(_info_px)
+        self.btn_about_info.setIcon(self._about_info_icon_idle)
+        self.btn_about_info.setIconSize(QSize(_info_px, _info_px))
+        self.btn_about_info.setFixedSize(_hit_px, _hit_px)
+        self.btn_about_info.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_about_info.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_about_info.setToolTip("About")
+        self.btn_about_info.clicked.connect(self.about_requested.emit)
+        self.btn_about_info.installEventFilter(self)
+
+        info_wrap = QWidget()
+        info_wrap.setObjectName("TitleBarAboutInfoWrap")
+        info_wrap.setFixedHeight(bar_h)
+        info_wrap.setFixedWidth(_hit_px)
+        info_lay = QVBoxLayout(info_wrap)
+        info_lay.setContentsMargins(0, 0, 0, 0)
+        info_lay.setSpacing(0)
+        info_lay.addStretch(1)
+        info_lay.addWidget(self.btn_about_info, 0, Qt.AlignmentFlag.AlignHCenter)
+        info_lay.addStretch(1)
+
+        root.addSpacing(4)
+        root.addWidget(info_wrap)
+
+        # Compact Health-style chip; hidden until a silent check finds a newer release.
+        self.btn_update_available = QPushButton("Update Available")
+        self.btn_update_available.setObjectName("TitleBarUpdateAvailable")
+        self.btn_update_available.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_update_available.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_update_available.setFixedHeight(20)
+        self.btn_update_available.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        self.btn_update_available.clicked.connect(self.update_available_clicked.emit)
+        self.btn_update_available.hide()
+        root.addSpacing(8)
+        root.addWidget(self.btn_update_available, 0, Qt.AlignmentFlag.AlignVCenter)
 
         root.addStretch(1)
 
@@ -266,22 +331,70 @@ class SteempegTitleBar(QWidget):
         self.btn_maximize.clicked.connect(self.maximize_requested.emit)
 
         self._apply_bar_style(tok.BG_TITLE_BAR)
+        self.set_update_available(False)
+
+    def eventFilter(self, watched, event):
+        btn = getattr(self, "btn_about_info", None)
+        if btn is not None and watched is btn:
+            et = event.type()
+            if et in (QEvent.Type.Enter, QEvent.Type.MouseButtonPress):
+                btn.setIcon(self._about_info_icon_hot)
+            elif et == QEvent.Type.Leave:
+                btn.setIcon(self._about_info_icon_idle)
+            elif et == QEvent.Type.MouseButtonRelease:
+                btn.setIcon(
+                    self._about_info_icon_hot
+                    if btn.underMouse()
+                    else self._about_info_icon_idle
+                )
+        return super().eventFilter(watched, event)
+
+    def _title_bar_press_is_interactive(self, pos: QPoint) -> bool:
+        hit = self.childAt(pos)
+        while hit is not None and hit is not self:
+            if isinstance(hit, QAbstractButton):
+                return True
+            hit = hit.parentWidget()
+        return False
 
     def mousePressEvent(self, event) -> None:
-        # Windows uses WM_NCHITTEST → HTCAPTION. Elsewhere drag via Qt.
-        if os.name != "nt" and event.button() == Qt.MouseButton.LeftButton:
-            handle = self._window.windowHandle()
-            if handle is not None:
-                handle.startSystemMove()
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        if self._title_bar_press_is_interactive(pos):
+            super().mousePressEvent(event)
+            return
+
+        # Native caption drag. Used on Windows too: with buttons in the bar we
+        # return HTCLIENT from NCHITTEST, so Qt must start the drag itself.
+        if os.name == "nt":
+            try:
+                hwnd = int(self._window.winId())
+                ctypes.windll.user32.ReleaseCapture()
+                ctypes.windll.user32.SendMessageW(
+                    hwnd, _WM_NCLBUTTONDOWN, HTCAPTION, 0
+                )
                 event.accept()
                 return
+            except Exception:
+                pass
+
+        handle = self._window.windowHandle()
+        if handle is not None:
+            handle.startSystemMove()
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
-        if os.name != "nt" and event.button() == Qt.MouseButton.LeftButton:
-            self.maximize_requested.emit()
-            event.accept()
-            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if not self._title_bar_press_is_interactive(pos):
+                self.maximize_requested.emit()
+                event.accept()
+                return
         super().mouseDoubleClickEvent(event)
 
     def _apply_bar_style(self, bg_color: str) -> None:
@@ -301,12 +414,62 @@ class SteempegTitleBar(QWidget):
                 font-family: {tok.FONT_UI};
                 padding-left: 4px;
             }}
+            QToolButton#TitleBarAboutInfo {{
+                background: transparent;
+                border: none;
+                padding: 0;
+                margin: 0;
+            }}
+            QToolButton#TitleBarAboutInfo:hover {{
+                background-color: rgba(255, 255, 255, 0.08);
+                border-radius: 13px;
+            }}
+            QToolButton#TitleBarAboutInfo:pressed {{
+                background-color: rgba(255, 255, 255, 0.12);
+                border-radius: 13px;
+            }}
             """
         )
 
     def set_bar_color(self, bg_color: str) -> None:
         """Re-tint the title bar background (used by the experimental themes)."""
         self._apply_bar_style(bg_color)
+
+    def set_update_available(self, available: bool, *, version: str | None = None) -> None:
+        """Show/hide the compact Update available chip next to the version."""
+        btn = self.btn_update_available
+        if not available:
+            btn.hide()
+            btn.setToolTip("")
+            return
+        label = "Update Available"
+        if version:
+            btn.setToolTip(f"Update Available: v{version.lstrip('v')}")
+        else:
+            btn.setToolTip(label)
+        color = COLOR_VERSION_NEW
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        btn.setText(label)
+        btn.setStyleSheet(
+            f"QPushButton#TitleBarUpdateAvailable {{"
+            f"background-color: rgba({r}, {g}, {b}, 0.18);"
+            f"color: {color};"
+            f"border: 1px solid {color};"
+            f"border-radius: 6px;"
+            f"font-family: {tok.FONT_APP};"
+            f"font-size: 10px;"
+            f"font-weight: bold;"
+            f"padding: 0 8px;"
+            f"}}"
+            f"QPushButton#TitleBarUpdateAvailable:hover {{"
+            f"background-color: rgba({r}, {g}, {b}, 0.30);"
+            f"}}"
+        )
+        # Pin to content width only — never max() with current width (a stretched
+        # layout width would lock the chip across the caption drag strip).
+        hint_w = max(btn.sizeHint().width(), 96)
+        btn.setFixedWidth(min(hint_w, 160))
+        btn.show()
 
     def sync_window_state(self) -> None:
         # Linux fake-maximize uses work-area geometry (isMaximized() stays False).
@@ -683,39 +846,48 @@ def _on_nchittest(window, msg):
         # no caption drag.
         return True, HTCLIENT
 
+    # lParam is physical screen coords — match against GetWindowRect (also physical).
+    # mapFromGlobal + logical sizes breaks resize hit bands under DPI scaling.
     x = ctypes.c_short(msg.lParam & 0xFFFF).value
     y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-    pos = window.mapFromGlobal(QPoint(x, y))
-    px, py = int(pos.x()), int(pos.y())
-    w, h = window.width(), window.height()
-    b = _RESIZE_BORDER
-    maximized = window.isMaximized()
+    hwnd = int(window.winId())
+    rect = _RECT()
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
 
+    maximized = bool(window.isMaximized()) or bool(ctypes.windll.user32.IsZoomed(hwnd))
     if not maximized:
-        on_left = px < b
-        on_right = px >= w - b
-        on_top = py < b
-        on_bottom = py >= h - b
-        if on_top and on_left:
+        border = max(_resize_border_thickness(window), 12)
+        corner = max(border * 2, 24)
+        left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+
+        in_left_c = left <= x < left + corner
+        in_right_c = right - corner <= x < right
+        in_top_c = top <= y < top + corner
+        in_bottom_c = bottom - corner <= y < bottom
+        if in_top_c and in_left_c:
             return True, HTTOPLEFT
-        if on_top and on_right:
+        if in_top_c and in_right_c:
             return True, HTTOPRIGHT
-        if on_bottom and on_left:
+        if in_bottom_c and in_left_c:
             return True, HTBOTTOMLEFT
-        if on_bottom and on_right:
+        if in_bottom_c and in_right_c:
             return True, HTBOTTOMRIGHT
-        if on_left:
+
+        if left <= x < left + border:
             return True, HTLEFT
-        if on_right:
+        if right - border <= x < right:
             return True, HTRIGHT
-        if on_top:
+        if top <= y < top + border:
             return True, HTTOP
-        if on_bottom:
+        if bottom - border <= y < bottom:
             return True, HTBOTTOM
 
-    # Title strip (minus the control buttons) = caption → native drag / snap /
-    # double-click maximize / drag-from-top-to-restore.
-    ctrl_right = w - _CONTROL_STRIP_WIDTH
-    if py < tok.TITLE_BAR_HEIGHT and px < ctrl_right:
-        return True, HTCAPTION
+    # Title-bar caption strip (logical) — drag via mousePress → WM_NCLBUTTONDOWN.
+    dpr = max(1.0, float(window.devicePixelRatioF()))
+    pos = window.mapFromGlobal(QPoint(int(round(x / dpr)), int(round(y / dpr))))
+    px, py = int(pos.x()), int(pos.y())
+    w = window.width()
+    if py < tok.TITLE_BAR_HEIGHT and px < (w - _CONTROL_STRIP_WIDTH):
+        return True, HTCLIENT
+
     return None
