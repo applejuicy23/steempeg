@@ -3,6 +3,8 @@
 # Shell
 BG_SHELL = "#1e1e1e"
 BG_TITLE_BAR = "#0d0d0d"
+# Idle player "Please select a clip…" chip fill (canvas stays #1e1e1e / black).
+BG_PLAYER_CANVAS = "#2d2d2d"
 BORDER_SUBTLE = "#000000"
 BORDER_DEFAULT = "#444444"
 
