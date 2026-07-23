@@ -1,4 +1,4 @@
-"""A small square icon button that opens the filter panel."""
+"""A square icon button that opens the filter panel (matches sort-combo chrome)."""
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QPushButton
@@ -18,11 +18,12 @@ class FilterPillButton(QPushButton):
         self.apply_density(COMFORT)
 
     def apply_density(self, dense: UiDensity) -> None:
+        # Same outer box as the Sorting combo (comfort ~36px ≈ combo min-h + pad + border).
         sz = dense.filter_size
-        # Keep the glyph inside the circle — comfort ~16px icon on 36px, compact ~11 on 22.
         icon = max(10, sz // 2 - (1 if dense.compact else 2))
-        radius = sz // 2
+        # Rounded square like compact_combo — not a circle (radius ≠ sz/2).
         border = 1 if dense.compact else 2
+        radius = 6 if dense.compact else 8
         pad = 1 if dense.compact else 2
         self.setFixedSize(sz, sz)
         self.setIconSize(QSize(icon, icon))
