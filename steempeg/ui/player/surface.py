@@ -102,21 +102,32 @@ class MPVWrapper(QWidget):
         painter.drawRect(x, y + b, b, video_h)
         painter.drawRect(x + total_w - b, y + b, b, video_h)
 
+    def _park_mpv_screen(self):
+        """Hide the native embed so it cannot punch through stacked siblings.
+
+        QStackedLayout only toggles Qt visibility; a WA_NativeWindow child that
+        is shown() during a resize (e.g. entering immersive mode on the idle
+        placeholder) can still paint an empty gray GPU surface on top.
+        """
+        self.mpv_screen.setGeometry(0, 0, 0, 0)
+        self.mpv_screen.hide()
+        for line in self.lines:
+            line.hide()
+        self._border_ring = None
+        if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
+            self.hud_reference.hide()
+        self._last_video_rect = (0, 0, 0, 0)
+        if sys.platform != "win32":
+            self.update()
+
     def update_geometry(self):
         w = self.width()
         h = self.height()
 
-        if w < 5 or h < 5:
-            self.mpv_screen.setGeometry(0, 0, 0, 0)
-            self.mpv_screen.hide()
-            for line in self.lines:
-                line.hide()
-            self._border_ring = None
-            if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
-                self.hud_reference.hide()
-            self._last_video_rect = (0, 0, 0, 0)
-            if sys.platform != "win32":
-                self.update()
+        # Hidden in the video stack (placeholder / blank): never show the native
+        # surface — fullscreen resize used to call show() here and cover the UI.
+        if w < 5 or h < 5 or not self.isVisible():
+            self._park_mpv_screen()
             return
 
         if self.mpv_screen.isHidden():
