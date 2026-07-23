@@ -136,9 +136,15 @@ def enter_immersive_chrome(window, screen_geometry):
     """Hide the native title bar. State is stored on *window*."""
     window._immersive_chrome_mode = None
     window._immersive_was_maximized = window.isMaximized()
-    window._immersive_saved_geometry = (
-        window.normalGeometry() if window._immersive_was_maximized else window.geometry()
-    )
+    # Capture restore size BEFORE un-maximize + setGeometry(full monitor).
+    # setGeometry while restored overwrites Qt's normalGeometry — without this
+    # snapshot, exiting fullscreen leaves a monitor-sized "windowed" restore rect
+    # (the old min-size bump hack). Prefer a gray cover over that.
+    if window._immersive_was_maximized:
+        window._immersive_saved_geometry = window.normalGeometry()
+    else:
+        window._immersive_saved_geometry = window.geometry()
+    window._immersive_saved_min_size = window.minimumSize()
 
     if os.name == 'nt':
         # Do NOT strip Win32 styles or move the window via Win32 here. The window
@@ -173,14 +179,32 @@ def exit_immersive_chrome(window):
     mode = getattr(window, '_immersive_chrome_mode', None)
     was_maximized = getattr(window, '_immersive_was_maximized', False)
     saved_geometry = getattr(window, '_immersive_saved_geometry', None)
+    saved_min = getattr(window, '_immersive_saved_min_size', None)
+
+    if saved_min is not None:
+        try:
+            window.setMinimumSize(saved_min)
+        except Exception:
+            pass
 
     if mode == 'nt_geom':
-        # Mirror of the Qt-geometry enter path: just restore the window state /
-        # geometry. No Win32 style restore needed (styles were never touched).
+        # Re-seed normalGeometry before maximize — enter's setGeometry(full screen)
+        # stomped Qt's restore rect. Under the gray cover this is invisible.
+        from steempeg.ui.window_chrome import poke_frame, refresh_dwm_chrome
+
         if was_maximized:
+            if saved_geometry is not None and saved_geometry.isValid():
+                window.setGeometry(saved_geometry)
+                # Intermediate restored size briefly re-adds Aero caption — suppress now.
+                poke_frame(window)
+                refresh_dwm_chrome(window)
             window.showMaximized()
+            poke_frame(window)
+            refresh_dwm_chrome(window)
         elif saved_geometry is not None:
             window.setGeometry(saved_geometry)
+            poke_frame(window)
+            refresh_dwm_chrome(window)
         window._immersive_chrome_mode = None
         return
 
@@ -189,6 +213,8 @@ def exit_immersive_chrome(window):
         if saved_flags is not None:
             window.setWindowFlags(saved_flags)
         if was_maximized:
+            if saved_geometry is not None and saved_geometry.isValid():
+                window.setGeometry(saved_geometry)
             window.showMaximized()
         else:
             window.show()
