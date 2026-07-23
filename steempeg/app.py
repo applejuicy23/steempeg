@@ -1096,6 +1096,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self.ui.destination_button.clicked.connect(self.choose_destination)
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)
         if btn_update: btn_update.clicked.connect(self.check_for_updates)
+        if hasattr(self, "_wire_title_bar_about_updates"):
+            self._wire_title_bar_about_updates()
         self.ui.btn_start.clicked.connect(self.start_render_thread)
         self.ui.btn_start.setEnabled(False)
 
@@ -1363,7 +1365,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             right_layout.setSpacing(8)
 
         # 2: Taming MPV Player and creating a Border Wrapper
-        from PySide6.QtWidgets import QFrame, QStackedLayout, QVBoxLayout, QLabel
+        from PySide6.QtWidgets import QFrame, QStackedLayout, QVBoxLayout, QLabel, QSizePolicy
         
         # --- 1. FAKE BLACK BACKGROUND (Fills the entire space) ---
         self.video_wrapper = QFrame()
@@ -1391,18 +1393,41 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self.ui.video_container.setStyleSheet("background-color: transparent; border: none;")
         self.video_stack.addWidget(self.ui.video_container)
         
-        # 2 Placeholder
+        # Placeholder canvas (near-black) + centered info chip for logo/text.
         self.placeholder_frame = QFrame()
         self.placeholder_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1e1e1e; 
-                border-radius: 0px; 
-                border: 1px solid #333333;
+            QFrame#playerPlaceholderCanvas {
+                background-color: #1e1e1e;
+                border-radius: 0px;
+                border: none;
             }
         """)
+        self.placeholder_frame.setObjectName("playerPlaceholderCanvas")
         place_layout = QVBoxLayout(self.placeholder_frame)
+        place_layout.setContentsMargins(24, 24, 24, 24)
         place_layout.setAlignment(Qt.AlignCenter)
-        
+
+        from steempeg.ui import design_tokens as tok
+
+        self.place_card = QFrame()
+        self.place_card.setObjectName("playerPlaceholderCard")
+        self.place_card.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        self.place_card.setStyleSheet(f"""
+            QFrame#playerPlaceholderCard {{
+                background-color: {tok.BG_PLAYER_CANVAS};
+                border: 1px solid #3d3d45;
+                border-radius: 18px;
+            }}
+            QFrame#playerPlaceholderCard QLabel {{
+                background: transparent;
+                border: none;
+            }}
+        """)
+        card_lay = QVBoxLayout(self.place_card)
+        card_lay.setContentsMargins(28, 22, 28, 22)
+        card_lay.setSpacing(12)
+        card_lay.setAlignment(Qt.AlignCenter)
+
         self.place_logo = QLabel()
         logo_path = get_resource_path("logo.png")
         if os.path.exists(logo_path):
@@ -1411,13 +1436,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
         self.place_logo.setAlignment(Qt.AlignCenter)
-        
+
         self.place_text = QLabel("Please select a clip from the library")
-        self.place_text.setStyleSheet("color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;")
+        self.place_text.setStyleSheet(
+            "color: #888888; font-size: 14px; font-weight: bold;"
+        )
         self.place_text.setAlignment(Qt.AlignCenter)
-        
-        place_layout.addWidget(self.place_logo)
-        place_layout.addWidget(self.place_text)
+
+        card_lay.addWidget(self.place_logo, 0, Qt.AlignCenter)
+        card_lay.addWidget(self.place_text, 0, Qt.AlignCenter)
+        place_layout.addWidget(self.place_card, 0, Qt.AlignCenter)
         self.video_stack.addWidget(self.placeholder_frame)
 
         # A plain black page shown only during the brief load gap (between selecting a
@@ -2129,6 +2157,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         
         self.aspect_frame = self.mpv_wrapper.aspect_frame
         self.mpv_screen = self.mpv_wrapper.mpv_screen
+        if hasattr(self, 'video_stack'):
+            self.video_stack.currentChanged.connect(self._on_video_stack_page_changed)
+            self._on_video_stack_page_changed()
 
         # Windows: create embedded mpv immediately.
         # Linux/Bazzite: do NOT create libmpv at startup — even vo=null still
@@ -3275,6 +3306,21 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception:
             pass
+        # Detach the black cmd.exe host when launched via python.exe / Code Runner.
+        # Logs still go to files. Keep a console with STEEMPEG_KEEP_CONSOLE=1.
+        if os.environ.get("STEEMPEG_KEEP_CONSOLE", "0") != "1":
+            try:
+                import ctypes
+
+                if ctypes.windll.kernel32.FreeConsole():
+                    # After FreeConsole, any print/logging to the old stdio can make
+                    # the CRT AllocConsole a fresh black window (often two flashes
+                    # around the first portable paint). Park stdio on the null device.
+                    _devnull = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+                    sys.stdout = _devnull
+                    sys.stderr = _devnull
+            except Exception:
+                pass
 
     # Linux: default to xcb (XWayland). libmpv wid= embed needs an X11 window;
     # plain Wayland often maps the shell then stalls (this packaged freeze).
@@ -3441,6 +3487,19 @@ def main():
         else:
             window.ui.setMinimumSize(TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
 
+        # Portable: enter theatre BEFORE the first paint so desktop chrome never flashes.
+        if ui_shell == UI_SHELL_PORTABLE:
+            window.apply_portable_theatre_shell()
+
+        # Hide the painted caption before the first ShowWindow — otherwise Windows
+        # briefly maps a native-framed "Steempeg" HWND, then frameless leaves a
+        # translucent stub at the top of the monitor.
+        if sys.platform == "win32":
+            from steempeg.ui.window_chrome import enable_frameless
+
+            _force_native_window_icon(window.ui, icon_path)
+            enable_frameless(window.ui)
+
         window.ui.show()
         window.ui.raise_()
         window.ui.activateWindow()
@@ -3458,9 +3517,17 @@ def main():
         QApplication.processEvents()
         window._sync_startup_layout()
         if ui_shell == UI_SHELL_PORTABLE:
-            window.apply_portable_theatre_shell()
             # Library restore (500ms) must not fight theatre — re-assert after it.
+            window.apply_portable_theatre_shell()
             QTimer.singleShot(600, window.apply_portable_theatre_shell)
+            # Prewarm Clips/Render sheets off the critical path (map-suppressed —
+            # no translucent HWND flash). First open stays snappy.
+            from steempeg.ui.portable.chrome import prewarm_portable_sheets
+
+            QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
+        if hasattr(window, "schedule_silent_update_check"):
+            # Quiet badge probe — never auto-installs; user still chooses backup/update.
+            window.schedule_silent_update_check(2800)
         geo = window.ui.geometry()
         logging.info(
             "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
@@ -3489,6 +3556,8 @@ def main():
             if tb is not None:
                 tb.sync_window_state()
 
+        # Second pass after maximize settles (icon + NCCALCSIZE); caption already
+        # stripped before the first show above.
         QTimer.singleShot(0, _apply_custom_shell_native)
         # Second pass: after the first paint / shell settle (post-update launches
         # sometimes need another poke before Windows shows the branded icon).
