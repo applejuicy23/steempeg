@@ -86,6 +86,7 @@ _BASE_ASSETS = (
     "info.png",
     "arrow.png",
     "settings.png",
+    "settings2.png",
 )
 
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
