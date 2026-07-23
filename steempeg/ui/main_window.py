@@ -60,7 +60,9 @@ class MainWindow(_WindowBase):
             # WM_NCCALCSIZE so our frameless client area stays caption-free.
             poke_frame(self)
             refresh_dwm_chrome(self)
-            if sys.platform == "win32":
+            if sys.platform == "win32" and not getattr(
+                self, "_suppress_dwm_ghost_timer", False
+            ):
                 self._dwm_ghost_timer.start()
         super().changeEvent(event)
 
