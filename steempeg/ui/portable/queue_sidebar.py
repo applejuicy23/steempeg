@@ -34,6 +34,7 @@ from steempeg.ui.queue_card_shared import (
 )
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.elided_label import ElidedLabel
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 # Compact rail on Deck-class shells; roomy rail when the host is wide.
 _SIDEBAR_W_COMPACT = 376
@@ -135,6 +136,43 @@ QPushButton#portableQueueHistory:pressed {{
     border: 2px solid #b29ae7;
 }}
 """
+
+_BTN_CLEAR = f"""
+QPushButton#portableQueueClear {{
+    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+    font-size: {_HEADER_FONT}px;
+    font-weight: bold;
+    background-color: #383838;
+    color: #e0e0e0;
+    border: 2px solid #4a4a4a;
+    border-radius: 8px;
+    padding: 4px 10px 4px 8px;
+    min-height: {_HEADER_MIN_H}px;
+}}
+QPushButton#portableQueueClear:hover {{
+    background-color: #404040;
+    color: #ffffff;
+    border: 2px solid #6b5a8e;
+}}
+QPushButton#portableQueueClear:pressed {{
+    background-color: #3a324a;
+    border: 2px solid #b29ae7;
+}}
+QPushButton#portableQueueClear:disabled {{
+    background-color: #262626;
+    color: #5a5a5a;
+    border: 2px solid #333333;
+}}
+"""
+
+_EMPTY_PANEL_STYLE = (
+    "QFrame#portableQueueEmptyPanel {"
+    " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
+)
+
+_EMPTY_TITLE = "Here is empty!"
+# Explicit <br> (not word-wrap) so Qt doesn't squash the hint under layout pressure.
+_EMPTY_HINT = "Add current clip.<br>or queue from"
 
 
 def _queue_cache_dir(app) -> str:
@@ -403,6 +441,19 @@ class PortableQueueSidebar(QWidget):
         self._anchor_id: str | None = None
         self._row_ids: list[str] = []
         self._rows: dict[str, _PortableQueueRow] = {}
+        dismissed = False
+        if hasattr(app, "load_user_settings"):
+            try:
+                # Portable has its own dismiss flag — desktop "Don't show again"
+                # must not hide this sheet stub.
+                dismissed = bool(
+                    app.load_user_settings().get(
+                        "portable_queue_empty_hint_dismissed", False
+                    )
+                )
+            except Exception:
+                dismissed = False
+        self._empty_hint_dismissed = dismissed
         rail_w = _SIDEBAR_W_COMPACT if compact else _SIDEBAR_W_SPACIOUS
         self.setFixedWidth(rail_w)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -443,7 +494,7 @@ class PortableQueueSidebar(QWidget):
         )
         head_lay.addWidget(self._title, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # History — same chrome as desktop queue toolbar (left of Add).
+        # History + Clear — same pair as the desktop queue toolbar (left of Add).
         hist_h = max(28, int(_HEADER_MIN_H) + 4)
         self._btn_history = QPushButton()
         self._btn_history.setObjectName("portableQueueHistory")
@@ -459,6 +510,19 @@ class PortableQueueSidebar(QWidget):
             self._btn_history.setText("⏱")
         self._btn_history.clicked.connect(self._on_history)
         head_lay.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._btn_clear = QPushButton(" Clear")
+        self._btn_clear.setObjectName("portableQueueClear")
+        self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_clear.setToolTip("Clear the render queue")
+        self._btn_clear.setStyleSheet(_BTN_CLEAR)
+        self._btn_clear.setFixedHeight(hist_h)
+        clear_icon = get_resource_path("clear.png")
+        if clear_icon and os.path.isfile(clear_icon):
+            self._btn_clear.setIcon(QIcon(clear_icon))
+            self._btn_clear.setIconSize(QSize(16, 16))
+        self._btn_clear.clicked.connect(self._on_clear)
+        head_lay.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Heavy plus (U+FF0B fullwidth) reads bolder than ASCII "+" at the same px size.
         self._btn_add = QPushButton("Add ＋")
@@ -497,23 +561,80 @@ class PortableQueueSidebar(QWidget):
         self._list.setSpacing(8)
         self._list.addStretch(1)
 
-        self._empty = QLabel("Empty — Add current\nclip, or queue from\nClips Manager.")
-        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty.setWordWrap(True)
-        self._empty.setStyleSheet(f"color: #777777; font-size: 11px; {_FONT}")
-        self._list.insertWidget(0, self._empty)
+        self._empty_center = self._build_empty_stub()
+        self._list.insertWidget(0, self._empty_center)
 
         scroll.setWidget(self._host)
         list_lay.addWidget(scroll, 1)
         root.addWidget(list_panel, 1)
         self.refresh()
 
+    def _build_empty_stub(self) -> QWidget:
+        """Desktop Render Queue empty panel chrome, portable hint text."""
+        center = QWidget()
+        center.setObjectName("portableQueueEmptyCenter")
+        center.setStyleSheet("background: transparent;")
+        center.setMinimumHeight(200)
+        lay = QVBoxLayout(center)
+        lay.setContentsMargins(12, 24, 12, 24)
+        lay.setSpacing(0)
+
+        panel = QFrame()
+        panel.setObjectName("portableQueueEmptyPanel")
+        panel.setStyleSheet(_EMPTY_PANEL_STYLE)
+        panel.setMaximumWidth(280)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(16, 16, 16, 14)
+        panel_lay.setSpacing(8)
+        panel_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel(_EMPTY_TITLE)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(False)
+        title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        title.setStyleSheet(
+            f"color: #c4b5e8; font-size: 14px; font-weight: bold; border: none;"
+            f" background: transparent; {_FONT}"
+        )
+        hint = QLabel(_EMPTY_HINT)
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        hint.setWordWrap(False)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        hint.setStyleSheet(
+            f"color: #8a8a8a; font-size: 12px; border: none; background: transparent; {_FONT}"
+        )
+        dismiss = SteempegCheckBox("Don't show again")
+        dismiss.setChecked(self._empty_hint_dismissed)
+        dismiss.toggled.connect(self._on_empty_hint_dismiss_toggled)
+
+        panel_lay.addWidget(title)
+        panel_lay.addWidget(hint)
+        panel_lay.addSpacing(8)
+        panel_lay.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignCenter)
+
+        lay.addStretch(1)
+        lay.addWidget(panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(2)
+        return center
+
+    def _on_empty_hint_dismiss_toggled(self, checked: bool) -> None:
+        self._empty_hint_dismissed = bool(checked)
+        if hasattr(self._app, "save_user_settings"):
+            self._app.save_user_settings(
+                "portable_queue_empty_hint_dismissed", self._empty_hint_dismissed
+            )
+        self.refresh()
+
     def refresh(self) -> None:
-        # Clear rows (keep stretch at end).
+        # Clear rows (keep stretch at end). Detach immediately — deleteLater alone
+        # left a ghost empty label painting under the new stub.
         while self._list.count() > 1:
             item = self._list.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.setParent(None)
                 w.deleteLater()
 
         # Keep completed jobs so the green "done" outline is visible in the rail.
@@ -536,13 +657,13 @@ class PortableQueueSidebar(QWidget):
         self._title.setText(f"Queue ({pending})" if pending else f"Queue ({len(jobs)})")
         self._row_ids = []
         self._rows = {}
+        if hasattr(self, "_btn_clear"):
+            self._btn_clear.setEnabled(len(jobs) > 0)
 
         if not jobs:
-            self._empty = QLabel("Empty — Add current\nclip, or queue from\nClips Manager.")
-            self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self._empty.setWordWrap(True)
-            self._empty.setStyleSheet(f"color: #777777; font-size: 11px; {_FONT}")
-            self._list.insertWidget(0, self._empty)
+            if not self._empty_hint_dismissed:
+                self._empty_center = self._build_empty_stub()
+                self._list.insertWidget(0, self._empty_center)
             self._sync_add_enabled()
             return
 
@@ -633,3 +754,8 @@ class PortableQueueSidebar(QWidget):
     def _on_history(self) -> None:
         if hasattr(self._app, "show_render_queue_history"):
             self._app.show_render_queue_history()
+
+    def _on_clear(self) -> None:
+        if hasattr(self._app, "clear_render_queue"):
+            self._app.clear_render_queue()
+        self.refresh()
