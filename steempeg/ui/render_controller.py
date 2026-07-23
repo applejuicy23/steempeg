@@ -1666,27 +1666,25 @@ class RenderMixin:
         self.current_orig_height = max_height
 
         if hasattr(self.ui, "combo_quality"):
+            from steempeg.render.quality_presets import build_quality_presets
+
+            # Only list presets the clip can actually use — no greyed-out upscales.
+            self.all_qualities = build_quality_presets(max_height)
             self.ui.combo_quality.clear()
             if max_height > 0:
                 self.ui.combo_quality.addItem(f"Original (Lossless, {max_height}p)")
             else:
                 self.ui.combo_quality.addItem("Original (Lossless)")
-            for preset_name, preset_height in self.all_qualities:
+            for preset_name, _preset_height in self.all_qualities:
                 self.ui.combo_quality.addItem(preset_name)
-                idx = self.ui.combo_quality.count() - 1
-                if max_height > 0 and preset_height > max_height:
-                    set_combo_item_enabled(
-                        self.ui.combo_quality,
-                        idx,
-                        False,
-                        tooltip=(
-                            f"Clip is {max_height}p — cannot upscale to {preset_height}p. "
-                            "Pick a lower preset or Original."
-                        ),
-                    )
             self.ui.combo_quality.setCurrentIndex(0)
             self.ui.combo_quality.insertSeparator(self.ui.combo_quality.count())
             self.ui.combo_quality.addItem("🎯 Target File Size...")
+            # Fit popup to every row (Original…Target) so Target File Size is
+            # visible without scrolling; scrollbar only if the list grows past that.
+            self.ui.combo_quality.setMaxVisibleItems(
+                max(1, self.ui.combo_quality.count())
+            )
             self.update_bitrate_options()
 
         if hasattr(self.ui, "combo_fps"):
@@ -1970,7 +1968,6 @@ class RenderMixin:
             self.ui.combo_bitrate.blockSignals(False)
             return
             
-        res_key = f"{match.group(1)}p"
         added_any = False
         
         # Calculating the FPS Multiplier for Visuals
@@ -1994,26 +1991,36 @@ class RenderMixin:
             if source_cap_mbps > 0
             else "unknown"
         )
+        from steempeg.render.quality_presets import bitrate_mbps_for
+
+        try:
+            height_px = int(match.group(1))
+        except (TypeError, ValueError):
+            height_px = 0
+
         for quality_level in ["Ultra", "High", "Medium", "Low"]:
-            if res_key in self.steam_bitrate_presets.get(quality_level, {}):
-                preset_bitrate = self.steam_bitrate_presets[quality_level][res_key]
+            preset_bitrate = bitrate_mbps_for(
+                self.steam_bitrate_presets, quality_level, height_px
+            )
+            if preset_bitrate is None:
+                continue
 
-                scaled_bitrate = preset_bitrate * fps_multiplier
-                display_val = _fmt_mbps(scaled_bitrate)
+            scaled_bitrate = preset_bitrate * fps_multiplier
+            display_val = _fmt_mbps(scaled_bitrate)
 
-                self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
-                idx = self.ui.combo_bitrate.count() - 1
-                if source_cap_mbps > 0 and preset_bitrate > source_cap_mbps + 0.25:
-                    set_combo_item_enabled(
-                        self.ui.combo_bitrate,
-                        idx,
-                        False,
-                        tooltip=(
-                            f"Source video is {cap_label} — cannot exceed the original bitrate."
-                        ),
-                    )
-                else:
-                    added_any = True
+            self.ui.combo_bitrate.addItem(f"{quality_level} - {display_val} Mbps")
+            idx = self.ui.combo_bitrate.count() - 1
+            if source_cap_mbps > 0 and preset_bitrate > source_cap_mbps + 0.25:
+                set_combo_item_enabled(
+                    self.ui.combo_bitrate,
+                    idx,
+                    False,
+                    tooltip=(
+                        f"Source video is {cap_label} — cannot exceed the original bitrate."
+                    ),
+                )
+            else:
+                added_any = True
         
         if not added_any and source_cap_mbps > 0:
             display_val = _fmt_mbps(source_cap_mbps * fps_multiplier)
@@ -3332,9 +3339,87 @@ class RenderMixin:
         job.refresh_output_path()
         self._start_render_job(job, batch_mode=True)
 
+    def _apply_render_performance_prefs(self) -> None:
+        """Bump process priority / pause preview for the active render (Settings)."""
+        from steempeg.ui.settings_dialog import (
+            KEY_PAUSE_PREVIEW_DURING_RENDER,
+            KEY_RENDER_PROCESS_PRIORITY,
+            PRIORITY_ABOVE,
+            PRIORITY_HIGH,
+            PRIORITY_NORMAL,
+        )
+
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+
+        if bool(settings.get(KEY_PAUSE_PREVIEW_DURING_RENDER, False)):
+            player = getattr(self, "player", None)
+            if player is not None:
+                try:
+                    was_paused = bool(player.pause)
+                except Exception:
+                    was_paused = True
+                self._preview_paused_for_render = not was_paused
+                if not was_paused:
+                    try:
+                        player.pause = True
+                    except Exception:
+                        self._preview_paused_for_render = False
+            else:
+                self._preview_paused_for_render = False
+        else:
+            self._preview_paused_for_render = False
+
+        prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))
+        self._render_priority_applied = prio
+        if sys.platform == "win32" and prio in (PRIORITY_ABOVE, PRIORITY_HIGH):
+            try:
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.GetCurrentProcess()
+                # ABOVE_NORMAL_PRIORITY_CLASS=0x8000, HIGH_PRIORITY_CLASS=0x80
+                cls = 0x80 if prio == PRIORITY_HIGH else 0x8000
+                kernel32.SetPriorityClass(handle, cls)
+            except Exception:
+                logging.debug("Could not raise process priority", exc_info=True)
+        elif sys.platform != "win32" and prio in (PRIORITY_ABOVE, PRIORITY_HIGH):
+            try:
+                os.nice(-5 if prio == PRIORITY_HIGH else -2)
+            except Exception:
+                logging.debug("Could not raise process nice", exc_info=True)
+
+    def _restore_render_performance_prefs(self) -> None:
+        if getattr(self, "_preview_paused_for_render", False):
+            player = getattr(self, "player", None)
+            if player is not None:
+                try:
+                    player.pause = False
+                except Exception:
+                    pass
+            self._preview_paused_for_render = False
+
+        if sys.platform == "win32" and getattr(self, "_render_priority_applied", "normal") != "normal":
+            try:
+                import ctypes
+
+                # NORMAL_PRIORITY_CLASS
+                ctypes.windll.kernel32.SetPriorityClass(
+                    ctypes.windll.kernel32.GetCurrentProcess(), 0x20
+                )
+            except Exception:
+                pass
+            self._render_priority_applied = "normal"
+
     def _start_render_job(self, job, batch_mode: bool = False) -> None:
         job.refresh_output_path()
         from shutil import which
+
+        self._apply_render_performance_prefs()
 
         ffmpeg_exe = resolve_ffmpeg_exe()
         if not os.path.isfile(ffmpeg_exe):
@@ -3421,6 +3506,7 @@ class RenderMixin:
 
     def _finish_queue_batch(self) -> None:
         self._queue_batch_active = False
+        self._restore_render_performance_prefs()
         set_settings_panel_locked(self, False)
         if hasattr(self.ui, 'btn_start'):
             self.ui.btn_start.setEnabled(True)
@@ -3442,6 +3528,7 @@ class RenderMixin:
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
         self._archive_batch_to_history(cancelled=cancelled)
         self._queue_batch_active = False
+        self._restore_render_performance_prefs()
         set_settings_panel_locked(self, False)
         if hasattr(self.ui, 'btn_start'):
             self.ui.btn_start.setEnabled(True)
@@ -3664,6 +3751,8 @@ class RenderMixin:
             else:
                 self._stop_queue_batch()
             return
+
+        self._restore_render_performance_prefs()
 
         set_settings_panel_locked(self, False)
 
