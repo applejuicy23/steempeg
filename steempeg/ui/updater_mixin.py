@@ -118,6 +118,8 @@ class UpdaterMixin:
         tb._about_updates_wired = True
         if hasattr(tb, "about_requested"):
             tb.about_requested.connect(self.show_about_dialog)
+        if hasattr(tb, "settings_requested"):
+            tb.settings_requested.connect(self.show_settings_dialog)
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
 
