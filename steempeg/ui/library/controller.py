@@ -31,6 +31,11 @@ from steempeg.core.clip_identity import is_nested_same_session
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
 from steempeg.ui.library.scan_worker import LibraryScanWorker
+from steempeg.ui.library.refresh_workers import (
+    ClipHealthRecheckWorker,
+    SteamIconsRefreshWorker,
+    SteamNamesRefreshWorker,
+)
 from steempeg.library.scan import ScannedClip
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.core.steam_paths import (
@@ -452,26 +457,45 @@ class LibraryMixin:
 
         btn.menu_btn.clicked.connect(_show_menu)
 
+    def _refresh_menu_busy(self) -> bool:
+        for attr in (
+            "_health_recheck_worker",
+            "_steam_icons_worker",
+            "_steam_names_worker",
+        ):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                return True
+        return False
+
     def refresh_steam_icons(self):
         """Re-download game icons for every app id in the current library list."""
+        if self._refresh_menu_busy():
+            if hasattr(self, "set_status"):
+                self.set_status("A library refresh job is already running…")
+            return
         app_ids = sorted(self._collect_library_app_ids())
         if not app_ids:
             return
         self.game_icons_cache.clear()
-        updated = 0
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            for app_id in app_ids:
-                icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
-                try:
-                    if os.path.isfile(icon_path):
-                        os.remove(icon_path)
-                except OSError:
-                    pass
-                if games.download_icon(app_id, icon_path):
-                    updated += 1
-        finally:
-            QApplication.restoreOverrideCursor()
+        if hasattr(self, "set_status"):
+            self.set_status(f"Refreshing game icons from Steam (0/{len(app_ids)})…")
+
+        worker = SteamIconsRefreshWorker(app_ids, self.cache_dir, self.ui)
+        self._steam_icons_worker = worker
+        worker.progress.connect(self._on_steam_icons_progress)
+        worker.finished_icons.connect(self._on_steam_icons_finished)
+        worker.failed.connect(self._on_refresh_worker_failed)
+        worker.start()
+
+    def _on_steam_icons_progress(self, done: int, total: int) -> None:
+        if hasattr(self, "set_status"):
+            self.set_status(f"Refreshing game icons from Steam ({done}/{total})…")
+
+    def _on_steam_icons_finished(self, payload: dict) -> None:
+        self._steam_icons_worker = None
+        updated = int(payload.get("updated") or 0)
+        total = int(payload.get("total") or 0)
 
         for row in range(self.ui.table_clips.rowCount()):
             item = self.ui.table_clips.item(row, 0)
@@ -486,26 +510,39 @@ class LibraryMixin:
 
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
+        msg = f"Refreshed {updated} of {total} game icon(s) from Steam."
         if hasattr(self, "set_status"):
-            self.set_status(
-                f"Refreshed {updated} of {len(app_ids)} game icon(s) from Steam."
-            )
+            self.set_status(msg)
+        steempeg_information(self.ui, "Game icons", msg)
 
     def refresh_steam_names(self):
         """Re-fetch game names from Steam for every app id in the library list."""
+        if self._refresh_menu_busy():
+            if hasattr(self, "set_status"):
+                self.set_status("A library refresh job is already running…")
+            return
         app_ids = sorted(self._collect_library_app_ids())
         if not app_ids:
             return
-        updated = 0
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            for app_id in app_ids:
-                name = games.fetch_game_name(app_id)
-                if name:
-                    self.game_names_cache[app_id] = name
-                    updated += 1
-        finally:
-            QApplication.restoreOverrideCursor()
+        if hasattr(self, "set_status"):
+            self.set_status(f"Refreshing game names from Steam (0/{len(app_ids)})…")
+
+        worker = SteamNamesRefreshWorker(app_ids, self.ui)
+        self._steam_names_worker = worker
+        worker.progress.connect(self._on_steam_names_progress)
+        worker.finished_names.connect(self._on_steam_names_finished)
+        worker.failed.connect(self._on_refresh_worker_failed)
+        worker.start()
+
+    def _on_steam_names_progress(self, done: int, total: int) -> None:
+        if hasattr(self, "set_status"):
+            self.set_status(f"Refreshing game names from Steam ({done}/{total})…")
+
+    def _on_steam_names_finished(self, payload: dict) -> None:
+        self._steam_names_worker = None
+        names = payload.get("names") or {}
+        for app_id, name in names.items():
+            self.game_names_cache[app_id] = name
         self.save_json_cache()
 
         for row in range(self.ui.table_clips.rowCount()):
@@ -523,40 +560,110 @@ class LibraryMixin:
 
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
+        updated = int(payload.get("updated") or 0)
+        total = int(payload.get("total") or 0)
+        msg = f"Refreshed {updated} of {total} game name(s) from Steam."
         if hasattr(self, "set_status"):
-            self.set_status(
-                f"Refreshed {updated} of {len(app_ids)} game name(s) from Steam."
-            )
+            self.set_status(msg)
+        steempeg_information(self.ui, "Game names", msg)
 
     def recheck_clip_health(self):
-        """Full health pass for listed clips (ffprobe when needed). Keeps selection and filters."""
+        """Full health pass for listed clips (ffprobe when needed). Off the UI thread."""
         if not hasattr(self.ui, "table_clips"):
             return
-        rows = self.ui.table_clips.rowCount()
-        if rows == 0:
+        if self._refresh_menu_busy():
+            if hasattr(self, "set_status"):
+                self.set_status("A library refresh job is already running…")
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            for row in range(rows):
-                item = self.ui.table_clips.item(row, 0)
-                if not item:
-                    continue
-                clip_path = item.data(Qt.UserRole)
-                if not clip_path or not os.path.isdir(clip_path):
-                    continue
-                report = self._resolve_clip_health(clip_path, fast=False, force=True)
-                item.setData(_CLIP_HEALTH_ROLE, report.level.value)
-                item.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(report.issues))
-        finally:
-            QApplication.restoreOverrideCursor()
+
+        clip_paths = []
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if clip_path and os.path.isdir(clip_path):
+                clip_paths.append(clip_path)
+        if not clip_paths:
+            return
+
+        self._ensure_clip_health_cache()
+        if hasattr(self, "set_status"):
+            self.set_status(f"Re-checking clip health (0/{len(clip_paths)})…")
+
+        worker = ClipHealthRecheckWorker(
+            clip_paths, getattr(self, "_clip_health_cache", {}), self.ui
+        )
+        self._health_recheck_worker = worker
+        worker.progress.connect(self._on_health_recheck_progress)
+        worker.finished_recheck.connect(self._on_health_recheck_finished)
+        worker.failed.connect(self._on_refresh_worker_failed)
+        worker.start()
+
+    def _on_health_recheck_progress(self, done: int, total: int) -> None:
+        if hasattr(self, "set_status"):
+            self.set_status(f"Re-checking clip health ({done}/{total})…")
+
+    def _on_health_recheck_finished(self, payload: dict) -> None:
+        self._health_recheck_worker = None
+        results = payload.get("results") or {}
+        counts = payload.get("counts") or {}
+        cache = payload.get("health_cache")
+        if isinstance(cache, dict):
+            self._clip_health_cache = cache
+            self._save_clip_health_cache()
+
+        for row in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(row, 0)
+            if not item:
+                continue
+            clip_path = item.data(Qt.UserRole)
+            if not clip_path:
+                continue
+            entry = results.get(os.path.normpath(clip_path))
+            if not entry:
+                continue
+            level, issues = entry
+            item.setData(_CLIP_HEALTH_ROLE, level)
+            item.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(issues or []))
 
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
-        if hasattr(self, "set_status"):
-            self.set_status(f"Re-checked health for {rows} clip(s).")
 
+        checked = int(payload.get("checked") or len(results))
+        healthy = int(counts.get(health.ClipHealth.HEALTHY.value, 0))
+        cured = int(counts.get(health.ClipHealth.CURED.value, 0))
+        issues_n = int(counts.get(health.ClipHealth.DEGRADED.value, 0))
+        dead = int(counts.get(health.ClipHealth.DEAD.value, 0))
+        status = (
+            f"Re-checked {checked} clip(s) — "
+            f"healthy {healthy + cured}, issues {issues_n}, dead {dead}."
+        )
+        if hasattr(self, "set_status"):
+            self.set_status(status)
+
+        body = (
+            f"Checked {checked} clip(s).\n\n"
+            f"Healthy: {healthy}\n"
+            f"Cured: {cured}\n"
+            f"Issues: {issues_n}\n"
+            f"Dead: {dead}"
+        )
+        steempeg_information(self.ui, "Clip health re-check", body)
+
+    def _on_refresh_worker_failed(self, message: str) -> None:
+        self._health_recheck_worker = None
+        self._steam_icons_worker = None
+        self._steam_names_worker = None
+        if hasattr(self, "set_status"):
+            self.set_status(f"Refresh failed: {message}")
+        steempeg_information(
+            self.ui,
+            "Refresh failed",
+            f"Something went wrong during the background refresh.\n\n{message}",
+        )
     def _stop_library_scan(self):
         worker = getattr(self, "_library_scan_worker", None)
         if worker is None:
@@ -2383,6 +2490,53 @@ class LibraryMixin:
         if table.isRowHidden(row):
             item.setHidden(True)
 
+    def _sync_library_scan_interaction_lock(self, *, busy: bool) -> None:
+        """Roskomnadzor mode: while clips are loading, freeze Queue + Clips Manager."""
+        enabled = not busy
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            try:
+                panel.setEnabled(enabled)
+            except RuntimeError:
+                pass
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None:
+            try:
+                sidebar.setEnabled(enabled)
+            except RuntimeError:
+                pass
+        for name in ("btn_portable_add_clip", "btn_portable_render"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                try:
+                    btn.setEnabled(enabled)
+                except RuntimeError:
+                    pass
+        # Desktop left-rail library stays visible but selection is already gated;
+        # still block the grid/table widgets so they feel locked.
+        for name in ("grid_clips", "table_clips"):
+            w = getattr(self, name, None) or getattr(getattr(self, "ui", None), name, None)
+            if w is not None:
+                try:
+                    w.setEnabled(enabled)
+                except RuntimeError:
+                    pass
+        try:
+            from steempeg.ui.portable.chrome import sync_portable_library_scan_badge
+
+            if busy:
+                inserted = int(getattr(self, "_scan_inserted", 0) or 0)
+                total = int(getattr(self, "_scan_total", 0) or 0)
+                if total > 0 and inserted > 0:
+                    pct = min(99.0, 100.0 * inserted / total)
+                    sync_portable_library_scan_badge(self, percent=pct, searching=False)
+                else:
+                    sync_portable_library_scan_badge(self, searching=True)
+            else:
+                sync_portable_library_scan_badge(self, clear=True)
+        except Exception:
+            pass
+
     def _clips_library_accepts_selection(self) -> bool:
         return not getattr(self, "_clips_scan_active", False)
 
@@ -2415,6 +2569,12 @@ class LibraryMixin:
                 self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
             else:
                 self.update_status_indicator(f"Found {total} clips", "busy", scan_phase="search")
+            try:
+                from steempeg.ui.portable.chrome import sync_portable_library_scan_badge
+
+                sync_portable_library_scan_badge(self, searching=True)
+            except Exception:
+                pass
 
     def _on_scan_clip_ready(self, row: ScannedClip, index: int, total: int, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
@@ -2475,6 +2635,12 @@ class LibraryMixin:
                 "busy",
                 scan_phase="loading",
             )
+            try:
+                from steempeg.ui.portable.chrome import sync_portable_library_scan_badge
+
+                sync_portable_library_scan_badge(self, percent=float(pct), searching=False)
+            except Exception:
+                pass
 
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
@@ -2540,6 +2706,7 @@ class LibraryMixin:
 
         will_scan_rendered = getattr(self, "_defer_rendered_scan_until_clips_done", False)
         self._clips_scan_active = False
+        self._sync_library_scan_interaction_lock(busy=False)
         if hasattr(self, "update_status_indicator"):
             if not will_scan_rendered:
                 if getattr(self, "_startup_library_scan_active", False) and hasattr(self, "preload_render_history"):
@@ -2582,6 +2749,7 @@ class LibraryMixin:
         self._library_scan_worker = None
         logging.error("Library scan failed: %s", message)
         self._clips_scan_active = False
+        self._sync_library_scan_interaction_lock(busy=False)
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Scan error", "error")
         QTimer.singleShot(0, self._sync_library_scrollbars)
@@ -2626,6 +2794,7 @@ class LibraryMixin:
             if hasattr(self, "_update_library_count_label"):
                 self._update_library_count_label()
             self._clips_scan_active = False
+            self._sync_library_scan_interaction_lock(busy=False)
             if hasattr(self, "update_status_indicator"):
                 self.update_status_indicator("Ready", "ready")
             self._sync_library_scrollbars()
@@ -2636,6 +2805,7 @@ class LibraryMixin:
         generation = self._scan_generation
         self._ensure_clip_health_cache()
         self._clips_scan_active = True
+        self._sync_library_scan_interaction_lock(busy=True)
 
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
@@ -2931,6 +3101,8 @@ class LibraryMixin:
         cached = self.game_icons_cache.get(app_id)
         if cached is not None and not cached.isNull():
             return cached
+        if app_id in getattr(games, "_FAILED_ICON_DOWNLOADS", ()):
+            return QIcon()
         icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
         if not os.path.isfile(icon_path) or os.path.getsize(icon_path) <= 100:
             if not allow_download or not games.download_icon(app_id, icon_path):
