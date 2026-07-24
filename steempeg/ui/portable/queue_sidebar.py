@@ -343,7 +343,7 @@ class _PortableQueueRow(QFrame):
 
         lay.addLayout(text, 1)
 
-        # Overlay ✕ on the card corner — no layout column, closer to content.
+        # Overlay ✕ on the card corner — visible only while the cursor is over the card.
         self._btn_remove = None
         if job_can_remove(job):
             self._btn_remove = QPushButton("✕", self)
@@ -355,6 +355,7 @@ class _PortableQueueRow(QFrame):
             self._btn_remove.clicked.connect(
                 lambda: self.remove_requested.emit(self._job_id)
             )
+            self._btn_remove.hide()
             self._btn_remove.raise_()
 
         for label in self.findChildren(QLabel):
@@ -362,6 +363,19 @@ class _PortableQueueRow(QFrame):
 
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMinimumHeight(max(_THUMB_H + 12, 96))
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def enterEvent(self, event):
+        if self._btn_remove is not None:
+            self._btn_remove.show()
+            self._place_remove_btn()
+            self._btn_remove.raise_()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._btn_remove is not None:
+            self._btn_remove.hide()
+        super().leaveEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -729,6 +743,10 @@ class PortableQueueSidebar(QWidget):
         self._apply_selection_styles()
 
     def _on_row_clicked(self, job_id: str, mods) -> None:
+        if getattr(self._app, "_clips_scan_active", False):
+            if hasattr(self._app, "set_status"):
+                self._app.set_status("Library is still loading — Queue is locked.")
+            return
         mods = mods or Qt.KeyboardModifier.NoModifier
         if mods & _TOGGLE_SELECT_MODIFIERS:
             if job_id in self._selected_ids:
