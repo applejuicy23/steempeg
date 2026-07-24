@@ -317,6 +317,10 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self._queue.job_selected.connect(self._on_queue_job)
         body.addWidget(self._queue, 0)
         app._portable_queue_sidebar = self._queue
+        if hasattr(app, "_sync_library_scan_interaction_lock"):
+            app._sync_library_scan_interaction_lock(
+                busy=bool(getattr(app, "_clips_scan_active", False))
+            )
 
         # Right column: settings + launch strip. Bottoms align with the queue list panel.
         right = QVBoxLayout()
@@ -557,9 +561,15 @@ class PortableClipPickerDialog(SteempegDialog):
             geo = shell.geometry()
         except Exception:
             return
+        # Wider than the old 0.78 shell fraction — the vertical scrollbar (~16px)
+        # used to leave a dead strip beside the last grid column in comfort mode.
+        shell_w = int(geo.width())
+        shell_h = int(geo.height())
+        w_frac = 0.88 if shell_w > 1600 else 0.85
+        h_frac = 0.82 if shell_h > 900 else 0.80
         self.resize(
-            max(640, int(geo.width() * 0.78)),
-            max(480, int(geo.height() * 0.78)),
+            max(720, int(shell_w * w_frac)),
+            max(520, int(shell_h * h_frac)),
         )
 
     def prepare_for_show(self) -> None:
