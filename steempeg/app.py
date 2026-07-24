@@ -2065,6 +2065,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
                 queue_view = self.get_layout_setting("queue_view_mode", DEFAULT_QUEUE_VIEW)
                 self.render_queue_panel = RenderQueuePanel(initial_view_mode=queue_view)
+                self.render_queue_panel._app = self
                 # Closed at startup (sizes […, 0]); keep min at 0 until the pane opens
                 # so nested mins cannot fight Clips Manager on the outer splitter.
                 self.render_queue_panel.setMinimumWidth(0)
@@ -3426,15 +3427,19 @@ def main():
     from steempeg.ui.shell_chooser import (
         ShellChooserDialog,
         UI_SHELL_PORTABLE,
+        resolve_startup_ui_shell,
         save_ui_shell,
     )
 
-    # Always ask — Desktop vs Portable (saved for later settings / diagnostics).
-    chooser = ShellChooserDialog()
-    if chooser.exec() != QDialog.DialogCode.Accepted or not chooser.chosen_shell:
-        sys.exit(0)
-    ui_shell = chooser.chosen_shell
-    save_ui_shell(ui_shell)
+    # Steam Deck: Portable by default (no chooser). Else ask unless "Don't ask again".
+    ui_shell = resolve_startup_ui_shell()
+    if ui_shell is None:
+        chooser = ShellChooserDialog()
+        if chooser.exec() != QDialog.DialogCode.Accepted or not chooser.chosen_shell:
+            sys.exit(0)
+        ui_shell = chooser.chosen_shell
+    else:
+        save_ui_shell(ui_shell)
 
     try:
         window = SteempegApp()
@@ -3480,6 +3485,8 @@ def main():
         _screen = app.primaryScreen()
         if _screen is not None:
             _avail = _screen.availableGeometry()
+            # Portable + Desktop share the Deck floor (1280×800). On smaller
+            # work areas the min clamps to the screen so the shell still fits.
             _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
             _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
             window.ui.setMinimumSize(_min_w, _min_h)
