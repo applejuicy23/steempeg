@@ -640,7 +640,7 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.setStyleSheet("""
             QPushButton {
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-                border-radius: 8px; padding: 4px 12px; font-size: 13px; font-weight: bold;
+                border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold;
                 font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
             }
             QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
@@ -664,7 +664,7 @@ class RenderQueuePanel(QWidget):
         self._btn_history.setStyleSheet("""
             QPushButton {
                 background-color: #383838; border: 2px solid #444444;
-                border-radius: 8px; padding: 4px;
+                border-radius: 6px; padding: 4px;
             }
             QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
             QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
@@ -928,7 +928,7 @@ class RenderQueuePanel(QWidget):
             self._toolbar.setStyleSheet(
                 toolbar_mega_pill_style(dense, object_name="queueToolbar")
             )
-        clear_r = max(6, dense.queue_btn_h // 2 - 2)
+        clear_r = 6
         self._btn_clear.setFixedHeight(dense.queue_btn_h)
         self._btn_clear.setStyleSheet(f"""
             QPushButton {{
@@ -942,7 +942,7 @@ class RenderQueuePanel(QWidget):
             QPushButton:disabled {{ background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }}
         """)
         self._btn_history.setFixedSize(dense.queue_btn_h, dense.queue_btn_h)
-        hist_r = dense.queue_btn_h // 2
+        hist_r = 6
         icon_sz = max(12, dense.queue_btn_h - 10)
         self._btn_history.setIconSize(QSize(icon_sz, icon_sz))
         self._btn_history.setStyleSheet(f"""
@@ -1120,6 +1120,11 @@ class RenderQueuePanel(QWidget):
         self.job_reorder_requested.emit(source_id, target_id)
 
     def _on_card_clicked(self, job_id: str) -> None:
+        app = getattr(self, "_app", None)
+        if app is not None and getattr(app, "_clips_scan_active", False):
+            if hasattr(app, "set_status"):
+                app.set_status("Library is still loading — Queue is locked.")
+            return
         self._selected_id = job_id
         for card in self._card_widgets:
             card.set_selected(card._job_id == job_id)
