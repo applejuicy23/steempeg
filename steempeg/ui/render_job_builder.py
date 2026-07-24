@@ -79,15 +79,27 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
         _set_combo_text(ui.combo_codec, settings.codec_text)
 
     if hasattr(ui, "combo_encoder") and settings.encoder_codec:
-        matched = False
-        for i in range(ui.combo_encoder.count()):
-            data = ui.combo_encoder.itemData(i, Qt.UserRole)
-            if data and str(data) == settings.encoder_codec:
-                ui.combo_encoder.setCurrentIndex(i)
-                matched = True
-                break
-        if not matched and settings.encoder_display:
-            _set_combo_text(ui.combo_encoder, settings.encoder_display)
+        saved = str(settings.encoder_codec)
+        # Don't re-apply a stale CPU choice when NVENC/AMF/QSV is available —
+        # old sessions defaulted to libx264 and kept restoring it on every launch.
+        hw_available = any(
+            not capabilities.is_software_encoder(
+                str(ui.combo_encoder.itemData(i, Qt.UserRole) or "")
+            )
+            for i in range(ui.combo_encoder.count())
+        )
+        if capabilities.is_software_encoder(saved) and hw_available:
+            pass  # keep the HW default from detect_gpu_and_set_encoder
+        else:
+            matched = False
+            for i in range(ui.combo_encoder.count()):
+                data = ui.combo_encoder.itemData(i, Qt.UserRole)
+                if data and str(data) == saved:
+                    ui.combo_encoder.setCurrentIndex(i)
+                    matched = True
+                    break
+            if not matched and settings.encoder_display:
+                _set_combo_text(ui.combo_encoder, settings.encoder_display)
 
     if hasattr(app, "refresh_encode_speed_options"):
         app.refresh_encode_speed_options(settings.encode_speed)
