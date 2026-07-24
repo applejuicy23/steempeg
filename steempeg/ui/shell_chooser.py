@@ -18,8 +18,10 @@ from steempeg.infra.paths import get_resource_path, get_save_directory
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.message_dialog import dialog_theme
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 UI_SHELL_KEY = "ui_shell"
+UI_SHELL_ASK_KEY = "ui_shell_ask_on_startup"
 UI_SHELL_DESKTOP = "desktop"
 UI_SHELL_PORTABLE = "portable"
 
@@ -47,6 +49,45 @@ def save_ui_shell(shell: str) -> None:
     data = cache.read_json(path)
     data[UI_SHELL_KEY] = shell
     cache.write_json(path, data)
+
+
+def load_ask_ui_shell() -> bool:
+    """True = show the chooser on launch (default)."""
+    data = cache.read_json(_settings_path())
+    if UI_SHELL_ASK_KEY not in data:
+        return True
+    return bool(data.get(UI_SHELL_ASK_KEY))
+
+
+def save_ask_ui_shell(ask: bool) -> None:
+    path = _settings_path()
+    data = cache.read_json(path)
+    data[UI_SHELL_ASK_KEY] = bool(ask)
+    cache.write_json(path, data)
+
+
+def is_steamdeck_build() -> bool:
+    """True for steamdeck update-channel builds (Deck zip / baked channel)."""
+    try:
+        from steempeg.services.release_catalog import update_channel
+
+        return update_channel() == "steamdeck"
+    except Exception:
+        return False
+
+
+def resolve_startup_ui_shell() -> str | None:
+    """Shell to use without showing the chooser, or None to ask.
+
+    Steam Deck builds skip the chooser (Portable by default; Settings can still
+    override). Other builds skip only when the user checked Don't ask again.
+    """
+    saved = load_ui_shell()
+    if is_steamdeck_build():
+        return saved or UI_SHELL_PORTABLE
+    if not load_ask_ui_shell() and saved:
+        return saved
+    return None
 
 
 class _ShellCard(QPushButton):
@@ -196,19 +237,31 @@ class ShellChooserDialog(SteempegDialog):
         row.addStretch(1)
         self.content_layout.addLayout(row)
 
-        foot = QLabel("Pick each time you launch — useful while we tune both shells.")
+        self._chk_remember = SteempegCheckBox("Don't ask again — remember this choice")
+        self._chk_remember.setChecked(False)
+        self.content_layout.addSpacing(10)
+        self.content_layout.addWidget(self._chk_remember)
+
+        foot = QLabel("You can switch Desktop ↔ Portable anytime in Settings.")
         foot.setWordWrap(True)
         foot.setStyleSheet(
             f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; "
             f"font-family: {tok.FONT_APP};"
         )
-        self.content_layout.addSpacing(6)
+        self.content_layout.addSpacing(4)
         self.content_layout.addWidget(foot)
 
     def _pick(self, shell_id: str) -> None:
         self._chosen = shell_id
+        save_ui_shell(shell_id)
+        # Checked → skip chooser next launch; unchecked → keep asking.
+        save_ask_ui_shell(not self._chk_remember.isChecked())
         self.accept()
 
     @property
     def chosen_shell(self) -> str | None:
         return self._chosen
+
+    @property
+    def remember_choice(self) -> bool:
+        return bool(self._chk_remember.isChecked())
