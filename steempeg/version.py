@@ -1,7 +1,7 @@
 """Single source of truth for the application version.
 
 ``APP_VERSION_STR`` is what users see (title bar, About, logs) — keep it short
-(``40``, ``41``, …).
+(``40``, ``40.1``, ``41``, …).
 
 Update channels (from **40T** onward) live in ``APP_UPDATE_CHANNEL``, baked by
 ``newver_compilator.py`` per target:
@@ -13,6 +13,6 @@ Update channels (from **40T** onward) live in ``APP_UPDATE_CHANNEL``, baked by
 Legacy builds that still encode the channel in the version string
 (``40T-linux``) keep working via suffix parsing in the Update Center.
 """
-APP_VERSION_STR = "40"
-APP_VERSION_FLOAT = 40.0
+APP_VERSION_STR = "40.1"
+APP_VERSION_FLOAT = 40.1
 APP_UPDATE_CHANNEL = ""
