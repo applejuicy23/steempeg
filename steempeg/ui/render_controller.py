@@ -356,8 +356,13 @@ class RenderMixin:
         for display_name, codec in encoders:
             self.ui.combo_encoder.addItem(display_name, codec)
 
-        # default to the first hardware encoder if there is one, otherwise CPU
-        self.ui.combo_encoder.setCurrentIndex(1 if self.ui.combo_encoder.count() > 1 else 0)
+        # Prefer NVENC / AMF / QSV — never default to CPU when HW is present.
+        idx = capabilities.preferred_encoder_index(encoders)
+        self.ui.combo_encoder.setCurrentIndex(idx)
+        logging.info(
+            "Default encoder → %s",
+            encoders[idx][0] if encoders else "?",
+        )
         self.refresh_encode_speed_options()
 
     def refresh_encode_speed_options(self, preferred_id: str | None = None) -> None:
@@ -2923,6 +2928,10 @@ class RenderMixin:
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
+        if getattr(self, "_clips_scan_active", False):
+            if hasattr(self, "set_status"):
+                self.set_status("Library is still loading — Queue is locked.")
+            return
         job = self.render_queue.get(job_id)
         if not job:
             return
@@ -2954,6 +2963,14 @@ class RenderMixin:
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
 
+    def on_queue_job_selected(self, job_id: str):
+        """Load preview and settings for the selected queue card."""
+        if getattr(self, "_clips_scan_active", False):
+            if hasattr(self, "set_status"):
+                self.set_status("Library is still loading — Queue is locked.")
+            return
+        logging.info("Queue selection: %s", job_id)
+        self.activate_queue_job(job_id)
     def _highlight_clip_in_library(self, clip_path: str) -> None:
         """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
         if not clip_path or not hasattr(self.ui, "table_clips"):
@@ -3296,10 +3313,6 @@ class RenderMixin:
             elif sizes[1] <= 0 and hasattr(self, "_set_queue_pane_closed"):
                 # Empty + already shut: keep maxWidth clamped, handle visible.
                 self._set_queue_pane_closed(True)
-    def on_queue_job_selected(self, job_id: str):
-        """Load preview and settings for the selected queue card."""
-        logging.info("Queue selection: %s", job_id)
-        self.activate_queue_job(job_id)
 
     def start_render_thread(self):
         """Prepares parameters and starts rendering (single clip or full queue)."""
