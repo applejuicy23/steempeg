@@ -438,7 +438,11 @@ class PlayerMixin:
         if hasattr(self.ui, 'label_short_summary'):
             if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
         if hasattr(self.ui, 'label_detailed_summary'):
-            self.ui.label_detailed_summary.setText("Waiting for clip selection...")
+            # Queue card switches call close_current_clip mid-activate; skip the
+            # placeholder so Final Render Details doesn't flash "Waiting…" over
+            # the real summary (SummaryLabel also clears sync — see render_panel).
+            if not getattr(self, "_loading_queue_job", False):
+                self.ui.label_detailed_summary.setText("Waiting for clip selection...")
         if hasattr(self.ui, 'label_location'):
             self.ui.label_location.setText("—")
             
@@ -472,7 +476,10 @@ class PlayerMixin:
         # child over the native mpv surface — that overlap was the root cause of the
         # splitter stutter. A floating window composites independently and is safe.
         app = QApplication.instance()
-        if active and app is not None and app.applicationState() != Qt.ApplicationState.ApplicationActive:
+        if active and (
+            (app is not None and app.applicationState() != Qt.ApplicationState.ApplicationActive)
+            or self._main_shell_is_minimized()
+        ):
             overlay = getattr(self, '_buffering_overlay', None)
             if overlay is not None:
                 overlay.hide_loading()
@@ -743,6 +750,11 @@ class PlayerMixin:
         # Keep comfort chrome — Deck-narrow width must not lerp settings/combos down.
         if hasattr(self, "_apply_responsive_layout_mins"):
             self._apply_responsive_layout_mins(apply_density=True)
+        tb = getattr(self, "title_bar", None) or getattr(
+            getattr(self, "ui", None), "title_bar", None
+        )
+        if tb is not None and hasattr(tb, "set_shell_tools_visible"):
+            tb.set_shell_tools_visible(True)
         if getattr(self, "is_fullscreen", False):
             return
         if not getattr(self, "is_theater", False):
@@ -1576,17 +1588,39 @@ class PlayerMixin:
         path.addRoundedRect(0.0, 0.0, float(hud_w), float(footer_h), 16.0, 16.0)
         region = QRegion(path.toFillPolygon().toPolygon())
         footer.setMask(region)
+    def hide_floating_overlays(self) -> None:
+        """Hide Tool/ToolTip chrome that does not follow main-window minimize.
+
+        Buffering pill and screenshot toast are separate always-on-top windows so
+        they don't recompose over mpv — but that also means they linger on the
+        desktop when the shell is minimized. Call this from MainWindow state/hide.
+        """
+        overlay = getattr(self, "_buffering_overlay", None)
+        if overlay is not None:
+            overlay.hide_loading()
+        self._playback_loading_active = False
+        self._playback_recover_at = None
+        toast = getattr(self, "_screenshot_toast", None)
+        if toast is not None:
+            toast.hide()
+        timer = getattr(self, "_screenshot_toast_timer", None)
+        if timer is not None:
+            timer.stop()
+
+    def _main_shell_is_minimized(self) -> bool:
+        ui = getattr(self, "ui", None)
+        try:
+            return ui is not None and (ui.isMinimized() or not ui.isVisible())
+        except RuntimeError:
+            return True
+
     def hide_hud_on_minimize(self, state):
 
         # The buffering pill is an always-on-top tool window; hide it whenever the
         # app loses focus so it never floats over other applications. It re-shows on
         # the next buffering tick if playback is still stalling.
         if state != Qt.ApplicationState.ApplicationActive:
-            overlay = getattr(self, '_buffering_overlay', None)
-            if overlay is not None:
-                overlay.hide_loading()
-            self._playback_loading_active = False
-            self._playback_recover_at = None
+            self.hide_floating_overlays()
 
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
@@ -3178,6 +3212,8 @@ class PlayerMixin:
 
     def _show_screenshot_toast(self, directory, *, screenshot_path=None):
         """Flash a small 'Screenshot saved in <dir>' toast with copy/open actions."""
+        if self._main_shell_is_minimized():
+            return
         directory = os.path.normpath(directory)
 
         toast = getattr(self, '_screenshot_toast', None)
