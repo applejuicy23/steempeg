@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QRectF, Qt, QSize, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
 from steempeg.ui.icon_assets import add_clip_icon
@@ -42,16 +43,118 @@ _ADD_CLIP_STYLE = (
 )
 
 _RENDER_STYLE = (
+    # Same typeface as Trim: inherit app font + bold only (no forced 12px).
     "QPushButton {"
     "background-color: #2e6b32; color: #ffffff;"
     "border: 2px solid #3e8e41; border-radius: 15px;"
-    "padding: 0 14px; font-weight: bold; font-size: 12px;"
-    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+    "padding: 0 12px; font-weight: bold;"
     "}"
     "QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }"
     "QPushButton:pressed { background-color: #235226; }"
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
+
+_SCAN_RING_SIZE = 28
+_SCAN_RING_COLOR = QColor(_ADD_CLIP_COLOR)
+_SCAN_RING_TRACK = QColor(70, 70, 70)
+_SCAN_RING_TEXT = QColor(_ADD_CLIP_TEXT)
+
+
+class _LibraryScanRing(QWidget):
+    """Compact % ring beside Choose a Clip while the library scan is locked."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("portableLibraryScanRing")
+        self.setFixedSize(_SCAN_RING_SIZE, _SCAN_RING_SIZE)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._pct = 0.0
+        self._searching = True
+        self._angle = 0
+        self._spin = QTimer(self)
+        self._spin.setInterval(40)
+        self._spin.timeout.connect(self._tick)
+        self.hide()
+
+    def _tick(self) -> None:
+        self._angle = (self._angle + 18) % 360
+        self.update()
+
+    def set_progress(self, percent: float | None = None, *, searching: bool = False) -> None:
+        self._searching = bool(searching) or percent is None
+        if percent is not None:
+            self._pct = max(0.0, min(100.0, float(percent)))
+        if self._searching:
+            if not self._spin.isActive():
+                self._spin.start()
+        else:
+            self._spin.stop()
+        if not self.isVisible():
+            self.show()
+        self.update()
+
+    def clear_progress(self) -> None:
+        self._spin.stop()
+        self.hide()
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        pad = 2.5
+        rect = QRectF(pad, pad, self.width() - 2 * pad, self.height() - 2 * pad)
+
+        track = QPen(_SCAN_RING_TRACK)
+        track.setWidthF(2.6)
+        track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track)
+        painter.drawEllipse(rect)
+
+        arc = QPen(_SCAN_RING_COLOR)
+        arc.setWidthF(2.6)
+        arc.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arc)
+        # Qt arcs: 16ths of a degree, 0 = 3 o'clock, counter-clockwise.
+        if self._searching:
+            painter.drawArc(rect, int((90 - self._angle) * 16), int(-110 * 16))
+            label = "…"
+        else:
+            span = int(-360 * 16 * (self._pct / 100.0))
+            painter.drawArc(rect, 90 * 16, span)
+            label = f"{int(self._pct)}"
+
+        painter.setPen(_SCAN_RING_TEXT)
+        font = QFont("Segoe UI")
+        font.setBold(True)
+        # Same face as Choose a Clip (bold Segoe); slightly smaller so digits fit.
+        font.setPixelSize(9 if len(label) <= 2 else 8)
+        painter.setFont(font)
+        painter.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), label)
+        painter.end()
+
+
+def sync_portable_library_scan_badge(
+    app,
+    *,
+    percent: float | None = None,
+    searching: bool = False,
+    clear: bool = False,
+) -> None:
+    """Show/update/hide the Choose-a-Clip scan ring (portable only)."""
+    if not getattr(app, "_portable_shell", False):
+        return
+    badge = getattr(app, "portable_library_scan_badge", None)
+    if badge is None:
+        return
+    try:
+        badge.objectName()
+    except RuntimeError:
+        app.portable_library_scan_badge = None
+        return
+    if clear:
+        badge.clear_progress()
+        return
+    badge.set_progress(percent, searching=searching)
 
 
 def ensure_portable_chrome(app) -> None:
@@ -82,6 +185,10 @@ def ensure_portable_chrome(app) -> None:
         restore_render_settings(app)
         app._portable_render_settings_restored = True
     sync_portable_render_button(app)
+    if hasattr(app, "_sync_library_scan_interaction_lock"):
+        app._sync_library_scan_interaction_lock(
+            busy=bool(getattr(app, "_clips_scan_active", False))
+        )
 
 
 def hide_portable_chrome(app) -> None:
@@ -93,6 +200,7 @@ def hide_portable_chrome(app) -> None:
     for name in (
         "portable_add_clip_divider",
         "btn_portable_add_clip",
+        "portable_library_scan_badge",
         "btn_portable_render",
         "btn_portable_render_settings",
     ):
@@ -153,6 +261,7 @@ def _ensure_add_clip_button(app) -> None:
             app.portable_add_clip_divider = divider
             idx = lay.indexOf(btn)
             lay.insertWidget(idx if idx >= 0 else insert_at, divider)
+        _ensure_library_scan_badge(app, lay)
         return
 
     # Same VLine chrome as health | actions divider — separates title from the chip.
@@ -172,6 +281,29 @@ def _ensure_add_clip_button(app) -> None:
 
     lay.insertWidget(insert_at, divider)
     lay.insertWidget(insert_at + 1, btn)
+    _ensure_library_scan_badge(app, lay)
+
+
+def _ensure_library_scan_badge(app, lay: QHBoxLayout) -> None:
+    """Ring sits immediately after Choose a Clip (same header row)."""
+    badge = getattr(app, "portable_library_scan_badge", None)
+    if badge is not None:
+        try:
+            badge.objectName()
+        except RuntimeError:
+            app.portable_library_scan_badge = None
+            badge = None
+    if badge is not None:
+        return
+
+    badge = _LibraryScanRing()
+    app.portable_library_scan_badge = badge
+    btn = getattr(app, "btn_portable_add_clip", None)
+    idx = lay.indexOf(btn) if btn is not None else -1
+    if idx >= 0:
+        lay.insertWidget(idx + 1, badge)
+    else:
+        lay.addWidget(badge)
 
 
 def _ensure_render_button(app) -> None:
@@ -183,6 +315,10 @@ def _ensure_render_button(app) -> None:
             pass
         app.btn_portable_render.clicked.connect(lambda: open_portable_render_settings(app))
         app.btn_portable_render.setToolTip("Render settings and progress")
+        app.btn_portable_render.setStyleSheet(_RENDER_STYLE)
+        trim = getattr(app, "btn_trim", None)
+        if trim is not None:
+            app.btn_portable_render.setFont(trim.font())
         return
 
     pill = getattr(app, "pill_container", None)
@@ -199,6 +335,8 @@ def _ensure_render_button(app) -> None:
     btn_render.setObjectName("portableRender")
     btn_render.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_render.setFixedHeight(30)
+    if trim is not None:
+        btn_render.setFont(trim.font())
     btn_render.setStyleSheet(_RENDER_STYLE)
     btn_render.setToolTip("Render settings and progress")
     btn_render.clicked.connect(lambda: open_portable_render_settings(app))
@@ -298,6 +436,10 @@ def dispose_portable_sheets(app) -> None:
 
 def open_portable_clip_picker(app) -> None:
     if getattr(app, "_portable_clip_picker_open", False):
+        return
+    if getattr(app, "_clips_scan_active", False):
+        if hasattr(app, "set_status"):
+            app.set_status("Library is still loading — Clips Manager is locked.")
         return
     app._portable_clip_picker_open = True
     try:
