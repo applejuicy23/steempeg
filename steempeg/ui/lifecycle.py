@@ -423,7 +423,20 @@ class LifecycleMixin:
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        dialog.setFixedSize(*scaled_dialog_size(620, 470, parent=self.ui))
+        # Portable + Deck-class shells: scaled_dialog_size shrinks too hard for the
+        # Report / Check for updates / Close row. Keep About wide enough for labels.
+        if getattr(self, "_portable_shell", False):
+            shell_w = 0
+            try:
+                shell_w = int(self.ui.width() or 0)
+            except Exception:
+                shell_w = 0
+            if shell_w <= 1600:
+                dialog.setFixedSize(720, 500)
+            else:
+                dialog.setFixedSize(*scaled_dialog_size(660, 480, parent=self.ui))
+        else:
+            dialog.setFixedSize(*scaled_dialog_size(620, 470, parent=self.ui))
         dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
 
         shell_layout = QVBoxLayout(dialog)
@@ -524,21 +537,24 @@ class LifecycleMixin:
         btn_report.setObjectName("AboutReportBtn")
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
-        btn_update = QPushButton("Check for updates")
-        btn_update.setObjectName("AboutUpdateBtn")
-        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        def _open_updates_from_about():
-            dialog.accept()
-            # Let About tear down before stacking Update Center.
-            QTimer.singleShot(0, self.check_for_updates)
-
-        btn_update.clicked.connect(_open_updates_from_about)
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
-        btn_row.addWidget(btn_update)
+        # Check for updates lives in About only for Portable (title-bar path).
+        # Desktop still has the left-panel Updates button for now.
+        if getattr(self, "_portable_shell", False):
+            btn_update = QPushButton("Check for updates")
+            btn_update.setObjectName("AboutUpdateBtn")
+            btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+
+            def _open_updates_from_about():
+                dialog.accept()
+                # Let About tear down before stacking Update Center.
+                QTimer.singleShot(0, self.check_for_updates)
+
+            btn_update.clicked.connect(_open_updates_from_about)
+            btn_row.addWidget(btn_update)
         btn_row.addWidget(btn_close)
         content.addLayout(btn_row)
 
