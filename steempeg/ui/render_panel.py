@@ -331,10 +331,15 @@ class SummaryLabel(QWidget):
         return False
 
     def _clear(self):
+        # Hide + reparent immediately. deleteLater alone leaves the old
+        # "Waiting for clip selection…" label painted over the new grid until
+        # the event loop runs (common when switching Queue cards in portable).
         while self._grid.count():
             item = self._grid.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
 
     def _label(self, text, qss):
