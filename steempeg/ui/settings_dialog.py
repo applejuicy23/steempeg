@@ -15,7 +15,10 @@ from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_them
 from steempeg.ui.shell_chooser import (
     UI_SHELL_DESKTOP,
     UI_SHELL_PORTABLE,
+    is_steamdeck_build,
+    load_ask_ui_shell,
     load_ui_shell,
+    save_ask_ui_shell,
     save_ui_shell,
 )
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -115,7 +118,23 @@ class SettingsDialog(SteempegDialog):
         shell_row.addWidget(shell_lbl)
         shell_row.addWidget(self._combo_shell, 1)
         root.addLayout(shell_row)
-        root.addWidget(self._hint("Applies the next time Steempeg starts."))
+        self._chk_ask_shell = SteempegCheckBox("Ask which shell on startup")
+        self._chk_ask_shell.setChecked(load_ask_ui_shell())
+        if is_steamdeck_build():
+            # Deck builds skip the chooser; still allow Desktop via this combo.
+            self._chk_ask_shell.setChecked(False)
+            self._chk_ask_shell.setEnabled(False)
+            root.addWidget(
+                self._hint(
+                    "Steam Deck builds start in Portable. Desktop is available "
+                    "here if you want it — applies next launch."
+                )
+            )
+        else:
+            root.addWidget(self._chk_ask_shell)
+            root.addWidget(
+                self._hint("Applies the next time Steempeg starts.")
+            )
 
         # --- Notifications ---
         root.addWidget(self._section("Notifications"))
@@ -259,6 +278,11 @@ class SettingsDialog(SteempegDialog):
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
             save_ui_shell(shell)
+        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
+            save_ask_ui_shell(self._chk_ask_shell.isChecked())
+        elif is_steamdeck_build():
+            # Deck never shows the chooser.
+            save_ask_ui_shell(False)
         self.accept()
 
 
