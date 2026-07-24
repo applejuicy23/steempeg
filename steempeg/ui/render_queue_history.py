@@ -180,6 +180,8 @@ class RenderQueueHistoryDialog(SteempegDialog):
             host_layout.addStretch()
         else:
             # Build cards in chunks so the dialog paints immediately (portable open lag).
+            # Do NOT addStretch until the pump finishes — stretch steals height and
+            # turns early cards into flat bars while batches are still pending.
             self._pending_batches = list(batches)
             self._history_host_layout = host_layout
             loading = QLabel("Loading history…")
@@ -189,7 +191,6 @@ class RenderQueueHistoryDialog(SteempegDialog):
                 f"color: #8a8a8a; font-size: 13px; padding: 24px; {_FONT}"
             )
             host_layout.addWidget(loading)
-            host_layout.addStretch()
             QTimer.singleShot(0, self._pump_history_batches)
 
         scroll.setWidget(host)
@@ -217,7 +218,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         if layout is None or pending is None:
             return
         # Drop the loading label on first pump.
-        if layout.count() >= 2:
+        if layout.count() >= 1:
             item = layout.itemAt(0)
             w = item.widget() if item is not None else None
             if w is not None and w.objectName() == "historyLoadingLabel":
@@ -225,16 +226,15 @@ class RenderQueueHistoryDialog(SteempegDialog):
                 w.setParent(None)
                 w.deleteLater()
         chunk = 2
-        stretch_idx = layout.count() - 1
         for _ in range(chunk):
             if not pending:
                 break
             batch = pending.pop(0)
-            layout.insertWidget(max(0, stretch_idx), self._build_batch_card(batch))
-            stretch_idx = layout.count() - 1
+            layout.addWidget(self._build_batch_card(batch))
         if pending:
             QTimer.singleShot(0, self._pump_history_batches)
         else:
+            layout.addStretch(1)
             self._pending_batches = None
             self._history_host_layout = None
 
@@ -278,6 +278,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
     def _build_batch_card(self, batch: RenderBatchRecord) -> QFrame:
         frame = QFrame()
         frame.setObjectName("batchFrame")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
@@ -305,6 +306,8 @@ class RenderQueueHistoryDialog(SteempegDialog):
         job, status_key = parse_history_job(job_data)
         frame = QFrame()
         frame.setObjectName("jobFrame")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        frame.setMinimumHeight(56)
         row = QVBoxLayout(frame)
         row.setContentsMargins(10, 8, 10, 8)
         row.setSpacing(3)
