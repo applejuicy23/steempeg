@@ -47,6 +47,15 @@ class BufferingOverlay(QWidget):
         if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
             self.hide_loading()
             return
+        # Never float over the desktop while the main shell is minimized.
+        try:
+            win = anchor_widget.window() if anchor_widget is not None else None
+            if win is not None and (win.isMinimized() or not win.isVisible()):
+                self.hide_loading()
+                return
+        except RuntimeError:
+            self.hide_loading()
+            return
         self._message = message
         self._reposition(anchor_widget)
         if not self._spin.isActive():
