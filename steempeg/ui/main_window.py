@@ -64,7 +64,20 @@ class MainWindow(_WindowBase):
                 self, "_suppress_dwm_ghost_timer", False
             ):
                 self._dwm_ghost_timer.start()
+            # Buffering / screenshot toast are separate Tool windows — they do not
+            # minimize with us. Hide them whenever the shell is minimized.
+            host = self._app_host
+            if self.isMinimized() and host is not None and hasattr(
+                host, "hide_floating_overlays"
+            ):
+                host.hide_floating_overlays()
         super().changeEvent(event)
+
+    def hideEvent(self, event):
+        host = self._app_host
+        if host is not None and hasattr(host, "hide_floating_overlays"):
+            host.hide_floating_overlays()
+        super().hideEvent(event)
 
     def showEvent(self, event):
         refresh_dwm_chrome(self)
