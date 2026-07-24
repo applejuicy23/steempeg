@@ -136,17 +136,30 @@ class _TrafficLight(QPushButton):
             """
         )
 
-    def enterEvent(self, event):
-        self._hovered = True
+    def _set_hovered(self, hovered: bool) -> None:
+        if self._hovered == hovered:
+            return
+        self._hovered = hovered
         self._apply_style()
         self.update()
+
+    def enterEvent(self, event):
+        self._set_hovered(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self._hovered = False
-        self._apply_style()
-        self.update()
+        self._set_hovered(False)
         super().leaveEvent(event)
+
+    def hideEvent(self, event):
+        # Hide/park (portable sheets) often skips leaveEvent → glyph stuck on next open.
+        self._set_hovered(False)
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Sync from real geometry after map (clears sticky hover; shows glyph if under cursor).
+        self._set_hovered(bool(self.underMouse()))
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -269,9 +282,9 @@ class SteempegTitleBar(QWidget):
             sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(sub_lbl)
 
-        # About (i) — glyph size stays 16px; hitbox is centered in the title bar
-        # (ceiling↔floor), not on the v40 text baseline. QToolButton centers the
-        # icon inside the hitbox more reliably than QPushButton on Windows.
+        # About (i) + Settings — Portable shell only (Desktop uses left-panel footer).
+        # Glyph size stays 16px; hitbox centered in the title bar. Hidden until
+        # ``set_shell_tools_visible(True)`` from the portable theatre path.
         _info_px = 16
         _hit_px = 26
         self.btn_about_info = QToolButton()
@@ -299,10 +312,6 @@ class SteempegTitleBar(QWidget):
         info_lay.addWidget(self.btn_about_info, 0, Qt.AlignmentFlag.AlignHCenter)
         info_lay.addStretch(1)
 
-        root.addSpacing(4)
-        root.addWidget(info_wrap)
-
-        # Settings (settings2.png) — same hitbox geometry as About (i).
         self.btn_title_settings = QToolButton()
         self.btn_title_settings.setObjectName("TitleBarSettings")
         self.btn_title_settings.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -328,8 +337,18 @@ class SteempegTitleBar(QWidget):
         settings_lay.addWidget(self.btn_title_settings, 0, Qt.AlignmentFlag.AlignHCenter)
         settings_lay.addStretch(1)
 
-        root.addSpacing(2)
-        root.addWidget(settings_wrap)
+        shell_tools = QWidget()
+        shell_tools.setObjectName("TitleBarShellTools")
+        shell_tools_lay = QHBoxLayout(shell_tools)
+        shell_tools_lay.setContentsMargins(0, 0, 0, 0)
+        shell_tools_lay.setSpacing(0)
+        shell_tools_lay.addSpacing(4)
+        shell_tools_lay.addWidget(info_wrap)
+        shell_tools_lay.addSpacing(2)
+        shell_tools_lay.addWidget(settings_wrap)
+        self._shell_tools = shell_tools
+        shell_tools.hide()
+        root.addWidget(shell_tools)
 
         # Compact Health-style chip; hidden until a silent check finds a newer release.
         self.btn_update_available = QPushButton("Update Available")
@@ -479,6 +498,12 @@ class SteempegTitleBar(QWidget):
         """Re-tint the title bar background (used by the experimental themes)."""
         self._apply_bar_style(bg_color)
 
+    def set_shell_tools_visible(self, visible: bool) -> None:
+        """Show About (i) + Settings in the title bar (Portable shell only)."""
+        tools = getattr(self, "_shell_tools", None)
+        if tools is not None:
+            tools.setVisible(bool(visible))
+
     def set_update_available(self, available: bool, *, version: str | None = None) -> None:
         """Show/hide the compact Update available chip next to the version."""
         btn = self.btn_update_available
@@ -589,20 +614,36 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     main_window.title_bar = title_bar
     main_window._custom_chrome_shell = shell
-    # Windows gets edge/corner resize via WM_NCHITTEST. Frameless on Linux has no
-    # native thick frame — manual grips on xcb, startSystemResize on Wayland.
-    if os.name != "nt":
+    # Platform-split edge/corner resize — keep both paths independent.
+    # Windows: overlay grip widgets + HTCLIENT on grip bands (see enable_windows_*).
+    # Linux: xcb manual / Wayland startSystemResize (unchanged).
+    if os.name == "nt":
+        enable_windows_edge_resize(main_window)
+    else:
         enable_linux_edge_resize(main_window)
     return title_bar
 
 
+# --- Shared edge geometry (used by Windows + Linux filters) -----------------
+
+_WIN_RESIZE_BORDER = 8
+_WIN_RESIZE_CORNER = 14
+# Top corners stay tiny so traffic-light dots stay clickable.
+_WIN_RESIZE_TOP_CORNER = 8
 _LINUX_RESIZE_BORDER = 8
 _LINUX_RESIZE_CORNER = 18
 
 
-def _linux_nearly_maximized(window: QWidget) -> bool:
+def _nearly_maximized(window: QWidget) -> bool:
     if window.isMaximized():
         return True
+    if os.name == "nt":
+        # Windows: only trust real maximized state. A "fills most of the screen"
+        # heuristic blocked corner drag after restore on large monitors.
+        try:
+            return bool(ctypes.windll.user32.IsZoomed(int(window.winId())))
+        except Exception:
+            return False
     screen = window.screen() or QApplication.primaryScreen()
     if screen is None:
         return False
@@ -616,20 +657,18 @@ def _linux_nearly_maximized(window: QWidget) -> bool:
     )
 
 
-def _linux_edges_at(window: QWidget, global_pos: QPoint):
+def _edges_at(window: QWidget, global_pos: QPoint, *, border: int, corner: int):
     """Map a global mouse position to Qt resize edges, or None if not on a grip."""
     tb = getattr(window, "title_bar", None)
     if tb is None or not tb.isVisible():
         return None
-    if _linux_nearly_maximized(window):
+    if _nearly_maximized(window):
         return None
 
-    # frameGeometry includes any WM frame; for frameless equals geometry.
     geo = window.frameGeometry()
     x, y = global_pos.x(), global_pos.y()
     left, top = geo.x(), geo.y()
     right, bottom = left + geo.width(), top + geo.height()
-    border, corner = _LINUX_RESIZE_BORDER, _LINUX_RESIZE_CORNER
 
     on_left = left <= x < left + border
     on_right = right - border <= x < right
@@ -659,7 +698,7 @@ def _linux_edges_at(window: QWidget, global_pos: QPoint):
     return None
 
 
-def _linux_cursor_for_edges(edges) -> Qt.CursorShape:
+def _cursor_for_edges(edges) -> Qt.CursorShape:
     left = bool(edges & Qt.Edge.LeftEdge)
     right = bool(edges & Qt.Edge.RightEdge)
     top = bool(edges & Qt.Edge.TopEdge)
@@ -673,16 +712,7 @@ def _linux_cursor_for_edges(edges) -> Qt.CursorShape:
     return Qt.CursorShape.SizeVerCursor
 
 
-def _linux_prefer_manual_resize() -> bool:
-    """XWayland/xcb often mishandles startSystemResize for frameless windows."""
-    app = QApplication.instance()
-    if app is None:
-        return True
-    name = (app.platformName() or "").lower()
-    return name in ("xcb", "offscreen", "minimal")
-
-
-def _linux_apply_manual_resize(
+def _apply_manual_resize(
     window: QWidget,
     edges,
     origin: QPoint,
@@ -711,6 +741,171 @@ def _linux_apply_manual_resize(
     window.setGeometry(x, y, w, h)
 
 
+# --- Windows edge resize ----------------------------------------------------
+# Dedicated path (not shared with Linux): transparent grip widgets on top of
+# the shell. App-wide mouse filters miss presses when DWM/NCHITTEST owns the
+# border; HTLEFT/… system resize was also unreliable with our NCCALCSIZE chrome.
+
+
+class _WinResizeGrip(QWidget):
+    """Invisible hit target for one edge or corner on Windows."""
+
+    def __init__(self, host: QWidget, edges):
+        super().__init__(host)
+        self._host = host
+        self._edges = edges
+        self._origin: QPoint | None = None
+        self._start_geo = None
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setStyleSheet("background: transparent;")
+        self.setCursor(QCursor(_cursor_for_edges(edges)))
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+        if _nearly_maximized(self._host):
+            return
+        self._origin = event.globalPosition().toPoint()
+        self._start_geo = self._host.geometry()
+        self.grabMouse()
+        event.accept()
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        if self._origin is None or self._start_geo is None:
+            return super().mouseMoveEvent(event)
+        _apply_manual_resize(
+            self._host,
+            self._edges,
+            self._origin,
+            self._start_geo,
+            event.globalPosition().toPoint(),
+        )
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if self._origin is not None:
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
+            self._origin = None
+            self._start_geo = None
+            event.accept()
+            return
+        return super().mouseReleaseEvent(event)
+
+
+class _WindowsEdgeResizeController(QObject):
+    """Positions 8 transparent grips over the window border (Windows only)."""
+
+    def __init__(self, window: QWidget):
+        super().__init__(window)
+        self._window = window
+        specs = (
+            Qt.Edge.LeftEdge,
+            Qt.Edge.RightEdge,
+            Qt.Edge.TopEdge,
+            Qt.Edge.BottomEdge,
+            Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+            Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+            Qt.Edge.BottomEdge | Qt.Edge.LeftEdge,
+            Qt.Edge.BottomEdge | Qt.Edge.RightEdge,
+        )
+        self._grips = [_WinResizeGrip(window, edges) for edges in specs]
+        window.installEventFilter(self)
+        self._layout_grips()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._window and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.WindowStateChange,
+        ):
+            self._layout_grips()
+        return False
+
+    def _layout_grips(self) -> None:
+        window = self._window
+        if _nearly_maximized(window):
+            for g in self._grips:
+                g.hide()
+            return
+
+        w, h = window.width(), window.height()
+        b, c = _WIN_RESIZE_BORDER, _WIN_RESIZE_CORNER
+        tc = _WIN_RESIZE_TOP_CORNER
+        # Order matches specs in __init__.
+        # Top corners stay small — a big square ate the close/min/max dots.
+        geos = (
+            (0, c, b, max(0, h - 2 * c)),  # left
+            (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
+            (tc, 0, max(0, w - 2 * tc), b),  # top
+            (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
+            (0, 0, tc, tc),  # top-left
+            (max(0, w - tc), 0, tc, tc),  # top-right
+            (0, max(0, h - c), c, c),  # bottom-left
+            (max(0, w - c), max(0, h - c), c, c),  # bottom-right
+        )
+        for grip, (x, y, gw, gh) in zip(self._grips, geos):
+            if gw <= 0 or gh <= 0:
+                grip.hide()
+                continue
+            grip.setGeometry(x, y, gw, gh)
+            grip.show()
+            grip.raise_()
+
+
+def enable_windows_edge_resize(window: QWidget) -> None:
+    """Windows-only: overlay grip widgets for edge/corner resize."""
+    if os.name != "nt":
+        return
+    existing = getattr(window, "_windows_edge_resize_filter", None)
+    if existing is not None:
+        return
+    window._windows_edge_resize_filter = _WindowsEdgeResizeController(window)
+
+
+# --- Linux edge resize (unchanged behaviour) --------------------------------
+
+
+def _linux_nearly_maximized(window: QWidget) -> bool:
+    return _nearly_maximized(window)
+
+
+def _linux_edges_at(window: QWidget, global_pos: QPoint):
+    return _edges_at(
+        window,
+        global_pos,
+        border=_LINUX_RESIZE_BORDER,
+        corner=_LINUX_RESIZE_CORNER,
+    )
+
+
+def _linux_cursor_for_edges(edges) -> Qt.CursorShape:
+    return _cursor_for_edges(edges)
+
+
+def _linux_prefer_manual_resize() -> bool:
+    """XWayland/xcb often mishandles startSystemResize for frameless windows."""
+    app = QApplication.instance()
+    if app is None:
+        return True
+    name = (app.platformName() or "").lower()
+    return name in ("xcb", "offscreen", "minimal")
+
+
+def _linux_apply_manual_resize(
+    window: QWidget,
+    edges,
+    origin: QPoint,
+    start_geo,
+    global_pos: QPoint,
+) -> None:
+    _apply_manual_resize(window, edges, origin, start_geo, global_pos)
+
+
 class _LinuxEdgeResizeFilter(QObject):
     """Edge/corner resize for frameless Linux windows.
 
@@ -726,6 +921,7 @@ class _LinuxEdgeResizeFilter(QObject):
         self._drag_origin: QPoint | None = None
         self._drag_geo = None
         self._manual = _linux_prefer_manual_resize()
+        window.setMouseTracking(True)
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -1112,14 +1308,41 @@ def refresh_dwm_chrome(window: QWidget) -> None:
         pass
 
 
+def _native_event_type_bytes(eventType) -> bytes:
+    """Normalize Qt/PySide nativeEvent type to bytes.
+
+    PySide6 may pass ``b'windows_generic_MSG'``, a QByteArray, or a plain
+    ``str``. Comparing only to ``bytes`` silently disables WM_NCHITTEST and
+    kills corner/edge resize on Windows.
+    """
+    if isinstance(eventType, (bytes, bytearray)):
+        return bytes(eventType)
+    if isinstance(eventType, memoryview):
+        return eventType.tobytes()
+    # QByteArray / str / anything with data()
+    data = getattr(eventType, "data", None)
+    if callable(data):
+        try:
+            raw = data()
+            if isinstance(raw, (bytes, bytearray)):
+                return bytes(raw)
+        except Exception:
+            pass
+    return str(eventType).encode("ascii", "ignore")
+
+
 def handle_native_event(window, eventType, message):
     """Return (True, result) for handled WM_* messages, else None.
 
     Call from MainWindow.nativeEvent."""
-    if os.name != "nt" or eventType != b"windows_generic_MSG":
+    if os.name != "nt":
+        return None
+    et = _native_event_type_bytes(eventType)
+    if et not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
         return None
     try:
-        msg = _MSG.from_address(int(message))
+        addr = int(message) if not hasattr(message, "__int__") else int(message.__int__())
+        msg = _MSG.from_address(addr)
     except (TypeError, ValueError):
         return None
 
@@ -1163,41 +1386,35 @@ def _on_nchittest(window, msg):
         # no caption drag.
         return True, HTCLIENT
 
-    # lParam is physical screen coords — match against GetWindowRect (also physical).
-    # mapFromGlobal + logical sizes breaks resize hit bands under DPI scaling.
+    # lParam is physical screen coords.
     x = ctypes.c_short(msg.lParam & 0xFFFF).value
     y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-    hwnd = int(window.winId())
-    rect = _RECT()
-    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
 
+    # Edge/corner resize is owned by ``enable_windows_edge_resize`` (Qt grips).
+    # Force HTCLIENT on the grip bands so Win32 does not swallow presses via
+    # HTLEFT/HTBOTTOMRIGHT (broken under our DWM + NCCALCSIZE chrome).
+    hwnd = int(window.winId())
     maximized = bool(window.isMaximized()) or bool(ctypes.windll.user32.IsZoomed(hwnd))
     if not maximized:
-        border = max(_resize_border_thickness(window), 12)
-        corner = max(border * 2, 24)
+        rect = _RECT()
+        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        dpr = max(1.0, float(window.devicePixelRatioF()))
+        border = max(int(round(_WIN_RESIZE_BORDER * dpr)), 8)
+        corner = max(int(round(_WIN_RESIZE_CORNER * dpr)), 12)
+        top_corner = max(int(round(_WIN_RESIZE_TOP_CORNER * dpr)), 8)
         left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
-
-        in_left_c = left <= x < left + corner
-        in_right_c = right - corner <= x < right
-        in_top_c = top <= y < top + corner
-        in_bottom_c = bottom - corner <= y < bottom
-        if in_top_c and in_left_c:
-            return True, HTTOPLEFT
-        if in_top_c and in_right_c:
-            return True, HTTOPRIGHT
-        if in_bottom_c and in_left_c:
-            return True, HTBOTTOMLEFT
-        if in_bottom_c and in_right_c:
-            return True, HTBOTTOMRIGHT
-
-        if left <= x < left + border:
-            return True, HTLEFT
-        if right - border <= x < right:
-            return True, HTRIGHT
-        if top <= y < top + border:
-            return True, HTTOP
-        if bottom - border <= y < bottom:
-            return True, HTBOTTOM
+        on_edge = (
+            left <= x < left + border
+            or right - border <= x < right
+            or top <= y < top + border
+            or bottom - border <= y < bottom
+            or (left <= x < left + top_corner and top <= y < top + top_corner)
+            or (right - top_corner <= x < right and top <= y < top + top_corner)
+            or (left <= x < left + corner and bottom - corner <= y < bottom)
+            or (right - corner <= x < right and bottom - corner <= y < bottom)
+        )
+        if on_edge:
+            return True, HTCLIENT
 
     # Title-bar caption strip (logical) — drag via mousePress → WM_NCLBUTTONDOWN.
     dpr = max(1.0, float(window.devicePixelRatioF()))
