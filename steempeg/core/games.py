@@ -29,6 +29,8 @@ _CDN_HOSTS = (
     "shared.akamai.steamstatic.com",
     "cdn.cloudflare.steamstatic.com",
 )
+# App IDs that failed icon download this process — skip re-fetch for every clip.
+_FAILED_ICON_DOWNLOADS: set[str] = set()
 
 
 def fetch_game_name(app_id, timeout=3):
@@ -139,8 +141,13 @@ def download_icon(app_id, dest_path, timeout=5):
     Prefers the local Steam client cache, then tries CDN URLs until one returns
     a real image (community HTML can point at stale 404 hashes).
     Returns True on success. Pure - no Qt.
+
+    After a hard failure for an app_id, later calls in this process skip the
+    network (so one dead Kuro/Wuthering Waves fetch doesn't hammer every clip).
     """
     app_id = str(app_id)
+    if app_id in _FAILED_ICON_DOWNLOADS:
+        return False
 
     local = find_local_steam_icon(app_id)
     if local:
@@ -160,4 +167,5 @@ def download_icon(app_id, dest_path, timeout=5):
             return True
         except (requests.RequestException, OSError):
             continue
+    _FAILED_ICON_DOWNLOADS.add(app_id)
     return False
