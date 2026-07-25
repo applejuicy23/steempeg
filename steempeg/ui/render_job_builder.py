@@ -221,13 +221,45 @@ def _mpd_paths_for_clip(app: SteempegApp, clip_path: str) -> list[str]:
     return salvage
 
 
-def probe_clip_render_defaults(clip_path: str, app: SteempegApp | None = None) -> dict:
-    """Per-clip Original preset strings from MPD (for queue add without preview)."""
+def _ui_encoder_snapshot(app: SteempegApp) -> tuple[str, str, str]:
+    """Live encoder combo → (codec, display, encode_speed). Used for non-preview queue jobs."""
+    ui = app.ui
+    codec_raw = ui.combo_codec.currentText() if hasattr(ui, "combo_codec") else ""
+    encoder_display = ui.combo_encoder.currentText() if hasattr(ui, "combo_encoder") else ""
+    encoder_codec = (
+        ui.combo_encoder.currentData(Qt.UserRole) if hasattr(ui, "combo_encoder") else "libx264"
+    )
+    encoder_codec = resolve_video_encoder(
+        codec_raw,
+        str(encoder_codec or "libx264"),
+        capabilities.av1_encoder_available(),
+    )
+    encode_speed = "balanced"
+    if hasattr(ui, "combo_encode_speed"):
+        data = ui.combo_encode_speed.currentData(Qt.UserRole)
+        if data:
+            encode_speed = normalize_encode_speed(str(data))
+    return str(encoder_codec), str(encoder_display or ""), encode_speed
+
+
+def probe_clip_render_defaults(
+    clip_path: str,
+    app: SteempegApp | None = None,
+    *,
+    mpds: list[str] | None = None,
+    allow_ffprobe: bool = True,
+) -> dict:
+    """Per-clip Original preset strings from MPD (for queue add without preview).
+
+    Queue-add passes ``allow_ffprobe=False`` so we never spawn ffprobe on the UI
+    thread — FPS/bitrate come from MPD text only.
+    """
     clip_path = os.path.normpath(clip_path)
-    if app is not None:
-        mpds = _mpd_paths_for_clip(app, clip_path)
-    else:
-        mpds = discovery.find_mpd_paths(clip_path)
+    if mpds is None:
+        if app is not None:
+            mpds = _mpd_paths_for_clip(app, clip_path)
+        else:
+            mpds = discovery.find_mpd_paths(clip_path)
     if not mpds:
         return {
             "orig_fps": 60,
@@ -236,25 +268,51 @@ def probe_clip_render_defaults(clip_path: str, app: SteempegApp | None = None) -
             "quality_text": "Original (Lossless)",
             "fps_text": "60 FPS (Original)",
             "bitrate_text": "Unknown Mbps (Original)",
+            "duration_label": "",
         }
 
     orig_fps = 60
     orig_video_mbps = 0.0
     max_height = 0
     orig_audio_kbps = 192
+    duration_label = ""
 
     for mpd_path in mpds:
         try:
             with open(mpd_path, encoding="utf-8") as handle:
                 content = handle.read()
+            if not duration_label:
+                seconds = discovery.parse_duration_seconds(content)
+                if seconds is not None and seconds > 0:
+                    total = int(seconds)
+                    minutes, secs = divmod(total, 60)
+                    hours, minutes = divmod(minutes, 60)
+                    if hours:
+                        duration_label = f"{hours}h {minutes}m"
+                    elif minutes:
+                        duration_label = f"{minutes}m {secs}s"
+                    else:
+                        duration_label = f"{secs}s"
             fps_match = re.search(r'\bframeRate="(\d+)(?:/\d+)?"', content)
             if fps_match:
                 orig_fps = int(fps_match.group(1))
-            else:
+            elif allow_ffprobe:
                 probed = mpd.get_fps(mpd_path)
                 if probed:
                     orig_fps = int(probed)
-            peak = mpd.get_video_bitrate_mbps(mpd_path)
+            if allow_ffprobe:
+                peak = mpd.get_video_bitrate_mbps(mpd_path)
+            else:
+                # Bandwidth attrs only — no disk walk / ffprobe on the UI path.
+                bws = [
+                    int(b)
+                    for b in re.findall(
+                        r'mimeType="video/[^"]*"[^>]*\bbandwidth="(\d+)"', content
+                    )
+                ]
+                if not bws:
+                    bws = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content)]
+                peak = (max(bws) / 1_000_000.0) if bws else 0.0
             if peak > orig_video_mbps:
                 orig_video_mbps = peak
             height_match = re.search(r'\bheight="(\d+)"', content)
@@ -263,9 +321,21 @@ def probe_clip_render_defaults(clip_path: str, app: SteempegApp | None = None) -
         except OSError:
             pass
 
-    ab = mpd.get_audio_bitrate_kbps(mpds[0])
-    if ab:
-        orig_audio_kbps = int(ab)
+    if allow_ffprobe:
+        ab = mpd.get_audio_bitrate_kbps(mpds[0])
+        if ab:
+            orig_audio_kbps = int(ab)
+    else:
+        try:
+            with open(mpds[0], encoding="utf-8") as handle:
+                content = handle.read()
+            ab_match = re.search(
+                r'mimeType="audio/[^"]*"[^>]*\bbandwidth="(\d+)"', content
+            )
+            if ab_match:
+                orig_audio_kbps = max(64, int(int(ab_match.group(1)) / 1000))
+        except OSError:
+            pass
 
     quality_text = (
         f"Original (Lossless, {max_height}p)" if max_height > 0 else "Original (Lossless)"
@@ -284,6 +354,7 @@ def probe_clip_render_defaults(clip_path: str, app: SteempegApp | None = None) -
         "quality_text": quality_text,
         "fps_text": fps_text,
         "bitrate_text": bitrate_text,
+        "duration_label": duration_label,
     }
 
 
@@ -454,22 +525,36 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         logging.warning("build_render_job_from_ui: not a clip folder: %s", clip_path)
         return None
 
-    mpds = _mpd_paths_for_clip(app, clip_path)
+    # One MPD walk: real manifests first, then cured/salvage fallback.
+    if hasattr(app, "_register_salvaged_clip") and hasattr(app, "_is_clip_cured"):
+        try:
+            if app._is_clip_cured(clip_path):
+                app._register_salvaged_clip(clip_path)
+        except Exception:
+            pass
+    real_mpds = discovery.find_mpd_paths(clip_path)
     salvage_mpds: list[str] = []
+    if real_mpds:
+        mpds = real_mpds
+    else:
+        salvage_mpds = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []))
+        mpds = salvage_mpds
     if not mpds:
         logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
         return None
-    if not discovery.find_mpd_paths(clip_path):
-        salvage_mpds = list(mpds)
 
     meta = find_clip_metadata(app, clip_path) or {}
     preview = getattr(app, "_preview_clip_path", None)
     same_preview = preview and os.path.normpath(preview) == clip_path
 
+    duration_label = ""
     if same_preview:
         settings = snapshot_settings_from_ui(app)
     else:
-        defaults = probe_clip_render_defaults(clip_path, app)
+        defaults = probe_clip_render_defaults(
+            clip_path, app, mpds=mpds, allow_ffprobe=False
+        )
+        enc_codec, enc_display, enc_speed = _ui_encoder_snapshot(app)
         settings = RenderJobSettings(
             quality_text=defaults["quality_text"],
             fps_text=defaults["fps_text"],
@@ -478,9 +563,16 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
             orig_video_mbps=float(defaults["orig_video_mbps"]),
             orig_audio_kbps=int(defaults["orig_audio_kbps"]),
             save_dir=app.custom_destination if app.custom_destination else get_save_directory(),
-            encode_speed="balanced",
+            encoder_codec=enc_codec,
+            encoder_display=enc_display,
+            encode_speed=enc_speed,
         )
         apply_per_clip_export_to_settings(app, clip_path, settings)
+        # Keep the live HW encoder even if per-clip memory restored codec labels.
+        settings.encoder_codec = enc_codec
+        settings.encoder_display = enc_display
+        settings.encode_speed = enc_speed
+        duration_label = str(defaults.get("duration_label") or "")
 
     settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
 
@@ -507,6 +599,24 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
     if not icon_path or not os.path.exists(icon_path):
         icon_path = getattr(app, "current_game_icon", "") or icon_path
 
+    if not duration_label and mpds:
+        try:
+            with open(mpds[0], encoding="utf-8") as handle:
+                content = handle.read()
+            seconds = discovery.parse_duration_seconds(content)
+            if seconds is not None and seconds > 0:
+                total = int(seconds)
+                minutes, secs = divmod(total, 60)
+                hours, minutes = divmod(minutes, 60)
+                if hours:
+                    duration_label = f"{hours}h {minutes}m"
+                elif minutes:
+                    duration_label = f"{minutes}m {secs}s"
+                else:
+                    duration_label = f"{secs}s"
+        except OSError:
+            pass
+
     job = RenderJob(
         clip_path=clip_path,
         game_name=meta.get("game_name") or os.path.basename(clip_path),
@@ -515,6 +625,7 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         game_icon_path=icon_path,
         settings=settings,
         salvage_mpds=salvage_mpds,
+        duration_label=duration_label,
     )
     job.refresh_output_path()
     return job
