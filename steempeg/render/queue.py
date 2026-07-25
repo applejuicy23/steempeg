@@ -88,6 +88,8 @@ class RenderJob:
     output_file: str = ""
     error_message: str = ""
     salvage_mpds: List[str] = field(default_factory=list)
+    # Cached at queue-add so cards don't re-walk MPD for duration.
+    duration_label: str = ""
 
     def refresh_output_path(self) -> str:
         """Recompute a collision-safe output path from current settings."""
@@ -302,6 +304,8 @@ def job_to_dict(job: RenderJob) -> Dict[str, Any]:
         "queue_index": job.queue_index,
         "output_file": job.output_file,
         "error_message": job.error_message,
+        "salvage_mpds": list(job.salvage_mpds or []),
+        "duration_label": job.duration_label or "",
     }
 
 
@@ -325,6 +329,8 @@ def job_from_dict(data: Dict[str, Any]) -> Optional[RenderJob]:
         queue_index=int(data.get("queue_index", 0)),
         output_file=data.get("output_file", ""),
         error_message=data.get("error_message", ""),
+        salvage_mpds=list(data.get("salvage_mpds") or []),
+        duration_label=str(data.get("duration_label") or ""),
     )
 
 
