@@ -297,7 +297,9 @@ for item in * .[!.]* ..?*; do
   mv -- "$item" "{staging_folder}/"
 done
 cp -a "{backup_folder_name}"/. .
-chmod +x "{exe_name}" Steempeg-linux Steempeg.sh Steempeg 2>/dev/null || true
+chmod +x "{exe_name}" Steempeg-linux Steempeg.sh Steempeg Steempeg-steamdeck 2>/dev/null || true
+chmod +x bin/ffmpeg bin/ffprobe 2>/dev/null || true
+if [[ -d venv/bin ]]; then chmod -R a+x venv/bin 2>/dev/null || true; fi
 rm -f "$0"
 exec ./"{exe_name}"
 """

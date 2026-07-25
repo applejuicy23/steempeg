@@ -13,8 +13,10 @@ from PySide6.QtWidgets import QApplication
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.services.update_install import (
+    ensure_portable_executables,
     find_app_executable,
     resolve_extract_source,
+    restore_zip_unix_modes,
     spawn_deferred_install,
     spawn_deferred_install_unix,
     write_deferred_install_bat,
@@ -70,8 +72,11 @@ def run_update_handler(job_path: str) -> int:
             os.makedirs(extract_root, exist_ok=True)
             with zipfile.ZipFile(filepath, "r") as archive:
                 archive.extractall(extract_root)
+                # 3.14+ no longer restores +x from zip metadata.
+                restore_zip_unix_modes(archive, extract_root)
 
             source_dir = resolve_extract_source(extract_root)
+            ensure_portable_executables(source_dir)
             new_exe_name = find_app_executable(source_dir)
 
             dialog.set_phase("install", percent=85)

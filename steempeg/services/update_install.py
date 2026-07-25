@@ -8,9 +8,16 @@ import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 _PRESERVE_DIRS = frozenset({"logs", "cache", "_update_extracted"})
 _CREATE_NO_WINDOW = 0x08000000
+_LAUNCHER_NAMES = (
+    "Steempeg",
+    "Steempeg.sh",
+    "Steempeg-linux",
+    "Steempeg-steamdeck",
+)
 
 
 def resolve_extract_source(extract_root: str) -> str:
@@ -44,6 +51,71 @@ def find_app_executable(directory: str) -> str:
         if name.endswith(".exe") and "ffmpeg" not in lower and "ffprobe" not in lower:
             return name
     return "Steempeg.exe" if sys.platform == "win32" else "Steempeg-linux"
+
+
+def restore_zip_unix_modes(archive: zipfile.ZipFile, extract_root: str) -> int:
+    """Re-apply Unix modes from zip central-directory entries.
+
+    CPython 3.14+ dropped ``chmod`` from ``ZipFile.extract`` / ``extractall``.
+    Portable Linux packs need those bits for ``venv/bin/python``, ffmpeg, and
+    shell launchers — without them the post-update relaunch gets Permission denied.
+    """
+    if sys.platform == "win32" or not hasattr(os, "chmod"):
+        return 0
+    root = os.path.normpath(extract_root)
+    root_prefix = root + os.sep
+    fixed = 0
+    for info in archive.infolist():
+        if info.is_dir():
+            continue
+        mode = (info.external_attr >> 16) & 0o7777
+        if not mode:
+            continue
+        # Prefer Unix-marked entries; still honor explicit +x from other creators.
+        if info.create_system != 3 and not (mode & 0o111):
+            continue
+        rel = info.filename.replace("/", os.sep)
+        path = os.path.normpath(os.path.join(root, rel))
+        if path != root and not path.startswith(root_prefix):
+            continue
+        if not os.path.isfile(path):
+            continue
+        try:
+            os.chmod(path, mode)
+            fixed += 1
+        except OSError:
+            pass
+    if fixed:
+        logging.info("UPDATE_INSTALL: restored unix modes on %s extracted files", fixed)
+    return fixed
+
+
+def ensure_portable_executables(root: str) -> None:
+    """Belt-and-suspenders +x for portable Linux/Steam Deck layouts."""
+    if sys.platform == "win32" or not hasattr(os, "chmod"):
+        return
+
+    def _mark(path: str) -> None:
+        try:
+            if os.path.isfile(path):
+                mode = os.stat(path).st_mode
+                if not (mode & stat.S_IXUSR):
+                    os.chmod(path, mode | 0o755)
+        except OSError:
+            pass
+
+    for name in _LAUNCHER_NAMES:
+        _mark(os.path.join(root, name))
+    for name in ("ffmpeg", "ffprobe"):
+        _mark(os.path.join(root, "bin", name))
+
+    for rel in ("venv/bin", "bin"):
+        base = os.path.join(root, rel)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _dirs, files in os.walk(base):
+            for filename in files:
+                _mark(os.path.join(dirpath, filename))
 
 
 def _should_preserve(name: str, *, backup_folder: str | None, tmp_asset: str | None) -> bool:
@@ -100,13 +172,7 @@ def apply_installed_update(
             shutil.copy2(src, dst)
 
     new_exe_name = find_app_executable(source_dir)
-    launcher = os.path.join(exe_dir, new_exe_name)
-    if os.path.isfile(launcher) and sys.platform != "win32":
-        try:
-            mode = os.stat(launcher).st_mode
-            os.chmod(launcher, mode | 0o755)
-        except OSError:
-            pass
+    ensure_portable_executables(exe_dir)
     logging.info("UPDATE_INSTALL: installed %s (backup=%s)", new_exe_name, backup_folder_name)
     return new_exe_name, backup_folder_name
 
@@ -251,8 +317,14 @@ done
 
     body += f"""
 cp -a {_sh_quote(source_dir)}/. .
+# CPython 3.14+ zip extract drops +x; force portable launch bits.
 chmod +x {_sh_quote(os.path.join(exe_dir, new_exe_name))} 2>/dev/null || true
-chmod +x Steempeg.sh Steempeg-linux Steempeg 2>/dev/null || true
+chmod +x Steempeg.sh Steempeg-linux Steempeg Steempeg-steamdeck 2>/dev/null || true
+chmod +x bin/ffmpeg bin/ffprobe 2>/dev/null || true
+if [[ -d venv/bin ]]; then chmod -R a+x venv/bin 2>/dev/null || true; fi
+if [[ -d bin ]]; then
+  find bin -type f \\( -name 'ffmpeg' -o -name 'ffprobe' -o -name '*.so*' \\) -exec chmod a+x {{}} + 2>/dev/null || true
+fi
 rm -rf {_sh_quote(extract_root)}
 """
     if tmp_name:
