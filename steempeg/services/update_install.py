@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -18,6 +19,14 @@ _LAUNCHER_NAMES = (
     "Steempeg-linux",
     "Steempeg-steamdeck",
 )
+_VERSIONED_BACKUP_RE = re.compile(
+    r"^(old_version_v|pre_restore_v)[\d.]+$", re.IGNORECASE
+)
+
+
+def _is_versioned_backup_dir(name: str) -> bool:
+    """True for flat sibling backups — never nest these into a newer old_version_*."""
+    return bool(_VERSIONED_BACKUP_RE.match(name or ""))
 
 
 def resolve_extract_source(extract_root: str) -> str:
@@ -123,6 +132,9 @@ def _should_preserve(name: str, *, backup_folder: str | None, tmp_asset: str | N
         return True
     if backup_folder and name == backup_folder:
         return True
+    # Keep prior backups as flat siblings (avoid old_version_v40/old_version_v39.5/…).
+    if _is_versioned_backup_dir(name):
+        return True
     if tmp_asset and name == f"{tmp_asset}.tmp":
         return True
     if name.endswith(".bat"):
@@ -214,7 +226,10 @@ for %%I in (*.*) do (
 )
 for /D %%D in (*) do (
     if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" if /I not "%%D"=="{backup_folder}" (
-        if exist "%%D" move "%%D" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+        echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
+        if errorlevel 1 (
+            if exist "%%D" move "%%D" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+        )
     )
 )"""
     else:
@@ -223,7 +238,10 @@ for /D %%D in (*) do (
 )
 for /D %%D in (*) do (
     if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" (
-        if exist "%%D" rd /S /Q "%%D" > NUL 2>&1
+        echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
+        if errorlevel 1 (
+            if exist "%%D" rd /S /Q "%%D" > NUL 2>&1
+        )
     )
 )"""
 
@@ -292,6 +310,8 @@ should_keep() {{
     [[ "$n" == "$p" ]] && return 0
   done
   [[ -n "{tmp_name}" && "$n" == "{tmp_name}" ]] && return 0
+  # Flat sibling backups — never nest / wipe prior old_version_* trees.
+  [[ "$n" == old_version_v* || "$n" == pre_restore_v* ]] && return 0
   return 1
 }}
 
