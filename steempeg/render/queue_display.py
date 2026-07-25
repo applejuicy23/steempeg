@@ -163,7 +163,9 @@ def format_job_datetime_line(job: RenderJob) -> str:
     """Date, clock time, and clip duration on one line (queue card row 2)."""
     date_line = (job.clip_date or "").replace("\n", " ").strip()
     time_str = (job.clip_time or "").strip()
-    duration = clip_duration_label(job.clip_path)
+    duration = (getattr(job, "duration_label", None) or "").strip()
+    if not duration:
+        duration = clip_duration_label(job.clip_path)
 
     parts: list[str] = []
     if date_line:
