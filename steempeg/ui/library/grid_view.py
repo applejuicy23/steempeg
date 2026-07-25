@@ -172,9 +172,17 @@ class ClipCard(qtw.QWidget):
 
         self._border_overlay.raise_()
         self._apply_selection_style()
+        # Dim overlay (not QGraphicsOpacityEffect) — opacity made the QListWidgetItem
+        # sort-key text ("000084") bleed through empty thumbs.
+        self._dim_veil = qtw.QFrame(self)
+        self._dim_veil.setGeometry(0, 0, 254, 184)
+        self._dim_veil.setStyleSheet("background-color: rgba(0, 0, 0, 140); border: none;")
+        self._dim_veil.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._dim_veil.hide()
         self._dim_dead = False
         self._dim_no_preview = not bool(thumb_path and os.path.exists(thumb_path))
         self._sync_unavailable_dim()
+        self._border_overlay.raise_()
 
     def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
         """Dim dead / empty-thumb cards without relying on Qt disabled look."""
@@ -186,13 +194,19 @@ class ClipCard(qtw.QWidget):
 
     def _sync_unavailable_dim(self) -> None:
         dim = bool(getattr(self, "_dim_dead", False) or getattr(self, "_dim_no_preview", False))
-        effect = self.graphicsEffect()
+        veil = getattr(self, "_dim_veil", None)
+        if veil is None:
+            return
         if dim:
-            if not isinstance(effect, qtw.QGraphicsOpacityEffect):
-                effect = qtw.QGraphicsOpacityEffect(self)
-                self.setGraphicsEffect(effect)
-            effect.setOpacity(0.48)
-        elif effect is not None:
+            veil.show()
+            veil.raise_()
+            border = getattr(self, "_border_overlay", None)
+            if border is not None:
+                border.raise_()
+        else:
+            veil.hide()
+        # Never leave an opacity effect (legacy) — it ghosts the sort-key text.
+        if self.graphicsEffect() is not None:
             self.setGraphicsEffect(None)
 
     def set_selected(self, selected: bool) -> None:

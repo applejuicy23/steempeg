@@ -11,7 +11,7 @@ import re
 import shutil
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -2339,12 +2339,20 @@ class LibraryMixin:
             hidden = True
             if clip_path and clip_path in table_order:
                 info = table_order[clip_path]
+                # Sort key only — never visible. (Opacity-dimmed cards used to show
+                # this as a ghost "000084" in the thumb area.)
                 item.setText(f"{info['row']:06d}")
+                item.setForeground(QBrush(QColor(0, 0, 0, 0)))
                 item.setData(Qt.UserRole, info['row'])
                 hidden = info['hidden']
             item.setHidden(hidden)
         # 3. Qt's built-in ultra-fast sort
         grid.sortItems(Qt.AscendingOrder)
+        # Drop the sort-key text so it cannot bleed through translucent cards.
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is not None:
+                item.setText("")
 
         grid.blockSignals(False)
         grid.setUpdatesEnabled(True)
