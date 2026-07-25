@@ -172,6 +172,28 @@ class ClipCard(qtw.QWidget):
 
         self._border_overlay.raise_()
         self._apply_selection_style()
+        self._dim_dead = False
+        self._dim_no_preview = not bool(thumb_path and os.path.exists(thumb_path))
+        self._sync_unavailable_dim()
+
+    def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
+        """Dim dead / empty-thumb cards without relying on Qt disabled look."""
+        if dead is not None:
+            self._dim_dead = bool(dead)
+        if no_preview is not None:
+            self._dim_no_preview = bool(no_preview)
+        self._sync_unavailable_dim()
+
+    def _sync_unavailable_dim(self) -> None:
+        dim = bool(getattr(self, "_dim_dead", False) or getattr(self, "_dim_no_preview", False))
+        effect = self.graphicsEffect()
+        if dim:
+            if not isinstance(effect, qtw.QGraphicsOpacityEffect):
+                effect = qtw.QGraphicsOpacityEffect(self)
+                self.setGraphicsEffect(effect)
+            effect.setOpacity(0.48)
+        elif effect is not None:
+            self.setGraphicsEffect(None)
 
     def set_selected(self, selected: bool) -> None:
         if self._selected == selected:
@@ -189,6 +211,8 @@ class ClipCard(qtw.QWidget):
                     qtc.Qt.TransformationMode.SmoothTransformation,
                 )
                 self.thumb_label.setPixmap(scaled_thumb)
+                self._dim_no_preview = False
+                self._sync_unavailable_dim()
 
     def enterEvent(self, event) -> None:
         self._hovered = True
