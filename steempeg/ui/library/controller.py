@@ -722,6 +722,16 @@ class LibraryMixin:
             card = self.grid_clips.itemWidget(item)
             if card is not None and hasattr(card, "set_thumbnail"):
                 card.set_thumbnail(thumb_path)
+            # Keep DEAD dim after poster fill; clear no-preview dim via set_thumbnail.
+            if card is not None and hasattr(card, "set_unavailable"):
+                table = getattr(getattr(self, "ui", None), "table_clips", None)
+                row = item.data(Qt.UserRole)
+                is_dead = False
+                if table is not None and isinstance(row, int):
+                    title_item = table.item(row, 0)
+                    if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
+                        is_dead = title_item.data(_CLIP_HEALTH_ROLE) == health.ClipHealth.DEAD.value
+                card.set_unavailable(dead=is_dead, no_preview=False)
             break
 
     def _on_clip_poster_batch_done(self):
@@ -2485,6 +2495,12 @@ class LibraryMixin:
             on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
             on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
         )
+        is_dead = False
+        if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
+            level = title_item.data(_CLIP_HEALTH_ROLE)
+            is_dead = level == health.ClipHealth.DEAD.value
+        has_thumb = bool(thumb_path and os.path.exists(thumb_path))
+        card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
         self.grid_clips.setItemWidget(item, card)
 
         if table.isRowHidden(row):
@@ -2505,15 +2521,15 @@ class LibraryMixin:
                 sidebar.setEnabled(enabled)
             except RuntimeError:
                 pass
-        for name in ("btn_portable_add_clip", "btn_portable_render"):
+        for name in ("btn_portable_render",):
             btn = getattr(self, name, None)
             if btn is not None:
                 try:
                     btn.setEnabled(enabled)
                 except RuntimeError:
                     pass
-        # Desktop left-rail library stays visible but selection is already gated;
-        # still block the grid/table widgets so they feel locked.
+        # Choose a Clip stays clickable during scan so the user can open the sheet
+        # and see the grayed library; grid/table remain locked below.
         for name in ("grid_clips", "table_clips"):
             w = getattr(self, name, None) or getattr(getattr(self, "ui", None), name, None)
             if w is not None:
