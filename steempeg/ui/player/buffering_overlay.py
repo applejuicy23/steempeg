@@ -16,12 +16,14 @@ from PySide6.QtWidgets import QWidget
 class BufferingOverlay(QWidget):
     """A small rounded 'Buffering…' pill with an animated spinner."""
 
-    def __init__(self):
-        super().__init__(None)
+    def __init__(self, parent=None):
+        # Parent to the main shell when available so the Tool stacks above mpv
+        # but *below* portable sheets (Dialog). No WindowStaysOnTopHint — that
+        # floated over Clips Manager / Render.
+        super().__init__(parent)
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -56,6 +58,16 @@ class BufferingOverlay(QWidget):
         except RuntimeError:
             self.hide_loading()
             return
+        # Portable Clips / Render sheets sit above the shell — don't paint over them.
+        try:
+            from PySide6.QtWidgets import QApplication as _QA
+
+            modal = _QA.activeModalWidget()
+            if modal is not None and modal is not self:
+                self.hide_loading()
+                return
+        except Exception:
+            pass
         self._message = message
         self._reposition(anchor_widget)
         if not self._spin.isActive():
