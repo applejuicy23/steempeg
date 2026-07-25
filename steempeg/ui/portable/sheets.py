@@ -573,14 +573,16 @@ class PortableClipPickerDialog(SteempegDialog):
         # dead strip (growing toward the next column left emptiness again).
         shell_w = int(geo.width())
         shell_h = int(geo.height())
+        # Wider caps (Windows 40.2) + column snap (Linux) so the right edge
+        # isn't a dead strip beside the scrollbar.
         if shell_w >= 1920:
-            w_frac = 0.92
+            w_frac = 0.94
         elif shell_w > 1600:
-            w_frac = 0.90
+            w_frac = 0.92
         elif shell_w > 1280:
-            w_frac = 0.88
+            w_frac = 0.90
         else:
-            w_frac = 0.86
+            w_frac = 0.88
         if shell_h >= 1080:
             h_frac = 0.88
         elif shell_h > 900:
