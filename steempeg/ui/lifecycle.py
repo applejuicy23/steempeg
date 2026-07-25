@@ -624,8 +624,13 @@ class LifecycleMixin:
 
         main_layout.addLayout(content)
 
-        dialog.exec()
-        self._about_is_open = False  # Release the lock when closed
+        try:
+            dialog.exec()
+        finally:
+            self._about_is_open = False  # Release the lock when closed
+            tb = getattr(getattr(self, "ui", None), "title_bar", None)
+            if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
+                tb.clear_shell_tool_hover()
 
 
     def setup_logs_menu(self):

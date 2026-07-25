@@ -159,6 +159,10 @@ class UpdaterMixin:
             if not limit_dlg.timer_completed:
                 break
 
+        tb = getattr(getattr(self, "ui", None), "title_bar", None)
+        if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
+            tb.clear_shell_tool_hover()
+
     def _install_release_entry(self, entry: ReleaseEntry):
         if not entry.zip_url or not entry.zip_name:
             webbrowser.open(entry.html_url)

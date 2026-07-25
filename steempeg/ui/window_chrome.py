@@ -409,6 +409,43 @@ class SteempegTitleBar(QWidget):
             break
         return super().eventFilter(watched, event)
 
+    def clear_shell_tool_hover(self) -> None:
+        """Reset About/Settings hot icon + cursor after a modal eats Leave events."""
+        pairs = (
+            (
+                getattr(self, "btn_about_info", None),
+                getattr(self, "_about_info_icon_idle", None),
+            ),
+            (
+                getattr(self, "btn_title_settings", None),
+                getattr(self, "_settings_icon_idle", None),
+            ),
+        )
+        for btn, idle in pairs:
+            if btn is None:
+                continue
+            try:
+                if idle is not None:
+                    btn.setIcon(idle)
+                btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+                QApplication.sendEvent(btn, QEvent(QEvent.Type.Leave))
+                btn.unsetCursor()
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            except RuntimeError:
+                pass
+        try:
+            self.unsetCursor()
+            parent = self.window()
+            if parent is not None:
+                parent.unsetCursor()
+        except RuntimeError:
+            pass
+        # Drop any leftover override cursors from modal open.
+        app = QApplication.instance()
+        if app is not None:
+            while app.overrideCursor() is not None:
+                app.restoreOverrideCursor()
+
     def _title_bar_press_is_interactive(self, pos: QPoint) -> bool:
         hit = self.childAt(pos)
         while hit is not None and hit is not self:
@@ -657,12 +694,26 @@ def _nearly_maximized(window: QWidget) -> bool:
     )
 
 
-def _edges_at(window: QWidget, global_pos: QPoint, *, border: int, corner: int):
-    """Map a global mouse position to Qt resize edges, or None if not on a grip."""
+def _edge_resize_blocked(window: QWidget) -> bool:
+    """True when edge/corner resize must not run (maximize or immersive fullscreen).
+
+    Immersive fullscreen clears WindowMaximized and hides the title bar so the
+    shell can fill the monitor — grips must follow that chrome, not maximize alone.
+    """
+    if _nearly_maximized(window):
+        return True
     tb = getattr(window, "title_bar", None)
     if tb is None or not tb.isVisible():
-        return None
-    if _nearly_maximized(window):
+        return True
+    host = getattr(window, "_app_host", None)
+    if host is not None and getattr(host, "is_fullscreen", False):
+        return True
+    return False
+
+
+def _edges_at(window: QWidget, global_pos: QPoint, *, border: int, corner: int):
+    """Map a global mouse position to Qt resize edges, or None if not on a grip."""
+    if _edge_resize_blocked(window):
         return None
 
     geo = window.frameGeometry()
@@ -765,7 +816,7 @@ class _WinResizeGrip(QWidget):
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
-        if _nearly_maximized(self._host):
+        if _edge_resize_blocked(self._host):
             return
         self._origin = event.globalPosition().toPoint()
         self._start_geo = self._host.geometry()
@@ -828,9 +879,10 @@ class _WindowsEdgeResizeController(QObject):
 
     def _layout_grips(self) -> None:
         window = self._window
-        if _nearly_maximized(window):
+        if _edge_resize_blocked(window):
             for g in self._grips:
                 g.hide()
+                g.setEnabled(False)
             return
 
         w, h = window.width(), window.height()
@@ -851,8 +903,10 @@ class _WindowsEdgeResizeController(QObject):
         for grip, (x, y, gw, gh) in zip(self._grips, geos):
             if gw <= 0 or gh <= 0:
                 grip.hide()
+                grip.setEnabled(False)
                 continue
             grip.setGeometry(x, y, gw, gh)
+            grip.setEnabled(True)
             grip.show()
             grip.raise_()
 
@@ -865,6 +919,13 @@ def enable_windows_edge_resize(window: QWidget) -> None:
     if existing is not None:
         return
     window._windows_edge_resize_filter = _WindowsEdgeResizeController(window)
+
+
+def refresh_windows_edge_resize(window: QWidget) -> None:
+    """Re-layout / hide grips after immersive fullscreen or title-bar show/hide."""
+    ctrl = getattr(window, "_windows_edge_resize_filter", None)
+    if ctrl is not None and hasattr(ctrl, "_layout_grips"):
+        ctrl._layout_grips()
 
 
 # --- Linux edge resize (unchanged behaviour) --------------------------------

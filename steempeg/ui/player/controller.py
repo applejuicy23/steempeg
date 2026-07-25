@@ -1012,6 +1012,12 @@ class PlayerMixin:
         if hasattr(self.ui, "title_bar"):
             self.ui.title_bar.hide()
         enter_immersive_chrome(self.ui, self._immersive_screen_geometry())
+        try:
+            from steempeg.ui.window_chrome import refresh_windows_edge_resize
+
+            refresh_windows_edge_resize(self.ui)
+        except Exception:
+            pass
         self.ui.raise_()
         self.ui.activateWindow()
 
@@ -1098,6 +1104,12 @@ class PlayerMixin:
             if was_hidden and tb is not None:
                 tb.hide()
             self._frameless_caption_warmed = True
+            try:
+                from steempeg.ui.window_chrome import refresh_windows_edge_resize
+
+                refresh_windows_edge_resize(self.ui)
+            except Exception:
+                pass
 
     def _finish_fullscreen_enter(self):
         """Drop the transition cover once the restore animation is done + repainted."""
@@ -1348,6 +1360,12 @@ class PlayerMixin:
             try:
                 if hasattr(self.ui, "title_bar"):
                     self.ui.title_bar.show()
+                try:
+                    from steempeg.ui.window_chrome import refresh_windows_edge_resize
+
+                    refresh_windows_edge_resize(self.ui)
+                except Exception:
+                    pass
                 # Soft-redraw after maximize fights the cover and can flash Aero
                 # chrome at the edges — pause it until uncover settles.
                 self.ui._suppress_dwm_ghost_timer = True

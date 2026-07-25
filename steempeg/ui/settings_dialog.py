@@ -288,4 +288,9 @@ class SettingsDialog(SteempegDialog):
 
 def show_settings_dialog(app) -> None:
     dlg = SettingsDialog(app, parent=getattr(app, "ui", None))
-    dlg.exec()
+    try:
+        dlg.exec()
+    finally:
+        tb = getattr(getattr(app, "ui", None), "title_bar", None)
+        if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
+            tb.clear_shell_tool_hover()
