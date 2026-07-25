@@ -911,12 +911,16 @@ class _LinuxEdgeResizeFilter(QObject):
 
     On xcb (XWayland) use manual setGeometry — startSystemResize feels jumpy /
     mirrored. On native Wayland, prefer compositor startSystemResize.
+
+    Cursor handling stays on the shell widget (set/unset) — never
+    ``QApplication.setOverrideCursor``, which sticks app-wide on XWayland and
+    makes the whole interior look like a grab/click target.
     """
 
     def __init__(self, window: QWidget):
         super().__init__(window)
         self._window = window
-        self._overriding = False
+        self._edge_cursor_on = False
         self._drag_edges = None
         self._drag_origin: QPoint | None = None
         self._drag_geo = None
@@ -929,23 +933,31 @@ class _LinuxEdgeResizeFilter(QObject):
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if not isinstance(obj, QWidget):
             return False
-        try:
-            if obj.window() is not self._window:
-                return False
-        except RuntimeError:
-            return False
 
         window = self._window
-        if not window.isVisible():
-            self._end_drag()
-            self._clear_cursor()
-            return False
-
         et = event.type()
 
-        # Active drag: only track moves/releases globally for our window tree.
+        # Always finish an active drag, even if the event targets another window
+        # (focus loss / deactivate), so grabMouse cannot stick.
         if self._drag_edges is not None:
-            if et == QEvent.Type.MouseMove:
+            if et in (
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.WindowDeactivate,
+                QEvent.Type.Hide,
+                QEvent.Type.Close,
+            ):
+                self._end_drag()
+                self._clear_edge_cursor()
+                return et == QEvent.Type.MouseButtonRelease
+            if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                self._end_drag()
+                self._clear_edge_cursor()
+                return True
+            try:
+                same_window = obj.window() is window
+            except RuntimeError:
+                same_window = False
+            if et == QEvent.Type.MouseMove and same_window:
                 global_pos = (
                     event.globalPosition().toPoint()
                     if hasattr(event, "globalPosition")
@@ -960,11 +972,16 @@ class _LinuxEdgeResizeFilter(QObject):
                         global_pos,
                     )
                     return True
+            return False
+
+        try:
+            if obj.window() is not window:
                 return False
-            if et == QEvent.Type.MouseButtonRelease:
-                self._end_drag()
-                self._clear_cursor()
-                return True
+        except RuntimeError:
+            return False
+
+        if not window.isVisible():
+            self._clear_edge_cursor()
             return False
 
         if et in (
@@ -982,19 +999,14 @@ class _LinuxEdgeResizeFilter(QObject):
                 return False
             edges = _linux_edges_at(window, global_pos)
             if edges:
-                shape = _linux_cursor_for_edges(edges)
-                if not self._overriding:
-                    QApplication.setOverrideCursor(QCursor(shape))
-                    self._overriding = True
-                else:
-                    QApplication.changeOverrideCursor(QCursor(shape))
+                self._set_edge_cursor(_linux_cursor_for_edges(edges))
             else:
-                self._clear_cursor()
+                self._clear_edge_cursor()
             return False
 
         if et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
-            if obj is window and self._drag_edges is None:
-                self._clear_cursor()
+            if obj is window:
+                self._clear_edge_cursor()
             return False
 
         if et == QEvent.Type.MouseButtonPress:
@@ -1020,7 +1032,7 @@ class _LinuxEdgeResizeFilter(QObject):
             handle = window.windowHandle()
             if handle is None:
                 return False
-            self._clear_cursor()
+            self._clear_edge_cursor()
             if handle.startSystemResize(edges):
                 event.accept()
                 return True
@@ -1045,10 +1057,22 @@ class _LinuxEdgeResizeFilter(QObject):
         self._drag_origin = None
         self._drag_geo = None
 
-    def _clear_cursor(self) -> None:
-        if self._overriding:
-            QApplication.restoreOverrideCursor()
-            self._overriding = False
+    def _set_edge_cursor(self, shape: Qt.CursorShape) -> None:
+        try:
+            self._window.setCursor(QCursor(shape))
+            self._edge_cursor_on = True
+        except RuntimeError:
+            self._edge_cursor_on = False
+
+    def _clear_edge_cursor(self) -> None:
+        if not self._edge_cursor_on:
+            return
+        try:
+            # unset so children (buttons, queue cards) keep their own cursors
+            self._window.unsetCursor()
+        except RuntimeError:
+            pass
+        self._edge_cursor_on = False
 
 
 def enable_linux_edge_resize(window: QWidget) -> None:
