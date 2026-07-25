@@ -356,14 +356,32 @@ class SteempegDialog(QDialog):
         w, h = scaled_dialog_size(*self._comfort_size, parent=self.parent())
         self.setFixedSize(w, h)
 
+    def _prepare_geometry_before_map(self) -> None:
+        """Size + center before the HWND is mapped.
+
+        Moving a translucent frameless dialog *after* first expose leaves a tiny
+        empty dark ghost window on Windows (seen next to Update Center).
+        """
+        self._apply_scaled_size()
+        self._center_on_parent()
+
+    def show(self):
+        if not self._map_suppressed:
+            self._prepare_geometry_before_map()
+        return super().show()
+
+    def exec(self):
+        if not self._map_suppressed:
+            self._prepare_geometry_before_map()
+        return super().exec()
+
     def showEvent(self, event):
         if self._map_suppressed:
             event.ignore()
             self.hide()
             return
+        # Do NOT move/resize here — window is already becoming visible.
         super().showEvent(event)
-        self._apply_scaled_size()
-        self._center_on_parent()
         self.clearMask()
 
     def _center_on_parent(self) -> None:
