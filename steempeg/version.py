@@ -1,7 +1,7 @@
 """Single source of truth for the application version.
 
 ``APP_VERSION_STR`` is what users see (title bar, About, logs) — keep it short
-(``40``, ``40.1``, ``41``, …).
+(``40``, ``40.1``, ``40.2``, …).
 
 Update channels (from **40T** onward) live in ``APP_UPDATE_CHANNEL``, baked by
 ``newver_compilator.py`` per target:
