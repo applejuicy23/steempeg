@@ -473,23 +473,33 @@ def open_portable_clip_picker(app) -> None:
 
 
 def _apply_portable_shell_density(app) -> None:
-    """Portable keeps comfort UI chrome — never crush Source/Video/library to Deck scale.
+    """Portable keeps comfort chrome; Linux compact sheets may narrow settings.
 
-    Sheet *windows* still resize to the shell; only density stays comfort.
+    Windows portable keeps the comfort settings column the user tuned there.
+    On Linux, Source/Export use a hard content-width clamp — without a mild
+    densify they stay at 646px on narrow sheets while Video/Audio still fit.
     """
     ui = getattr(app, "ui", None)
     if ui is None:
         return
+    import sys
+
     from steempeg.ui.render_panel import apply_settings_panel_density
-    from steempeg.ui.ui_density import COMFORT
+    from steempeg.ui.ui_density import COMFORT, lerp_density
 
     app._ui_density = COMFORT
-    apply_settings_panel_density(ui, COMFORT)
     if hasattr(app, "_apply_ui_density"):
         try:
             app._apply_ui_density(COMFORT)
         except Exception:
             _log.exception("Portable comfort density apply failed")
+
+    # Windows: leave settings at comfort (user's layout). Linux compact only.
+    if sys.platform != "win32" and portable_render_sheet_compact(ui, app=app):
+        settings_dense = lerp_density(0.55)
+    else:
+        settings_dense = COMFORT
+    apply_settings_panel_density(ui, settings_dense)
 
 
 def _dispose_portable_render_sheet(app) -> None:
