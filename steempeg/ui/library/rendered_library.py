@@ -286,8 +286,39 @@ class RenderedLibraryMixin:
         if hasattr(self, "grid_rendered"):
             self.grid_rendered.blockSignals(True)
             self.grid_rendered.clearSelection()
+            self.grid_rendered.setCurrentItem(None)
             self.grid_rendered.blockSignals(False)
             self._sync_rendered_grid_card_visuals()
+
+    def library_has_item_selection(self) -> bool:
+        """True when Clips or Rendered has one or more selected rows/cards."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is not None and grid.selectedItems():
+            return True
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is not None:
+            sm = table.selectionModel()
+            if sm is not None and sm.hasSelection():
+                return True
+        rgrid = getattr(self, "grid_rendered", None)
+        if rgrid is not None and rgrid.selectedItems():
+            return True
+        rtable = getattr(self, "table_rendered", None)
+        if rtable is not None:
+            sm = rtable.selectionModel()
+            if sm is not None and sm.hasSelection():
+                return True
+        return False
+
+    def clear_library_item_selection(self) -> bool:
+        """Esc: drop Ctrl/Shift multi-select (and single select). Returns True if cleared."""
+        if not self.library_has_item_selection():
+            return False
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            self._clear_rendered_selection_visual()
+        return True
 
     def _restore_library_tab_selection(self, tab: str) -> None:
         """Re-paint the saved row highlight after a tab switch (preview keeps playing)."""
@@ -898,6 +929,8 @@ class RenderedLibraryMixin:
         self.grid_rendered.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid_rendered.viewport().installEventFilter(self)
         self.table_rendered.viewport().installEventFilter(self)
+        self.grid_rendered.installEventFilter(self)
+        self.table_rendered.installEventFilter(self)
 
         rendered_layout.addWidget(self.table_rendered)
         rendered_layout.addWidget(self.grid_rendered)

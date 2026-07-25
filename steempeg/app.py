@@ -413,6 +413,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             # --- SMART RIGHT-CLICK (NO ROW SELECTION) ---
             self.ui.table_clips.viewport().installEventFilter(self)
+            self.ui.table_clips.installEventFilter(self)
             
             # Attaching an event listener to the main window
             self.ui.installEventFilter(self)
@@ -592,6 +593,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             # connection on top of those would pop a duplicate menu.
             self.grid_clips.setContextMenuPolicy(Qt.CustomContextMenu)
             self.grid_clips.viewport().installEventFilter(self)
+            self.grid_clips.installEventFilter(self)
             # We strictly fix the card sizes so they don't fly apart when hidden!
             self.grid_clips.setUniformItemSizes(True)
             self.grid_clips.setSelectionMode(qtw.QAbstractItemView.ExtendedSelection)

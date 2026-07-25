@@ -528,6 +528,13 @@ class PortableClipPickerDialog(SteempegDialog):
         self.setMinimumSize(640, 480)
         self.content_layout.setContentsMargins(10, 6, 10, 10)
 
+        # Esc → reject() (clear selection first). Title-bar X must always close.
+        try:
+            self._title_bar.close_requested.disconnect(self.reject)
+        except (TypeError, RuntimeError):
+            pass
+        self._title_bar.close_requested.connect(self._force_close)
+
         if self._panel is None:
             from PySide6.QtWidgets import QLabel
 
@@ -561,14 +568,37 @@ class PortableClipPickerDialog(SteempegDialog):
             geo = shell.geometry()
         except Exception:
             return
-        # Wider than the old 0.78 shell fraction — the vertical scrollbar (~16px)
-        # used to leave a dead strip beside the last grid column in comfort mode.
+        # Clip cards are fixed 254px (+15 spacing). Cap to a shell fraction, then
+        # snap *down* to a whole number of columns so the right edge isn't a
+        # dead strip (growing toward the next column left emptiness again).
         shell_w = int(geo.width())
         shell_h = int(geo.height())
-        w_frac = 0.88 if shell_w > 1600 else 0.85
-        h_frac = 0.82 if shell_h > 900 else 0.80
+        if shell_w >= 1920:
+            w_frac = 0.92
+        elif shell_w > 1600:
+            w_frac = 0.90
+        elif shell_w > 1280:
+            w_frac = 0.88
+        else:
+            w_frac = 0.86
+        if shell_h >= 1080:
+            h_frac = 0.88
+        elif shell_h > 900:
+            h_frac = 0.86
+        else:
+            h_frac = 0.82
+
+        card_pitch = 254 + 15
+        # Dialog margins + library chrome + vertical scrollbar gutter (~16–20px).
+        # Without the gutter the last column leaves a dead strip beside the bar.
+        chrome_w = 56 + 80
+        max_w = max(720, int(shell_w * w_frac))
+        inner = max(0, max_w - chrome_w)
+        cols = max(1, inner // card_pitch) if card_pitch > 0 else 1
+        target_w = cols * card_pitch + chrome_w
+        target_w = min(max(target_w, 720), shell_w - 16)
         self.resize(
-            max(720, int(shell_w * w_frac)),
+            target_w,
             max(520, int(shell_h * h_frac)),
         )
 
@@ -770,6 +800,31 @@ class PortableClipPickerDialog(SteempegDialog):
 
     def _arm_selection_close(self) -> None:
         self._armed = True
+
+    def _try_clear_library_selection(self) -> bool:
+        """Esc with a selection: deselect instead of closing the sheet."""
+        app = self._app
+        # Avoid selection-changed → accept while we clear.
+        was_armed = self._armed
+        self._armed = False
+        try:
+            if hasattr(app, "clear_library_item_selection"):
+                return bool(app.clear_library_item_selection())
+        finally:
+            self._armed = was_armed
+        return False
+
+    def _force_close(self) -> None:
+        """Title-bar close — always dismiss, even if clips are selected."""
+        from PySide6.QtWidgets import QDialog
+
+        QDialog.reject(self)
+
+    def reject(self) -> None:
+        # QDialog wires Esc → reject(). Clear multi-select first; second Esc closes.
+        if self._try_clear_library_selection():
+            return
+        super().reject()
 
     def _on_pick(self) -> None:
         if not self._armed:

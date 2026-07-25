@@ -15,6 +15,7 @@ import psutil
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -137,6 +138,22 @@ class LifecycleMixin:
         if getattr(self, '_is_closing', False):
             return False
 
+        # Esc clears Clips/Rendered multi-select before anything else closes.
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
+            if event.key() == Qt.Key.Key_Escape:
+                if getattr(self, "is_fullscreen", False):
+                    return False
+                # Portable Choose-a-Clip sheet owns Esc (clear, then close).
+                if getattr(self, "_portable_clip_picker_open", False):
+                    return False
+                if self._escape_targets_library(source) and hasattr(
+                    self, "clear_library_item_selection"
+                ):
+                    if self.clear_library_item_selection():
+                        if event.type() == QEvent.Type.ShortcutOverride:
+                            event.accept()
+                        return True
+
         # --- FLOATING PANEL RESIZE LOGIC ---
         if source == self.ui and event.type() == QEvent.Type.Resize:
             if getattr(self, 'is_fullscreen', False):
@@ -218,7 +235,54 @@ class LifecycleMixin:
                 return True
 
         return super().eventFilter(source, event)
-    
+
+    def _escape_targets_library(self, source) -> bool:
+        """True when Esc should clear Clips Manager / Rendered selection."""
+        libs = []
+        for name in ("grid_clips", "grid_rendered", "table_rendered"):
+            w = getattr(self, name, None)
+            if w is not None:
+                libs.append(w)
+                vp = getattr(w, "viewport", None)
+                if callable(vp):
+                    try:
+                        libs.append(vp())
+                    except Exception:
+                        pass
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is not None:
+            libs.append(table)
+            try:
+                libs.append(table.viewport())
+            except Exception:
+                pass
+        left = getattr(getattr(self, "ui", None), "left_panel", None)
+        if left is not None:
+            libs.append(left)
+
+        node = source
+        while node is not None:
+            if node in libs:
+                return True
+            try:
+                node = node.parentWidget() if hasattr(node, "parentWidget") else None
+            except RuntimeError:
+                break
+        # Focus may sit on a card child while the event source is the window.
+        try:
+            focus = QApplication.focusWidget() if QApplication.instance() else None
+        except Exception:
+            focus = None
+        node = focus
+        while node is not None:
+            if node in libs:
+                return True
+            try:
+                node = node.parentWidget() if hasattr(node, "parentWidget") else None
+            except RuntimeError:
+                break
+        return False
+
     def _sync_mpv_surface_geometry(self, *args):
         """Re-pin the native mpv child after splitter / panel layout changes."""
         wrapper = getattr(self, "mpv_wrapper", None)
