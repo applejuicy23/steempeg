@@ -437,10 +437,10 @@ def dispose_portable_sheets(app) -> None:
 def open_portable_clip_picker(app) -> None:
     if getattr(app, "_portable_clip_picker_open", False):
         return
-    if getattr(app, "_clips_scan_active", False):
-        if hasattr(app, "set_status"):
-            app.set_status("Library is still loading — Clips Manager is locked.")
-        return
+    # Allow opening during scan so the user sees the grayed/locked library;
+    # selection stays gated by _clips_library_accepts_selection / setEnabled(False).
+    if hasattr(app, "hide_floating_overlays"):
+        app.hide_floating_overlays()
     app._portable_clip_picker_open = True
     try:
         # Toolbar / tabs / combos live in left_panel — refresh density for the
@@ -465,11 +465,19 @@ def open_portable_clip_picker(app) -> None:
             app._portable_clip_picker_dlg = dlg
             app._portable_sheets_warm = True
         dlg.prepare_for_show()
+        if hasattr(app, "_sync_library_scan_interaction_lock"):
+            app._sync_library_scan_interaction_lock(
+                busy=bool(getattr(app, "_clips_scan_active", False))
+            )
         dlg.exec()
     except Exception:
         _log.exception("Open Clips Manager failed")
     finally:
         app._portable_clip_picker_open = False
+        if hasattr(app, "_sync_library_scan_interaction_lock"):
+            app._sync_library_scan_interaction_lock(
+                busy=bool(getattr(app, "_clips_scan_active", False))
+            )
 
 
 def _apply_portable_shell_density(app) -> None:
@@ -528,6 +536,8 @@ def _dispose_portable_render_sheet(app) -> None:
 def open_portable_render_settings(app) -> None:
     if getattr(app, "_portable_render_settings_open", False):
         return
+    if hasattr(app, "hide_floating_overlays"):
+        app.hide_floating_overlays()
     app._portable_render_settings_open = True
     try:
         _apply_portable_shell_density(app)
