@@ -145,6 +145,8 @@ class ReleaseEntry:
     published_at: str = ""
     zip_size: int | None = None
     zip_sha256: str | None = None
+    # Which install zips shipped on this GitHub release (may be empty = announced only).
+    available_platforms: frozenset[str] = frozenset()
 
     def badge(self, current_version: float) -> str:
         if abs(self.version_float - current_version) < 0.001:
@@ -156,12 +158,16 @@ class ReleaseEntry:
                 return "newer · risky"
             if self.install_tier == InstallTier.BROKEN:
                 return "broken"
+            if self.install_tier == InstallTier.NO_ZIP:
+                return "not ready" if not self.available_platforms else "no build"
             return "newer"
         if not self.installable:
             if self.install_tier == InstallTier.BROKEN:
                 return "broken"
             if self.install_tier == InstallTier.MANUAL:
                 return "manual only"
+            if self.install_tier == InstallTier.NO_ZIP:
+                return "not ready" if not self.available_platforms else "no build"
             if self.era in (VersionEra.BROWSER, VersionEra.EARLY):
                 return "browser-era"
             return "unavailable"
@@ -370,6 +376,8 @@ def info_tooltip_text(entry: ReleaseEntry) -> str | None:
 
 def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
     """Single short line under release notes when a version is selected."""
+    if entry.install_tier == InstallTier.NO_ZIP and entry.block_reason:
+        return entry.block_reason
     if entry.version_float <= 11.0:
         return "Early Development. Bare .exe only. Cannot install in-app."
     if entry.version_float >= current_version - 0.001:
@@ -385,6 +393,33 @@ def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
     if entry.version_float < MIN_INSTALL_VERSION:
         return "Bare .exe era. Manual download only."
     return GENERIC_DOWNGRADE_NOTICE
+
+
+def platform_display_name(platform: str) -> str:
+    return {
+        "windows": "Windows",
+        "linux": "Linux",
+        "steamdeck": "Steam Deck",
+        "macos": "macOS",
+    }.get(platform, platform)
+
+
+def _missing_channel_block_reason(
+    *,
+    channel: str,
+    available: frozenset[str],
+    version_float: float,
+) -> str | None:
+    """Explain why this release cannot be installed on the running channel."""
+    if version_float < MIN_INSTALL_VERSION:
+        return None
+    if channel in available:
+        return None
+    pretty = platform_display_name(channel)
+    if not available:
+        return "Version announced, but no install zip is ready yet."
+    others = ", ".join(platform_display_name(p) for p in ("windows", "linux", "steamdeck") if p in available)
+    return f"No {pretty} build for this version (available: {others})."
 
 
 def old_version_warning(entry: ReleaseEntry, current_version: float) -> str | None:
@@ -407,9 +442,15 @@ def classify_install_tier(version_float: float, zip_url: str | None) -> InstallT
     return InstallTier.STABLE
 
 
-def is_installable(version_float: float, zip_url: str | None) -> bool:
+def is_installable(version_float: float, zip_url: str | None, *, available_platforms: frozenset[str] | None = None) -> bool:
     tier = classify_install_tier(version_float, zip_url)
-    return tier in (InstallTier.RISKY, InstallTier.STABLE)
+    if tier not in (InstallTier.RISKY, InstallTier.STABLE):
+        return False
+    if available_platforms is not None:
+        channel = release_platform_tag()
+        if channel not in available_platforms:
+            return False
+    return True
 
 
 def install_policy_message(entry: ReleaseEntry) -> str | None:
@@ -474,7 +515,12 @@ def update_channel(*, version_str: str | None = None) -> str:
         if baked in ("windows", "linux", "steamdeck", "macos"):
             return baked
         if baked in ("", "win", "win32") and APP_VERSION_FLOAT >= 40.0 - 0.001:
-            return "windows"
+            # Packaged Windows builds bake "" on purpose. On Linux/macOS the same
+            # empty value means source/dev or a mis-baked portable — never treat
+            # those as Windows (would offer untagged zips that cannot run here).
+            if sys.platform == "win32":
+                return "windows"
+            return _host_platform_tag()
 
     text = (version_str if version_str is not None else APP_VERSION_STR) or ""
     text = text.strip().lower()
@@ -482,16 +528,21 @@ def update_channel(*, version_str: str | None = None) -> str:
     if match:
         return match.group(1)
 
-    # Bare version (no suffix): from 40T onward → Windows stream.
+    # Bare version (no suffix): from 40T onward → Windows stream for release tags.
+    # Running app with no bake on a non-Windows host → host platform (see above).
     major_match = re.match(r"v?(\d+(?:\.\d+)?)", text)
     if major_match:
         try:
             if float(major_match.group(1)) >= 40.0 - 0.001:
+                if version_str is None and sys.platform != "win32":
+                    return _host_platform_tag()
                 return "windows"
         except ValueError:
             pass
     if version_str is None and APP_VERSION_FLOAT >= 40.0 - 0.001:
-        return "windows"
+        if sys.platform == "win32":
+            return "windows"
+        return _host_platform_tag()
 
     return _host_platform_tag()
 
@@ -526,6 +577,33 @@ def _asset_is_other_platform(name: str, platform: str) -> bool:
         if other == "darwin" and _asset_matches_platform(n, "macos"):
             return True
     return False
+
+
+def classify_release_platforms(assets: list[dict] | None) -> frozenset[str]:
+    """Which install channels shipped zips on this GitHub release.
+
+    * ``*_linux.zip`` / ``*-linux.zip`` → linux
+    * ``*_steamdeck.zip`` → steamdeck
+    * ``*_windows.zip`` → windows
+    * untagged ``Steempeg_vX.zip`` (legacy) → windows (keeps old releases working)
+    """
+    found: set[str] = set()
+    for asset in assets or []:
+        name = str(asset.get("name") or "")
+        if not name.lower().endswith(".zip"):
+            continue
+        if _asset_matches_platform(name, "linux"):
+            found.add("linux")
+        elif _asset_matches_platform(name, "steamdeck"):
+            found.add("steamdeck")
+        elif _asset_matches_platform(name, "windows"):
+            found.add("windows")
+        elif _asset_matches_platform(name, "macos") or _asset_matches_platform(name, "darwin"):
+            found.add("macos")
+        elif not _asset_is_other_platform(name, "windows"):
+            # Untagged zip = Windows stream (pre-_windows naming).
+            found.add("windows")
+    return frozenset(found)
 
 
 def find_zip_asset(assets: list[dict]) -> tuple[str | None, str | None, int | None, str | None]:
@@ -580,11 +658,19 @@ def parse_release(data: dict) -> ReleaseEntry | None:
 
     version_str = format_version(version)
     version_float = version_to_float(version)
-    zip_url, zip_name, zip_size, zip_sha256 = find_zip_asset(data.get("assets") or [])
+    assets = data.get("assets") or []
+    available = classify_release_platforms(assets)
+    zip_url, zip_name, zip_size, zip_sha256 = find_zip_asset(assets)
     era = classify_era(version_float)
     install_tier = classify_install_tier(version_float, zip_url)
     milestones = milestones_for_version(version_float)
     block_reason = _block_reason_for(install_tier, version_float)
+    if block_reason is None and install_tier == InstallTier.NO_ZIP:
+        block_reason = _missing_channel_block_reason(
+            channel=release_platform_tag(),
+            available=available,
+            version_float=version_float,
+        )
 
     return ReleaseEntry(
         tag_name=tag_name,
@@ -598,12 +684,13 @@ def parse_release(data: dict) -> ReleaseEntry | None:
         zip_name=zip_name,
         era=era,
         install_tier=install_tier,
-        installable=is_installable(version_float, zip_url),
+        installable=is_installable(version_float, zip_url, available_platforms=available),
         milestones=milestones,
         block_reason=block_reason,
         published_at=data.get("published_at") or "",
         zip_size=zip_size,
         zip_sha256=zip_sha256,
+        available_platforms=available,
     )
 
 
@@ -768,10 +855,8 @@ def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
                 entry = parse_release(item)
                 if not entry:
                     continue
-                # Linux/macOS: only list releases that ship a matching zip.
-                # Windows keeps the full history (legacy untagged zips still match).
-                if entry.zip_url is None and release_platform_tag() != "windows":
-                    continue
+                # List every public release. Install is gated by zip for this channel
+                # (icons show which platforms shipped; missing channel → no download).
                 releases.append(entry)
 
             if len(batch) < 100:

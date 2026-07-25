@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.ui.icon_assets import info_icon
+from steempeg.ui.icon_assets import info_icon, load_pixmap
 from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
@@ -35,12 +35,21 @@ from steempeg.services.release_catalog import (
     group_releases_by_major,
     info_tooltip_text,
     latest_release_version,
+    platform_display_name,
     selection_marker_text,
     selection_notice,
     shows_info_icon,
     version_label_color,
     versions_equal,
 )
+
+# Display order for platform availability icons next to a release version.
+_PLATFORM_ICON_ORDER = ("windows", "linux", "steamdeck")
+_PLATFORM_ASSET = {
+    "windows": "windows.png",
+    "linux": "linux.png",
+    "steamdeck": "steamdeck.png",
+}
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
@@ -122,8 +131,14 @@ _ACK_FRAME_STYLE = """
     }
 """
 
-_NOTICE_WARN = f"color: #e8b86d; font-size: 11px; font-family: {tok.FONT_APP};"
-_NOTICE_DANGER = f"color: #ff8a80; font-size: 11px; font-family: {tok.FONT_APP};"
+_NOTICE_WARN = (
+    f"color: #e8b86d; font-size: 11px; font-family: {tok.FONT_APP}; "
+    "background-color: #2a2a2a; padding: 6px 8px; border-radius: 6px;"
+)
+_NOTICE_DANGER = (
+    f"color: #ff8a80; font-size: 11px; font-family: {tok.FONT_APP}; "
+    "background-color: #2a2a2a; padding: 6px 8px; border-radius: 6px;"
+)
 
 
 def _logo_pixmap(size: int = 18) -> QPixmap | None:
@@ -396,6 +411,21 @@ class _VersionRow(QFrame):
             f"font-size: {'12px' if not indent else '11px'}; font-weight: 600; background: transparent;"
         )
         outer.addWidget(self._version_label)
+
+        icon_size = 14 if not indent else 12
+        for platform in _PLATFORM_ICON_ORDER:
+            if platform not in entry.available_platforms:
+                continue
+            pix = load_pixmap(_PLATFORM_ASSET[platform], icon_size)
+            if pix.isNull():
+                continue
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(pix)
+            icon_lbl.setFixedSize(icon_size, icon_size)
+            icon_lbl.setToolTip(platform_display_name(platform))
+            icon_lbl.setStyleSheet("background: transparent;")
+            outer.addWidget(icon_lbl)
+
         outer.addStretch()
 
         if shows_info_icon(entry):
@@ -596,13 +626,17 @@ class UpdateCenterDialog(SteempegDialog):
         self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._notes.setPlaceholderText("Select a version.")
         notes_block.addWidget(self._notes, 1)
-        root.addLayout(notes_block, 1)
 
+        # Keep notice inside the notes column so it cannot paint over the QTextEdit
+        # when the dialog is short (Linux layout was overlapping the yellow line).
         self._notice_label = QLabel()
         self._notice_label.setWordWrap(True)
         self._notice_label.setStyleSheet(_NOTICE_WARN)
+        self._notice_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._notice_label.hide()
-        root.addWidget(self._notice_label)
+        notes_block.addWidget(self._notice_label)
+
+        root.addLayout(notes_block, 1)
 
         self._marker_label = QLabel()
         self._marker_label.setWordWrap(True)
@@ -831,6 +865,15 @@ class UpdateCenterDialog(SteempegDialog):
                 self._btn_install.setText(f"Downgrade to v{entry.version_str}")
         elif entry.install_tier == InstallTier.MANUAL:
             self._btn_install.setText("Manual .exe only")
+        elif entry.install_tier == InstallTier.NO_ZIP:
+            if not entry.available_platforms:
+                self._btn_install.setText("Not ready yet")
+            elif entry.block_reason:
+                # e.g. "No Linux build for this version (available: Windows)."
+                short = entry.block_reason.split(" (", 1)[0].rstrip(".")
+                self._btn_install.setText(short)
+            else:
+                self._btn_install.setText("No build for this OS")
         else:
             self._btn_install.setText("Open on GitHub")
 

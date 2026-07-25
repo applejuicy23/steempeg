@@ -91,6 +91,9 @@ _BASE_ASSETS = (
     "portable.png",
     "addclip.png",
     "queue.png",
+    "windows.png",
+    "linux.png",
+    "steamdeck.png",
 )
 
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
