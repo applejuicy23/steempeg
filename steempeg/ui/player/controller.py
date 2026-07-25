@@ -467,7 +467,9 @@ class PlayerMixin:
         overlay = getattr(self, '_buffering_overlay', None)
         if overlay is None:
             from steempeg.ui.player.buffering_overlay import BufferingOverlay
-            overlay = BufferingOverlay()
+            # Parent to the main shell (not mpv) so Dialog sheets stack above it.
+            host = getattr(self, "ui", None)
+            overlay = BufferingOverlay(parent=host)
             self._buffering_overlay = overlay
         return overlay
 
@@ -479,6 +481,8 @@ class PlayerMixin:
         if active and (
             (app is not None and app.applicationState() != Qt.ApplicationState.ApplicationActive)
             or self._main_shell_is_minimized()
+            or getattr(self, "_portable_clip_picker_open", False)
+            or getattr(self, "_portable_render_settings_open", False)
         ):
             overlay = getattr(self, '_buffering_overlay', None)
             if overlay is not None:
@@ -3220,8 +3224,9 @@ class PlayerMixin:
         if toast is None:
             toast = QWidget(self.ui)
             toast.setObjectName("screenshotToastHost")
+            # Tool (not ToolTip) without stays-on-top — stays under Clips Manager sheets.
             toast.setWindowFlags(
-                Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+                Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
             )
             toast.setAttribute(Qt.WA_ShowWithoutActivating, True)
             toast.setAttribute(Qt.WA_TranslucentBackground, True)
