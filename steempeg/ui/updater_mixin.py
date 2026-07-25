@@ -266,7 +266,10 @@ mkdir "{staging_folder}"
 
 for %%I in (*.*) do if /I not "%%I"=="restore.bat" move "%%I" "{staging_folder}\" > NUL
 for /D %%D in (*) do (
-    if /I not "%%D"=="{backup_folder_name}" if /I not "%%D"=="{staging_folder}" if /I not "%%D"=="logs" if /I not "%%D"=="cache" move "%%D" "{staging_folder}\" > NUL
+    if /I not "%%D"=="{backup_folder_name}" if /I not "%%D"=="{staging_folder}" if /I not "%%D"=="logs" if /I not "%%D"=="cache" (
+        echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
+        if errorlevel 1 move "%%D" "{staging_folder}\" > NUL
+    )
 )
 
 echo Restoring backup from {backup_folder_name}...
@@ -294,6 +297,7 @@ for item in * .[!.]* ..?*; do
   [[ "$item" == "{backup_folder_name}" ]] && continue
   [[ "$item" == "{staging_folder}" ]] && continue
   [[ "$item" == "logs" || "$item" == "cache" ]] && continue
+  [[ "$item" == old_version_v* || "$item" == pre_restore_v* ]] && continue
   mv -- "$item" "{staging_folder}/"
 done
 cp -a "{backup_folder_name}"/. .
