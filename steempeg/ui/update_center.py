@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.ui.icon_assets import info_icon, load_pixmap
+from steempeg.ui.icon_assets import info_icon, load_pixmap, title_bar_update_pixmap
 from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
@@ -586,9 +586,25 @@ class UpdateCenterDialog(SteempegDialog):
 
         root = self.content_layout
 
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+        title_icon = QLabel()
+        title_icon.setFixedSize(28, 28)
+        title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_pix = title_bar_update_pixmap(tok.TEXT_TITLE, 26)
+        if title_pix.isNull():
+            title_pix = load_pixmap("update.png", 26)
+        if not title_pix.isNull():
+            title_icon.setPixmap(title_pix)
+        title_icon.setStyleSheet("background: transparent;")
+        title_row.addWidget(title_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
         title = QLabel("Update Center")
         title.setStyleSheet(tok.STYLE_PANEL_TITLE)
-        root.addWidget(title)
+        title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addStretch(1)
+        root.addLayout(title_row)
 
         version_line = QLabel(f"Current version is v{APP_VERSION_STR}")
         version_line.setStyleSheet(tok.STYLE_PANEL_SUBTITLE)
