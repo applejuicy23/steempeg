@@ -488,7 +488,7 @@ class LifecycleMixin:
         from steempeg.ui.ui_density import scaled_dialog_size
 
         # Portable + Deck-class shells: scaled_dialog_size shrinks too hard for the
-        # Report / Check for updates / Close row. Keep About wide enough for labels.
+        # Report / Close row. Keep About wide enough for labels.
         if getattr(self, "_portable_shell", False):
             shell_w = 0
             try:
@@ -605,20 +605,8 @@ class LifecycleMixin:
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
-        # Check for updates lives in About only for Portable (title-bar path).
-        # Desktop still has the left-panel Updates button for now.
-        if getattr(self, "_portable_shell", False):
-            btn_update = QPushButton("Check for updates")
-            btn_update.setObjectName("AboutUpdateBtn")
-            btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
-
-            def _open_updates_from_about():
-                dialog.accept()
-                # Let About tear down before stacking Update Center.
-                QTimer.singleShot(0, self.check_for_updates)
-
-            btn_update.clicked.connect(_open_updates_from_about)
-            btn_row.addWidget(btn_update)
+        # Portable: Check for updates lives in the title bar (Updates chip).
+        # Desktop still has the left-panel Updates button.
         btn_row.addWidget(btn_close)
         content.addLayout(btn_row)
 
