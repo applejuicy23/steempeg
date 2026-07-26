@@ -10,9 +10,8 @@ from dataclasses import dataclass, fields
 
 from steempeg.ui.layout_defaults import (
     clamp01,
-    is_compact_layout,
-    layout_scale,
     lerp_int,
+    shell_layout_scale,
 )
 
 _PAD_TOKEN_RE = re.compile(r"(\d+)px")
@@ -265,8 +264,43 @@ def lerp_density(t: float) -> UiDensity:
     return UiDensity(**kwargs)
 
 
-def density_for_width(window_width: int) -> UiDensity:
-    return lerp_density(layout_scale(window_width))
+def scale_density_pixels(dense: UiDensity, factor: float) -> UiDensity:
+    """Multiply discrete chrome pixel metrics by a PPI factor (pads too)."""
+    if abs(factor - 1.0) < 0.02:
+        return dense
+    factor = max(0.65, min(1.25, float(factor)))
+
+    def _px(v: int) -> int:
+        return max(1, int(round(v * factor)))
+
+    kwargs = {"compact": dense.compact, "scale": dense.scale}
+    for f in fields(UiDensity):
+        name = f.name
+        if name in ("compact", "scale"):
+            continue
+        val = getattr(dense, name)
+        if isinstance(val, int):
+            kwargs[name] = _px(val)
+        elif isinstance(val, str):
+            parts = _PAD_TOKEN_RE.findall(val)
+            if parts:
+                kwargs[name] = " ".join(f"{_px(int(x))}px" for x in parts)
+            else:
+                kwargs[name] = val
+        elif isinstance(val, tuple):
+            kwargs[name] = tuple(_px(int(x)) for x in val)
+        else:
+            kwargs[name] = val
+    return UiDensity(**kwargs)
+
+
+def density_for_width(window_width: int, *, widget=None, screen=None) -> UiDensity:
+    """Chrome density from window width + physical PPI of the target screen."""
+    from steempeg.ui.screen_metrics import chrome_ppi_scale
+
+    t = shell_layout_scale(window_width, widget=widget, screen=screen)
+    dense = lerp_density(t)
+    return scale_density_pixels(dense, chrome_ppi_scale(widget, screen))
 
 
 def chrome_equal(a: UiDensity | None, b: UiDensity | None) -> bool:
@@ -399,10 +433,11 @@ def scaled_dialog_size(
     parent=None,
     factor: float = 0.82,
 ) -> tuple[int, int]:
-    """Shrink dialog footprint continuously toward Deck-class screens."""
+    """Shrink dialog footprint continuously toward Deck-class / low-PPI screens."""
     from PySide6.QtWidgets import QApplication
 
     win_w = 0
+    host = parent
     if parent is not None and hasattr(parent, "width"):
         try:
             win_w = int(parent.width())
@@ -412,7 +447,8 @@ def scaled_dialog_size(
         aw = QApplication.activeWindow()
         if aw is not None:
             win_w = int(aw.width())
-    t = layout_scale(win_w)
+            host = aw
+    t = shell_layout_scale(win_w, widget=host)
     # t=1 → no shrink; t=0 → full factor shrink
     scale = factor + (1.0 - factor) * t
     return max(300, int(width * scale)), max(240, int(height * scale))
