@@ -174,10 +174,23 @@ class TimelineCanvas(QWidget):
         self.marker_store = MarkerIconStore()
         
         # NEW FLOATING TOOLTIP (Will reside beneath the scrollbar)
+        from steempeg.ui import design_tokens as tok
+
         self.text_tooltip = QLabel()
         self.text_tooltip.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.text_tooltip.setStyleSheet("QLabel { background-color: #181818; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px 10px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 12px; }")
+        self.text_tooltip.setStyleSheet(
+            f"QLabel {{"
+            f" background-color: {tok.TOOLTIP_BG};"
+            f" color: {tok.TOOLTIP_FG};"
+            f" border: 1px solid {tok.TOOLTIP_BORDER};"
+            f" border-radius: 6px;"
+            f" padding: 5px 9px;"
+            f" font-family: 'Segoe UI', {tok.FONT_APP};"
+            f" font-size: 12px;"
+            f" font-weight: bold;"
+            f"}}"
+        )
         self.text_tooltip.hide()
 
         self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
