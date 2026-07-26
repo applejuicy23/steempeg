@@ -111,6 +111,23 @@ def layout_scale(window_width: int) -> float:
     return (w - LAYOUT_SCALE_MIN_WIDTH) / (LAYOUT_SCALE_MAX_WIDTH - LAYOUT_SCALE_MIN_WIDTH)
 
 
+def shell_layout_scale(window_width: int, *, widget=None, screen=None) -> float:
+    """Width scale pulled toward compact on low-PPI (physically large) screens.
+
+    Wide + coarse pixels (e.g. 24–27″ FHD) used to look like full comfort while
+    every button was huge in inches. PPI < ref shrinks ``t``; high-PPI Deck-class
+    leaves width scale alone (portable already forces comfort chrome).
+    """
+    from steempeg.ui.screen_metrics import chrome_ppi_scale
+
+    t = layout_scale(window_width)
+    ppi_f = chrome_ppi_scale(widget, screen)
+    if ppi_f >= 0.97:
+        return t
+    # Low PPI: blend toward compact without ignoring a truly narrow window.
+    return clamp01(t * ppi_f)
+
+
 def height_layout_scale(window_height: int) -> float:
     """Vertical scale for bottom-pane caps; 0.0 at Deck height, 1.0 at comfort."""
     h = int(window_height or 0)
@@ -123,24 +140,29 @@ def height_layout_scale(window_height: int) -> float:
     return (h - LAYOUT_SCALE_MIN_HEIGHT) / (LAYOUT_SCALE_MAX_HEIGHT - LAYOUT_SCALE_MIN_HEIGHT)
 
 
-def is_compact_layout(window_width: int) -> bool:
+def is_compact_layout(window_width: int, *, widget=None, screen=None) -> bool:
     """True when short labels / compact bool heuristics should win (scale < 0.5)."""
-    return layout_scale(window_width) < 0.5
+    return shell_layout_scale(window_width, widget=widget, screen=screen) < 0.5
 
 
-def left_panel_min_width(window_width: int) -> int:
-    return lerp_int(
+def left_panel_min_width(window_width: int, *, widget=None, screen=None) -> int:
+    ideal = lerp_int(
         MIN_LEFT_PANEL_WIDTH_COMPACT,
         MIN_LEFT_PANEL_WIDTH_COMFORT,
-        layout_scale(window_width),
+        shell_layout_scale(window_width, widget=widget, screen=screen),
     )
+    win_w = int(window_width or 0)
+    if win_w > 0:
+        # Hard cap: Clips Manager must not claim more than ~40% of the shell.
+        ideal = min(ideal, max(MIN_LEFT_PANEL_WIDTH_COMPACT, int(win_w * 0.40)))
+    return max(MIN_LEFT_PANEL_WIDTH_COMPACT, ideal)
 
 
-def queue_panel_min_width(window_width: int) -> int:
+def queue_panel_min_width(window_width: int, *, widget=None, screen=None) -> int:
     return lerp_int(
         MIN_QUEUE_PANEL_WIDTH_COMPACT,
         MIN_QUEUE_PANEL_WIDTH,
-        layout_scale(window_width),
+        shell_layout_scale(window_width, widget=widget, screen=screen),
     )
 
 
@@ -158,6 +180,8 @@ def affordable_queue_min_width(
     *,
     left_min: int | None = None,
     queue_open: bool = True,
+    widget=None,
+    screen=None,
 ) -> int:
     """Queue ``minimumWidth`` that cannot starve Clips Manager or the player.
 
@@ -166,8 +190,12 @@ def affordable_queue_min_width(
     """
     if not queue_open:
         return 0
-    ideal = queue_panel_min_width(window_width)
-    left = int(left_min if left_min is not None else left_panel_min_width(window_width))
+    ideal = queue_panel_min_width(window_width, widget=widget, screen=screen)
+    left = int(
+        left_min
+        if left_min is not None
+        else left_panel_min_width(window_width, widget=widget, screen=screen)
+    )
     win_w = int(window_width or 0)
     if win_w <= 0:
         return ideal
@@ -176,11 +204,19 @@ def affordable_queue_min_width(
     return min(ideal, max_q)
 
 
-def queue_panel_open_width(window_width: int, *, total_splitter: int = 0) -> int:
+def queue_panel_open_width(
+    window_width: int,
+    *,
+    total_splitter: int = 0,
+    widget=None,
+    screen=None,
+) -> int:
     """Preferred queue width when opening — lerp mins, capped ~25% of window."""
-    t = layout_scale(window_width)
+    t = shell_layout_scale(window_width, widget=widget, screen=screen)
     ideal = lerp_int(MIN_QUEUE_PANEL_WIDTH_COMPACT, DEFAULT_QUEUE_PANEL_WIDTH, t)
-    min_q = affordable_queue_min_width(window_width, queue_open=True)
+    min_q = affordable_queue_min_width(
+        window_width, queue_open=True, widget=widget, screen=screen
+    )
     win_w = int(window_width or 0)
     max_by_pct = max(min_q, int(win_w * 0.25)) if win_w else ideal
     queue_w = max(min_q, min(ideal, max_by_pct))
@@ -194,9 +230,12 @@ def queue_panel_open_width(window_width: int, *, total_splitter: int = 0) -> int
 def default_main_v_splitter_sizes(
     window_width: int = 0,
     window_height: int = 0,
+    *,
+    widget=None,
+    screen=None,
 ) -> list[int]:
     """Lerp vertical split defaults; cap bottom pane on short windows."""
-    tw = layout_scale(window_width) if window_width else 1.0
+    tw = shell_layout_scale(window_width, widget=widget, screen=screen) if window_width else 1.0
     th = height_layout_scale(window_height) if window_height else 1.0
     t = min(tw, th)
     top = lerp_int(
