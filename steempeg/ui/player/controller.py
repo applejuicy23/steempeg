@@ -1318,9 +1318,10 @@ class PlayerMixin:
             target_layout.addWidget(footer)
 
         footer.setObjectName("HudFrame")
-        footer.setStyleSheet(
+        from steempeg.ui.design_tokens import with_tooltip_style
+        footer.setStyleSheet(with_tooltip_style(
             "QFrame#HudFrame { background-color: #2d2d2d; border-radius: 6px; border: none; }"
-        )
+        ))
 
         v_container = getattr(self.ui, 'video_container', None)
         if v_container:
@@ -1551,17 +1552,18 @@ class PlayerMixin:
             self.player_footer_frame.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
             
             self.player_footer_frame.setObjectName("HudFrame")
-            self.player_footer_frame.setStyleSheet("""
-                QFrame#HudFrame { 
-                    background-color: rgba(25, 25, 25, 200); 
-                    border-radius: 16px; 
+            from steempeg.ui.design_tokens import with_tooltip_style
+            self.player_footer_frame.setStyleSheet(with_tooltip_style("""
+                QFrame#HudFrame {
+                    background-color: rgba(25, 25, 25, 200);
+                    border-radius: 16px;
                     border: none;
                 }
                 QFrame#HudFrame QPushButton, QFrame#HudFrame QToolButton {
                     background-color: transparent;
                     border: none;
                 }
-            """)
+            """))
             self.player_footer_frame.show()
             self.player_footer_frame.raise_()
 
@@ -1725,10 +1727,11 @@ class PlayerMixin:
             else:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("❌ Cancel")
-            self.btn_trim.setStyleSheet(
+            from steempeg.ui.design_tokens import with_tooltip_style
+            self.btn_trim.setStyleSheet(with_tooltip_style(
                 "background-color: #ff4444; color: white; border-radius: 15px; "
                 "padding: 0 12px; font-weight: bold;"
-            )
+            ))
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.show()
         else:
@@ -1739,10 +1742,11 @@ class PlayerMixin:
             else:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("✂️ Trim")
-            self.btn_trim.setStyleSheet(
+            from steempeg.ui.design_tokens import with_tooltip_style
+            self.btn_trim.setStyleSheet(with_tooltip_style(
                 "background-color: #cfa94a; color: black; border-radius: 15px; "
                 "padding: 0 12px; font-weight: bold;"
-            )
+            ))
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.hide()
             self._apply_video_border(False)
