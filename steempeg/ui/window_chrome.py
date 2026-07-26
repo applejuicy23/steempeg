@@ -14,16 +14,16 @@ import sys
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -31,7 +31,11 @@ from PySide6.QtWidgets import (
 from steempeg.infra.paths import get_resource_path
 from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.icon_assets import title_bar_info_icons, title_bar_settings_icons
+from steempeg.ui.icon_assets import (
+    title_bar_info_icons,
+    title_bar_settings_icons,
+    title_bar_update_pixmap,
+)
 
 _CONTROL_STRIP_WIDTH = 84
 
@@ -221,6 +225,108 @@ class _TrafficLight(QPushButton):
         painter.end()
 
 
+class _TitleBarUpdateButton(QPushButton):
+    """Portable title-bar Updates control — ``update.png`` in a circle.
+
+    Spins continuously (clockwise) while hovered, pressed, or marked busy
+    (Update Center open). Spin is not a CSS trick — the pixmap is rotated in
+    ``paintEvent``.
+    """
+
+    _TICK_MS = 16
+    _DEG_PER_TICK = 7.5  # clockwise (top moves left→right)
+
+    def __init__(self, *, hit_px: int, icon_px: int, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TitleBarCheckUpdates")
+        self.setFlat(True)
+        self.setFixedSize(hit_px, hit_px)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setToolTip("Check for updates")
+        self._hit_r = hit_px // 2
+        self._angle = 0.0
+        self._busy = False
+        self._idle_pix = title_bar_update_pixmap("#b8b8b8", icon_px)
+        self._hot_pix = title_bar_update_pixmap("#e8e8e8", icon_px)
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._TICK_MS)
+        self._timer.timeout.connect(self._on_tick)
+
+    def set_busy(self, busy: bool) -> None:
+        """Keep spinning while Update Center / check is in flight."""
+        self._busy = bool(busy)
+        self._sync_spin()
+        self.update()
+
+    def clear_hover_spin(self) -> None:
+        """After a modal eats Leave — re-evaluate spin without underMouse stuck."""
+        self.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+        self._sync_spin()
+
+    def _wants_spin(self) -> bool:
+        return bool(self._busy or self.isDown() or self.underMouse())
+
+    def _sync_spin(self) -> None:
+        if self._wants_spin():
+            if not self._timer.isActive():
+                self._timer.start()
+            return
+        if self._timer.isActive():
+            self._timer.stop()
+        if self._angle != 0.0:
+            self._angle = 0.0
+            self.update()
+
+    def _on_tick(self) -> None:
+        if not self._wants_spin():
+            self._sync_spin()
+            return
+        self._angle = (self._angle + self._DEG_PER_TICK) % 360.0
+        self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        super().enterEvent(event)
+        self._sync_spin()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        self._sync_spin()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        super().mousePressEvent(event)
+        self._sync_spin()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        self._sync_spin()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        hot = bool(self._busy or self.isDown() or self.underMouse())
+        if hot:
+            alpha = 31 if (self.isDown() or self._busy) else 20
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, alpha))
+            painter.drawEllipse(0, 0, self.width() - 1, self.height() - 1)
+        pix = self._hot_pix if hot else self._idle_pix
+        if pix.isNull():
+            painter.end()
+            return
+        cx = self.width() * 0.5
+        cy = self.height() * 0.5
+        painter.translate(cx, cy)
+        painter.rotate(self._angle)
+        painter.drawPixmap(
+            int(-pix.width() * 0.5),
+            int(-pix.height() * 0.5),
+            pix,
+        )
+        painter.end()
+
+
 class SteempegTitleBar(QWidget):
     """Top chrome: branding left, window controls right (Windows order)."""
 
@@ -229,6 +335,7 @@ class SteempegTitleBar(QWidget):
     maximize_requested = Signal()
     about_requested = Signal()
     settings_requested = Signal()
+    check_updates_requested = Signal()
     update_available_clicked = Signal()
 
     def __init__(self, window: QWidget, *, title: str, subtitle: str = "", parent=None):
@@ -237,7 +344,7 @@ class SteempegTitleBar(QWidget):
         self.setObjectName("SteempegTitleBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
-        # Caption drag area must stay arrow; only the (i) / Update chip use hand.
+        # Caption drag area must stay arrow; only the shell tools use hand.
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
         bar_h = tok.TITLE_BAR_HEIGHT
@@ -282,71 +389,72 @@ class SteempegTitleBar(QWidget):
             sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(sub_lbl)
 
-        # About (i) + Settings — Portable shell only (Desktop uses left-panel footer).
-        # Glyph size stays 16px; hitbox centered in the title bar. Hidden until
-        # ``set_shell_tools_visible(True)`` from the portable theatre path.
-        _info_px = 16
-        _hit_px = 26
-        self.btn_about_info = QToolButton()
-        self.btn_about_info.setObjectName("TitleBarAboutInfo")
-        self.btn_about_info.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.btn_about_info.setAutoRaise(True)
-        self._about_info_icon_idle, self._about_info_icon_hot = title_bar_info_icons(_info_px)
-        self.btn_about_info.setIcon(self._about_info_icon_idle)
-        self.btn_about_info.setIconSize(QSize(_info_px, _info_px))
-        self.btn_about_info.setFixedSize(_hit_px, _hit_px)
-        self.btn_about_info.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_about_info.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_about_info.setToolTip("About")
+        # Portable shell tools: (i) near version | Settings + Check for updates.
+        # Hidden until ``set_shell_tools_visible(True)`` from the portable theatre path.
+        # QPushButton (not QToolButton) — Windows styles offset QToolButton icons inside
+        # the hover circle, which looked like a crooked hitbox on the About (i).
+        _icon_px = 16
+        _hit_px = 22
+        _hit_r = _hit_px // 2
+
+        def _shell_icon_btn(object_name: str, idle: object, tooltip: str) -> QPushButton:
+            btn = QPushButton()
+            btn.setObjectName(object_name)
+            btn.setIcon(idle)
+            btn.setIconSize(QSize(_icon_px, _icon_px))
+            btn.setFixedSize(_hit_px, _hit_px)
+            btn.setFlat(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setToolTip(tooltip)
+            btn.installEventFilter(self)
+            return btn
+
+        self._about_info_icon_idle, self._about_info_icon_hot = title_bar_info_icons(_icon_px)
+        self.btn_about_info = _shell_icon_btn(
+            "TitleBarAboutInfo", self._about_info_icon_idle, "About"
+        )
         self.btn_about_info.clicked.connect(self.about_requested.emit)
-        self.btn_about_info.installEventFilter(self)
 
-        info_wrap = QWidget()
-        info_wrap.setObjectName("TitleBarAboutInfoWrap")
-        info_wrap.setFixedHeight(bar_h)
-        info_wrap.setFixedWidth(_hit_px)
-        info_lay = QVBoxLayout(info_wrap)
-        info_lay.setContentsMargins(0, 0, 0, 0)
-        info_lay.setSpacing(0)
-        info_lay.addStretch(1)
-        info_lay.addWidget(self.btn_about_info, 0, Qt.AlignmentFlag.AlignHCenter)
-        info_lay.addStretch(1)
-
-        self.btn_title_settings = QToolButton()
-        self.btn_title_settings.setObjectName("TitleBarSettings")
-        self.btn_title_settings.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.btn_title_settings.setAutoRaise(True)
-        self._settings_icon_idle, self._settings_icon_hot = title_bar_settings_icons(_info_px)
-        self.btn_title_settings.setIcon(self._settings_icon_idle)
-        self.btn_title_settings.setIconSize(QSize(_info_px, _info_px))
-        self.btn_title_settings.setFixedSize(_hit_px, _hit_px)
-        self.btn_title_settings.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_title_settings.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_title_settings.setToolTip("Settings")
+        self._settings_icon_idle, self._settings_icon_hot = title_bar_settings_icons(_icon_px)
+        self.btn_title_settings = _shell_icon_btn(
+            "TitleBarSettings", self._settings_icon_idle, "Settings"
+        )
         self.btn_title_settings.clicked.connect(self.settings_requested.emit)
-        self.btn_title_settings.installEventFilter(self)
 
-        settings_wrap = QWidget()
-        settings_wrap.setObjectName("TitleBarSettingsWrap")
-        settings_wrap.setFixedHeight(bar_h)
-        settings_wrap.setFixedWidth(_hit_px)
-        settings_lay = QVBoxLayout(settings_wrap)
-        settings_lay.setContentsMargins(0, 0, 0, 0)
-        settings_lay.setSpacing(0)
-        settings_lay.addStretch(1)
-        settings_lay.addWidget(self.btn_title_settings, 0, Qt.AlignmentFlag.AlignHCenter)
-        settings_lay.addStretch(1)
+        self.btn_check_updates = _TitleBarUpdateButton(hit_px=_hit_px, icon_px=_icon_px)
+        self.btn_check_updates.clicked.connect(self.check_updates_requested.emit)
+
+        divider = QFrame()
+        divider.setObjectName("TitleBarShellDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFixedWidth(1)
+        divider.setFixedHeight(14)
+        divider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         shell_tools = QWidget()
         shell_tools.setObjectName("TitleBarShellTools")
+        shell_tools.setFixedHeight(bar_h)
         shell_tools_lay = QHBoxLayout(shell_tools)
         shell_tools_lay.setContentsMargins(0, 0, 0, 0)
         shell_tools_lay.setSpacing(0)
-        shell_tools_lay.addSpacing(4)
-        shell_tools_lay.addWidget(info_wrap)
+        # Sit (i) tight against vXX.X — was a wide gap with old spacing + subtitle pad.
         shell_tools_lay.addSpacing(2)
-        shell_tools_lay.addWidget(settings_wrap)
+        shell_tools_lay.addWidget(
+            self.btn_about_info, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        shell_tools_lay.addSpacing(6)
+        shell_tools_lay.addWidget(divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        shell_tools_lay.addSpacing(6)
+        shell_tools_lay.addWidget(
+            self.btn_title_settings, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        shell_tools_lay.addSpacing(4)
+        shell_tools_lay.addWidget(
+            self.btn_check_updates, 0, Qt.AlignmentFlag.AlignVCenter
+        )
         self._shell_tools = shell_tools
+        self._shell_hit_radius = _hit_r
         shell_tools.hide()
         root.addWidget(shell_tools)
 
@@ -433,6 +541,19 @@ class SteempegTitleBar(QWidget):
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
             except RuntimeError:
                 pass
+        for name in ("btn_check_updates", "btn_update_available"):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            try:
+                if hasattr(btn, "clear_hover_spin"):
+                    btn.clear_hover_spin()
+                btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+                QApplication.sendEvent(btn, QEvent(QEvent.Type.Leave))
+                btn.unsetCursor()
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            except RuntimeError:
+                pass
         try:
             self.unsetCursor()
             parent = self.window()
@@ -509,24 +630,32 @@ class SteempegTitleBar(QWidget):
             QLabel#TitleBarSubtitle {{
                 color: {tok.TEXT_MUTED};
                 font-family: {tok.FONT_UI};
-                padding-left: 4px;
+                padding-left: 2px;
             }}
-            QToolButton#TitleBarAboutInfo,
-            QToolButton#TitleBarSettings {{
+            QPushButton#TitleBarAboutInfo,
+            QPushButton#TitleBarSettings,
+            QPushButton#TitleBarCheckUpdates {{
                 background: transparent;
                 border: none;
-                padding: 0;
-                margin: 0;
+                padding: 0px;
+                margin: 0px;
+                text-align: center;
             }}
-            QToolButton#TitleBarAboutInfo:hover,
-            QToolButton#TitleBarSettings:hover {{
+            QPushButton#TitleBarAboutInfo:hover,
+            QPushButton#TitleBarSettings:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
-                border-radius: 13px;
+                border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
-            QToolButton#TitleBarAboutInfo:pressed,
-            QToolButton#TitleBarSettings:pressed {{
+            QPushButton#TitleBarAboutInfo:pressed,
+            QPushButton#TitleBarSettings:pressed {{
                 background-color: rgba(255, 255, 255, 0.12);
-                border-radius: 13px;
+                border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
+            }}
+            QFrame#TitleBarShellDivider {{
+                color: #555555;
+                background-color: #555555;
+                border: none;
+                margin: 0px;
             }}
             """
         )
@@ -536,7 +665,7 @@ class SteempegTitleBar(QWidget):
         self._apply_bar_style(bg_color)
 
     def set_shell_tools_visible(self, visible: bool) -> None:
-        """Show About (i) + Settings in the title bar (Portable shell only)."""
+        """Show About (i) | Settings + Updates in the title bar (Portable only)."""
         tools = getattr(self, "_shell_tools", None)
         if tools is not None:
             tools.setVisible(bool(visible))
@@ -1216,6 +1345,27 @@ def enable_frameless(window: QWidget) -> None:
         _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED,
     )
     refresh_dwm_chrome(window)
+
+
+def ensure_startup_maximized(window: QWidget) -> None:
+    """Re-assert maximize after Win32 chrome / post-update settle.
+
+    Startup pre-sizes to an inset rect, then ``showMaximized()``. A later
+    ``enable_frameless`` (FRAMECHANGED) or the post-update success dialog can
+    leave the shell on that inset — especially noticeable in portable after
+    ``--updated-from`` relaunches. Skip immersive fullscreen.
+    """
+    if os.name != "nt":
+        return
+    host = getattr(window, "_app_host", None)
+    if host is not None and getattr(host, "is_fullscreen", False):
+        return
+    try:
+        if window.isMaximized():
+            return
+        window.showMaximized()
+    except RuntimeError:
+        pass
 
 
 # Back-compat name used by app.py.
