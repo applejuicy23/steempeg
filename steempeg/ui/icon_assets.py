@@ -57,23 +57,60 @@ def info_icon(size: int = 14) -> QIcon:
     return load_icon("info.png", size)
 
 
-def title_bar_info_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
-    """Tinted info.png for the title-bar About (i), centered in ``size``.
+def _opaque_content_rect(pix: QPixmap, *, alpha_min: int = 24) -> tuple[int, int, int, int]:
+    """Tight bbox of non-transparent pixels (x, y, w, h), or full pixmap if empty."""
+    img = pix.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    w, h = img.width(), img.height()
+    min_x, min_y, max_x, max_y = w, h, -1, -1
+    for y in range(h):
+        for x in range(w):
+            if img.pixelColor(x, y).alpha() >= alpha_min:
+                if x < min_x:
+                    min_x = x
+                if y < min_y:
+                    min_y = y
+                if x > max_x:
+                    max_x = x
+                if y > max_y:
+                    max_y = y
+    if max_x < min_x or max_y < min_y:
+        return 0, 0, w, h
+    return min_x, min_y, max_x - min_x + 1, max_y - min_y + 1
 
-    Source clips the ring bottom slightly — scale inset by 1px so the arc stays round.
+
+def title_bar_info_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted info.png for the title-bar About (i), geometrically centered in ``size``.
+
+    Crops to the opaque ring first so asymmetric PNG padding cannot skew the glyph
+    inside the circular hover hitbox.
     """
-    inner = max(size - 1, 10)
-    src = tinted_pixmap("info.png", color, inner)
-    if src.isNull():
-        return src
+    raw = QPixmap(get_resource_path("info.png"))
+    if raw.isNull():
+        return QPixmap()
+    x, y, bw, bh = _opaque_content_rect(raw)
+    side = max(bw, bh)
+    # Square crop around the opaque content center.
+    cx = x + bw / 2.0
+    cy = y + bh / 2.0
+    left = int(round(cx - side / 2.0))
+    top = int(round(cy - side / 2.0))
+    cropped = raw.copy(max(left, 0), max(top, 0), side, side)
+    if isinstance(color, str):
+        color = QColor(color)
+    scaled = cropped.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
     out = QPixmap(size, size)
     out.fill(Qt.GlobalColor.transparent)
     painter = QPainter(out)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    x = (size - src.width()) // 2
-    y = (size - src.height()) // 2
-    painter.drawPixmap(x, y, src)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(out.rect(), color)
     painter.end()
     return out
 
@@ -95,6 +132,18 @@ def title_bar_settings_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     """Idle + hot icons for the title-bar Settings (settings2.png)."""
     idle = _icon_from_pixmap(title_bar_settings_pixmap("#b8b8b8", size))
     hot = _icon_from_pixmap(title_bar_settings_pixmap("#e8e8e8", size))
+    return idle, hot
+
+
+def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted update.png for the portable title-bar Check for updates control."""
+    return tinted_pixmap("update.png", color, size)
+
+
+def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Idle + hot icons for the title-bar Updates spinner button."""
+    idle = _icon_from_pixmap(title_bar_update_pixmap("#b8b8b8", size))
+    hot = _icon_from_pixmap(title_bar_update_pixmap("#e8e8e8", size))
     return idle, hot
 
 
