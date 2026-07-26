@@ -53,13 +53,21 @@ class UpdaterMixin:
     def check_for_updates(self):
         """Open the Update Center to browse, install, or restore releases."""
         logging.info("--- UPDATER: Opening Update Center ---")
+        tb = getattr(getattr(self, "ui", None), "title_bar", None)
+        spin = getattr(tb, "btn_check_updates", None) if tb is not None else None
         try:
+            if spin is not None and hasattr(spin, "set_busy"):
+                spin.set_busy(True)
             self.set_status("Checking for updates...")
             self._open_update_center()
         except Exception as e:
             logging.error(f"UPDATER: Critical exception: {e}")
             steempeg_critical(self.ui, "Updater Error", f"Could not open Update Center:\n{e}")
         finally:
+            if spin is not None and hasattr(spin, "set_busy"):
+                spin.set_busy(False)
+            if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
+                tb.clear_shell_tool_hover()
             self.set_status("Ready")
             logging.info("--- UPDATER: check_for_updates finished ---")
 
@@ -120,6 +128,8 @@ class UpdaterMixin:
             tb.about_requested.connect(self.show_about_dialog)
         if hasattr(tb, "settings_requested"):
             tb.settings_requested.connect(self.show_settings_dialog)
+        if hasattr(tb, "check_updates_requested"):
+            tb.check_updates_requested.connect(self.check_for_updates)
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
 
