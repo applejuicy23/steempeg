@@ -21,7 +21,7 @@ _ROUND_BTN_STYLE = """
 
 
 def _round_btn_style(size: int = 40) -> str:
-    return _ROUND_BTN_STYLE.format(radius=max(1, size // 2))
+    return tok.with_tooltip_style(_ROUND_BTN_STYLE.format(radius=max(1, size // 2)))
 
 
 def _drag_value_font() -> QFont:
