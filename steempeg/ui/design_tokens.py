@@ -55,6 +55,82 @@ STYLE_PANEL_HEADING = (
     "background: transparent;"
 )
 
+# Canonical hover tip chrome — match Portable title-bar «Check for updates»
+# (sampled: bg ≈ #2c2b2e, text ≈ #dcdde2). One style for Desktop + Portable
+# + every platform; apply on QApplication. Bold ink — Emily's preferred weight.
+TOOLTIP_BG = "#2c2b2e"
+TOOLTIP_BORDER = "#5a5a5a"
+TOOLTIP_FG = "#dcdde2"
+STYLE_TOOLTIP = (
+    f"QToolTip {{"
+    f" background-color: {TOOLTIP_BG};"
+    f" color: {TOOLTIP_FG};"
+    f" border: 1px solid {TOOLTIP_BORDER};"
+    f" border-radius: 6px;"
+    f" padding: 5px 9px;"
+    f" font-family: 'Segoe UI', {FONT_APP};"
+    f" font-size: 12px;"
+    f" font-weight: bold;"
+    f"}}"
+)
+
+
+def with_tooltip_style(qss: str = "") -> str:
+    """Append canonical tip chrome to a widget-local stylesheet.
+
+    Widgets with their own ``setStyleSheet`` often get a native black Windows tip
+    instead of the app-level QToolTip rules. Include STYLE_TOOLTIP in that sheet.
+    """
+    body = (qss or "").rstrip()
+    if "QToolTip" in body:
+        return body
+    return f"{body}\n{STYLE_TOOLTIP}" if body else STYLE_TOOLTIP
+
+
+def apply_app_tooltip_style(app=None) -> None:
+    """Force the shared QToolTip chrome on the QApplication (all shells/platforms).
+
+    Window-level stylesheets do not reliably style tip popups (separate HWND).
+    Palette + ``QToolTip.setFont`` keep fill/ink/weight consistent even when
+    Windows paints a native black tip for some widgets.
+    """
+    from PySide6.QtGui import QColor, QFont, QPalette
+    from PySide6.QtWidgets import QApplication, QToolTip
+
+    target = app or QApplication.instance()
+    if target is None:
+        return
+    current = target.styleSheet() or ""
+    import re
+
+    cleaned = re.sub(
+        r"/\* steempeg-tooltip \*/.*?QToolTip\s*\{[^}]*\}",
+        "",
+        current,
+        flags=re.DOTALL,
+    )
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    block = f"/* steempeg-tooltip */\n{STYLE_TOOLTIP}"
+    target.setStyleSheet(f"{cleaned}\n{block}" if cleaned else block)
+
+    tip_bg = QColor(TOOLTIP_BG)
+    tip_fg = QColor(TOOLTIP_FG)
+    palette = target.palette()
+    for group in (
+        QPalette.ColorGroup.Active,
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorGroup.Disabled,
+    ):
+        palette.setColor(group, QPalette.ColorRole.ToolTipBase, tip_bg)
+        palette.setColor(group, QPalette.ColorRole.ToolTipText, tip_fg)
+    target.setPalette(palette)
+
+    tip_font = QFont("Segoe UI", 12)
+    tip_font.setWeight(QFont.Weight.Bold)
+    tip_font.setStyleHint(QFont.StyleHint.SansSerif)
+    QToolTip.setFont(tip_font)
+
+
 # Legacy aliases (prefer STYLE_PANEL_* in new UI).
 STYLE_HEADING = STYLE_PANEL_TITLE.replace("20px", "14px")
 STYLE_SUBHEADING = STYLE_PANEL_SUBTITLE
