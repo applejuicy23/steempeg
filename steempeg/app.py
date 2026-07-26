@@ -149,10 +149,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if not hasattr(self.ui, "btn_play"):
             return
         from PySide6.QtWidgets import QSizePolicy
+        from steempeg.ui.design_tokens import with_tooltip_style
+        tip_qss = with_tooltip_style(_PLAYBACK_BUTTONS_QSS)
         for btn in (self.ui.btn_play, self.ui.btn_skip_back, self.ui.btn_skip_forward):
             btn.setFlat(True)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setStyleSheet(_PLAYBACK_BUTTONS_QSS)
+            btn.setStyleSheet(tip_qss)
         self.ui.btn_skip_back.setMinimumSize(40, 48)
         self.ui.btn_skip_back.setMaximumSize(40, 48)
         self.ui.btn_skip_forward.setMinimumSize(40, 48)
@@ -1067,7 +1069,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         from steempeg.ui.ui_density import settings_button_label
         from steempeg.ui.ui_density import density_for_width
 
-        btn_settings = QPushButton(settings_button_label(density_for_width(self.ui.width())))
+        btn_settings = QPushButton(settings_button_label(density_for_width(self.ui.width(), widget=self.ui)))
         btn_settings.setObjectName("btn_settings")
         self.ui.btn_settings = btn_settings
             
@@ -1678,12 +1680,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 from PySide6.QtWidgets import QSizePolicy
                 self.player_footer_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
                 
-                self.player_footer_frame.setStyleSheet("""
+                from steempeg.ui.design_tokens import with_tooltip_style
+                self.player_footer_frame.setStyleSheet(with_tooltip_style("""
                     #HudFrame {
                         background-color: #2d2d2d;
                         border-radius: 6px;
                     }
-                """ + _PLAYBACK_BUTTONS_QSS)
+                """ + _PLAYBACK_BUTTONS_QSS))
                 
                 v_layout = QVBoxLayout(self.player_footer_frame)
                 v_layout.setContentsMargins(15, 12, 15, 12)
@@ -1736,7 +1739,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_trim.setCursor(Qt.PointingHandCursor)
                 
                 # Apply a slightly golden premium style
-                self.btn_trim.setStyleSheet("background-color: #cfa94a; color: black; border-radius: 15px; padding: 0 12px; font-weight: bold;")
+                from steempeg.ui.design_tokens import with_tooltip_style
+                self.btn_trim.setStyleSheet(with_tooltip_style(
+                    "background-color: #cfa94a; color: black; border-radius: 15px; "
+                    "padding: 0 12px; font-weight: bold;"
+                ))
                 
                 # Try to load custom scissors icon
                 trim_icon_path = get_resource_path("trim_icon.png")
@@ -1761,10 +1768,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_theater.setFixedSize(40, 40) 
                 self.btn_theater.setCursor(Qt.PointingHandCursor)
                 self.btn_theater.setToolTip("Theater Mode")
-                self.btn_theater.setStyleSheet("""
-                    QPushButton { background: transparent; border-radius: 20px; border: none; } 
+                from steempeg.ui.design_tokens import with_tooltip_style
+                _pill_btn_qss = with_tooltip_style("""
+                    QPushButton { background: transparent; border-radius: 20px; border: none; }
                     QPushButton:hover { background: rgba(255, 255, 255, 40); }
                 """)
+                self.btn_theater.setStyleSheet(_pill_btn_qss)
                 
                 self._apply_theater_button_icon(closed=False)
                 if self.btn_theater.icon().isNull():
@@ -1775,10 +1784,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_fullscreen.setFixedSize(40, 40)
                 self.btn_fullscreen.setCursor(Qt.PointingHandCursor)
                 self.btn_fullscreen.setToolTip("Full Screen (Press ESC to exit)")
-                self.btn_fullscreen.setStyleSheet("""
-                    QPushButton { background: transparent; border-radius: 20px; border: none; } 
-                    QPushButton:hover { background: rgba(255, 255, 255, 40); }
-                """)
+                self.btn_fullscreen.setStyleSheet(_pill_btn_qss)
                 
                 fs_icon_path = get_resource_path("btn_fullscreen.png")
                 if os.path.exists(fs_icon_path):
@@ -1803,11 +1809,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 trim_tools_layout.setContentsMargins(5, 0, 5, 0)
                 trim_tools_layout.setSpacing(4)
                 
-                btn_style = """
-                    QPushButton { background: transparent; border-radius: 20px; border: none; } 
+                btn_style = with_tooltip_style("""
+                    QPushButton { background: transparent; border-radius: 20px; border: none; }
                     QPushButton:hover { background: rgba(255, 255, 255, 40); }
                     QPushButton:pressed { background: rgba(255, 255, 255, 60); }
-                """
+                """)
                 
                 self.btn_clipcut1 = QPushButton()
                 self.btn_clipcut1.setFixedSize(40, 40)
@@ -1864,11 +1870,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_add_marker.setToolTip("Add User Marker")
                 
                 # Style just like the audio: transparent, no shitty outlines.
-                btn_style_marker = """
+                from steempeg.ui.design_tokens import with_tooltip_style
+                btn_style_marker = with_tooltip_style("""
                     QPushButton { background: transparent; border: none; }
                     QPushButton:hover { background: rgba(255, 255, 255, 30); border-radius: 6px; }
                     QPushButton:pressed { background: rgba(255, 255, 255, 50); }
-                """
+                """)
                 self.btn_add_marker.setStyleSheet(btn_style_marker)
                 
                 icon_marker_btn = get_resource_path("pointuser.png")
@@ -2344,17 +2351,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 left_panel_min_width,
             )
 
-            # Prefer comfort sizes on big screens; Deck-class windows use compact.
+            # Prefer comfort sizes on big screens; Deck-class / low-PPI use compact.
             avail_w = self.ui.width() or STEAM_DECK_WIDTH
             default_sizes = (
                 DEFAULT_MAIN_SPLITTER_SIZES_COMPACT
-                if is_compact_layout(avail_w)
+                if is_compact_layout(avail_w, widget=self.ui)
                 else DEFAULT_MAIN_SPLITTER_SIZES
             )
             self.ui.main_splitter.setSizes(
                 self.get_layout_setting("main_splitter_sizes", default_sizes)
             )
-            self.ui.left_panel.setMinimumWidth(left_panel_min_width(avail_w))
+            self.ui.left_panel.setMinimumWidth(left_panel_min_width(avail_w, widget=self.ui))
             self._apply_responsive_layout_mins()
 
         self._apply_dark_shell()
@@ -2411,20 +2418,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         return tok.chrome_theme_colors(getattr(self, "_chrome_theme", "default"))["app_bg"]
 
     def _shell_stylesheet(self, bg_color: str) -> str:
-        """Window stylesheet: dialog background + shared tooltip chrome."""
+        """Window stylesheet: dialog background (+ tip chrome mirrored for safety)."""
+        from steempeg.ui import design_tokens as tok
+
         return f"""
             QDialog#Dialog, QWidget#Dialog {{ background-color: {bg_color}; }}
 
-            QToolTip {{
-                background-color: #2d2d2d;
-                color: #ffffff;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-            }}
+            {tok.STYLE_TOOLTIP}
         """
 
     def apply_chrome_theme(self, name: str, persist: bool = True) -> None:
@@ -2443,6 +2443,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
         self.ui.setPalette(palette)
         self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
+        try:
+            from steempeg.ui.design_tokens import apply_app_tooltip_style
+
+            apply_app_tooltip_style()
+        except Exception:
+            pass
 
         # Shell wrappers created by install_title_bar (appShell + appContent).
         for attr, obj_name in (
@@ -2530,7 +2536,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._apply_responsive_layout_mins(apply_density=True)
 
     def _apply_responsive_layout_mins(self, *, apply_density: bool = True):
-        """Lerp panel mins + chrome density with window width (no binary cliff)."""
+        """Lerp panel mins + chrome density with window width + physical PPI."""
         from steempeg.ui.layout_defaults import left_panel_min_width
         from steempeg.ui.ui_density import chrome_equal, density_for_width
 
@@ -2538,7 +2544,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         if w <= 0:
             return
 
-        left_min = left_panel_min_width(w)
+        host = self.ui
+        left_min = left_panel_min_width(w, widget=host)
 
         if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
             self.ui.left_panel.setMinimumWidth(left_min)
@@ -2568,7 +2575,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
             dense = COMFORT
         else:
-            dense = density_for_width(w)
+            dense = density_for_width(w, widget=host)
         prev = getattr(self, "_ui_density", None)
         # Ignore float scale — otherwise every resize pixel restyles the whole UI
         # and rebuilds queue cards (DWM ghosts + floating text scraps).
@@ -2642,7 +2649,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         if left_min is None:
             w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
-            left_min = left_panel_min_width(w) if w else 360
+            left_min = left_panel_min_width(w, widget=getattr(self, "ui", None)) if w else 360
 
         rhs = getattr(self, "right_h_splitter", None)
         # Only snap microscopic queue scraps shut. Do NOT push player back up to
@@ -3147,20 +3154,20 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
         avail_w = self.ui.width() or STEAM_DECK_WIDTH
         avail_h = self.ui.height() or STEAM_DECK_HEIGHT
-        compact = is_compact_layout(avail_w)
+        compact = is_compact_layout(avail_w, widget=self.ui)
         default_main = (
             DEFAULT_MAIN_SPLITTER_SIZES_COMPACT if compact else DEFAULT_MAIN_SPLITTER_SIZES
         )
         # Prefer continuous left min when remembering is off / defaults.
         if not compact:
-            default_main = [left_panel_min_width(avail_w), 100000]
+            default_main = [left_panel_min_width(avail_w, widget=self.ui), 100000]
         main_sizes = self.get_layout_setting("main_splitter_sizes", default_main)
         if hasattr(self.ui, "main_splitter"):
             self.ui.main_splitter.setSizes(main_sizes)
         self._apply_responsive_layout_mins()
         v_splitter = getattr(self, "main_v_splitter", None)
         if v_splitter is not None:
-            default_v = default_main_v_splitter_sizes(avail_w, avail_h)
+            default_v = default_main_v_splitter_sizes(avail_w, avail_h, widget=self.ui)
             v_sizes = self.get_layout_setting("main_v_splitter_sizes", default_v)
             # Cap remembered bottom pane on short screens.
             if avail_h > 0 and len(v_sizes) >= 2:
@@ -3380,6 +3387,12 @@ def main():
     app.setApplicationName("Steempeg")
     app.setApplicationDisplayName("Steempeg")
     try:
+        from steempeg.ui.design_tokens import apply_app_tooltip_style
+
+        apply_app_tooltip_style(app)
+    except Exception:
+        pass
+    try:
         from PySide6.QtGui import QGuiApplication
 
         QGuiApplication.setDesktopFileName("steempeg")
@@ -3505,6 +3518,12 @@ def main():
                 _avail.width(),
                 _avail.height(),
             )
+            try:
+                from steempeg.ui.screen_metrics import describe_screen
+
+                logging.info("Display metrics: %s", describe_screen(screen=_screen))
+            except Exception:
+                logging.exception("Display metrics: failed to read PPI")
         else:
             window.ui.setMinimumSize(TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
 
@@ -3578,9 +3597,15 @@ def main():
             )
 
         def _apply_custom_shell_native():
-            from steempeg.ui.window_chrome import enable_frameless
+            from steempeg.ui.window_chrome import (
+                enable_frameless,
+                ensure_startup_maximized,
+            )
             _force_native_window_icon(window.ui, icon_path)
             enable_frameless(window.ui)
+            # FRAMECHANGED after maximize can drop WS maximized back to the
+            # inset pre-size — put it back before the user notices.
+            ensure_startup_maximized(window.ui)
             # Frameless / DWM refresh can drop the taskbar icon cache after an
             # in-place update — re-push WM_SETICON once the chrome is settled.
             _force_native_window_icon(window.ui, icon_path)
@@ -3594,10 +3619,19 @@ def main():
         # Second pass: after the first paint / shell settle (post-update launches
         # sometimes need another poke before Windows shows the branded icon).
         QTimer.singleShot(400, lambda: _force_native_window_icon(window.ui, icon_path))
+        from steempeg.ui.window_chrome import ensure_startup_maximized as _ensure_max
+
+        QTimer.singleShot(450, lambda: _ensure_max(window.ui))
         if args.updated_from:
             QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
-            QTimer.singleShot(1000, lambda: window.show_update_success(args.updated_from, args.backup_folder))
-            
+
+            def _post_update_ui():
+                _ensure_max(window.ui)
+                window.show_update_success(args.updated_from, args.backup_folder)
+                _ensure_max(window.ui)
+
+            QTimer.singleShot(1000, _post_update_ui)
+
         sys.exit(app.exec())
 
     except Exception as e:
