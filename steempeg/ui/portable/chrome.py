@@ -7,6 +7,7 @@ from PySide6.QtCore import QRectF, Qt, QSize, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
+from steempeg.ui.design_tokens import with_tooltip_style
 from steempeg.ui.icon_assets import add_clip_icon
 from steempeg.ui.player.controls.adaptive_trim_tools import (
     ensure_adaptive_trim_hook,
@@ -27,7 +28,8 @@ _ADD_CLIP_COLOR = "#8e7cc3"
 _ADD_CLIP_TEXT = "#d4c8f5"
 _ADD_CLIP_ICON = 18
 
-_ADD_CLIP_STYLE = (
+# Local QSS without QToolTip → Windows paints a native black tip; wrap both.
+_ADD_CLIP_STYLE = with_tooltip_style(
     "QPushButton {"
     f"background-color: rgba(142, 124, 195, 0.22);"
     f"color: {_ADD_CLIP_TEXT};"
@@ -42,7 +44,7 @@ _ADD_CLIP_STYLE = (
     "QPushButton:pressed { background-color: rgba(142, 124, 195, 0.48); }"
 )
 
-_RENDER_STYLE = (
+_RENDER_STYLE = with_tooltip_style(
     # Same typeface as Trim: inherit app font + bold only (no forced 12px).
     "QPushButton {"
     "background-color: #2e6b32; color: #ffffff;"
