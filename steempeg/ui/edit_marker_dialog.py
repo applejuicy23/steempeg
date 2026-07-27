@@ -1,20 +1,33 @@
-"""Steempeg-styled editor for custom Steam timeline markers."""
+"""Steempeg-styled editor for custom timeline markers (title / desc / class / icon)."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QVBoxLayout
+import os
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTextEdit,
+)
+
+from steempeg.services import marker_prefs as mprefs
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.marker_icons import load_scaled_pixmap, tint_pixmap
 from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 _FIELD_STYLE = """
-    QLineEdit, QTextEdit {
+    QLineEdit, QTextEdit, QComboBox {
         background-color: #2d2d2d; color: #f0f0f0; border: 1px solid #555;
         border-radius: 6px; padding: 6px 8px; font-size: 12px;
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }
-    QLineEdit:focus, QTextEdit:focus { border-color: #6b5a8e; }
+    QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border-color: #6b5a8e; }
+    QComboBox::drop-down { border: none; width: 22px; }
 """
 
 _LABEL_STYLE = (
@@ -29,13 +42,74 @@ class EditSteamMarkerDialog(SteempegDialog):
         title_text: str,
         description: str,
         parent=None,
+        *,
+        marker_key: str = "usermarker",
         **theme_kwargs,
     ):
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent), **theme_kwargs}
-        super().__init__("Edit Steam Marker", parent, **theme_kwargs)
-        self.setMinimumWidth(360)
-        self.resize(400, 280)
+        super().__init__("Edit Marker", parent, **theme_kwargs)
+        self.setMinimumWidth(400)
+        self.resize(440, 360)
+        self._marker_key = marker_key or "usermarker"
+        self._custom_icon = ""
+
+        prefs = mprefs.load_marker_prefs()
+        ov = mprefs.marker_override(self._marker_key, prefs)
+        self._custom_icon = ov.get("custom_icon") or ""
+
+        # Icon preview + pick
+        icon_row = QHBoxLayout()
+        icon_row.setSpacing(10)
+        self._preview = QLabel()
+        self._preview.setFixedSize(44, 44)
+        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview.setStyleSheet(
+            "background: #1a1a1a; border-radius: 10px; border: 1px solid #444;"
+        )
+        icon_row.addWidget(self._preview)
+        icon_btns = QHBoxLayout()
+        btn_icon = QPushButton("Set icon…")
+        btn_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_icon.setStyleSheet(_BTN_SECONDARY)
+        btn_icon.clicked.connect(self._pick_icon)
+        btn_clear = QPushButton("Clear")
+        btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clear.setStyleSheet(_BTN_SECONDARY)
+        btn_clear.clicked.connect(self._clear_icon)
+        icon_btns.addWidget(btn_icon)
+        icon_btns.addWidget(btn_clear)
+        icon_btns.addStretch(1)
+        icon_col = QHBoxLayout()
+        # stack vertically beside preview via nested layout
+        from PySide6.QtWidgets import QVBoxLayout
+
+        side = QVBoxLayout()
+        side.addWidget(QLabel("Icon"))
+        side.itemAt(0).widget().setStyleSheet(_LABEL_STYLE)
+        side.addLayout(icon_btns)
+        side.addStretch(1)
+        icon_row.addLayout(side, 1)
+        self.content_layout.addLayout(icon_row)
+        self._refresh_preview(prefs)
+
+        # Class
+        cls_lbl = QLabel("Class")
+        cls_lbl.setStyleSheet(_LABEL_STYLE)
+        self.content_layout.addWidget(cls_lbl)
+        self._class_combo = QComboBox()
+        self._class_combo.setStyleSheet(_FIELD_STYLE)
+        self._class_combo.addItem("(no class)", "")
+        for cls in prefs.get("classes") or []:
+            self._class_combo.addItem(
+                f"{cls.get('name')} ({cls.get('color')})", cls.get("id")
+            )
+        idx = self._class_combo.findData(ov.get("class_id") or "")
+        self._class_combo.setCurrentIndex(max(0, idx))
+        self._class_combo.currentIndexChanged.connect(
+            lambda _i: self._refresh_preview()
+        )
+        self.content_layout.addWidget(self._class_combo)
 
         title_lbl = QLabel("Title")
         title_lbl.setStyleSheet(_LABEL_STYLE)
@@ -66,10 +140,60 @@ class EditSteamMarkerDialog(SteempegDialog):
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_PRIMARY)
-        btn_save.clicked.connect(self.accept)
+        btn_save.clicked.connect(self._on_save)
         actions.addWidget(btn_save)
 
         self.content_layout.addLayout(actions)
+
+    def _refresh_preview(self, prefs: dict | None = None) -> None:
+        prefs = prefs or mprefs.load_marker_prefs()
+        # Temporary combo class for live preview.
+        class_id = self._class_combo.currentData() if hasattr(self, "_class_combo") else ""
+        path = self._custom_icon
+        if not path and class_id:
+            cls = mprefs.get_class(class_id, prefs)
+            if cls and cls.get("icon") and os.path.isfile(str(cls["icon"])):
+                path = str(cls["icon"])
+        if not path:
+            path = mprefs.legacy_asset_path(self._marker_key) or mprefs.legacy_asset_path(
+                "usermarker"
+            )
+        pix = load_scaled_pixmap(path, 36) if path else None
+        tint = None
+        if class_id:
+            cls = mprefs.get_class(class_id, prefs)
+            if cls and not (cls.get("icon") and os.path.isfile(str(cls.get("icon") or ""))):
+                tint = cls.get("color")
+        if pix is not None and tint:
+            pix = tint_pixmap(pix, str(tint), height=36)
+        if pix is not None:
+            self._preview.setPixmap(pix)
+        else:
+            self._preview.setText("?")
+
+    def _pick_icon(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Marker icon",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.svg)",
+        )
+        if not path:
+            return
+        self._custom_icon = path
+        self._refresh_preview()
+
+    def _clear_icon(self) -> None:
+        self._custom_icon = ""
+        self._refresh_preview()
+
+    def _on_save(self) -> None:
+        mprefs.set_marker_override(
+            self._marker_key,
+            class_id=self._class_combo.currentData() or "",
+            custom_icon=self._custom_icon,
+        )
+        self.accept()
 
     @property
     def title_text(self) -> str:
@@ -78,3 +202,11 @@ class EditSteamMarkerDialog(SteempegDialog):
     @property
     def description_text(self) -> str:
         return self._desc_edit.toPlainText().strip()
+
+    @property
+    def class_id(self) -> str:
+        return str(self._class_combo.currentData() or "")
+
+    @property
+    def custom_icon(self) -> str:
+        return self._custom_icon

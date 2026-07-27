@@ -1862,30 +1862,56 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_clipcut2.clicked.connect(self.set_trim_end_to_playhead)
                 self.btn_clipcutback.clicked.connect(self.jump_to_trim_start)
 
-                # Inject into the footer control bar
-                # New Marker Button
-                self.btn_add_marker = QPushButton()
-                self.btn_add_marker.setFixedSize(40, 40)
-                self.btn_add_marker.setCursor(Qt.PointingHandCursor)
-                self.btn_add_marker.setToolTip("Add User Marker")
-                
-                # Style just like the audio: transparent, no shitty outlines.
+                # Marker pill: add mark + Marker Settings (like theater/fullscreen pill)
                 from steempeg.ui.design_tokens import with_tooltip_style
                 btn_style_marker = with_tooltip_style("""
                     QPushButton { background: transparent; border: none; }
                     QPushButton:hover { background: rgba(255, 255, 255, 30); border-radius: 6px; }
                     QPushButton:pressed { background: rgba(255, 255, 255, 50); }
                 """)
-                self.btn_add_marker.setStyleSheet(btn_style_marker)
-                
+                _pill_inner = with_tooltip_style("""
+                    QPushButton { background: transparent; border-radius: 20px; border: none; }
+                    QPushButton:hover { background: rgba(255, 255, 255, 40); }
+                """)
+
+                self.marker_pill = QFrame()
+                self.marker_pill.setStyleSheet(
+                    "QFrame { background-color: #4e4e4e; border-radius: 20px; border: none; }"
+                )
+                marker_pill_layout = QHBoxLayout(self.marker_pill)
+                marker_pill_layout.setContentsMargins(5, 0, 5, 0)
+                marker_pill_layout.setSpacing(4)
+
+                self.btn_add_marker = QPushButton()
+                self.btn_add_marker.setFixedSize(40, 40)
+                self.btn_add_marker.setCursor(Qt.PointingHandCursor)
+                self.btn_add_marker.setToolTip("Add User Marker")
+                self.btn_add_marker.setStyleSheet(_pill_inner)
                 icon_marker_btn = get_resource_path("pointuser.png")
                 if os.path.exists(icon_marker_btn):
                     self.btn_add_marker.setIcon(QIcon(icon_marker_btn))
                     self.btn_add_marker.setIconSize(QSize(22, 22))
                 else:
                     self.btn_add_marker.setText("📍")
-                
                 self.btn_add_marker.clicked.connect(self.add_user_marker)
+
+                self.btn_marker_settings = QPushButton()
+                self.btn_marker_settings.setFixedSize(40, 40)
+                self.btn_marker_settings.setCursor(Qt.PointingHandCursor)
+                self.btn_marker_settings.setToolTip("Marker settings")
+                self.btn_marker_settings.setStyleSheet(_pill_inner)
+                settings_icon = get_resource_path("settings.png")
+                if not os.path.exists(settings_icon):
+                    settings_icon = get_resource_path("settings2.png")
+                if os.path.exists(settings_icon):
+                    self.btn_marker_settings.setIcon(QIcon(settings_icon))
+                    self.btn_marker_settings.setIconSize(QSize(20, 20))
+                else:
+                    self.btn_marker_settings.setText("⚙")
+                self.btn_marker_settings.clicked.connect(self.show_marker_settings)
+
+                marker_pill_layout.addWidget(self.btn_add_marker)
+                marker_pill_layout.addWidget(self.btn_marker_settings)
 
                 # NEW CAMERA BUTTON
                 self.btn_screenshot = QPushButton()
@@ -1905,7 +1931,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
 
                 # ASSEMBLING THE PANEL 
                 rw.addStretch() 
-                rw.addWidget(self.btn_add_marker, alignment=Qt.AlignVCenter) 
+                rw.addWidget(self.marker_pill, alignment=Qt.AlignVCenter) 
                 rw.addWidget(self.btn_screenshot, alignment=Qt.AlignVCenter) 
                 rw.addWidget(self.trim_tools_pill, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.btn_trim, alignment=Qt.AlignVCenter)
@@ -1918,6 +1944,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                     left_wrap, self.ui.label_time, right_wrap, self.player_footer_frame
                 )
                 v_layout.addWidget(self._footer_controls_row)
+                from steempeg.ui.player.controls.adaptive_trim_tools import (
+                    ensure_adaptive_trim_hook,
+                    sync_trim_tools_placement,
+                )
+
+                ensure_adaptive_trim_hook(self)
+                sync_trim_tools_placement(self)
                 
                 # ROW 3: The Playback Buttons (Centered horizontally)
                 
@@ -2560,12 +2593,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         self._clamp_splitters_to_mins(left_min=left_min)
 
         if not apply_density:
-            if getattr(self, "_portable_shell", False):
-                from steempeg.ui.player.controls.adaptive_trim_tools import (
-                    sync_trim_tools_placement,
-                )
+            from steempeg.ui.player.controls.adaptive_trim_tools import (
+                sync_trim_tools_placement,
+            )
 
-                sync_trim_tools_placement(self)
+            sync_trim_tools_placement(self)
             return
 
         # Portable has no splitters / Deck density — keep comfort chrome. Only the
@@ -2580,9 +2612,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
         # Ignore float scale — otherwise every resize pixel restyles the whole UI
         # and rebuilds queue cards (DWM ghosts + floating text scraps).
         if chrome_equal(prev, dense):
+            from steempeg.ui.player.controls.adaptive_trim_tools import (
+                sync_trim_tools_placement,
+            )
+
+            sync_trim_tools_placement(self)
             return
         self._ui_density = dense
         self._apply_ui_density(dense)
+        from steempeg.ui.player.controls.adaptive_trim_tools import (
+            sync_trim_tools_placement,
+        )
+
+        sync_trim_tools_placement(self)
 
     def _on_main_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
         """Debounce kiss-snap when Clips pushes into the player column."""
@@ -3008,11 +3050,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 else:
                     self._sync_chrome_button_icon_size(b, icon_sz)
 
-        for attr in ("btn_add_marker", "btn_screenshot"):
+        for attr in ("btn_add_marker", "btn_marker_settings", "btn_screenshot"):
             b = getattr(self, attr, None) or getattr(self.ui, attr, None)
             if b is not None and hasattr(b, "setFixedSize"):
                 b.setFixedSize(chip, chip)
-                b.setStyleSheet(marker_qss)
+                if attr == "btn_marker_settings":
+                    b.setStyleSheet(chip_qss)
+                else:
+                    b.setStyleSheet(marker_qss)
                 self._sync_chrome_button_icon_size(b, icon_sz)
 
         for ctrl_attr in ("volume_control", "speed_control"):
@@ -3020,8 +3065,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             if ctrl is not None and hasattr(ctrl, "apply_density"):
                 ctrl.apply_density(dense)
 
-        # Pill frames around theater/fullscreen stay circular-ish
-        for pill_attr in ("pill_container", "trim_tools_pill"):
+        # Pill frames around theater/fullscreen / markers stay circular-ish
+        for pill_attr in ("pill_container", "trim_tools_pill", "marker_pill"):
             frame = getattr(self, pill_attr, None)
             if frame is not None:
                 frame.setStyleSheet(
@@ -3579,6 +3624,15 @@ def main():
                 check_on_start = True
             if check_on_start:
                 window.schedule_silent_update_check(2800)
+
+        # Small-screen tip after chrome settles (also warned on shell chooser).
+        from steempeg.ui.settings_dialog import maybe_show_small_screen_warning
+
+        QTimer.singleShot(
+            900,
+            lambda: maybe_show_small_screen_warning(window, ui_shell),
+        )
+
         geo = window.ui.geometry()
         logging.info(
             "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",

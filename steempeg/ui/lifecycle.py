@@ -472,6 +472,12 @@ class LifecycleMixin:
 
         show_settings_dialog(self)
 
+    def show_marker_settings(self):
+        """Marker classes / CS2 pack / per-ID icon overrides."""
+        from steempeg.ui.marker_settings_dialog import show_marker_settings_dialog
+
+        show_marker_settings_dialog(self)
+
     def show_about_dialog(self):
         """ Frameless About dialog styled like the FFmpeg render-error window. """
         if getattr(self, '_about_is_open', False):

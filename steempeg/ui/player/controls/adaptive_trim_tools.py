@@ -64,10 +64,11 @@ def _trim_mode_active(app) -> bool:
 
 
 def _should_drop_below(app) -> bool:
-    """Portable + tight width / crowded right rail → tools under Trim."""
-    if not getattr(app, "_portable_shell", False):
-        return False
+    """Tight width / crowded right rail → tools under Trim (Desktop + Portable).
 
+    Same rule as Portable: when the right chrome would collide with the centered
+    ``00:00 / 00:00`` timer, drop the Trim tools pill below the Trim button.
+    """
     ui = getattr(app, "ui", None)
     win_w = int(ui.width()) if ui is not None else 0
     if win_w <= _NARROW_SHELL_W:
@@ -86,6 +87,8 @@ def _should_drop_below(app) -> bool:
     packed = tools_w + 10
     for name in (
         "btn_add_marker",
+        "btn_marker_settings",
+        "marker_pill",
         "btn_screenshot",
         "btn_trim",
         "btn_portable_render",

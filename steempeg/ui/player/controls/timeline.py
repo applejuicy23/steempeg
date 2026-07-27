@@ -276,6 +276,24 @@ class TimelineCanvas(QWidget):
                     'desc': desc
                 })
 
+            try:
+                from steempeg.services import marker_prefs as mprefs
+
+                steam_ids = [
+                    str(m.get("icon") or "")
+                    for m in self.markers
+                    if m.get("icon")
+                ]
+                legacy_ids = [
+                    str(m.get("icon_key") or "")
+                    for m in self.markers
+                    if m.get("icon_key")
+                ]
+                mprefs.remember_marker_ids(steam_ids + legacy_ids)
+                self.invalidate_marker_prefs_cache()
+            except Exception:
+                pass
+
             # --- Gamemode segments: menu/lobby/loading = hatching on the strip ---
             # Offset-aware: entries before the clip start only set the mode the clip OPENS in,
             # instead of collapsing to 0 (which smeared 'loading' across the whole gameplay).
@@ -384,15 +402,66 @@ class TimelineCanvas(QWidget):
                 return pixmap
         return None
     def get_icon_pixmap(self, marker):
-        """ Иконка метки: сначала реальный markers.svg, затем бандл-ассеты как фолбэк. """
-        icon = marker.get('icon', '')
+        """Icon: prefs override → CS2 pack / Steam SVG → legacy PNG assets."""
+        from steempeg.services import marker_prefs as mprefs
+        from steempeg.ui.marker_icons import load_scaled_pixmap, tint_pixmap
+
+        prefs = getattr(self, "_marker_prefs_cache", None)
+        if prefs is None:
+            prefs = mprefs.load_marker_prefs()
+            self._marker_prefs_cache = prefs
+
+        steam_icon = str(marker.get("icon") or "")
+        icon_key = str(marker.get("icon_key") or "point")
+        # Preference key: Steam sprite id when present, else legacy parse key.
+        marker_key = steam_icon or icon_key
         app_id = self.current_app_id
-        if icon and app_id:
-            pix = self.marker_store.get_icon(app_id, icon, 36)
+
+        # 1) Explicit custom icon (per-marker or class).
+        custom = mprefs.resolve_custom_icon_path(marker_key, prefs=prefs)
+        if not custom and marker_key != icon_key:
+            custom = mprefs.resolve_custom_icon_path(icon_key, prefs=prefs)
+        if custom:
+            pix = load_scaled_pixmap(custom, 36)
             if pix is not None:
                 return pix
-        #2. Fallback: bundle assets / gluing numbers / steam_ (the old CS2 way)
-        return self._legacy_icon_pixmap(marker['icon_key'], marker['is_round'])
+
+        # 2) CS2 Steempeg pack — Emily's PNGs win over Steam SVG.
+        use_steempeg = mprefs.prefer_steempeg_pack(app_id, prefs)
+        if use_steempeg:
+            pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
+            if pix is not None:
+                tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
+                if not tint and marker_key != icon_key:
+                    tint = mprefs.resolve_tint_color(icon_key, prefs=prefs)
+                if tint and icon_key == "usermarker":
+                    return tint_pixmap(pix, tint, height=36)
+                return pix
+
+        # 3) Steam SVG sprite.
+        if steam_icon and app_id:
+            pix = self.marker_store.get_icon(app_id, steam_icon, 36)
+            if pix is not None:
+                tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
+                if tint and icon_key == "usermarker":
+                    return tint_pixmap(pix, tint, height=36)
+                return pix
+
+        # 4) Legacy / bundled PNGs.
+        pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
+        if pix is None:
+            return None
+        tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
+        if not tint and marker_key != icon_key:
+            tint = mprefs.resolve_tint_color(icon_key, prefs=prefs)
+        if tint and icon_key == "usermarker":
+            return tint_pixmap(pix, tint, height=36)
+        return pix
+
+    def invalidate_marker_prefs_cache(self) -> None:
+        self._marker_prefs_cache = None
+        self.cached_pixmaps.clear()
+        self.update()
     def _hide_hover_preview(self) -> None:
         self._hover_preview_bucket = -1
         if hasattr(self, "sniper_timer"):
@@ -966,14 +1035,17 @@ class TimelineCanvas(QWidget):
 
     def edit_user_marker(self, marker):
         """ Opens the editing window and saves to Steam JSON. """
+        marker_key = str(marker.get("icon") or marker.get("icon_key") or "usermarker")
         dialog = EditSteamMarkerDialog(
             marker.get('title', ''),
             marker.get('desc', ''),
             self,
+            marker_key=marker_key,
         )
         if dialog.exec():
             marker['title'] = dialog.title_text
             marker['desc'] = dialog.description_text
+            self.invalidate_marker_prefs_cache()
             if hasattr(self, 'text_tooltip'):
                 self.text_tooltip.hide()
             self.update()
