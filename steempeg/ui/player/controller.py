@@ -2016,6 +2016,8 @@ class PlayerMixin:
         canvas.clip_ranges = []
         canvas.current_app_id = None
         canvas.current_json_path = None
+        canvas.current_clip_path = None
+        canvas.current_offset_ms = 0
         canvas.rendered_media_path = None
         canvas._hover_preview_bucket = -1
         canvas._batch_thumbs_busy = False
@@ -2067,6 +2069,8 @@ class PlayerMixin:
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.setEnabled(True)
         self._is_switching = False
+        if hasattr(self, "clear_clip_open_loading"):
+            self.clear_clip_open_loading()
         if getattr(self, "_pending_trim_restore", None):
             QTimer.singleShot(50, self._deferred_apply_trim_restore)
         elif hasattr(self, "_loading_queue_job"):
@@ -2305,6 +2309,7 @@ class PlayerMixin:
             canvas = self.custom_timeline.canvas
             canvas.rendered_media_path = file_path
             if hasattr(self, "cache_dir"):
+                canvas._markers_cache_dir = self.cache_dir
                 sidecar_entries = load_markers_sidecar(self.cache_dir, file_path)
                 canvas.markers.extend(markers_to_canvas(sidecar_entries))
             canvas.update()
@@ -2361,6 +2366,127 @@ class PlayerMixin:
         if hasattr(self.ui, "btn_play"):
             self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
 
+    def _norm_clip_path_key(self, path: str | None) -> str:
+        if not path:
+            return ""
+        try:
+            return os.path.normcase(os.path.abspath(str(path)))
+        except Exception:
+            return str(path)
+
+    def clear_clip_open_loading(self) -> None:
+        """Hide open-spinner on library cards and queue rows."""
+        self._opening_clip_path = None
+        grid = getattr(self, "grid_clips", None)
+        if grid is not None:
+            try:
+                for i in range(grid.count()):
+                    item = grid.item(i)
+                    if item is None:
+                        continue
+                    card = grid.itemWidget(item)
+                    if card is not None and hasattr(card, "set_loading"):
+                        card.set_loading(False)
+            except RuntimeError:
+                pass
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            for card in getattr(panel, "_card_widgets", None) or ():
+                if hasattr(card, "set_loading"):
+                    try:
+                        card.set_loading(False)
+                    except RuntimeError:
+                        pass
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None:
+            for row in getattr(sidebar, "_rows", {}).values():
+                if hasattr(row, "set_loading"):
+                    try:
+                        row.set_loading(False)
+                    except RuntimeError:
+                        pass
+
+    def set_clip_open_loading(
+        self,
+        clip_path: str | None = None,
+        *,
+        job_id: str | None = None,
+        percent: int | None = None,
+    ) -> None:
+        """Show spinner on the clip/queue banner that is opening into the player."""
+        self.clear_clip_open_loading()
+        key = self._norm_clip_path_key(clip_path)
+        if key:
+            grid = getattr(self, "grid_clips", None)
+            if grid is not None:
+                try:
+                    for i in range(grid.count()):
+                        item = grid.item(i)
+                        if item is None:
+                            continue
+                        path = item.data(Qt.UserRole + 1)
+                        if self._norm_clip_path_key(path) != key:
+                            continue
+                        card = grid.itemWidget(item)
+                        if card is not None and hasattr(card, "set_loading"):
+                            card.set_loading(True, percent=percent)
+                        break
+                except RuntimeError:
+                    pass
+
+        jid = str(job_id or getattr(self, "_selected_queue_job_id", "") or "")
+        if jid:
+            panel = getattr(self, "render_queue_panel", None)
+            if panel is not None:
+                for card in getattr(panel, "_card_widgets", None) or ():
+                    if getattr(card, "_job_id", None) == jid and hasattr(card, "set_loading"):
+                        try:
+                            card.set_loading(True, percent=percent)
+                        except RuntimeError:
+                            pass
+            sidebar = getattr(self, "_portable_queue_sidebar", None)
+            if sidebar is not None:
+                row = getattr(sidebar, "_rows", {}).get(jid)
+                if row is not None and hasattr(row, "set_loading"):
+                    try:
+                        row.set_loading(True, percent=percent)
+                    except RuntimeError:
+                        pass
+
+    def update_clip_open_loading_progress(self, percent: int | None) -> None:
+        """Update % on whichever card is currently showing the open spinner."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is not None:
+            try:
+                for i in range(grid.count()):
+                    item = grid.item(i)
+                    if item is None:
+                        continue
+                    card = grid.itemWidget(item)
+                    if card is not None and getattr(card, "is_loading", lambda: False)():
+                        if hasattr(card, "set_loading_progress"):
+                            card.set_loading_progress(percent)
+            except RuntimeError:
+                pass
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            for card in getattr(panel, "_card_widgets", None) or ():
+                if getattr(card, "is_loading", lambda: False)():
+                    if hasattr(card, "set_loading_progress"):
+                        try:
+                            card.set_loading_progress(percent)
+                        except RuntimeError:
+                            pass
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None:
+            for row in getattr(sidebar, "_rows", {}).values():
+                if getattr(row, "is_loading", lambda: False)():
+                    if hasattr(row, "set_loading_progress"):
+                        try:
+                            row.set_loading_progress(percent)
+                        except RuntimeError:
+                            pass
+
     def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
 
@@ -2382,6 +2508,27 @@ class PlayerMixin:
         if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
             logging.warning("Ignored invalid clip preview path: %s", clip_path)
             return
+
+        # Spam-click while this same open is already in flight — don't restart MPV/remux.
+        want = self._norm_clip_path_key(clip_path)
+        opening = self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
+        if (
+            want
+            and want == opening
+            and not mpd_override
+            and not force
+            and (
+                getattr(self, "_is_switching", False)
+                or getattr(self, "_awaiting_first_frame", False)
+            )
+        ):
+            return
+
+        self._opening_clip_path = clip_path
+        self._preview_clip_path = clip_path
+        self.set_clip_open_loading(
+            clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
+        )
 
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)
@@ -2407,6 +2554,8 @@ class PlayerMixin:
                 logging.warning("Blocked dead clip preview: %s", clip_path)
                 self._preview_clip_path = clip_path
                 self._selected_queue_job_id = None
+                if hasattr(self, "clear_clip_open_loading"):
+                    self.clear_clip_open_loading()
                 self._clear_player_surface()
                 if hasattr(self, '_reset_player_placeholder_default'):
                     self._reset_player_placeholder_default()
@@ -2454,6 +2603,8 @@ class PlayerMixin:
         if not all_mpds:
             logging.warning("No MPD found for clip: %s", clip_path)
             self._is_switching = False
+            if hasattr(self, "clear_clip_open_loading"):
+                self.clear_clip_open_loading()
             return
 
         mpd_path = all_mpds[0]
@@ -2484,18 +2635,29 @@ class PlayerMixin:
             if not directory or not os.path.isdir(directory):
                 return None
             try:
-                for name in os.listdir(directory):
-                    if name.startswith("timeline_") and name.endswith(".json"):
-                        return os.path.join(directory, name)
+                names = os.listdir(directory)
             except OSError:
-                pass
-            for root_dir, dirs, files in os.walk(directory):
+                names = []
+            # Prefer real Steam timeline_*.json over our steempeg_timeline.json.
+            for name in names:
+                if name.startswith("timeline_") and name.endswith(".json"):
+                    return os.path.join(directory, name)
+            if "steempeg_timeline.json" in names:
+                return os.path.join(directory, "steempeg_timeline.json")
+            for root_dir, _dirs, files in os.walk(directory):
                 for file in files:
                     if file.startswith("timeline_") and file.endswith(".json"):
                         return os.path.join(root_dir, file)
-            for root_dir, dirs, files in os.walk(directory):
+            for root_dir, _dirs, files in os.walk(directory):
+                if "steempeg_timeline.json" in files:
+                    return os.path.join(root_dir, "steempeg_timeline.json")
+            for root_dir, _dirs, files in os.walk(directory):
                 for file in files:
-                    if file.endswith(".json") and "settings" not in file and "games" not in file:
+                    if (
+                        file.endswith(".json")
+                        and "settings" not in file
+                        and "game" not in file
+                    ):
                         return os.path.join(root_dir, file)
             return None
 
@@ -2510,26 +2672,45 @@ class PlayerMixin:
                 clip_folder_name = os.path.basename(clip_path)
                 json_path = find_json_in_dir(os.path.join(timelines_dir, clip_folder_name))
 
-        # 3. Passing to the Engine
+        # 3. No Steam timeline → create steempeg_timeline.json in the clip folder
+        #    (Healthy / Issues / Cured / Dead salvage — same for all).
+        from steempeg.core.clip_markers_cache import (
+            ensure_steempeg_timeline_json,
+            is_steam_timeline_json,
+            is_steempeg_timeline_json,
+        )
+
+        if not json_path or (
+            not is_steam_timeline_json(json_path)
+            and not is_steempeg_timeline_json(json_path)
+        ):
+            created = ensure_steempeg_timeline_json(
+                clip_path, cache_dir=getattr(self, "cache_dir", None)
+            )
+            if created:
+                json_path = created
+
+        # 4. Passing to the Engine
         if hasattr(self, 'custom_timeline'):
             self.custom_timeline.canvas.rendered_media_path = None
+            cache_dir = getattr(self, "cache_dir", None)
             if json_path:
                 logging.debug("Timeline JSON: %s", json_path)
-                
-                json_name = os.path.basename(json_path) 
+
+                json_name = os.path.basename(json_path)
                 video_folder_name = os.path.basename(os.path.dirname(mpd_path))
-                
+
                 json_match = re.search(r'(\d{8})_(\d{6})', json_name)
                 video_match = re.search(r'(\d{8})_(\d{6})', video_folder_name)
-                
+
                 if json_match and video_match:
                     try:
                         j_str = json_match.group(1) + json_match.group(2)
                         v_str = video_match.group(1) + video_match.group(2)
-                        
+
                         json_dt = datetime.strptime(j_str, "%Y%m%d%H%M%S")
                         video_dt = datetime.strptime(v_str, "%Y%m%d%H%M%S")
-                        
+
                         offset_ms = int((video_dt - json_dt).total_seconds() * 1000)
                     except Exception as e:
                         logging.debug("Timeline offset calc failed: %s", e)
@@ -2537,18 +2718,29 @@ class PlayerMixin:
 
                 logging.debug("Timeline offset: %d ms", offset_ms)
                 canvas = self.custom_timeline.canvas
-                canvas.load_timeline_json(json_path, offset_ms, clip_path=clip_path)
+                # Our file is SoT for usermarkers — skip cache merge to avoid dupes.
+                use_cache = is_steam_timeline_json(json_path)
+                canvas.load_timeline_json(
+                    json_path,
+                    offset_ms,
+                    clip_path=clip_path,
+                    cache_dir=cache_dir if use_cache else None,
+                    merge_marker_cache=use_cache,
+                )
                 app_id = canvas.current_app_id
                 if app_id:
                     canvas.marker_store.prefetch(
                         app_id,
                         on_ready=canvas.update,
                     )
-                
+
             else:
                 logging.debug("No timeline JSON for clip: %s", clip_path)
-                self.custom_timeline.canvas.markers.clear()
-                self.custom_timeline.canvas.update()
+                canvas = self.custom_timeline.canvas
+                canvas.load_steempeg_markers_only(
+                    clip_path=clip_path,
+                    cache_dir=cache_dir,
+                )
 
 
         # 3. PREPARE THE CANVAS
@@ -2636,6 +2828,8 @@ class PlayerMixin:
         except Exception as exc:
             logging.error("DASH remux start failed for %s: %s", abs_path, exc)
             self._is_switching = False
+            if hasattr(self, "clear_clip_open_loading"):
+                self.clear_clip_open_loading()
             try:
                 steempeg_warning(self.ui, "Clip prepare failed", str(exc)[:400])
             except Exception:
@@ -2650,6 +2844,8 @@ class PlayerMixin:
         job: RemuxJob = started
         self._progressive_remux = (switch_gen, job)
         early_started = {"done": False}
+        if hasattr(self, "update_clip_open_loading_progress"):
+            self.update_clip_open_loading_progress(0)
 
         def _on_ui(play_path: str = "", err_text: str = "", finished: bool = False) -> None:
             if switch_gen != getattr(self, "_media_switch_gen", 0):
@@ -2686,6 +2882,16 @@ class PlayerMixin:
                 except Exception:
                     pass
                 return
+            # Estimated remux progress for the clip banner (%).
+            try:
+                need = int(getattr(job, "need", 0) or 0)
+                written = int(job.bytes_written() or 0)
+                if need > 0:
+                    pct = min(99, max(0, int(written * 100 / need)))
+                    if hasattr(self, "update_clip_open_loading_progress"):
+                        self.update_clip_open_loading_progress(pct)
+            except Exception:
+                pass
             if not early_started["done"]:
                 early = job.early_play_path()
                 if early:
@@ -2947,6 +3153,9 @@ class PlayerMixin:
                 # Prevent UI lag by updating text only once per second
                 if self.ui.label_time.text() != new_time_text:
                     self.ui.label_time.setText(new_time_text)
+                    row = getattr(self, "_footer_controls_row", None)
+                    if row is not None and hasattr(row, "refresh_center"):
+                        row.refresh_center()
         except Exception as e:
             pass # Ignore random missing property errors during video switching
 
@@ -2977,10 +3186,12 @@ class PlayerMixin:
         internal_marker = {
             'id': new_id,
             'time_ms': current_time,
+            'raw_time_ms': current_time + getattr(canvas, 'current_offset_ms', 0),
             'icon_key': 'usermarker',
             'is_round': False,
             'title': '',
-            'desc': ''
+            'desc': '',
+            'steempeg_owned': True,
         }
         markers_list.append(internal_marker)
         markers_list.sort(key=lambda x: x.get('time_ms', 0))
@@ -2996,37 +3207,59 @@ class PlayerMixin:
             )
             return
 
-        # 2. Steam Format
-        json_path = getattr(canvas, 'current_json_path', None)
-        if not json_path or not os.path.exists(json_path):
+        # 2. Persist: Steam timeline → app cache; missing Steam JSON → steempeg_timeline.json
+        from steempeg.core.clip_markers_cache import (
+            ensure_steempeg_timeline_json,
+            is_steempeg_timeline_json,
+            sync_user_markers_to_steempeg_timeline,
+            upsert_user_marker,
+        )
+
+        clip_key = getattr(canvas, "current_clip_path", None) or getattr(
+            self, "_preview_clip_path", None
+        )
+        if clip_key and not getattr(canvas, "current_clip_path", None):
+            canvas.current_clip_path = clip_key
+
+        json_path = getattr(canvas, "current_json_path", None)
+        if clip_key and not is_steempeg_timeline_json(json_path):
+            # No / non-steempeg timeline bound → create our file and use it.
+            from steempeg.core.clip_markers_cache import is_steam_timeline_json
+
+            if not is_steam_timeline_json(json_path):
+                created = ensure_steempeg_timeline_json(
+                    clip_key, cache_dir=getattr(self, "cache_dir", None)
+                )
+                if created:
+                    json_path = created
+                    canvas.current_json_path = created
+
+        if is_steempeg_timeline_json(json_path):
+            ok = sync_user_markers_to_steempeg_timeline(
+                json_path,
+                markers_list,
+                offset_ms=int(getattr(canvas, "current_offset_ms", 0) or 0),
+            )
+            if not ok:
+                logging.warning("Failed to persist user marker to %s", json_path)
             return
-            
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-            if 'entries' not in data:
-                data['entries'] = []
-                
-            raw_time = current_time + getattr(canvas, 'current_offset_ms', 0)
-            
-            steam_marker = {
-                "id": new_id,
-                "time": str(raw_time),
-                "type": "usermarker",
-                "title": "",
-                "description": "",
-                "icon": "steam_marker",
-                "priority": 0
-            }
-            
-            data['entries'].append(steam_marker)
-            data['entries'].sort(key=lambda x: int(x.get('time', 0)))
-            
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"Marker save error: {e}")
+
+        if hasattr(self, "cache_dir") and self.cache_dir:
+            canvas._markers_cache_dir = self.cache_dir
+            ok = upsert_user_marker(
+                self.cache_dir,
+                internal_marker,
+                clip_path=clip_key,
+                json_path=json_path,
+            )
+            if not ok:
+                logging.warning("Failed to persist user marker to Steempeg cache")
+            elif not clip_key:
+                logging.warning(
+                    "User marker saved under unknown identity — no clip folder bound"
+                )
+        else:
+            logging.warning("No cache_dir — user marker not persisted")
     def take_screenshot(self, target_ms=None):
         """ Takes a clean screenshot directly from MPV and saves it to the global folder. """
         if not hasattr(self, 'player') or not self.player: return
