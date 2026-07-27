@@ -1500,7 +1500,11 @@ class RenderedLibraryMixin:
 
         self.rendered_filter_menu = RenderedFilterMenu(self.ui)
         self.rendered_filter_menu.gather_statistics(self)
-        dense = getattr(self, "_ui_density", None)
+        dense = (
+            self._filter_menu_density()
+            if hasattr(self, "_filter_menu_density")
+            else getattr(self, "_ui_density", None)
+        )
         if dense is not None and hasattr(self.rendered_filter_menu, "apply_density"):
             self.rendered_filter_menu.apply_density(dense)
         self._position_rendered_filter_menu()
@@ -1519,9 +1523,8 @@ class RenderedLibraryMixin:
         menu_y = button_bottom_left.y() + 5
         menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
 
-        if hasattr(self, "btn_refresh"):
-            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
-            menu.set_content_max_height(max(160, footer_top - menu_y - 8))
+        floor_y = self._filter_popup_floor_y(menu_y)
+        menu.set_content_max_height(max(160, floor_y - menu_y - 8))
 
     def refresh_rendered_library(self):
         self._rendered_output_meta_index = None

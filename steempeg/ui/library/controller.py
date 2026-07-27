@@ -1772,6 +1772,10 @@ class LibraryMixin:
             if cell:
                 self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
 
+    def _on_clips_table_item_clicked(self, item) -> None:
+        """Re-click on the already-selected table row is a no-op (clip already open)."""
+        return
+
     def _list_widget_item_index(self, list_widget, item) -> int:
         """Linear list index — QListWidget::row() is wrong in multi-column IconMode."""
         if item is None:
@@ -1856,6 +1860,23 @@ class LibraryMixin:
                     if row_item and not row_item.isHidden():
                         row_item.setSelected(True)
             else:
+                # Already the open clip — ignore the click (no reload).
+                clip_path = item.data(Qt.UserRole + 1)
+                if (
+                    update_preview
+                    and clip_path
+                    and hasattr(self, "_norm_clip_path_key")
+                    and self._norm_clip_path_key(clip_path)
+                    == self._norm_clip_path_key(
+                        getattr(self, "_preview_clip_path", None)
+                    )
+                ):
+                    item.setSelected(True)
+                    grid.blockSignals(False)
+                    self._grid_select_in_progress = False
+                    if hasattr(self, "_sync_grid_card_visuals"):
+                        self._sync_grid_card_visuals()
+                    return
                 grid.clearSelection()
                 item.setSelected(True)
 
@@ -2904,6 +2925,89 @@ class LibraryMixin:
         self.sync_grid_from_table_selection()
         QTimer.singleShot(0, self._sync_library_scrollbars)
 
+    def _filter_popup_floor_y(self, menu_y: int) -> int:
+        """Bottom Y the filter popup may grow down to (global coords).
+
+        Desktop keeps Refresh in the footer mega-pill → that Y is the floor.
+        Portable mounts Refresh into the *top* toolbar next to the filter pill,
+        so using Refresh there would leave ~0px for Games and force the cramped
+        mobile-looking popup. Fall back to the Clips Manager panel / window bottom.
+        """
+        candidates: list[int] = []
+
+        refresh = getattr(self, "btn_refresh", None)
+        if refresh is not None:
+            try:
+                ry = refresh.mapToGlobal(QPoint(0, 0)).y()
+                # Only treat Refresh as the floor when it sits clearly below the popup.
+                if ry > menu_y + 80:
+                    candidates.append(ry)
+            except RuntimeError:
+                pass
+
+        footer = getattr(self, "_footer_mega_pill", None)
+        if footer is not None:
+            try:
+                if footer.isVisible():
+                    fy = footer.mapToGlobal(QPoint(0, 0)).y()
+                    if fy > menu_y + 40:
+                        candidates.append(fy)
+            except RuntimeError:
+                pass
+
+        panel = getattr(getattr(self, "ui", None), "left_panel", None)
+        if panel is not None:
+            try:
+                br = panel.mapToGlobal(QPoint(0, panel.height()))
+                if br.y() > menu_y + 40:
+                    candidates.append(br.y())
+            except RuntimeError:
+                pass
+
+        if candidates:
+            return min(candidates)
+
+        # Last resort: window that hosts the filter pill (sheet or main shell).
+        host = self.btn_filter_pill.window() if hasattr(self, "btn_filter_pill") else None
+        if host is not None:
+            try:
+                return host.mapToGlobal(QPoint(0, host.height())).y()
+            except RuntimeError:
+                pass
+        return menu_y + 480
+
+    def _filter_menu_density(self):
+        """Density from Clips Manager footprint (sheet / left pane), not shell alone."""
+        from steempeg.ui.ui_density import COMFORT, density_for_width
+
+        dense = getattr(self, "_ui_density", None)
+        panel = getattr(getattr(self, "ui", None), "left_panel", None)
+        host = None
+        if hasattr(self, "btn_filter_pill") and self.btn_filter_pill is not None:
+            try:
+                host = self.btn_filter_pill.window()
+            except RuntimeError:
+                host = None
+        width = 0
+        for w in (host, panel):
+            if w is None:
+                continue
+            try:
+                width = max(width, int(w.width() or 0))
+            except RuntimeError:
+                pass
+        if width <= 0:
+            return dense if dense is not None else COMFORT
+        local = density_for_width(
+            width, widget=host or panel or getattr(self, "ui", None)
+        )
+        if dense is None:
+            return local
+        # Roomier of the two — large Choose-a-Clip sheet → desktop filter chrome.
+        if getattr(local, "scale", 0.0) >= getattr(dense, "scale", 0.0):
+            return local
+        return dense
+
     def _position_filter_menu(self):
         """Place + size the filter popup relative to the live widget geometry.
 
@@ -2920,9 +3024,8 @@ class LibraryMixin:
         menu_y = button_bottom_left.y() + 5
         menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
 
-        if hasattr(self, 'btn_refresh'):
-            footer_top = self.btn_refresh.mapToGlobal(QPoint(0, 0)).y()
-            menu.set_content_max_height(max(160, footer_top - menu_y - 8))
+        floor_y = self._filter_popup_floor_y(menu_y)
+        menu.set_content_max_height(max(160, floor_y - menu_y - 8))
 
     def show_filter_menu(self):
         """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
@@ -2935,7 +3038,7 @@ class LibraryMixin:
         # 2. Creating a brand-new menu from scratch
         self.filter_menu = FilterMenu(self.ui)
         self.filter_menu.gather_statistics(self)
-        dense = getattr(self, "_ui_density", None)
+        dense = self._filter_menu_density()
         if dense is not None and hasattr(self.filter_menu, "apply_density"):
             self.filter_menu.apply_density(dense)
 
