@@ -5,13 +5,21 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPushButton,
     QVBoxLayout,
 )
 
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
+from steempeg.ui.message_dialog import (
+    _BTN_PRIMARY,
+    _BTN_SECONDARY,
+    dialog_theme,
+    steempeg_information,
+    steempeg_question,
+    steempeg_warning,
+)
 from steempeg.ui.shell_chooser import (
     UI_SHELL_DESKTOP,
     UI_SHELL_PORTABLE,
@@ -195,6 +203,26 @@ class SettingsDialog(SteempegDialog):
         support_row.addStretch(1)
         root.addLayout(support_row)
 
+        import_row = QHBoxLayout()
+        import_row.setSpacing(8)
+        import_row.addWidget(
+            self._hint(
+                "Pull rendered videos, Screenshots, and cache from an "
+                "old_version backup (skips files that already exist)."
+            ),
+            1,
+        )
+        btn_import = QPushButton("Import from backup…")
+        btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_import.setStyleSheet(_BTN_SECONDARY)
+        btn_import.clicked.connect(self._import_from_backup)
+        import_row.addWidget(btn_import, 0)
+        root.addLayout(import_row)
+        self._import_status = QLabel("")
+        self._import_status.setWordWrap(True)
+        self._import_status.setStyleSheet(_HINT)
+        root.addWidget(self._import_status)
+
         # --- Performance ---
         root.addWidget(self._section("Performance"))
         prio_row = QHBoxLayout()
@@ -273,6 +301,74 @@ class SettingsDialog(SteempegDialog):
     def _clear_cache(self) -> None:
         if hasattr(self._app, "confirm_clear_cache"):
             self._app.confirm_clear_cache()
+
+    def _import_from_backup(self) -> None:
+        """Merge user data from an ``old_version_v*`` folder into the live install."""
+        from steempeg.infra.paths import get_install_root
+        from steempeg.services.backup_import import import_user_data_from_backup
+        from steempeg.services.release_catalog import find_local_backups
+
+        root = get_install_root()
+        backups = find_local_backups(root)
+        if not backups:
+            steempeg_warning(
+                self,
+                "No backups found",
+                "No old_version_v… folders next to Steempeg.\n"
+                "Keep a backup when updating to create one.",
+            )
+            self._import_status.setText("No local backups found.")
+            return
+
+        labels = [f"v{b.version_str}  ({b.folder_name})" for b in backups]
+        chosen, ok = QInputDialog.getItem(
+            self,
+            "Import from backup",
+            "Choose a local backup to copy from:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not chosen:
+            return
+        backup = backups[labels.index(chosen)]
+
+        if not steempeg_question(
+            self,
+            "Import from backup?",
+            f"Copy missing files from {backup.folder_name} into the current install?\n\n"
+            "Folders: rendered_videos, Screenshots, cache.\n"
+            "Existing files are left alone.",
+        ):
+            return
+
+        result = import_user_data_from_backup(backup.path, root)
+        if result.errors and result.copied_files == 0 and not result.folders_touched:
+            steempeg_warning(
+                self,
+                "Import failed",
+                "\n".join(result.errors[:6]),
+            )
+            self._import_status.setText("Import failed.")
+            return
+
+        folders = ", ".join(result.folders_touched) or "nothing to copy"
+        msg = (
+            f"Copied {result.copied_files} file(s), "
+            f"skipped {result.skipped_existing} existing. "
+            f"Touched: {folders}."
+        )
+        if result.errors:
+            msg += f" ({len(result.errors)} error(s))"
+        self._import_status.setText(msg)
+        steempeg_information(self, "Import finished", msg)
+
+        # Refresh rendered library if it is already built.
+        if hasattr(self._app, "scan_rendered_outputs"):
+            try:
+                self._app.scan_rendered_outputs()
+            except Exception:
+                pass
 
     def _restart_app(self) -> None:
         from steempeg.ui.message_dialog import steempeg_question

@@ -11,7 +11,17 @@ import sys
 import tempfile
 import zipfile
 
-_PRESERVE_DIRS = frozenset({"logs", "cache", "_update_extracted"})
+# Top-level install folders that must survive updates / restores.
+# User data: exports, screenshots, marker prefs / clip_markers (under cache/).
+_PRESERVE_DIRS = frozenset(
+    {
+        "logs",
+        "cache",
+        "_update_extracted",
+        "rendered_videos",
+        "Screenshots",
+    }
+)
 _CREATE_NO_WINDOW = 0x08000000
 _LAUNCHER_NAMES = (
     "Steempeg",
@@ -127,6 +137,12 @@ def ensure_portable_executables(root: str) -> None:
                 _mark(os.path.join(dirpath, filename))
 
 
+def _bat_preserve_dir_guards(var: str = "%%D") -> str:
+    """Chain of ``if /I not …`` so cmd.exe leaves user-data folders alone."""
+    parts = [f'if /I not "{var}"=="{name}"' for name in sorted(_PRESERVE_DIRS)]
+    return " ".join(parts)
+
+
 def _should_preserve(name: str, *, backup_folder: str | None, tmp_asset: str | None) -> bool:
     if name in _PRESERVE_DIRS:
         return True
@@ -218,6 +234,7 @@ def write_deferred_install_bat(
     tmp_guard = f'if /I not "%%I"=="{tmp_asset_name}.tmp" ' if tmp_asset_name else ""
     bat_path = os.path.join(tempfile.gettempdir(), f"steempeg_install_{handler_pid}.bat")
 
+    dir_guards = _bat_preserve_dir_guards("%%D")
     if keep_backup:
         remove_block = f"""if exist "{_bat_path(os.path.join(exe_dir, backup_folder))}" rd /S /Q "{_bat_path(os.path.join(exe_dir, backup_folder))}"
 mkdir "{_bat_path(os.path.join(exe_dir, backup_folder))}"
@@ -225,7 +242,7 @@ for %%I in (*.*) do (
     {tmp_guard}move "%%I" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
 )
 for /D %%D in (*) do (
-    if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" if /I not "%%D"=="{backup_folder}" (
+    {dir_guards} if /I not "%%D"=="{backup_folder}" (
         echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
         if errorlevel 1 (
             if exist "%%D" move "%%D" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
@@ -237,7 +254,7 @@ for /D %%D in (*) do (
     {tmp_guard}del /F /Q "%%I" > NUL 2>&1
 )
 for /D %%D in (*) do (
-    if /I not "%%D"=="logs" if /I not "%%D"=="cache" if /I not "%%D"=="_update_extracted" (
+    {dir_guards} (
         echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
         if errorlevel 1 (
             if exist "%%D" rd /S /Q "%%D" > NUL 2>&1
@@ -290,7 +307,7 @@ def write_deferred_install_sh(
     backup_folder = f"old_version_v{from_version}" if keep_backup else ""
     backup_arg = backup_folder if keep_backup else "None"
     sh_path = os.path.join(tempfile.gettempdir(), f"steempeg_install_{handler_pid}.sh")
-    preserve = {"logs", "cache", "_update_extracted"}
+    preserve = set(_PRESERVE_DIRS)
     if keep_backup and backup_folder:
         preserve.add(backup_folder)
     preserve_list = " ".join(f"'{p}'" for p in sorted(preserve))

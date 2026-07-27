@@ -217,18 +217,22 @@ class UpdaterMixin:
             f"<h3>Steempeg is updated!</h3>"
             f"<p>Successfully updated from <b>v{old_version}</b> to the latest version.</p>"
         )
-        if backup_folder and backup_folder != "None":
+        has_backup = bool(backup_folder and backup_folder != "None")
+        if has_backup:
             text += (
                 f"<p>Your old version was saved in the folder:<br><code>{backup_folder}</code></p>"
-                "<p><small>Restore via <b>Update Center</b>, restore local backup (v37+).</small></p>"
+                "<p><small>Import rendered videos / Screenshots / cache from that backup, "
+                "or restore the whole build via <b>Update Center</b>.</small></p>"
             )
 
-        buttons = (DialogButton("Good!", "primary", accept=True),)
-        if backup_folder and backup_folder != "None":
+        if has_backup:
             buttons = (
+                DialogButton("Import from previous build", "secondary", accept=True),
                 DialogButton("📂 Open Backup Folder", "secondary", accept=True),
                 DialogButton("Good!", "primary", accept=True),
             )
+        else:
+            buttons = (DialogButton("Good!", "primary", accept=True),)
 
         clicked = steempeg_alert_actions(
             self.ui,
@@ -239,10 +243,50 @@ class UpdaterMixin:
             min_width=460,
         )
 
-        if backup_folder and backup_folder != "None" and clicked == 0:
-            backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
-            if os.path.exists(backup_path):
-                open_path_with_default_app(backup_path)
+        if not has_backup:
+            return
+
+        backup_path = os.path.abspath(os.path.join(get_save_directory(), backup_folder))
+        if clicked == 0:
+            self._import_user_data_from_backup_path(backup_path, backup_folder)
+        elif clicked == 1 and os.path.exists(backup_path):
+            open_path_with_default_app(backup_path)
+
+    def _import_user_data_from_backup_path(
+        self, backup_path: str, backup_label: str = ""
+    ) -> None:
+        """Merge rendered_videos / Screenshots / cache from a backup into the live install."""
+        from steempeg.services.backup_import import import_user_data_from_backup
+        from steempeg.ui.message_dialog import steempeg_information
+
+        if not backup_path or not os.path.isdir(backup_path):
+            steempeg_warning(
+                self.ui,
+                "Import failed",
+                f"Backup folder not found:\n{backup_label or backup_path}",
+            )
+            return
+
+        result = import_user_data_from_backup(backup_path, get_install_root())
+        folders = ", ".join(result.folders_touched) or "none"
+        msg = (
+            f"Copied {result.copied_files} file(s), "
+            f"skipped {result.skipped_existing} existing.\n"
+            f"Folders: {folders}."
+        )
+        if result.copied_files == 0 and result.skipped_existing == 0:
+            msg = (
+                "Nothing to import — that backup has no rendered_videos, "
+                "Screenshots, or cache (they may already be in the live install)."
+            )
+        if result.errors:
+            msg += f"\n\n{len(result.errors)} error(s)."
+        steempeg_information(self.ui, "Import from previous build", msg)
+        if result.copied_files and hasattr(self, "scan_rendered_outputs"):
+            try:
+                self.scan_rendered_outputs()
+            except Exception:
+                pass
 
     def restore_local_backup(self, backup_folder_name: str):
         """Swap the live install with a backed-up tree (Windows .bat / Linux .sh)."""
@@ -262,6 +306,9 @@ class UpdaterMixin:
         env.pop("_MEIPASS", None)
 
         if sys.platform == "win32":
+            from steempeg.services.update_install import _bat_preserve_dir_guards
+
+            dir_guards = _bat_preserve_dir_guards("%%D")
             bat_path = os.path.join(exe_dir, "restore.bat")
             bat_content = f"""@echo off
 title Steempeg Restore
@@ -280,7 +327,7 @@ mkdir "{staging_folder}"
 
 for %%I in (*.*) do if /I not "%%I"=="restore.bat" move "%%I" "{staging_folder}\" > NUL
 for /D %%D in (*) do (
-    if /I not "%%D"=="{backup_folder_name}" if /I not "%%D"=="{staging_folder}" if /I not "%%D"=="logs" if /I not "%%D"=="cache" (
+    if /I not "%%D"=="{backup_folder_name}" if /I not "%%D"=="{staging_folder}" {dir_guards} (
         echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
         if errorlevel 1 move "%%D" "{staging_folder}\" > NUL
     )
@@ -297,6 +344,11 @@ del "%~f0"
                 f.write(bat_content)
             subprocess.Popen([bat_path], shell=True, cwd=exe_dir, creationflags=0x08000000, env=env)
         else:
+            from steempeg.services.update_install import _PRESERVE_DIRS
+
+            keep_tests = " || ".join(
+                f'[[ "$item" == "{name}" ]]' for name in sorted(_PRESERVE_DIRS)
+            )
             sh_path = os.path.join(exe_dir, "restore.sh")
             sh_content = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -310,7 +362,7 @@ for item in * .[!.]* ..?*; do
   [[ "$item" == "restore.sh" ]] && continue
   [[ "$item" == "{backup_folder_name}" ]] && continue
   [[ "$item" == "{staging_folder}" ]] && continue
-  [[ "$item" == "logs" || "$item" == "cache" ]] && continue
+  {keep_tests} && continue
   [[ "$item" == old_version_v* || "$item" == pre_restore_v* ]] && continue
   mv -- "$item" "{staging_folder}/"
 done
