@@ -229,7 +229,44 @@ class TimelineCanvas(QWidget):
         }
 
 
-    def load_timeline_json(self, json_path, offset_ms=0, clip_path=None):
+    def load_steempeg_markers_only(self, *, clip_path=None, cache_dir=None, json_path=None):
+        """Bind a clip folder and load Steempeg-owned markers when Steam JSON is missing.
+
+        Cured / salvage previews often have no ``timeline_*.json`` — without this,
+        markers were cleared and new ones saved under an unstable identity.
+        """
+        from steempeg.core.clip_markers_cache import merge_cached_user_markers
+
+        self.current_json_path = json_path
+        self.current_offset_ms = 0
+        self.current_clip_path = clip_path
+        self.current_json_start_utc = None
+        self.current_app_id = app_id_from_clip_paths(json_path, clip_path)
+        if cache_dir is not None:
+            self._markers_cache_dir = cache_dir
+        self.markers.clear()
+        self.mode_segments = []
+        self.clip_ranges = []
+        try:
+            self.markers = merge_cached_user_markers(
+                [],
+                getattr(self, "_markers_cache_dir", None),
+                clip_path=clip_path,
+                json_path=json_path,
+            )
+        except Exception as exc:
+            print(f"Clip markers cache load: {exc}")
+        self.update()
+
+    def load_timeline_json(
+        self,
+        json_path,
+        offset_ms=0,
+        clip_path=None,
+        cache_dir=None,
+        *,
+        merge_marker_cache: bool = True,
+    ):
         """ Reads JSON, adjusts chunk times, and populates the self.markers list. """
         
         self.current_json_path = json_path  
@@ -237,17 +274,38 @@ class TimelineCanvas(QWidget):
         self.current_clip_path = clip_path
         self.current_json_start_utc = timeline_json_start_utc(json_path)
         self.current_app_id = app_id_from_clip_paths(json_path, clip_path)
+        if cache_dir is not None:
+            self._markers_cache_dir = cache_dir
+        elif not hasattr(self, "_markers_cache_dir"):
+            self._markers_cache_dir = None
         
         self.markers.clear()
         self.mode_segments = []
         self.clip_ranges = []
-        if not os.path.exists(json_path): return
+        if not json_path or not os.path.exists(json_path):
+            # Still restore Steempeg markers for this clip folder.
+            try:
+                from steempeg.core.clip_markers_cache import merge_cached_user_markers
+
+                self.markers = merge_cached_user_markers(
+                    [],
+                    getattr(self, "_markers_cache_dir", None),
+                    clip_path=clip_path,
+                    json_path=json_path,
+                )
+                self.update()
+            except Exception as exc:
+                print(f"Clip markers cache load: {exc}")
+            return
         
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 
             entries = data.get('entries', [])
+            from steempeg.core.clip_markers_cache import is_steempeg_timeline_json
+
+            steempeg_file = is_steempeg_timeline_json(json_path)
             for entry in entries:
                # Subtract the time of the cut pieces!
                 raw_time = int(entry.get('time', 0))
@@ -264,8 +322,8 @@ class TimelineCanvas(QWidget):
                 
                 icon_key, is_round = self.parse_event_to_icon(type_, title, desc)
                 if icon_key == 'screenshot' and not title: title = "A screenshot"
-                
-                self.markers.append({
+
+                marker = {
                     'id': m_id,  # SAVING THE ID IN MEMORY!
                     'time_ms': time_ms,
                     'raw_time_ms': raw_time,
@@ -274,7 +332,24 @@ class TimelineCanvas(QWidget):
                     'is_round': is_round,
                     'title': title,
                     'desc': desc
-                })
+                }
+                if icon_key == 'usermarker' and steempeg_file:
+                    marker['steempeg_owned'] = True
+                self.markers.append(marker)
+
+            # Steam timeline: merge Steempeg cache. Our steempeg_timeline.json is SoT.
+            if merge_marker_cache:
+                try:
+                    from steempeg.core.clip_markers_cache import merge_cached_user_markers
+
+                    self.markers = merge_cached_user_markers(
+                        self.markers,
+                        getattr(self, "_markers_cache_dir", None),
+                        clip_path=clip_path,
+                        json_path=json_path,
+                    )
+                except Exception as exc:
+                    print(f"Clip markers cache merge: {exc}")
 
             try:
                 from steempeg.services import marker_prefs as mprefs
@@ -413,14 +488,11 @@ class TimelineCanvas(QWidget):
 
         steam_icon = str(marker.get("icon") or "")
         icon_key = str(marker.get("icon_key") or "point")
-        # Preference key: Steam sprite id when present, else legacy parse key.
-        marker_key = steam_icon or icon_key
         app_id = self.current_app_id
+        tintable = mprefs.is_tintable_marker(marker)
 
-        # 1) Explicit custom icon (per-marker or class).
-        custom = mprefs.resolve_custom_icon_path(marker_key, prefs=prefs)
-        if not custom and marker_key != icon_key:
-            custom = mprefs.resolve_custom_icon_path(icon_key, prefs=prefs)
+        # 1) Explicit custom icon (per-instance / per-type / class).
+        custom = mprefs.resolve_custom_icon_path_for_marker(marker, prefs=prefs)
         if custom:
             pix = load_scaled_pixmap(custom, 36)
             if pix is not None:
@@ -431,10 +503,8 @@ class TimelineCanvas(QWidget):
         if use_steempeg:
             pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
             if pix is not None:
-                tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
-                if not tint and marker_key != icon_key:
-                    tint = mprefs.resolve_tint_color(icon_key, prefs=prefs)
-                if tint and icon_key == "usermarker":
+                tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
+                if tint and tintable:
                     return tint_pixmap(pix, tint, height=36)
                 return pix
 
@@ -442,8 +512,8 @@ class TimelineCanvas(QWidget):
         if steam_icon and app_id:
             pix = self.marker_store.get_icon(app_id, steam_icon, 36)
             if pix is not None:
-                tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
-                if tint and icon_key == "usermarker":
+                tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
+                if tint and tintable:
                     return tint_pixmap(pix, tint, height=36)
                 return pix
 
@@ -451,10 +521,8 @@ class TimelineCanvas(QWidget):
         pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
         if pix is None:
             return None
-        tint = mprefs.resolve_tint_color(marker_key, prefs=prefs)
-        if not tint and marker_key != icon_key:
-            tint = mprefs.resolve_tint_color(icon_key, prefs=prefs)
-        if tint and icon_key == "usermarker":
+        tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
+        if tint and tintable:
             return tint_pixmap(pix, tint, height=36)
         return pix
 
@@ -1034,8 +1102,14 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def edit_user_marker(self, marker):
-        """ Opens the editing window and saves to Steam JSON. """
-        marker_key = str(marker.get("icon") or marker.get("icon_key") or "usermarker")
+        """Opens the editing window; Steempeg markers persist in app cache only."""
+        from steempeg.services import marker_prefs as mprefs
+        from steempeg.core.clip_markers_cache import update_user_marker_fields
+
+        marker_key = mprefs.user_instance_prefs_key(
+            marker.get("id"),
+            time_ms=marker.get("time_ms"),
+        )
         dialog = EditSteamMarkerDialog(
             marker.get('title', ''),
             marker.get('desc', ''),
@@ -1050,42 +1124,95 @@ class TimelineCanvas(QWidget):
                 self.text_tooltip.hide()
             self.update()
 
-            json_path = getattr(self, 'current_json_path', None)
-            if not json_path or not os.path.exists(json_path):
+            rendered_path = getattr(self, "rendered_media_path", None)
+            if rendered_path and os.path.isfile(rendered_path):
+                cache_dir = getattr(self, "_markers_cache_dir", None)
+                if cache_dir:
+                    from steempeg.core.rendered_media import (
+                        canvas_markers_to_sidecar,
+                        save_markers_sidecar,
+                    )
+                    save_markers_sidecar(
+                        cache_dir,
+                        rendered_path,
+                        canvas_markers_to_sidecar(
+                            [
+                                m
+                                for m in getattr(self, "markers", [])
+                                if m.get("icon_key") == "usermarker"
+                            ]
+                        ),
+                    )
                 return
-            try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                if 'entries' in data:
-                    for e in data['entries']:
-                        if str(e.get('id')) == str(marker.get('id')):
-                            e['title'] = marker['title']
-                            e['description'] = marker['desc']
-                            break
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=4)
-            except Exception as e:
-                print(f"Edit error: {e}")
+
+            update_user_marker_fields(
+                getattr(self, "_markers_cache_dir", None),
+                marker,
+                clip_path=getattr(self, "current_clip_path", None),
+                json_path=getattr(self, "current_json_path", None),
+            )
+            from steempeg.core.clip_markers_cache import (
+                is_steempeg_timeline_json,
+                sync_user_markers_to_steempeg_timeline,
+            )
+
+            json_path = getattr(self, "current_json_path", None)
+            if is_steempeg_timeline_json(json_path):
+                sync_user_markers_to_steempeg_timeline(
+                    json_path,
+                    getattr(self, "markers", []),
+                    offset_ms=int(getattr(self, "current_offset_ms", 0) or 0),
+                )
 
     def delete_user_marker(self, marker):
-        """ Burns a tag strictly by its ID. """
-        
+        """Remove a user marker from the timeline and Steempeg cache (not Steam JSON)."""
+        from steempeg.core.clip_markers_cache import delete_user_marker as cache_delete
+
         if marker in getattr(self, 'markers', []):
             self.markers.remove(marker)
             self.hovered_marker = None
             if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
             self.update()
-            
-        json_path = getattr(self, 'current_json_path', None)
-        if not json_path or not os.path.exists(json_path): return
-        
-        try:
-            with open(json_path, 'r', encoding='utf-8') as f: data = json.load(f)
-            if 'entries' in data:
-                data['entries'] = [e for e in data['entries'] if str(e.get('id')) != str(marker.get('id'))]
-                with open(json_path, 'w', encoding='utf-8') as f: json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"Delete error: {e}")
+
+        rendered_path = getattr(self, "rendered_media_path", None)
+        if rendered_path and os.path.isfile(rendered_path):
+            cache_dir = getattr(self, "_markers_cache_dir", None)
+            if cache_dir:
+                from steempeg.core.rendered_media import (
+                    canvas_markers_to_sidecar,
+                    save_markers_sidecar,
+                )
+                save_markers_sidecar(
+                    cache_dir,
+                    rendered_path,
+                    canvas_markers_to_sidecar(
+                        [
+                            m
+                            for m in getattr(self, "markers", [])
+                            if m.get("icon_key") == "usermarker"
+                        ]
+                    ),
+                )
+            return
+
+        cache_delete(
+            getattr(self, "_markers_cache_dir", None),
+            marker,
+            clip_path=getattr(self, "current_clip_path", None),
+            json_path=getattr(self, "current_json_path", None),
+        )
+        from steempeg.core.clip_markers_cache import (
+            is_steempeg_timeline_json,
+            sync_user_markers_to_steempeg_timeline,
+        )
+
+        json_path = getattr(self, "current_json_path", None)
+        if is_steempeg_timeline_json(json_path):
+            sync_user_markers_to_steempeg_timeline(
+                json_path,
+                getattr(self, "markers", []),
+                offset_ms=int(getattr(self, "current_offset_ms", 0) or 0),
+            )
 
     def mouseMoveEvent(self, event):
         if self.duration_ms <= 0: return
