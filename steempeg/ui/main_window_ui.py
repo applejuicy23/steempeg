@@ -118,7 +118,7 @@ class Ui_Dialog(object):
 
         self.label_time = QLabel(self.right_panel)
         self.label_time.setObjectName(u"label_time")
-        self.label_time.setMinimumSize(QSize(90, 0))
+        self.label_time.setMinimumSize(QSize(170, 0))
         font1 = QFont()
         font1.setBold(True)
         self.label_time.setFont(font1)

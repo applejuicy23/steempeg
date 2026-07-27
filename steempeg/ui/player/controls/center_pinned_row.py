@@ -63,7 +63,16 @@ class CenterPinnedRow(QWidget):
             return
         c.adjustSize()
         hint = c.sizeHint()
-        w = max(hint.width(), c.minimumSizeHint().width(), c.minimumWidth(), 90)
+        # Long clips use HH:MM:SS / HH:MM:SS — keep room even if sizeHint lags.
+        text_w = 0
+        try:
+            text = c.text() if hasattr(c, "text") else ""
+            if text:
+                text_w = c.fontMetrics().horizontalAdvance(text) + 12
+        except Exception:
+            text_w = 0
+        # "00:00:00 / 00:00:00" ≈ 155–170px at 13px bold; floor covers 3h+ clips.
+        w = max(hint.width(), c.minimumSizeHint().width(), c.minimumWidth(), text_w, 170)
         h = max(hint.height(), c.minimumSizeHint().height(), 16)
         # True geometric center horizontally — never follows side content.
         x = max(0, (self.width() - w) // 2)
@@ -73,6 +82,10 @@ class CenterPinnedRow(QWidget):
         y = max(0, (band - h) // 2)
         c.setGeometry(x, y, w, h)
         c.raise_()
+
+    def refresh_center(self) -> None:
+        """Call after the center label text changes (e.g. long duration format)."""
+        self._reposition_center()
 
     def sizeHint(self) -> QSize:
         h = 0
