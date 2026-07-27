@@ -523,11 +523,27 @@ class LifecycleMixin:
 
         # --- Left: the program logo (smoothly scaled, never pixelated) ---
         logo_label = QLabel()
-        logo_pix = _crisp_icon(get_resource_path("logo.png"), 120, dpr=1.0)
-        if not logo_pix.isNull():
-            logo_label.setPixmap(logo_pix)
+        logo_normal = _crisp_icon(get_resource_path("logo.png"), 120, dpr=1.0)
+        logo_egg = _crisp_icon(get_resource_path("phibechipeegg.png"), 120, dpr=1.0)
+        if not logo_normal.isNull():
+            logo_label.setPixmap(logo_normal)
         logo_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
         logo_label.setFixedWidth(128)
+        logo_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Quiet toggle: click logo ↔ Phibe Chupe (in-place, no external viewer).
+        logo_egg_on = {"v": False}
+
+        def _logo_pressed(event) -> None:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return
+            if logo_egg.isNull() and logo_normal.isNull():
+                return
+            logo_egg_on["v"] = not logo_egg_on["v"]
+            pix = logo_egg if logo_egg_on["v"] and not logo_egg.isNull() else logo_normal
+            if not pix.isNull():
+                logo_label.setPixmap(pix)
+
+        logo_label.mousePressEvent = _logo_pressed  # type: ignore[method-assign]
         main_layout.addWidget(logo_label)
 
         # --- Right: the content column ---
