@@ -19,6 +19,7 @@ from steempeg.ui import design_tokens as tok
 from steempeg.ui.marker_icons import load_scaled_pixmap, tint_pixmap
 from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 _FIELD_STYLE = """
     QLineEdit, QTextEdit, QComboBox {
@@ -101,8 +102,10 @@ class EditSteamMarkerDialog(SteempegDialog):
         self._class_combo.setStyleSheet(_FIELD_STYLE)
         self._class_combo.addItem("(no class)", "")
         for cls in prefs.get("classes") or []:
+            color = str(cls.get("color") or "").strip()
+            suffix = f" ({color})" if color else " (no color)"
             self._class_combo.addItem(
-                f"{cls.get('name')} ({cls.get('color')})", cls.get("id")
+                f"{cls.get('name')}{suffix}", cls.get("id")
             )
         idx = self._class_combo.findData(ov.get("class_id") or "")
         self._class_combo.setCurrentIndex(max(0, idx))
@@ -110,6 +113,19 @@ class EditSteamMarkerDialog(SteempegDialog):
             lambda _i: self._refresh_preview()
         )
         self.content_layout.addWidget(self._class_combo)
+
+        self._no_tint = SteempegCheckBox("Don't apply class color (keep original look)")
+        self._no_tint.setToolTip(
+            "Stay in the class for grouping, but skip the class tint. "
+            "Custom icons already keep their own colors."
+        )
+        self._no_tint.setChecked(bool(ov.get("no_tint")))
+        self._no_tint.toggled.connect(lambda _c: self._refresh_preview())
+        self.content_layout.addWidget(self._no_tint)
+        self._sync_no_tint_enabled()
+        self._class_combo.currentIndexChanged.connect(
+            lambda _i: self._sync_no_tint_enabled()
+        )
 
         title_lbl = QLabel("Title")
         title_lbl.setStyleSheet(_LABEL_STYLE)
@@ -145,25 +161,30 @@ class EditSteamMarkerDialog(SteempegDialog):
 
         self.content_layout.addLayout(actions)
 
+    def _sync_no_tint_enabled(self) -> None:
+        if not hasattr(self, "_no_tint"):
+            return
+        self._no_tint.setEnabled(bool(self._class_combo.currentData()))
+
     def _refresh_preview(self, prefs: dict | None = None) -> None:
         prefs = prefs or mprefs.load_marker_prefs()
         # Temporary combo class for live preview.
         class_id = self._class_combo.currentData() if hasattr(self, "_class_combo") else ""
         path = self._custom_icon
+        has_custom = bool(path and os.path.isfile(path))
         if not path and class_id:
             cls = mprefs.get_class(class_id, prefs)
             if cls and cls.get("icon") and os.path.isfile(str(cls["icon"])):
                 path = str(cls["icon"])
         if not path:
-            path = mprefs.legacy_asset_path(self._marker_key) or mprefs.legacy_asset_path(
-                "usermarker"
-            )
+            path = mprefs.legacy_asset_path("usermarker")
         pix = load_scaled_pixmap(path, 36) if path else None
         tint = None
-        if class_id:
+        no_tint = bool(getattr(self, "_no_tint", None) and self._no_tint.isChecked())
+        if class_id and not has_custom and not no_tint:
             cls = mprefs.get_class(class_id, prefs)
             if cls and not (cls.get("icon") and os.path.isfile(str(cls.get("icon") or ""))):
-                tint = cls.get("color")
+                tint = str(cls.get("color") or "").strip() or None
         if pix is not None and tint:
             pix = tint_pixmap(pix, str(tint), height=36)
         if pix is not None:
@@ -192,6 +213,7 @@ class EditSteamMarkerDialog(SteempegDialog):
             self._marker_key,
             class_id=self._class_combo.currentData() or "",
             custom_icon=self._custom_icon,
+            no_tint=bool(self._no_tint.isChecked()) if hasattr(self, "_no_tint") else False,
         )
         self.accept()
 

@@ -113,7 +113,29 @@ def load_marker_prefs() -> dict:
         out["known_marker_ids"] = sorted(
             {str(x) for x in known if str(x).strip()}
         )
+    # Old builds wrote icon/class under shared usermarker/steam_marker — that
+    # painted every custom pin the same. Drop those type keys; keep user_<id>.
+    if _scrub_shared_user_type_overrides(out):
+        save_marker_prefs(out)
     return out
+
+
+# Type-level keys that must never hold per-pin custom icons (legacy mistake).
+_SHARED_USER_TYPE_KEYS = frozenset({"usermarker", "steam_marker"})
+_SHARED_SHOT_TYPE_KEYS = frozenset({"screenshot", "steam_screenshot"})
+_SHARED_INSTANCE_TYPE_KEYS = _SHARED_USER_TYPE_KEYS | _SHARED_SHOT_TYPE_KEYS
+
+
+def _scrub_shared_user_type_overrides(prefs: dict) -> bool:
+    markers = dict(prefs.get("markers") or {})
+    changed = False
+    for key in _SHARED_INSTANCE_TYPE_KEYS:
+        if key in markers:
+            markers.pop(key, None)
+            changed = True
+    if changed:
+        prefs["markers"] = markers
+    return changed
 
 
 def save_marker_prefs(data: dict) -> None:
@@ -210,8 +232,9 @@ def update_class(class_id: str, **fields) -> dict | None:
             continue
         if "name" in fields and fields["name"] is not None:
             cls["name"] = str(fields["name"]).strip() or cls.get("name") or "Class"
-        if "color" in fields and fields["color"]:
-            cls["color"] = str(fields["color"])
+        if "color" in fields:
+            # Empty string = group-only class (no tint attribute).
+            cls["color"] = str(fields["color"] or "").strip()
         if "icon" in fields:
             cls["icon"] = str(fields["icon"] or "")
         save_marker_prefs(data)
@@ -230,6 +253,12 @@ def get_class(class_id: str | None, prefs: dict | None = None) -> dict | None:
     return None
 
 
+def class_has_color(cls: dict | None) -> bool:
+    if not cls:
+        return False
+    return bool(str(cls.get("color") or "").strip())
+
+
 def marker_override(marker_key: str, prefs: dict | None = None) -> dict:
     data = prefs if prefs is not None else load_marker_prefs()
     raw = (data.get("markers") or {}).get(str(marker_key)) or {}
@@ -237,6 +266,8 @@ def marker_override(marker_key: str, prefs: dict | None = None) -> dict:
         "class_id": str(raw.get("class_id") or ""),
         "custom_icon": str(raw.get("custom_icon") or ""),
         "label": str(raw.get("label") or ""),
+        # Exception: stay in a colored class but keep the glyph / art untinted.
+        "no_tint": bool(raw.get("no_tint")),
     }
 
 
@@ -246,10 +277,15 @@ def set_marker_override(
     class_id: str | None = None,
     custom_icon: str | None = None,
     label: str | None = None,
+    no_tint: bool | None = None,
     clear_missing: bool = False,
 ) -> dict:
-    data = load_marker_prefs()
     key = str(marker_key)
+    # Never store appearance on shared type keys — would apply to every custom pin.
+    if key in _SHARED_INSTANCE_TYPE_KEYS:
+        _log.warning("refusing marker override on shared key %r", key)
+        return {}
+    data = load_marker_prefs()
     ov = dict((data.get("markers") or {}).get(key) or {})
     if class_id is not None:
         ov["class_id"] = str(class_id)
@@ -263,11 +299,18 @@ def set_marker_override(
         ov["label"] = str(label)
     elif clear_missing:
         ov.pop("label", None)
+    if no_tint is not None:
+        if no_tint:
+            ov["no_tint"] = True
+        else:
+            ov.pop("no_tint", None)
+    elif clear_missing:
+        ov.pop("no_tint", None)
     # Drop empty override entries.
     cleaned = {
         k: v
         for k, v in ov.items()
-        if v not in ("", None)
+        if v not in ("", None, False)
     }
     markers = dict(data.get("markers") or {})
     if cleaned:
@@ -453,25 +496,163 @@ def catalog_marker_keys(
     return sorted(rows.values(), key=_sort_key)
 
 
+def is_user_marker(marker: dict | None) -> bool:
+    """True for Steempeg / Steam custom pins (not kill/death/etc.)."""
+    if not marker:
+        return False
+    icon_key = str(marker.get("icon_key") or "").strip()
+    steam_icon = str(marker.get("icon") or "").strip()
+    return icon_key == "usermarker" or steam_icon in ("steam_marker", "usermarker")
+
+
+def is_screenshot_marker(marker: dict | None) -> bool:
+    if not marker:
+        return False
+    icon_key = str(marker.get("icon_key") or "").strip()
+    steam_icon = str(marker.get("icon") or "").strip()
+    return icon_key == "screenshot" or steam_icon in (
+        "steam_screenshot",
+        "screenshot",
+    )
+
+
+def is_tintable_marker(marker: dict | None) -> bool:
+    """White glyphs that take a class color tint (custom pins + screenshots)."""
+    return is_user_marker(marker) or is_screenshot_marker(marker)
+
+
+def user_instance_prefs_key(marker_id: str | None, *, time_ms: int | None = None) -> str:
+    """Per-instance prefs key so each custom pin can have its own class/icon."""
+    mid = str(marker_id or "").strip()
+    if mid:
+        return f"user_{mid}"
+    if time_ms is not None:
+        return f"user_t{int(time_ms)}"
+    return "usermarker"
+
+
+def screenshot_instance_prefs_key(
+    marker_id: str | None, *, time_ms: int | None = None
+) -> str:
+    mid = str(marker_id or "").strip()
+    if mid:
+        return f"shot_{mid}"
+    if time_ms is not None:
+        return f"shot_t{int(time_ms)}"
+    return "screenshot"
+
+
+def marker_resolve_keys(marker: dict) -> list[str]:
+    """Preference lookup order for a timeline marker.
+
+    Custom pins and screenshots use only their instance key — never fall back to
+    shared type overrides (that leaked one icon onto every pin).
+    """
+    if is_user_marker(marker):
+        return [
+            user_instance_prefs_key(
+                marker.get("id"),
+                time_ms=marker.get("time_ms"),
+            )
+        ]
+    if is_screenshot_marker(marker):
+        return [
+            screenshot_instance_prefs_key(
+                marker.get("id"),
+                time_ms=marker.get("time_ms"),
+            )
+        ]
+    keys: list[str] = []
+    steam_icon = str(marker.get("icon") or "").strip()
+    icon_key = str(marker.get("icon_key") or "").strip()
+    for k in (steam_icon, icon_key):
+        if k and k not in keys:
+            keys.append(k)
+    return keys
+
+
 def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
-    """Unique configurable keys from the open clip — what users actually care about."""
-    rows: dict[str, dict] = {}
-    for m in clip_markers or ():
-        steam_icon = str(m.get("icon") or "").strip()
-        icon_key = str(m.get("icon_key") or "").strip()
+    """Configurable rows from the open clip.
+
+    Game markers (kill, death, …) stay one row per type. Custom pins and
+    screenshots are listed individually (Screenshot 1, 2, …).
+    """
+    type_rows: dict[str, dict] = {}
+    user_rows: list[dict] = []
+    shot_rows: list[dict] = []
+    unnamed_n = 0
+    shot_n = 0
+
+    ordered = sorted(
+        list(clip_markers or ()),
+        key=lambda m: (int(m.get("time_ms") or 0), str(m.get("id") or "")),
+    )
+    for m in ordered:
         if m.get("is_round"):
             continue
+        steam_icon = str(m.get("icon") or "").strip()
+        icon_key = str(m.get("icon_key") or "").strip()
+
+        if is_user_marker(m):
+            key = user_instance_prefs_key(m.get("id"), time_ms=m.get("time_ms"))
+            title = str(m.get("title") or "").strip()
+            if title:
+                label = title
+            else:
+                unnamed_n += 1
+                label = f"Custom Marker {unnamed_n}"
+            user_rows.append(
+                {
+                    "key": key,
+                    "kind": "user",
+                    "title": title,
+                    "label": label,
+                    "marker_id": str(m.get("id") or ""),
+                    "time_ms": int(m.get("time_ms") or 0),
+                    "raw_time_ms": m.get("raw_time_ms"),
+                }
+            )
+            continue
+
+        if is_screenshot_marker(m):
+            shot_n += 1
+            key = screenshot_instance_prefs_key(
+                m.get("id"), time_ms=m.get("time_ms")
+            )
+            title = str(m.get("title") or "").strip()
+            if title and title.lower() not in ("a screenshot", "screenshot"):
+                label = title
+            else:
+                label = f"Screenshot {shot_n}"
+            shot_rows.append(
+                {
+                    "key": key,
+                    "kind": "screenshot",
+                    "title": title,
+                    "label": label,
+                    "marker_id": str(m.get("id") or ""),
+                    "time_ms": int(m.get("time_ms") or 0),
+                    "raw_time_ms": m.get("raw_time_ms"),
+                }
+            )
+            continue
+
         key = steam_icon or icon_key
         if not key or is_round_number_key(key):
             continue
         title = str(m.get("title") or "")
-        rows[key] = {
+        type_rows[key] = {
             "key": key,
-            "kind": "user" if icon_key == "usermarker" else "steam" if steam_icon else "legacy",
+            "kind": "steam" if steam_icon else "legacy",
             "title": title,
             "label": friendly_marker_label(key, title=title),
         }
-    return sorted(rows.values(), key=lambda r: r["label"].lower())
+
+    return (
+        user_rows
+        + shot_rows
+        + sorted(type_rows.values(), key=lambda r: r["label"].lower())
+    )
 
 
 def legacy_asset_path(icon_key: str) -> str | None:
@@ -502,8 +683,20 @@ def resolve_tint_color(
     *,
     prefs: dict | None = None,
 ) -> str | None:
-    """Class color for tinting white glyphs; None = leave as-is."""
+    """Class color for tinting white glyphs; None = leave as-is.
+
+    Rules:
+    - Marker ``no_tint`` → never tint (in class for grouping only).
+    - Marker custom icon → never tint (full-color art stays as-is).
+    - Class custom icon → class supplies the picture instead of a tint.
+    - Class with empty color → group-only class.
+    """
     ov = marker_override(marker_key, prefs)
+    if ov.get("no_tint"):
+        return None
+    custom = ov.get("custom_icon") or ""
+    if custom and os.path.isfile(custom):
+        return None
     cls = get_class(ov.get("class_id"), prefs)
     if not cls:
         return None
@@ -528,4 +721,28 @@ def resolve_custom_icon_path(
         icon = str(cls.get("icon") or "")
         if icon and os.path.isfile(icon):
             return icon
+    return None
+
+
+def resolve_custom_icon_path_for_marker(
+    marker: dict,
+    *,
+    prefs: dict | None = None,
+) -> str | None:
+    for key in marker_resolve_keys(marker):
+        path = resolve_custom_icon_path(key, prefs=prefs)
+        if path:
+            return path
+    return None
+
+
+def resolve_tint_color_for_marker(
+    marker: dict,
+    *,
+    prefs: dict | None = None,
+) -> str | None:
+    for key in marker_resolve_keys(marker):
+        tint = resolve_tint_color(key, prefs=prefs)
+        if tint:
+            return tint
     return None
