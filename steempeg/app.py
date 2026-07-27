@@ -402,6 +402,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             
             self.ui.table_clips.itemSelectionChanged.connect(self.update_quality_options)
             self.ui.table_clips.itemSelectionChanged.connect(self.sync_grid_from_table_selection)
+            # Re-clicking the already-selected row does not fire selectionChanged —
+            # still reopen so the card spinner / player switch has something to do.
+            self.ui.table_clips.itemClicked.connect(self._on_clips_table_item_clicked)
             if hasattr(self, "update_clip_health_button"):
                 self.ui.table_clips.itemSelectionChanged.connect(self.update_clip_health_button)
             if hasattr(self.ui, 'table_clips'):
@@ -1722,7 +1725,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.ui.label_time.setStyleSheet(
                     "color: #cccccc; font-size: 13px; font-weight: bold; background: transparent;"
                 )
-                self.ui.label_time.setMinimumWidth(90)
+                self.ui.label_time.setMinimumWidth(170)
 
                 # 3. RIGHT BLOCK (Theater + trim buttons)
                 right_wrap = QWidget()
@@ -3054,7 +3057,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             b = getattr(self, attr, None) or getattr(self.ui, attr, None)
             if b is not None and hasattr(b, "setFixedSize"):
                 b.setFixedSize(chip, chip)
-                if attr == "btn_marker_settings":
+                if attr in ("btn_add_marker", "btn_marker_settings"):
                     b.setStyleSheet(chip_qss)
                 else:
                     b.setStyleSheet(marker_qss)
