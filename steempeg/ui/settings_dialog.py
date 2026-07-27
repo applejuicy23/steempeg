@@ -35,7 +35,10 @@ HINT_DISMISS_KEYS: tuple[str, ...] = (
     "render_queue_duplicate_notice_dismissed",
     "render_queue_empty_hint_dismissed",
     "portable_queue_empty_hint_dismissed",
+    "small_screen_warning_dismissed",
 )
+
+KEY_SMALL_SCREEN_WARNING_DISMISSED = "small_screen_warning_dismissed"
 
 PRIORITY_NORMAL = "normal"
 PRIORITY_ABOVE = "above_normal"
@@ -135,6 +138,18 @@ class SettingsDialog(SteempegDialog):
             root.addWidget(
                 self._hint("Applies the next time Steempeg starts.")
             )
+
+        restart_row = QHBoxLayout()
+        restart_row.setSpacing(8)
+        btn_restart = QPushButton("Restart app")
+        btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_restart.setStyleSheet(_BTN_SECONDARY)
+        btn_restart.clicked.connect(self._restart_app)
+        restart_row.addWidget(btn_restart, 0)
+        restart_row.addWidget(
+            self._hint("Quit and relaunch — use after changing shell."), 1
+        )
+        root.addLayout(restart_row)
 
         # --- Notifications ---
         root.addWidget(self._section("Notifications"))
@@ -259,6 +274,28 @@ class SettingsDialog(SteempegDialog):
         if hasattr(self._app, "confirm_clear_cache"):
             self._app.confirm_clear_cache()
 
+    def _restart_app(self) -> None:
+        from steempeg.ui.message_dialog import steempeg_question
+
+        if not steempeg_question(
+            self,
+            "Restart Steempeg?",
+            "Steempeg will quit and open again.",
+            detail="Unsaved dialog choices in this window are discarded — Save first if needed.",
+        ):
+            return
+        # Persist shell prefs before relaunch so Restart after a shell change works
+        # even if the user forgot Save.
+        shell = self._combo_shell.currentData()
+        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
+            save_ui_shell(shell)
+        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
+            save_ask_ui_shell(self._chk_ask_shell.isChecked())
+        self.accept()
+        from steempeg.ui.app_restart import restart_application
+
+        restart_application(self._app)
+
     def _save(self) -> None:
         self._save_setting(
             KEY_CHECK_UPDATES_ON_STARTUP, self._chk_updates.isChecked()
@@ -294,3 +331,53 @@ def show_settings_dialog(app) -> None:
         tb = getattr(getattr(app, "ui", None), "title_bar", None)
         if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
             tb.clear_shell_tool_hover()
+
+
+def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:
+    """Startup tip when resolution / inches are below comfort (dismissable).
+
+    Skipped on Steam Deck Portable (that shell is built for 1280×800). Still
+    shown for Desktop on Deck, and for every cramped PC display.
+    """
+    try:
+        from steempeg.ui.screen_metrics import (
+            is_screen_undersized,
+            screen_size_summary,
+        )
+        from steempeg.ui.shell_chooser import UI_SHELL_DESKTOP, is_steamdeck_build
+    except Exception:
+        return
+
+    shell = ui_shell or getattr(app, "_ui_shell", None) or load_ui_shell()
+    if is_steamdeck_build() and shell != UI_SHELL_DESKTOP:
+        return
+
+    parent = getattr(app, "ui", None)
+    if not is_screen_undersized(widget=parent):
+        return
+
+    settings = {}
+    if hasattr(app, "load_user_settings"):
+        try:
+            settings = app.load_user_settings() or {}
+        except Exception:
+            settings = {}
+    if settings.get(KEY_SMALL_SCREEN_WARNING_DISMISSED):
+        return
+
+    from steempeg.ui.message_dialog import steempeg_information_dont_ask
+
+    summary = screen_size_summary(widget=parent)
+    checked = steempeg_information_dont_ask(
+        parent,
+        "Small display",
+        "Your screen is a bit small for Steempeg's comfort layout. "
+        "You may see cramped panels or visual artifacts — especially in Desktop mode.",
+        detail=(
+            f"Detected: {summary}. Portable (theatre) usually fits small screens "
+            "better. Switch shells anytime in Settings."
+        ),
+        checkbox_label="Don't show again",
+    )
+    if checked and hasattr(app, "save_user_settings"):
+        app.save_user_settings(KEY_SMALL_SCREEN_WARNING_DISMISSED, True)

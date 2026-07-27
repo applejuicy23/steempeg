@@ -212,6 +212,28 @@ class ShellChooserDialog(SteempegDialog):
             f"font-family: {tok.FONT_APP};"
         )
         self.content_layout.addWidget(sub)
+
+        try:
+            from steempeg.ui.screen_metrics import (
+                is_screen_undersized,
+                screen_size_summary,
+            )
+
+            if is_screen_undersized():
+                cramped = QLabel(
+                    "Your display looks a bit small "
+                    f"({screen_size_summary()}). Desktop may feel cramped or "
+                    "show layout artifacts — Portable is usually a better fit."
+                )
+                cramped.setWordWrap(True)
+                cramped.setStyleSheet(
+                    f"color: #e8c87a; font-size: 12px; background: transparent; "
+                    f"font-family: {tok.FONT_APP};"
+                )
+                self.content_layout.addWidget(cramped)
+        except Exception:
+            pass
+
         self.content_layout.addSpacing(8)
 
         row = QHBoxLayout()

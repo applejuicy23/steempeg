@@ -151,7 +151,69 @@ def describe_screen(
     diag = screen_diagonal_inches(widget, screen)
     scale = chrome_ppi_scale(widget, screen)
     diag_s = f"{diag:.1f}\"" if diag is not None else "?"
+    cramped = is_screen_undersized(widget, screen)
     return (
         f"screen={name} geo={geo} diag={diag_s} ppi={ppi:.1f} "
-        f"chrome_ppi_scale={scale:.3f} (ref={REF_PPI:g})"
+        f"chrome_ppi_scale={scale:.3f} cramped={cramped} (ref={REF_PPI:g})"
     )
+
+
+# Comfort floor matches Steam Deck / layout_defaults TARGET_MIN_*.
+_MIN_COMFORT_W = 1280
+_MIN_COMFORT_H = 800
+# Below this diagonal, even "enough" DIPs feel cramped for Desktop chrome.
+_SMALL_DIAG_IN = 15.5
+_TINY_DIAG_IN = 13.0
+
+
+def is_screen_undersized(
+    widget: QWidget | None = None,
+    screen: QScreen | None = None,
+) -> bool:
+    """True when resolution and/or physical size are below Steempeg comfort.
+
+    Used for the startup «screen a bit small» tip (Desktop especially; also
+    shown on the shell chooser). Steam Deck Portable is designed for 1280×800 —
+    we still flag it so the tip can steer users, but callers may soft-skip Deck.
+    """
+    sc = _qscreen_for(widget, screen)
+    if sc is None:
+        return False
+
+    try:
+        avail = sc.availableGeometry()
+        w = int(avail.width())
+        h = int(avail.height())
+    except Exception:
+        return False
+
+    if w < _MIN_COMFORT_W or h < _MIN_COMFORT_H:
+        return True
+
+    diag = screen_diagonal_inches(widget, screen)
+    if diag is not None:
+        if diag < _TINY_DIAG_IN:
+            return True
+        # Small laptop: enough DIPs on paper, but inches + mid width → artifacts.
+        if diag < _SMALL_DIAG_IN and (w < 1520 or h < 900):
+            return True
+    return False
+
+
+def screen_size_summary(
+    widget: QWidget | None = None,
+    screen: QScreen | None = None,
+) -> str:
+    """Short human line for warning dialogs (e.g. ``1366×768 · 15.6\"``)."""
+    sc = _qscreen_for(widget, screen)
+    parts: list[str] = []
+    if sc is not None:
+        try:
+            g = sc.availableGeometry()
+            parts.append(f"{g.width()}×{g.height()}")
+        except Exception:
+            pass
+    diag = screen_diagonal_inches(widget, screen)
+    if diag is not None:
+        parts.append(f'{diag:.1f}"')
+    return " · ".join(parts) if parts else "unknown display"
