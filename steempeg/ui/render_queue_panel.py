@@ -56,6 +56,7 @@ from steempeg.ui.ui_density import (
     view_toggle_button_styles,
     view_toggle_track_style,
 )
+from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 _LIST_TITLE_ICON = 28
 
@@ -163,6 +164,11 @@ class QueueJobCard(QFrame):
         )
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
+        self._thumb_wrap = thumb_wrap
+        self._loading = False
+        self._load_overlay = ThumbLoadingOverlay(thumb_wrap, radius=12.0, pen_w=3)
+        self._load_overlay.setGeometry(0, 0, thumb_w, thumb_h)
+        self._load_overlay.hide()
 
         text_col = QVBoxLayout()
         text_col.setSpacing(3)
@@ -342,6 +348,28 @@ class QueueJobCard(QFrame):
             return
         self._selected = selected
         self._apply_card_style()
+
+    def set_loading(self, loading: bool, *, percent: int | None = None) -> None:
+        self._loading = bool(loading)
+        overlay = getattr(self, "_load_overlay", None)
+        wrap = getattr(self, "_thumb_wrap", None)
+        if overlay is None or wrap is None:
+            return
+        if self._loading:
+            overlay.setGeometry(0, 0, wrap.width() or self._thumb_w, wrap.height() or self._thumb_h)
+            overlay.start(percent=percent)
+            overlay.raise_()
+        else:
+            overlay.stop()
+
+    def set_loading_progress(self, percent: int | None) -> None:
+        overlay = getattr(self, "_load_overlay", None)
+        if overlay is None or not getattr(self, "_loading", False):
+            return
+        overlay.set_progress(percent)
+
+    def is_loading(self) -> bool:
+        return bool(getattr(self, "_loading", False))
 
     def _drag_preview_pixmap(self) -> QPixmap:
         """A clean, opaque rounded snapshot of the card for the drag cursor.
@@ -1125,6 +1153,10 @@ class RenderQueuePanel(QWidget):
             if hasattr(app, "set_status"):
                 app.set_status("Library is still loading — Queue is locked.")
             return
+        # Already the active queue job — ignore re-click.
+        if job_id and job_id == getattr(app, "_selected_queue_job_id", None):
+            if job_id == getattr(self, "_selected_id", None):
+                return
         self._selected_id = job_id
         for card in self._card_widgets:
             card.set_selected(card._job_id == job_id)

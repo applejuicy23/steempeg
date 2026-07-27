@@ -35,6 +35,7 @@ from steempeg.ui.queue_card_shared import (
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 # Compact rail on Deck-class shells; roomy rail when the host is wide.
 _SIDEBAR_W_COMPACT = 376
@@ -294,6 +295,11 @@ class _PortableQueueRow(QFrame):
         badge.setText(str(index))
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lay.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
+        self._thumb_wrap = thumb_wrap
+        self._loading = False
+        self._load_overlay = ThumbLoadingOverlay(thumb_wrap, radius=12.0, pen_w=3)
+        self._load_overlay.setGeometry(0, 0, _THUMB_W, _THUMB_H)
+        self._load_overlay.hide()
 
         text = QVBoxLayout()
         text.setSpacing(3)
@@ -398,6 +404,28 @@ class _PortableQueueRow(QFrame):
     def set_selected(self, selected: bool) -> None:
         self._selected = bool(selected)
         self._apply_chrome()
+
+    def set_loading(self, loading: bool, *, percent: int | None = None) -> None:
+        self._loading = bool(loading)
+        overlay = getattr(self, "_load_overlay", None)
+        wrap = getattr(self, "_thumb_wrap", None)
+        if overlay is None or wrap is None:
+            return
+        if self._loading:
+            overlay.setGeometry(0, 0, wrap.width() or _THUMB_W, wrap.height() or _THUMB_H)
+            overlay.start(percent=percent)
+            overlay.raise_()
+        else:
+            overlay.stop()
+
+    def set_loading_progress(self, percent: int | None) -> None:
+        overlay = getattr(self, "_load_overlay", None)
+        if overlay is None or not getattr(self, "_loading", False):
+            return
+        overlay.set_progress(percent)
+
+    def is_loading(self) -> bool:
+        return bool(getattr(self, "_loading", False))
 
     def set_status_border(self, border_color: str, border_w: int = 2) -> None:
         self._border_color = border_color
@@ -772,6 +800,9 @@ class PortableQueueSidebar(QWidget):
         self._selected_ids = {job_id}
         self._anchor_id = job_id
         self._apply_selection_styles()
+        # Already the active queue job — ignore re-click (no reload).
+        if job_id and job_id == getattr(self._app, "_selected_queue_job_id", None):
+            return
         self.job_selected.emit(job_id)
 
     def _on_remove_requested(self, job_id: str) -> None:

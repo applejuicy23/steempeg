@@ -9,6 +9,7 @@ import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 
 def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
@@ -182,7 +183,39 @@ class ClipCard(qtw.QWidget):
         self._dim_dead = False
         self._dim_no_preview = not bool(thumb_path and os.path.exists(thumb_path))
         self._sync_unavailable_dim()
+
+        # Opening spinner sits on the thumbnail banner only.
+        self._loading = False
+        self._load_overlay = ThumbLoadingOverlay(self.thumb_label, radius=16.0, pen_w=4)
+        self._load_overlay.setGeometry(0, 0, 254, 144)
+        self._load_overlay.hide()
+
         self._border_overlay.raise_()
+
+    def set_loading(self, loading: bool, *, percent: int | None = None) -> None:
+        """Show a spinner on the thumbnail while this clip opens in the player."""
+        self._loading = bool(loading)
+        overlay = getattr(self, "_load_overlay", None)
+        if overlay is None:
+            return
+        if self._loading:
+            overlay.setGeometry(0, 0, self.thumb_label.width(), self.thumb_label.height())
+            overlay.start(percent=percent)
+            overlay.raise_()
+            border = getattr(self, "_border_overlay", None)
+            if border is not None:
+                border.raise_()
+        else:
+            overlay.stop()
+
+    def set_loading_progress(self, percent: int | None) -> None:
+        overlay = getattr(self, "_load_overlay", None)
+        if overlay is None or not getattr(self, "_loading", False):
+            return
+        overlay.set_progress(percent)
+
+    def is_loading(self) -> bool:
+        return bool(getattr(self, "_loading", False))
 
     def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
         """Dim dead / empty-thumb cards without relying on Qt disabled look."""
