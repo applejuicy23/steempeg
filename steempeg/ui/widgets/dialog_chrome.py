@@ -32,6 +32,7 @@ class _DialogTitleBar(QWidget):
         title: str,
         bar_color: str,
         show_minimize: bool = False,
+        bar_icon: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -46,7 +47,7 @@ class _DialogTitleBar(QWidget):
         root.setContentsMargins(10, 0, 10, 0)
         root.setSpacing(0)
 
-        icon_path = get_resource_path("logo.png")
+        icon_path = bar_icon if bar_icon and os.path.isfile(bar_icon) else get_resource_path("logo.png")
         if os.path.isfile(icon_path):
             icon_lbl = QLabel()
             icon_lbl.setPixmap(
@@ -182,6 +183,7 @@ class SteempegDialog(QDialog):
         content_margins: tuple[int, int, int, int] = (16, 16, 16, 16),
         show_minimize: bool = False,
         suppress_map: bool = False,
+        bar_icon: str | None = None,
     ):
         super().__init__(parent)
         self._map_suppressed = bool(suppress_map)
@@ -220,7 +222,11 @@ class SteempegDialog(QDialog):
         card_layout.setSpacing(0)
 
         self._title_bar = _DialogTitleBar(
-            self, title=title, bar_color=bar_color, show_minimize=show_minimize
+            self,
+            title=title,
+            bar_color=bar_color,
+            show_minimize=show_minimize,
+            bar_icon=bar_icon,
         )
         self._title_bar.close_requested.connect(self.reject)
         card_layout.addWidget(self._title_bar)
