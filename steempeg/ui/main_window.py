@@ -56,6 +56,7 @@ class MainWindow(_WindowBase):
             tb = getattr(self, "title_bar", None)
             if tb is not None:
                 tb.sync_window_state()
+                QTimer.singleShot(0, tb.reset_traffic_lights)
             # Windows re-adds the native caption on maximize/restore — re-trigger
             # WM_NCCALCSIZE so our frameless client area stays caption-free.
             poke_frame(self)
@@ -107,6 +108,9 @@ class MainWindow(_WindowBase):
         try:
             refresh_dwm_chrome(self)
             soft_full_redraw(self)
+            tb = getattr(self, "title_bar", None)
+            if tb is not None and hasattr(tb, "reset_traffic_lights"):
+                tb.reset_traffic_lights()
         finally:
             # Clear on next tick so any late resize from RedrawWindow is ignored.
             QTimer.singleShot(0, self._end_dwm_redraw)
