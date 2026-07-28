@@ -229,12 +229,14 @@ NEO_NAV_COMFORT = [
     "🎬  Video Settings",
     "🎵  Audio Settings",
     "🚀  Export Settings",
+    "📦  Presets",
 ]
 NEO_NAV_COMPACT = [
     "ℹ️  Source",
     "🎬  Video",
     "🎵  Audio",
     "🚀  Export",
+    "📦  Presets",
 ]
 
 
