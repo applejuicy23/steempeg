@@ -35,6 +35,7 @@ from steempeg.services.release_catalog import (
     group_releases_by_major,
     info_tooltip_text,
     latest_release_version,
+    load_releases_cache,
     platform_display_name,
     selection_marker_text,
     selection_notice,
@@ -141,13 +142,29 @@ _NOTICE_DANGER = (
 )
 
 
+_ROW_LOGO_CACHE: dict[int, QPixmap] = {}
+
+
 def _logo_pixmap(size: int = 18) -> QPixmap | None:
-    path = get_resource_path("logo.png")
-    if not os.path.isfile(path):
-        return None
-    return QPixmap(path).scaled(
-        size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-    )
+    cached = _ROW_LOGO_CACHE.get(size)
+    if cached is not None and not cached.isNull():
+        return cached
+    from steempeg.ui.icon_utils import app_logo_pixmap
+
+    pix = app_logo_pixmap(size)
+    if pix is None or pix.isNull():
+        path = get_resource_path("logo.png")
+        if os.path.isfile(path):
+            pix = QPixmap(path).scaled(
+                size,
+                size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+    if pix is not None and not pix.isNull():
+        _ROW_LOGO_CACHE[size] = pix
+        return pix
+    return None
 
 
 def _sanitize_notes(text: str) -> str:
@@ -581,6 +598,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._row_widgets: list[_VersionRow | _PatchGroupWidget] = []
         self._group_widgets: list[_PatchGroupWidget] = []
         self._notes_image_loader: _ReleaseNotesImageLoader | None = None
+        self._refreshing_catalog = False
 
         self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
 
@@ -738,11 +756,25 @@ class UpdateCenterDialog(SteempegDialog):
         self._start_fetch()
 
     def _start_fetch(self):
+        QTimer.singleShot(0, self._show_cached_catalog)
         self._fetch_thread = _ReleaseFetchThread(self)
-        self._fetch_thread.finished_ok.connect(self._on_releases_loaded)
+        self._fetch_thread.finished_ok.connect(self._on_fetch_ok)
         self._fetch_thread.finished_error.connect(self._on_fetch_error)
         self._fetch_thread.finished_rate_limited.connect(self._on_fetch_rate_limited)
         self._fetch_thread.start()
+
+    def _show_cached_catalog(self) -> None:
+        cached = load_releases_cache()
+        if not cached:
+            return
+        self._refreshing_catalog = True
+        self._on_releases_loaded(cached, from_cache=True)
+        self._status_label.setText("Refreshing release list…")
+        self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
+
+    def _on_fetch_ok(self, releases: list):
+        self._refreshing_catalog = False
+        self._on_releases_loaded(releases, from_cache=False)
 
     def _clear_list(self):
         while self._list_layout.count() > 1:
@@ -752,21 +784,49 @@ class UpdateCenterDialog(SteempegDialog):
         self._row_widgets.clear()
         self._group_widgets.clear()
 
-    def _on_releases_loaded(self, releases: list):
+    def _on_releases_loaded(self, releases: list, *, from_cache: bool = False):
+        new_tags = [entry.tag_name for entry in releases]
+        old_tags = [entry.tag_name for entry in self._releases] if self._releases else []
+        if (
+            self._row_widgets
+            and new_tags == old_tags
+            and not from_cache
+        ):
+            self._releases = releases
+            self._refreshing_catalog = False
+            self._latest_version = latest_release_version(releases)
+            latest_str = releases[0].version_str if releases else APP_VERSION_STR
+            if self._latest_version > APP_VERSION_FLOAT + 0.001:
+                self._status_label.setText(f"Update available: v{latest_str}")
+                self._status_label.setStyleSheet(
+                    "color: #7ec8a3; font-size: 11px; font-weight: 600;"
+                )
+            else:
+                self._status_label.setText(f"{len(releases)} releases · you are on the latest")
+                self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
+            return
+
         self._releases = releases
         self._clear_list()
 
         if not releases:
-            self._status_label.setText("No public releases found.")
+            if not from_cache:
+                self._status_label.setText("No public releases found.")
             return
 
         self._latest_version = latest_release_version(releases)
         latest_str = releases[0].version_str
         if self._latest_version > APP_VERSION_FLOAT + 0.001:
-            self._status_label.setText(f"Update available: v{latest_str}")
+            status = f"Update available: v{latest_str}"
+            if from_cache and self._refreshing_catalog:
+                status += " · refreshing…"
+            self._status_label.setText(status)
             self._status_label.setStyleSheet("color: #7ec8a3; font-size: 11px; font-weight: 600;")
         else:
-            self._status_label.setText(f"{len(releases)} releases · you are on the latest")
+            count_line = f"{len(releases)} releases · you are on the latest"
+            if from_cache and self._refreshing_catalog:
+                count_line += " · refreshing…"
+            self._status_label.setText(count_line)
             self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
 
         groups = group_releases_by_major(releases)
@@ -803,10 +863,20 @@ class UpdateCenterDialog(SteempegDialog):
         self._select_entry(initial_entry)
 
     def _on_fetch_error(self, message: str):
+        self._refreshing_catalog = False
+        if self._releases:
+            self._status_label.setText("Could not refresh — showing cached releases.")
+            self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+            return
         self._status_label.setText(message)
         self._status_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
 
     def _on_fetch_rate_limited(self, info: RateLimitInfo):
+        self._refreshing_catalog = False
+        if self._releases:
+            self._status_label.setText("Rate limited — showing cached releases.")
+            self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+            return
         self._status_label.setText("GitHub API rate limit exceeded — waiting to retry…")
         self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
         # Emit before reject so the parent can capture RateLimitInfo while still connected.
