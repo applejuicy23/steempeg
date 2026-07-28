@@ -7,6 +7,7 @@ instead of building their own outer layout, so every window shares one top bar.
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import Qt, QPoint, QRectF, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
@@ -384,21 +385,46 @@ class SteempegDialog(QDialog):
         self.setFixedSize(w, h)
 
     def _prepare_geometry_before_map(self) -> None:
-        """Size + center before the HWND is mapped.
+        """Size + center before the window is mapped.
 
         Moving a translucent frameless dialog *after* first expose leaves a tiny
-        empty dark ghost window on Windows (seen next to Update Center).
+        empty dark ghost window on Windows (seen next to Update Center). On
+        Linux/XWayland the same flash is a bare micro-surface until resize.
         """
         self._apply_scaled_size()
+        self.ensurePolished()
+        # Dialogs that only resize() (Update Center) still need a real footprint
+        # before the compositor maps them.
+        if self.width() < 80 or self.height() < 80:
+            hint = self.sizeHint()
+            if hint.width() >= 80 and hint.height() >= 80:
+                self.resize(hint)
         self._center_on_parent()
 
+    def _show_without_map_flash(self):
+        """Create the surface off-screen, then map at the final geometry (Linux)."""
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self._prepare_geometry_before_map()
+        super().show()
+        self.hide()
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+        self._prepare_geometry_before_map()
+        return super().show()
+
     def show(self):
-        if not self._map_suppressed:
-            self._prepare_geometry_before_map()
+        if self._map_suppressed:
+            return super().show()
+        # Windows: size/center once before map (DWM ghost HWND fix).
+        # Linux: off-screen warm show so the compositor never flashes a 0×0 frame.
+        if sys.platform != "win32":
+            return self._show_without_map_flash()
+        self._prepare_geometry_before_map()
         return super().show()
 
     def exec(self):
         if not self._map_suppressed:
+            # QDialog.exec() calls show(); still prep once so Windows centers before
+            # the modal loop, and Linux has a non-tiny size before map flash guard.
             self._prepare_geometry_before_map()
         return super().exec()
 
