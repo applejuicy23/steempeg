@@ -989,10 +989,11 @@ class RenderQueuePanel(QWidget):
         clear_font.setPixelSize(dense.footer_font)
         self._btn_clear.setFont(clear_font)
         self._empty_panel.setMaximumWidth(dense.queue_empty_w)
-        gutter = 0 if dense.compact else _SPLITTER_GUTTER
+        # Keep the same gutter as comfort desktop — compact used to zero this and
+        # glue the queue flush against the right_h_splitter handle (esp. Linux).
         if hasattr(self, "_outer_layout") and self._outer_layout is not None:
             self._outer_layout.setContentsMargins(
-                gutter, 0, 0, RENDER_QUEUE_BOTTOM_INSET
+                _SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET
             )
         self._sync_view_toggle_buttons()
         if (
