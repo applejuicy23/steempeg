@@ -16,6 +16,7 @@ from steempeg.ui.library.controller import LibraryMixin
 from steempeg.ui.library.rendered_library import RenderedLibraryMixin
 from steempeg.ui.player.controller import PlayerMixin
 from steempeg.ui.lifecycle import LifecycleMixin
+from steempeg.ui.splitter_rules import SplitterRulesMixin
 from steempeg.ui.hide_watcher import HideWatcher
 from steempeg.ui.widgets.combo_chrome import (
     compact_combo_stylesheet,
@@ -143,7 +144,7 @@ QPushButton#btn_play:focus, QPushButton#btn_skip_back:focus, QPushButton#btn_ski
 """
 
 
-class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
+class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def _apply_playback_button_styles(self):
         """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
         if not hasattr(self.ui, "btn_play"):
@@ -2175,6 +2176,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.ui.main_splitter.setCollapsible(1, True)
                 self.ui.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
                 self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
+                self.install_splitter_rules()
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
