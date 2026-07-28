@@ -55,5 +55,12 @@ bin/
 # --- Local Linux build / run helpers (not shipped in git) ---
 newver_compilator.py
 run-linux.sh
-Steempeg_v*.zip
 Steempeg-linux/
+
+# --- Local release builds (Windows / Linux / SteamOS) — keep offline ---
+# PyInstaller output dirs + zips next to the repo (e.g. Steempeg_v41/, Steempeg_v41.1_linux.zip)
+Steempeg_v*/
+Steempeg_v*.zip
+
+# --- Local release-note drafts (paste into GitHub Releases by hand) ---
+docs/release-notes*.md
