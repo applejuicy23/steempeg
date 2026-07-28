@@ -795,8 +795,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
             self._neo_nav_pill_style_template = True
             
             self.neo_nav_buttons = []
-            custom_names = ["ℹ️  Source Info", "🎬  Video Settings", "🎵  Audio Settings", "🚀  Export Settings"]
+            custom_names = [
+                "ℹ️  Source Info",
+                "🎬  Video Settings",
+                "🎵  Audio Settings",
+                "🚀  Export Settings",
+                "📦  Presets",
+            ]
             
+            # Presets tab must exist before neo buttons are counted.
+            from steempeg.ui.render_panel import ensure_presets_tab
+
+            ensure_presets_tab(self.ui)
+
             for i in range(self.ui.settings_tabs.count()):
                 text = custom_names[i] if i < len(custom_names) else self.ui.settings_tabs.tabText(i)
                 btn = QPushButton(text)
@@ -922,11 +933,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 else:
                     parent_layout.addWidget(self.neo_wrapper)
         
-        from steempeg.ui.render_panel import restyle_video_page, restyle_audio_page, restyle_source_page, restyle_export_page
+        from steempeg.ui.render_panel import (
+            restyle_video_page,
+            restyle_audio_page,
+            restyle_source_page,
+            restyle_export_page,
+            restyle_presets_page,
+        )
         restyle_video_page(self.ui)
         restyle_audio_page(self.ui)
         restyle_source_page(self.ui)
         restyle_export_page(self.ui)
+        restyle_presets_page(self.ui, self)
 
         # Give each render combo its OWN stylesheet so the field text matches the
         # Source Info value labels (Segoe UI, 14px, bold) instead of the app default.
@@ -1903,12 +1921,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, PlayerMixin, LibraryMixi
                 self.btn_marker_settings.setCursor(Qt.PointingHandCursor)
                 self.btn_marker_settings.setToolTip("Marker settings")
                 self.btn_marker_settings.setStyleSheet(_pill_inner)
-                settings_icon = get_resource_path("settings.png")
-                if not os.path.exists(settings_icon):
-                    settings_icon = get_resource_path("settings2.png")
+                settings_icon = get_resource_path("markersettings.png")
                 if os.path.exists(settings_icon):
                     self.btn_marker_settings.setIcon(QIcon(settings_icon))
-                    self.btn_marker_settings.setIconSize(QSize(20, 20))
+                    self.btn_marker_settings.setIconSize(QSize(22, 22))
                 else:
                     self.btn_marker_settings.setText("⚙")
                 self.btn_marker_settings.clicked.connect(self.show_marker_settings)
