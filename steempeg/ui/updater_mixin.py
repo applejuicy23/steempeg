@@ -181,6 +181,7 @@ class UpdaterMixin:
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
         if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
             tb.clear_shell_tool_hover()
+        self._clear_update_chrome_hover()
 
     def _install_release_entry(self, entry: ReleaseEntry):
         if not entry.zip_url or not entry.zip_name:
@@ -194,7 +195,10 @@ class UpdaterMixin:
             bar_color=theme["title_bar"],
             bg_color=theme["app_bg"],
         )
-        if dlg.exec() != dlg.DialogCode.Accepted:
+        accepted = dlg.exec() == dlg.DialogCode.Accepted
+        # Nested confirm eats Leave on title-bar Updates / traffic lights.
+        self._clear_update_chrome_hover()
+        if not accepted:
             return
 
         if dlg.choice == UpdateConfirmChoice.CANCEL:
@@ -216,6 +220,32 @@ class UpdaterMixin:
         spawn_update_handler(job)
         QApplication.quit()
         sys.exit(0)
+
+    def _clear_update_chrome_hover(self) -> None:
+        """Reset stuck hand-cursor / traffic-light hover after Update Center modals."""
+        from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+
+        ui = getattr(self, "ui", None)
+        tb = getattr(ui, "title_bar", None) if ui is not None else None
+        if tb is not None:
+            if hasattr(tb, "clear_shell_tool_hover"):
+                tb.clear_shell_tool_hover()
+            if hasattr(tb, "reset_traffic_lights"):
+                tb.reset_traffic_lights()
+        if ui is not None:
+            try:
+                ui.unsetCursor()
+            except RuntimeError:
+                pass
+        for w in QApplication.topLevelWidgets():
+            if isinstance(w, SteempegDialog):
+                if hasattr(w, "reset_title_bar_chrome"):
+                    w.reset_title_bar_chrome()
+                try:
+                    w.unsetCursor()
+                except RuntimeError:
+                    pass
+        QApplication.restoreOverrideCursor()
 
     def _restore_local_backup(self, backup: LocalBackup):
         self.restore_local_backup(backup.folder_name)
