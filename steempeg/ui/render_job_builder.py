@@ -30,8 +30,18 @@ def _set_combo_text(combo, text: str) -> None:
         combo.setCurrentIndex(idx)
 
 
-def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> None:
-    """Restore a job's saved settings into the live settings panel."""
+def apply_job_settings_to_ui(
+    app: SteempegApp,
+    settings: RenderJobSettings,
+    *,
+    refresh_summary: bool = True,
+) -> None:
+    """Restore a job's saved settings into the live settings panel.
+
+    When ``refresh_summary`` is True (default), runs one ``update_final_setup`` at
+    the end. Bulk apply blocks combo signals so Apply-preset does not fire the
+    summary rebuild once per field.
+    """
     ui = app.ui
     app.custom_target_bitrate = settings.custom_target_bitrate
     app.custom_target_height = settings.custom_target_height
@@ -43,137 +53,179 @@ def apply_job_settings_to_ui(app: SteempegApp, settings: RenderJobSettings) -> N
         app.custom_destination = settings.save_dir
         # Keep the button's static label; the destination path is shown in the Output line.
 
+    prev_bulk = bool(getattr(app, "_bulk_settings_apply", False))
+    app._bulk_settings_apply = True
+
     blockers = []
-    for name in (
-        "combo_quality",
-        "combo_fps",
-        "combo_bitrate",
-        "combo_codec",
-        "combo_encoder",
-        "combo_encode_speed",
-        "combo_audio_format",
-        "combo_audio_bitrate",
-        "combo_container",
-        "combo_output_preset",
-        "check_audio_only",
-        "check_mute_audio",
-        "input_filename",
-    ):
-        w = getattr(ui, name, None)
-        if w is not None and hasattr(w, "blockSignals"):
-            w.blockSignals(True)
-            blockers.append(w)
+    try:
+        for name in (
+            "combo_quality",
+            "combo_fps",
+            "combo_bitrate",
+            "combo_codec",
+            "combo_encoder",
+            "combo_encode_speed",
+            "combo_audio_format",
+            "combo_audio_bitrate",
+            "combo_container",
+            "combo_output_preset",
+            "check_audio_only",
+            "check_mute_audio",
+            "input_filename",
+            "size_slider",
+        ):
+            w = getattr(ui, name, None)
+            if w is not None and hasattr(w, "blockSignals"):
+                w.blockSignals(True)
+                blockers.append(w)
 
-    if hasattr(ui, "combo_quality") and settings.quality_text:
-        _set_combo_text(ui.combo_quality, settings.quality_text)
-        if hasattr(app, "on_quality_mode_changed"):
-            app.on_quality_mode_changed(settings.quality_text)
-        if hasattr(app, "update_bitrate_options"):
-            app.update_bitrate_options()
+        if hasattr(ui, "combo_quality") and settings.quality_text:
+            _set_combo_text(ui.combo_quality, settings.quality_text)
+            if hasattr(app, "on_quality_mode_changed"):
+                app.on_quality_mode_changed(settings.quality_text)
+            if hasattr(app, "update_bitrate_options"):
+                app.update_bitrate_options()
 
-    if hasattr(ui, "combo_fps") and settings.fps_text:
-        _set_combo_text(ui.combo_fps, settings.fps_text)
-    if hasattr(ui, "combo_bitrate") and settings.bitrate_text:
-        _set_combo_text(ui.combo_bitrate, settings.bitrate_text)
-    if hasattr(ui, "combo_codec") and settings.codec_text:
-        _set_combo_text(ui.combo_codec, settings.codec_text)
+        if hasattr(ui, "combo_fps") and settings.fps_text:
+            _set_combo_text(ui.combo_fps, settings.fps_text)
+        if hasattr(ui, "combo_bitrate") and settings.bitrate_text:
+            _set_combo_text(ui.combo_bitrate, settings.bitrate_text)
+        if hasattr(ui, "combo_codec") and settings.codec_text:
+            _set_combo_text(ui.combo_codec, settings.codec_text)
 
-    if hasattr(ui, "combo_encoder") and settings.encoder_codec:
-        saved = str(settings.encoder_codec)
-        # Don't re-apply a stale CPU choice when NVENC/AMF/QSV is available —
-        # old sessions defaulted to libx264 and kept restoring it on every launch.
-        hw_available = any(
-            not capabilities.is_software_encoder(
-                str(ui.combo_encoder.itemData(i, Qt.UserRole) or "")
+        if hasattr(ui, "combo_encoder") and settings.encoder_codec:
+            saved = str(settings.encoder_codec)
+            # Don't re-apply a stale CPU choice when NVENC/AMF/QSV is available —
+            # old sessions defaulted to libx264 and kept restoring it on every launch.
+            hw_available = any(
+                not capabilities.is_software_encoder(
+                    str(ui.combo_encoder.itemData(i, Qt.UserRole) or "")
+                )
+                for i in range(ui.combo_encoder.count())
             )
-            for i in range(ui.combo_encoder.count())
-        )
-        if capabilities.is_software_encoder(saved) and hw_available:
-            pass  # keep the HW default from detect_gpu_and_set_encoder
-        else:
-            matched = False
-            for i in range(ui.combo_encoder.count()):
-                data = ui.combo_encoder.itemData(i, Qt.UserRole)
-                if data and str(data) == saved:
-                    ui.combo_encoder.setCurrentIndex(i)
-                    matched = True
-                    break
-            if not matched and settings.encoder_display:
-                _set_combo_text(ui.combo_encoder, settings.encoder_display)
+            if capabilities.is_software_encoder(saved) and hw_available:
+                pass  # keep the HW default from detect_gpu_and_set_encoder
+            else:
+                matched = False
+                for i in range(ui.combo_encoder.count()):
+                    data = ui.combo_encoder.itemData(i, Qt.UserRole)
+                    if data and str(data) == saved:
+                        ui.combo_encoder.setCurrentIndex(i)
+                        matched = True
+                        break
+                if not matched and settings.encoder_display:
+                    _set_combo_text(ui.combo_encoder, settings.encoder_display)
 
-    if hasattr(app, "refresh_encode_speed_options"):
-        app.refresh_encode_speed_options(settings.encode_speed)
-    elif hasattr(ui, "combo_encode_speed") and settings.encode_speed:
-        idx = ui.combo_encode_speed.findData(normalize_encode_speed(settings.encode_speed), Qt.UserRole)
-        if idx >= 0:
-            ui.combo_encode_speed.setCurrentIndex(idx)
+        if hasattr(app, "refresh_encode_speed_options"):
+            app.refresh_encode_speed_options(settings.encode_speed)
+        elif hasattr(ui, "combo_encode_speed") and settings.encode_speed:
+            idx = ui.combo_encode_speed.findData(
+                normalize_encode_speed(settings.encode_speed), Qt.UserRole
+            )
+            if idx >= 0:
+                ui.combo_encode_speed.setCurrentIndex(idx)
 
-    if hasattr(ui, "check_audio_only"):
-        ui.check_audio_only.setChecked(settings.audio_only)
-    if hasattr(ui, "check_mute_audio"):
-        ui.check_mute_audio.setChecked(settings.mute_audio)
-    if hasattr(ui, "combo_audio_format") and settings.audio_format:
-        _set_combo_text(ui.combo_audio_format, settings.audio_format)
-    if hasattr(ui, "combo_audio_bitrate") and settings.audio_bitrate_text:
-        _set_combo_text(ui.combo_audio_bitrate, settings.audio_bitrate_text)
-    if hasattr(ui, "combo_container") and settings.container_format:
-        _set_combo_text(ui.combo_container, settings.container_format)
-    if hasattr(ui, "combo_output_preset") and settings.output_preset:
-        _set_combo_text(ui.combo_output_preset, settings.output_preset)
-    if hasattr(ui, "input_filename") and settings.output_basename:
-        ui.input_filename.setText(settings.output_basename)
+        if hasattr(ui, "check_audio_only"):
+            ui.check_audio_only.setChecked(settings.audio_only)
+        if hasattr(ui, "check_mute_audio"):
+            ui.check_mute_audio.setChecked(settings.mute_audio)
+        if hasattr(ui, "combo_audio_format") and settings.audio_format:
+            _set_combo_text(ui.combo_audio_format, settings.audio_format)
+        if hasattr(ui, "combo_audio_bitrate") and settings.audio_bitrate_text:
+            _set_combo_text(ui.combo_audio_bitrate, settings.audio_bitrate_text)
+        if hasattr(ui, "combo_container") and settings.container_format:
+            _set_combo_text(ui.combo_container, settings.container_format)
+        if hasattr(ui, "combo_output_preset") and settings.output_preset:
+            # User presets are not Share/Edit/Web entries — keep Custom in the mux combo.
+            preset_label = settings.output_preset
+            if preset_label.startswith("User:"):
+                preset_label = "Custom"
+            _set_combo_text(ui.combo_output_preset, preset_label)
+        if hasattr(ui, "input_filename") and settings.output_basename:
+            ui.input_filename.setText(settings.output_basename)
 
-    if hasattr(ui, "size_slider"):
-        ui.size_slider.setValue(settings.size_slider_index)
+        if hasattr(ui, "size_slider"):
+            ui.size_slider.setValue(settings.size_slider_index)
 
-    fps_custom = "Custom" in (settings.fps_text or "")
-    if hasattr(app, "input_custom_fps"):
-        if fps_custom and settings.custom_fps is not None:
-            app.input_custom_fps.setText(str(settings.custom_fps))
-        else:
-            app.input_custom_fps.clear()
+        fps_custom = "Custom" in (settings.fps_text or "")
+        if hasattr(app, "input_custom_fps"):
+            if fps_custom and settings.custom_fps is not None:
+                app.input_custom_fps.setText(str(settings.custom_fps))
+            else:
+                app.input_custom_fps.clear()
 
-    br_custom = "Custom" in (settings.bitrate_text or "")
-    if hasattr(app, "input_custom_vbitrate"):
-        if br_custom and settings.custom_vbitrate is not None:
-            app.input_custom_vbitrate.setText(str(settings.custom_vbitrate))
-        else:
-            app.input_custom_vbitrate.clear()
+        br_custom = "Custom" in (settings.bitrate_text or "")
+        if hasattr(app, "input_custom_vbitrate"):
+            if br_custom and settings.custom_vbitrate is not None:
+                app.input_custom_vbitrate.setText(str(settings.custom_vbitrate))
+            else:
+                app.input_custom_vbitrate.clear()
 
-    ab_custom = "Custom" in (settings.audio_bitrate_text or "")
-    if hasattr(app, "input_custom_abitrate"):
-        if ab_custom and settings.custom_abitrate is not None:
-            app.input_custom_abitrate.setText(str(settings.custom_abitrate))
-        else:
-            app.input_custom_abitrate.clear()
+        ab_custom = "Custom" in (settings.audio_bitrate_text or "")
+        if hasattr(app, "input_custom_abitrate"):
+            if ab_custom and settings.custom_abitrate is not None:
+                app.input_custom_abitrate.setText(str(settings.custom_abitrate))
+            else:
+                app.input_custom_abitrate.clear()
 
-    for w in blockers:
-        w.blockSignals(False)
+        # Refresh Custom overlays without emitting currentTextChanged (that used to
+        # rebuild the Export summary once per combo — felt like a multi-second hitch).
+        sync_custom_combo_overlays(app, emit=False)
 
-    sync_custom_combo_overlays(app)
+        if hasattr(app, "_sync_original_audio_controls"):
+            app._sync_original_audio_controls()
+    finally:
+        for w in blockers:
+            w.blockSignals(False)
+        app._bulk_settings_apply = prev_bulk
 
-    if hasattr(ui, "combo_quality"):
-        ui.combo_quality.currentTextChanged.emit(ui.combo_quality.currentText())
-
-    if hasattr(app, "_sync_original_audio_controls"):
-        app._sync_original_audio_controls()
+    if refresh_summary and hasattr(app, "update_final_setup"):
+        app.update_final_setup()
 
 
-def sync_custom_combo_overlays(app) -> None:
+def sync_custom_combo_overlays(app, *, emit: bool = True) -> None:
     """Refresh custom FPS/bitrate overlay visibility after programmatic combo changes."""
+    from PySide6.QtWidgets import QFrame
+
     ui = app.ui
     pairs = (
-        ("combo_fps", "input_custom_fps", "validate_custom_fps"),
-        ("combo_bitrate", "input_custom_vbitrate", "validate_custom_vbitrate"),
-        ("combo_audio_bitrate", "input_custom_abitrate", "validate_custom_abitrate"),
+        ("combo_fps", "input_custom_fps", "validate_custom_fps", "warn_fps"),
+        ("combo_bitrate", "input_custom_vbitrate", "validate_custom_vbitrate", "warn_vbitrate"),
+        (
+            "combo_audio_bitrate",
+            "input_custom_abitrate",
+            "validate_custom_abitrate",
+            "warn_abitrate",
+        ),
     )
-    for combo_name, input_attr, validate_attr in pairs:
+    for combo_name, input_attr, validate_attr, warn_attr in pairs:
         combo = getattr(ui, combo_name, None)
         if combo is None:
             continue
         text = combo.currentText()
-        combo.currentTextChanged.emit(text)
-        if "Custom" in text:
+        if emit:
+            combo.currentTextChanged.emit(text)
+            if "Custom" in text:
+                edit = getattr(ui, input_attr, None)
+                validate = getattr(app, validate_attr, None)
+                if edit is not None and validate is not None:
+                    validate(edit.text())
+            continue
+
+        is_custom = "Custom" in (text or "")
+        for overlay in combo.findChildren(QFrame, "customOverlay"):
+            if is_custom:
+                pos = getattr(overlay, "_positioner", None)
+                if pos is not None:
+                    pos.reposition()
+                overlay.show()
+                overlay.raise_()
+            else:
+                overlay.hide()
+        warn = getattr(ui, warn_attr, None)
+        if warn is not None and not is_custom:
+            warn.hide()
+        if is_custom:
             edit = getattr(ui, input_attr, None)
             validate = getattr(app, validate_attr, None)
             if edit is not None and validate is not None:
