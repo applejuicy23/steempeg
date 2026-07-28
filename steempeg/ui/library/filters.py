@@ -140,9 +140,6 @@ class FilterMenu(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Sections are stacked directly; only the Games list scrolls (see below).
-        scroll_layout = layout
-
         self._drag_active = False
         self._drag_layout = None
         self._drag_btn = None
@@ -150,6 +147,7 @@ class FilterMenu(QWidget):
         # disappears (its game was deselected) returns with the SAME state it had,
         # instead of being force-checked or force-cleared.
         self._type_checked_memory = {}
+        self._flow_sections: list[tuple[QFrame, int]] = []
 
         # --- 1. SUPER HELPER: CREATE CATEGORY MEGA-CAPSULES ---
         def create_category_capsule(title_text, content_widget):
@@ -181,6 +179,19 @@ class FilterMenu(QWidget):
             cap_layout.addWidget(content_widget)
             return capsule
 
+        def add_flow_section(title_text, content_widget, *, min_width: int) -> QFrame:
+            capsule = create_category_capsule(title_text, content_widget)
+            capsule.setMinimumWidth(min_width)
+            self._sections_layout.addWidget(capsule)
+            self._flow_sections.append((capsule, min_width))
+            return capsule
+
+        self._sections_host = QWidget()
+        self._sections_host.setObjectName("FilterSectionsHost")
+        self._sections_host.setStyleSheet("background: transparent;")
+        self._sections_layout = FlowLayout()
+        self._sections_host.setLayout(self._sections_layout)
+
         # --- GAMES CAPSULE (the ONLY scrollable section) ---
         self.games_container = QWidget()
         self.games_container.setStyleSheet("background: transparent;")
@@ -202,13 +213,15 @@ class FilterMenu(QWidget):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
         self._games_scroll.setWidget(self.games_container)
-        scroll_layout.addWidget(create_category_capsule("🎮 Games:", self._games_scroll))
+        self._games_scroll.setMinimumHeight(104)
+        self._games_capsule = create_category_capsule("🎮 Games:", self._games_scroll)
+        layout.addWidget(self._games_capsule)
 
         # --- TYPE CAPSULE ---
         self.types_container = QWidget()
         self.types_layout = FlowLayout()
         self.types_container.setLayout(self.types_layout)
-        scroll_layout.addWidget(create_category_capsule("📂 Type:", self.types_container))
+        add_flow_section("📂 Type:", self.types_container, min_width=188)
         self.types_container.setMouseTracking(True)
         self.types_container.installEventFilter(self)
 
@@ -218,7 +231,7 @@ class FilterMenu(QWidget):
         self.health_container = QWidget()
         self.health_layout = FlowLayout()
         self.health_container.setLayout(self.health_layout)
-        scroll_layout.addWidget(create_category_capsule("💚 Health:", self.health_container))
+        add_flow_section("💚 Health:", self.health_container, min_width=188)
         self.health_container.setMouseTracking(True)
         self.health_container.installEventFilter(self)
 
@@ -365,7 +378,7 @@ class FilterMenu(QWidget):
         date_layout.addWidget(lbl_to_d)
         date_layout.addWidget(self.input_max_date)
         date_layout.addStretch() 
-        scroll_layout.addWidget(create_category_capsule("📅 Date:", date_container))
+        add_flow_section("📅 Date:", date_container, min_width=300)
 
         # --- TIME CAPSULE (WITH AM/PM & ICONS) ---
         time_c_container = QWidget()
@@ -390,7 +403,7 @@ class FilterMenu(QWidget):
         time_c_layout.addWidget(lbl_to_t)
         time_c_layout.addWidget(self.input_max_time)
         time_c_layout.addStretch()
-        scroll_layout.addWidget(create_category_capsule("⏰ Time of creation:", time_c_container))
+        add_flow_section("⏰ Time of creation:", time_c_container, min_width=300)
 
         # --- DURATION CAPSULE (HH:MM:SS) ---
         dur_container = QWidget()
@@ -415,10 +428,9 @@ class FilterMenu(QWidget):
         dur_layout.addWidget(lbl_max_dur)
         dur_layout.addWidget(self.input_max_dur)
         dur_layout.addStretch()
-        scroll_layout.addWidget(create_category_capsule("⏱ Duration:", dur_container))
+        add_flow_section("⏱ Duration:", dur_container, min_width=300)
 
-
-        scroll_layout.addStretch()
+        layout.addWidget(self._sections_host)
 
         bottom_layout = QHBoxLayout()
         bottom_layout.setContentsMargins(0, 10, 0, 0)
@@ -462,6 +474,44 @@ class FilterMenu(QWidget):
         self._inner_layout = layout
         self._bottom_layout = bottom_layout
         self._density = None
+
+    def _filter_host_width(self) -> int:
+        app = getattr(self, "app", None)
+        pill = getattr(app, "btn_filter_pill", None) if app is not None else None
+        if pill is None:
+            return 0
+        try:
+            host = pill.window()
+            return int(host.width() or 0) if host is not None else 0
+        except RuntimeError:
+            return 0
+
+    def _resolve_menu_width(self, dense) -> int:
+        """Narrow shells get a wider filter panel so sections can flow in columns."""
+        host_w = self._filter_host_width()
+        compact = bool(getattr(dense, "compact", False))
+        if host_w <= 0:
+            return 540 if compact else 460
+        usable = max(380, host_w - 28)
+        if compact or host_w < 980:
+            target = max(500, min(660, int(host_w * 0.54)))
+            return min(usable, target)
+        return min(usable, 520)
+
+    def _relayout_sections(self) -> None:
+        host = getattr(self, "_sections_host", None)
+        lay = getattr(self, "_sections_layout", None)
+        if host is None or lay is None:
+            return
+        compact = bool(getattr(self._density, "compact", False)) if self._density else False
+        cap_m = 8 if compact else 16
+        inner_w = max(220, self.container.width() - 2 * cap_m)
+        for capsule, min_w in getattr(self, "_flow_sections", ()):
+            capsule.setMinimumWidth(min(min_w, inner_w))
+        host.setFixedWidth(inner_w)
+        host_h = lay.heightForWidth(inner_w)
+        host.setFixedHeight(max(0, host_h))
+        self.adjustSize()
 
     def _date_time_input_style_for(self, dense) -> str:
         """QDateEdit / QTimeEdit chrome — comfort uses init style; compact shrinks."""
@@ -546,7 +596,7 @@ class FilterMenu(QWidget):
         """Shrink popup chrome for Deck / ultra-narrow windows."""
         self._density = dense
         compact = bool(getattr(dense, "compact", False))
-        width = 340 if compact else 460
+        width = self._resolve_menu_width(dense)
         self.setFixedWidth(width)
 
         font = 11 if compact else 13
@@ -701,6 +751,10 @@ class FilterMenu(QWidget):
                 if "#888888" in ss and "font-weight: bold" in ss:
                     lbl.setStyleSheet(cap_lbl)
 
+        games_min = 92 if compact else 104
+        self._games_scroll.setMinimumHeight(games_min)
+        self._relayout_sections()
+
     _PILL_BTN_STYLE = """
         QPushButton {
             background-color: #383838;
@@ -739,15 +793,17 @@ class FilterMenu(QWidget):
         self._games_scroll.setFixedHeight(0)
         self.adjustSize()
         non_games = self.height()
-        cap = max(70, max_px - non_games)
+        cap = max(130, max_px - non_games)
 
         # Fixed popup width minus main/container/capsule margins + scrollbar.
         inset = 64 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 84
         width = max(120, self.width() - inset)
         content = self.games_layout.heightForWidth(width) + 4
-        height = max(40, min(content, cap))
+        games_floor = 108 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 124
+        height = max(games_floor, min(content, int(cap * 0.46)))
 
         self._games_scroll.setFixedHeight(height)
+        self._relayout_sections()
         self.adjustSize()
 
     _MOUSE_EVENTS = (
