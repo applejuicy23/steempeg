@@ -2188,6 +2188,8 @@ class RenderMixin:
 
     def update_final_setup(self, *, trim_only: bool = False):
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
+        if getattr(self, "_bulk_settings_apply", False) and not trim_only:
+            return
         clip_path = self._active_preview_clip_path()
         if not clip_path:
             if hasattr(self.ui, 'label_short_summary'):
@@ -2552,7 +2554,8 @@ class RenderMixin:
             self.setup_dynamic_slider()
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
-        if is_target_mode:
+        # Skip summary rebuild during bulk preset/job apply — caller runs it once.
+        if is_target_mode and not getattr(self, "_bulk_settings_apply", False):
             self.update_final_setup()
 
     def init_original_help_state(self) -> None:
@@ -2925,6 +2928,182 @@ class RenderMixin:
         sidebar = getattr(self, "_portable_queue_sidebar", None)
         if sidebar is not None and hasattr(sidebar, "refresh"):
             sidebar.refresh()
+
+    # --- Custom export presets (v41) -----------------------------------------
+
+    def refresh_export_presets_list(self) -> None:
+        from steempeg.render.export_presets import list_preset_names
+
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is None:
+            return
+        selected = ""
+        cur = lst.currentItem()
+        if cur is not None:
+            selected = cur.text()
+        lst.blockSignals(True)
+        lst.clear()
+        for name in list_preset_names(self.load_user_settings):
+            lst.addItem(name)
+        lst.blockSignals(False)
+        if selected:
+            matches = lst.findItems(selected, Qt.MatchFlag.MatchExactly)
+            if matches:
+                lst.setCurrentItem(matches[0])
+
+    def _on_export_preset_selection_changed(self) -> None:
+        lst = getattr(self.ui, "preset_list", None)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if lst is None or edit is None:
+            return
+        item = lst.currentItem()
+        if item is not None:
+            edit.setText(item.text())
+
+    def _selected_export_preset_name(self) -> str:
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            typed = (edit.text() or "").strip()
+            if typed:
+                return typed
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is not None and lst.currentItem() is not None:
+            return (lst.currentItem().text() or "").strip()
+        return ""
+
+    def _set_preset_status(self, text: str) -> None:
+        label = getattr(self.ui, "preset_status_label", None)
+        if label is not None:
+            label.setText(text or "")
+
+    def save_export_preset_from_ui(self) -> None:
+        from steempeg.render.export_presets import save_preset
+        from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
+        from steempeg.ui.render_job_builder import snapshot_settings_from_ui
+
+        name = self._selected_export_preset_name()
+        if not name:
+            steempeg_warning(
+                self.ui,
+                "Save preset",
+                "Enter a name for the preset first.",
+            )
+            return
+        try:
+            key = save_preset(
+                name,
+                snapshot_settings_from_ui(self),
+                load_settings=self.load_user_settings,
+                save_settings=self.save_user_settings,
+            )
+        except ValueError as exc:
+            steempeg_warning(self.ui, "Save preset", str(exc))
+            return
+        self.refresh_export_presets_list()
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is not None:
+            matches = lst.findItems(key, Qt.MatchFlag.MatchExactly)
+            if matches:
+                lst.setCurrentItem(matches[0])
+        self._set_preset_status(f"Saved preset “{key}”.")
+        steempeg_information(self.ui, "Preset saved", f"Saved “{key}”.")
+
+    def apply_export_preset_to_panel(self) -> None:
+        from steempeg.render.export_presets import get_preset_settings
+        from steempeg.ui.message_dialog import steempeg_warning
+        from steempeg.ui.render_job_builder import apply_job_settings_to_ui
+
+        name = self._selected_export_preset_name()
+        if not name:
+            steempeg_warning(self.ui, "Apply preset", "Select or type a preset name.")
+            return
+        settings = get_preset_settings(name, self.load_user_settings)
+        if settings is None:
+            steempeg_warning(
+                self.ui,
+                "Apply preset",
+                f"No saved preset named “{name}”.",
+            )
+            return
+        # One summary rebuild at the end — not once per combo signal.
+        apply_job_settings_to_ui(self, settings, refresh_summary=True)
+        self._set_preset_status(f"Applied “{name}” to the export panel.")
+
+    def delete_export_preset_from_ui(self) -> None:
+        from steempeg.render.export_presets import delete_preset
+        from steempeg.ui.message_dialog import steempeg_question, steempeg_warning
+
+        name = self._selected_export_preset_name()
+        if not name:
+            steempeg_warning(self.ui, "Delete preset", "Select a preset to delete.")
+            return
+        if not steempeg_question(
+            self.ui,
+            "Delete preset?",
+            f"Delete saved preset “{name}”?",
+        ):
+            return
+        if not delete_preset(
+            name,
+            load_settings=self.load_user_settings,
+            save_settings=self.save_user_settings,
+        ):
+            steempeg_warning(
+                self.ui,
+                "Delete preset",
+                f"No saved preset named “{name}”.",
+            )
+            return
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.clear()
+        self.refresh_export_presets_list()
+        self._set_preset_status(f"Deleted “{name}”.")
+
+    def apply_export_preset_to_queue_job(self, job_id: str, preset_name: str) -> None:
+        from steempeg.render.export_presets import apply_preset_to_job, get_preset_settings
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        job = self.render_queue.get(job_id) if hasattr(self, "render_queue") else None
+        if job is None:
+            return
+        settings = get_preset_settings(preset_name, self.load_user_settings)
+        if settings is None:
+            steempeg_warning(
+                self.ui,
+                "Apply preset",
+                f"No saved preset named “{preset_name}”.",
+            )
+            return
+        apply_preset_to_job(job, settings, preset_name=preset_name)
+        if job_id == getattr(self, "_selected_queue_job_id", None):
+            from steempeg.ui.render_job_builder import apply_job_settings_to_ui
+
+            apply_job_settings_to_ui(self, job.settings)
+            if hasattr(self, "update_final_setup"):
+                self.update_final_setup()
+        self._persist_render_queue()
+        self.refresh_render_queue_panel()
+        if hasattr(self, "set_status"):
+            self.set_status(f"Applied preset “{preset_name}” to queue job.")
+
+    def apply_panel_settings_to_queue_job(self, job_id: str) -> None:
+        """Per-job edit: push the live export panel onto one queued job."""
+        from steempeg.render.export_presets import apply_preset_to_job
+        from steempeg.ui.render_job_builder import snapshot_settings_from_ui
+
+        job = self.render_queue.get(job_id) if hasattr(self, "render_queue") else None
+        if job is None:
+            return
+        apply_preset_to_job(job, snapshot_settings_from_ui(self), preset_name="")
+        # Don't force "User: …" label when pushing live panel.
+        if (job.settings.output_preset or "").startswith("User:"):
+            job.settings.output_preset = "Custom"
+            job.refresh_output_path()
+        self._persist_render_queue()
+        self.refresh_render_queue_panel()
+        if hasattr(self, "set_status"):
+            self.set_status("Applied panel settings to queue job.")
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
