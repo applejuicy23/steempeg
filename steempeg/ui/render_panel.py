@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -1146,6 +1147,31 @@ def apply_settings_panel_density(ui, dense) -> None:
         fnt.setPixelSize(field_font)
         dest.setFont(fnt)
 
+    # Preset actions: same Save-as chrome metrics; keep purple / gray / red faces.
+    _preset_faces = (
+        ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
+        ("btn_preset_apply", "#383838", "#ffffff", "#444444", "#404040", "#6b5a8e", "#3a324a"),
+        ("btn_preset_delete", "#3a2222", "#ff8a8a", "#8b3a3a", "#522828", "#c44", "#2a1818"),
+    )
+    for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in _preset_faces:
+        btn = getattr(ui, attr, None)
+        if btn is None:
+            continue
+        btn.setFixedHeight(line_h)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {bg}; color: {fg};"
+            f" border: {border}px solid {brd}; border-radius: {btn_r}px;"
+            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
+            f" QPushButton:hover {{ background-color: {hover_bg}; border: {border}px solid {hover_brd}; }}"
+            f" QPushButton:pressed {{ background-color: {pressed_bg}; border: {border}px solid {hover_brd}; }}"
+        )
+        fnt = btn.font()
+        fnt.setFamily("Segoe UI")
+        fnt.setBold(True)
+        fnt.setPixelSize(field_font)
+        btn.setFont(fnt)
+
     for path_row in root.findChildren(QFrame, "outputPathRow"):
         lay = path_row.layout()
         if lay is not None:
@@ -1153,7 +1179,7 @@ def apply_settings_panel_density(ui, dense) -> None:
             v = 4 if dense.compact else 8
             lay.setContentsMargins(m, v, v, v)
 
-    for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export"):
+    for page_attr in ("tab_source", "tab_video", "tab_audio", "tab_export", "tab_presets"):
         page = getattr(ui, page_attr, None)
         if page is None:
             continue
@@ -1162,4 +1188,178 @@ def apply_settings_panel_density(ui, dense) -> None:
             gap = int(round(4 + (10 - 4) * getattr(dense, "scale", 0.0 if dense.compact else 1.0)))
             lay.setContentsMargins(*margins)
             lay.setSpacing(gap)
+
+
+def ensure_presets_tab(ui) -> QWidget:
+    """Add the Presets page to ``settings_tabs`` if missing (before neo nav is built)."""
+    existing = getattr(ui, "tab_presets", None)
+    if existing is not None:
+        return existing
+    tabs = getattr(ui, "settings_tabs", None)
+    if tabs is None:
+        raise RuntimeError("settings_tabs missing")
+    page = QWidget()
+    page.setObjectName("tab_presets")
+    ui.tab_presets = page
+    tabs.addTab(page, "Presets")
+    return page
+
+
+def restyle_presets_page(ui, app) -> None:
+    """Presets tab: save current Video/Audio/Export recipe under a name; manage list."""
+    from steempeg.ui.design_tokens import with_tooltip_style
+    from steempeg.ui.icon_assets import info_icon
+
+    page = ensure_presets_tab(ui)
+    _drop_layout(page)
+
+    root = QVBoxLayout(page)
+    root.setContentsMargins(*_settings_page_margins())
+    root.setSpacing(12)
+
+    title_row = QHBoxLayout()
+    title_row.setContentsMargins(0, 0, 0, 0)
+    title_row.setSpacing(8)
+    title_row.addWidget(_page_title("Create new preset"), 0, Qt.AlignmentFlag.AlignVCenter)
+    info_btn = QPushButton()
+    info_btn.setObjectName("preset_help_info")
+    info_btn.setIcon(info_icon(14))
+    info_btn.setIconSize(QSize(14, 14))
+    info_btn.setFixedSize(22, 22)
+    info_btn.setFlat(True)
+    info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    info_btn.setToolTip(
+        "Set Video, Audio, and Export first — then save the recipe here.\n"
+        "Apply a preset to the panel, or right-click a queue job → Apply preset."
+    )
+    info_btn.setStyleSheet(
+        with_tooltip_style(
+            "QPushButton {"
+            " background: transparent; border: none; border-radius: 11px;"
+            " padding: 0px; margin: 0px;"
+            "}"
+            " QPushButton:hover { background-color: rgba(255, 255, 255, 0.08); }"
+            " QPushButton:pressed { background-color: rgba(255, 255, 255, 0.12); }"
+        )
+    )
+    ui.btn_preset_help = info_btn
+    title_row.addWidget(info_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+    title_row.addStretch(1)
+    root.addLayout(title_row)
+
+    name_cap = QLabel("Preset name")
+    name_cap.setStyleSheet(_FIELD_LABEL_QSS)
+    name_edit = QLineEdit()
+    name_edit.setObjectName("preset_name_edit")
+    name_edit.setPlaceholderText("e.g. Discord 720p")
+    name_edit.setStyleSheet(
+        "QLineEdit { background-color: #2a2a2a; color: #e8e8e8; border: 1px solid #444;"
+        " border-radius: 8px; padding: 8px 10px; font-weight: bold; }"
+        " QLineEdit:focus { border: 1px solid #8e7cc3; }"
+    )
+    ui.preset_name_edit = name_edit
+    name_block = QWidget()
+    name_lay = QVBoxLayout(name_block)
+    name_lay.setContentsMargins(0, 0, 0, 0)
+    name_lay.setSpacing(4)
+    name_lay.addWidget(name_cap)
+    name_lay.addWidget(name_edit)
+    root.addWidget(_content_width_wrap(name_block))
+
+    # Same chrome as Export "Save as…" (Segoe UI bold, fixed height, pad-x only);
+    # keep purple / gray / red faces.
+    def _save_as_like_btn(label: str, *, bg: str, fg: str, border: str, hover_bg: str, hover_border: str, pressed_bg: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedHeight(36)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {bg}; color: {fg};"
+            f" border: 2px solid {border}; border-radius: 12px;"
+            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-weight: bold; font-size: 13px; padding: 0px 12px; }}"
+            f" QPushButton:hover {{ background-color: {hover_bg}; border: 2px solid {hover_border}; }}"
+            f" QPushButton:pressed {{ background-color: {pressed_bg}; border: 2px solid {hover_border}; }}"
+        )
+        fnt = btn.font()
+        fnt.setFamily("Segoe UI")
+        fnt.setBold(True)
+        fnt.setPixelSize(13)
+        btn.setFont(fnt)
+        return btn
+
+    btn_row = QHBoxLayout()
+    btn_row.setSpacing(8)
+    btn_save = _save_as_like_btn(
+        "Save current settings",
+        bg="#4a3d66",
+        fg="#f0ecff",
+        border="#6b5a8e",
+        hover_bg="#5a4d76",
+        hover_border="#b29ae7",
+        pressed_bg="#3a324a",
+    )
+    btn_apply = _save_as_like_btn(
+        "Apply to panel",
+        bg="#383838",
+        fg="#ffffff",
+        border="#444444",
+        hover_bg="#404040",
+        hover_border="#6b5a8e",
+        pressed_bg="#3a324a",
+    )
+    btn_delete = _save_as_like_btn(
+        "Delete",
+        bg="#3a2222",
+        fg="#ff8a8a",
+        border="#8b3a3a",
+        hover_bg="#522828",
+        hover_border="#c44",
+        pressed_bg="#2a1818",
+    )
+    ui.btn_preset_save = btn_save
+    ui.btn_preset_apply = btn_apply
+    ui.btn_preset_delete = btn_delete
+    btn_row.addWidget(btn_save)
+    btn_row.addWidget(btn_apply)
+    btn_row.addWidget(btn_delete)
+    btn_row.addStretch()
+    root.addLayout(btn_row)
+
+    list_cap = QLabel("Saved presets")
+    list_cap.setStyleSheet(_FIELD_LABEL_QSS)
+    root.addWidget(list_cap)
+
+    preset_list = QListWidget()
+    preset_list.setObjectName("preset_list")
+    preset_list.setMinimumHeight(160)
+    preset_list.setStyleSheet(
+        "QListWidget { background-color: #2a2a2a; border: 1px solid #3a3a3a;"
+        " border-radius: 10px; color: #e0e0e0; padding: 4px; }"
+        " QListWidget::item { padding: 8px 10px; border-radius: 6px; }"
+        " QListWidget::item:selected { background-color: #4a3d66; color: #ffffff; }"
+        " QListWidget::item:hover { background-color: #383838; }"
+    )
+    ui.preset_list = preset_list
+    root.addWidget(_content_width_wrap(preset_list), 1)
+
+    status = QLabel("")
+    status.setObjectName("preset_status_label")
+    status.setWordWrap(True)
+    status.setStyleSheet(f"color: #9a9a9a; background: transparent; font-size: 11px; {_FONT}")
+    ui.preset_status_label = status
+    root.addWidget(status)
+
+    btn_save.clicked.connect(lambda: getattr(app, "save_export_preset_from_ui", lambda: None)())
+    btn_apply.clicked.connect(lambda: getattr(app, "apply_export_preset_to_panel", lambda: None)())
+    btn_delete.clicked.connect(lambda: getattr(app, "delete_export_preset_from_ui", lambda: None)())
+    preset_list.itemSelectionChanged.connect(
+        lambda: getattr(app, "_on_export_preset_selection_changed", lambda: None)()
+    )
+    preset_list.itemDoubleClicked.connect(
+        lambda *_: getattr(app, "apply_export_preset_to_panel", lambda: None)()
+    )
+
+    if hasattr(app, "refresh_export_presets_list"):
+        app.refresh_export_presets_list()
 
