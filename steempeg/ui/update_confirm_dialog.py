@@ -54,10 +54,11 @@ class UpdateConfirmDialog(SteempegDialog):
         super().__init__("Before updating", parent, bar_color=bar_color, bg_color=bg_color)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        mw, _ = scaled_dialog_size(420, 230, parent=parent)
+        mw, mh = scaled_dialog_size(420, 230, parent=parent)
         rw, rh = scaled_dialog_size(460, 230, parent=parent)
-        self.setMinimumWidth(mw)
+        self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
+        self.set_comfort_size(460, 230)
         self._choice = UpdateConfirmChoice.CANCEL
 
         root = self.content_layout
