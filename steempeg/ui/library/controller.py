@@ -1354,12 +1354,21 @@ class LibraryMixin:
         self._ensure_salvage_verified_cache()
         norm = os.path.normpath(clip_path)
         entry = self._salvage_verified_cache.get(norm)
-        if not entry:
+        if not entry or not entry.get("cured"):
             return None
-        if entry.get("mtime") != self._clip_folder_mtime(clip_path):
+        if not os.path.isdir(norm):
             return None
-        if not self._salvage_manifests_on_disk(clip_path):
+        mtime = self._clip_folder_mtime(norm)
+        if not mtime:
             return None
+        # Cured is user-verified — marker/thumbnail/cache writes must not revoke it.
+        if entry.get("mtime") != mtime:
+            entry = dict(entry)
+            entry["mtime"] = mtime
+            self._salvage_verified_cache[norm] = entry
+            self._save_salvage_verified_cache()
+        if self._salvage_manifests_on_disk(norm):
+            self._register_salvaged_clip(norm)
         return entry
 
     def _is_clip_cured(self, clip_path: str) -> bool:
@@ -1478,6 +1487,7 @@ class LibraryMixin:
         """Rehydrate salvage manifests for cured clips saved from past sessions."""
         self._ensure_salvage_verified_cache()
         stale: list[str] = []
+        changed = False
         for norm, entry in list(self._salvage_verified_cache.items()):
             if not entry.get("cured"):
                 stale.append(norm)
@@ -1485,18 +1495,20 @@ class LibraryMixin:
             if not os.path.isdir(norm):
                 stale.append(norm)
                 continue
-            try:
-                mtime = os.path.getmtime(norm)
-            except OSError:
+            mtime = self._clip_folder_mtime(norm)
+            if not mtime:
                 stale.append(norm)
                 continue
-            if entry.get("mtime") != mtime or not self._salvage_manifests_on_disk(norm):
-                stale.append(norm)
-                continue
-            self._register_salvaged_clip(norm)
+            if entry.get("mtime") != mtime:
+                entry = dict(entry)
+                entry["mtime"] = mtime
+                self._salvage_verified_cache[norm] = entry
+                changed = True
+            if self._salvage_manifests_on_disk(norm):
+                self._register_salvaged_clip(norm)
         for norm in stale:
             del self._salvage_verified_cache[norm]
-        if stale:
+        if stale or changed:
             self._save_salvage_verified_cache()
 
     def _offer_salvage_verification(self, clip_path: str) -> None:
