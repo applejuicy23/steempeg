@@ -209,6 +209,7 @@ class PlayerMixin:
         """
         self._force_pause = True
         self._eof_rewind_pending = 0
+        self._restart_from_eof = False
         self._current_mpd_abs_path = None
         self._is_switching = False
         self._awaiting_first_frame = False
@@ -643,6 +644,22 @@ class PlayerMixin:
         except Exception:
             pass
 
+    def _sync_play_button_icon(self, *, paused: bool | None = None) -> None:
+        """Keep the centre play/pause glyph aligned with mpv pause state."""
+        if not hasattr(self.ui, "btn_play"):
+            return
+        if paused is None:
+            try:
+                paused = bool(getattr(self.player, "pause", True))
+            except Exception:
+                paused = True
+        icon_path = (
+            get_resource_path("icon_play.png")
+            if paused
+            else get_resource_path("icon_pause.png")
+        )
+        self.ui.btn_play.setIcon(QIcon(icon_path))
+
     # VIDEO PLAYER CONTROLS
     def toggle_play(self):
         """ Toggles Play/Pause state in MPV and updates the button icon. """
@@ -666,15 +683,16 @@ class PlayerMixin:
                 except Exception:
                     pos = None
                 if dur and pos is not None and float(pos) >= float(dur) - 0.05:
+                    self._restart_from_eof = True
                     self._ignore_playback_stall(0.5)
                     self._safe_mpv_seek(0)
                     if hasattr(self, 'custom_timeline'):
                         self.custom_timeline.force_jump(0)
-
-            self.player.pause = not self.player.pause
-            if hasattr(self.ui, 'btn_play'):
-                icon_path = get_resource_path("icon_play.png") if self.player.pause else get_resource_path("icon_pause.png")
-                self.ui.btn_play.setIcon(QIcon(icon_path))
+                self.player.pause = False
+            else:
+                self._restart_from_eof = False
+                self.player.pause = True
+            self._sync_play_button_icon(paused=self.player.pause)
         except Exception as exc:
             logging.warning("toggle_play ignored (mpv dead?): %s", exc)
             self._discard_dead_linux_mpv()
@@ -2304,6 +2322,7 @@ class PlayerMixin:
             self._sync_library_mode_chrome()
         self._current_mpd_abs_path = None
         self._eof_rewind_pending = 0
+        self._restart_from_eof = False
 
         if hasattr(self, "custom_timeline"):
             canvas = self.custom_timeline.canvas
@@ -2947,6 +2966,7 @@ class PlayerMixin:
         self._current_mpd_abs_path = abs_path
         self._current_play_abs_path = play_path
         self._eof_rewind_pending = 0
+        self._restart_from_eof = False
 
         self._playback_last_time_pos = None
         self._playback_stall_since = None
@@ -3089,12 +3109,19 @@ class PlayerMixin:
                 # Snap to true end so the scrubber fills the purple bar (lost when
                 # we switched from rewind-to-0 to pause-at-EOF in 39.3).
                 current_ms = duration_ms if duration_ms > 0 else current_ms
+                restarting = bool(getattr(self, "_restart_from_eof", False))
+                if restarting and duration_ms > 0 and current_ms < duration_ms - end_slop:
+                    self._restart_from_eof = False
+                    restarting = False
                 if user_scrubbing:
                     pass
-                elif not self.player.pause:
-                    self.player.pause = True
-                    if hasattr(self.ui, 'btn_play'):
-                        self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
+                elif restarting:
+                    # User hit Play at EOF — seek is in flight; don't re-latch pause.
+                    self._sync_play_button_icon(paused=False)
+                else:
+                    if not self.player.pause:
+                        self.player.pause = True
+                    self._sync_play_button_icon(paused=True)
                 if (
                     not user_scrubbing
                     and hasattr(self, 'custom_timeline')
@@ -3106,6 +3133,7 @@ class PlayerMixin:
                         canvas.target_ms = float(duration_ms)
             else:
                 self._eof_rewind_pending = 0
+                self._restart_from_eof = False
 
             is_playing = not self.player.pause
 
