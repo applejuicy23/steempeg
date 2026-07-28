@@ -38,8 +38,17 @@ class _SilentUpdateCheckThread(QThread):
 
     def run(self):
         try:
-            from steempeg.services.release_catalog import fetch_releases
+            from steempeg.services.release_catalog import (
+                fetch_releases,
+                load_releases_cache,
+                releases_cache_is_fresh,
+            )
 
+            if releases_cache_is_fresh():
+                cached = load_releases_cache()
+                if cached:
+                    self.finished_ok.emit(cached)
+                    return
             releases = fetch_releases()
             self.finished_ok.emit(releases)
         except FetchError:
