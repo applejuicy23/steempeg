@@ -436,18 +436,26 @@ def dispose_portable_sheets(app) -> None:
         app._portable_sheet_garage = None
 
 
-def open_portable_clip_picker(app) -> None:
+def open_portable_clip_picker(app, *, host_parent=None) -> None:
     if getattr(app, "_portable_clip_picker_open", False):
         return
     # Allow opening during scan so the user sees the grayed/locked library;
     # selection stays gated by _clips_library_accepts_selection / setEnabled(False).
     if hasattr(app, "hide_floating_overlays"):
         app.hide_floating_overlays()
+
+    # Nest under an open Render sheet when caller didn't pass a parent.
+    if host_parent is None and getattr(app, "_portable_render_settings_open", False):
+        host_parent = getattr(app, "_portable_render_sheet_dlg", None)
+
+    nested = host_parent is not None
     app._portable_clip_picker_open = True
     try:
         # Toolbar / tabs / combos live in left_panel — refresh density for the
         # current shell width before the sheet borrows that chrome.
-        _apply_portable_shell_density(app)
+        # Skip when nested: Render already owns neo/settings density.
+        if not nested:
+            _apply_portable_shell_density(app)
 
         dlg = getattr(app, "_portable_clip_picker_dlg", None)
         try:
@@ -476,6 +484,26 @@ def open_portable_clip_picker(app) -> None:
         _log.exception("Open Clips Manager failed")
     finally:
         app._portable_clip_picker_open = False
+        # After nested exec, park back under the garage (not the Render sheet).
+        dlg = getattr(app, "_portable_clip_picker_dlg", None)
+        if dlg is not None and nested:
+            try:
+                from PySide6.QtCore import Qt
+
+                if dlg.windowFlags() & Qt.WindowType.Dialog:
+                    dlg._park_hidden_dialog()
+                else:
+                    garage = _ensure_sheet_garage(app)
+                    dlg._park_as_embedded_widget(garage)
+            except Exception:
+                _log.exception("Re-park Choose a Clip after nested open failed")
+            if host_parent is not None and hasattr(host_parent, "reset_title_bar_chrome"):
+                try:
+                    host_parent.reset_title_bar_chrome()
+                    host_parent.raise_()
+                    host_parent.activateWindow()
+                except Exception:
+                    _log.exception("Refresh Render sheet after nested Choose a Clip failed")
         if hasattr(app, "_sync_library_scan_interaction_lock"):
             app._sync_library_scan_interaction_lock(
                 busy=bool(getattr(app, "_clips_scan_active", False))
