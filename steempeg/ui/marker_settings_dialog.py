@@ -377,13 +377,6 @@ class MarkerSettingsDialog(SteempegDialog):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
-        lay.addWidget(
-            self._hint(
-                "A class groups your markers: shared name and color (the white dot "
-                "will be tinted). You can set one icon for the whole class."
-            )
-        )
-
         row = QHBoxLayout()
         row.setSpacing(12)
 
@@ -446,12 +439,6 @@ class MarkerSettingsDialog(SteempegDialog):
         color_row.addStretch(1)
         ed.addWidget(QLabel("Marker color (optional)"))
         ed.addLayout(color_row)
-        ed.addWidget(
-            self._hint(
-                "Leave empty for a plain group. Color tints white pin / screenshot "
-                "glyphs — custom pictures are never recolored."
-            )
-        )
 
         icon_row = QHBoxLayout()
         self._cls_icon_btn = QPushButton("Class icon…")
