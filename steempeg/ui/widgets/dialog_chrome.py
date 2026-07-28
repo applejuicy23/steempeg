@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.icon_utils import app_logo_pixmap, app_window_icon
 from steempeg.ui.window_chrome import _TrafficLight
 
 _SIDE_RAIL_PX = 2
@@ -47,14 +48,19 @@ class _DialogTitleBar(QWidget):
         root.setContentsMargins(10, 0, 10, 0)
         root.setSpacing(0)
 
-        icon_path = bar_icon if bar_icon and os.path.isfile(bar_icon) else get_resource_path("logo.png")
-        if os.path.isfile(icon_path):
-            icon_lbl = QLabel()
-            icon_lbl.setPixmap(
-                QPixmap(icon_path).scaled(
+        icon_path = bar_icon if bar_icon and os.path.isfile(bar_icon) else None
+        pixmap = None
+        if icon_path:
+            source = QPixmap(icon_path)
+            if not source.isNull():
+                pixmap = source.scaled(
                     16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
                 )
-            )
+        else:
+            pixmap = app_logo_pixmap(16)
+        if pixmap is not None and not pixmap.isNull():
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(pixmap)
             icon_lbl.setFixedSize(16, bar_h)
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             root.addWidget(icon_lbl)
@@ -205,6 +211,9 @@ class SteempegDialog(QDialog):
         self._bg_color = bg_color
 
         self.setWindowTitle(title)
+        icon = app_window_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         # Translucent only when allowed on screen — otherwise DWM paints a gray ghost.
         if not self._map_suppressed:
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -282,6 +291,17 @@ class SteempegDialog(QDialog):
         # Do NOT clear WA_TranslucentBackground here — after winId() exists,
         # flipping it off/on leaves opaque black corners on the next show.
         self.hide()
+        self.reset_title_bar_chrome()
+
+    def reset_title_bar_chrome(self) -> None:
+        """Clear stuck traffic-light hover after park/unpark or nested modals."""
+        bar = getattr(self, "_title_bar", None)
+        if bar is None:
+            return
+        for attr in ("btn_close", "btn_minimize"):
+            btn = getattr(bar, attr, None)
+            if btn is not None and hasattr(btn, "_set_hovered"):
+                btn._set_hovered(False)
 
     # Back-compat name used by portable sheets / chrome.
     def _park_offscreen(self) -> None:
@@ -316,6 +336,7 @@ class SteempegDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAutoFillBackground(False)
         self.setWindowOpacity(1.0)
+        self.reset_title_bar_chrome()
 
     def silent_promote_for_prewarm(self, host: QWidget) -> None:
         """After garage build: create the Dialog HWND once while still unmapped.
