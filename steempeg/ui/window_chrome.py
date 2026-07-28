@@ -1041,18 +1041,15 @@ class _WindowsEdgeResizeController(QObject):
         w, h = window.width(), window.height()
         b, c = _WIN_RESIZE_BORDER, _WIN_RESIZE_CORNER
         tc = _WIN_RESIZE_TOP_CORNER
-        # Keep the top edge / top-right hit targets out of the traffic-light strip.
-        control_reserve = _CONTROL_STRIP_WIDTH + 6
-        top_span = max(0, w - 2 * tc - control_reserve)
         # Order matches specs in __init__.
         # Top corners stay small — a big square ate the close/min/max dots.
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, top_span, b),  # top (stops before window controls)
+            (tc, 0, max(0, w - 2 * tc), b),  # top
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
             (0, 0, tc, tc),  # top-left
-            (max(0, w - tc - control_reserve), 0, tc, tc),  # top-right (left of dots)
+            (max(0, w - tc), 0, tc, tc),  # top-right
             (0, max(0, h - c), c, c),  # bottom-left
             (max(0, w - c), max(0, h - c), c, c),  # bottom-right
         )
