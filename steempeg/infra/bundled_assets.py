@@ -62,6 +62,7 @@ _BASE_ASSETS = (
     "clipcut1.png",
     "clipcut2.png",
     "pointuser.png",
+    "markersettings.png",
     "clipcutback.png",
     "filter.png",
     "durationsort1.png",
