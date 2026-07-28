@@ -801,7 +801,7 @@ def _looks_like_transport_block(exc: BaseException) -> bool:
     return any(n in text for n in needles)
 
 
-def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
+def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[ReleaseEntry]:
     """Fetch all public releases, newest first."""
     releases: list[ReleaseEntry] = []
     page = 1
@@ -886,7 +886,161 @@ def fetch_releases(*, timeout: float = 10.0) -> list[ReleaseEntry]:
 
     releases.sort(key=lambda entry: entry.version_float, reverse=True)
     logging.info("RELEASE_CATALOG: fetched %s releases", len(releases))
+    if save_cache:
+        save_releases_cache(releases)
     return releases
+
+
+_RELEASES_CACHE_FILENAME = "release_catalog.json"
+# Silent title-bar probe can skip GitHub when the on-disk catalog is still fresh.
+RELEASES_CACHE_MAX_AGE_SEC = 6 * 3600
+
+
+def _releases_cache_path() -> str:
+    from steempeg.infra.paths import get_save_directory
+
+    return os.path.join(get_save_directory(), "cache", _RELEASES_CACHE_FILENAME)
+
+
+def _milestone_to_dict(milestone: VersionMilestone) -> dict:
+    return {
+        "version": milestone.version,
+        "icon": milestone.icon,
+        "short_label": milestone.short_label,
+        "detail": milestone.detail,
+    }
+
+
+def _milestone_from_dict(data: dict) -> VersionMilestone:
+    return VersionMilestone(
+        float(data.get("version", 0)),
+        str(data.get("icon", "")),
+        str(data.get("short_label", "")),
+        str(data.get("detail", "")),
+    )
+
+
+def _entry_to_dict(entry: ReleaseEntry) -> dict:
+    return {
+        "tag_name": entry.tag_name,
+        "name": entry.name,
+        "version": list(entry.version),
+        "version_str": entry.version_str,
+        "version_float": entry.version_float,
+        "html_url": entry.html_url,
+        "body": entry.body,
+        "zip_url": entry.zip_url,
+        "zip_name": entry.zip_name,
+        "era": entry.era.value,
+        "install_tier": entry.install_tier.value,
+        "installable": entry.installable,
+        "milestones": [_milestone_to_dict(m) for m in entry.milestones],
+        "block_reason": entry.block_reason,
+        "published_at": entry.published_at,
+        "zip_size": entry.zip_size,
+        "zip_sha256": entry.zip_sha256,
+        "available_platforms": sorted(entry.available_platforms),
+    }
+
+
+def _entry_from_dict(data: dict) -> ReleaseEntry | None:
+    try:
+        version = tuple(int(part) for part in (data.get("version") or []))
+        if not version:
+            return None
+        era = VersionEra(str(data.get("era", VersionEra.RELIABLE.value)))
+        install_tier = InstallTier(str(data.get("install_tier", InstallTier.NO_ZIP.value)))
+        milestones = tuple(
+            _milestone_from_dict(item) for item in (data.get("milestones") or [])
+        )
+        platforms = frozenset(str(p) for p in (data.get("available_platforms") or []))
+        return ReleaseEntry(
+            tag_name=str(data.get("tag_name") or ""),
+            name=str(data.get("name") or ""),
+            version=version,
+            version_str=str(data.get("version_str") or format_version(version)),
+            version_float=float(data.get("version_float", version_to_float(version))),
+            html_url=str(data.get("html_url") or ""),
+            body=str(data.get("body") or ""),
+            zip_url=data.get("zip_url"),
+            zip_name=data.get("zip_name"),
+            era=era,
+            install_tier=install_tier,
+            installable=bool(data.get("installable")),
+            milestones=milestones,
+            block_reason=data.get("block_reason"),
+            published_at=str(data.get("published_at") or ""),
+            zip_size=data.get("zip_size"),
+            zip_sha256=data.get("zip_sha256"),
+            available_platforms=platforms,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def releases_cache_age_sec() -> float | None:
+    """Seconds since the on-disk catalog was written, or None if missing."""
+    path = _releases_cache_path()
+    if not os.path.isfile(path):
+        return None
+    try:
+        from steempeg.infra import cache as json_cache
+
+        payload = json_cache.read_json(path, default={})
+        fetched_at = float(payload.get("fetched_at", 0) or 0)
+        if fetched_at <= 0:
+            return None
+        return max(0.0, time.time() - fetched_at)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def releases_cache_is_fresh(*, max_age_sec: float = RELEASES_CACHE_MAX_AGE_SEC) -> bool:
+    age = releases_cache_age_sec()
+    return age is not None and age <= max_age_sec
+
+
+def load_releases_cache() -> list[ReleaseEntry] | None:
+    """Return the last saved release catalog, or None if unreadable."""
+    path = _releases_cache_path()
+    if not os.path.isfile(path):
+        return None
+    try:
+        from steempeg.infra import cache as json_cache
+
+        payload = json_cache.read_json(path, default={})
+        raw = payload.get("releases")
+        if not isinstance(raw, list) or not raw:
+            return None
+        releases: list[ReleaseEntry] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            entry = _entry_from_dict(item)
+            if entry is not None:
+                releases.append(entry)
+        if not releases:
+            return None
+        releases.sort(key=lambda entry: entry.version_float, reverse=True)
+        return releases
+    except Exception:
+        logging.exception("RELEASE_CATALOG: failed reading cache")
+        return None
+
+
+def save_releases_cache(releases: list[ReleaseEntry]) -> None:
+    if not releases:
+        return
+    try:
+        from steempeg.infra import cache as json_cache
+
+        payload = {
+            "fetched_at": time.time(),
+            "releases": [_entry_to_dict(entry) for entry in releases],
+        }
+        json_cache.write_json(_releases_cache_path(), payload)
+    except Exception:
+        logging.exception("RELEASE_CATALOG: failed writing cache")
 
 
 def find_local_backups(exe_dir: str) -> list[LocalBackup]:
