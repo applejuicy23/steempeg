@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.icon_utils import app_logo_pixmap
 from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import (
@@ -162,8 +163,9 @@ class _TrafficLight(QPushButton):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Sync from real geometry after map (clears sticky hover; shows glyph if under cursor).
-        self._set_hovered(bool(self.underMouse()))
+        # Park/unpark (portable warm sheets) often leaves underMouse() true on Windows
+        # even when the pointer is elsewhere — never trust it on first map.
+        self._set_hovered(False)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -352,10 +354,10 @@ class SteempegTitleBar(QWidget):
         root.setContentsMargins(10, 0, 12, 0)
         root.setSpacing(0)
 
-        icon_path = get_resource_path("logo.png")
-        if os.path.isfile(icon_path):
+        pixmap = app_logo_pixmap(16)
+        if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(QPixmap(icon_path).scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            icon_lbl.setPixmap(pixmap)
             icon_lbl.setFixedHeight(bar_h)
             icon_lbl.setFixedWidth(16)
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
@@ -706,6 +708,20 @@ class SteempegTitleBar(QWidget):
         btn.setFixedWidth(min(hint_w, 160))
         btn.show()
 
+    def reset_traffic_lights(self) -> None:
+        """Repaint window controls after maximize/DWM refresh (sticky hover / missed paint)."""
+        for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+            btn = getattr(self, attr, None)
+            if btn is None:
+                continue
+            if hasattr(btn, "_set_hovered"):
+                btn._set_hovered(False)
+            btn.setVisible(True)
+            btn.setEnabled(True)
+            btn.raise_()
+            btn.update()
+        self.update()
+
     def sync_window_state(self) -> None:
         # Linux fake-maximize uses work-area geometry (isMaximized() stays False).
         maximized = self._window.isMaximized()
@@ -729,6 +745,14 @@ class SteempegTitleBar(QWidget):
             self.btn_maximize.setToolTip("Maximize")
             self.btn_maximize._glyph = "maximize"
         self.btn_maximize.update()
+        self.reset_traffic_lights()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Maximize/restore often skips leaveEvent on the traffic lights — refresh
+        # once layout has settled so the dots are not stuck invisible/glyph-only.
+        if event.size().width() != event.oldSize().width():
+            QTimer.singleShot(0, self.reset_traffic_lights)
 
 
 def install_title_bar(main_window) -> SteempegTitleBar:
@@ -1017,15 +1041,18 @@ class _WindowsEdgeResizeController(QObject):
         w, h = window.width(), window.height()
         b, c = _WIN_RESIZE_BORDER, _WIN_RESIZE_CORNER
         tc = _WIN_RESIZE_TOP_CORNER
+        # Keep the top edge / top-right hit targets out of the traffic-light strip.
+        control_reserve = _CONTROL_STRIP_WIDTH + 6
+        top_span = max(0, w - 2 * tc - control_reserve)
         # Order matches specs in __init__.
         # Top corners stay small — a big square ate the close/min/max dots.
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, max(0, w - 2 * tc), b),  # top
+            (tc, 0, top_span, b),  # top (stops before window controls)
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
             (0, 0, tc, tc),  # top-left
-            (max(0, w - tc), 0, tc, tc),  # top-right
+            (max(0, w - tc - control_reserve), 0, tc, tc),  # top-right (left of dots)
             (0, max(0, h - c), c, c),  # bottom-left
             (max(0, w - c), max(0, h - c), c, c),  # bottom-right
         )
@@ -1038,6 +1065,9 @@ class _WindowsEdgeResizeController(QObject):
             grip.setEnabled(True)
             grip.show()
             grip.raise_()
+        tb = getattr(window, "title_bar", None)
+        if tb is not None and hasattr(tb, "reset_traffic_lights"):
+            tb.reset_traffic_lights()
 
 
 def enable_windows_edge_resize(window: QWidget) -> None:
