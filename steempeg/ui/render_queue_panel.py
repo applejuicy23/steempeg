@@ -545,6 +545,10 @@ class QueueJobCard(QFrame):
         act_select = menu.addAction("▶️  Select in editor")
         act_select.triggered.connect(lambda: self.clicked.emit(self._job_id))
 
+        from steempeg.ui.queue_preset_menu import add_export_preset_menu_actions
+
+        add_export_preset_menu_actions(menu, self, self._job_id)
+
         act_open_clip = menu.addAction("📂  Open clip folder")
         clip_exists = bool(job.clip_path) and os.path.isdir(job.clip_path)
         act_open_clip.setEnabled(clip_exists)
