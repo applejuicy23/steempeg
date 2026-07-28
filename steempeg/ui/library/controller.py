@@ -3034,7 +3034,20 @@ class LibraryMixin:
         button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
         x_shift = menu.width() - self.btn_filter_pill.width()
         menu_y = button_bottom_left.y() + 5
-        menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
+        menu_x = button_bottom_left.x() - x_shift + 10
+        host = None
+        try:
+            host = self.btn_filter_pill.window()
+        except RuntimeError:
+            host = None
+        if host is not None:
+            try:
+                min_x = host.mapToGlobal(QPoint(8, 0)).x()
+                max_x = host.mapToGlobal(QPoint(host.width() - menu.width() - 8, 0)).x()
+                menu_x = max(min_x, min(menu_x, max_x))
+            except RuntimeError:
+                pass
+        menu.move(menu_x, menu_y)
 
         floor_y = self._filter_popup_floor_y(menu_y)
         menu.set_content_max_height(max(160, floor_y - menu_y - 8))
