@@ -3493,6 +3493,9 @@ class RenderMixin:
                 # Empty + already shut: keep maxWidth clamped, handle visible.
                 self._set_queue_pane_closed(True)
 
+        if hasattr(self, "sync_queue_minimum"):
+            self.sync_queue_minimum()
+
     def start_render_thread(self):
         """Prepares parameters and starts rendering (single clip or full queue)."""
         if getattr(self, '_is_rendering', False):

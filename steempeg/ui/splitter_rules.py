@@ -34,6 +34,22 @@ Handle states, from open to closed:
 States 4 and 5 use hysteresis so the collapse cannot flicker, and both are
 derived from the live pointer position rather than a latched size — dragging
 back out always reopens the player column at its floor.
+
+A collapsed pane is pinned by a one-pixel explicit minimum (see ``PANE_FREED``),
+without which the outer splitter re-inflates the block and the kiss springs
+back. Qt reads that minimum as licence to regrow the pane a pixel at a time, so
+any drag that *starts* from a collapse is driven here too — including the right
+handle, which otherwise runs on plain Qt. Collapsed panes pop open at their
+floor in one step; they never creep.
+
+Either handle can undo a kiss — but only out of slack its own neighbour can
+actually spare, and a neighbour already down to its own floor has none. Reopening
+the player column there would mean shoving that neighbour under its floor, which
+is what used to make a handle sitting at the verge of closing wander off instead
+of closing. So the room becomes a two-position toggle at its own midpoint: the
+neighbour holds all of it with the column kissed shut, or the neighbour shuts and
+the joint travels, both handles moving together with the far pane taking up the
+room. A handle already against its wall has nothing to shut and stays put.
 """
 
 from __future__ import annotations
@@ -50,15 +66,20 @@ KISS_OUT = 0.75
 CLIPS_SNAP_SHUT = 0.5
 # A pane thinner than this is a leftover scrap, not an open pane.
 PANE_SCRAP_WIDTH = 48
-# Smallest the player column's floor may be scaled to on a cramped shell.
-PLAYER_COLUMN_CRAMPED = 120
-# Explicit minimum that frees the player column for the kiss. Zero is ignored:
-# qSmartMinSize only lets an explicit minimum override the content-driven
-# minimumSizeHint when it is greater than zero.
-PLAYER_COLUMN_FREED = 1
+# Least slack a neighbour must be able to spare before the player column is
+# worth reopening at all. Under this the collapse simply holds.
+PLAYER_COLUMN_MIN_SLACK = 120
+# Explicit minimum that frees a collapsed pane. Zero is ignored: qSmartMinSize
+# only lets an explicit minimum override the content-driven minimumSizeHint
+# when it is greater than zero.
+PANE_FREED = 1
 
 LEFT = "left"
 RIGHT = "right"
+
+# Which pane the right handle starts its drag with collapsed.
+FROM_KISS = "from-kiss"
+REOPEN_QUEUE = "reopen-queue"
 
 
 class _HandleDragWatcher(QObject):
@@ -97,6 +118,7 @@ class SplitterRulesMixin:
         self._splitter_dragging = False
         self._splitter_handle_watchers = []
         self._frozen_queue_width = 0
+        self._right_drag_mode = ""
         self._watch_splitter_handle(getattr(ui, "main_splitter", None), LEFT)
         self._watch_splitter_handle(getattr(self, "right_h_splitter", None), RIGHT)
 
@@ -116,41 +138,86 @@ class SplitterRulesMixin:
     def _begin_splitter_drag(self, side: str) -> None:
         self._splitter_drag_side = side
         self._splitter_dragging = True
-        if side != LEFT or not self._splitter_rules_active():
+        if not self._splitter_rules_active():
+            return
+        if side == RIGHT:
+            # Latched once: mid-drag a pane stops being collapsed, and the rule
+            # must not change while the button is still down.
+            self._right_drag_mode = self._right_drag_mode_for_state()
             return
         sizes = self.right_h_splitter.sizes()
         # Freeze the wall now. Reading it live lets the queue balloon while the
         # player column is collapsed, which drags the right handle along.
-        self._frozen_queue_width = int(sizes[1]) if len(sizes) >= 2 else 0
+        queue_w = int(sizes[1]) if len(sizes) >= 2 else 0
+        self._frozen_queue_width = queue_w if queue_w > PANE_SCRAP_WIDTH else 0
+        self.sync_queue_minimum()
 
     def _end_splitter_drag(self, side: str) -> None:
         if getattr(self, "_splitter_drag_side", None) == side:
             self._splitter_drag_side = None
         self._splitter_dragging = False
         self._frozen_queue_width = 0
+        self._right_drag_mode = ""
+        self._sync_kiss_flag()
+        self.sync_queue_minimum()
+
+    def _sync_kiss_flag(self) -> None:
+        """Match the hysteresis flag to the sizes the drag actually left.
+
+        Drags that start with both panes open run on plain Qt, so a collapse made
+        that way never went through the hysteresis and would otherwise be missed.
+        """
+        if not self._splitter_rules_active():
+            return
+        sizes = self.right_h_splitter.sizes()
+        self._player_column_kissed = len(sizes) >= 2 and int(sizes[0]) <= PANE_FREED
+
+    def sync_queue_minimum(self) -> None:
+        """Match the collapsed-pane minimums to the right column's live sizes.
+
+        Collapsed panes still feed the nested splitter's minimumSizeHint, so a
+        closed queue keeps holding ~480px that the player column can never use.
+        Every path that reopens a pane clears its minimum itself.
+        """
+        if not self._splitter_rules_active():
+            return
+        sizes = self.right_h_splitter.sizes()
+        if len(sizes) < 2:
+            return
+        # Compare against the sentinel, not zero: Qt hands a collapsed pane that
+        # exact minimum back, so a strict test reads "shut" as "open" and drops
+        # the minimums that were holding the kiss together.
+        self._free_collapsed_minimums(
+            int(sizes[0]) <= PANE_FREED, int(sizes[1]) <= PANE_FREED
+        )
 
     def _splitter_drag_moved(self, side: str, global_x: int, grab_offset: int) -> bool:
         """Place both splitters for this pointer position. True = event consumed."""
-        if side != LEFT or getattr(self, "_splitter_drag_side", None) != LEFT:
+        if getattr(self, "_splitter_drag_side", None) != side:
             return False
         if not self._splitter_rules_active():
             return False
-        queue_w = int(getattr(self, "_frozen_queue_width", 0))
-        if queue_w <= PANE_SCRAP_WIDTH:
-            # Queue closed — no wall to work against, let Qt drag normally.
+        if side == RIGHT:
+            mode = getattr(self, "_right_drag_mode", "")
+            if mode == FROM_KISS:
+                return self._drag_right_from_kiss(global_x, grab_offset)
+            if mode == REOPEN_QUEUE:
+                return self._reopen_queue_pane(global_x, grab_offset)
+            # Both panes open: nothing to snap, Qt divides them as it always has.
             return False
-
+        queue_w = int(getattr(self, "_frozen_queue_width", 0))
         main = self.ui.main_splitter
-        rhs = self.right_h_splitter
         main_total = sum(main.sizes()) or main.width()
         # Everything the drag may divide: Clips plus the player column.
-        avail = main_total - queue_w - rhs.handleWidth()
+        avail = main_total - queue_w - self._right_handle_width()
         if avail <= 0:
             return False
 
         requested_left = main.mapFromGlobal(QPoint(int(global_x), 0)).x() - int(grab_offset)
         left = max(0, min(int(requested_left), avail))
         floor = self._effective_player_floor(avail)
+        if floor <= 0:
+            return self._place_left_handle_at_verge(main_total, left, avail, queue_w)
 
         left = self._snap_clips_width(left, avail, floor)
         player_w = self._resolve_player_width(avail - left, floor)
@@ -173,6 +240,20 @@ class SplitterRulesMixin:
             and getattr(ui, "right_panel", None) is not None
         )
 
+    def _right_handle_width(self) -> int:
+        """How much room the right handle really takes.
+
+        handleWidth() only reports the property; the stylesheet makes the handle
+        widget wider than that, and the layout goes by the widget. Using the
+        property alone leaves the kiss a few pixels off and squashes the handle.
+        """
+        rhs = self.right_h_splitter
+        handle = rhs.handle(1)
+        widget_w = 0
+        if handle is not None:
+            widget_w = max(int(handle.width()), int(handle.sizeHint().width()))
+        return max(int(rhs.handleWidth()), widget_w)
+
     def _player_column_floor(self) -> int:
         """Narrowest the player column renders at — its own content minimum.
 
@@ -181,18 +262,26 @@ class SplitterRulesMixin:
         """
         return max(int(self.ui.right_panel.minimumSizeHint().width()), 1)
 
-    def _effective_player_floor(self, avail: int) -> int:
-        """The content floor, scaled down when the shell cannot afford it.
+    def _scaled_player_floor(self, room: int, neighbour_floor: int) -> int:
+        """How wide the player column may reopen here. Zero means it may not.
 
-        Below roughly 1760px the three content floors do not fit side by side.
-        Holding the full floor there puts the reopen threshold out of reach and
-        the player column stays collapsed for good, so it is scaled to whatever
-        the drag can actually hand back.
+        Below roughly 1760px the three content floors do not fit side by side, so
+        the full floor is out of reach and the column reopens at whatever the
+        neighbour can spare. Once that is nothing — the neighbour is down to its
+        own floor — the answer is zero. Forcing a floor there is what made a
+        handle sitting at the verge of closing wander off instead of closing.
         """
+        affordable = int(room) - int(neighbour_floor)
+        if affordable < PLAYER_COLUMN_MIN_SLACK:
+            return 0
+        return min(self._player_column_floor(), affordable)
+
+    def _effective_player_floor(self, avail: int) -> int:
+        """Player floor for a left drag, where Clips Manager is the neighbour."""
         ui = self.ui
-        clips_min = left_panel_min_width(int(ui.width() or 0), widget=ui)
-        affordable = int(avail) - clips_min
-        return min(self._player_column_floor(), max(PLAYER_COLUMN_CRAMPED, affordable))
+        return self._scaled_player_floor(
+            avail, left_panel_min_width(int(ui.width() or 0), widget=ui)
+        )
 
     def _snap_clips_width(self, left: int, avail: int, floor: int) -> int:
         """States 1 and 2 — Clips is either shut or at least minimally open."""
@@ -217,13 +306,176 @@ class SplitterRulesMixin:
             return 0
         return max(int(wanted), floor)
 
+    def _place_left_handle_at_verge(
+        self, main_total: int, left: int, avail: int, queue_w: int
+    ) -> bool:
+        """Left drag with Clips a stone's throw from its own floor.
+
+        Neither pane can give the other anything here, so the room has just two
+        placements: Clips shut with the player column holding it, or Clips holding
+        it with the column kissed shut. Halfway across decides which.
+        """
+        if left >= avail * CLIPS_SNAP_SHUT:
+            self._player_column_kissed = True
+            self._apply_left_drag_geometry(main_total, avail, 0, queue_w)
+            return True
+        if self._clips_width() <= PANE_FREED:
+            # Already against the wall, so there is nothing left to shut. Pushing
+            # on would just shove the right handle along.
+            return True
+        return self._shut_clips_and_travel()
+
+    def _clips_width(self) -> int:
+        sizes = self.ui.main_splitter.sizes()
+        return int(sizes[0]) if sizes else 0
+
     def _apply_left_drag_geometry(
         self, main_total: int, left: int, player_w: int, queue_w: int
     ) -> None:
-        main = self.ui.main_splitter
+        handle = self._right_handle_width()
+        self._free_collapsed_minimums(player_w <= 0, queue_w <= 0)
+        block = player_w + queue_w + handle
+        self.ui.main_splitter.setSizes([max(int(left), 0), max(block, handle)])
+        self.right_h_splitter.setSizes([max(int(player_w), 0), max(int(queue_w), 0)])
+
+    def _right_drag_mode_for_state(self) -> str:
+        """Which pane, if any, this drag has to snap back open.
+
+        A collapsed pane is held there by a one-pixel minimum, and Qt reads that
+        as licence to regrow it a pixel at a time. Panes must pop open at their
+        floor in one step, so any drag starting from a collapse is driven here.
+        """
+        sizes = self.right_h_splitter.sizes()
+        if len(sizes) < 2:
+            return ""
+        if int(sizes[0]) <= PANE_FREED:
+            return FROM_KISS
+        return REOPEN_QUEUE if int(sizes[1]) <= PANE_FREED else ""
+
+    def _drag_right_from_kiss(self, global_x: int, grab_offset: int) -> bool:
+        """Player column collapsed: reopen it, or shut the queue and travel."""
+        sizes = self.right_h_splitter.sizes()
+        if len(sizes) >= 2 and int(sizes[1]) <= PANE_FREED:
+            # Nothing but the handle is left, so the queue comes out of Clips.
+            return self._pull_queue_out_of_clips(global_x, grab_offset)
+        room, pointer = self._right_column_room(global_x, grab_offset)
+        if room <= 0:
+            return False
+        floor = self._scaled_player_floor(room, self._queue_pane_floor())
+        if floor <= 0:
+            # Mirror of the left handle at the verge: the queue is a stone's throw
+            # from its own floor, so it either holds the room or shuts and takes
+            # the kissed left handle along. Halfway across decides which.
+            if pointer >= room * CLIPS_SNAP_SHUT:
+                self.kiss_right_column_shut()
+            else:
+                self._apply_right_column(room, 0)
+            return True
+        return self._apply_right_column(room, self._resolve_player_width(pointer, floor))
+
+    def _reopen_queue_pane(self, global_x: int, grab_offset: int) -> bool:
+        """Queue collapsed: it pops back to its floor, the player column yields."""
+        room, pointer = self._right_column_room(global_x, grab_offset)
+        if room <= 0:
+            return False
+        queue_w = self._snap_queue_width(room - pointer, room)
+        return self._apply_right_column(room, room - queue_w)
+
+    def _right_column_room(self, global_x: int, grab_offset: int) -> tuple[int, int]:
+        """Splittable width of the right column, and the player width asked for."""
         rhs = self.right_h_splitter
-        # Only an explicit minimum above zero can undercut the content floor.
-        self.ui.right_panel.setMinimumWidth(PLAYER_COLUMN_FREED if player_w <= 0 else 0)
-        block = player_w + queue_w + rhs.handleWidth()
-        main.setSizes([max(int(left), 0), max(block, 1)])
-        rhs.setSizes([max(int(player_w), 0), max(int(queue_w), 1)])
+        sizes = rhs.sizes()
+        if len(sizes) < 2:
+            return 0, 0
+        room = sum(int(s) for s in sizes)
+        pointer = rhs.mapFromGlobal(QPoint(int(global_x), 0)).x() - int(grab_offset)
+        return room, max(0, min(int(pointer), room))
+
+    def _apply_right_column(self, room: int, player_w: int) -> bool:
+        player_w = max(0, min(int(player_w), int(room)))
+        queue_w = int(room) - player_w
+        self._free_collapsed_minimums(player_w <= 0, queue_w <= 0)
+        self.right_h_splitter.setSizes([player_w, queue_w])
+        return True
+
+    def _pull_queue_out_of_clips(self, global_x: int, grab_offset: int) -> bool:
+        """Right handle in state 5 with the queue shut too — both are at the wall.
+
+        Everywhere else the right handle divides the player column against the
+        queue and Clips is not involved. Here there is no queue left to divide
+        against, so the room for it has to come out of Clips — otherwise the
+        handle would be dead.
+        """
+        main = self.ui.main_splitter
+        handle = self._right_handle_width()
+        main_total = sum(main.sizes()) or main.width()
+        room = main_total - handle
+        if room <= 0:
+            return False
+
+        pointer = main.mapFromGlobal(QPoint(int(global_x), 0)).x() - int(grab_offset)
+        queue_w = self._snap_queue_width(room - pointer, room)
+        if queue_w <= 0:
+            self.kiss_right_column_shut()
+            return True
+        self._free_collapsed_minimums(True, False)
+        main.setSizes([max(room - queue_w, 0), handle + queue_w])
+        self.right_h_splitter.setSizes([0, queue_w])
+        return True
+
+    def _shut_clips_and_travel(self) -> bool:
+        """Shut Clips from the verge, taking the kissed right handle along.
+
+        The meeting point is a rigid joint here, so both handles end up against
+        the left wall and the queue takes up the room Clips gave back. Handing it
+        to the player column instead would reopen a pane the drag never asked for.
+        """
+        main = self.ui.main_splitter
+        handle = self._right_handle_width()
+        main_total = sum(main.sizes()) or main.width()
+        room = main_total - handle
+        if room <= 0:
+            return False
+        self._player_column_kissed = True
+        self._free_collapsed_minimums(True, False)
+        main.setSizes([0, main_total])
+        self.right_h_splitter.setSizes([0, room])
+        return True
+
+    def _queue_pane_floor(self) -> int:
+        """Narrowest the queue renders at — its own content minimum."""
+        return max(int(self.render_queue_panel.minimumSizeHint().width()), 1)
+
+    def _snap_queue_width(self, wanted: int, room: int) -> int:
+        """Shut, or at least minimally open — the queue has no in-between."""
+        floor = min(self._queue_pane_floor(), room)
+        if wanted < floor * CLIPS_SNAP_SHUT:
+            return 0
+        return min(max(int(wanted), floor), room)
+
+    def kiss_right_column_shut(self) -> None:
+        """State 5 with the queue already closed.
+
+        The player column collapses and the right column shrinks to its bare
+        handle, so the two handles meet while the right one stays grabbable.
+        """
+        if not self._splitter_rules_active():
+            return
+        main = self.ui.main_splitter
+        sizes = main.sizes()
+        if len(sizes) < 2:
+            return
+        handle = self._right_handle_width()
+        self._free_collapsed_minimums(True, True)
+        self.right_h_splitter.setSizes([0, 0])
+        main.setSizes([max(sum(sizes) - handle, 0), handle])
+
+    def _free_collapsed_minimums(self, player_shut: bool, queue_shut: bool) -> None:
+        """Let collapsed panes stop reserving room. Only an explicit minimum
+        above zero can undercut a content floor — qSmartMinSize ignores zero."""
+        self.ui.right_panel.setMinimumWidth(PANE_FREED if player_shut else 0)
+        self.render_queue_panel.setMinimumWidth(PANE_FREED if queue_shut else 0)
+        # Both panes gone: the right column is nothing but its own handle. Without
+        # this the outer splitter re-inflates it and the kiss springs back open.
+        shut_width = self._right_handle_width() if (player_shut and queue_shut) else 0
+        self.right_h_splitter.setMinimumWidth(shut_width)

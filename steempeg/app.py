@@ -2689,22 +2689,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             jobs = getattr(self, "render_queue", None)
             if jobs is not None and len(jobs) > 0:
                 self._queue_user_collapsed = True
-            # Player scrap with queue closed: collapse the whole right column.
+            # Player scrap with the queue already shut → finish the kiss. Zeroing
+            # the whole column instead used to take the right handle down with
+            # it, leaving no way to pull the queue back out.
             sizes = rhs.sizes()
-            total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
             player_w = int(sizes[0]) if len(sizes) >= 2 else 0
             if 0 < player_w < 48:
-                main = getattr(self.ui, "main_splitter", None)
-                if main is not None:
-                    ms = main.sizes()
-                    if len(ms) >= 2:
-                        main.setSizes([max(sum(ms), 1), 0])
+                self.kiss_right_column_shut()
+            self.sync_queue_minimum()
             return
 
         self._queue_user_collapsed = False
         # Player scrap between Clips handle and Queue handle → complete the kiss.
         if 0 < player_w < 48:
             rhs.setSizes([0, max(int(total), 1)])
+        self.sync_queue_minimum()
 
     def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
         """Keep Clips floor only — never re-inflate a kissed-away player column."""
