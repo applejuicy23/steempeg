@@ -146,6 +146,8 @@ class TimelineCanvas(QWidget):
         self.is_hovering = False
 
         self.current_video_path = ""
+        # Linux mpv bridge plays remuxed .mkv but sniper decodes DASH chunks from .mpd.
+        self.sniper_source_path = ""
         self.current_preview_pixmap = None
         self._thumb_dir_media_path = ""
         self._batch_thumbs_busy = False
@@ -566,26 +568,35 @@ class TimelineCanvas(QWidget):
             return ""
         return os.path.normcase(os.path.normpath(str(path))).replace("\\", "/")
 
+    def _sniper_media_path(self) -> str:
+        src = getattr(self, "sniper_source_path", "") or ""
+        return src or (self.current_video_path or "")
+
     def _sniper_path_matches(self) -> bool:
-        if not hasattr(self, 'sniper') or not self.current_video_path:
+        if not hasattr(self, 'sniper') or not self._sniper_media_path():
             return False
-        return self._norm_media_path(self.sniper.video_path) == self._norm_media_path(self.current_video_path)
+        return self._norm_media_path(self.sniper.video_path) == self._norm_media_path(
+            self._sniper_media_path()
+        )
 
     def _thumb_dir_is_valid(self):
         thumb_dir = getattr(self, 'thumb_dir', None)
         if not thumb_dir or not os.path.exists(thumb_dir):
             return False
         src = getattr(self, '_thumb_dir_media_path', '')
-        return bool(src) and self._norm_media_path(src) == self._norm_media_path(self.current_video_path)
+        return bool(src) and self._norm_media_path(src) == self._norm_media_path(
+            self._sniper_media_path()
+        )
 
     def trigger_sniper(self):
-        if hasattr(self, 'sniper') and self.current_video_path and self.pending_sec >= 0:
+        sniper_path = self._sniper_media_path()
+        if hasattr(self, 'sniper') and sniper_path and self.pending_sec >= 0:
             # Don't waste PyAV on buckets already covered by batch disk thumbs.
             if self._thumb_dir_is_valid():
                 self.sniper.disk_cover_until_sec = int(MAX_BATCH_SEC)
             else:
                 self.sniper.disk_cover_until_sec = 0
-            self.sniper.request_frame(self.current_video_path, self.pending_sec)
+            self.sniper.request_frame(sniper_path, self.pending_sec)
 
     def _start_sniper_background_warm(self) -> None:
         if getattr(self, "is_hovering", False):
@@ -1735,7 +1746,12 @@ class CustomTimelineWidget(QScrollArea):
     def thumb_dir(self, val):
         self.canvas.thumb_dir = val
         if val:
-            self.canvas._thumb_dir_media_path = getattr(self.canvas, 'current_video_path', '') or ''
+            src = (
+                getattr(self.canvas, "sniper_source_path", "")
+                or getattr(self.canvas, "current_video_path", "")
+                or ""
+            )
+            self.canvas._thumb_dir_media_path = src
         else:
             self.canvas._thumb_dir_media_path = ''
 
@@ -1743,16 +1759,28 @@ class CustomTimelineWidget(QScrollArea):
     def current_video_path(self):
         return self.canvas.current_video_path
 
+    @property
+    def sniper_source_path(self):
+        return getattr(self.canvas, "sniper_source_path", "") or ""
+
+    @sniper_source_path.setter
+    def sniper_source_path(self, val):
+        self.canvas.sniper_source_path = val or ""
+
     @current_video_path.setter
     def current_video_path(self, val):
         val = val or ""
         old = getattr(self.canvas, 'current_video_path', '') or ''
+        if not val:
+            self.canvas.sniper_source_path = ""
+        old_sniper = self.canvas._sniper_media_path() if old else ""
+        new_sniper = self.canvas._sniper_media_path() if val else ""
         if hasattr(self.canvas, 'sniper') and self.canvas.sniper:
             norm = self.canvas._norm_media_path
-            if norm(val) != norm(old):
+            if norm(new_sniper) != norm(old_sniper):
                 self.canvas.sniper.kill_worker()
                 self.canvas.sniper.cache.clear()
-            self.canvas.sniper.video_path = val
+            self.canvas.sniper.video_path = new_sniper
         if val != old:
             self.canvas._hover_preview_bucket = -1
             self.canvas.thumb_dir = None

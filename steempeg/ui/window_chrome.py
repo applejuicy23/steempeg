@@ -14,7 +14,7 @@ import sys
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -601,12 +601,38 @@ class SteempegTitleBar(QWidget):
             except Exception:
                 pass
 
+        # Linux xcb/XWayland: manual move via the shell filter (no startSystemMove —
+        # it warps the cursor to the last edge-resize grab point).
+        if sys.platform != "win32" and _linux_prefer_manual_resize():
+            filt = getattr(self._window, "_linux_edge_resize_filter", None)
+            if filt is not None and hasattr(filt, "begin_title_drag"):
+                filt.begin_title_drag(event.globalPosition().toPoint())
+                event.accept()
+                return
+
+        if sys.platform != "win32":
+            handle = self._window.windowHandle()
+            if handle is not None:
+                try:
+                    if handle.startSystemMove():
+                        event.accept()
+                        return
+                except Exception:
+                    pass
+            event.accept()
+            return
+
         handle = self._window.windowHandle()
         if handle is not None:
             handle.startSystemMove()
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if sys.platform != "win32":
+            _linux_refresh_traffic_lights(self._window)
+        super().mouseMoveEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -822,6 +848,8 @@ _WIN_RESIZE_CORNER = 14
 _WIN_RESIZE_TOP_CORNER = 8
 _LINUX_RESIZE_BORDER = 8
 _LINUX_RESIZE_CORNER = 18
+# Top corners stay tiny so title-bar traffic lights stay clickable (match Windows).
+_LINUX_RESIZE_TOP_CORNER = 8
 
 
 def _nearly_maximized(window: QWidget) -> bool:
@@ -845,6 +873,79 @@ def _nearly_maximized(window: QWidget) -> bool:
         and abs(geo.width() - avail.width()) <= 48
         and abs(geo.height() - avail.height()) <= 48
     )
+
+
+def _linux_restore_target_geometry(window: QWidget) -> QRect:
+    """Preferred size when leaving Linux fake-maximize (work-area fill)."""
+    saved = getattr(window, "_linux_restore_geometry", None)
+    if isinstance(saved, QRect) and saved.isValid() and saved.width() >= 200:
+        return saved
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is None:
+        return window.geometry()
+    return screen.availableGeometry().adjusted(80, 60, -80, -60)
+
+
+def _linux_refresh_traffic_lights(window: QWidget) -> None:
+    """Re-sync traffic-light hover after a shell-level mouse grab (drag/resize)."""
+    tb = getattr(window, "title_bar", None)
+    if tb is None:
+        return
+    pos = QCursor.pos()
+    for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+        btn = getattr(tb, attr, None)
+        if btn is None or not btn.isVisible():
+            continue
+        try:
+            hovered = btn.rect().contains(btn.mapFromGlobal(pos))
+        except RuntimeError:
+            hovered = False
+        if hasattr(btn, "_set_hovered"):
+            btn._set_hovered(hovered)
+
+
+def _linux_snap_title_drag_to_top(window: QWidget) -> None:
+    """Fake-maximize when the title-bar drag ends flush with the screen top."""
+    if os.name == "nt":
+        return
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is None:
+        return
+    avail = screen.availableGeometry()
+    if window.frameGeometry().y() > avail.top() + 12:
+        return
+    if not _nearly_maximized(window):
+        window._linux_restore_geometry = QRect(window.geometry())
+    window.setGeometry(avail)
+    tb = getattr(window, "title_bar", None)
+    if tb is not None and hasattr(tb, "sync_window_state"):
+        tb.sync_window_state()
+
+
+def _linux_unsnap_from_fake_maximize(window: QWidget, global_pos: QPoint) -> None:
+    """Shrink a work-area-filled shell so title-bar drag can move it (Linux only)."""
+    if os.name == "nt" or not _nearly_maximized(window):
+        return
+    restore = _linux_restore_target_geometry(window)
+    geo = window.geometry()
+    width = max(int(restore.width()), window.minimumWidth())
+    height = max(int(restore.height()), window.minimumHeight())
+    frac_x = 0.5
+    if geo.width() > 1:
+        frac_x = (global_pos.x() - geo.x()) / float(geo.width())
+    frac_x = max(0.08, min(0.92, frac_x))
+    anchor_y = max(8, tok.TITLE_BAR_HEIGHT // 2)
+    new_x = int(global_pos.x() - width * frac_x)
+    new_y = int(global_pos.y() - anchor_y)
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        new_x = max(avail.left(), min(new_x, avail.right() - width + 1))
+        new_y = max(avail.top(), min(new_y, avail.bottom() - height + 1))
+    window.setGeometry(new_x, new_y, width, height)
+    tb = getattr(window, "title_bar", None)
+    if tb is not None and hasattr(tb, "sync_window_state"):
+        tb.sync_window_state()
 
 
 def _edge_resize_blocked(window: QWidget) -> bool:
@@ -1124,182 +1225,139 @@ def _linux_apply_manual_resize(
 
 
 class _LinuxEdgeResizeFilter(QObject):
-    """Edge/corner resize for frameless Linux windows.
+    """Title-bar window move on xcb/XWayland (manual move, no startSystemMove warp).
 
-    On xcb (XWayland) use manual setGeometry — startSystemResize feels jumpy /
-    mirrored. On native Wayland, prefer compositor startSystemResize.
-
-    Cursor handling stays on the shell widget (set/unset) — never
-    ``QApplication.setOverrideCursor``, which sticks app-wide on XWayland and
-    makes the whole interior look like a grab/click target.
+    Edge/corner resize uses transparent grip widgets (``_LinuxEdgeResizeGrips``),
+    same approach as Windows — app-wide filters miss presses under the title bar.
     """
 
     def __init__(self, window: QWidget):
         super().__init__(window)
         self._window = window
-        self._edge_cursor_on = False
-        self._drag_edges = None
-        self._drag_origin: QPoint | None = None
-        self._drag_geo = None
-        self._manual = _linux_prefer_manual_resize()
-        window.setMouseTracking(True)
+        self._title_drag_offset: QPoint | None = None
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802
-        if not isinstance(obj, QWidget):
-            return False
-
-        window = self._window
-        et = event.type()
-
-        # Always finish an active drag, even if the event targets another window
-        # (focus loss / deactivate), so grabMouse cannot stick.
-        if self._drag_edges is not None:
-            if et in (
-                QEvent.Type.MouseButtonRelease,
-                QEvent.Type.WindowDeactivate,
-                QEvent.Type.Hide,
-                QEvent.Type.Close,
-            ):
-                self._end_drag()
-                self._clear_edge_cursor()
-                return et == QEvent.Type.MouseButtonRelease
-            if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-                self._end_drag()
-                self._clear_edge_cursor()
-                return True
-            try:
-                same_window = obj.window() is window
-            except RuntimeError:
-                same_window = False
-            if et == QEvent.Type.MouseMove and same_window:
-                global_pos = (
-                    event.globalPosition().toPoint()
-                    if hasattr(event, "globalPosition")
-                    else event.globalPos()
-                )
-                if self._manual and self._drag_origin is not None and self._drag_geo is not None:
-                    _linux_apply_manual_resize(
-                        window,
-                        self._drag_edges,
-                        self._drag_origin,
-                        self._drag_geo,
-                        global_pos,
-                    )
-                    return True
-            return False
-
+    def begin_title_drag(self, global_pos: QPoint) -> None:
+        if sys.platform != "win32":
+            _linux_unsnap_from_fake_maximize(self._window, global_pos)
+        self._title_drag_offset = global_pos - self._window.pos()
         try:
-            if obj.window() is not window:
-                return False
-        except RuntimeError:
+            self._window.grabMouse()
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if self._title_drag_offset is None:
             return False
 
-        if not window.isVisible():
-            self._clear_edge_cursor()
-            return False
-
+        et = event.type()
         if et in (
-            QEvent.Type.MouseMove,
-            QEvent.Type.HoverMove,
-            QEvent.Type.Enter,
-            QEvent.Type.HoverEnter,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.WindowDeactivate,
+            QEvent.Type.Hide,
+            QEvent.Type.Close,
         ):
-            global_pos = None
-            if hasattr(event, "globalPosition"):
-                global_pos = event.globalPosition().toPoint()
-            elif hasattr(event, "globalPos"):
-                global_pos = event.globalPos()
-            if global_pos is None:
-                return False
-            edges = _linux_edges_at(window, global_pos)
-            if edges:
-                self._set_edge_cursor(_linux_cursor_for_edges(edges))
-            else:
-                self._clear_edge_cursor()
+            self._end_title_drag()
             return False
-
-        if et in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
-            if obj is window:
-                self._clear_edge_cursor()
-            return False
-
-        if et == QEvent.Type.MouseButtonPress:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return False
+        if et == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self._end_title_drag()
+            return True
+        if et == QEvent.Type.MouseMove:
             global_pos = (
                 event.globalPosition().toPoint()
                 if hasattr(event, "globalPosition")
                 else event.globalPos()
             )
-            edges = _linux_edges_at(window, global_pos)
-            if not edges:
-                return False
-
-            if self._manual:
-                self._drag_edges = edges
-                self._drag_origin = QPoint(global_pos)
-                self._drag_geo = window.geometry()
-                window.grabMouse()
-                event.accept()
-                return True
-
-            handle = window.windowHandle()
-            if handle is None:
-                return False
-            self._clear_edge_cursor()
-            if handle.startSystemResize(edges):
-                event.accept()
-                return True
-            # Fallback if compositor refuses.
-            self._manual = True
-            self._drag_edges = edges
-            self._drag_origin = QPoint(global_pos)
-            self._drag_geo = window.geometry()
-            window.grabMouse()
-            event.accept()
+            self._window.move(global_pos - self._title_drag_offset)
             return True
-
         return False
 
-    def _end_drag(self) -> None:
-        if self._drag_edges is not None:
-            try:
-                self._window.releaseMouse()
-            except Exception:
-                pass
-        self._drag_edges = None
-        self._drag_origin = None
-        self._drag_geo = None
-
-    def _set_edge_cursor(self, shape: Qt.CursorShape) -> None:
+    def _end_title_drag(self) -> None:
+        self._title_drag_offset = None
         try:
-            self._window.setCursor(QCursor(shape))
-            self._edge_cursor_on = True
-        except RuntimeError:
-            self._edge_cursor_on = False
-
-    def _clear_edge_cursor(self) -> None:
-        if not self._edge_cursor_on:
-            return
-        try:
-            # unset so children (buttons, queue cards) keep their own cursors
-            self._window.unsetCursor()
-        except RuntimeError:
+            self._window.releaseMouse()
+        except Exception:
             pass
-        self._edge_cursor_on = False
+        if sys.platform != "win32":
+            _linux_snap_title_drag_to_top(self._window)
+            win = self._window
+            QTimer.singleShot(0, lambda w=win: _linux_refresh_traffic_lights(w))
+
+
+class _LinuxEdgeResizeGrips(QObject):
+    """Transparent resize grips over the shell (Linux / macOS)."""
+
+    def __init__(self, window: QWidget):
+        super().__init__(window)
+        self._window = window
+        specs = (
+            Qt.Edge.LeftEdge,
+            Qt.Edge.RightEdge,
+            Qt.Edge.TopEdge,
+            Qt.Edge.BottomEdge,
+            Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+            Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+            Qt.Edge.BottomEdge | Qt.Edge.LeftEdge,
+            Qt.Edge.BottomEdge | Qt.Edge.RightEdge,
+        )
+        self._grips = [_WinResizeGrip(window, edges) for edges in specs]
+        window.installEventFilter(self)
+        self._layout_grips()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._window and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.WindowStateChange,
+        ):
+            self._layout_grips()
+        return False
+
+    def _layout_grips(self) -> None:
+        window = self._window
+        if _edge_resize_blocked(window):
+            for grip in self._grips:
+                grip.hide()
+                grip.setEnabled(False)
+            return
+
+        w, h = window.width(), window.height()
+        b, c = _LINUX_RESIZE_BORDER, _LINUX_RESIZE_CORNER
+        tc = _LINUX_RESIZE_TOP_CORNER
+        geos = (
+            (0, c, b, max(0, h - 2 * c)),  # left
+            (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
+            (tc, 0, max(0, w - 2 * tc), b),  # top
+            (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
+            (0, 0, tc, tc),  # top-left
+            (max(0, w - tc), 0, tc, tc),  # top-right
+            (0, max(0, h - c), c, c),  # bottom-left
+            (max(0, w - c), max(0, h - c), c, c),  # bottom-right
+        )
+        for grip, (x, y, gw, gh) in zip(self._grips, geos):
+            if gw <= 0 or gh <= 0:
+                grip.hide()
+                grip.setEnabled(False)
+                continue
+            grip.setGeometry(x, y, gw, gh)
+            grip.setEnabled(True)
+            grip.show()
+            grip.raise_()
+        tb = getattr(window, "title_bar", None)
+        if tb is not None and hasattr(tb, "reset_traffic_lights"):
+            tb.reset_traffic_lights()
 
 
 def enable_linux_edge_resize(window: QWidget) -> None:
     """Enable corner/edge resize for frameless windows on Linux (and macOS)."""
     if os.name == "nt":
         return
-    existing = getattr(window, "_linux_edge_resize_filter", None)
-    if existing is not None:
-        return
-    window._linux_edge_resize_filter = _LinuxEdgeResizeFilter(window)
+    if getattr(window, "_linux_edge_resize_filter", None) is None:
+        window._linux_edge_resize_filter = _LinuxEdgeResizeFilter(window)
+    if getattr(window, "_linux_edge_resize_grips", None) is None:
+        window._linux_edge_resize_grips = _LinuxEdgeResizeGrips(window)
 
 
 def _hex_to_colorref(hex_color: str) -> int:
@@ -1340,8 +1398,13 @@ def win32_window_command(window: QWidget, action: str) -> None:
             )
             if window.isMaximized() or nearly_max:
                 window.showNormal()
-                window.setGeometry(avail.adjusted(80, 60, -80, -60))
+                restore = getattr(window, "_linux_restore_geometry", None)
+                if isinstance(restore, QRect) and restore.isValid():
+                    window.setGeometry(restore)
+                else:
+                    window.setGeometry(avail.adjusted(80, 60, -80, -60))
             else:
+                window._linux_restore_geometry = QRect(window.geometry())
                 if window.isMaximized():
                     window.showNormal()
                 window.setGeometry(avail)

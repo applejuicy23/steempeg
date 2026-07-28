@@ -2257,9 +2257,12 @@ class PlayerMixin:
             return
         expected = getattr(sender, "mpd_path", "")
         current = ""
+        sniper_src = ""
         if hasattr(self, "custom_timeline"):
             current = getattr(self.custom_timeline, "current_video_path", "") or ""
-        if PreviewSniperWorker._norm_media_path(expected) != PreviewSniperWorker._norm_media_path(current):
+            sniper_src = getattr(self.custom_timeline, "sniper_source_path", "") or current
+        norm = PreviewSniperWorker._norm_media_path
+        if norm(expected) not in (norm(current), norm(sniper_src)):
             logging.debug(
                 "Ignored thumb batch for wrong clip (got %s, playing %s)",
                 expected, current,
@@ -2882,6 +2885,7 @@ class PlayerMixin:
                 if early_started["done"]:
                     self._current_play_abs_path = play_path
                     if hasattr(self, "custom_timeline"):
+                        self.custom_timeline.sniper_source_path = abs_path
                         self.custom_timeline.current_video_path = play_path
                     logging.info("DASH remux finished (already playing): %s", play_path)
                     return
@@ -2958,6 +2962,12 @@ class PlayerMixin:
             return
 
         if hasattr(self, 'custom_timeline'):
+            from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
+
+            sniper_src = play_path
+            if host_libmpv_needs_mpd_bridge() and abs_path.lower().endswith(".mpd"):
+                sniper_src = abs_path
+            self.custom_timeline.sniper_source_path = sniper_src
             self.custom_timeline.current_video_path = play_path
             self.custom_timeline.thumb_dir = None
 
@@ -3010,7 +3020,12 @@ class PlayerMixin:
 
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
         if clip_dur >= 1.0:
-            self._start_timeline_thumb_batch(play_path, clip_dur)
+            from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
+
+            thumb_src = play_path
+            if host_libmpv_needs_mpd_bridge() and abs_path.lower().endswith(".mpd"):
+                thumb_src = abs_path
+            self._start_timeline_thumb_batch(thumb_src, clip_dur)
         elif hasattr(self, 'custom_timeline'):
             self.custom_timeline.thumb_dir = None
             self._set_timeline_batch_thumbs_busy(False)
