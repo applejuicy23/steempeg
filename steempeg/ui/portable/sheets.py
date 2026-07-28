@@ -377,6 +377,14 @@ class PortableRenderSettingsDialog(SteempegDialog):
         footer_lay = QHBoxLayout(footer)
         footer_lay.setContentsMargins(12, 10, 12, 12)
         footer_lay.setSpacing(8)
+
+        btn_choose = QPushButton("Choose a Clip")
+        btn_choose.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_choose.setStyleSheet(_BTN_SECONDARY)
+        btn_choose.setToolTip("Open Clips Manager without closing Render settings")
+        btn_choose.clicked.connect(self._on_choose_clip)
+        footer_lay.addWidget(btn_choose, 0)
+
         footer_lay.addStretch(1)
 
         btn_save = QPushButton("Save")
@@ -385,6 +393,13 @@ class PortableRenderSettingsDialog(SteempegDialog):
         btn_save.clicked.connect(self._on_save)
         footer_lay.addWidget(btn_save)
         self.content_layout.addWidget(footer, 0)
+
+        # Title-bar X must always dismiss — bypass any future reject() overrides.
+        try:
+            self._title_bar.close_requested.disconnect(self.reject)
+        except (TypeError, RuntimeError):
+            pass
+        self._title_bar.close_requested.connect(self._force_close)
 
         if self._warm:
             # Prewarm builds the sheet hidden — don't leave hide_watcher suppressed.
@@ -425,6 +440,13 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._strip.sync_from_app()
         if hasattr(self._app, "fit_settings_tab_to_page"):
             QTimer.singleShot(0, self._app.fit_settings_tab_to_page)
+        if hasattr(self, "reset_title_bar_chrome"):
+            self.reset_title_bar_chrome()
+
+    def _force_close(self) -> None:
+        from PySide6.QtWidgets import QDialog
+
+        QDialog.reject(self)
 
     def dispose_warm(self) -> None:
         """Return borrowed neo to the main shell and destroy this dialog."""
@@ -448,6 +470,23 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self._strip.sync_from_app()
         if hasattr(self._queue, "sync_selection"):
             self._queue.sync_selection(job_id)
+
+    def _on_choose_clip(self) -> None:
+        """Nest Choose a Clip over this Render sheet (keep Render open)."""
+        from steempeg.ui.portable.chrome import open_portable_clip_picker
+
+        open_portable_clip_picker(self._app, host_parent=self)
+        if hasattr(self, "reset_title_bar_chrome"):
+            self.reset_title_bar_chrome()
+        self.raise_()
+        self.activateWindow()
+        # Clip pick may have changed preview / queue context.
+        if hasattr(self._queue, "refresh"):
+            self._queue.refresh()
+        if hasattr(self._strip, "sync_from_app"):
+            self._strip.sync_from_app()
+        if hasattr(self._strip, "sync_game_header"):
+            self._strip.sync_game_header()
 
     def _on_save(self) -> None:
         persist_render_settings(self._app)
