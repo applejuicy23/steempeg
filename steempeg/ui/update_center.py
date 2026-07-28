@@ -973,7 +973,9 @@ class UpdateCenterDialog(SteempegDialog):
             webbrowser.open(entry.html_url)
             return
         self.install_requested.emit(entry)
-        self.accept()
+        # Do NOT accept() here — the confirm dialog runs inside the install slot.
+        # Closing Update Center before/after a cancelled confirm left a stuck
+        # hand cursor on the title-bar Updates control.
 
     def _on_github_clicked(self):
         if self._selected:
