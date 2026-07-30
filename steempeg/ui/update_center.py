@@ -23,7 +23,12 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.ui.icon_assets import info_icon, load_pixmap, title_bar_update_pixmap
+from steempeg.ui.icon_assets import (
+    info_icon,
+    load_icon,
+    load_pixmap,
+    title_bar_update_pixmap,
+)
 from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
@@ -44,6 +49,13 @@ from steempeg.services.release_catalog import (
     versions_equal,
 )
 
+from steempeg.ui import design_tokens as tok
+from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
+from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.message_dialog import steempeg_question
+from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
+
 # Display order for platform availability icons next to a release version.
 _PLATFORM_ICON_ORDER = ("windows", "linux", "steamdeck")
 _PLATFORM_ASSET = {
@@ -51,12 +63,6 @@ _PLATFORM_ASSET = {
     "linux": "linux.png",
     "steamdeck": "steamdeck.png",
 }
-from steempeg.ui import design_tokens as tok
-from steempeg.ui.widgets.dialog_chrome import SteempegDialog
-from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
-from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
-from steempeg.ui.message_dialog import steempeg_question
-from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
 
 _ROW_NORMAL = """
     QFrame#versionRow {
@@ -458,12 +464,14 @@ class _VersionRow(QFrame):
             outer.addWidget(info_btn)
 
         if expand_handler is not None:
-            self._expand_btn = QPushButton("▾" if expanded else "▸")
+            self._expand_btn = QPushButton()
             self._expand_btn.setToolTip("Show other patches in this version line")
             self._expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             self._expand_btn.setStyleSheet(_ICON_BTN)
+            self._expand_btn.setIconSize(QSize(16, 16))
             self._expand_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self._expand_btn.clicked.connect(self._on_expand_clicked)
+            self.set_expanded(expanded)
             outer.addWidget(self._expand_btn)
         else:
             self._expand_btn = None
@@ -474,7 +482,8 @@ class _VersionRow(QFrame):
 
     def set_expanded(self, expanded: bool) -> None:
         if self._expand_btn is not None:
-            self._expand_btn.setText("▾" if expanded else "▸")
+            asset = "arrow_drop.png" if expanded else "arrow_right.png"
+            self._expand_btn.setIcon(load_icon(asset, 16))
 
     def set_selected(self, selected: bool) -> None:
         if selected:

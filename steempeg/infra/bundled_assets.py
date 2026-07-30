@@ -86,6 +86,8 @@ _BASE_ASSETS = (
     "clear.png",
     "info.png",
     "arrow.png",
+    "arrow_drop.png",
+    "arrow_right.png",
     "settings.png",
     "settings2.png",
     "desktop.png",
