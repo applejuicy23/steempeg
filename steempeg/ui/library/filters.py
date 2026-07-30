@@ -14,10 +14,12 @@ from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display_format
 from steempeg.core.dash.health import ClipHealth
+from steempeg.core.steam_paths import steam_id_from_clips_folder
 from steempeg.ui.icon_assets import health_icon
 from steempeg.ui.widgets import BlockCombo, FlowLayout
 
@@ -36,6 +39,29 @@ def _row_display_health_level(item) -> str:
     if item and item.data(_CLIP_CURED_ROLE):
         return ClipHealth.CURED.value
     return item.data(_CLIP_HEALTH_ROLE) or ClipHealth.HEALTHY.value
+
+
+def _library_root_for_clip(clip_path: str, roots) -> str | None:
+    """Longest matching library root for a clip folder path, or None."""
+    if not clip_path or not roots:
+        return None
+    norm = os.path.normpath(clip_path)
+    matches = []
+    for root in roots:
+        if not root:
+            continue
+        rn = os.path.normpath(root)
+        if norm == rn or norm.startswith(rn + os.sep):
+            matches.append(rn)
+    return max(matches, key=len) if matches else None
+
+
+def _folder_pill_label(path: str) -> str:
+    sid = steam_id_from_clips_folder(path)
+    if sid:
+        return f"Steam {sid}"
+    base = os.path.basename(path.rstrip("\\/")) or path
+    return base[:16] + "…" if len(base) > 18 else base
 
 
 class DateGroup(QWidget):
@@ -124,8 +150,10 @@ class FilterMenu(QWidget):
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         
-        # --- UI TWEAK: Slightly widened the menu to give the capsules a more spacious look ---
-        self.setFixedWidth(460) 
+        # Classic single-column width (~29.1). Wide shells switch to a 3-column
+        # arrangement via _relayout_sections — block internals stay unchanged.
+        self.setFixedWidth(460)
+        self._three_col = False
 
         self.container = QFrame(self)
         self.container.setObjectName("MainFilterContainer")
@@ -133,7 +161,7 @@ class FilterMenu(QWidget):
             QFrame#MainFilterContainer { background-color: #252525; border: 1px solid #3d3d3d; border-radius: 16px; }
         """)
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10) 
+        main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.addWidget(self.container)
 
         layout = QVBoxLayout(self.container)
@@ -147,7 +175,6 @@ class FilterMenu(QWidget):
         # disappears (its game was deselected) returns with the SAME state it had,
         # instead of being force-checked or force-cleared.
         self._type_checked_memory = {}
-        self._flow_sections: list[tuple[QFrame, int]] = []
 
         # --- 1. SUPER HELPER: CREATE CATEGORY MEGA-CAPSULES ---
         def create_category_capsule(title_text, content_widget):
@@ -179,18 +206,14 @@ class FilterMenu(QWidget):
             cap_layout.addWidget(content_widget)
             return capsule
 
-        def add_flow_section(title_text, content_widget, *, min_width: int) -> QFrame:
-            capsule = create_category_capsule(title_text, content_widget)
-            capsule.setMinimumWidth(min_width)
-            self._sections_layout.addWidget(capsule)
-            self._flow_sections.append((capsule, min_width))
-            return capsule
-
+        # Grid host: same capsules as 29.1, only placement changes (1 vs 3 columns).
         self._sections_host = QWidget()
         self._sections_host.setObjectName("FilterSectionsHost")
         self._sections_host.setStyleSheet("background: transparent;")
-        self._sections_layout = FlowLayout()
-        self._sections_host.setLayout(self._sections_layout)
+        self._sections_grid = QGridLayout(self._sections_host)
+        self._sections_grid.setContentsMargins(0, 0, 0, 0)
+        self._sections_grid.setHorizontalSpacing(12)
+        self._sections_grid.setVerticalSpacing(12)
 
         # --- GAMES CAPSULE (the ONLY scrollable section) ---
         self.games_container = QWidget()
@@ -215,25 +238,22 @@ class FilterMenu(QWidget):
         self._games_scroll.setWidget(self.games_container)
         self._games_scroll.setMinimumHeight(104)
         self._games_capsule = create_category_capsule("🎮 Games:", self._games_scroll)
-        layout.addWidget(self._games_capsule)
 
-        # --- TYPE CAPSULE ---
+        # --- TYPE ---
         self.types_container = QWidget()
         self.types_layout = FlowLayout()
         self.types_container.setLayout(self.types_layout)
-        add_flow_section("📂 Type:", self.types_container, min_width=188)
         self.types_container.setMouseTracking(True)
         self.types_container.installEventFilter(self)
+        self._type_capsule = create_category_capsule("📂 Type:", self.types_container)
 
-        # --- HEALTH CAPSULE ---
-        # Healthy / Issues / Dead always; Cured only when the library has cured clips
-        # (synced in gather_statistics — was always showing even with zero cured).
+        # --- HEALTH (post-29.1; sits with Type/Date in column 2) ---
         self.health_container = QWidget()
         self.health_layout = FlowLayout()
         self.health_container.setLayout(self.health_layout)
-        add_flow_section("💚 Health:", self.health_container, min_width=188)
         self.health_container.setMouseTracking(True)
         self.health_container.installEventFilter(self)
+        self._health_capsule = create_category_capsule("💚 Health:", self.health_container)
 
         self._HEALTH_PILL_TEXT = {
             ClipHealth.HEALTHY: "Healthy",
@@ -255,17 +275,22 @@ class FilterMenu(QWidget):
                 btn.hide()
             self.health_layout.addWidget(btn)
 
+        # --- FOLDERS (library roots — fills column 2 with Type/Health) ---
+        self.folders_container = QWidget()
+        self.folders_layout = FlowLayout()
+        self.folders_container.setLayout(self.folders_layout)
+        self.folders_container.setMouseTracking(True)
+        self.folders_container.installEventFilter(self)
+        self._folders_capsule = create_category_capsule("📁 Folders:", self.folders_container)
+        self._folder_checked_memory = {}
+
         # --- 3. SMART INPUTS STYLE (Clean, small pills + Rounded Spinners) ---
-        
-        # 1. Generate paths in the system's temporary folder.
         temp_dir = tempfile.gettempdir()
         up_path = os.path.join(temp_dir, "smpeg_up.png").replace('\\', '/')
         down_path = os.path.join(temp_dir, "smpeg_down.png").replace('\\', '/')
 
-        # 2. Making the program draw the icons itself!
         pix = QPixmap(16, 16)
-        
-        # Drawing the perfect upward-flicked eyeliner
+
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
@@ -275,7 +300,6 @@ class FilterMenu(QWidget):
         p.end()
         pix.save(up_path, "PNG")
 
-        # Drawing the perfect downward-sloping winged liner
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
@@ -285,7 +309,6 @@ class FilterMenu(QWidget):
         p.end()
         pix.save(down_path, "PNG")
 
-        # 3. SEWING THEM INTO STYLES
         raw_style = """
             QDateEdit, QTimeEdit {
                 background-color: #383838;
@@ -300,8 +323,8 @@ class FilterMenu(QWidget):
             }
             QDateEdit:hover, QTimeEdit:hover { background-color: #404040; border: 2px solid #6b5a8e; }
             QDateEdit:focus, QTimeEdit:focus { background-color: #3a324a; border: 2px solid #b29ae7; }
-            
-            
+
+
             QDateEdit::drop-down {
                 subcontrol-origin: border;
                 subcontrol-position: top right;
@@ -330,7 +353,7 @@ class FilterMenu(QWidget):
             }
             QDateEdit::drop-down:hover, QTimeEdit::up-button:hover, QTimeEdit::down-button:hover { background-color: #6b5a8e; }
             QDateEdit::drop-down:pressed, QTimeEdit::up-button:pressed, QTimeEdit::down-button:pressed { background-color: #b29ae7; }
-            
+
 
             QTimeEdit::up-arrow {
                 image: url("UP_ARROW_PATH");
@@ -340,96 +363,76 @@ class FilterMenu(QWidget):
                 image: url("DOWN_ARROW_PATH");
                 width: 10px; height: 10px;
             }
-            
+
 
             QCalendarWidget QWidget { alternate-background-color: #2d2d2d; background-color: #252525; color: white; }
             QCalendarWidget QToolButton { color: white; background-color: #383838; border-radius: 4px; padding: 2px; }
             QCalendarWidget QToolButton:hover { background-color: #6b5a8e; }
             QCalendarWidget QAbstractItemView:enabled { color: white; background-color: #252525; selection-background-color: #6b5a8e; selection-color: white; border-radius: 4px; }
         """
-        
+
         smart_input_style = raw_style.replace("UP_ARROW_PATH", up_path).replace("DOWN_ARROW_PATH", down_path)
         self._filter_date_arrow_up = up_path
         self._filter_date_arrow_down = down_path
         self._date_time_input_style = smart_input_style
 
-        # --- DATE CAPSULE (WITH CALENDAR POPUP & ICONS) ---
-        date_container = QWidget()
-        date_layout = QHBoxLayout(date_container)
-        date_layout.setContentsMargins(0, 0, 0, 0)
-        date_layout.setSpacing(8)
-        
+        def _bound_row_29(label_a: str, widget_a, label_b: str, widget_b) -> QWidget:
+            """29.1-style horizontal From|To row — do not restack vertically."""
+            host = QWidget()
+            host.setStyleSheet("background: transparent;")
+            row = QHBoxLayout(host)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            lbl_a = QLabel(label_a)
+            lbl_a.setStyleSheet("color: #888888; font-weight: bold;")
+            lbl_b = QLabel(label_b)
+            lbl_b.setStyleSheet("color: #888888; font-weight: bold;")
+            row.addWidget(lbl_a)
+            row.addWidget(widget_a)
+            row.addSpacing(15)
+            row.addWidget(lbl_b)
+            row.addWidget(widget_b)
+            row.addStretch()
+            return host
+
+        # --- DATE ---
         self.input_min_date = QDateEdit()
         self.input_max_date = QDateEdit()
-        
         for de in (self.input_min_date, self.input_max_date):
             de.setCalendarPopup(True)
             de.setStyleSheet(smart_input_style)
             de.setCursor(Qt.PointingHandCursor)
             de.setDateRange(QDate(2020, 1, 1), QDate(2050, 12, 31))
-        
-        # Aesthetic icons right in the text
-        lbl_from_d = QLabel("📅 From:"); lbl_from_d.setStyleSheet("color: #888888; font-weight: bold;")
-        lbl_to_d = QLabel("📅 To:"); lbl_to_d.setStyleSheet("color: #888888; font-weight: bold;")
-        
-        date_layout.addWidget(lbl_from_d)
-        date_layout.addWidget(self.input_min_date)
-        date_layout.addSpacing(15) 
-        date_layout.addWidget(lbl_to_d)
-        date_layout.addWidget(self.input_max_date)
-        date_layout.addStretch() 
-        add_flow_section("📅 Date:", date_container, min_width=300)
+        self._date_capsule = create_category_capsule(
+            "📅 Date:",
+            _bound_row_29("📅 From:", self.input_min_date, "📅 To:", self.input_max_date),
+        )
 
-        # --- TIME CAPSULE (WITH AM/PM & ICONS) ---
-        time_c_container = QWidget()
-        time_c_layout = QHBoxLayout(time_c_container)
-        time_c_layout.setContentsMargins(0, 0, 0, 0)
-        time_c_layout.setSpacing(8)
-        
+        # --- TIME OF CREATION ---
         self.input_min_time = QTimeEdit()
         self.input_max_time = QTimeEdit()
-        
         for te in (self.input_min_time, self.input_max_time):
             te.setDisplayFormat(qt_time_display_format())
             te.setStyleSheet(smart_input_style)
             te.setCursor(Qt.PointingHandCursor)
-        
-        lbl_from_t = QLabel("🕒 From:"); lbl_from_t.setStyleSheet("color: #888888; font-weight: bold;")
-        lbl_to_t = QLabel("🕒 To:"); lbl_to_t.setStyleSheet("color: #888888; font-weight: bold;")
-        
-        time_c_layout.addWidget(lbl_from_t)
-        time_c_layout.addWidget(self.input_min_time)
-        time_c_layout.addSpacing(15)
-        time_c_layout.addWidget(lbl_to_t)
-        time_c_layout.addWidget(self.input_max_time)
-        time_c_layout.addStretch()
-        add_flow_section("⏰ Time of creation:", time_c_container, min_width=300)
+        self._time_capsule = create_category_capsule(
+            "⏰ Time of creation:",
+            _bound_row_29("🕒 From:", self.input_min_time, "🕒 To:", self.input_max_time),
+        )
 
-        # --- DURATION CAPSULE (HH:MM:SS) ---
-        dur_container = QWidget()
-        dur_layout = QHBoxLayout(dur_container)
-        dur_layout.setContentsMargins(0, 0, 0, 0)
-        dur_layout.setSpacing(8)
-        
+        # --- DURATION ---
         self.input_min_dur = QTimeEdit()
         self.input_max_dur = QTimeEdit()
-        
         for de in (self.input_min_dur, self.input_max_dur):
             de.setDisplayFormat("HH:mm:ss")
             de.setStyleSheet(smart_input_style)
             de.setCursor(Qt.PointingHandCursor)
-        
-        lbl_min_dur = QLabel("⏱ Min:"); lbl_min_dur.setStyleSheet("color: #888888; font-weight: bold;")
-        lbl_max_dur = QLabel("⏱ Max:"); lbl_max_dur.setStyleSheet("color: #888888; font-weight: bold;")
-        
-        dur_layout.addWidget(lbl_min_dur)
-        dur_layout.addWidget(self.input_min_dur)
-        dur_layout.addSpacing(15)
-        dur_layout.addWidget(lbl_max_dur)
-        dur_layout.addWidget(self.input_max_dur)
-        dur_layout.addStretch()
-        add_flow_section("⏱ Duration:", dur_container, min_width=300)
+        self._dur_capsule = create_category_capsule(
+            "⏱ Duration:",
+            _bound_row_29("⏱ Min:", self.input_min_dur, "⏱ Max:", self.input_max_dur),
+        )
 
+        self._place_filter_columns(three_col=False)
         layout.addWidget(self._sections_host)
 
         bottom_layout = QHBoxLayout()
@@ -476,41 +479,151 @@ class FilterMenu(QWidget):
         self._density = None
 
     def _filter_host_width(self) -> int:
+        """Width of the window under the filter pill (Choose-a-Clip sheet or main)."""
+        app = getattr(self, "app", None)
+        pill = getattr(app, "btn_filter_pill", None) if app is not None else None
+        if pill is not None:
+            try:
+                host = pill.window()
+                if host is not None:
+                    w = int(host.width() or 0)
+                    if w > 0:
+                        return w
+            except RuntimeError:
+                pass
+        panel = getattr(getattr(app, "ui", None), "left_panel", None) if app is not None else None
+        if panel is not None:
+            try:
+                return int(panel.width() or 0)
+            except RuntimeError:
+                pass
+        return 0
+
+    def _filter_host_height(self) -> int:
         app = getattr(self, "app", None)
         pill = getattr(app, "btn_filter_pill", None) if app is not None else None
         if pill is None:
             return 0
         try:
             host = pill.window()
-            return int(host.width() or 0) if host is not None else 0
+            return int(host.height() or 0) if host is not None else 0
         except RuntimeError:
             return 0
 
-    def _resolve_menu_width(self, dense) -> int:
-        """Narrow shells get a wider filter panel so sections can flow in columns."""
+    def _width_for_mode(self, three_col: bool, dense) -> int:
         host_w = self._filter_host_width()
-        compact = bool(getattr(dense, "compact", False))
+        compact = bool(getattr(dense, "compact", False)) if dense is not None else False
+        if three_col:
+            if host_w <= 0:
+                return 980
+            usable = max(840, host_w - 32)
+            return min(usable, 1180)
         if host_w <= 0:
-            return 540 if compact else 460
-        usable = max(380, host_w - 28)
-        if compact or host_w < 980:
-            target = max(500, min(660, int(host_w * 0.54)))
-            return min(usable, target)
-        return min(usable, 520)
+            return 420 if compact else 460
+        usable = max(360, host_w - 24)
+        return min(usable, 520 if compact else 460)
+
+    def _want_three_columns(self) -> bool:
+        """
+        3 columns when the classic stack would stick out the bottom
+        (main window squeezed a little or a lot). Tall shells keep the 29.1 stack.
+        Needs enough horizontal room for three short capsules.
+        """
+        host_w = self._filter_host_width()
+        if 0 < host_w < 780:
+            return False
+        avail = int(getattr(self, "_popup_avail_h", 0) or 0)
+        if avail > 0:
+            return avail < 700
+        host_h = self._filter_host_height()
+        return 0 < host_h < 900
+
+    def _resolve_menu_width(self, dense) -> int:
+        return self._width_for_mode(self._want_three_columns(), dense)
+
+    def _clear_sections_grid(self) -> None:
+        grid = getattr(self, "_sections_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            _ = item.widget()
+
+    def _place_filter_columns(self, *, three_col: bool) -> None:
+        """
+        Squeezed: Games | Type+Health+Folders | Date+Time+Duration
+        Tall:     one vertical stack (29.1 + Health + Folders).
+        """
+        grid = getattr(self, "_sections_grid", None)
+        if grid is None:
+            return
+        games = self._games_capsule
+        type_c = self._type_capsule
+        health = self._health_capsule
+        folders = self._folders_capsule
+        date = self._date_capsule
+        time_c = self._time_capsule
+        dur = self._dur_capsule
+
+        self._clear_sections_grid()
+        self._three_col = bool(three_col)
+        top = Qt.AlignmentFlag.AlignTop
+
+        if three_col:
+            grid.addWidget(games, 0, 0, 3, 1, top)
+            grid.addWidget(type_c, 0, 1, 1, 1, top)
+            grid.addWidget(health, 1, 1, 1, 1, top)
+            grid.addWidget(folders, 2, 1, 1, 1, top)
+            grid.addWidget(date, 0, 2, 1, 1, top)
+            grid.addWidget(time_c, 1, 2, 1, 1, top)
+            grid.addWidget(dur, 2, 2, 1, 1, top)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(2, 1)
+            for r in range(3):
+                grid.setRowStretch(r, 0)
+        else:
+            order = (games, type_c, health, folders, date, time_c, dur)
+            for row, widget in enumerate(order):
+                grid.addWidget(widget, row, 0, 1, 1, top)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 0)
+            grid.setColumnStretch(2, 0)
+            for r in range(7):
+                grid.setRowStretch(r, 0)
+
+    def _stretch_games_column(self) -> None:
+        """Games left column runs down to the bottom of the other two columns."""
+        if not getattr(self, "_three_col", False):
+            return
+        gap = 12
+        mid_h = (
+            self._type_capsule.sizeHint().height()
+            + self._health_capsule.sizeHint().height()
+            + self._folders_capsule.sizeHint().height()
+            + 2 * gap
+        )
+        right_h = (
+            self._date_capsule.sizeHint().height()
+            + self._time_capsule.sizeHint().height()
+            + self._dur_capsule.sizeHint().height()
+            + 2 * gap
+        )
+        target = max(mid_h, right_h)
+        chrome = 12 + 12 + 22 + 8
+        games_floor = 108 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 124
+        self._games_scroll.setFixedHeight(max(games_floor, target - chrome))
 
     def _relayout_sections(self) -> None:
-        host = getattr(self, "_sections_host", None)
-        lay = getattr(self, "_sections_layout", None)
-        if host is None or lay is None:
-            return
-        compact = bool(getattr(self._density, "compact", False)) if self._density else False
-        cap_m = 8 if compact else 16
-        inner_w = max(220, self.container.width() - 2 * cap_m)
-        for capsule, min_w in getattr(self, "_flow_sections", ()):
-            capsule.setMinimumWidth(min(min_w, inner_w))
-        host.setFixedWidth(inner_w)
-        host_h = lay.heightForWidth(inner_w)
-        host.setFixedHeight(max(0, host_h))
+        dense = getattr(self, "_density", None)
+        three = self._want_three_columns()
+        if dense is not None:
+            target_w = self._width_for_mode(three, dense)
+            if target_w != self.width():
+                self.setFixedWidth(target_w)
+        self._place_filter_columns(three_col=three)
+        if three:
+            self._stretch_games_column()
         self.adjustSize()
 
     def _date_time_input_style_for(self, dense) -> str:
@@ -681,6 +794,7 @@ class FilterMenu(QWidget):
                 getattr(self, "games_container", None),
                 getattr(self, "types_container", None),
                 getattr(self, "health_container", None),
+                getattr(self, "folders_container", None),
             ):
                 btn.setStyleSheet(self._PILL_BTN_STYLE)
 
@@ -736,16 +850,10 @@ class FilterMenu(QWidget):
             cap_lbl = f"color: #888888; font-weight: bold; font-size: {10 if compact else 12}px;"
             for w in self.findChildren(QDateEdit):
                 w.setStyleSheet(dt_style)
-                if compact:
-                    w.setMaximumWidth(112)
-                else:
-                    w.setMaximumWidth(16777215)
+                w.setMaximumWidth(16777215)
             for w in self.findChildren(QTimeEdit):
                 w.setStyleSheet(dt_style)
-                if compact:
-                    w.setMaximumWidth(88)
-                else:
-                    w.setMaximumWidth(16777215)
+                w.setMaximumWidth(16777215)
             for lbl in self.findChildren(QLabel):
                 ss = lbl.styleSheet() or ""
                 if "#888888" in ss and "font-weight: bold" in ss:
@@ -784,26 +892,43 @@ class FilterMenu(QWidget):
     """
 
     def set_content_max_height(self, max_px: int) -> None:
-        """Size the Games list to its content, capped so the popup never overruns
-        the footer buttons. The list grows row by row as games are added and the
-        scrollbar only appears once it hits that cap.
-        """
-        # Collapse Games to measure everything else, so the cap is independent of
-        # the scroll area's own expanding policy.
+        """Size Games + pick 1 vs 3 columns from whether the stack would protrude."""
+        self._popup_avail_h = max(160, int(max_px))
+        dense = getattr(self, "_density", None)
+        host_w = self._filter_host_width()
+        can_three = host_w <= 0 or host_w >= 780
+
+        # Measure classic stack height first.
+        self._place_filter_columns(three_col=False)
+        self.setFixedWidth(self._width_for_mode(False, dense))
         self._games_scroll.setFixedHeight(0)
         self.adjustSize()
         non_games = self.height()
-        cap = max(130, max_px - non_games)
+        cap = max(130, self._popup_avail_h - non_games)
 
-        # Fixed popup width minus main/container/capsule margins + scrollbar.
-        inset = 64 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 84
+        inset = 64 if dense is not None and getattr(dense, "compact", False) else 84
         width = max(120, self.width() - inset)
         content = self.games_layout.heightForWidth(width) + 4
-        games_floor = 108 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 124
-        height = max(games_floor, min(content, int(cap * 0.46)))
+        games_floor = 108 if dense is not None and getattr(dense, "compact", False) else 124
+        stack_games_h = max(games_floor, min(content, int(cap * 0.46)))
+        self._games_scroll.setFixedHeight(stack_games_h)
+        self.adjustSize()
+        stack_h = self.height()
 
-        self._games_scroll.setFixedHeight(height)
-        self._relayout_sections()
+        three = can_three and stack_h > self._popup_avail_h
+        if three:
+            self._place_filter_columns(three_col=True)
+            self.setFixedWidth(self._width_for_mode(True, dense))
+            self._stretch_games_column()
+            # Still respect the floor — don't let Games blow past available height.
+            self.adjustSize()
+            if self.height() > self._popup_avail_h:
+                overflow = self.height() - self._popup_avail_h
+                shrunk = max(games_floor, self._games_scroll.height() - overflow)
+                self._games_scroll.setFixedHeight(shrunk)
+        else:
+            self._three_col = False
+
         self.adjustSize()
 
     _MOUSE_EVENTS = (
@@ -817,13 +942,17 @@ class FilterMenu(QWidget):
         games_c = getattr(self, 'games_container', None)
         types_c = getattr(self, 'types_container', None)
         health_c = getattr(self, 'health_container', None)
-        if source in (games_c, types_c, health_c) and source is not None and et in self._MOUSE_EVENTS:
+        folders_c = getattr(self, 'folders_container', None)
+        pill_hosts = (games_c, types_c, health_c, folders_c)
+        if source in pill_hosts and source is not None and et in self._MOUSE_EVENTS:
             if source is games_c:
                 layout = self.games_layout
             elif source is types_c:
                 layout = self.types_layout
-            else:
+            elif source is health_c:
                 layout = self.health_layout
+            else:
+                layout = self.folders_layout
             pos = event.position().toPoint()
             if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 btn = self._pill_at(layout, pos)
@@ -885,11 +1014,22 @@ class FilterMenu(QWidget):
 
     @staticmethod
     def _parse_row_duration(text):
-        txt = text or ""
-        h = int(re.search(r'(\d+)h', txt).group(1)) if 'h' in txt else 0
-        m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
-        s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
-        return h * 3600 + m * 60 + s
+        txt = (text or "").strip()
+        if not txt or txt in {"--:--", "—", "-", "Unknown"}:
+            return 0
+        h = int(re.search(r"(\d+)h", txt).group(1)) if "h" in txt else 0
+        m = int(re.search(r"(\d+)m", txt).group(1)) if "m" in txt else 0
+        s = int(re.search(r"(\d+)s", txt).group(1)) if "s" in txt else 0
+        if h or m or s:
+            return h * 3600 + m * 60 + s
+        # Fallback for MM:SS / H:MM:SS cells that never used the h/m/s labels.
+        clock = re.fullmatch(r"(\d+):([0-5]\d)(?::([0-5]\d))?", txt)
+        if not clock:
+            return 0
+        parts = [int(p) for p in clock.groups() if p is not None]
+        if len(parts) == 2:
+            return parts[0] * 60 + parts[1]
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
 
     def _get_checked_health_levels(self):
         levels = []
@@ -1008,8 +1148,55 @@ class FilterMenu(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_name", t_name)
+            btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(self._on_type_toggled)
             self.types_layout.addWidget(btn)
+
+    def _sync_folder_memory(self):
+        for i in range(self.folders_layout.count()):
+            w = self.folders_layout.itemAt(i).widget()
+            if w:
+                self._folder_checked_memory[w.property("raw_name")] = w.isChecked()
+
+    def _rebuild_folder_buttons(self, available_roots, saved_state=None):
+        self._sync_folder_memory()
+        while self.folders_layout.count():
+            item = self.folders_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        roots = sorted(available_roots)
+        if (
+            saved_state
+            and saved_state.get("active")
+            and saved_state.get("folders")
+        ):
+            saved = set(saved_state["folders"])
+            for root in roots:
+                self._folder_checked_memory[root] = root in saved
+
+        for root in roots:
+            label = _folder_pill_label(root)
+            btn = QPushButton(f" {label}")
+            btn.setCheckable(True)
+            checked = self._folder_checked_memory.get(root, True)
+            btn.setChecked(checked)
+            self._folder_checked_memory[root] = checked
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
+            btn.setProperty("raw_name", root)
+            btn.setToolTip(root)
+            btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            btn.clicked.connect(self.update_live_count)
+            self.folders_layout.addWidget(btn)
+
+    def _configured_library_roots(self):
+        roots = getattr(getattr(self, "app", None), "clips_folders", None) or []
+        return [os.path.normpath(p) for p in roots if p]
+
+    def _roots_present_in_table(self):
+        """Configured library roots offered in the Folders filter pills."""
+        return set(self._configured_library_roots())
 
     def _default_datetime_bounds(self, stats):
         min_dt = stats['min_dt']
@@ -1029,8 +1216,8 @@ class FilterMenu(QWidget):
         self._is_gathering = True
         self.input_min_date.setDate(min_dt.date())
         self.input_max_date.setDate(max_dt.date())
-        self.input_min_time.setTime(QTime(0, 0))
-        self.input_max_time.setTime(QTime(23, 59))
+        self.input_min_time.setTime(QTime(0, 0, 0))
+        self.input_max_time.setTime(QTime(23, 59, 59))
         self.input_min_dur.setTime(self._sec_to_qtime(stats['min_sec']))
         self.input_max_dur.setTime(self._sec_to_qtime(stats['max_sec']))
         self._is_gathering = False
@@ -1157,14 +1344,11 @@ class FilterMenu(QWidget):
                 item.widget().deleteLater()
 
         saved_state = getattr(self.app, 'saved_filter_state', None)
-        hide_all = bool(saved_state and saved_state.get('active') is False)
         for name, icon in unique_games.items():
             short_name = name[:14] + '...' if len(name) > 14 else name
             btn = QPushButton(icon, f" {short_name}")
             btn.setCheckable(True)
-            if hide_all:
-                btn.setChecked(False)
-            elif saved_state and saved_state.get('games'):
+            if saved_state and saved_state.get('active') and saved_state.get('games'):
                 btn.setChecked(name in saved_state['games'])
             else:
                 btn.setChecked(True)
@@ -1199,9 +1383,7 @@ class FilterMenu(QWidget):
         self.actual_max_sec = max_sec
 
         self._is_gathering = True
-        if hide_all or not saved_state:
-            self._reset_bounds_to_stats(full_stats)
-        elif saved_state.get('active'):
+        if saved_state and saved_state.get('active'):
             self.input_min_date.setDate(saved_state['min_date'])
             self.input_max_date.setDate(saved_state['max_date'])
             self.input_min_time.setTime(saved_state['min_time'])
@@ -1226,14 +1408,14 @@ class FilterMenu(QWidget):
             if not w:
                 continue
             level = w.property("health_level")
-            if hide_all:
-                w.setChecked(True)
-            elif saved_state and saved_state.get('active') and saved_state.get('health'):
+            if saved_state and saved_state.get('active') and saved_state.get('health'):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
 
         self._sync_cured_health_pill()
+
+        self._rebuild_folder_buttons(self._roots_present_in_table(), saved_state)
 
         self.input_min_date.dateChanged.connect(self.update_live_count)
         self.input_max_date.dateChanged.connect(self.update_live_count)
@@ -1267,6 +1449,9 @@ class FilterMenu(QWidget):
 
         self._sync_cured_health_pill()
 
+        self._folder_checked_memory = {r: True for r in self._roots_present_in_table()}
+        self._rebuild_folder_buttons(self._roots_present_in_table())
+
         min_dt = full_stats['min_dt'] or QDateTime.currentDateTime().addMonths(-1)
         max_dt = full_stats['max_dt'] or QDateTime.currentDateTime()
         self.actual_min_dt = min_dt
@@ -1276,8 +1461,8 @@ class FilterMenu(QWidget):
 
         self.input_min_date.setDate(min_dt.date())
         self.input_max_date.setDate(max_dt.date())
-        self.input_min_time.setTime(QTime(0, 0))
-        self.input_max_time.setTime(QTime(23, 59))
+        self.input_min_time.setTime(QTime(0, 0, 0))
+        self.input_max_time.setTime(QTime(23, 59, 59))
         self.input_min_dur.setTime(self._sec_to_qtime(full_stats['min_sec']))
         self.input_max_dur.setTime(self._sec_to_qtime(full_stats['max_sec']))
 
@@ -1299,22 +1484,30 @@ class FilterMenu(QWidget):
         """ Safely counts suitable clips in real time. """
         if getattr(self, '_is_gathering', False) or not hasattr(self, 'app'): return
         table = self.app.ui.table_clips
+        total = table.rowCount()
 
         sel_games = self._get_checked_names(self.games_layout)
         sel_types = self._get_checked_names(self.types_layout)
         sel_health = self._get_checked_health_levels()
+        sel_folders = self._get_checked_names(self.folders_layout)
+        roots = self._configured_library_roots()
+        # No folder pills yet (single empty rebuild) → don't treat as "hide all".
+        folder_filter_on = bool(sel_folders) or self.folders_layout.count() == 0
 
-        if not sel_games or not sel_types or not sel_health:
-            self.btn_apply.setText("Apply Filters (0)")
+        # Nothing checked yet (rebuild in flight) → show the full library total,
+        # not a scary zero that looks like "filters hide everything".
+        if not sel_games or not sel_types or not sel_health or not folder_filter_on:
+            self.btn_apply.setText(f"Apply Filters ({total})")
             return
 
         min_date, max_date = self.input_min_date.date(), self.input_max_date.date()
         min_time = self._qtime_to_sec(self.input_min_time.time())
         max_time = self._qtime_to_sec(self.input_max_time.time())
         min_dur, max_dur = self._resolved_duration_bounds()
+        skip_duration = max_dur <= 0 and min_dur <= 0
 
         count = 0
-        for row in range(table.rowCount()):
+        for row in range(total):
             show = True
             r_g = table.item(row, 0)
             r_t = table.item(row, 1)
@@ -1327,6 +1520,11 @@ class FilterMenu(QWidget):
                 row_health = _row_display_health_level(r_g)
                 if row_health not in sel_health:
                     show = False
+            if show and sel_folders and r_g:
+                clip_path = r_g.data(Qt.UserRole) or ""
+                root = _library_root_for_clip(clip_path, roots)
+                if root is None or root not in sel_folders:
+                    show = False
 
             if show and r_d:
                 q_dt = self._parse_row_datetime(r_d.text())
@@ -1338,7 +1536,7 @@ class FilterMenu(QWidget):
                     if t_sec < min_time: show = False
                     if t_sec > max_time: show = False
 
-            if show and r_dur:
+            if show and r_dur and not skip_duration:
                 sec = self._parse_row_duration(r_dur.text())
                 if sec < min_dur: show = False
                 if sec > max_dur: show = False
@@ -1357,8 +1555,13 @@ class FilterMenu(QWidget):
         selected_games = self._get_checked_names(self.games_layout)
         selected_types = self._get_checked_names(self.types_layout)
         selected_health = self._get_checked_health_levels()
+        selected_folders = self._get_checked_names(self.folders_layout)
+        roots = self._configured_library_roots()
+        folder_filter_on = bool(selected_folders) or self.folders_layout.count() == 0
 
-        filter_active = bool(selected_games and selected_types and selected_health)
+        filter_active = bool(
+            selected_games and selected_types and selected_health and folder_filter_on
+        )
 
         if not filter_active:
             full_stats = self._compute_stats()
@@ -1398,14 +1601,17 @@ class FilterMenu(QWidget):
             saved['games'] = selected_games
             saved['types'] = selected_types
             saved['health'] = selected_health
+            saved['folders'] = selected_folders
         else:
             saved['games'] = []
         self.app.saved_filter_state = saved
 
         visible_count = 0
         if not filter_active:
+            # No games/types/health/folders selected → treat as "show everything".
             for row in range(table.rowCount()):
-                table.setRowHidden(row, True)
+                table.setRowHidden(row, False)
+            visible_count = table.rowCount()
         else:
             min_date = self.input_min_date.date()
             max_date = self.input_max_date.date()
@@ -1413,6 +1619,7 @@ class FilterMenu(QWidget):
             max_time = self._qtime_to_sec(self.input_max_time.time())
             min_dur = min_dur_sec
             max_dur = max_dur_sec
+            skip_duration = max_dur <= 0 and min_dur <= 0
 
             for row in range(table.rowCount()):
                 show = True
@@ -1427,6 +1634,11 @@ class FilterMenu(QWidget):
                     row_health = _row_display_health_level(item_game)
                     if row_health not in selected_health:
                         show = False
+                if show and selected_folders and item_game:
+                    clip_path = item_game.data(Qt.UserRole) or ""
+                    root = _library_root_for_clip(clip_path, roots)
+                    if root is None or root not in selected_folders:
+                        show = False
 
                 if show and item_date:
                     q_dt = self._parse_row_datetime(item_date.text())
@@ -1438,7 +1650,7 @@ class FilterMenu(QWidget):
                         if r_time < min_time: show = False
                         if r_time > max_time: show = False
 
-                if show and item_dur:
+                if show and item_dur and not skip_duration:
                     r_dur = self._parse_row_duration(item_dur.text())
                     if r_dur < min_dur: show = False
                     if r_dur > max_dur: show = False
