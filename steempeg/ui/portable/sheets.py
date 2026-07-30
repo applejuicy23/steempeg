@@ -727,7 +727,7 @@ class PortableClipPickerDialog(SteempegDialog):
         self._mount_folder_refresh_in_toolbar()
 
     def _mount_folder_refresh_in_toolbar(self) -> None:
-        """Put Choose Folder + Refresh on the left of the sort/filter toolbar row."""
+        """Place View → Choose Folder → Refresh → count in the library toolbar."""
         if self._folder_refresh_mounted:
             return
         app = self._app
@@ -749,9 +749,13 @@ class PortableClipPickerDialog(SteempegDialog):
         refresh.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         refresh.setMaximumWidth(160)
 
-        # Left cluster: folder + refresh; sort/filter already sit after the stretch.
-        layout.insertWidget(0, folder)
-        layout.insertWidget(1, refresh)
+        # View and its Grid/List toggle already lead the row. Mount the borrowed
+        # folder controls immediately after them so the count stays after Refresh:
+        # View · Choose Folder · Refresh · count.
+        toggle = getattr(app, "toggle_pill", None)
+        insert_at = layout.indexOf(toggle) + 1 if toggle is not None else 0
+        layout.insertWidget(insert_at, folder)
+        layout.insertWidget(insert_at + 1, refresh)
         folder.show()
         refresh.show()
 
