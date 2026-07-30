@@ -125,14 +125,51 @@ def open_in_file_manager(path, *, reveal: bool = False):
     open_path_with_default_app(norm)
 
 
+def _reveal_windows(path: str) -> bool:
+    """Select ``path`` in Explorer, even when that folder is already open.
+
+    ``explorer /select,`` often does nothing if a window for the parent folder is
+    already up. Shell32's SHOpenFolderAndSelectItems brings that window forward
+    and highlights the item instead of silently no-oping.
+    """
+    import ctypes
+
+    abs_path = os.path.abspath(path)
+    try:
+        ole32 = ctypes.windll.ole32
+        shell32 = ctypes.windll.shell32
+        ole32.CoInitialize(None)
+        pidl = shell32.ILCreateFromPathW(abs_path)
+        if not pidl:
+            return False
+        try:
+            # cidl=0: treat pidl as the fully-qualified item to open+select.
+            hr = shell32.SHOpenFolderAndSelectItems(pidl, 0, None, 0)
+            return int(hr) >= 0
+        finally:
+            shell32.ILFree(pidl)
+    except Exception:
+        return False
+
+
 def reveal_in_file_manager(path: str) -> None:
-    """Open the file manager with ``path`` selected/highlighted."""
+    """Open the file manager with ``path`` selected/highlighted.
+
+    If ``path`` is already visible in an open Explorer/Finder window, that window
+    is brought forward and the item is re-selected — not silently ignored.
+    """
     if not path:
         return
-    norm = os.path.normpath(path)
+    norm = os.path.abspath(os.path.normpath(path))
     if os.path.exists(norm):
         if sys.platform == "win32":
-            subprocess.run(["explorer", "/select,", norm], check=False)
+            if _reveal_windows(norm):
+                return
+            # Fallback: attach path to /select, — split argv form is unreliable.
+            subprocess.run(
+                ["explorer", f"/select,{norm}"],
+                check=False,
+            )
         elif sys.platform == "darwin":
             subprocess.run(["open", "-R", norm], check=False)
         else:
