@@ -191,15 +191,21 @@ def preview_settings_icon(size: int = 16) -> QIcon:
     return load_icon("settings.png", size)
 
 
-def playinfo_icon(size: int = 16) -> QIcon:
-    """playinfo.png for the player header Source Info chip.
+def playinfo_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted playinfo2.png for the player header Clip info chip."""
+    return tinted_pixmap("playinfo2.png", color, size)
 
-    Uses a plain QIcon so Qt can gray the glyph when the button is disabled.
-    """
-    pix = load_pixmap("playinfo.png", size)
-    if pix.isNull():
-        return QIcon()
-    return QIcon(pix)
+
+def playinfo_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Idle (soft gray) + hot (near-white) icons — same tints as title-bar tools."""
+    idle = _icon_from_pixmap(playinfo_pixmap("#b8b8b8", size))
+    hot = _icon_from_pixmap(playinfo_pixmap("#e8e8e8", size))
+    return idle, hot
+
+
+def playinfo_icon(size: int = 16) -> QIcon:
+    """Idle playinfo2.png for the player header Clip info chip."""
+    return playinfo_icons(size)[0]
 
 
 def theater_mode_icon(size: int = 22, *, closed: bool = False) -> QIcon:
