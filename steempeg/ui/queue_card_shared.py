@@ -86,12 +86,11 @@ def set_game_icon_label(label: QLabel, job: RenderJob, *, size: int = 28) -> Non
     unknown = get_resource_path("unknown_icon.png")
     pix_path = icon_path if icon_path and os.path.exists(icon_path) else unknown
     if pix_path and os.path.exists(pix_path):
-        label.setPixmap(
-            QPixmap(pix_path).scaled(
-                size, size, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+        src = QPixmap(pix_path)
+        if not src.isNull():
+            label.setPixmap(shaped_game_icon_pixmap(src, size))
 
 
 def build_queue_thumb_strip(
