@@ -3208,10 +3208,281 @@ class LibraryMixin:
         pixmap = QPixmap(icon_path)
         if pixmap.isNull():
             return QIcon()
-        icon = QIcon(pixmap)
+        from steempeg.ui.icon_shape import shaped_game_icon
+
+        icon = shaped_game_icon(pixmap)
         if app_id:
             self.game_icons_cache[str(app_id)] = icon
         return icon
+
+    def refresh_game_icon_shapes(self, shape: str | None = None) -> None:
+        """Re-shape cached game icons after Settings → Visual change (in-place, no grid rebuild)."""
+        import logging
+
+        from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+        from steempeg.ui.icon_shape import get_icon_shape, set_icon_shape
+
+        if shape is not None:
+            set_icon_shape(shape)
+        applied = get_icon_shape()
+        logging.info("Game icon shape → %s", applied)
+
+        cache = getattr(self, "game_icons_cache", None)
+        if isinstance(cache, dict):
+            cache.clear()
+
+        if hasattr(self.ui, "table_clips"):
+            table = self.ui.table_clips
+            seen: set[str] = set()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if not item:
+                    continue
+                clip_path = item.data(Qt.UserRole)
+                app_id = None
+                if clip_path:
+                    app_id = parse_app_id_from_clip_folder(os.path.basename(str(clip_path)))
+                if not app_id:
+                    app_id = self._app_id_for_clip_path(clip_path)
+                if not app_id or app_id in seen:
+                    continue
+                seen.add(app_id)
+                icon = self.get_game_icon(app_id, allow_download=False)
+                if not icon.isNull():
+                    # Table rows only — grid is handled in a single pass below.
+                    for r in range(table.rowCount()):
+                        cell = table.item(r, 0)
+                        if not cell:
+                            continue
+                        if self._app_id_for_clip_path(cell.data(Qt.UserRole)) != app_id:
+                            continue
+                        cell.setIcon(icon)
+            try:
+                table.viewport().update()
+            except Exception as exc:
+                logging.debug("clips table viewport update failed: %s", exc)
+
+        try:
+            self._refresh_grid_game_icon_shapes()
+        except Exception:
+            logging.exception("grid icon shape refresh failed")
+
+        try:
+            self._refresh_queue_game_icon_shapes()
+        except Exception:
+            logging.exception("queue icon shape refresh failed")
+
+        try:
+            self._refresh_header_game_icon_shapes()
+        except Exception:
+            logging.exception("header icon shape refresh failed")
+
+        if hasattr(self, "table_rendered") and self.table_rendered is not None:
+            try:
+                from steempeg.ui.icon_shape import shaped_game_icon
+
+                _icon_role = Qt.ItemDataRole.UserRole + 8
+                for row in range(self.table_rendered.rowCount()):
+                    item = self.table_rendered.item(row, 0)
+                    if not item:
+                        continue
+                    path = item.data(_icon_role) or ""
+                    if path and os.path.isfile(str(path)):
+                        pix = QPixmap(str(path))
+                        if not pix.isNull():
+                            item.setIcon(shaped_game_icon(pix))
+                self.table_rendered.viewport().update()
+            except Exception as exc:
+                logging.warning("rendered icon refresh failed: %s", exc)
+
+    def _refresh_grid_game_icon_shapes(self) -> None:
+        """Update existing ClipCard icon_label pixmaps without rebuilding the grid."""
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import (
+            ICON_SHAPE_CIRCLE,
+            get_icon_shape,
+            shaped_game_icon_pixmap,
+        )
+
+        unknown = get_resource_path("unknown_icon.png")
+
+        def _reshape_card(card, pix_path: str, *, force_circle: bool = False) -> None:
+            if card is None or not hasattr(card, "icon_label"):
+                return
+            if not pix_path or not os.path.isfile(pix_path):
+                pix_path = unknown
+                force_circle = True
+            if not pix_path or not os.path.isfile(pix_path):
+                return
+            src = QPixmap(pix_path)
+            if src.isNull():
+                return
+            shape = (
+                ICON_SHAPE_CIRCLE
+                if force_circle or os.path.basename(pix_path).lower() == "unknown_icon.png"
+                else get_icon_shape()
+            )
+            card.icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
+
+        if hasattr(self, "grid_clips"):
+            for idx in range(self.grid_clips.count()):
+                item = self.grid_clips.item(idx)
+                if item is None:
+                    continue
+                clip_path = item.data(Qt.UserRole + 1)
+                app_id = self._app_id_for_clip_path(clip_path)
+                icon_path = (
+                    os.path.join(self.cache_dir, f"{app_id}.jpg") if app_id else ""
+                )
+                _reshape_card(self.grid_clips.itemWidget(item), icon_path)
+
+        if hasattr(self, "grid_rendered") and hasattr(self, "table_rendered"):
+            _icon_role = Qt.ItemDataRole.UserRole + 8
+            for idx in range(self.grid_rendered.count()):
+                item = self.grid_rendered.item(idx)
+                if item is None:
+                    continue
+                icon_path = ""
+                row = item.data(Qt.UserRole)
+                if isinstance(row, int):
+                    cell = self.table_rendered.item(row, 0)
+                    if cell is not None:
+                        icon_path = cell.data(_icon_role) or ""
+                _reshape_card(self.grid_rendered.itemWidget(item), str(icon_path or ""))
+
+    def _refresh_queue_game_icon_shapes(self) -> None:
+        """Re-shape game icons on existing queue cards (no panel rebuild)."""
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+        from steempeg.ui.queue_card_shared import set_game_icon_label
+
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is None:
+            return
+        for card in getattr(panel, "_card_widgets", []) or []:
+            job = getattr(card, "_job", None)
+            if job is None:
+                continue
+            if hasattr(card, "_game_icon"):
+                set_game_icon_label(card._game_icon, job, size=28)
+            icon_label = getattr(card, "_icon_label", None)
+            if icon_label is None:
+                continue
+            icon_path = getattr(job, "game_icon_path", "") or ""
+            unknown = get_resource_path("unknown_icon.png")
+            pix_path = icon_path if icon_path and os.path.exists(icon_path) else unknown
+            if pix_path and os.path.exists(pix_path):
+                src = QPixmap(pix_path)
+                if not src.isNull():
+                    icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
+
+    def _refresh_header_game_icon_shapes(self) -> None:
+        """Re-shape player header / bottom summary / center place logo icons."""
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import (
+            ICON_SHAPE_CIRCLE,
+            shaped_game_icon_pixmap,
+        )
+
+        path = self._resolve_header_game_icon_path()
+        unknown = get_resource_path("unknown_icon.png")
+        if not path or not os.path.isfile(path):
+            path = unknown
+        is_unknown = os.path.basename(path).lower() == "unknown_icon.png"
+        shape = ICON_SHAPE_CIRCLE if is_unknown else None
+
+        for attr, size in (
+            ("custom_icon_label", 24),
+            ("bottom_icon_label", 24),
+        ):
+            label = getattr(self, attr, None)
+            if label is None:
+                continue
+            label.setStyleSheet("background: transparent; border: none;")
+            src = QPixmap(path)
+            if not src.isNull():
+                label.setPixmap(shaped_game_icon_pixmap(src, size, shape))
+
+        place = getattr(self, "place_logo", None)
+        if place is not None and place.isVisible():
+            logo_path = get_resource_path("logo.png")
+            place_path = path
+            if is_unknown and logo_path and os.path.isfile(logo_path):
+                place_path = logo_path
+            place.setStyleSheet("")
+            src = QPixmap(place_path)
+            if not src.isNull():
+                place.setPixmap(shaped_game_icon_pixmap(src, 80, shape))
+
+    def _icon_path_for_current_rendered(self) -> str:
+        """Game icon path for the active Rendered-videos selection (if any)."""
+        _icon_role = Qt.ItemDataRole.UserRole + 8
+        _game_role = Qt.ItemDataRole.UserRole + 6
+        table = getattr(self, "table_rendered", None)
+        if table is not None:
+            row = table.currentRow()
+            if row >= 0:
+                item = table.item(row, 0)
+                if item is not None:
+                    stored = item.data(_icon_role) or ""
+                    if stored and os.path.isfile(str(stored)):
+                        return str(stored)
+                    if (item.data(_game_role) or "") == "Unknown":
+                        from steempeg.infra.paths import get_resource_path
+
+                        unknown = get_resource_path("unknown_icon.png")
+                        return unknown if os.path.isfile(unknown) else ""
+
+        file_path = getattr(self, "_rendered_media_path", None) or ""
+        if file_path and hasattr(self, "_resolved_rendered_meta"):
+            try:
+                _title, icon_path, _thumb, is_unknown, _key = self._resolved_rendered_meta(
+                    file_path, os.path.basename(str(file_path))
+                )
+            except Exception:
+                icon_path = ""
+                is_unknown = False
+            if icon_path and os.path.isfile(str(icon_path)):
+                return str(icon_path)
+            if is_unknown:
+                from steempeg.infra.paths import get_resource_path
+
+                unknown = get_resource_path("unknown_icon.png")
+                return unknown if os.path.isfile(unknown) else ""
+        return ""
+
+    def _resolve_header_game_icon_path(self) -> str:
+        """Best path for the player header game icon (clips or rendered)."""
+        panel = getattr(self, "_library_panel_mode", "clips")
+        rendered_path = getattr(self, "_rendered_media_path", None)
+        if panel == "rendered" or rendered_path:
+            rendered_icon = self._icon_path_for_current_rendered()
+            if rendered_icon:
+                # Keep current_game_icon in sync so later refreshes stay correct.
+                self.current_game_icon = rendered_icon
+                return rendered_icon
+
+        path = getattr(self, "current_game_icon", "") or ""
+        if path and os.path.isfile(path):
+            return path
+
+        # Last resort: re-derive from sticky export clip / preview clip.
+        clip_path = None
+        if hasattr(self, "_current_header_clip_path"):
+            try:
+                clip_path = self._current_header_clip_path()
+            except Exception:
+                clip_path = None
+        if not clip_path:
+            clip_path = getattr(self, "_preview_clip_path", None)
+        if clip_path:
+            parts = os.path.basename(str(clip_path)).split("_")
+            if len(parts) >= 2 and parts[1].isdigit():
+                cache_icon = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
+                if os.path.isfile(cache_icon):
+                    self.current_game_icon = cache_icon
+                    return cache_icon
+        return path or ""
 
     def _app_id_for_clip_path(self, clip_path: str | None) -> str | None:
         if not clip_path:
@@ -3251,9 +3522,9 @@ class LibraryMixin:
             if os.path.isfile(icon_path):
                 pixmap = QPixmap(icon_path)
                 if not pixmap.isNull():
-                    card.icon_label.setPixmap(
-                        pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    )
+                    from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+                    card.icon_label.setPixmap(shaped_game_icon_pixmap(pixmap, 24))
 
     def _backfill_missing_game_icons(self) -> None:
         """Retry icon fetch for games that still show a blank list icon after scan."""
