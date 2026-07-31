@@ -961,19 +961,58 @@ class RenderMixin:
         if not game_item:
             return
         game_name = game_item.text()
-        game_icon = game_item.icon()
+        # Col 2 = ``date\\ntime``; col 3 = duration (not clock time).
         clip_date = self.ui.table_clips.item(selected_row, 2)
-        clip_time = self.ui.table_clips.item(selected_row, 3)
+        clip_dur = self.ui.table_clips.item(selected_row, 3)
         date_text = clip_date.text() if clip_date else ""
-        time_text = clip_time.text() if clip_time else ""
+        duration_text = clip_dur.text() if clip_dur else ""
         if hasattr(self, "custom_text_label"):
-            header_html = (
-                f"<b>{game_name}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
-                f"{date_text} &nbsp;&nbsp;•&nbsp;&nbsp; {time_text}</span>"
+            from steempeg.ui.player_header_layout import (
+                set_player_header_game_text,
+                split_clip_date_cell,
             )
-            self.custom_text_label.setText(header_html)
-        if hasattr(self, "custom_icon_label"):
-            self.custom_icon_label.setPixmap(game_icon.pixmap(24, 24))
+
+            date_part, time_part = split_clip_date_cell(date_text)
+            set_player_header_game_text(
+                self,
+                game_name,
+                date=date_part,
+                time=time_part,
+                duration=duration_text,
+            )
+        clip_path = game_item.data(Qt.UserRole)
+        self._set_player_header_game_icon(clip_path=clip_path)
+
+    def _set_player_header_game_icon(
+        self,
+        *,
+        clip_path: str | None = None,
+        icon_path: str | None = None,
+    ) -> None:
+        """Set custom_icon_label from disk path with Settings → Visual shape."""
+        if not hasattr(self, "custom_icon_label"):
+            return
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
+        path = icon_path or ""
+        if not path and clip_path:
+            parts = os.path.basename(str(clip_path)).split("_")
+            if len(parts) >= 2 and parts[1].isdigit():
+                path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
+        if not path:
+            path = getattr(self, "current_game_icon", "") or ""
+        unknown = get_resource_path("unknown_icon.png")
+        if path and os.path.isfile(path):
+            self.current_game_icon = path
+        if not path or not os.path.isfile(path):
+            path = unknown
+        is_unknown = os.path.basename(path).lower() == "unknown_icon.png"
+        self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
+        src = QPixmap(path)
+        if not src.isNull():
+            shape = ICON_SHAPE_CIRCLE if is_unknown else None
+            self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
         """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
@@ -1618,6 +1657,23 @@ class RenderMixin:
                         self.ui.label_size.setText(f"Size: {size_str}")
                     if hasattr(self.ui, "label_duration"):
                         self.ui.label_duration.setText(f"Time: {duration_str}")
+                    # Keep SteempegUI header meta in sync once duration is known.
+                    meta = getattr(self, "_player_header_meta", None)
+                    if meta is not None and not meta.get("placeholder"):
+                        from steempeg.ui.player_header_layout import (
+                            refresh_player_header_text,
+                            store_player_header_meta,
+                        )
+
+                        store_player_header_meta(
+                            self,
+                            title=str(meta.get("title") or ""),
+                            date=str(meta.get("date") or ""),
+                            time=str(meta.get("time") or ""),
+                            duration=duration_str or "",
+                            extra=list(meta.get("extra") or ()),
+                        )
+                        refresh_player_header_text(self)
 
                     fps_match = re.search(r'\bframeRate="(\d+)(?:/\d+)?"', content)
                     if fps_match:
@@ -1741,6 +1797,8 @@ class RenderMixin:
         # Enforce audio-track availability (disables audio choices for video-only clips).
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
+        if hasattr(self, "refresh_player_header_info"):
+            self.refresh_player_header_info(has_clip=True)
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
@@ -1834,18 +1892,27 @@ class RenderMixin:
 
         game_item = self.ui.table_clips.item(selected_row, 0)
         game_name = game_item.text()
-        game_icon = game_item.icon()
-        clip_date = self.ui.table_clips.item(selected_row, 2).text()
-        clip_time = self.ui.table_clips.item(selected_row, 3).text()
+        # Col 2 = ``date\\ntime``; col 3 = duration (not clock time).
+        clip_date = self.ui.table_clips.item(selected_row, 2)
+        clip_dur = self.ui.table_clips.item(selected_row, 3)
+        date_text = clip_date.text() if clip_date else ""
+        duration_text = clip_dur.text() if clip_dur else ""
 
         if hasattr(self, "custom_text_label"):
-            header_html = (
-                f"<b>{game_name}</b> <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
-                f"{clip_date} &nbsp;&nbsp;•&nbsp;&nbsp; {clip_time}</span>"
+            from steempeg.ui.player_header_layout import (
+                set_player_header_game_text,
+                split_clip_date_cell,
             )
-            self.custom_text_label.setText(header_html)
-        if hasattr(self, "custom_icon_label"):
-            self.custom_icon_label.setPixmap(game_icon.pixmap(24, 24))
+
+            date_part, time_part = split_clip_date_cell(date_text)
+            set_player_header_game_text(
+                self,
+                game_name,
+                date=date_part,
+                time=time_part,
+                duration=duration_text,
+            )
+        self._set_player_header_game_icon(clip_path=clip_path)
 
         self._selected_queue_job_id = None
         self.update_playback_badge()
@@ -2500,20 +2567,30 @@ class RenderMixin:
         # GIVE ORDER TO OUR NEW CSS WIDGETS
         if hasattr(self, 'bottom_text_label'):
             self.bottom_text_label.setText(text_part)
+            from steempeg.ui.icon_shape import (
+                ICON_SHAPE_CIRCLE,
+                shaped_game_icon_pixmap,
+            )
+
+            is_unknown_icon = (
+                os.path.basename(target_icon).lower() == "unknown_icon.png"
+            )
+            header_shape = ICON_SHAPE_CIRCLE if is_unknown_icon else None
             if hasattr(self, "_set_bottom_summary_icon"):
                 self._set_bottom_summary_icon(target_icon)
-            else:
-                icon_css = target_icon.replace('\\', '/')
+            elif hasattr(self, "bottom_icon_label"):
                 self.bottom_icon_label.setStyleSheet(
-                    f"image: url('{icon_css}'); background: transparent; border: none;"
+                    "background: transparent; border: none;"
                 )
+                bottom_pix = QPixmap(target_icon)
+                if not bottom_pix.isNull():
+                    self.bottom_icon_label.setPixmap(
+                        shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
+                    )
 
             # We are updating the TOP panel of the player!
             if hasattr(self, 'custom_text_label') and hasattr(self, 'custom_icon_label'):
-                icon_css = target_icon.replace('\\', '/')
-                self.custom_icon_label.setStyleSheet(
-                    f"image: url('{icon_css}'); background: transparent; border: none;"
-                )
+                self._set_player_header_game_icon(icon_path=target_icon)
                 
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
@@ -2523,9 +2600,7 @@ class RenderMixin:
                 self.place_logo.setStyleSheet("")
                 game_pix = QPixmap(place_icon)
                 if not game_pix.isNull():
-                    self.place_logo.setPixmap(
-                        game_pix.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    )
+                    self.place_logo.setPixmap(shaped_game_icon_pixmap(game_pix, 80))
                 self.place_logo.setAlignment(Qt.AlignCenter)
                 self.place_logo.show()
                 self.place_text.setText(f"Ready to play: {game_name}")
@@ -3359,21 +3434,29 @@ class RenderMixin:
     def _apply_header_from_job(self, job):
         if not job or not hasattr(self, "custom_text_label"):
             return
-        date_line = (job.clip_date or "").replace("\n", " • ")
-        meta = date_line
-        if job.clip_time and job.clip_time not in date_line:
-            meta = f"{date_line} • {job.clip_time}" if date_line else job.clip_time
-        header_html = (
-            f"<b>{job.game_name.strip()}</b>"
-            f" <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; {meta}</span>"
+        from steempeg.ui.player_header_layout import set_player_header_game_text
+
+        # ``format_player_header_html`` splits ``date\\ntime`` and ignores
+        # duration values mis-stored in ``clip_time`` on older jobs.
+        set_player_header_game_text(
+            self,
+            (job.game_name or "").strip() or "—",
+            date=job.clip_date or "",
+            time=job.clip_time or "",
+            duration=getattr(job, "duration_label", "") or "",
         )
-        self.custom_text_label.setText(header_html)
         if hasattr(self, "custom_icon_label"):
             icon_path = job.game_icon_path
             unknown = get_resource_path("unknown_icon.png")
             path = icon_path if icon_path and os.path.exists(icon_path) else unknown
             if path and os.path.exists(path):
-                self.custom_icon_label.setPixmap(QPixmap(path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+                if icon_path and os.path.exists(icon_path):
+                    self.current_game_icon = icon_path
+                src = QPixmap(path)
+                if not src.isNull():
+                    self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
 
     def _sync_queue_job_render_status(self, job, success, error_msg, output_file: str = ""):
         """Update the *specific* queue job (by id) — clip_path is not unique when duplicates exist."""
