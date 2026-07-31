@@ -82,6 +82,27 @@ def display_path(path: str) -> str:
     return path
 
 
+def _spawn_detached(cmd: list[str]) -> None:
+    """Start ``cmd`` without blocking the Qt UI thread.
+
+    Linux ``xdg-open`` / some file managers wait until the helper exits if launched
+    via ``subprocess.run``, which freezes Steempeg after «Open file» / Play video.
+    """
+    kwargs: dict = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+    }
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+    else:
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — don't wait on the child.
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+        )
+    subprocess.Popen(cmd, **kwargs)
+
+
 def open_path_with_default_app(path: str) -> None:
     """Open a file or folder with the OS default handler."""
     if not path:
@@ -92,9 +113,9 @@ def open_path_with_default_app(path: str) -> None:
     if sys.platform == "win32":
         os.startfile(norm)  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.run(["open", norm], check=False)
+        _spawn_detached(["open", norm])
     else:
-        subprocess.run(["xdg-open", norm], check=False)
+        _spawn_detached(["xdg-open", norm])
 
 
 def open_text_file(path: str) -> None:
@@ -171,7 +192,7 @@ def reveal_in_file_manager(path: str) -> None:
                 check=False,
             )
         elif sys.platform == "darwin":
-            subprocess.run(["open", "-R", norm], check=False)
+            _spawn_detached(["open", "-R", norm])
         else:
             for cmd in (
                 ["nautilus", "--select", norm],
@@ -181,7 +202,7 @@ def reveal_in_file_manager(path: str) -> None:
                 ["pcmanfm", "--select", norm],
             ):
                 try:
-                    subprocess.run(cmd, check=False)
+                    _spawn_detached(cmd)
                     return
                 except FileNotFoundError:
                     continue
