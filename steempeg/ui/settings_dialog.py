@@ -1,17 +1,35 @@
 """App-wide Settings dialog — prefs that are not one click away elsewhere."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.icon_shape import (
+    ICON_SHAPE_DEFAULT,
+    ICON_SHAPE_LABELS,
+    KEY_GAME_ICON_SHAPE,
+    get_icon_shape,
+    normalize_icon_shape,
+    set_icon_shape,
+)
+from steempeg.ui.player_header_layout import (
+    HEADER_LAYOUT_DEFAULT,
+    HEADER_LAYOUT_LABELS,
+    KEY_PLAYER_HEADER_LAYOUT,
+    get_header_layout,
+    normalize_header_layout,
+    set_header_layout,
+)
 from steempeg.ui.message_dialog import (
     _BTN_PRIMARY,
     _BTN_SECONDARY,
@@ -76,20 +94,42 @@ _COMBO = """
     QComboBox:hover { border: 2px solid #6b5a8e; }
     QComboBox::drop-down { border: none; width: 22px; }
 """
+_TABS = """
+    QTabWidget::pane {
+        border: 1px solid #444; border-radius: 8px;
+        background: #1e1e1e; top: -1px;
+    }
+    QTabBar::tab {
+        background: #2a2a2a; color: #aaa; padding: 8px 14px; margin-right: 4px;
+        border-top-left-radius: 6px; border-top-right-radius: 6px;
+        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
+        font-size: 12px; font-weight: bold;
+    }
+    QTabBar::tab:selected { background: #4a3d66; color: #fff; }
+    QTabBar::tab:hover:!selected { background: #353535; color: #ddd; }
+"""
+
+
+def _tab_page() -> tuple[QWidget, QVBoxLayout]:
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(12, 12, 12, 12)
+    layout.setSpacing(10)
+    return page, layout
 
 
 class SettingsDialog(SteempegDialog):
-    """Library-footer Settings: updates, shell, notify, hints, support, performance."""
+    """App Settings — tabbed: General · Visual · Notifications · Performance · Support."""
 
     def __init__(self, app, parent=None, **theme_kwargs):
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent or getattr(app, "ui", None)), **theme_kwargs}
         super().__init__("Settings", parent or getattr(app, "ui", None), **theme_kwargs)
         self._app = app
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(480)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        w, h = scaled_dialog_size(460, 520, parent=parent or getattr(app, "ui", None))
+        w, h = scaled_dialog_size(520, 480, parent=parent or getattr(app, "ui", None))
         self.resize(w, h)
 
         settings = {}
@@ -102,19 +142,21 @@ class SettingsDialog(SteempegDialog):
         root = self.content_layout
         root.setSpacing(10)
 
-        # --- Updates ---
-        root.addWidget(self._section("Updates"))
+        tabs = QTabWidget()
+        tabs.setStyleSheet(_TABS)
+        root.addWidget(tabs, 1)
+
+        # ----- General (Updates + Shell) -----
+        general, g = _tab_page()
+        g.addWidget(self._section("Updates"))
         self._chk_updates = SteempegCheckBox("Check for updates on startup")
         self._chk_updates.setChecked(
             bool(settings.get(KEY_CHECK_UPDATES_ON_STARTUP, True))
         )
-        root.addWidget(self._chk_updates)
-        root.addWidget(
-            self._hint("Quiet badge only — never installs without you.")
-        )
+        g.addWidget(self._chk_updates)
+        g.addWidget(self._hint("Quiet badge only — never installs without you."))
 
-        # --- Shell ---
-        root.addWidget(self._section("Shell"))
+        g.addWidget(self._section("Shell"))
         shell_row = QHBoxLayout()
         shell_row.setSpacing(8)
         shell_lbl = QLabel("UI shell")
@@ -128,24 +170,21 @@ class SettingsDialog(SteempegDialog):
         self._combo_shell.setCurrentIndex(max(0, idx))
         shell_row.addWidget(shell_lbl)
         shell_row.addWidget(self._combo_shell, 1)
-        root.addLayout(shell_row)
+        g.addLayout(shell_row)
         self._chk_ask_shell = SteempegCheckBox("Ask which shell on startup")
         self._chk_ask_shell.setChecked(load_ask_ui_shell())
         if is_steamdeck_build():
-            # Deck builds skip the chooser; still allow Desktop via this combo.
             self._chk_ask_shell.setChecked(False)
             self._chk_ask_shell.setEnabled(False)
-            root.addWidget(
+            g.addWidget(
                 self._hint(
                     "Steam Deck builds start in Portable. Desktop is available "
                     "here if you want it — applies next launch."
                 )
             )
         else:
-            root.addWidget(self._chk_ask_shell)
-            root.addWidget(
-                self._hint("Applies the next time Steempeg starts.")
-            )
+            g.addWidget(self._chk_ask_shell)
+            g.addWidget(self._hint("Applies the next time Steempeg starts."))
 
         restart_row = QHBoxLayout()
         restart_row.setSpacing(8)
@@ -157,24 +196,126 @@ class SettingsDialog(SteempegDialog):
         restart_row.addWidget(
             self._hint("Quit and relaunch — use after changing shell."), 1
         )
-        root.addLayout(restart_row)
+        g.addLayout(restart_row)
+        g.addStretch(1)
+        tabs.addTab(general, "General")
 
-        # --- Notifications ---
-        root.addWidget(self._section("Notifications"))
+        # ----- Visual -----
+        visual, v = _tab_page()
+        v.addWidget(self._section("Game icons"))
+        shape_row = QHBoxLayout()
+        shape_row.setSpacing(8)
+        shape_lbl = QLabel("Corner shape")
+        shape_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_icon_shape = QComboBox()
+        self._combo_icon_shape.setStyleSheet(_COMBO)
+        for value, label in ICON_SHAPE_LABELS:
+            self._combo_icon_shape.addItem(label, value)
+        cur_shape = normalize_icon_shape(
+            settings.get(KEY_GAME_ICON_SHAPE, ICON_SHAPE_DEFAULT)
+        )
+        self._committed_icon_shape = cur_shape
+        sidx = self._combo_icon_shape.findData(cur_shape)
+        self._combo_icon_shape.setCurrentIndex(max(0, sidx))
+        shape_row.addWidget(shape_lbl)
+        shape_row.addWidget(self._combo_icon_shape, 1)
+        v.addLayout(shape_row)
+        v.addWidget(
+            self._hint(
+                "Square · Soft (Steam-like, default) · Circle. "
+                "Applies to Clips list/grid, Rendered, queue cards, and headers. "
+                "Combo previews live; Apply saves without closing. Cancel restores "
+                "the last saved shape."
+            )
+        )
+        self._icon_shape_preview_timer = QTimer(self)
+        self._icon_shape_preview_timer.setSingleShot(True)
+        self._icon_shape_preview_timer.setInterval(200)
+        self._icon_shape_preview_timer.timeout.connect(self._apply_icon_shape_preview)
+        self._combo_icon_shape.currentIndexChanged.connect(self._preview_icon_shape)
+
+        v.addWidget(self._section("Player header"))
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+        header_lbl = QLabel("Layout")
+        header_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_header_layout = QComboBox()
+        self._combo_header_layout.setStyleSheet(_COMBO)
+        for value, label in HEADER_LAYOUT_LABELS:
+            self._combo_header_layout.addItem(label, value)
+        cur_header = normalize_header_layout(
+            settings.get(KEY_PLAYER_HEADER_LAYOUT, HEADER_LAYOUT_DEFAULT)
+        )
+        self._committed_header_layout = cur_header
+        hidx = self._combo_header_layout.findData(cur_header)
+        self._combo_header_layout.setCurrentIndex(max(0, hidx))
+        header_row.addWidget(header_lbl)
+        header_row.addWidget(self._combo_header_layout, 1)
+        v.addLayout(header_row)
+        v.addWidget(
+            self._hint(
+                "SteempegUI — left-aligned title with date/time and duration. "
+                "Steam-like — centered logo + game name; date/duration only in the "
+                "info (i) tip. Combo previews live; Apply saves without closing. "
+                "Cancel restores the last saved layout."
+            )
+        )
+        self._header_layout_preview_timer = QTimer(self)
+        self._header_layout_preview_timer.setSingleShot(True)
+        self._header_layout_preview_timer.setInterval(200)
+        self._header_layout_preview_timer.timeout.connect(self._apply_header_layout_preview)
+        self._combo_header_layout.currentIndexChanged.connect(self._preview_header_layout)
+
+        v.addStretch(1)
+        tabs.addTab(visual, "Visual")
+
+        # ----- Notifications -----
+        notify, n = _tab_page()
+        n.addWidget(self._section("Notifications"))
         self._chk_notify = SteempegCheckBox("Notify when render finishes or fails")
         self._chk_notify.setChecked(
             bool(settings.get(KEY_NOTIFY_ON_RENDER_COMPLETE, True))
         )
-        root.addWidget(self._chk_notify)
-        root.addWidget(
+        n.addWidget(self._chk_notify)
+        n.addWidget(
             self._hint(
                 "When Steempeg is minimized: OS notification center toast + "
                 "system alert sound (Windows / Linux / SteamOS). Off = silent."
             )
         )
+        n.addStretch(1)
+        tabs.addTab(notify, "Notifications")
 
-        # --- Hints ---
-        root.addWidget(self._section("Hints"))
+        # ----- Performance -----
+        perf, p = _tab_page()
+        p.addWidget(self._section("Performance"))
+        prio_row = QHBoxLayout()
+        prio_row.setSpacing(8)
+        prio_lbl = QLabel("Priority while rendering")
+        prio_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_priority = QComboBox()
+        self._combo_priority.setStyleSheet(_COMBO)
+        for value, label in _PRIORITY_LABELS:
+            self._combo_priority.addItem(label, value)
+        cur_prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))
+        pidx = self._combo_priority.findData(cur_prio)
+        self._combo_priority.setCurrentIndex(max(0, pidx))
+        prio_row.addWidget(prio_lbl)
+        prio_row.addWidget(self._combo_priority, 1)
+        p.addLayout(prio_row)
+
+        self._chk_pause_preview = SteempegCheckBox("Pause preview while rendering")
+        self._chk_pause_preview.setChecked(
+            bool(settings.get(KEY_PAUSE_PREVIEW_DURING_RENDER, False))
+        )
+        p.addWidget(self._chk_pause_preview)
+        p.addWidget(self._hint("Keeps CPU/GPU freer for FFmpeg. Off by default."))
+        p.addStretch(1)
+        tabs.addTab(perf, "Performance")
+
+        # ----- Support -----
+        support, s = _tab_page()
+        s.addWidget(self._section("Hints"))
         hints_row = QHBoxLayout()
         hints_row.addWidget(
             self._hint("Restore dismissed «Don't show again» dialogs."), 1
@@ -184,13 +325,12 @@ class SettingsDialog(SteempegDialog):
         btn_reset_hints.setStyleSheet(_BTN_SECONDARY)
         btn_reset_hints.clicked.connect(self._reset_hints)
         hints_row.addWidget(btn_reset_hints, 0)
-        root.addLayout(hints_row)
+        s.addLayout(hints_row)
         self._hints_status = QLabel("")
         self._hints_status.setStyleSheet(_HINT)
-        root.addWidget(self._hints_status)
+        s.addWidget(self._hints_status)
 
-        # --- Logs / support ---
-        root.addWidget(self._section("Logs / support"))
+        s.addWidget(self._section("Logs / support"))
         support_row = QHBoxLayout()
         support_row.setSpacing(8)
         btn_logs = QPushButton("Open logs folder")
@@ -204,7 +344,7 @@ class SettingsDialog(SteempegDialog):
         support_row.addWidget(btn_logs)
         support_row.addWidget(btn_cache)
         support_row.addStretch(1)
-        root.addLayout(support_row)
+        s.addLayout(support_row)
 
         import_row = QHBoxLayout()
         import_row.setSpacing(8)
@@ -220,41 +360,13 @@ class SettingsDialog(SteempegDialog):
         btn_import.setStyleSheet(_BTN_SECONDARY)
         btn_import.clicked.connect(self._import_from_backup)
         import_row.addWidget(btn_import, 0)
-        root.addLayout(import_row)
+        s.addLayout(import_row)
         self._import_status = QLabel("")
         self._import_status.setWordWrap(True)
         self._import_status.setStyleSheet(_HINT)
-        root.addWidget(self._import_status)
-
-        # --- Performance ---
-        root.addWidget(self._section("Performance"))
-        prio_row = QHBoxLayout()
-        prio_row.setSpacing(8)
-        prio_lbl = QLabel("Priority while rendering")
-        prio_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_priority = QComboBox()
-        self._combo_priority.setStyleSheet(_COMBO)
-        for value, label in _PRIORITY_LABELS:
-            self._combo_priority.addItem(label, value)
-        cur_prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))
-        pidx = self._combo_priority.findData(cur_prio)
-        self._combo_priority.setCurrentIndex(max(0, pidx))
-        prio_row.addWidget(prio_lbl)
-        prio_row.addWidget(self._combo_priority, 1)
-        root.addLayout(prio_row)
-
-        self._chk_pause_preview = SteempegCheckBox(
-            "Pause preview while rendering"
-        )
-        self._chk_pause_preview.setChecked(
-            bool(settings.get(KEY_PAUSE_PREVIEW_DURING_RENDER, False))
-        )
-        root.addWidget(self._chk_pause_preview)
-        root.addWidget(
-            self._hint("Keeps CPU/GPU freer for FFmpeg. Off by default.")
-        )
-
-        root.addStretch(1)
+        s.addWidget(self._import_status)
+        s.addStretch(1)
+        tabs.addTab(support, "Support")
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -263,11 +375,16 @@ class SettingsDialog(SteempegDialog):
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_cancel.setStyleSheet(_BTN_SECONDARY)
         btn_cancel.clicked.connect(self.reject)
+        btn_apply = QPushButton("Apply")
+        btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_apply.setStyleSheet(_BTN_SECONDARY)
+        btn_apply.clicked.connect(self._apply)
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_PRIMARY)
         btn_save.clicked.connect(self._save)
         actions.addWidget(btn_cancel)
+        actions.addWidget(btn_apply)
         actions.addWidget(btn_save)
         root.addLayout(actions)
 
@@ -395,7 +512,93 @@ class SettingsDialog(SteempegDialog):
 
         restart_application(self._app)
 
-    def _save(self) -> None:
+    def _preview_icon_shape(self, *_args) -> None:
+        """Debounced live preview (not persisted until Apply/Save)."""
+        self._icon_shape_preview_timer.start()
+
+    def _apply_icon_shape_preview(self) -> None:
+        import logging
+
+        shape = normalize_icon_shape(self._combo_icon_shape.currentData())
+        set_icon_shape(shape)
+        logging.info("Icon shape preview → %s", shape)
+        if hasattr(self._app, "refresh_game_icon_shapes"):
+            try:
+                self._app.refresh_game_icon_shapes(shape)
+            except Exception:
+                logging.exception("Icon shape preview refresh failed")
+
+    def _refresh_icon_shapes(self, shape: str) -> None:
+        if hasattr(self._app, "refresh_game_icon_shapes"):
+            try:
+                self._app.refresh_game_icon_shapes(shape)
+            except Exception:
+                import logging
+
+                logging.exception("Icon shape refresh failed for %s", shape)
+
+    def _preview_header_layout(self, *_args) -> None:
+        self._header_layout_preview_timer.start()
+
+    def _apply_header_layout_preview(self) -> None:
+        import logging
+
+        layout = normalize_header_layout(self._combo_header_layout.currentData())
+        set_header_layout(layout)
+        logging.info("Player header layout preview → %s", layout)
+        self._refresh_header_layout(layout)
+
+    def _refresh_header_layout(self, layout: str) -> None:
+        if hasattr(self._app, "refresh_player_header_layout"):
+            try:
+                self._app.refresh_player_header_layout(layout)
+            except Exception:
+                import logging
+
+                logging.exception("Player header layout refresh failed for %s", layout)
+
+    def _restore_icon_shape_on_cancel(self) -> None:
+        """Undo live preview mutations that were never Applied/Saved."""
+        import logging
+
+        if getattr(self, "_icon_shape_preview_timer", None) is not None:
+            self._icon_shape_preview_timer.stop()
+        committed = normalize_icon_shape(
+            getattr(self, "_committed_icon_shape", ICON_SHAPE_DEFAULT)
+        )
+        live = get_icon_shape()
+        combo = normalize_icon_shape(self._combo_icon_shape.currentData())
+        if live == committed and combo == committed:
+            return
+        set_icon_shape(committed)
+        logging.info("Icon shape cancelled → restored %s", committed)
+        self._refresh_icon_shapes(committed)
+
+    def _restore_header_layout_on_cancel(self) -> None:
+        """Undo live header-layout preview that was never Applied/Saved."""
+        import logging
+
+        if getattr(self, "_header_layout_preview_timer", None) is not None:
+            self._header_layout_preview_timer.stop()
+        committed = normalize_header_layout(
+            getattr(self, "_committed_header_layout", HEADER_LAYOUT_DEFAULT)
+        )
+        live = get_header_layout()
+        combo = normalize_header_layout(self._combo_header_layout.currentData())
+        if live == committed and combo == committed:
+            return
+        set_header_layout(committed)
+        logging.info("Player header layout cancelled → restored %s", committed)
+        self._refresh_header_layout(committed)
+
+    def reject(self) -> None:
+        self._restore_icon_shape_on_cancel()
+        self._restore_header_layout_on_cancel()
+        super().reject()
+
+    def _persist_settings(self) -> None:
+        import logging
+
         self._save_setting(
             KEY_CHECK_UPDATES_ON_STARTUP, self._chk_updates.isChecked()
         )
@@ -411,6 +614,25 @@ class SettingsDialog(SteempegDialog):
             KEY_RENDER_PROCESS_PRIORITY,
             prio if prio else PRIORITY_NORMAL,
         )
+        # Cancel pending preview so Apply/Save is the sole refresh.
+        if getattr(self, "_icon_shape_preview_timer", None) is not None:
+            self._icon_shape_preview_timer.stop()
+        shape = normalize_icon_shape(self._combo_icon_shape.currentData())
+        self._save_setting(KEY_GAME_ICON_SHAPE, shape)
+        set_icon_shape(shape)
+        self._committed_icon_shape = shape
+        logging.info("Icon shape applied → %s (settings.json)", shape)
+        self._refresh_icon_shapes(shape)
+
+        if getattr(self, "_header_layout_preview_timer", None) is not None:
+            self._header_layout_preview_timer.stop()
+        header_layout = normalize_header_layout(self._combo_header_layout.currentData())
+        self._save_setting(KEY_PLAYER_HEADER_LAYOUT, header_layout)
+        set_header_layout(header_layout)
+        self._committed_header_layout = header_layout
+        logging.info("Player header layout applied → %s (settings.json)", header_layout)
+        self._refresh_header_layout(header_layout)
+
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
             save_ui_shell(shell)
@@ -419,6 +641,15 @@ class SettingsDialog(SteempegDialog):
         elif is_steamdeck_build():
             # Deck never shows the chooser.
             save_ask_ui_shell(False)
+
+    def _apply(self) -> None:
+        import logging
+
+        self._persist_settings()
+        logging.info("Settings Apply succeeded (dialog stays open)")
+
+    def _save(self) -> None:
+        self._persist_settings()
         self.accept()
 
 
