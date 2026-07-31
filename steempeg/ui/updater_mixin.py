@@ -103,6 +103,12 @@ class UpdaterMixin:
     def _on_silent_update_check_ok(self, releases: list) -> None:
         self._silent_update_check_running = False
         try:
+            from steempeg.ui.settings_prefs import stamp_last_update_check
+
+            stamp_last_update_check(self)
+        except Exception:
+            logging.exception("UPDATER: failed stamping last_update_check_ts")
+        try:
             if not releases:
                 self._set_title_bar_update_available(False)
                 return
