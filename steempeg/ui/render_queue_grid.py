@@ -137,9 +137,11 @@ class QueueGridJobCard(QWidget):
         self._icon_label.setFixedSize(24, 24)
         self._icon_label.move(8, _THUMB_H - 32)
         if pix_path and os.path.exists(pix_path):
-            self._icon_label.setPixmap(
-                QPixmap(pix_path).scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
+            from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+            src = QPixmap(pix_path)
+            if not src.isNull():
+                self._icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
 
         self._btn_remove = None
         if _job_can_remove(job):
