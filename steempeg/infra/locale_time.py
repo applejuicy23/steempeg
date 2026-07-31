@@ -24,7 +24,8 @@ def clip_time_strftime_fmt() -> str:
 
 
 def clip_datetime_strftime_fmt() -> str:
-    return f"{_DATE_FMT} {clip_time_strftime_fmt()}"
+    """Full datetime with ``at`` between date and time (``11 May 2026 at 2:32 PM``)."""
+    return f"{_DATE_FMT} at {clip_time_strftime_fmt()}"
 
 
 def qt_time_display_format() -> str:
@@ -39,9 +40,17 @@ def format_clip_time(dt: datetime) -> str:
     return dt.strftime(clip_time_strftime_fmt())
 
 
+def format_clip_datetime(dt: datetime) -> str:
+    return dt.strftime(clip_datetime_strftime_fmt())
+
+
 def clip_datetime_parse_formats() -> tuple[str, ...]:
-    # Try both — table cells may still hold the other format after a locale switch.
+    # ``at`` form is canonical; comma / bare-space kept for older table cells / cache.
     return (
+        f"{_DATE_FMT} at {_TIME_24}",
+        f"{_DATE_FMT} at {_TIME_12}",
+        f"{_DATE_FMT}, {_TIME_24}",
+        f"{_DATE_FMT}, {_TIME_12}",
         f"{_DATE_FMT} {_TIME_24}",
         f"{_DATE_FMT} {_TIME_12}",
         _DATE_FMT,
@@ -50,6 +59,9 @@ def clip_datetime_parse_formats() -> tuple[str, ...]:
 
 def parse_clip_datetime_text(text: str) -> QDateTime | None:
     raw = re.sub(r"\s+", " ", text.strip())
+    # Normalize separators so both ``date at time`` and ``date, time`` parse.
+    raw = re.sub(r",\s*", ", ", raw)
+    raw = re.sub(r"\s+at\s+", " at ", raw, flags=re.IGNORECASE)
     for fmt in clip_datetime_parse_formats():
         try:
             dt = datetime.strptime(raw, fmt)
