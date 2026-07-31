@@ -89,25 +89,26 @@ def with_tooltip_style(qss: str = "") -> str:
 
 # Trim / Cancel — same language as portable Render (dark fill + bright border).
 # Gold idle / red cancel; hover brightens fill + border like ``_RENDER_STYLE``.
+# Fill sits closer to the bright border than earlier eclipse-dark gold/red.
 STYLE_TRIM_BUTTON = with_tooltip_style(
     "QPushButton {"
-    "background-color: #6b5520; color: #ffffff;"
+    "background-color: #957a35; color: #ffffff;"
     "border: 2px solid #cfa94a; border-radius: 15px;"
     "padding: 0 12px; font-weight: bold;"
     "}"
-    "QPushButton:hover { background-color: #8a6f28; border: 2px solid #e0c06a; }"
-    "QPushButton:pressed { background-color: #4a3a14; }"
+    "QPushButton:hover { background-color: #b09040; border: 2px solid #e0c06a; }"
+    "QPushButton:pressed { background-color: #6b5520; }"
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
 
 STYLE_TRIM_CANCEL_BUTTON = with_tooltip_style(
     "QPushButton {"
-    "background-color: #8b2222; color: #ffffff;"
+    "background-color: #a52c2c; color: #ffffff;"
     "border: 2px solid #ff4444; border-radius: 15px;"
     "padding: 0 12px; font-weight: bold;"
     "}"
-    "QPushButton:hover { background-color: #a83030; border: 2px solid #ff6666; }"
-    "QPushButton:pressed { background-color: #5c1616; }"
+    "QPushButton:hover { background-color: #c03838; border: 2px solid #ff6666; }"
+    "QPushButton:pressed { background-color: #6e1a1a; }"
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
 
