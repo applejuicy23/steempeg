@@ -261,15 +261,48 @@ class RenderMixin:
 
     def choose_destination(self):
         """ Select a custom folder to save the finished video """
-        folder = QFileDialog.getExistingDirectory(self.ui, "Select Destination Folder")
+        from steempeg.ui.settings_prefs import (
+            apply_export_folder,
+            default_export_dir,
+            is_outside_default_rendered,
+            normalize_export_folder,
+            resolve_permanent_export_folder,
+        )
+
+        start = normalize_export_folder(
+            getattr(self, "custom_destination", "") or ""
+        ) or default_export_dir()
+        folder = QFileDialog.getExistingDirectory(
+            self.ui, "Select Destination Folder", start
+        )
         if folder:
-            self.custom_destination = folder
+            folder = normalize_export_folder(folder)
+            apply_export_folder(self, folder, persist=True)
+            if is_outside_default_rendered(folder):
+                try:
+                    from steempeg.ui.message_dialog import steempeg_information
+
+                    steempeg_information(
+                        self.ui,
+                        "Custom export folder",
+                        "This folder is outside the default rendered_videos library.\n\n"
+                        "Exports still work. The Rendered tab keeps scanning this path "
+                        "while it is set, but «Open in Steempeg» after render is limited "
+                        "to files inside rendered_videos.",
+                    )
+                except Exception:
+                    pass
         else:
-            # If we change our minds and click Cancel, we return to our cool folder
-            default_export_dir = os.path.join(get_save_directory(), "rendered_videos").replace('\\', '/')
-            if not os.path.exists(default_export_dir):
-                os.makedirs(default_export_dir, exist_ok=True)
-            self.custom_destination = default_export_dir
+            # Cancel: keep permanent folder if set, else default rendered_videos.
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                try:
+                    settings = self.load_user_settings() or {}
+                except Exception:
+                    settings = {}
+            apply_export_folder(
+                self, resolve_permanent_export_folder(settings), persist=False
+            )
 
         self.update_final_setup()
 
