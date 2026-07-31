@@ -201,6 +201,13 @@ def restore_render_settings(app) -> None:
     """Apply last saved export panel snapshot if present."""
     raw = app.load_user_settings().get(RENDER_SETTINGS_KEY)
     if not isinstance(raw, dict) or not raw:
+        # Still honour Main Settings permanent export folder.
+        try:
+            from steempeg.ui.settings_prefs import apply_export_folder
+
+            apply_export_folder(app, persist=False)
+        except Exception:
+            pass
         return
     allowed = {f.name for f in fields(RenderJobSettings)}
     cleaned = {k: v for k, v in raw.items() if k in allowed}
@@ -208,6 +215,20 @@ def restore_render_settings(app) -> None:
         apply_job_settings_to_ui(app, RenderJobSettings(**cleaned))
     except Exception:
         _log.exception("Failed to restore render settings")
+    # Main Settings permanent folder wins over snapshot save_dir.
+    try:
+        from steempeg.ui.settings_prefs import (
+            KEY_PERMANENT_EXPORT_FOLDER,
+            apply_export_folder,
+            normalize_export_folder,
+        )
+
+        settings = app.load_user_settings() or {}
+        permanent = normalize_export_folder(settings.get(KEY_PERMANENT_EXPORT_FOLDER))
+        if permanent:
+            apply_export_folder(app, permanent, persist=False)
+    except Exception:
+        _log.exception("Failed re-applying permanent export folder")
 
 
 def _find_layout_index(layout, widget: QWidget):
@@ -346,9 +367,10 @@ class PortableRenderSettingsDialog(SteempegDialog):
             tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
             if tabs is not None and not self._warm:
                 tabs.show()
-                # Landing tab for a "Render settings" sheet — not Source Info.
-                if tabs.count() > 1:
-                    tabs.setCurrentIndex(1)
+                # Landing tab from Settings → Default Render panel tab.
+                from steempeg.ui.settings_prefs import apply_default_render_tab
+
+                apply_default_render_tab(app)
             if not self._warm:
                 for name in ("_neo_sidebar", "right_scroll"):
                     w = getattr(app, name, None)
@@ -428,8 +450,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
             tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
             if tabs is not None:
                 tabs.show()
-                if tabs.count() > 1:
-                    tabs.setCurrentIndex(1)
+                from steempeg.ui.settings_prefs import apply_default_render_tab
+
+                apply_default_render_tab(self._app)
             for name in ("_neo_sidebar", "right_scroll"):
                 wdg = getattr(self._app, name, None)
                 if wdg is not None:
