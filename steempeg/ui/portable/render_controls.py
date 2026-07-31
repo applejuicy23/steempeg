@@ -229,13 +229,11 @@ class PortableRenderControlStrip(QFrame):
         if not name:
             custom_text = getattr(app, "custom_text_label", None)
             if custom_text is not None:
-                # May contain HTML: <b>Game</b> …
-                import re
+                from steempeg.ui.player_header_layout import plain_header_title
 
-                plain = re.sub(r"<[^>]+>", "", custom_text.text() or "")
-                plain = plain.replace("\xa0", " ").strip()
-                if plain and "select a clip" not in plain.lower():
-                    name = plain.split("•")[0].strip()
+                title = plain_header_title(custom_text.text() or "")
+                if title and "select a clip" not in title.lower():
+                    name = title
             custom_icon = getattr(app, "custom_icon_label", None)
             if custom_icon is not None and not icon_css:
                 icon_css = custom_icon.styleSheet() or ""
