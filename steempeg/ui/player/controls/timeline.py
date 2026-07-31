@@ -103,9 +103,9 @@ class TimelineCanvas(QWidget):
         p = QImage(get_resource_path("scrolleback.png"))
         
         if not (h.isNull() or b.isNull() or p.isNull()):
-            # Three-part needle: head + tiled body + foot.
-            # Keep even widths so the stem stays pixel-centered under the head
-            # (odd body_w under even head_w shifted by 0.5px and looked "off").
+            # Readable playhead on the 13px track. Steam-thin (8×6 head / 2px stem)
+            # was nearly invisible; keep the pre-thin sizes that read clearly.
+            # Even head_w + even body_w keeps the stem pixel-centered.
             head_w = 10
             body_w = 6
             h_s = h.scaledToWidth(head_w, Qt.SmoothTransformation)
