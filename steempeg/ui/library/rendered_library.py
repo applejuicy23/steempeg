@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1143,7 +1143,13 @@ class RenderedLibraryMixin:
             return -1
 
         icon_path = scanned.icon_path
-        list_icon = QIcon(icon_path) if icon_path and os.path.isfile(icon_path) else QIcon()
+        list_icon = QIcon()
+        if icon_path and os.path.isfile(icon_path):
+            from steempeg.ui.icon_shape import shaped_game_icon
+
+            pix = QPixmap(icon_path)
+            if not pix.isNull():
+                list_icon = shaped_game_icon(pix)
         if list_icon.isNull() and not scanned.is_unknown:
             app_id = parse_app_id_from_name(os.path.basename(scanned.full_path))
             if not app_id and scanned.source_clip_name:
@@ -1152,13 +1158,20 @@ class RenderedLibraryMixin:
                 synced = self._seed_rendered_icons_cache()
                 if app_id in synced:
                     icon_path = synced[app_id]
-                    list_icon = QIcon(icon_path)
+                    from steempeg.ui.icon_shape import shaped_game_icon
+
+                    pix = QPixmap(icon_path)
+                    if not pix.isNull():
+                        list_icon = shaped_game_icon(pix)
         if scanned.is_unknown:
             from steempeg.infra.paths import get_resource_path
+            from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon
 
             unknown_icon = get_resource_path("unknown_icon.png")
             if os.path.isfile(unknown_icon):
-                list_icon = QIcon(unknown_icon)
+                pix = QPixmap(unknown_icon)
+                if not pix.isNull():
+                    list_icon = shaped_game_icon(pix, ICON_SHAPE_CIRCLE)
 
         row = self.table_rendered.rowCount()
         self.table_rendered.insertRow(row)
@@ -1691,29 +1704,55 @@ class RenderedLibraryMixin:
         )
 
         if hasattr(self, "custom_text_label"):
-            unknown_tag = (
-                " <span style='color: #888888;'>&nbsp;&nbsp;•&nbsp;&nbsp; Unknown</span>"
-                if is_unknown else ""
+            from steempeg.ui.player_header_layout import set_player_header_game_text
+
+            extra: list[str] = []
+            if is_unknown:
+                extra.append("Unknown")
+            if type_clean:
+                extra.append(type_clean)
+            if size_str:
+                extra.append(size_str)
+            date_part = date_str
+            time_part = ""
+            if "\n" in date_str:
+                bits = date_str.split("\n", 1)
+                date_part = bits[0].strip()
+                time_part = bits[1].strip()
+            set_player_header_game_text(
+                self,
+                display_title,
+                date=date_part,
+                time=time_part,
+                extra=extra,
             )
-            header_html = (
-                f"<b>{display_title}</b>{unknown_tag} <span style='color: #888;'>&nbsp;&nbsp;•&nbsp;&nbsp; "
-                f"{type_clean} &nbsp;&nbsp;•&nbsp;&nbsp; {date_str} &nbsp;&nbsp;•&nbsp;&nbsp; {size_str}</span>"
-            )
-            self.custom_text_label.setText(header_html)
         if hasattr(self, "custom_icon_label"):
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             if icon_path and os.path.isfile(icon_path):
                 from PySide6.QtGui import QPixmap
-                self.custom_icon_label.setPixmap(QPixmap(icon_path).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+                self.current_game_icon = icon_path
+                src = QPixmap(icon_path)
+                if not src.isNull():
+                    self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
             elif is_unknown:
                 from steempeg.infra.paths import get_resource_path
                 from PySide6.QtGui import QPixmap
+                from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
                 unknown = get_resource_path("unknown_icon.png")
+                self.current_game_icon = unknown if os.path.isfile(unknown) else ""
                 if os.path.isfile(unknown):
-                    self.custom_icon_label.setPixmap(QPixmap(unknown).scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                    src = QPixmap(unknown)
+                    if not src.isNull():
+                        self.custom_icon_label.setPixmap(
+                            shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                        )
                 else:
                     self.custom_icon_label.clear()
             else:
+                self.current_game_icon = ""
                 self.custom_icon_label.clear()
 
         if hasattr(self, "btn_clip_health"):
