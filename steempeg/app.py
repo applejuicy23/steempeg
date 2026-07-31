@@ -285,6 +285,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.json_cache_path = os.path.join(self.cache_dir, "games.json")
         self.game_names_cache = self.load_json_cache() # JSON
         self.game_icons_cache = {} # This is where we store downloaded images in memory
+        try:
+            from steempeg.ui.icon_shape import load_icon_shape_from_settings
+            from steempeg.ui.player_header_layout import load_header_layout_from_settings
+
+            _settings0 = self.load_user_settings() or {}
+            load_icon_shape_from_settings(_settings0)
+            load_header_layout_from_settings(_settings0)
+        except Exception:
+            pass
         if hasattr(self, "restore_salvage_verified_clips"):
             self.restore_salvage_verified_clips()
 
@@ -1264,7 +1273,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
                         self.custom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
-                        self.custom_text_label.setText("Select a clip to preview...")
+                        from steempeg.ui.player_header_layout import set_player_header_game_text
+
+                        set_player_header_game_text(
+                            self,
+                            "Select a clip to preview...",
+                            placeholder=True,
+                        )
 
                     css_logo_main = get_resource_path("logo.png").replace('\\', '/')
                     if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
@@ -1490,8 +1505,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.video_stack.setCurrentWidget(self.placeholder_frame)
 
         # --- CREATE A TOP PANEL  ---
-        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
-        
+        # Title cluster: icon + game name + info chip. SteempegUI = left;
+        # Steam-like = centered via spacers. Status/actions stay right.
+        # Portable injects "| Choose a Clip" after the title cluster only.
+        from PySide6.QtCore import QEvent, QObject
+        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+        from steempeg.ui.design_tokens import with_tooltip_style
+
         self.player_header_frame = QFrame()
         self.player_header_frame.setStyleSheet("""
             QFrame {
@@ -1502,21 +1522,85 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         header_layout = QHBoxLayout(self.player_header_frame)
         header_layout.setContentsMargins(10, 8, 10, 8)
         header_layout.setSpacing(10)
-        
+
+        self.player_header_title = QWidget()
+        self.player_header_title.setObjectName("playerHeaderTitle")
+        title_row = QHBoxLayout(self.player_header_title)
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
         self.custom_icon_label = QLabel()
         self.custom_icon_label.setFixedSize(24, 24)
+        self.custom_icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
         self.custom_icon_label.setPixmap(QIcon(get_resource_path("unknown_icon.png")).pixmap(24, 24))
-        
+
         self.custom_text_label = QLabel("Select a clip to preview...")
-        self.custom_text_label.setStyleSheet("color: white; font-size: 13px; font-weight: bold;")
-        
-        header_layout.addWidget(self.custom_icon_label)
-        header_layout.addWidget(self.custom_text_label)
-        header_layout.addStretch()
+        self.custom_text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.custom_text_label.setTextFormat(Qt.TextFormat.RichText)
+        self.custom_text_label.setStyleSheet(
+            "color: white; font-size: 13px; font-weight: 700;"
+            "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            "background: transparent; border: none;"
+        )
+
+        from steempeg.ui.icon_assets import playinfo_icon
+
+        _INFO_CHIP = 20
+        _INFO_ICON = 16
+        self.btn_player_header_info = QPushButton()
+        self.btn_player_header_info.setObjectName("playerHeaderInfo")
+        self.btn_player_header_info.setFixedSize(_INFO_CHIP, _INFO_CHIP)
+        self.btn_player_header_info.setIcon(playinfo_icon(_INFO_ICON))
+        self.btn_player_header_info.setIconSize(QSize(_INFO_ICON, _INFO_ICON))
+        self.btn_player_header_info.setCursor(Qt.PointingHandCursor)
+        self.btn_player_header_info.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_player_header_info.setToolTip("No clip")
+        self.btn_player_header_info.setEnabled(False)
+        self.btn_player_header_info.setStyleSheet(with_tooltip_style(
+            "QPushButton {"
+            "background-color: transparent;"
+            "border: none;"
+            "border-radius: 10px;"
+            "padding: 0px;"
+            "}"
+            "QPushButton:hover { background-color: rgba(200, 200, 200, 0.18); }"
+            "QPushButton:disabled { background-color: transparent; }"
+        ))
+
+        class _HeaderInfoHoverFilter(QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Type.Enter:
+                    owner = self.parent()
+                    if owner is not None and hasattr(owner, "refresh_player_header_info"):
+                        owner.refresh_player_header_info()
+                return False
+
+        self._header_info_hover_filter = _HeaderInfoHoverFilter(self)
+        self.btn_player_header_info.installEventFilter(self._header_info_hover_filter)
+
+        title_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(self.custom_icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(self.custom_text_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(self.btn_player_header_info, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        from steempeg.ui.player_header_layout import (
+            apply_player_header_layout,
+            ensure_header_spacers,
+            set_player_header_game_text,
+        )
+
+        left_sp, right_sp = ensure_header_spacers(self)
+        header_layout.addWidget(left_sp)
+        header_layout.addWidget(self.player_header_title)
+        header_layout.addWidget(right_sp)
+        set_player_header_game_text(
+            self,
+            "Select a clip to preview...",
+            placeholder=True,
+        )
+        apply_player_header_layout(self)
 
         # Status chips (health + preview badge) | action chips (close, later: preview settings).
-        from PySide6.QtWidgets import QFrame, QPushButton, QWidget
-
         self.player_header_status = QWidget()
         status_row = QHBoxLayout(self.player_header_status)
         status_row.setContentsMargins(0, 0, 0, 0)
@@ -1601,6 +1685,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         header_layout.addWidget(self.player_header_status)
         header_layout.addWidget(self.player_header_divider)
         header_layout.addWidget(self.player_header_actions)
+        # Status/actions exist now — re-apply so Steam-like dock mirror + sync
+        # filters attach to the right dock (first apply ran before these).
+        apply_player_header_layout(self)
 
         right_layout = self.ui.right_panel.layout()
         if right_layout:
@@ -1760,12 +1847,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.btn_trim.setFixedHeight(30)
                 self.btn_trim.setCursor(Qt.PointingHandCursor)
                 
-                # Apply a slightly golden premium style
-                from steempeg.ui.design_tokens import with_tooltip_style
-                self.btn_trim.setStyleSheet(with_tooltip_style(
-                    "background-color: #cfa94a; color: black; border-radius: 15px; "
-                    "padding: 0 12px; font-weight: bold;"
-                ))
+                # Dark fill + bright gold border (same language as portable Render).
+                from steempeg.ui.design_tokens import STYLE_TRIM_BUTTON
+                self.btn_trim.setStyleSheet(STYLE_TRIM_BUTTON)
                 
                 # Try to load custom scissors icon
                 trim_icon_path = get_resource_path("trim_icon.png")
@@ -2465,6 +2549,162 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ):
             if widget is not None:
                 widget.setVisible(bool(visible))
+        self.refresh_player_header_info(has_clip=bool(visible))
+        # Steam-like: keep ``|`` / title at bar midpoint when the right dock
+        # appears or disappears (Healthy / gear / close).
+        try:
+            from steempeg.ui.player_header_layout import (
+                ensure_header_center_sync,
+                sync_header_center_mirror,
+            )
+
+            ensure_header_center_sync(self)
+            sync_header_center_mirror(self)
+        except Exception:
+            pass
+
+    def _source_info_tooltip_text(self) -> str:
+        """Build hover text from Source Info labels already on the settings tab."""
+        from steempeg.ui.player_header_layout import (
+            join_clip_date_time,
+            plain_header_title,
+        )
+
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return "No clip"
+
+        lines: list[str] = []
+        meta = getattr(self, "_player_header_meta", None) or {}
+        title = str(meta.get("title") or "").strip()
+        if not title or meta.get("placeholder"):
+            name_lbl = getattr(self, "custom_text_label", None)
+            if name_lbl is not None:
+                title = plain_header_title(name_lbl.text() or "")
+        if title and "select a clip" not in title.lower():
+            lines.append(title)
+
+        datetime_line = join_clip_date_time(
+            str(meta.get("date") or ""),
+            str(meta.get("time") or ""),
+        )
+        if datetime_line:
+            lines.append(f"Date: {datetime_line}")
+        dur_meta = str(meta.get("duration") or "").strip()
+        if dur_meta and dur_meta not in ("-", "—"):
+            if dur_meta.lower().startswith("time:"):
+                dur_meta = dur_meta.split(":", 1)[1].strip()
+            if dur_meta:
+                lines.append(f"Duration: {dur_meta}")
+        for part in meta.get("extra") or ():
+            p = str(part or "").strip()
+            if p:
+                lines.append(p)
+
+        specs = (
+            ("Resolution", "orig_res_label"),
+            ("Video Bitrate", "label_vbitrate"),
+            ("Audio Bitrate", "label_abitrate"),
+            ("Duration", "label_duration"),
+            ("FPS", "label_fps"),
+            ("Size", "label_size"),
+        )
+        seen_caps = {ln.split(":", 1)[0].strip().lower() for ln in lines if ":" in ln}
+        for caption, attr in specs:
+            if caption.lower() in seen_caps:
+                continue
+            lbl = getattr(ui, attr, None)
+            if lbl is None or not hasattr(lbl, "text"):
+                continue
+            val = (lbl.text() or "").strip()
+            if not val or val in ("-", "—"):
+                continue
+            # label_duration is ``Time: 3m`` — normalize to Duration for the tip.
+            if attr == "label_duration" and val.lower().startswith("time:"):
+                val = val.split(":", 1)[1].strip()
+                if not val or val in ("-", "—"):
+                    continue
+                lines.append(f"Duration: {val}")
+                seen_caps.add("duration")
+                continue
+            # Strip ``Label:`` prefixes from Source Info widgets.
+            for prefix in (
+                "Original resolution:",
+                "Original Resolution:",
+                "Video Bitrate:",
+                "Audio Bitrate:",
+                "FPS:",
+                "Size:",
+                "Time:",
+            ):
+                if val.lower().startswith(prefix.lower()):
+                    val = val[len(prefix):].strip()
+                    break
+            if not val or val in ("-", "—"):
+                continue
+            lines.append(f"{caption}: {val}")
+            seen_caps.add(caption.lower())
+
+        src = getattr(ui, "source_label", None)
+        paths: list[str] = []
+        if src is not None:
+            try:
+                from PySide6.QtWidgets import QLabel, QLineEdit
+
+                for field in src.findChildren(QLineEdit):
+                    t = (field.text() or "").strip()
+                    if t:
+                        paths.append(t)
+                if not paths:
+                    for field in src.findChildren(QLabel):
+                        t = (field.text() or "").strip()
+                        if not t or t.lower().rstrip(":") == "source":
+                            continue
+                        paths.append(t)
+            except RuntimeError:
+                paths = []
+            if not paths and hasattr(src, "text"):
+                raw = (src.text() or "").strip()
+                if raw and raw.lower() not in ("source:", "source: -", "source:-"):
+                    if raw.lower().startswith("source:"):
+                        raw = raw.split(":", 1)[1].strip()
+                    if raw and raw not in ("-", "—"):
+                        paths.append(raw)
+        if paths:
+            lines.append("Source:")
+            lines.extend(paths)
+
+        return "\n".join(lines) if lines else "No clip"
+
+    def refresh_player_header_info(self, *, has_clip: bool | None = None) -> None:
+        """Enable/disable the header info chip and refresh its Source Info tooltip."""
+        btn = getattr(self, "btn_player_header_info", None)
+        if btn is None:
+            return
+        if has_clip is None:
+            actions = getattr(self, "player_header_actions", None)
+            has_clip = bool(actions is not None and actions.isVisible())
+        tip = self._source_info_tooltip_text() if has_clip else "No clip"
+        if not has_clip or tip == "No clip":
+            btn.setEnabled(False)
+            btn.setToolTip("No clip")
+        else:
+            btn.setEnabled(True)
+            btn.setToolTip(tip)
+
+    def refresh_player_header_layout(self, layout: str | None = None) -> None:
+        """Apply Settings → Visual header layout (spacers + title meta) without restart."""
+        from steempeg.ui.player_header_layout import (
+            apply_player_header_layout,
+            refresh_player_header_text,
+            set_header_layout,
+        )
+
+        if layout is not None:
+            set_header_layout(layout)
+        apply_player_header_layout(self)
+        refresh_player_header_text(self)
+        self.refresh_player_header_info()
 
     def _current_app_bg(self) -> str:
         """Background color for the current chrome theme."""
