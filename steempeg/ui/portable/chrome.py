@@ -191,6 +191,33 @@ def ensure_portable_chrome(app) -> None:
         app._sync_library_scan_interaction_lock(
             busy=bool(getattr(app, "_clips_scan_active", False))
         )
+    # Re-balance header once Choose a Clip (+ divider) exist — same path Settings
+    # uses when the user re-selects SteempegUI / Steam-like.
+    def _rebalance_header() -> None:
+        if hasattr(app, "refresh_player_header_layout"):
+            try:
+                app.refresh_player_header_layout()
+                return
+            except Exception:
+                pass
+        try:
+            from steempeg.ui.player_header_layout import apply_player_header_layout
+
+            apply_player_header_layout(app)
+        except Exception:
+            pass
+
+    _rebalance_header()
+    # Pre-show apply can run before the header has a real width; one deferred
+    # pass after the event loop maps the window matches a Settings re-select.
+    if not getattr(app, "_portable_header_layout_deferred", False):
+        app._portable_header_layout_deferred = True
+        try:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, _rebalance_header)
+        except Exception:
+            app._portable_header_layout_deferred = False
 
 
 def hide_portable_chrome(app) -> None:
@@ -210,6 +237,11 @@ def hide_portable_chrome(app) -> None:
         if btn is not None:
             btn.hide()
     dispose_portable_sheets(app)
+    if hasattr(app, "refresh_player_header_layout"):
+        try:
+            app.refresh_player_header_layout()
+        except Exception:
+            pass
 
 
 def _style_add_clip_button(btn: QPushButton) -> None:
@@ -228,12 +260,35 @@ def _ensure_add_clip_button(app) -> None:
         return
 
     lay: QHBoxLayout = header.layout()
-    insert_at = 2
-    for i in range(lay.count()):
-        item = lay.itemAt(i)
-        if item is not None and item.spacerItem() is not None:
-            insert_at = i
-            break
+    # Insert after the title cluster (icon+name+info), before the trailing
+    # stretch / status chips. Works for both SteempegUI (left) and Steam-like
+    # (centered). If the title lives inside a center wing, park after that wing
+    # — apply_player_header_layout (from ensure_portable_chrome) finalizes order.
+    title = getattr(app, "player_header_title", None)
+    insert_at = -1
+    if title is not None:
+        idx = lay.indexOf(title)
+        if idx >= 0:
+            insert_at = idx + 1
+    if insert_at < 0:
+        left_wing = getattr(app, "player_header_left_wing", None)
+        if left_wing is not None:
+            wi = lay.indexOf(left_wing)
+            if wi >= 0:
+                insert_at = wi + 1
+    if insert_at < 0:
+        insert_at = lay.count()
+        for name in (
+            "player_header_status",
+            "player_header_divider",
+            "player_header_actions",
+        ):
+            dock = getattr(app, name, None)
+            if dock is not None:
+                di = lay.indexOf(dock)
+                if di >= 0:
+                    insert_at = di
+                    break
 
     btn = getattr(app, "btn_portable_add_clip", None)
     if btn is not None:
@@ -263,6 +318,14 @@ def _ensure_add_clip_button(app) -> None:
             app.portable_add_clip_divider = divider
             idx = lay.indexOf(btn)
             lay.insertWidget(idx if idx >= 0 else insert_at, divider)
+        # Re-parent onto the header if a layout pass left them orphaned.
+        divider = getattr(app, "portable_add_clip_divider", None)
+        if divider is not None and lay.indexOf(divider) < 0:
+            at = lay.indexOf(btn) if lay.indexOf(btn) >= 0 else insert_at
+            lay.insertWidget(at if at >= 0 else lay.count(), divider)
+        if lay.indexOf(btn) < 0:
+            at = lay.indexOf(divider) + 1 if divider is not None and lay.indexOf(divider) >= 0 else insert_at
+            lay.insertWidget(max(0, at), btn)
         _ensure_library_scan_badge(app, lay)
         return
 
