@@ -103,3 +103,7 @@ _BASE_ASSETS = (
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
 
 BUNDLED_ASSET_FILES: tuple[str, ...] = _BASE_ASSETS + _HEALTH_ASSETS
+
+# Per-game DASH init donors live under assets/donors/<app_id>/ (not flat filenames).
+# PyInstaller adds the whole tree via ``BUNDLED_DONOR_TREE``; Linux packs copy assets/.
+BUNDLED_DONOR_TREE = "donors"

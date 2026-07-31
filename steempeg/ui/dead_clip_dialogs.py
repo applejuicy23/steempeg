@@ -138,8 +138,9 @@ class DeadClipOfferDialog(_MascotConfirmDialog):
         body = (
             f"{issues_text}\n\n"
             "Steempeg can try to salvage it from surviving chunks. "
-            "If the decoder header is missing, you need one healthy donor clip "
-            "of the same game in your library. No same-game donor = usually unrecoverable."
+            "If the decoder header is missing, recovery uses a healthy same-game "
+            "clip from your library, or a bundled donor for that game when available. "
+            "No donor at all = usually unrecoverable."
         )
         super().__init__(
             "Dead Clip",
@@ -160,8 +161,9 @@ class DeadClipSalvageDialog(_MascotConfirmDialog):
         body = (
             "Steempeg can rebuild a salvage manifest from surviving chunks. "
             "If this clip's own decoder header (init) is missing or corrupt, "
-            "recovery needs one healthy donor clip of the same game already in your library. "
-            "Without that donor, salvage usually cannot work.\n\n"
+            "recovery borrows one from a healthy same-game library clip, "
+            "or from Steempeg's bundled donor pack for that game when present. "
+            "Without any same-game donor, salvage usually cannot work.\n\n"
             "You may see garbled video, only audio, or nothing. "
             "If it plays, the clip stays labelled Dead but can be rendered."
         )
@@ -200,9 +202,9 @@ class DeadClipSalvageFailedDialog(SteempegDialog):
         col.addWidget(title)
         body = QLabel(
             "Either there are no usable video chunks, or the decoder header is gone "
-            "and no healthy donor clip of the same game is in your library.\n\n"
-            "Add at least one working clip of this game, then try Force play (salvage) again. "
-            "Without a same-game donor, this dead clip cannot be revived."
+            "and no same-game donor was found (library or bundled pack).\n\n"
+            "Add at least one working clip of this game — or wait for a bundled donor "
+            "for this title — then try Force play (salvage) again."
         )
         body.setWordWrap(True)
         body.setStyleSheet(

@@ -1626,29 +1626,40 @@ class LibraryMixin:
         return None
 
     def _find_donor_init(self, app_id, exclude: str = ""):
-        """Find a valid init-stream0.m4s from a healthy clip of the same game."""
-        if not app_id or not hasattr(self.ui, "table_clips"):
+        """Find a valid init-stream0.m4s for this game.
+
+        Order: healthy same-game library clip → bundled ``assets/donors/<app_id>/``.
+        """
+        if not app_id:
             return None
         exclude_norm = os.path.normpath(exclude) if exclude else ""
-        for row in range(self.ui.table_clips.rowCount()):
-            item = self.ui.table_clips.item(row, 0)
-            if not item:
-                continue
-            path = item.data(Qt.UserRole)
-            if not path or not os.path.isdir(path):
-                continue
-            if exclude_norm and os.path.normpath(path) == exclude_norm:
-                continue
-            from steempeg.core.rendered_media import parse_app_id_from_clip_folder
-            if parse_app_id_from_clip_folder(os.path.basename(path)) != app_id:
-                continue
-            report = self.get_clip_health_report(path)
-            if report.level == health.ClipHealth.DEAD:
-                continue
-            donor = self._find_valid_init0(path)
-            if donor:
-                logging.info("Donor init for %s found in %s", app_id, path)
-                return donor
+        if hasattr(self.ui, "table_clips"):
+            for row in range(self.ui.table_clips.rowCount()):
+                item = self.ui.table_clips.item(row, 0)
+                if not item:
+                    continue
+                path = item.data(Qt.UserRole)
+                if not path or not os.path.isdir(path):
+                    continue
+                if exclude_norm and os.path.normpath(path) == exclude_norm:
+                    continue
+                from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+                if parse_app_id_from_clip_folder(os.path.basename(path)) != app_id:
+                    continue
+                report = self.get_clip_health_report(path)
+                if report.level == health.ClipHealth.DEAD:
+                    continue
+                donor = self._find_valid_init0(path)
+                if donor:
+                    logging.info("Donor init for %s found in library %s", app_id, path)
+                    return donor
+
+        from steempeg.core.dash.donors import find_bundled_donor_init
+
+        bundled = find_bundled_donor_init(app_id)
+        if bundled:
+            logging.info("Donor init for %s using bundled pack", app_id)
+            return bundled
         return None
 
     def _populate_library_context_menu(self, menu, clip_paths: list):
