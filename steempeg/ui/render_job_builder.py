@@ -247,12 +247,19 @@ def find_clip_metadata(app: SteempegApp, clip_path: str) -> Optional[dict]:
             continue
         row_path = item.data(Qt.UserRole)
         if row_path and os.path.normpath(row_path) == norm:
+            # Col 2 = ``date\\ntime``; col 3 = duration (not clock time).
             date_item = table.item(row, 2)
-            time_item = table.item(row, 3)
+            dur_item = table.item(row, 3)
+            from steempeg.ui.player_header_layout import split_clip_date_cell
+
+            date_part, time_part = split_clip_date_cell(
+                date_item.text() if date_item else ""
+            )
             return {
                 "game_name": item.text(),
-                "clip_date": date_item.text() if date_item else "",
-                "clip_time": time_item.text() if time_item else "",
+                "clip_date": date_part,
+                "clip_time": time_part,
+                "duration_label": (dur_item.text() if dur_item else "").strip(),
             }
     return None
 
@@ -625,6 +632,9 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
         settings.encoder_display = enc_display
         settings.encode_speed = enc_speed
         duration_label = str(defaults.get("duration_label") or "")
+
+    if not duration_label:
+        duration_label = str(meta.get("duration_label") or "")
 
     settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
 
