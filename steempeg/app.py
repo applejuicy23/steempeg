@@ -233,11 +233,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.clips_folder = ""
         self.clips_folders = []
         
-        # --- Set default rendered_videos ---
-        default_export_dir = os.path.join(get_save_directory(), "rendered_videos").replace('\\', '/')
-        if not os.path.exists(default_export_dir):
-            os.makedirs(default_export_dir, exist_ok=True)
-        self.custom_destination = default_export_dir 
+        # --- Export destination (default rendered_videos; Main Settings may override) ---
+        from steempeg.ui.settings_prefs import apply_export_folder, default_export_dir
+
+        _default_export = default_export_dir()
+        self.custom_destination = _default_export
         # The button keeps a static "Save as…" label; the full path lives in the Output line.
             
         self.current_orig_bitrate = 0 # Bitrate of the selected original clip
@@ -292,6 +292,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             _settings0 = self.load_user_settings() or {}
             load_icon_shape_from_settings(_settings0)
             load_header_layout_from_settings(_settings0)
+            from steempeg.ui.settings_prefs import (
+                KEY_PERMANENT_EXPORT_FOLDER,
+                apply_export_folder,
+                resolve_permanent_export_folder,
+                sync_export_folder_to_settings,
+            )
+
+            _export = resolve_permanent_export_folder(_settings0)
+            apply_export_folder(self, _export, persist=False)
+            # One-shot migrate: seed permanent_export_folder from resolved path.
+            if KEY_PERMANENT_EXPORT_FOLDER not in _settings0:
+                sync_export_folder_to_settings(self, _export)
         except Exception:
             pass
         if hasattr(self, "restore_salvage_verified_clips"):
@@ -741,7 +753,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
         # "Hide" Arch-Shaped Insert Button
         if hasattr(self.ui, 'settings_tabs'):
-            self.ui.settings_tabs.setCurrentIndex(0)
             from PySide6.QtWidgets import QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QFrame, QScrollArea, QSizePolicy
             from PySide6.QtCore import QObject, QEvent
             
@@ -830,7 +841,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.neo_nav_buttons.append(btn)
                 
             if self.neo_nav_buttons:
-                self.neo_nav_buttons[0].setChecked(True)
+                # After Presets tab exists — honour Settings → Default Render panel tab.
+                from steempeg.ui.settings_prefs import apply_default_render_tab
+
+                apply_default_render_tab(self)
                 
             self.ui.settings_tabs.currentChanged.connect(
                 lambda idx: self.neo_nav_buttons[idx].setChecked(True) if idx < len(self.neo_nav_buttons) else None
@@ -4160,17 +4174,14 @@ def main():
             QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
         if hasattr(window, "schedule_silent_update_check"):
             # Quiet badge probe — never auto-installs; user still chooses backup/update.
-            # Opt-out via Settings → Check for updates on startup.
-            from steempeg.ui.settings_dialog import KEY_CHECK_UPDATES_ON_STARTUP
+            # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).
+            from steempeg.ui.settings_prefs import should_run_silent_update_check
 
-            check_on_start = True
             try:
-                check_on_start = bool(
-                    window.load_user_settings().get(KEY_CHECK_UPDATES_ON_STARTUP, True)
-                )
+                _upd_settings = window.load_user_settings() or {}
             except Exception:
-                check_on_start = True
-            if check_on_start:
+                _upd_settings = {}
+            if should_run_silent_update_check(_upd_settings):
                 window.schedule_silent_update_check(2800)
 
         # Small-screen tip after chrome settles (also warned on shell chooser).
