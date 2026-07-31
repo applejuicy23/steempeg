@@ -3,7 +3,7 @@
 Two modes:
 
 * ``steempeg_ui`` — classic left-aligned title + date/time (+ duration) meta
-* ``steam_like`` — centered logo + game name; meta lives in the playinfo tooltip only
+* ``steam_like`` — centered logo + game name; meta lives in the Clip info tip/popup only
 
 Default is ``steempeg_ui`` for classic familiarity (icon shape Soft/Steam-like is
 independent).
@@ -772,7 +772,7 @@ def set_player_header_game_text(
     extra: list[str] | tuple[str, ...] | None = None,
     placeholder: bool = False,
 ) -> None:
-    """Store meta, paint the label, and refresh the info tooltip."""
+    """Store meta, paint the label, and refresh the Clip info chip."""
     store_player_header_meta(
         app,
         title=title,
