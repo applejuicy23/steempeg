@@ -43,6 +43,9 @@ class TimelineCanvas(QWidget):
     _MAJOR_TICK_H = 10      # longer major ticks (was 8)
     _MINOR_TICK_H = 4
     _RULER_FONT_PT = 8
+    # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440.
+    _TRACK_H = 13.0
+    _TRACK_Y = 28.0
     _CANVAS_H = 58
 
     pause_requested = Signal()        
@@ -112,7 +115,7 @@ class TimelineCanvas(QWidget):
             self.master_head_h = float(h_s.height())
             
             # Stem spans the purple track (+ a hair taller than the bar).
-            track_h = 13
+            track_h = int(self._TRACK_H)
             total_h = h_s.height() + track_h + p_s.height()
             body_x = (head_w - body_w) // 2
             
@@ -616,7 +619,7 @@ class TimelineCanvas(QWidget):
         """Return 'trim_l', 'trim_r', or None. Vertical grab zone matches paint + hover cursor."""
         if not self.is_trim_mode:
             return None
-        track_y, track_height = 28.0, 12.0
+        track_y, track_height = self._TRACK_Y, self._TRACK_H
         hit_tolerance = 10.0
         vertical_pad = 10.0
         if y < track_y - vertical_pad or y > track_y + track_height + vertical_pad:
@@ -723,8 +726,8 @@ class TimelineCanvas(QWidget):
 
         painter.fillRect(self.rect(), QColor("#1e1e1e"))
         
-        track_height = 12.0 
-        track_y = 28.0
+        track_height = self._TRACK_H
+        track_y = self._TRACK_Y
 
         painter.fillRect(QRectF(pad, track_y, usable_w, track_height), self.track_color)
 
