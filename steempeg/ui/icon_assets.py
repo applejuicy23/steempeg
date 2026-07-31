@@ -191,6 +191,17 @@ def preview_settings_icon(size: int = 16) -> QIcon:
     return load_icon("settings.png", size)
 
 
+def playinfo_icon(size: int = 16) -> QIcon:
+    """playinfo.png for the player header Source Info chip.
+
+    Uses a plain QIcon so Qt can gray the glyph when the button is disabled.
+    """
+    pix = load_pixmap("playinfo.png", size)
+    if pix.isNull():
+        return QIcon()
+    return QIcon(pix)
+
+
 def theater_mode_icon(size: int = 22, *, closed: bool = False) -> QIcon:
     """Theatre chrome icon matched to fullscreen *height*, full plate visible.
 
