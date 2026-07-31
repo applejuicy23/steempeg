@@ -3362,6 +3362,16 @@ def main():
     import os
     import argparse
     import traceback
+
+    # Toast / protocol click: restore the running window and exit (no Qt).
+    if sys.platform == "win32" and any(
+        a == "--raise-existing" or str(a).startswith("steempeg:")
+        for a in sys.argv[1:]
+    ):
+        from steempeg.infra.window_focus import raise_steempeg_window
+
+        raise SystemExit(0 if raise_steempeg_window() else 1)
+
     from PySide6.QtWidgets import QApplication, QMessageBox
     from PySide6.QtGui import QIcon
     from PySide6.QtCore import QTimer

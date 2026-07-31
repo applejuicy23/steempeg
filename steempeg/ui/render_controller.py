@@ -3715,6 +3715,46 @@ class RenderMixin:
             else:
                 steempeg_critical(self.ui, "Thread Error", f"Could not start render:\n{e}")
 
+    def _notify_render_outcome(
+        self,
+        *,
+        success: bool,
+        title: str,
+        body: str,
+    ) -> None:
+        """OS toast + system sound when Steempeg is in the background.
+
+        Honours Settings → «Notify when render finishes». Errors also beep
+        when the window is focused (dialog is already on screen).
+        """
+        from steempeg.infra.os_notify import (
+            NotifyKind,
+            app_is_in_background,
+            notify_render_event,
+        )
+        from steempeg.infra.system_sound import SystemSound, play_system_sound
+        from steempeg.ui.settings_dialog import KEY_NOTIFY_ON_RENDER_COMPLETE
+
+        enabled = True
+        if hasattr(self, "load_user_settings"):
+            try:
+                enabled = bool(
+                    self.load_user_settings().get(KEY_NOTIFY_ON_RENDER_COMPLETE, True)
+                )
+            except Exception:
+                enabled = True
+        if not enabled:
+            return
+
+        parent = getattr(self, "ui", None)
+        kind = NotifyKind.SUCCESS if success else NotifyKind.ERROR
+        if app_is_in_background(parent):
+            notify_render_event(
+                title, body, kind=kind, parent=parent, force=True, play_sound=True
+            )
+        elif not success:
+            play_system_sound(SystemSound.ERROR)
+
     def _finish_queue_batch(self) -> None:
         self._queue_batch_active = False
         self._restore_render_performance_prefs()
@@ -3734,6 +3774,28 @@ class RenderMixin:
         self.update_status_indicator("Ready", "ready")
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
+
+        jobs = list(self.render_queue.jobs)
+        try:
+            from steempeg.render.queue import JobStatus
+
+            done = sum(1 for j in jobs if j.status == JobStatus.COMPLETED)
+            failed = sum(1 for j in jobs if j.status == JobStatus.ERROR)
+        except Exception:
+            done, failed = 0, 0
+        if failed == 0 and done > 0:
+            self._notify_render_outcome(
+                success=True,
+                title="Videos are ready",
+                body=f"{done} exported",
+            )
+        elif failed:
+            self._notify_render_outcome(
+                success=False,
+                title="Render failed",
+                body=f"{done} ok · {failed} failed",
+            )
+
         self._show_batch_complete_dialog()
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
@@ -3957,6 +4019,13 @@ class RenderMixin:
             if "cancelled by user" in (error_msg or "").lower():
                 self._stop_queue_batch(cancelled=True)
                 return
+            short = (error_msg or "FFmpeg error").strip().splitlines()[0][:80]
+            game = getattr(active_job, "game_name", None) or "Clip"
+            self._notify_render_outcome(
+                success=False,
+                title="Render failed",
+                body=f"{game}: {short}",
+            )
             if self._prompt_batch_continue_after_error(error_msg or ""):
                 self.process_next_in_queue()
             else:
@@ -3983,6 +4052,12 @@ class RenderMixin:
             self.update_status_indicator("Success!", "success")
 
             if active_job and output_file:
+                game = getattr(active_job, "game_name", None) or "Clip"
+                self._notify_render_outcome(
+                    success=True,
+                    title="Video is ready",
+                    body=game,
+                )
                 if not getattr(self, "_queue_batch_active", False):
                     self._archive_single_render_to_history(active_job, output_file)
                 self._show_render_complete_dialog(active_job, output_file)
@@ -3998,6 +4073,13 @@ class RenderMixin:
         else:
             logging.error(f"=== RENDER ERROR === \n{error_msg}")
             self.update_status_indicator("Error!", "error")
+            short = (error_msg or "FFmpeg error").strip().splitlines()[0][:80]
+            game = getattr(active_job, "game_name", None) or "Clip"
+            self._notify_render_outcome(
+                success=False,
+                title="Render failed",
+                body=f"{game}: {short}",
+            )
             self._show_steempeg_render_error_dialog(error_msg or "")
             self.update_status_indicator("Ready", "ready")
 

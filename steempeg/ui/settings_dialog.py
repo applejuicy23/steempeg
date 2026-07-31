@@ -161,13 +161,16 @@ class SettingsDialog(SteempegDialog):
 
         # --- Notifications ---
         root.addWidget(self._section("Notifications"))
-        self._chk_notify = SteempegCheckBox("Notify when render finishes")
+        self._chk_notify = SteempegCheckBox("Notify when render finishes or fails")
         self._chk_notify.setChecked(
             bool(settings.get(KEY_NOTIFY_ON_RENDER_COMPLETE, True))
         )
         root.addWidget(self._chk_notify)
         root.addWidget(
-            self._hint("OS toast when minimized — wired as notifications land.")
+            self._hint(
+                "When Steempeg is minimized: OS notification center toast + "
+                "system alert sound (Windows / Linux / SteamOS). Off = silent."
+            )
         )
 
         # --- Hints ---
