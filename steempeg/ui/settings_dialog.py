@@ -4,9 +4,11 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -47,11 +49,26 @@ from steempeg.ui.shell_chooser import (
     save_ask_ui_shell,
     save_ui_shell,
 )
+from steempeg.ui.settings_prefs import (
+    KEY_DEFAULT_RENDER_TAB,
+    KEY_UPDATE_CHECK_INTERVAL,
+    RENDER_TAB_LABELS,
+    UPDATE_INTERVAL_LABELS,
+    apply_default_render_tab,
+    apply_export_folder,
+    default_export_dir,
+    is_outside_default_rendered,
+    load_default_render_tab,
+    normalize_export_folder,
+    normalize_render_tab,
+    normalize_update_check_interval,
+    resolve_permanent_export_folder,
+    resolve_update_check_interval,
+)
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 # Persisted preference keys
-KEY_CHECK_UPDATES_ON_STARTUP = "check_updates_on_startup"
 KEY_NOTIFY_ON_RENDER_COMPLETE = "notify_on_render_complete"
 KEY_RENDER_PROCESS_PRIORITY = "render_process_priority"
 KEY_PAUSE_PREVIEW_DURING_RENDER = "pause_preview_during_render"
@@ -94,6 +111,17 @@ _COMBO = """
     QComboBox:hover { border: 2px solid #6b5a8e; }
     QComboBox::drop-down { border: none; width: 22px; }
 """
+_EDIT = """
+    QLineEdit {
+        background-color: #383838; color: #ffffff;
+        border: 2px solid #4a4a4a; border-radius: 8px;
+        padding: 4px 10px; font-size: 12px;
+        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
+        min-height: 26px;
+    }
+    QLineEdit:hover { border: 2px solid #6b5a8e; }
+    QLineEdit:focus { border: 2px solid #8e7cc3; }
+"""
 _TABS = """
     QTabWidget::pane {
         border: 1px solid #444; border-radius: 8px;
@@ -129,7 +157,7 @@ class SettingsDialog(SteempegDialog):
         self.setMinimumWidth(480)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        w, h = scaled_dialog_size(520, 480, parent=parent or getattr(app, "ui", None))
+        w, h = scaled_dialog_size(520, 560, parent=parent or getattr(app, "ui", None))
         self.resize(w, h)
 
         settings = {}
@@ -146,15 +174,79 @@ class SettingsDialog(SteempegDialog):
         tabs.setStyleSheet(_TABS)
         root.addWidget(tabs, 1)
 
-        # ----- General (Updates + Shell) -----
+        # ----- General (Updates + Export + Render landing + Shell) -----
         general, g = _tab_page()
         g.addWidget(self._section("Updates"))
-        self._chk_updates = SteempegCheckBox("Check for updates on startup")
-        self._chk_updates.setChecked(
-            bool(settings.get(KEY_CHECK_UPDATES_ON_STARTUP, True))
+        upd_row = QHBoxLayout()
+        upd_row.setSpacing(8)
+        upd_lbl = QLabel("Check for updates")
+        upd_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_update_interval = QComboBox()
+        self._combo_update_interval.setStyleSheet(_COMBO)
+        for value, label in UPDATE_INTERVAL_LABELS:
+            self._combo_update_interval.addItem(label, value)
+        cur_upd = resolve_update_check_interval(settings)
+        uidx = self._combo_update_interval.findData(cur_upd)
+        self._combo_update_interval.setCurrentIndex(max(0, uidx))
+        self._combo_update_interval.setToolTip(
+            "Every launch checks once each time the app starts. "
+            "Daily and Weekly wait for that cooldown."
         )
-        g.addWidget(self._chk_updates)
+        upd_row.addWidget(upd_lbl)
+        upd_row.addWidget(self._combo_update_interval, 1)
+        g.addLayout(upd_row)
         g.addWidget(self._hint("Quiet badge only — never installs without you."))
+
+        g.addWidget(self._section("Export"))
+        export_row = QHBoxLayout()
+        export_row.setSpacing(8)
+        self._edit_export_folder = QLineEdit()
+        self._edit_export_folder.setStyleSheet(_EDIT)
+        self._edit_export_folder.setPlaceholderText(default_export_dir())
+        self._committed_export_folder = resolve_permanent_export_folder(settings)
+        self._edit_export_folder.setText(self._committed_export_folder)
+        btn_browse_export = QPushButton("Browse…")
+        btn_browse_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_browse_export.setStyleSheet(_BTN_SECONDARY)
+        btn_browse_export.clicked.connect(self._browse_export_folder)
+        btn_clear_export = QPushButton("Reset")
+        btn_clear_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clear_export.setStyleSheet(_BTN_SECONDARY)
+        btn_clear_export.setToolTip("Reset to the default rendered_videos folder")
+        btn_clear_export.clicked.connect(self._reset_export_folder)
+        export_row.addWidget(self._edit_export_folder, 1)
+        export_row.addWidget(btn_browse_export, 0)
+        export_row.addWidget(btn_clear_export, 0)
+        g.addLayout(export_row)
+        self._export_folder_hint = self._hint(
+            "Permanent output folder for exports. Apply/Save syncs the Export panel. "
+            "Folders outside rendered_videos still work; Open in Steempeg may be limited."
+        )
+        g.addWidget(self._export_folder_hint)
+        self._refresh_export_folder_hint()
+
+        g.addWidget(self._section("Render panel"))
+        tab_row = QHBoxLayout()
+        tab_row.setSpacing(8)
+        tab_lbl = QLabel("Default tab")
+        tab_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_render_tab = QComboBox()
+        self._combo_render_tab.setStyleSheet(_COMBO)
+        for value, label in RENDER_TAB_LABELS:
+            self._combo_render_tab.addItem(label, value)
+        cur_tab = load_default_render_tab(settings)
+        self._committed_render_tab = cur_tab
+        tidx = self._combo_render_tab.findData(cur_tab)
+        self._combo_render_tab.setCurrentIndex(max(0, tidx))
+        tab_row.addWidget(tab_lbl)
+        tab_row.addWidget(self._combo_render_tab, 1)
+        g.addLayout(tab_row)
+        g.addWidget(
+            self._hint(
+                "Landing tab when the Render panel / neo-nav opens. "
+                "Default is Video Settings. Apply switches the open panel now."
+            )
+        )
 
         g.addWidget(self._section("Shell"))
         shell_row = QHBoxLayout()
@@ -405,6 +497,43 @@ class SettingsDialog(SteempegDialog):
         if hasattr(self._app, "save_user_settings"):
             self._app.save_user_settings(key, value)
 
+    def _browse_export_folder(self) -> None:
+        start = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select export folder", start
+        )
+        if not folder:
+            return
+        folder = normalize_export_folder(folder)
+        self._edit_export_folder.setText(folder)
+        self._refresh_export_folder_hint()
+        if is_outside_default_rendered(folder):
+            steempeg_information(
+                self,
+                "Custom export folder",
+                "This folder is outside the default rendered_videos library.\n\n"
+                "Exports still work. The Rendered tab keeps scanning this path "
+                "while it is set, but «Open in Steempeg» after render is limited "
+                "to files inside rendered_videos.",
+            )
+
+    def _reset_export_folder(self) -> None:
+        self._edit_export_folder.setText(default_export_dir())
+        self._refresh_export_folder_hint()
+
+    def _refresh_export_folder_hint(self) -> None:
+        folder = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
+        if is_outside_default_rendered(folder):
+            self._export_folder_hint.setText(
+                "Outside rendered_videos — exports OK; Rendered library still "
+                "scans this path, but «Open in Steempeg» may be limited."
+            )
+        else:
+            self._export_folder_hint.setText(
+                "Permanent output folder for exports. Apply/Save syncs the Export "
+                "panel. Reset returns to the default rendered_videos folder."
+            )
+
     def _reset_hints(self) -> None:
         for key in HINT_DISMISS_KEYS:
             self._save_setting(key, False)
@@ -599,9 +728,22 @@ class SettingsDialog(SteempegDialog):
     def _persist_settings(self) -> None:
         import logging
 
-        self._save_setting(
-            KEY_CHECK_UPDATES_ON_STARTUP, self._chk_updates.isChecked()
+        interval = normalize_update_check_interval(
+            self._combo_update_interval.currentData()
         )
+        self._save_setting(KEY_UPDATE_CHECK_INTERVAL, interval)
+
+        folder = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
+        apply_export_folder(self._app, folder, persist=True)
+        self._committed_export_folder = folder
+        self._edit_export_folder.setText(folder)
+        self._refresh_export_folder_hint()
+
+        render_tab = normalize_render_tab(self._combo_render_tab.currentData())
+        self._save_setting(KEY_DEFAULT_RENDER_TAB, render_tab)
+        self._committed_render_tab = render_tab
+        apply_default_render_tab(self._app, render_tab)
+
         self._save_setting(
             KEY_NOTIFY_ON_RENDER_COMPLETE, self._chk_notify.isChecked()
         )
