@@ -85,7 +85,7 @@ _BASE_ASSETS = (
     "history.png",
     "clear.png",
     "info.png",
-    "playinfo.png",
+    "playinfo2.png",
     "arrow.png",
     "arrow_drop.png",
     "arrow_right.png",
