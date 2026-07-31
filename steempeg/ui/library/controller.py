@@ -3020,37 +3020,54 @@ class LibraryMixin:
             return local
         return dense
 
-    def _position_filter_menu(self):
+    def _position_filter_menu(self, *, relayout: bool = True):
         """Place + size the filter popup relative to the live widget geometry.
 
-        Split out so it can run again right after show(): on a fresh launch the
-        maximized window hasn't fully settled when the menu is first built, so the
-        button/footer global coords are stale and the panel comes out mis-sized
-        ("slightly broken"). Re-running once the geometry is valid self-corrects it.
+        ``relayout=True`` picks stack vs 3-col. The post-show timer uses
+        ``relayout=False`` so only position/ceiling refresh — no mode flash.
         """
         menu = getattr(self, 'filter_menu', None)
         if not menu or not hasattr(self, 'btn_filter_pill'):
             return
         button_bottom_left = self.btn_filter_pill.mapToGlobal(QPoint(0, self.btn_filter_pill.height()))
-        x_shift = menu.width() - self.btn_filter_pill.width()
         menu_y = button_bottom_left.y() + 5
+
+        floor_y = self._filter_popup_floor_y(menu_y)
+        avail = max(160, floor_y - menu_y - 8)
+        if relayout:
+            menu.set_content_max_height(avail, relayout=True)
+        elif not bool(getattr(menu, "_three_col", False)):
+            # Stack may need a ceiling tweak after show; 3-col height is
+            # deterministic — re-packing made Clear/Apply drift across opens.
+            menu.set_content_max_height(avail, relayout=False)
+
+        # Width may change with mode — compute X after sizing.
+        x_shift = menu.width() - self.btn_filter_pill.width()
         menu_x = button_bottom_left.x() - x_shift + 10
         host = None
         try:
             host = self.btn_filter_pill.window()
         except RuntimeError:
             host = None
+
+        three_col = bool(getattr(menu, "_three_col", False))
         if host is not None:
             try:
-                min_x = host.mapToGlobal(QPoint(8, 0)).x()
+                # Stay mostly inside the sheet; allow a small left spill in 3-col.
+                pad = 48 if three_col else 8
+                min_x = host.mapToGlobal(QPoint(-pad if three_col else 8, 0)).x()
                 max_x = host.mapToGlobal(QPoint(host.width() - menu.width() - 8, 0)).x()
+                if three_col:
+                    # Keep the right edge near the filter pill.
+                    pill_right = self.btn_filter_pill.mapToGlobal(
+                        QPoint(self.btn_filter_pill.width(), 0)
+                    ).x()
+                    menu_x = pill_right - menu.width() + 12
                 menu_x = max(min_x, min(menu_x, max_x))
             except RuntimeError:
                 pass
-        menu.move(menu_x, menu_y)
 
-        floor_y = self._filter_popup_floor_y(menu_y)
-        menu.set_content_max_height(max(160, floor_y - menu_y - 8))
+        menu.move(menu_x, menu_y)
 
     def show_filter_menu(self):
         """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
@@ -3067,11 +3084,12 @@ class LibraryMixin:
         if dense is not None and hasattr(self.filter_menu, "apply_density"):
             self.filter_menu.apply_density(dense)
 
-        # Best-effort placement before show, then correct once shown (handles the
-        # first-launch case where the window geometry isn't settled yet).
-        self._position_filter_menu()
+        # Size + place while hidden, then show once — avoids stack↔3-col flash.
+        self.filter_menu.setVisible(False)
+        self._position_filter_menu(relayout=True)
         self.filter_menu.show()
-        QTimer.singleShot(0, self._position_filter_menu)
+        # Geometry settle: move/ceiling only, do not switch column mode.
+        QTimer.singleShot(0, lambda: self._position_filter_menu(relayout=False))
 
     def apply_sorting(self):
         """ FAST INDEPENDENT SORTING ENGINE """

@@ -14,7 +14,6 @@ from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -58,9 +57,10 @@ def _library_root_for_clip(clip_path: str, roots) -> str | None:
 
 def _folder_pill_label(path: str) -> str:
     sid = steam_id_from_clips_folder(path)
-    if sid:
-        return f"Steam {sid}"
     base = os.path.basename(path.rstrip("\\/")) or path
+    if sid:
+        # Distinguish clips vs video (or nested) roots that share a Steam ID.
+        return f"Steam {sid} · {base}"
     return base[:16] + "…" if len(base) > 18 else base
 
 
@@ -154,6 +154,9 @@ class FilterMenu(QWidget):
         # arrangement via _relayout_sections — block internals stay unchanged.
         self.setFixedWidth(460)
         self._three_col = False
+        self._last_packed_h = 0
+        self._popup_avail_h = 0
+        self._three_col_body_h = 0
 
         self.container = QFrame(self)
         self.container.setObjectName("MainFilterContainer")
@@ -161,12 +164,13 @@ class FilterMenu(QWidget):
             QFrame#MainFilterContainer { background-color: #252525; border: 1px solid #3d3d3d; border-radius: 16px; }
         """)
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setContentsMargins(8, 8, 8, 8)
         main_layout.addWidget(self.container)
 
         layout = QVBoxLayout(self.container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._drag_active = False
         self._drag_layout = None
@@ -180,6 +184,8 @@ class FilterMenu(QWidget):
         def create_category_capsule(title_text, content_widget):
             capsule = QFrame()
             capsule.setObjectName("CategoryCapsule")
+            # Don't vertically expand into the column floor — that squares off radius.
+            capsule.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             capsule.setStyleSheet("""
                 QFrame#CategoryCapsule {
                     background-color: #2d2d2d;
@@ -206,14 +212,64 @@ class FilterMenu(QWidget):
             cap_layout.addWidget(content_widget)
             return capsule
 
-        # Grid host: same capsules as 29.1, only placement changes (1 vs 3 columns).
+        # Sections host: stack page (tall window) or 3 independent columns (squeezed).
+        # Columns are separate VBoxes so a tall Games panel cannot stretch mid/right
+        # rows the way QGridLayout rowspan does.
         self._sections_host = QWidget()
         self._sections_host.setObjectName("FilterSectionsHost")
         self._sections_host.setStyleSheet("background: transparent;")
-        self._sections_grid = QGridLayout(self._sections_host)
-        self._sections_grid.setContentsMargins(0, 0, 0, 0)
-        self._sections_grid.setHorizontalSpacing(12)
-        self._sections_grid.setVerticalSpacing(12)
+        # Maximum vertical: never expand into empty space under the columns (the void).
+        self._sections_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        sections_outer = QVBoxLayout(self._sections_host)
+        sections_outer.setContentsMargins(0, 0, 0, 0)
+        sections_outer.setSpacing(0)
+        sections_outer.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._stack_page = QWidget()
+        self._stack_page.setStyleSheet("background: transparent;")
+        self._stack_lay = QVBoxLayout(self._stack_page)
+        self._stack_lay.setContentsMargins(0, 0, 0, 0)
+        self._stack_lay.setSpacing(8)
+        self._stack_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._cols_page = QWidget()
+        self._cols_page.setStyleSheet("background: transparent;")
+        self._cols_page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        cols_row = QHBoxLayout(self._cols_page)
+        cols_row.setContentsMargins(0, 0, 0, 0)
+        cols_row.setSpacing(12)
+        cols_row.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        def _make_col():
+            col = QWidget()
+            col.setStyleSheet("background: transparent;")
+            col.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            lay = QVBoxLayout(col)
+            # Bottom inset so CategoryCapsule border-radius isn't clipped by the column floor.
+            lay.setContentsMargins(0, 0, 0, 8)
+            lay.setSpacing(12)
+            lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+            return col, lay
+
+        self._col_games, self._col_games_lay = _make_col()
+        # Mid is a plain column like Games/right — QScrollArea was clipping Folders'
+        # bottom border-radius even with padding.
+        self._col_mid, self._col_mid_lay = _make_col()
+        self._col_right, self._col_right_lay = _make_col()
+        self._col_mid_inner = self._col_mid  # alias used by stretch height measure
+
+        # Games / mid share space; right (Date/Time/Dur) gets a bit more so steppers fit.
+        top = Qt.AlignmentFlag.AlignTop
+        cols_row.addWidget(self._col_games, 4, top)
+        cols_row.addWidget(self._col_mid, 4, top)
+        cols_row.addWidget(self._col_right, 5, top)
+        self._col_games.setMinimumWidth(200)
+        self._col_mid.setMinimumWidth(200)
+        self._col_right.setMinimumWidth(320)
+
+        sections_outer.addWidget(self._stack_page)
+        sections_outer.addWidget(self._cols_page)
+        self._cols_page.hide()
 
         # --- GAMES CAPSULE (the ONLY scrollable section) ---
         self.games_container = QWidget()
@@ -236,6 +292,7 @@ class FilterMenu(QWidget):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
         self._games_scroll.setWidget(self.games_container)
+        self._games_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._games_scroll.setMinimumHeight(104)
         self._games_capsule = create_category_capsule("🎮 Games:", self._games_scroll)
 
@@ -381,18 +438,20 @@ class FilterMenu(QWidget):
             host = QWidget()
             host.setStyleSheet("background: transparent;")
             row = QHBoxLayout(host)
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(8)
+            row.setContentsMargins(0, 0, 0, 4)
+            row.setSpacing(6)
             lbl_a = QLabel(label_a)
             lbl_a.setStyleSheet("color: #888888; font-weight: bold;")
             lbl_b = QLabel(label_b)
             lbl_b.setStyleSheet("color: #888888; font-weight: bold;")
-            row.addWidget(lbl_a)
-            row.addWidget(widget_a)
-            row.addSpacing(15)
-            row.addWidget(lbl_b)
-            row.addWidget(widget_b)
-            row.addStretch()
+            for w in (widget_a, widget_b):
+                w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                w.setMinimumWidth(108)
+            row.addWidget(lbl_a, 0)
+            row.addWidget(widget_a, 1)
+            row.addSpacing(10)
+            row.addWidget(lbl_b, 0)
+            row.addWidget(widget_b, 1)
             return host
 
         # --- DATE ---
@@ -436,7 +495,8 @@ class FilterMenu(QWidget):
         layout.addWidget(self._sections_host)
 
         bottom_layout = QHBoxLayout()
-        bottom_layout.setContentsMargins(0, 10, 0, 0)
+        bottom_layout.setContentsMargins(0, 2, 0, 0)
+        bottom_layout.setSpacing(8)
         
         unified_table_style = """
             QPushButton { 
@@ -462,15 +522,17 @@ class FilterMenu(QWidget):
         self.btn_clear = QPushButton("🗑 Clear")
         self.btn_clear.setCursor(Qt.PointingHandCursor)
         self.btn_clear.setStyleSheet(clear_style)
+        self.btn_clear.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.btn_clear.clicked.connect(self.clear_filters)
 
         self.btn_apply = QPushButton("Apply Filters (0)")
         self.btn_apply.setCursor(Qt.PointingHandCursor)
         self.btn_apply.setStyleSheet(unified_table_style)
+        self.btn_apply.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.btn_apply.clicked.connect(self.apply_filters)
 
-        bottom_layout.addWidget(self.btn_clear)
-        bottom_layout.addWidget(self.btn_apply)
+        bottom_layout.addWidget(self.btn_clear, 1)
+        bottom_layout.addWidget(self.btn_apply, 1)
         layout.addLayout(bottom_layout)
 
         self._outer_layout = main_layout
@@ -514,10 +576,10 @@ class FilterMenu(QWidget):
         host_w = self._filter_host_width()
         compact = bool(getattr(dense, "compact", False)) if dense is not None else False
         if three_col:
+            # Room for Date/Time steppers in column 3; small spill past the sheet is OK.
             if host_w <= 0:
-                return 980
-            usable = max(840, host_w - 32)
-            return min(usable, 1180)
+                return 1000
+            return min(max(host_w + 120, 960), 1140)
         if host_w <= 0:
             return 420 if compact else 460
         usable = max(360, host_w - 24)
@@ -525,38 +587,35 @@ class FilterMenu(QWidget):
 
     def _want_three_columns(self) -> bool:
         """
-        3 columns when the classic stack would stick out the bottom
-        (main window squeezed a little or a lot). Tall shells keep the 29.1 stack.
-        Needs enough horizontal room for three short capsules.
+        After set_content_max_height, trust `_three_col` (stack vs protrude).
+        Before first measure, stay on the classic stack so apply_density doesn't
+        stretch 3-col chrome and lock a stub height on tall windows.
         """
-        host_w = self._filter_host_width()
-        if 0 < host_w < 780:
-            return False
         avail = int(getattr(self, "_popup_avail_h", 0) or 0)
-        if avail > 0:
-            return avail < 700
-        host_h = self._filter_host_height()
-        return 0 < host_h < 900
+        if avail >= 160:
+            return bool(getattr(self, "_three_col", False))
+        return False
 
     def _resolve_menu_width(self, dense) -> int:
         return self._width_for_mode(self._want_three_columns(), dense)
 
-    def _clear_sections_grid(self) -> None:
-        grid = getattr(self, "_sections_grid", None)
-        if grid is None:
+    def _clear_box(self, lay) -> None:
+        if lay is None:
             return
-        while grid.count():
-            item = grid.takeAt(0)
-            _ = item.widget()
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
 
     def _place_filter_columns(self, *, three_col: bool) -> None:
         """
         Squeezed: Games | Type+Health+Folders | Date+Time+Duration
         Tall:     one vertical stack (29.1 + Health + Folders).
+
+        Mid/right columns pack to the top; Games only grows to match their height
+        — never the other way around (that was the giant gap bug).
         """
-        grid = getattr(self, "_sections_grid", None)
-        if grid is None:
-            return
         games = self._games_capsule
         type_c = self._type_capsule
         health = self._health_capsule
@@ -565,66 +624,276 @@ class FilterMenu(QWidget):
         time_c = self._time_capsule
         dur = self._dur_capsule
 
-        self._clear_sections_grid()
         self._three_col = bool(three_col)
-        top = Qt.AlignmentFlag.AlignTop
+        self._clear_box(self._stack_lay)
+        self._clear_box(self._col_games_lay)
+        self._clear_box(self._col_mid_lay)
+        self._clear_box(self._col_right_lay)
 
         if three_col:
-            grid.addWidget(games, 0, 0, 3, 1, top)
-            grid.addWidget(type_c, 0, 1, 1, 1, top)
-            grid.addWidget(health, 1, 1, 1, 1, top)
-            grid.addWidget(folders, 2, 1, 1, 1, top)
-            grid.addWidget(date, 0, 2, 1, 1, top)
-            grid.addWidget(time_c, 1, 2, 1, 1, top)
-            grid.addWidget(dur, 2, 2, 1, 1, top)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 1)
-            grid.setColumnStretch(2, 1)
-            for r in range(3):
-                grid.setRowStretch(r, 0)
+            self._col_games_lay.addWidget(games)
+            self._col_mid_lay.addWidget(type_c)
+            self._col_mid_lay.addWidget(health)
+            self._col_mid_lay.addWidget(folders)
+            self._col_right_lay.addWidget(date)
+            self._col_right_lay.addWidget(time_c)
+            self._col_right_lay.addWidget(dur)
+            self._stack_page.hide()
+            self._cols_page.show()
         else:
-            order = (games, type_c, health, folders, date, time_c, dur)
-            for row, widget in enumerate(order):
-                grid.addWidget(widget, row, 0, 1, 1, top)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 0)
-            grid.setColumnStretch(2, 0)
-            for r in range(7):
-                grid.setRowStretch(r, 0)
+            self._clear_fixed_col_heights()
+            for w in (games, type_c, health, folders, date, time_c, dur):
+                self._stack_lay.addWidget(w)
+            self._cols_page.hide()
+            self._stack_page.show()
+
+    def _clear_fixed_col_heights(self) -> None:
+        for w in (
+            getattr(self, "_col_games", None),
+            getattr(self, "_col_mid", None),
+            getattr(self, "_col_right", None),
+            getattr(self, "_cols_page", None),
+            getattr(self, "_stack_page", None),
+            getattr(self, "_games_capsule", None),
+            getattr(self, "_sections_host", None),
+        ):
+            if w is None:
+                continue
+            w.setMinimumHeight(0)
+            w.setMaximumHeight(16777215)
 
     def _stretch_games_column(self) -> None:
-        """Games left column runs down to the bottom of the other two columns."""
+        """Share one column floor; Games bottom aligns with Folders (mid) bottom."""
         if not getattr(self, "_three_col", False):
             return
-        gap = 12
-        mid_h = (
-            self._type_capsule.sizeHint().height()
-            + self._health_capsule.sizeHint().height()
-            + self._folders_capsule.sizeHint().height()
-            + 2 * gap
+        avail = int(getattr(self, "_popup_avail_h", 0) or 0)
+        chrome = self._chrome_and_buttons_h()
+        # Room under capsules so radius + pill AA aren't shaved by the column floor.
+        radius_pad = 12
+        for lay in (
+            getattr(self, "_col_games_lay", None),
+            getattr(self, "_col_mid_lay", None),
+            getattr(self, "_col_right_lay", None),
+        ):
+            if lay is not None:
+                lay.setContentsMargins(0, 0, 0, radius_pad)
+
+        mid = getattr(self, "_col_mid", None) or getattr(self, "_col_mid_inner", None)
+        mid_natural = max(
+            1,
+            int(mid.sizeHint().height()) if mid is not None else 0,
+            int(mid.minimumSizeHint().height()) if mid is not None else 0,
         )
-        right_h = (
-            self._date_capsule.sizeHint().height()
-            + self._time_capsule.sizeHint().height()
-            + self._dur_capsule.sizeHint().height()
-            + 2 * gap
-        )
-        target = max(mid_h, right_h)
-        chrome = 12 + 12 + 22 + 8
+        right_natural = max(1, int(self._col_right.sizeHint().height()))
+        # Never shorter than mid — Folders/SteamLibrary must stay fully visible.
+        target = max(mid_natural, right_natural) + 4
+        if avail >= 160:
+            target = max(mid_natural + 4, min(target, max(mid_natural, avail - chrome)))
+
         games_floor = 108 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 124
-        self._games_scroll.setFixedHeight(max(games_floor, target - chrome))
+        games_chrome = 12 + 12 + 22 + 8
+        # Match Games capsule bottom to mid body (Folders), not extra empty under mid.
+        mid_body = max(games_floor + games_chrome, mid_natural - radius_pad)
+        games_body = max(games_floor, mid_body - games_chrome)
+        self._games_scroll.setFixedHeight(games_body)
+
+        self._col_games.setFixedHeight(target)
+        self._col_mid.setFixedHeight(target)
+        self._col_right.setFixedHeight(target)
+        self._cols_page.setFixedHeight(target)
+        host = getattr(self, "_sections_host", None)
+        if host is not None:
+            host.setFixedHeight(target)
+        self._three_col_body_h = target
+
+    def _tighten_three_col_chrome(self) -> None:
+        """Pull content up and kill dead air under the buttons."""
+        if not getattr(self, "_three_col", False):
+            # Stack: tight chrome so Clear/Apply sit under Duration, not in a void.
+            dense = getattr(self, "_density", None)
+            compact = bool(getattr(dense, "compact", False)) if dense else False
+            outer = 6 if compact else 8
+            inner = 8 if compact else 12
+            gap = 6 if compact else 8
+            if getattr(self, "_outer_layout", None) is not None:
+                self._outer_layout.setContentsMargins(outer, outer, outer, outer)
+            if getattr(self, "_inner_layout", None) is not None:
+                self._inner_layout.setContentsMargins(inner, inner, inner, inner)
+                self._inner_layout.setSpacing(gap)
+                self._inner_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            if getattr(self, "_bottom_layout", None) is not None:
+                self._bottom_layout.setContentsMargins(0, 2, 0, 0)
+            return
+        if getattr(self, "_outer_layout", None) is not None:
+            self._outer_layout.setContentsMargins(8, 6, 8, 6)
+        if getattr(self, "_inner_layout", None) is not None:
+            self._inner_layout.setContentsMargins(12, 8, 12, 8)
+            self._inner_layout.setSpacing(8)
+            self._inner_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        if getattr(self, "_bottom_layout", None) is not None:
+            # Buttons sit right under the column floor.
+            self._bottom_layout.setContentsMargins(0, 4, 0, 0)
+
+    def _clear_popup_height_lock(self) -> None:
+        """Undo setFixedHeight so the popup can grow again on remasure."""
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+
+    def _chrome_and_buttons_h(self) -> int:
+        outer = getattr(self, "_outer_layout", None) or self.layout()
+        inner = getattr(self, "_inner_layout", None)
+        bottom = getattr(self, "_bottom_layout", None)
+        h = 0
+        if outer is not None:
+            m = outer.contentsMargins()
+            h += m.top() + m.bottom()
+        if inner is not None:
+            m = inner.contentsMargins()
+            h += m.top() + m.bottom() + max(0, int(inner.spacing()))
+        if bottom is not None:
+            m = bottom.contentsMargins()
+            h += m.top() + m.bottom()
+        btn_h = 36
+        for name in ("btn_clear", "btn_apply"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn_h = max(btn_h, int(btn.sizeHint().height()))
+        return h + btn_h
+
+    def _stack_sections_h(self, games_h: int) -> int:
+        """Classic stack body height for mode decision / stack pack."""
+        stack = getattr(self, "_stack_lay", None)
+        if stack is None:
+            return games_h + 280
+        total = 0
+        visible = 0
+        games_cap = getattr(self, "_games_capsule", None)
+        for i in range(stack.count()):
+            item = stack.itemAt(i)
+            w = item.widget() if item is not None else None
+            if w is None or w.isHidden():
+                continue
+            if w is games_cap:
+                # Title + margins around the games scroll — don't trust inflated sizeHints.
+                chrome = 12 + 12 + 22 + 8
+                total += games_h + chrome
+            else:
+                total += max(
+                    int(w.minimumHeight() or 0),
+                    int(w.minimumSizeHint().height()),
+                    int(w.sizeHint().height()),
+                )
+            visible += 1
+        if visible > 1:
+            total += int(stack.spacing()) * (visible - 1)
+        return total
+
+    def _three_col_sections_h(self) -> int:
+        """Tight 3-col body — cols_page fixed floor only (no stretch void)."""
+        cols = getattr(self, "_cols_page", None)
+        if cols is None:
+            return 280
+        return max(
+            int(cols.minimumHeight() or 0),
+            int(cols.height() or 0) if cols.minimumHeight() > 0 else 0,
+            int(cols.sizeHint().height()),
+            200,
+        )
+
+    def _content_height_hint(self) -> int:
+        """Popup height from current mode body + chrome. No prev/avail inflation."""
+        gs = getattr(self, "_games_scroll", None)
+        games_h = 0
+        if gs is not None:
+            games_h = max(int(gs.height() or 0), int(gs.minimumHeight() or 0))
+        body = (
+            self._three_col_sections_h()
+            if getattr(self, "_three_col", False)
+            else self._stack_sections_h(games_h)
+        )
+        return max(120, body + self._chrome_and_buttons_h())
+
+    def sizeHint(self):
+        w = self.width() if self.width() > 0 else int(self.minimumWidth() or 460)
+        return QSize(max(w, 1), self._content_height_hint())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def _pack_popup_height(self) -> None:
+        """Snap popup height. 3-col is deterministic; stack shrink-wraps to buttons."""
+        avail = int(getattr(self, "_popup_avail_h", 0) or 0)
+
+        if getattr(self, "_three_col", False):
+            # No probe/resize dance — that made Clear/Apply drift across opens.
+            body = int(getattr(self, "_three_col_body_h", 0) or 0)
+            if body <= 0:
+                body = self._three_col_sections_h()
+            host = getattr(self, "_sections_host", None)
+            if host is not None:
+                host.setFixedHeight(body)
+            cols = getattr(self, "_cols_page", None)
+            if cols is not None:
+                cols.setFixedHeight(body)
+            hint_h = body + self._chrome_and_buttons_h()
+            hint_h = max(120, int(hint_h))
+            if avail >= 160:
+                hint_h = min(hint_h, avail)
+            self.setFixedHeight(hint_h)
+            self._last_packed_h = hint_h
+            return
+
+        self._clear_popup_height_lock()
+        host = getattr(self, "_sections_host", None)
+        if host is not None:
+            host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            host.setMinimumHeight(0)
+            host.setMaximumHeight(16777215)
+
+        lay = self.layout()
+        if lay is not None:
+            lay.activate()
+        probe = max(self._content_height_hint(), 480)
+        if avail >= 160:
+            probe = min(probe, avail)
+        self.resize(max(self.width(), 1), probe)
+
+        btn = getattr(self, "btn_apply", None) or getattr(self, "btn_clear", None)
+        if btn is not None and btn.height() > 0:
+            bottom_y = btn.mapTo(self, QPoint(0, btn.height())).y()
+            outer = getattr(self, "_outer_layout", None)
+            pad = outer.contentsMargins().bottom() if outer is not None else 8
+            hint_h = bottom_y + pad
+        else:
+            hint_h = probe
+
+        hint_h = max(120, int(hint_h))
+        if avail >= 160:
+            hint_h = min(hint_h, avail)
+        self.setFixedHeight(hint_h)
+        self._last_packed_h = hint_h
+
+    def _apply_height_floor(self) -> None:
+        """Keep FixedHeight; only clamp if content somehow exceeds avail."""
+        avail = int(getattr(self, "_popup_avail_h", 0) or 0)
+        if avail < 160:
+            return
+        if self.height() > avail:
+            self.setFixedHeight(avail)
+            self._last_packed_h = avail
 
     def _relayout_sections(self) -> None:
         dense = getattr(self, "_density", None)
         three = self._want_three_columns()
         if dense is not None:
             target_w = self._width_for_mode(three, dense)
-            if target_w != self.width():
+            if self.width() != target_w:
                 self.setFixedWidth(target_w)
         self._place_filter_columns(three_col=three)
+        self._tighten_three_col_chrome()
         if three:
             self._stretch_games_column()
-        self.adjustSize()
+        # Height is owned by set_content_max_height.
 
     def _date_time_input_style_for(self, dense) -> str:
         """QDateEdit / QTimeEdit chrome — comfort uses init style; compact shrinks."""
@@ -718,9 +987,9 @@ class FilterMenu(QWidget):
         min_h = 18 if compact else 24
         radius = 8 if compact else 10
         border = 1 if compact else 2
-        outer_m = 6 if compact else 10
-        inner_m = 8 if compact else 16
-        gap = 6 if compact else 12
+        outer_m = 6 if compact else 8
+        inner_m = 8 if compact else 12
+        gap = 6 if compact else 8
         cap_m = 8 if compact else 12
         title_font = 11 if compact else 13
         pill_r = 10 if compact else 14
@@ -731,7 +1000,7 @@ class FilterMenu(QWidget):
             self._inner_layout.setContentsMargins(inner_m, inner_m, inner_m, inner_m)
             self._inner_layout.setSpacing(gap)
         if getattr(self, "_bottom_layout", None) is not None:
-            self._bottom_layout.setContentsMargins(0, 6 if compact else 10, 0, 0)
+            self._bottom_layout.setContentsMargins(0, 2, 0, 0)
 
         self.container.setStyleSheet(
             f"QFrame#MainFilterContainer {{ background-color: #252525; "
@@ -891,45 +1160,75 @@ class FilterMenu(QWidget):
         }
     """
 
-    def set_content_max_height(self, max_px: int) -> None:
-        """Size Games + pick 1 vs 3 columns from whether the stack would protrude."""
+    def set_content_max_height(self, max_px: int, *, relayout: bool = True) -> None:
+        """Size Games + pick stack vs 3-col.
+
+        Full / normal shells keep the classic vertical stack (29.1 look).
+        3-col only when vertical room under the filter pill is clearly tight.
+        """
         self._popup_avail_h = max(160, int(max_px))
         dense = getattr(self, "_density", None)
         host_w = self._filter_host_width()
-        can_three = host_w <= 0 or host_w >= 780
-
-        # Measure classic stack height first.
-        self._place_filter_columns(three_col=False)
-        self.setFixedWidth(self._width_for_mode(False, dense))
-        self._games_scroll.setFixedHeight(0)
-        self.adjustSize()
-        non_games = self.height()
-        cap = max(130, self._popup_avail_h - non_games)
-
-        inset = 64 if dense is not None and getattr(dense, "compact", False) else 84
-        width = max(120, self.width() - inset)
-        content = self.games_layout.heightForWidth(width) + 4
         games_floor = 108 if dense is not None and getattr(dense, "compact", False) else 124
-        stack_games_h = max(games_floor, min(content, int(cap * 0.46)))
-        self._games_scroll.setFixedHeight(stack_games_h)
-        self.adjustSize()
-        stack_h = self.height()
+        inset = 64 if dense is not None and getattr(dense, "compact", False) else 84
+        avail = self._popup_avail_h
 
-        three = can_three and stack_h > self._popup_avail_h
-        if three:
-            self._place_filter_columns(three_col=True)
-            self.setFixedWidth(self._width_for_mode(True, dense))
-            self._stretch_games_column()
-            # Still respect the floor — don't let Games blow past available height.
-            self.adjustSize()
-            if self.height() > self._popup_avail_h:
-                overflow = self.height() - self._popup_avail_h
-                shrunk = max(games_floor, self._games_scroll.height() - overflow)
-                self._games_scroll.setFixedHeight(shrunk)
-        else:
-            self._three_col = False
+        self.setUpdatesEnabled(False)
+        try:
+            self._clear_popup_height_lock()
 
-        self.adjustSize()
+            if relayout:
+                # Measure classic stack width for games wrap height.
+                self._place_filter_columns(three_col=False)
+                self._tighten_three_col_chrome()
+                target_w = self._width_for_mode(False, dense)
+                self.setFixedWidth(target_w)
+                width = max(120, target_w - inset)
+                content = self.games_layout.heightForWidth(width) + 4
+                chrome = self._chrome_and_buttons_h()
+                self._games_scroll.setFixedHeight(games_floor)
+                non_games = max(80, self._stack_sections_h(games_floor) - games_floor)
+                # Modest games band for fit math — not "half the shell".
+                stack_games_h = max(games_floor, min(content, 220))
+                stack_h = chrome + non_games + stack_games_h
+
+                # Tall room → always stack. 3-col only when the popup would
+                # clearly stick out (squeezed main window / short sheet).
+                host_h = self._filter_host_height()
+                can_three = host_w <= 0 or host_w >= 780
+                tall_shell = host_h >= 820 or avail >= 640
+                three = bool(can_three and not tall_shell and stack_h > avail + 24)
+
+                if three:
+                    self._place_filter_columns(three_col=True)
+                    self.setFixedWidth(self._width_for_mode(True, dense))
+                    self._tighten_three_col_chrome()
+                    self._stretch_games_column()
+                else:
+                    self._place_filter_columns(three_col=False)
+                    self._tighten_three_col_chrome()
+                    self.setFixedWidth(target_w)
+                    # Games = content height only. Never inflate to fill avail
+                    # (that opened the void under the Games: title).
+                    room = max(games_floor, avail - chrome - non_games)
+                    fit_games = max(games_floor, min(content, room))
+                    self._games_scroll.setFixedHeight(fit_games)
+            elif getattr(self, "_three_col", False):
+                self._stretch_games_column()
+            else:
+                # Re-pack only: keep mode, refit games to new avail.
+                width = max(120, self.width() - inset)
+                content = self.games_layout.heightForWidth(width) + 4
+                chrome = self._chrome_and_buttons_h()
+                non_games = max(80, self._stack_sections_h(games_floor) - games_floor)
+                room = max(games_floor, avail - chrome - non_games)
+                fit_games = max(games_floor, min(content, room))
+                self._games_scroll.setFixedHeight(fit_games)
+
+            self._pack_popup_height()
+            self._apply_height_floor()
+        finally:
+            self.setUpdatesEnabled(True)
 
     _MOUSE_EVENTS = (
         QEvent.Type.MouseButtonPress,

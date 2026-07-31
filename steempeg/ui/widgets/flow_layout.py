@@ -67,4 +67,4 @@ class FlowLayout(QLayout):
                 item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
             x += w + 8
             line_h = max(line_h, h)
-        return y + line_h - r.y()
+        return y + line_h - r.y() + 2
