@@ -13,28 +13,10 @@ from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 
 def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
-    """Clip a pixmap to a circle on a transparent canvas (no square matte)."""
-    scaled = source.scaled(
-        size,
-        size,
-        qtc.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-        qtc.Qt.TransformationMode.SmoothTransformation,
-    )
-    x = max(0, (scaled.width() - size) // 2)
-    y = max(0, (scaled.height() - size) // 2)
-    cropped = scaled.copy(x, y, size, size)
+    """Backward-compatible alias — prefer shaped_game_icon_pixmap. """
+    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
 
-    result = qtg.QPixmap(size, size)
-    result.fill(qtc.Qt.GlobalColor.transparent)
-
-    painter = qtg.QPainter(result)
-    painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing)
-    clip = qtg.QPainterPath()
-    clip.addEllipse(0, 0, size, size)
-    painter.setClipPath(clip)
-    painter.drawPixmap(0, 0, cropped)
-    painter.end()
-    return result
+    return shaped_game_icon_pixmap(source, size, ICON_SHAPE_CIRCLE)
 
 
 class ClipCard(qtw.QWidget):
@@ -87,17 +69,21 @@ class ClipCard(qtw.QWidget):
         self.icon_label.move(8, 8)
         self.icon_label.setStyleSheet("background: transparent; border: none;")
         pix_path = icon_path if icon_path and os.path.exists(icon_path) else get_resource_path("unknown_icon.png")
-        use_round = round_icon or (
+        from steempeg.ui.icon_shape import (
+            ICON_SHAPE_CIRCLE,
+            get_icon_shape,
+            shaped_game_icon_pixmap,
+        )
+
+        # Unknown badge stays circular for recognition; games follow Settings → Visual.
+        use_force_circle = round_icon or (
             pix_path and os.path.basename(pix_path).lower() == "unknown_icon.png"
         )
+        shape = ICON_SHAPE_CIRCLE if use_force_circle else get_icon_shape()
         if pix_path and os.path.exists(pix_path):
             src = qtg.QPixmap(pix_path)
-            if use_round:
-                self.icon_label.setPixmap(_circular_icon_pixmap(src, 24))
-            else:
-                self.icon_label.setPixmap(
-                    src.scaled(24, 24, qtc.Qt.KeepAspectRatio, qtc.Qt.SmoothTransformation)
-                )
+            if not src.isNull():
+                self.icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
 
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
         self.badge_label.setStyleSheet(
