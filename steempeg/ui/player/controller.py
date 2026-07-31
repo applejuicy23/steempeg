@@ -384,9 +384,25 @@ class PlayerMixin:
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(False)
         if hasattr(self, 'custom_text_label'):
-            self.custom_text_label.setText("Select a clip to preview...")
+            from steempeg.ui.player_header_layout import set_player_header_game_text
+
+            set_player_header_game_text(
+                self,
+                "Select a clip to preview...",
+                placeholder=True,
+            )
         if hasattr(self, 'custom_icon_label'):
-            self.custom_icon_label.setPixmap(QIcon(get_resource_path("unknown_icon.png")).pixmap(24, 24))
+            from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
+            unknown = get_resource_path("unknown_icon.png")
+            self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
+            src = QPixmap(unknown)
+            if not src.isNull():
+                self.custom_icon_label.setPixmap(
+                    shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                )
+            else:
+                self.custom_icon_label.setPixmap(QIcon(unknown).pixmap(24, 24))
         # Forget the previewed clip / queue selection so the top-right badge
         # ("Preview" / "In queue (N)") clears instead of lingering after close.
         self._preview_clip_path = None
@@ -1737,6 +1753,11 @@ class PlayerMixin:
         """Sync the Trim / Cancel button and tools pill with trim mode."""
         if not hasattr(self, "btn_trim"):
             return
+        from steempeg.ui.design_tokens import (
+            STYLE_TRIM_BUTTON,
+            STYLE_TRIM_CANCEL_BUTTON,
+        )
+
         if active:
             cancel_icon_path = get_resource_path("cancel.png")
             if os.path.exists(cancel_icon_path):
@@ -1745,11 +1766,7 @@ class PlayerMixin:
             else:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("❌ Cancel")
-            from steempeg.ui.design_tokens import with_tooltip_style
-            self.btn_trim.setStyleSheet(with_tooltip_style(
-                "background-color: #ff4444; color: white; border-radius: 15px; "
-                "padding: 0 12px; font-weight: bold;"
-            ))
+            self.btn_trim.setStyleSheet(STYLE_TRIM_CANCEL_BUTTON)
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.show()
         else:
@@ -1760,11 +1777,7 @@ class PlayerMixin:
             else:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("✂️ Trim")
-            from steempeg.ui.design_tokens import with_tooltip_style
-            self.btn_trim.setStyleSheet(with_tooltip_style(
-                "background-color: #cfa94a; color: black; border-radius: 15px; "
-                "padding: 0 12px; font-weight: bold;"
-            ))
+            self.btn_trim.setStyleSheet(STYLE_TRIM_BUTTON)
             if hasattr(self, "trim_tools_pill"):
                 self.trim_tools_pill.hide()
             self._apply_video_border(False)
