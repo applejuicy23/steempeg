@@ -1543,36 +1543,71 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             "background: transparent; border: none;"
         )
 
-        from steempeg.ui.icon_assets import playinfo_icon
+        from steempeg.ui.icon_assets import playinfo_icons
 
-        _INFO_CHIP = 20
+        # Match title-bar About/Settings: 16px glyph in a 22px circular hover hitbox.
+        _INFO_HIT = 22
         _INFO_ICON = 16
+        _INFO_HIT_R = _INFO_HIT // 2
+        self._player_header_info_icon_idle, self._player_header_info_icon_hot = playinfo_icons(
+            _INFO_ICON
+        )
         self.btn_player_header_info = QPushButton()
         self.btn_player_header_info.setObjectName("playerHeaderInfo")
-        self.btn_player_header_info.setFixedSize(_INFO_CHIP, _INFO_CHIP)
-        self.btn_player_header_info.setIcon(playinfo_icon(_INFO_ICON))
+        self.btn_player_header_info.setFixedSize(_INFO_HIT, _INFO_HIT)
+        self.btn_player_header_info.setIcon(self._player_header_info_icon_idle)
         self.btn_player_header_info.setIconSize(QSize(_INFO_ICON, _INFO_ICON))
+        self.btn_player_header_info.setFlat(True)
         self.btn_player_header_info.setCursor(Qt.PointingHandCursor)
         self.btn_player_header_info.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_player_header_info.setToolTip("No clip")
+        self.btn_player_header_info.setAccessibleName("Clip info")
+        self.btn_player_header_info.setToolTip("No clip selected")
         self.btn_player_header_info.setEnabled(False)
+        self.btn_player_header_info.clicked.connect(self.show_player_header_clip_info_popup)
         self.btn_player_header_info.setStyleSheet(with_tooltip_style(
-            "QPushButton {"
-            "background-color: transparent;"
+            "QPushButton#playerHeaderInfo {"
+            "background: transparent;"
             "border: none;"
-            "border-radius: 10px;"
             "padding: 0px;"
+            "margin: 0px;"
+            "text-align: center;"
             "}"
-            "QPushButton:hover { background-color: rgba(200, 200, 200, 0.18); }"
-            "QPushButton:disabled { background-color: transparent; }"
+            "QPushButton#playerHeaderInfo:hover {"
+            f"background-color: rgba(255, 255, 255, 0.08);"
+            f"border-radius: {_INFO_HIT_R}px;"
+            "}"
+            "QPushButton#playerHeaderInfo:pressed {"
+            f"background-color: rgba(255, 255, 255, 0.12);"
+            f"border-radius: {_INFO_HIT_R}px;"
+            "}"
+            "QPushButton#playerHeaderInfo:disabled {"
+            "background-color: transparent;"
+            "}"
         ))
 
         class _HeaderInfoHoverFilter(QObject):
             def eventFilter(self, obj, event):
-                if event.type() == QEvent.Type.Enter:
-                    owner = self.parent()
+                owner = self.parent()
+                et = event.type()
+                if et == QEvent.Type.Enter:
                     if owner is not None and hasattr(owner, "refresh_player_header_info"):
                         owner.refresh_player_header_info()
+                btn = getattr(owner, "btn_player_header_info", None) if owner else None
+                idle = getattr(owner, "_player_header_info_icon_idle", None) if owner else None
+                hot = getattr(owner, "_player_header_info_icon_hot", None) if owner else None
+                if (
+                    btn is not None
+                    and obj is btn
+                    and idle is not None
+                    and hot is not None
+                    and btn.isEnabled()
+                ):
+                    if et in (QEvent.Type.Enter, QEvent.Type.MouseButtonPress):
+                        btn.setIcon(hot)
+                    elif et == QEvent.Type.Leave:
+                        btn.setIcon(idle)
+                    elif et == QEvent.Type.MouseButtonRelease:
+                        btn.setIcon(hot if btn.underMouse() else idle)
                 return False
 
         self._header_info_hover_filter = _HeaderInfoHoverFilter(self)
@@ -2564,7 +2599,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             pass
 
     def _source_info_tooltip_text(self) -> str:
-        """Build hover text from Source Info labels already on the settings tab."""
+        """Build clip facts from Source Info labels / header meta (hover + click popup)."""
         from steempeg.ui.player_header_layout import (
             join_clip_date_time,
             plain_header_title,
@@ -2572,7 +2607,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         ui = getattr(self, "ui", None)
         if ui is None:
-            return "No clip"
+            return "No clip selected"
 
         lines: list[str] = []
         meta = getattr(self, "_player_header_meta", None) or {}
@@ -2609,7 +2644,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             ("FPS", "label_fps"),
             ("Size", "label_size"),
         )
-        seen_caps = {ln.split(":", 1)[0].strip().lower() for ln in lines if ":" in ln}
+        # Skip the game-title line (index 0): titles may contain ``:`` and must
+        # not pollute caption dedupe (e.g. "Hatsune Miku: Project DIVA…").
+        seen_caps = {
+            ln.split(":", 1)[0].strip().lower()
+            for ln in lines[1:]
+            if ":" in ln
+        }
         for caption, attr in specs:
             if caption.lower() in seen_caps:
                 continue
@@ -2674,23 +2715,260 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             lines.append("Source:")
             lines.extend(paths)
 
-        return "\n".join(lines) if lines else "No clip"
+        return "\n".join(lines) if lines else "No clip selected"
+
+    def show_player_header_clip_info_popup(self) -> None:
+        """Lightweight popup with quick clip params, anchored under the playinfo chip."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QFont, QPixmap
+        from PySide6.QtWidgets import (
+            QHBoxLayout,
+            QLabel,
+            QMenu,
+            QToolTip,
+            QVBoxLayout,
+            QWidget,
+            QWidgetAction,
+        )
+
+        from steempeg.ui import design_tokens as tok
+        from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+        btn = getattr(self, "btn_player_header_info", None)
+        if btn is None or not btn.isEnabled():
+            return
+
+        text = self._source_info_tooltip_text()
+        if not text or text == "No clip selected":
+            return
+
+        existing = getattr(self, "_clip_info_popup", None)
+        if existing is not None:
+            try:
+                if existing.isVisible():
+                    existing.close()
+                    self._clip_info_popup = None
+                    return
+            except RuntimeError:
+                self._clip_info_popup = None
+
+        QToolTip.hideText()
+
+        menu = QMenu(btn)
+        self._clip_info_popup = menu
+        menu.setObjectName("clipInfoPopup")
+        menu.setStyleSheet(
+            "QMenu#clipInfoPopup {"
+            f" background-color: {tok.TOOLTIP_BG};"
+            f" border: 1px solid {tok.TOOLTIP_BORDER};"
+            " border-radius: 8px;"
+            " padding: 0px;"
+            "}"
+        )
+
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        host.setMinimumWidth(348)
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(14, 12, 14, 12)
+        # Same rhythm as Original preset warning: 8px between title and body.
+        lay.setSpacing(8)
+
+        # Match render_controller Original preset warning title style.
+        heading = QLabel("Clip info")
+        heading.setStyleSheet(
+            "color: #ffffff; font-weight: bold; font-size: 12px;"
+            " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
+            " background: transparent;"
+        )
+        lay.addWidget(heading)
+
+        lines = [ln for ln in text.split("\n") if ln.strip()]
+        # Resolve game title from header meta — never via colon-split of tip lines.
+        meta = getattr(self, "_player_header_meta", None) or {}
+        title_line = str(meta.get("title") or "").strip()
+        if not title_line or meta.get("placeholder"):
+            name_lbl = getattr(self, "custom_text_label", None)
+            if name_lbl is not None:
+                from steempeg.ui.player_header_layout import plain_header_title
+
+                title_line = plain_header_title(name_lbl.text() or "")
+        if title_line and "select a clip" in title_line.lower():
+            title_line = ""
+        # Tip text still starts with the title when present — drop it so it is
+        # not re-parsed as a fake Label/value row.
+        _META_CAPS = {
+            "date",
+            "duration",
+            "resolution",
+            "video bitrate",
+            "audio bitrate",
+            "fps",
+            "size",
+        }
+        if title_line and lines and lines[0] == title_line:
+            lines = lines[1:]
+        elif title_line and lines:
+            # Tip title may differ slightly from meta; drop non-meta first line
+            # so a colon-bearing name is never shown again as a field row.
+            first = lines[0]
+            cap0 = (
+                first.split(":", 1)[0].strip().lower() if ":" in first else ""
+            )
+            if cap0 not in _META_CAPS and first.strip() != "Source:" and cap0 != "source":
+                lines = lines[1:]
+        elif not title_line and lines:
+            first = lines[0]
+            cap0 = (
+                first.split(":", 1)[0].strip().lower() if ":" in first else ""
+            )
+            if ":" not in first or (cap0 and cap0 not in _META_CAPS and cap0 != "source"):
+                title_line = lines.pop(0)
+
+        rows: list[tuple[str, str]] = []
+        source_paths: list[str] = []
+        in_source = False
+        for line in lines:
+            if in_source:
+                source_paths.append(line)
+                continue
+            if line.strip() == "Source:":
+                in_source = True
+                continue
+            if ":" in line:
+                cap, val = line.split(":", 1)
+                cap_s, val_s = cap.strip(), val.strip()
+                if cap_s.lower() in _META_CAPS:
+                    rows.append((cap_s, val_s))
+                else:
+                    rows.append(("", line.strip()))
+            else:
+                rows.append(("", line.strip()))
+
+        if title_line:
+            _ICON_SZ = 24
+            title_row = QHBoxLayout()
+            title_row.setContentsMargins(0, 0, 0, 0)
+            title_row.setSpacing(8)
+
+            icon_lbl = QLabel()
+            icon_lbl.setFixedSize(_ICON_SZ, _ICON_SZ)
+            icon_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+            )
+            icon_lbl.setStyleSheet("background: transparent; border: none;")
+            src_pix = QPixmap()
+            icon_path = getattr(self, "current_game_icon", "") or ""
+            if icon_path and os.path.isfile(icon_path):
+                src_pix = QPixmap(icon_path)
+            if src_pix.isNull():
+                header_icon = getattr(self, "custom_icon_label", None)
+                if header_icon is not None:
+                    try:
+                        hdr = header_icon.pixmap()
+                        if hdr is not None and not hdr.isNull():
+                            src_pix = hdr
+                    except RuntimeError:
+                        pass
+            if src_pix.isNull():
+                unknown = get_resource_path("unknown_icon.png")
+                if unknown and os.path.isfile(unknown):
+                    src_pix = QPixmap(unknown)
+            if not src_pix.isNull():
+                icon_lbl.setPixmap(shaped_game_icon_pixmap(src_pix, _ICON_SZ))
+            title_row.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+            name = QLabel(title_line)
+            name.setWordWrap(True)
+            name.setStyleSheet(
+                f"color: {tok.TEXT_PRIMARY}; font-weight: 600; font-size: 12px;"
+                f" font-family: {tok.FONT_APP}; background: transparent;"
+            )
+            title_row.addWidget(name, 1)
+            lay.addLayout(title_row)
+
+        for cap, val in rows:
+            if not val and not cap:
+                continue
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            if cap:
+                cap_lbl = QLabel(f"{cap}:")
+                cap_lbl.setStyleSheet(
+                    f"color: {tok.TEXT_MUTED}; font-size: 11px;"
+                    f" font-family: {tok.FONT_APP}; background: transparent;"
+                )
+                cap_lbl.setMinimumWidth(96)
+                row.addWidget(cap_lbl, 0)
+            val_lbl = QLabel(val)
+            val_lbl.setWordWrap(True)
+            val_lbl.setStyleSheet(
+                f"color: {tok.TOOLTIP_FG}; font-size: 11px;"
+                f" font-family: {tok.FONT_APP}; background: transparent;"
+            )
+            row.addWidget(val_lbl, 1)
+            lay.addLayout(row)
+
+        if source_paths:
+            src_cap = QLabel("Source:")
+            src_cap.setStyleSheet(
+                f"color: {tok.TEXT_MUTED}; font-size: 11px;"
+                f" font-family: {tok.FONT_APP}; background: transparent;"
+            )
+            lay.addWidget(src_cap)
+            path_font = QFont("Cascadia Mono")
+            if not path_font.exactMatch():
+                path_font = QFont("Consolas")
+            if not path_font.exactMatch():
+                path_font = QFont("Courier New")
+            path_font.setStyleHint(QFont.StyleHint.Monospace)
+            path_font.setFixedPitch(True)
+            path_font.setPointSize(9)
+            for path in source_paths:
+                path_lbl = QLabel(path)
+                path_lbl.setWordWrap(True)
+                path_lbl.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                path_lbl.setFixedWidth(320)
+                path_lbl.setFont(path_font)
+                path_lbl.setStyleSheet(
+                    f"color: {tok.TEXT_MUTED}; background: transparent;"
+                )
+                lay.addWidget(path_lbl)
+
+        act = QWidgetAction(menu)
+        act.setDefaultWidget(host)
+        menu.addAction(act)
+
+        def _clear_ref(*_args):
+            if getattr(self, "_clip_info_popup", None) is menu:
+                self._clip_info_popup = None
+
+        menu.aboutToHide.connect(_clear_ref)
+        menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 4)))
 
     def refresh_player_header_info(self, *, has_clip: bool | None = None) -> None:
-        """Enable/disable the header info chip and refresh its Source Info tooltip."""
+        """Enable/disable the header Clip info chip and refresh its tooltip."""
         btn = getattr(self, "btn_player_header_info", None)
         if btn is None:
             return
         if has_clip is None:
             actions = getattr(self, "player_header_actions", None)
             has_clip = bool(actions is not None and actions.isVisible())
-        tip = self._source_info_tooltip_text() if has_clip else "No clip"
-        if not has_clip or tip == "No clip":
+        tip = self._source_info_tooltip_text() if has_clip else "No clip selected"
+        idle = getattr(self, "_player_header_info_icon_idle", None)
+        if not has_clip or tip == "No clip selected":
             btn.setEnabled(False)
-            btn.setToolTip("No clip")
+            btn.setToolTip("No clip selected")
+            if idle is not None:
+                btn.setIcon(idle)
         else:
             btn.setEnabled(True)
             btn.setToolTip(tip)
+            if idle is not None and not btn.underMouse():
+                btn.setIcon(idle)
 
     def refresh_player_header_layout(self, layout: str | None = None) -> None:
         """Apply Settings → Visual header layout (spacers + title meta) without restart."""
