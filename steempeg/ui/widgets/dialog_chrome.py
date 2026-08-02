@@ -15,7 +15,14 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.icon_utils import app_logo_pixmap, app_window_icon
+from steempeg.ui.icon_utils import (
+    app_logo_pixmap,
+    app_window_icon,
+    apply_square_icon,
+    chrome_icon_slot_size,
+    square_fit_pixmap,
+)
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES, apply_dark_combo_popup
 from steempeg.ui.window_chrome import _TrafficLight
 
 _SIDE_RAIL_PX = 2
@@ -49,22 +56,20 @@ class _DialogTitleBar(QWidget):
         root.setContentsMargins(10, 0, 10, 0)
         root.setSpacing(0)
 
+        # Square slot capped to bar height — never 16×bar_h (stretches on HD chrome).
+        icon_sz = chrome_icon_slot_size(16, bar_height=bar_h)
         icon_path = bar_icon if bar_icon and os.path.isfile(bar_icon) else None
         pixmap = None
         if icon_path:
             source = QPixmap(icon_path)
             if not source.isNull():
-                pixmap = source.scaled(
-                    16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
+                pixmap = square_fit_pixmap(source, icon_sz)
         else:
-            pixmap = app_logo_pixmap(16)
+            pixmap = app_logo_pixmap(icon_sz)
         if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(pixmap)
-            icon_lbl.setFixedSize(16, bar_h)
-            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-            root.addWidget(icon_lbl)
+            apply_square_icon(icon_lbl, pixmap, icon_sz)
+            root.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
             root.addSpacing(7)
 
         title_lbl = QLabel(title)
@@ -436,6 +441,12 @@ class SteempegDialog(QDialog):
         # Do NOT move/resize here — window is already becoming visible.
         super().showEvent(event)
         self.clearMask()
+        # Combo popups are separate HWNDs; polish after children exist so Windows
+        # light theme cannot force black list text onto our dark popup chrome.
+        from PySide6.QtWidgets import QComboBox
+
+        for combo in self.findChildren(QComboBox):
+            apply_dark_combo_popup(combo)
 
     def _center_on_parent(self) -> None:
         """Place the dialog on the parent (or available screen) so HD/Deck windows stay in view."""
@@ -501,5 +512,18 @@ class SteempegDialog(QDialog):
                 border-bottom-left-radius: {inner_radius}px;
                 border-bottom-right-radius: {inner_radius}px;
             }}
+            /* Opaque scroll/stack fills — transparent + OS light palette = white panels. */
+            QScrollArea {{
+                background-color: {bg_color};
+                border: none;
+            }}
+            QScrollArea > QWidget {{
+                background-color: {bg_color};
+            }}
+            QStackedWidget {{
+                background-color: {bg_color};
+            }}
+            /* Dark combo popups — light ink (OS light theme must not override). */
+            {COMBO_POPUP_ITEM_RULES}
             """
         )

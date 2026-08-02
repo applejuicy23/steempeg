@@ -86,9 +86,9 @@ _ROW_CHILD = """
     }
 """
 
-_SCROLL_STYLE = """
-    QScrollArea { background: transparent; border: none; }
-    QWidget#releaseListHost { background: transparent; }
+_SCROLL_STYLE = f"""
+    {tok.dialog_scroll_stylesheet(tok.BG_SHELL)}
+    QWidget#releaseListHost {{ background-color: {tok.BG_SHELL}; }}
 """
 
 _NOTES_STYLE = """
@@ -155,18 +155,13 @@ def _logo_pixmap(size: int = 18) -> QPixmap | None:
     cached = _ROW_LOGO_CACHE.get(size)
     if cached is not None and not cached.isNull():
         return cached
-    from steempeg.ui.icon_utils import app_logo_pixmap
+    from steempeg.ui.icon_utils import app_logo_pixmap, square_fit_pixmap
 
     pix = app_logo_pixmap(size)
     if pix is None or pix.isNull():
         path = get_resource_path("logo.png")
         if os.path.isfile(path):
-            pix = QPixmap(path).scaled(
-                size,
-                size,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            pix = square_fit_pixmap(QPixmap(path), size, dpr=1.0)
     if pix is not None and not pix.isNull():
         _ROW_LOGO_CACHE[size] = pix
         return pix
@@ -419,12 +414,12 @@ class _VersionRow(QFrame):
         outer.setContentsMargins(8 + indent * 14, 6, 8, 6)
         outer.setSpacing(8)
 
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        logo_sz = 18 if not indent else 16
         logo = QLabel()
-        pix = _logo_pixmap(18 if not indent else 16)
-        if pix is not None:
-            logo.setPixmap(pix)
-        logo.setFixedSize(18 if not indent else 16, 18 if not indent else 16)
-        outer.addWidget(logo)
+        apply_square_icon(logo, _logo_pixmap(logo_sz), logo_sz)
+        outer.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         label = entry.tag_name or f"v{entry.version_str}"
         color = version_label_color(entry.version_float, installed=installed, latest=latest)
@@ -442,12 +437,13 @@ class _VersionRow(QFrame):
             pix = load_pixmap(_PLATFORM_ASSET[platform], icon_size)
             if pix.isNull():
                 continue
+            from steempeg.ui.icon_utils import apply_square_icon
+
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(pix)
-            icon_lbl.setFixedSize(icon_size, icon_size)
+            apply_square_icon(icon_lbl, pix, icon_size)
             icon_lbl.setToolTip(platform_display_name(platform))
             icon_lbl.setStyleSheet("background: transparent;")
-            outer.addWidget(icon_lbl)
+            outer.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         outer.addStretch()
 
@@ -616,14 +612,13 @@ class UpdateCenterDialog(SteempegDialog):
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(10)
+        from steempeg.ui.icon_utils import apply_square_icon
+
         title_icon = QLabel()
-        title_icon.setFixedSize(28, 28)
-        title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_pix = title_bar_update_pixmap(tok.TEXT_TITLE, 26)
         if title_pix.isNull():
             title_pix = load_pixmap("update.png", 26)
-        if not title_pix.isNull():
-            title_icon.setPixmap(title_pix)
+        apply_square_icon(title_icon, title_pix, 28)
         title_icon.setStyleSheet("background: transparent;")
         title_row.addWidget(title_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -643,10 +638,12 @@ class UpdateCenterDialog(SteempegDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
         self._list_host = QWidget()
         self._list_host.setObjectName("releaseListHost")
+        self._list_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._list_host.setStyleSheet(f"background-color: {tok.BG_SHELL};")
         self._list_layout = QVBoxLayout(self._list_host)
         self._list_layout.setContentsMargins(0, 0, 4, 0)
         self._list_layout.setSpacing(4)
