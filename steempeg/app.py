@@ -3215,14 +3215,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # lerp doesn't thrash queue cards / DWM on every pixel.
         self._apply_responsive_layout_mins(apply_density=False)
         timer = getattr(self, "_density_resize_timer", None)
+        defer_ms = int(getattr(self, "_density_resize_defer_ms", 120) or 120)
+        self._density_resize_defer_ms = 120
         if timer is None:
             from PySide6.QtCore import QTimer
 
             timer = QTimer(self.ui if hasattr(self, "ui") else None)
             timer.setSingleShot(True)
-            timer.setInterval(120)
             timer.timeout.connect(self._flush_ui_density_after_resize)
             self._density_resize_timer = timer
+        timer.setInterval(max(0, defer_ms))
         timer.start()
 
     def _flush_ui_density_after_resize(self):
