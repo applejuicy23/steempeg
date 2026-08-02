@@ -141,8 +141,47 @@ def title_bar_settings_icons(size: int = 16) -> tuple[QIcon, QIcon]:
 
 
 def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
-    """Tinted update.png for the portable title-bar Check for updates control."""
-    return tinted_pixmap("update.png", color, size)
+    """Tinted update.png for the portable title-bar Updates spinner.
+
+    Crops to the opaque glyph and recenters in a square so rotation orbits the
+    visual center (source asset is non-square 387×396 with uneven padding).
+    """
+    raw = QPixmap(get_resource_path("update.png"))
+    if raw.isNull():
+        return QPixmap()
+    x, y, bw, bh = _opaque_content_rect(raw)
+    side = max(bw, bh, 1)
+    cx = x + bw / 2.0
+    cy = y + bh / 2.0
+    left = int(round(cx - side / 2.0))
+    top = int(round(cy - side / 2.0))
+    src_x, src_y = max(left, 0), max(top, 0)
+    src_w = min(side, raw.width() - src_x)
+    src_h = min(side, raw.height() - src_y)
+    cropped = QPixmap(side, side)
+    cropped.fill(Qt.GlobalColor.transparent)
+    crop_p = QPainter(cropped)
+    crop_p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    crop_p.drawPixmap(src_x - left, src_y - top, raw.copy(src_x, src_y, src_w, src_h))
+    crop_p.end()
+    if isinstance(color, str):
+        color = QColor(color)
+    scaled = cropped.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+    painter.drawPixmap(0, 0, scaled)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(out.rect(), color)
+    painter.end()
+    return out
 
 
 def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:

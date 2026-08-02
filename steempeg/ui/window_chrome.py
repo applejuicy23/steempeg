@@ -334,15 +334,15 @@ class _TitleBarUpdateButton(QPushButton):
         if pix.isNull():
             painter.end()
             return
+        # Rotate around widget + glyph center (float offsets; no int truncation).
         cx = self.width() * 0.5
         cy = self.height() * 0.5
+        dpr = max(float(pix.devicePixelRatio()), 1.0)
+        logical_w = pix.width() / dpr
+        logical_h = pix.height() / dpr
         painter.translate(cx, cy)
         painter.rotate(self._angle)
-        painter.drawPixmap(
-            int(-pix.width() * 0.5),
-            int(-pix.height() * 0.5),
-            pix,
-        )
+        painter.drawPixmap(QPointF(-logical_w * 0.5, -logical_h * 0.5), pix)
         painter.end()
 
 
