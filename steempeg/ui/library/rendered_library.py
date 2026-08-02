@@ -40,6 +40,7 @@ from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.library.rendered_scan import ScannedRenderedFile
 from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillWorker
 from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
+from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.ui.library.grid_view import ClipCard
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
@@ -59,6 +60,7 @@ _RENDERED_GAME_FILTER_ROLE = Qt.ItemDataRole.UserRole + 6
 _RENDERED_THUMB_ROLE = Qt.ItemDataRole.UserRole + 7
 _RENDERED_ICON_ROLE = Qt.ItemDataRole.UserRole + 8
 _HEALTH_SORT_INDICES = (5, 6)
+_FOLDER_SORT_INDICES = (11, 12)
 
 _LIBRARY_TAB_INACTIVE = """
     QPushButton {
@@ -1110,7 +1112,10 @@ class RenderedLibraryMixin:
         if hasattr(self, "table_rendered"):
             self.table_rendered.setSortingEnabled(True)
             self.table_rendered.horizontalHeader().setSectionsClickable(False)
-        self._sync_rendered_grid_from_table()
+        if hasattr(self, "apply_rendered_sorting"):
+            self.apply_rendered_sorting()
+        else:
+            self._sync_rendered_grid_from_table()
         self._schedule_rendered_poster_backfill()
         self._update_library_count_label()
 
@@ -1425,12 +1430,18 @@ class RenderedLibraryMixin:
                 self.lbl_clip_count.setText("• 0 Files")
             return
 
-        if getattr(self, "_clips_scan_active", False) and hasattr(self.ui, "table_clips"):
-            n = self.ui.table_clips.rowCount()
-            self.lbl_clip_count.setText(f"• {n} Clips" if n > 0 else "• … Clips")
-        elif hasattr(self.ui, "table_clips"):
-            n = self.ui.table_clips.rowCount()
-            self.lbl_clip_count.setText(f"• {n} Clips")
+        if not hasattr(self.ui, "table_clips"):
+            return
+        table = self.ui.table_clips
+        n = table.rowCount()
+        # Honour row-hidden state from Apply Filters (same as Rendered files).
+        visible = sum(1 for r in range(n) if not table.isRowHidden(r))
+        if getattr(self, "_clips_scan_active", False):
+            self.lbl_clip_count.setText(
+                f"• {visible} Clips" if visible > 0 else "• … Clips"
+            )
+        else:
+            self.lbl_clip_count.setText(f"• {visible} Clips")
 
     def _apply_rendered_view_mode(self):
         mode = getattr(self, "_rendered_view_mode", "grid")
@@ -1484,6 +1495,9 @@ class RenderedLibraryMixin:
             rows.sort(key=lambda r: os.path.getsize(path(r)) if path(r) and os.path.exists(path(r)) else 0)
             if idx == 10:
                 rows.reverse()
+        elif idx in _FOLDER_SORT_INDICES:
+            roots = getattr(self, "clips_folders", None) or []
+            rows.sort(key=lambda r: clip_folder_sort_key(path(r), roots), reverse=(idx == 12))
         elif idx in _HEALTH_SORT_INDICES:
             pass
 

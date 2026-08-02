@@ -38,6 +38,7 @@ from steempeg.ui.library.refresh_workers import (
 )
 from steempeg.library.scan import ScannedClip
 from steempeg.core.dash import discovery, health, mpd
+from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.core.steam_paths import (
     default_clips_dialog_path,
     discover_steam_clips_folders,
@@ -2760,6 +2761,10 @@ class LibraryMixin:
 
         self.ui.table_clips.setSortingEnabled(True)
         self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
+        # Re-apply the active sort mode (scan order alone is mtime / discovery).
+        # Call the clips sorter directly — RenderedLibraryMixin.apply_sorting would
+        # target the rendered table when that panel is active.
+        LibraryMixin.apply_sorting(self)
         self.sync_grid_from_table_selection()
         self._backfill_missing_game_icons()
         self._schedule_clip_poster_backfill()
@@ -3161,11 +3166,16 @@ class LibraryMixin:
                 m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
                 s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
                 return h * 3600 + m * 60 + s
-                
+
+            if sort_idx in (11, 12):  # FOLDER (library root / parent dir)
+                clip_path = r[0].data(Qt.UserRole) if r[0] else ""
+                roots = getattr(self, "clips_folders", None) or []
+                return clip_folder_sort_key(clip_path, roots)
+
             return data['orig_row']
 
        
-        reverse = sort_idx in (0, 2, 4, 6, 8, 10)
+        reverse = sort_idx in (0, 2, 4, 6, 8, 10, 12)
         all_data.sort(key=get_sort_key, reverse=reverse)
         
         for new_row, data in enumerate(all_data):

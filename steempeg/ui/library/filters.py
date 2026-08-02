@@ -45,14 +45,32 @@ def _library_root_for_clip(clip_path: str, roots) -> str | None:
     if not clip_path or not roots:
         return None
     norm = os.path.normpath(clip_path)
+    norm_key = os.path.normcase(norm)
     matches = []
     for root in roots:
         if not root:
             continue
         rn = os.path.normpath(root)
-        if norm == rn or norm.startswith(rn + os.sep):
+        rn_key = os.path.normcase(rn)
+        if norm_key == rn_key or norm_key.startswith(rn_key + os.sep):
             matches.append(rn)
     return max(matches, key=len) if matches else None
+
+
+def clip_folder_sort_key(clip_path: str, roots=None) -> tuple:
+    """Stable, user-meaningful folder key for library sorting.
+
+    Prefers the configured library root (same grouping as Folders filter pills).
+    Falls back to the parent directory of the clip path. Uses ``normcase`` so
+    Windows path case noise does not split groups. Second tuple element is the
+    clip path itself for a deterministic order within a folder.
+    """
+    if not clip_path:
+        return ("", "")
+    norm = os.path.normpath(str(clip_path))
+    root = _library_root_for_clip(norm, roots or [])
+    folder = root if root else (os.path.dirname(norm) or norm)
+    return (os.path.normcase(folder), os.path.normcase(norm))
 
 
 def _folder_pill_label(path: str) -> str:
@@ -1270,6 +1288,8 @@ class FilterMenu(QWidget):
                         self._refresh_cascade_after_games()
                     elif layout is self.types_layout:
                         self._refresh_cascade_after_types()
+                    elif layout is self.folders_layout:
+                        self._sync_folder_memory()
                     self.update_live_count()
                     return True
             elif et == QEvent.Type.MouseMove and self._drag_active and event.buttons() & Qt.MouseButton.LeftButton:
@@ -1282,6 +1302,8 @@ class FilterMenu(QWidget):
                         self._refresh_cascade_after_games()
                     elif self._drag_layout is self.types_layout:
                         self._refresh_cascade_after_types()
+                    elif self._drag_layout is self.folders_layout:
+                        self._sync_folder_memory()
                     self.update_live_count()
             elif et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 handled = self._drag_btn is not None
@@ -1335,10 +1357,13 @@ class FilterMenu(QWidget):
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
 
     def _get_checked_health_levels(self):
+        # Use isHidden() (local hide), not isVisible() (needs ancestors shown).
+        # gather_statistics → update_live_count runs before the popup is shown;
+        # isVisible() was False for every Health pill → honest 0 with purple pills.
         levels = []
         for i in range(self.health_layout.count()):
             w = self.health_layout.itemAt(i).widget()
-            if w and w.isVisible() and w.isChecked():
+            if w and not w.isHidden() and w.isChecked():
                 levels.append(w.property("health_level"))
         return levels
 
@@ -1474,9 +1499,14 @@ class FilterMenu(QWidget):
             and saved_state.get("active")
             and saved_state.get("folders")
         ):
-            saved = set(saved_state["folders"])
+            # normcase: Windows path case must not drop saved folder pills on reopen.
+            saved = {
+                os.path.normcase(os.path.normpath(p))
+                for p in saved_state["folders"]
+                if p
+            }
             for root in roots:
-                self._folder_checked_memory[root] = root in saved
+                self._folder_checked_memory[root] = os.path.normcase(root) in saved
 
         for root in roots:
             label = _folder_pill_label(root)
@@ -1490,7 +1520,7 @@ class FilterMenu(QWidget):
             btn.setProperty("raw_name", root)
             btn.setToolTip(root)
             btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            btn.clicked.connect(self.update_live_count)
+            btn.clicked.connect(self._on_folder_toggled)
             self.folders_layout.addWidget(btn)
 
     def _configured_library_roots(self):
@@ -1593,6 +1623,12 @@ class FilterMenu(QWidget):
 
     def _on_type_toggled(self):
         self._refresh_cascade_after_types()
+        self.update_live_count()
+
+    def _on_folder_toggled(self):
+        if getattr(self, '_is_gathering', False):
+            return
+        self._sync_folder_memory()
         self.update_live_count()
 
     def _refresh_cascade_after_games(self):
@@ -1794,13 +1830,28 @@ class FilterMenu(QWidget):
         sel_health = self._get_checked_health_levels()
         sel_folders = self._get_checked_names(self.folders_layout)
         roots = self._configured_library_roots()
-        # No folder pills yet (single empty rebuild) → don't treat as "hide all".
-        folder_filter_on = bool(sel_folders) or self.folders_layout.count() == 0
+        sel_folder_keys = {
+            os.path.normcase(os.path.normpath(p)) for p in sel_folders if p
+        }
 
-        # Nothing checked yet (rebuild in flight) → show the full library total,
-        # not a scary zero that looks like "filters hide everything".
-        if not sel_games or not sel_types or not sel_health or not folder_filter_on:
+        # Mid-rebuild (no pills yet) → keep the full total, not a flash of 0.
+        building = (
+            self.games_layout.count() == 0
+            or self.types_layout.count() == 0
+            or self.health_layout.count() == 0
+        )
+        if building:
             self.btn_apply.setText(f"Apply Filters ({total})")
+            return
+
+        # Intentional empty category (incl. all Folders off) → honest 0.
+        # Do NOT substitute the library total — that looked like the filter
+        # "forgot" a pending Folders selection (Apply Filters (258)).
+        if not sel_games or not sel_types or not sel_health:
+            self.btn_apply.setText("Apply Filters (0)")
+            return
+        if self.folders_layout.count() > 0 and not sel_folder_keys:
+            self.btn_apply.setText("Apply Filters (0)")
             return
 
         min_date, max_date = self.input_min_date.date(), self.input_max_date.date()
@@ -1823,10 +1874,10 @@ class FilterMenu(QWidget):
                 row_health = _row_display_health_level(r_g)
                 if row_health not in sel_health:
                     show = False
-            if show and sel_folders and r_g:
+            if show and sel_folder_keys and r_g:
                 clip_path = r_g.data(Qt.UserRole) or ""
                 root = _library_root_for_clip(clip_path, roots)
-                if root is None or root not in sel_folders:
+                if root is None or os.path.normcase(root) not in sel_folder_keys:
                     show = False
 
             if show and r_d:
@@ -1970,3 +2021,6 @@ class FilterMenu(QWidget):
         # 5. THE MOST IMPORTANT PART: REBUILD THE GRID FROM SCRATCH TO KEEP CUSTOM WIDGETS!
         if hasattr(self.app, 'fast_sync_grid'):
             self.app.fast_sync_grid()
+        # Keep the library header • N Clips on the filtered size (not rowCount).
+        if hasattr(self.app, '_update_library_count_label'):
+            self.app._update_library_count_label()

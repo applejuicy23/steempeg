@@ -701,7 +701,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.combo_sort.addItem(QIcon(get_resource_path("datesort2.png")), "Date (Newest First)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort1.png")), "Duration (Shortest)")
         self.combo_sort.addItem(QIcon(get_resource_path("durationsort2.png")), "Duration (Longest)")
-        self.combo_sort.setMaxVisibleItems(12)
+        self.combo_sort.addItem(QIcon(get_resource_path("lettersort1.png")), "Folder (A - Z)")
+        self.combo_sort.addItem(QIcon(get_resource_path("lettersort2.png")), "Folder (Z - A)")
+        self.combo_sort.setMaxVisibleItems(14)
 
         # Same face as Refresh: Segoe UI bold 13. QSS alone does not reliably
         # style a non-editable combo's painted text, so set it on the widget.
