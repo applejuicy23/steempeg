@@ -1,9 +1,20 @@
 """Shared QComboBox popup styling — selected item outline + visible disabled rows."""
 from __future__ import annotations
 
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QComboBox
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
+
+# Force light ink — Windows light OS theme otherwise paints near-black Text
+# on our dark custom popup (QSS alone is not always enough).
+_POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
+_POPUP_BG = tok.BG_SHELL  # #1e1e1e
+_POPUP_ITEM_BG = "#333333"
+_POPUP_SEL_BG = "#3a3350"
+_POPUP_SEL_FG = "#ffffff"
+_POPUP_DIS_FG = "#5a5a5a"
 
 
 def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
@@ -16,14 +27,14 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
     border = 2 if d.scale >= 0.45 else 1
     return f"""
     QComboBox QAbstractItemView {{
-        background-color: #1e1e1e;
-        color: #e0e0e0;
+        background-color: {_POPUP_BG};
+        color: {_POPUP_FG};
         border: 2px solid #4a4a4a;
         border-radius: 10px;
         padding: {max(2, pv - 2)}px;
         outline: none;
         selection-background-color: transparent;
-        selection-color: #ffffff;
+        selection-color: {_POPUP_SEL_FG};
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }}
     QComboBox QAbstractItemView::item {{
@@ -31,31 +42,78 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
         padding: {pv}px {ph}px;
         border-radius: {radius}px;
         margin: 1px 2px;
-        background-color: #333333;
-        color: #e0e0e0;
+        background-color: {_POPUP_ITEM_BG};
+        color: {_POPUP_FG};
         border: {border}px solid transparent;
     }}
     QComboBox QAbstractItemView::item:hover:enabled {{
         background-color: #404040;
-        color: #ffffff;
+        color: {_POPUP_SEL_FG};
         border: {border}px solid #6b5a8e;
     }}
     QComboBox QAbstractItemView::item:selected {{
-        background-color: #3a3350;
-        color: #ffffff;
+        background-color: {_POPUP_SEL_BG};
+        color: {_POPUP_SEL_FG};
         border: {border}px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:selected:enabled {{
-        background-color: #3a3350;
-        color: #ffffff;
+        background-color: {_POPUP_SEL_BG};
+        color: {_POPUP_SEL_FG};
         border: {border}px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:disabled {{
         background-color: #262626;
-        color: #5a5a5a;
+        color: {_POPUP_DIS_FG};
         border: {border}px solid #333333;
     }}
 """
+
+
+def apply_dark_combo_popup(
+    combo: QComboBox,
+    *,
+    dense: UiDensity | None = None,
+) -> None:
+    """Force readable light text on dark combo popups (Windows light theme safe).
+
+    Ensures ``QComboBox QAbstractItemView`` rules are present on the combo sheet
+    (popup HWND often ignores ancestor dialog QSS) and overrides the view palette
+    so OS light Text / WindowText cannot paint black on dark rows.
+    """
+    current = combo.styleSheet() or ""
+    if "QAbstractItemView" not in current:
+        combo.setStyleSheet(current + combo_popup_item_rules(dense))
+
+    view = combo.view()
+    if view is None:
+        return
+
+    bg = QColor(_POPUP_BG)
+    fg = QColor(_POPUP_FG)
+    item_bg = QColor(_POPUP_ITEM_BG)
+    sel_bg = QColor(_POPUP_SEL_BG)
+    sel_fg = QColor(_POPUP_SEL_FG)
+    dis_fg = QColor(_POPUP_DIS_FG)
+
+    pal = view.palette()
+    for group in (
+        QPalette.ColorGroup.Active,
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorGroup.Disabled,
+    ):
+        text = dis_fg if group == QPalette.ColorGroup.Disabled else fg
+        pal.setColor(group, QPalette.ColorRole.Base, bg)
+        pal.setColor(group, QPalette.ColorRole.AlternateBase, item_bg)
+        pal.setColor(group, QPalette.ColorRole.Window, bg)
+        pal.setColor(group, QPalette.ColorRole.Text, text)
+        pal.setColor(group, QPalette.ColorRole.WindowText, text)
+        pal.setColor(group, QPalette.ColorRole.Button, item_bg)
+        pal.setColor(group, QPalette.ColorRole.ButtonText, text)
+        pal.setColor(group, QPalette.ColorRole.Highlight, sel_bg)
+        pal.setColor(group, QPalette.ColorRole.HighlightedText, sel_fg)
+        pal.setColor(group, QPalette.ColorRole.BrightText, sel_fg)
+    view.setPalette(pal)
+    view.setAutoFillBackground(True)
 
 
 # Default comfort popup (backward-compatible import for static QSS builders).
@@ -132,49 +190,49 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
 
 # Slimmer popup for the compact combos (Sorting / Filter in the Clips Manager):
 # flat rows, normal weight, row height matched to the collapsed combo box.
-COMPACT_COMBO_POPUP_ITEM_RULES = """
-    QComboBox QAbstractItemView {
-        background-color: #1e1e1e;
-        color: #e0e0e0;
+COMPACT_COMBO_POPUP_ITEM_RULES = f"""
+    QComboBox QAbstractItemView {{
+        background-color: {_POPUP_BG};
+        color: {_POPUP_FG};
         border: 2px solid #4a4a4a;
         border-radius: 10px;
         padding: 4px;
         outline: none;
         selection-background-color: transparent;
-        selection-color: #ffffff;
+        selection-color: {_POPUP_SEL_FG};
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-weight: normal;
-    }
-    QComboBox QAbstractItemView::item {
+    }}
+    QComboBox QAbstractItemView::item {{
         min-height: 24px;
         padding: 4px 10px 4px 6px;
         border-radius: 6px;
         margin: 1px 2px;
         background-color: transparent;
-        color: #e0e0e0;
+        color: {_POPUP_FG};
         border: 1px solid transparent;
         font-weight: normal;
-    }
-    QComboBox QAbstractItemView::item:hover:enabled {
-        background-color: #3a3350;
-        color: #ffffff;
+    }}
+    QComboBox QAbstractItemView::item:hover:enabled {{
+        background-color: {_POPUP_SEL_BG};
+        color: {_POPUP_SEL_FG};
         border: 1px solid #6b5a8e;
-    }
-    QComboBox QAbstractItemView::item:selected {
-        background-color: #3a3350;
-        color: #ffffff;
+    }}
+    QComboBox QAbstractItemView::item:selected {{
+        background-color: {_POPUP_SEL_BG};
+        color: {_POPUP_SEL_FG};
         border: 1px solid #b29ae7;
-    }
-    QComboBox QAbstractItemView::item:selected:enabled {
-        background-color: #3a3350;
-        color: #ffffff;
+    }}
+    QComboBox QAbstractItemView::item:selected:enabled {{
+        background-color: {_POPUP_SEL_BG};
+        color: {_POPUP_SEL_FG};
         border: 1px solid #b29ae7;
-    }
-    QComboBox QAbstractItemView::item:disabled {
+    }}
+    QComboBox QAbstractItemView::item:disabled {{
         background-color: transparent;
-        color: #5a5a5a;
+        color: {_POPUP_DIS_FG};
         border: 1px solid transparent;
-    }
+    }}
 """
 
 COMPACT_COMBO_RULES = """

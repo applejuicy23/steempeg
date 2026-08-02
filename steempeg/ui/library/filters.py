@@ -1094,7 +1094,10 @@ class FilterMenu(QWidget):
 
         # Date/time BlockCombo fields
         from steempeg.ui.widgets.block_combo import BlockCombo
-        from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
+        from steempeg.ui.widgets.combo_chrome import (
+            apply_dark_combo_popup,
+            combo_popup_item_rules,
+        )
 
         bc_pad = "0px" if compact else "0px"
         bc_font = 11 if compact else 13
@@ -1113,6 +1116,7 @@ class FilterMenu(QWidget):
                 "border: 1px solid #333;", "border: 2px solid #ff4444;"
             )
             combo.setStyleSheet(combo.style_normal if combo.is_valid() else combo.style_error)
+            apply_dark_combo_popup(combo, dense=dense)
 
         dt_style = self._date_time_input_style_for(dense)
         if dt_style:

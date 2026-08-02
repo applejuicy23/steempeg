@@ -5,7 +5,7 @@ Used for the date and time pickers in the filter panel.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QCompleter
 
-from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES, apply_dark_combo_popup
 
 
 class BlockCombo(QComboBox):
@@ -36,6 +36,7 @@ class BlockCombo(QComboBox):
             "border: 1px solid #333;", "border: 2px solid #ff4444;"
         )
         self.setStyleSheet(self.style_normal)
+        apply_dark_combo_popup(self)
         self.currentTextChanged.connect(self.validate_text)
 
     def auto_pad_zero(self):
