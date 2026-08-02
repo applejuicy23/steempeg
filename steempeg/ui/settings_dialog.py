@@ -57,11 +57,13 @@ from steempeg.ui.settings_prefs import (
     apply_default_render_tab,
     apply_export_folder,
     default_export_dir,
+    ensure_usable_export_folder,
     is_outside_default_rendered,
     load_default_render_tab,
     normalize_export_folder,
     normalize_render_tab,
     normalize_update_check_interval,
+    notify_export_folder_fallback,
     resolve_permanent_export_folder,
     resolve_update_check_interval,
 )
@@ -729,7 +731,12 @@ class SettingsDialog(SteempegDialog):
         )
         self._save_setting(KEY_UPDATE_CHECK_INTERVAL, interval)
 
-        folder = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
+        requested = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
+        folder, fell_back = ensure_usable_export_folder(requested)
+        if fell_back:
+            notify_export_folder_fallback(
+                self, requested, folder, use_dialog=True
+            )
         apply_export_folder(self._app, folder, persist=True)
         self._committed_export_folder = folder
         self._edit_export_folder.setText(folder)

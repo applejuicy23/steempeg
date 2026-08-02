@@ -55,7 +55,6 @@ from steempeg.core.dash import discovery, health, mpd, repair
 from steempeg.core.rendered_media import resolve_ffmpeg_exe
 from steempeg.infra.paths import (
     get_resource_path,
-    get_save_directory,
     open_path_with_default_app,
     open_text_file,
 )
@@ -2335,7 +2334,9 @@ class RenderMixin:
             ext = output_extension(container, audio_only, audio_format)
 
             # 3. OVERWRITE PROTECTION
-            save_dir = self.custom_destination if self.custom_destination else get_save_directory()
+            from steempeg.ui.settings_prefs import resolve_app_export_folder
+
+            save_dir = resolve_app_export_folder(self, notify=False)
             base_filename = self.ui.input_filename.text().strip() if hasattr(self.ui, 'input_filename') else "rendered"
 
             lower_base = base_filename.lower()
@@ -3757,6 +3758,16 @@ class RenderMixin:
             self._render_priority_applied = "normal"
 
     def _start_render_job(self, job, batch_mode: bool = False) -> None:
+        from steempeg.ui.settings_prefs import resolve_app_export_folder
+
+        # Catch deleted / unwritable destinations before ffmpeg opens the output.
+        safe_dir = resolve_app_export_folder(
+            self,
+            getattr(job.settings, "save_dir", None) or getattr(self, "custom_destination", ""),
+            notify=True,
+        )
+        if getattr(job.settings, "save_dir", None) != safe_dir:
+            job.settings.save_dir = safe_dir
         job.refresh_output_path()
         from shutil import which
 

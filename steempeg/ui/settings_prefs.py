@@ -125,10 +125,11 @@ def apply_default_render_tab(app, tab: object | None = None) -> int:
 
 
 def default_export_dir() -> str:
+    """Default ``{install}/rendered_videos`` — create parents if missing."""
     from steempeg.infra.paths import default_rendered_videos_dir
 
     path = default_rendered_videos_dir().replace("\\", "/")
-    if not os.path.exists(path):
+    if not os.path.isdir(path):
         try:
             os.makedirs(path, exist_ok=True)
         except OSError:
@@ -139,6 +140,71 @@ def default_export_dir() -> str:
 def normalize_export_folder(value: object | None) -> str:
     text = str(value or "").strip().replace("\\", "/")
     return text
+
+
+def _norm_export_path(folder: str) -> str:
+    return os.path.normcase(os.path.normpath(folder.replace("/", os.sep)))
+
+
+def _dir_is_writable(folder: str) -> bool:
+    """Probe-write a tiny temp file (more reliable than ``os.access`` on Windows)."""
+    probe = os.path.join(folder, ".steempeg_write_test")
+    try:
+        with open(probe, "wb") as fh:
+            fh.write(b"0")
+        try:
+            os.remove(probe)
+        except OSError:
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def export_folder_is_usable(folder: str | None) -> bool:
+    """True when path exists as a directory and is writable."""
+    folder = normalize_export_folder(folder)
+    if not folder or not os.path.isdir(folder):
+        return False
+    return _dir_is_writable(folder)
+
+
+def ensure_usable_export_folder(preferred: str | None = None) -> tuple[str, bool]:
+    """Return ``(usable_folder, fell_back)``.
+
+    Tries ``preferred`` (creates it when the parent allows). If still missing,
+    invalid, or not writable → default ``rendered_videos`` (created if needed).
+    Empty preferred uses the default without counting as a fallback.
+    """
+    preferred = normalize_export_folder(preferred)
+    if preferred:
+        if not os.path.isdir(preferred):
+            try:
+                os.makedirs(preferred, exist_ok=True)
+            except OSError:
+                logging.warning("Could not create export folder %s", preferred)
+        if export_folder_is_usable(preferred):
+            return preferred, False
+
+    safe = default_export_dir()
+    if not export_folder_is_usable(safe):
+        # Last resort: still return the default path; caller continues with it.
+        logging.error("Default export folder is not writable: %s", safe)
+
+    if not preferred:
+        return safe, False
+
+    if _norm_export_path(preferred) == _norm_export_path(safe) and export_folder_is_usable(
+        safe
+    ):
+        return safe, False
+
+    logging.warning(
+        "Export folder unavailable (%s); falling back to %s",
+        preferred,
+        safe,
+    )
+    return safe, True
 
 
 def is_outside_default_rendered(folder: str) -> bool:
@@ -158,14 +224,15 @@ def resolve_permanent_export_folder(settings: dict | None) -> str:
     """Return a usable export dir from Main Settings (or migrate portable snapshot)."""
     settings = settings or {}
     folder = normalize_export_folder(settings.get(KEY_PERMANENT_EXPORT_FOLDER))
-    if folder and os.path.isdir(folder):
+    if folder and export_folder_is_usable(folder):
         return folder
     blob = settings.get("render_export_settings")
     if isinstance(blob, dict):
         legacy = normalize_export_folder(blob.get("save_dir"))
-        if legacy and os.path.isdir(legacy):
+        if legacy and export_folder_is_usable(legacy):
             return legacy
-    return default_export_dir()
+    safe, _fell = ensure_usable_export_folder(None)
+    return safe
 
 
 def sync_export_folder_to_settings(app, folder: str) -> None:
@@ -185,8 +252,53 @@ def sync_export_folder_to_settings(app, folder: str) -> None:
         logging.exception("Failed syncing render_export_settings.save_dir")
 
 
-def apply_export_folder(app, folder: str | None = None, *, persist: bool = False) -> str:
-    """Set ``custom_destination`` and refresh the Export path label."""
+def notify_export_folder_fallback(
+    app,
+    requested: str,
+    safe: str,
+    *,
+    use_dialog: bool = False,
+) -> None:
+    """Log + status (or dialog) when export path was reset to the default."""
+    logging.warning(
+        "Export folder fallback: %r → %r",
+        requested,
+        safe,
+    )
+    if use_dialog:
+        try:
+            from steempeg.ui.message_dialog import steempeg_information
+
+            parent = getattr(app, "ui", None) or app
+            steempeg_information(
+                parent,
+                "Export folder reset",
+                "That export path is missing, invalid, or not writable.\n\n"
+                f"Requested:\n{requested}\n\n"
+                f"Using the default folder instead:\n{safe}",
+            )
+            return
+        except Exception:
+            logging.exception("Export-folder fallback dialog failed")
+    if hasattr(app, "set_status"):
+        try:
+            app.set_status("Export folder unavailable — using default rendered_videos")
+        except Exception:
+            pass
+
+
+def apply_export_folder(
+    app,
+    folder: str | None = None,
+    *,
+    persist: bool = False,
+    notify: bool = False,
+    notify_dialog: bool = False,
+) -> str:
+    """Set ``custom_destination`` to a usable folder and refresh the Export label.
+
+    Invalid / unwritable paths fall back to default ``rendered_videos``.
+    """
     if folder is None:
         settings = {}
         if hasattr(app, "load_user_settings"):
@@ -195,22 +307,38 @@ def apply_export_folder(app, folder: str | None = None, *, persist: bool = False
             except Exception:
                 settings = {}
         folder = resolve_permanent_export_folder(settings)
-    folder = normalize_export_folder(folder) or default_export_dir()
-    if folder and not os.path.isdir(folder):
-        try:
-            os.makedirs(folder, exist_ok=True)
-        except OSError:
-            logging.exception("Export folder missing and could not be created: %s", folder)
-            folder = default_export_dir()
-    app.custom_destination = folder
+    requested = normalize_export_folder(folder) or default_export_dir()
+    safe, fell_back = ensure_usable_export_folder(requested)
+    if fell_back and (notify or notify_dialog):
+        notify_export_folder_fallback(
+            app, requested, safe, use_dialog=notify_dialog
+        )
+    app.custom_destination = safe
     if persist:
-        sync_export_folder_to_settings(app, folder)
+        sync_export_folder_to_settings(app, safe)
     if hasattr(app, "update_final_setup"):
         try:
             app.update_final_setup()
         except Exception:
             logging.exception("update_final_setup after export folder apply failed")
-    return folder
+    return safe
+
+
+def resolve_app_export_folder(
+    app,
+    preferred: str | None = None,
+    *,
+    notify: bool = True,
+) -> str:
+    """Resolve a writable export dir for the live app (render / UI path labels)."""
+    if preferred is None:
+        preferred = getattr(app, "custom_destination", "") or ""
+    requested = normalize_export_folder(preferred)
+    safe, fell_back = ensure_usable_export_folder(requested or None)
+    if fell_back and notify:
+        notify_export_folder_fallback(app, requested or "(empty)", safe)
+    app.custom_destination = safe
+    return safe
 
 
 def normalize_update_check_interval(value: object | None) -> str:

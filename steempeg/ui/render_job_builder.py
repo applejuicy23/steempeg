@@ -10,8 +10,8 @@ from PySide6.QtCore import Qt
 
 from steempeg.core.dash import discovery, mpd
 from steempeg.core import capabilities
-from steempeg.infra.paths import get_save_directory
 from steempeg.render.encode_speed import normalize_encode_speed
+from steempeg.ui.settings_prefs import resolve_app_export_folder
 from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
@@ -447,7 +447,7 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         ui.combo_audio_bitrate.currentText() if hasattr(ui, "combo_audio_bitrate") else "192 kbps"
     )
 
-    save_dir = app.custom_destination if app.custom_destination else get_save_directory()
+    save_dir = resolve_app_export_folder(app, notify=False)
     output_basename = ui.input_filename.text().strip() if hasattr(ui, "input_filename") else "rendered"
 
     trim_start_ms = 0
@@ -621,7 +621,7 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
             orig_fps=int(defaults["orig_fps"]),
             orig_video_mbps=float(defaults["orig_video_mbps"]),
             orig_audio_kbps=int(defaults["orig_audio_kbps"]),
-            save_dir=app.custom_destination if app.custom_destination else get_save_directory(),
+            save_dir=resolve_app_export_folder(app, notify=False),
             encoder_codec=enc_codec,
             encoder_display=enc_display,
             encode_speed=enc_speed,
