@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
@@ -10,7 +11,9 @@ from steempeg.services import marker_prefs as mprefs
 from steempeg.ui.icon_utils import primary_device_pixel_ratio, square_fit_pixmap
 
 # On-canvas timeline pin size (logical px). Buffer uses ≥2× DPR for crisp HD.
-TIMELINE_MARKER_LOGICAL = 18
+# Windows keeps compact Steam-like pins; Linux / Deck need a larger logical size
+# (typical 100% scale + XWayland) or pins look tiny vs the seek strip.
+TIMELINE_MARKER_LOGICAL = 18 if sys.platform == "win32" else 20
 
 
 def timeline_marker_dpr() -> float:
@@ -45,17 +48,27 @@ def load_timeline_marker_pixmap(path: str) -> QPixmap | None:
 
 
 def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixmap:
-    """Recolor opaque pixels to ``color`` (keeps alpha) — for white mono icons."""
+    """Recolor opaque pixels to ``color`` (keeps alpha) — for white mono icons.
+
+    When ``height`` is set, scale by height only (KeepAspectRatio). Never squash
+    wide pins (round digit strips, panoramic class art) into a square — that is
+    what made class-tinted markers look "sausaged" on the timeline.
+    """
     if src is None or src.isNull():
         return QPixmap()
     base = src
     if height is not None:
         edge = max(1, int(height))
         dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
-        logical_w = base.width() / dpr
         logical_h = base.height() / dpr
-        if abs(logical_w - edge) > 0.51 or abs(logical_h - edge) > 0.51:
-            base = square_fit_pixmap(base, edge, dpr=dpr)
+        if abs(logical_h - edge) > 0.51:
+            phys_h = max(1, int(round(edge * dpr)))
+            raw = QPixmap(base)
+            raw.setDevicePixelRatio(1.0)
+            base = raw.scaledToHeight(
+                phys_h, Qt.TransformationMode.SmoothTransformation
+            )
+            base.setDevicePixelRatio(dpr)
     out = QPixmap(base.size())
     out.fill(Qt.GlobalColor.transparent)
     painter = QPainter(out)

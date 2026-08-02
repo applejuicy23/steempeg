@@ -10,6 +10,7 @@ import json
 import os
 import re
 import logging
+import sys
 import time
 
 import PySide6.QtWidgets as qtw
@@ -32,9 +33,43 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
+from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec, MAX_BATCH_SEC
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
+
+
+def _paint_timeline_marker_pixmap(
+    painter: QPainter,
+    pix: QPixmap,
+    draw_x: float,
+    draw_y: float,
+    *,
+    scale: float = 1.0,
+) -> None:
+    """Draw a DPR-aware marker pixmap.
+
+    On Windows ``drawPixmap(QPointF)`` honours pixmap DPR correctly. On Linux /
+    XWayland that path often smears icons horizontally (ghosted doubles) — paint
+    into an explicit logical ``QRectF`` instead. Hover scale is done via the
+    target rect (no ``painter.scale``), which also avoids blur on xcb.
+    """
+    dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
+    lw = pix.width() / dpr
+    lh = pix.height() / dpr
+    if scale != 1.0:
+        cx = draw_x + lw / 2.0
+        cy = draw_y + lh / 2.0
+        lw *= scale
+        lh *= scale
+        draw_x = cx - lw / 2.0
+        draw_y = cy - lh / 2.0
+    if sys.platform == "win32" and scale == 1.0:
+        painter.drawPixmap(QPointF(draw_x, draw_y), pix)
+        return
+    target = QRectF(draw_x, draw_y, lw, lh)
+    source = QRectF(0.0, 0.0, float(pix.width()), float(pix.height()))
+    painter.drawPixmap(target, pix, source)
 
 
 class TimelineCanvas(QWidget):
@@ -45,8 +80,9 @@ class TimelineCanvas(QWidget):
     _RULER_FONT_PT = 8
     # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440.
     _TRACK_H = 13.0
-    _TRACK_Y = 28.0
-    _CANVAS_H = 58
+    # Leave room above the strip for timeline pins (Windows 18px / Linux 20px).
+    _TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
+    _CANVAS_H = int(_TRACK_Y + _TRACK_H + _RULER_GAP + _MAJOR_TICK_H + 8)
 
     pause_requested = Signal()        
     seek_requested = Signal(int)      
@@ -917,22 +953,22 @@ class TimelineCanvas(QWidget):
                     int(m_x), int(base_bottom), int(m_x), int(track_y)
                 )
 
-            # drawPixmap(QPointF) honours pixmap DPR; scale painter for hover.
-            if is_hovered:
-                painter.save()
-                cy = base_icon_y + base_h / 2.0
-                painter.translate(m_x, cy)
-                painter.scale(1.2, 1.2)
-                painter.translate(-m_x, -cy)
-            painter.drawPixmap(QPointF(draw_x, base_icon_y), pix)
-            if is_hovered:
-                painter.restore()
+            _paint_timeline_marker_pixmap(
+                painter,
+                pix,
+                draw_x,
+                base_icon_y,
+                scale=1.2 if is_hovered else 1.0,
+            )
 
         # 1. BACKGROUND LAYER: Draw ALL standard icons 
         hovered_m = getattr(self, 'hovered_marker', None)
         last_drawn_x = -9999
-        marker_width = 16.0 
-        
+        from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
+
+        # Occlusion fade spacing tracks pin size (was hard-coded 16 for 18px pins).
+        marker_width = float(TIMELINE_MARKER_LOGICAL)
+
         # Sort the markers by time to ensure rendering proceeds strictly from left to right!
         sorted_markers = sorted(getattr(self, 'markers', []), key=lambda m: m['time_ms'])
         
@@ -940,7 +976,7 @@ class TimelineCanvas(QWidget):
             if marker != hovered_m:
                 m_x = self.ms_to_x(marker['time_ms'])
                 
-                # If the distance to the previous marker is less than 16px, make it transparent
+                # If the distance to the previous marker is less than one pin, fade it
                 if (m_x - last_drawn_x) < marker_width:
                     painter.setOpacity(0.5)
                 else:
@@ -1287,6 +1323,9 @@ class TimelineCanvas(QWidget):
             self.sniper._cancel_background_warm()
 
         found_marker = None
+        from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
+
+        hit_top = max(28.0, float(TIMELINE_MARKER_LOGICAL) + 10.0)
         for marker in getattr(self, 'markers', []):
             m_x = self.ms_to_x(marker['time_ms'])
             pix = self.get_icon_pixmap(marker)
@@ -1294,9 +1333,9 @@ class TimelineCanvas(QWidget):
                 dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
                 pw = pix.width() / dpr
             else:
-                pw = 18.0
+                pw = float(TIMELINE_MARKER_LOGICAL)
 
-            if abs(x - m_x) <= (pw / 2) + 8 and 0 <= y <= 28:
+            if abs(x - m_x) <= (pw / 2) + 8 and 0 <= y <= hit_top:
                 found_marker = marker
                 break
         
