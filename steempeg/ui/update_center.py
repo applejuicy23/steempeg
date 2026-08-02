@@ -140,12 +140,86 @@ _ACK_FRAME_STYLE = """
 
 _NOTICE_WARN = (
     f"color: #e8b86d; font-size: 11px; font-family: {tok.FONT_APP}; "
-    "background-color: #2a2a2a; padding: 6px 8px; border-radius: 6px;"
+    "background-color: #2a2418; padding: 8px 10px; border-radius: 6px; "
+    "border: 1px solid #5a4a28;"
 )
 _NOTICE_DANGER = (
     f"color: #ff8a80; font-size: 11px; font-family: {tok.FONT_APP}; "
-    "background-color: #2a2a2a; padding: 6px 8px; border-radius: 6px;"
+    "background-color: #2a1c1c; padding: 8px 10px; border-radius: 6px; "
+    "border: 1px solid #5a3030;"
 )
+
+
+def _update_center_dialog_size(parent=None) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Min and default (w, h) for Update Center.
+
+    Content-heavy (list + notes + warning + ack + buttons). Keep enough height
+    that warning plates aren't crushed, but never taller than the main window's
+    ``minimumHeight()`` (when parent is the shell) and never more than ~85% of
+    the screen work area. Overflow scrolls inside notes / version list.
+    """
+    from PySide6.QtWidgets import QApplication
+    from steempeg.ui.layout_defaults import shell_layout_scale
+
+    # Comfort baseline — roomier than the old squashed 560×640, under main min (~800).
+    min_w, min_h = 580, 640
+    def_w, def_h = 620, 720
+
+    host = parent
+    win_w = 0
+    win_h = 0
+    if parent is not None and hasattr(parent, "width"):
+        try:
+            win_w = int(parent.width())
+            win_h = int(parent.height())
+        except Exception:
+            win_w = win_h = 0
+    if win_w <= 0:
+        aw = QApplication.activeWindow()
+        if aw is not None:
+            win_w = int(aw.width())
+            win_h = int(aw.height())
+            host = aw
+
+    t = shell_layout_scale(win_w, widget=host) if win_w > 0 else 1.0
+    cramped = t < 0.85 or (win_h > 0 and win_h < 900)
+    if cramped:
+        # Mild bump for notes + early-zip warning; list stays capped/scrollable.
+        min_w, min_h = 600, 660
+        def_w, def_h = 640, 740
+
+    parent_min_h = 0
+    if parent is not None and hasattr(parent, "minimumHeight"):
+        try:
+            parent_min_h = int(parent.minimumHeight())
+        except Exception:
+            parent_min_h = 0
+
+    screen = None
+    try:
+        if host is not None and hasattr(host, "screen"):
+            screen = host.screen()
+    except Exception:
+        screen = None
+    if screen is None:
+        screen = QApplication.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        max_w = max(420, avail.width() - 48)
+        # Hard caps: main-window floor and ~85% of work area (notes/list scroll).
+        max_h = max(480, int(avail.height() * 0.85))
+        if parent_min_h > 0:
+            max_h = min(max_h, parent_min_h)
+        min_w = min(min_w, max_w)
+        min_h = min(min_h, max_h)
+        def_w = min(max(def_w, min_w), max_w)
+        def_h = min(max(def_h, min_h), max_h)
+
+    elif parent_min_h > 0:
+        min_h = min(min_h, parent_min_h)
+        def_h = min(max(def_h, min_h), parent_min_h)
+
+    return (min_w, min_h), (def_w, def_h)
 
 
 _ROW_LOGO_CACHE: dict[int, QPixmap] = {}
@@ -589,10 +663,9 @@ class UpdateCenterDialog(SteempegDialog):
         bg_color: str | None = None,
     ):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
-        from steempeg.ui.ui_density import scaled_dialog_size
 
-        mw, mh = scaled_dialog_size(560, 640, parent=parent)
-        rw, rh = scaled_dialog_size(580, 680, parent=parent)
+        (mw, mh), (rw, rh) = _update_center_dialog_size(parent)
+        self._size_cap_h = rh  # do not grow past default/cap (notes scroll instead)
         self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
         self._releases: list[ReleaseEntry] = []
@@ -649,34 +722,46 @@ class UpdateCenterDialog(SteempegDialog):
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
         scroll.setWidget(self._list_host)
-        scroll.setMinimumHeight(140)
-        scroll.setMaximumHeight(220)
+        # Cap the list so notes + warning plates keep room on short heights;
+        # versions still scroll inside this pane.
+        scroll.setMinimumHeight(120)
+        scroll.setMaximumHeight(200)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         root.addWidget(scroll, 0)
 
         notes_block = QVBoxLayout()
         notes_block.setContentsMargins(0, 4, 0, 0)
-        notes_block.setSpacing(4)
+        notes_block.setSpacing(6)
         notes_label = QLabel("Release notes")
         notes_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
         notes_block.addWidget(notes_label)
 
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
-        self._notes.setMinimumHeight(140)
+        self._notes.setMinimumHeight(160)
         self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._notes.setPlaceholderText("Select a version.")
         notes_block.addWidget(self._notes, 1)
+        # Notes alone own stretch — notice is a sibling on root (stretch=0) so a
+        # word-wrapped QLabel sizeHint can never devour the changelog pane.
+        root.addLayout(notes_block, 1)
 
-        # Keep notice inside the notes column so it cannot paint over the QTextEdit
-        # when the dialog is short (Linux layout was overlapping the yellow line).
         self._notice_label = QLabel()
         self._notice_label.setWordWrap(True)
+        self._notice_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._notice_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
         self._notice_label.setStyleSheet(_NOTICE_WARN)
-        self._notice_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        # Fixed vertically: layout must not use height-for-width / Preferred growth.
+        notice_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        notice_policy.setHeightForWidth(False)
+        self._notice_label.setSizePolicy(notice_policy)
+        self._notice_label.setFixedHeight(0)
         self._notice_label.hide()
-        notes_block.addWidget(self._notice_label)
-
-        root.addLayout(notes_block, 1)
+        root.addWidget(self._notice_label, 0)
 
         self._marker_label = QLabel()
         self._marker_label.setWordWrap(True)
@@ -694,8 +779,11 @@ class UpdateCenterDialog(SteempegDialog):
         self._ack_check = SteempegCheckBox(
             "I understand settings, queue, and rendered sidecars may not match the target version.",
         )
+        self._ack_check.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
         self._ack_check.stateChanged.connect(self._refresh_actions)
-        ack_layout.addWidget(self._ack_check)
+        ack_layout.addWidget(self._ack_check, 1)
         self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
         self._ack_frame.hide()
         root.addWidget(self._ack_frame)
@@ -903,13 +991,18 @@ class UpdateCenterDialog(SteempegDialog):
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
         if notice:
-            self._notice_label.setText(f"⚠️ {notice}")
+            text = f"⚠️ {notice}"
+            self._notice_label.setText(text)
             if entry.version_float <= 11.0:
                 self._notice_label.setStyleSheet(_NOTICE_DANGER)
             else:
                 self._notice_label.setStyleSheet(_NOTICE_WARN)
+            # Height once from font metrics — same one-line text ⇒ identical height.
+            self._pin_notice_height(text)
             self._notice_label.show()
         else:
+            self._notice_label.clear()
+            self._notice_label.setFixedHeight(0)
             self._notice_label.hide()
 
         marker = selection_marker_text(entry)
@@ -920,6 +1013,28 @@ class UpdateCenterDialog(SteempegDialog):
             self._marker_label.hide()
 
         self._refresh_actions()
+
+    def _pin_notice_height(self, text: str) -> None:
+        """Lock banner to wrapped text height; never accumulate across selections."""
+        label = self._notice_label
+        # Stable wrap width from the notes pane / dialog — not the label's
+        # transient contentsRect (that shrinks as the plate grows → Jenga loop).
+        width = max(int(self._notes.width()) - 8, int(self.width()) - 48, 280)
+        # Stylesheet padding 8+8 + 1px borders ≈ 18; keep a small floor.
+        pad = 20
+        fm = label.fontMetrics()
+        bounds = fm.boundingRect(
+            0,
+            0,
+            max(width - pad, 40),
+            10_000,
+            int(Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignLeft),
+            text,
+        )
+        needed = max(int(bounds.height()) + pad, fm.height() + pad)
+        needed = min(needed, 96)  # one/two-line banner only
+        if label.height() != needed:
+            label.setFixedHeight(needed)
 
     def _refresh_actions(self):
         entry = self._selected
