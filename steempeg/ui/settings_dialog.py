@@ -65,6 +65,7 @@ from steempeg.ui.settings_prefs import (
     resolve_permanent_export_folder,
     resolve_update_check_interval,
 )
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
@@ -110,7 +111,7 @@ _COMBO = """
     }
     QComboBox:hover { border: 2px solid #6b5a8e; }
     QComboBox::drop-down { border: none; width: 22px; }
-"""
+""" + COMBO_POPUP_ITEM_RULES
 _EDIT = """
     QLineEdit {
         background-color: #383838; color: #ffffff;
@@ -219,7 +220,7 @@ class SettingsDialog(SteempegDialog):
         export_row.addWidget(btn_clear_export, 0)
         g.addLayout(export_row)
         self._export_folder_hint = self._hint(
-            "Permanent output folder for exports. Apply/Save syncs the Export panel. "
+            "Permanent output folder for exports. Save syncs the Export panel. "
             "Folders outside rendered_videos still work; Open in Steempeg may be limited."
         )
         g.addWidget(self._export_folder_hint)
@@ -244,7 +245,7 @@ class SettingsDialog(SteempegDialog):
         g.addWidget(
             self._hint(
                 "Landing tab when the Render panel / neo-nav opens. "
-                "Default is Video Settings. Apply switches the open panel now."
+                "Default is Video Settings. Save switches the open panel."
             )
         )
 
@@ -316,7 +317,7 @@ class SettingsDialog(SteempegDialog):
             self._hint(
                 "Square · Soft (Steam-like, default) · Circle. "
                 "Applies to Clips list/grid, Rendered, queue cards, and headers. "
-                "Combo previews live; Apply saves without closing. Cancel restores "
+                "Combo previews live; Save persists. Cancel restores "
                 "the last saved shape."
             )
         )
@@ -348,7 +349,7 @@ class SettingsDialog(SteempegDialog):
             self._hint(
                 "SteempegUI — left-aligned title with date/time and duration. "
                 "Steam-like — centered logo + game name; date/duration only in the "
-                "info (i) tip. Combo previews live; Apply saves without closing. "
+                "info (i) tip. Combo previews live; Save persists. "
                 "Cancel restores the last saved layout."
             )
         )
@@ -467,16 +468,11 @@ class SettingsDialog(SteempegDialog):
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_cancel.setStyleSheet(_BTN_SECONDARY)
         btn_cancel.clicked.connect(self.reject)
-        btn_apply = QPushButton("Apply")
-        btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_apply.setStyleSheet(_BTN_SECONDARY)
-        btn_apply.clicked.connect(self._apply)
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_PRIMARY)
         btn_save.clicked.connect(self._save)
         actions.addWidget(btn_cancel)
-        actions.addWidget(btn_apply)
         actions.addWidget(btn_save)
         root.addLayout(actions)
 
@@ -530,7 +526,7 @@ class SettingsDialog(SteempegDialog):
             )
         else:
             self._export_folder_hint.setText(
-                "Permanent output folder for exports. Apply/Save syncs the Export "
+                "Permanent output folder for exports. Save syncs the Export "
                 "panel. Reset returns to the default rendered_videos folder."
             )
 
@@ -642,7 +638,7 @@ class SettingsDialog(SteempegDialog):
         restart_application(self._app)
 
     def _preview_icon_shape(self, *_args) -> None:
-        """Debounced live preview (not persisted until Apply/Save)."""
+        """Debounced live preview (not persisted until Save)."""
         self._icon_shape_preview_timer.start()
 
     def _apply_icon_shape_preview(self) -> None:
@@ -687,7 +683,7 @@ class SettingsDialog(SteempegDialog):
                 logging.exception("Player header layout refresh failed for %s", layout)
 
     def _restore_icon_shape_on_cancel(self) -> None:
-        """Undo live preview mutations that were never Applied/Saved."""
+        """Undo live preview mutations that were never Saved."""
         import logging
 
         if getattr(self, "_icon_shape_preview_timer", None) is not None:
@@ -704,7 +700,7 @@ class SettingsDialog(SteempegDialog):
         self._refresh_icon_shapes(committed)
 
     def _restore_header_layout_on_cancel(self) -> None:
-        """Undo live header-layout preview that was never Applied/Saved."""
+        """Undo live header-layout preview that was never Saved."""
         import logging
 
         if getattr(self, "_header_layout_preview_timer", None) is not None:
@@ -756,7 +752,7 @@ class SettingsDialog(SteempegDialog):
             KEY_RENDER_PROCESS_PRIORITY,
             prio if prio else PRIORITY_NORMAL,
         )
-        # Cancel pending preview so Apply/Save is the sole refresh.
+        # Cancel pending preview so Save is the sole refresh.
         if getattr(self, "_icon_shape_preview_timer", None) is not None:
             self._icon_shape_preview_timer.stop()
         shape = normalize_icon_shape(self._combo_icon_shape.currentData())
@@ -783,12 +779,6 @@ class SettingsDialog(SteempegDialog):
         elif is_steamdeck_build():
             # Deck never shows the chooser.
             save_ask_ui_shell(False)
-
-    def _apply(self) -> None:
-        import logging
-
-        self._persist_settings()
-        logging.info("Settings Apply succeeded (dialog stays open)")
 
     def _save(self) -> None:
         self._persist_settings()
