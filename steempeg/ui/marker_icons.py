@@ -7,15 +7,41 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
 
 from steempeg.services import marker_prefs as mprefs
+from steempeg.ui.icon_utils import primary_device_pixel_ratio, square_fit_pixmap
+
+# On-canvas timeline pin size (logical px). Buffer uses ≥2× DPR for crisp HD.
+TIMELINE_MARKER_LOGICAL = 18
 
 
-def load_scaled_pixmap(path: str, height: int = 36) -> QPixmap | None:
+def timeline_marker_dpr() -> float:
+    """Device ratio for timeline marker buffers — never below 2× (old retina path)."""
+    return max(primary_device_pixel_ratio(), 2.0)
+
+
+def load_scaled_pixmap(
+    path: str,
+    size: int = 36,
+    *,
+    dpr: float | None = None,
+) -> QPixmap | None:
+    """Load an image and KeepAspectRatio-fit it into a ``size``×``size`` square.
+
+    Wide (or tall) custom icons letterbox into the square — never stretch into a
+    thin rectangle. Pass ``dpr`` for HiDPI; default uses the primary screen ratio.
+    """
     if not path or not os.path.isfile(path):
         return None
     pix = QPixmap(path)
     if pix.isNull():
         return None
-    return pix.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
+    return square_fit_pixmap(pix, size, dpr=dpr)
+
+
+def load_timeline_marker_pixmap(path: str) -> QPixmap | None:
+    """Square-fit a file for the seek-bar marker row (DPR-aware, ≥2× buffer)."""
+    return load_scaled_pixmap(
+        path, TIMELINE_MARKER_LOGICAL, dpr=timeline_marker_dpr()
+    )
 
 
 def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixmap:
@@ -23,8 +49,13 @@ def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixm
     if src is None or src.isNull():
         return QPixmap()
     base = src
-    if height and base.height() != height:
-        base = base.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
+    if height is not None:
+        edge = max(1, int(height))
+        dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
+        logical_w = base.width() / dpr
+        logical_h = base.height() / dpr
+        if abs(logical_w - edge) > 0.51 or abs(logical_h - edge) > 0.51:
+            base = square_fit_pixmap(base, edge, dpr=dpr)
     out = QPixmap(base.size())
     out.fill(Qt.GlobalColor.transparent)
     painter = QPainter(out)
@@ -34,6 +65,7 @@ def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixm
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(out.rect(), QColor(color))
     painter.end()
+    out.setDevicePixelRatio(base.devicePixelRatio())
     return out
 
 

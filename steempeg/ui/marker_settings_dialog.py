@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from steempeg.infra.paths import get_resource_path, reveal_in_file_manager
 from steempeg.services import marker_prefs as mprefs
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.icon_utils import apply_square_icon
 from steempeg.ui.marker_icons import (
     class_display_pixmap,
     class_has_custom_icon,
@@ -39,6 +40,7 @@ from steempeg.ui.message_dialog import (
     dialog_theme,
     steempeg_question,
 )
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
@@ -59,7 +61,7 @@ _FIELD = """
     }
     QLineEdit:focus, QComboBox:focus { border-color: #6b5a8e; }
     QComboBox::drop-down { border: none; width: 24px; }
-"""
+""" + COMBO_POPUP_ITEM_RULES
 _LIST = """
     QListWidget {
         background-color: #242424; border: 1px solid #444; border-radius: 8px;
@@ -70,6 +72,12 @@ _LIST = """
     QListWidget::item:hover:!selected { background-color: #333; }
 """
 _MARKER_HOST = """
+    QScrollArea {
+        background-color: #242424; border: none;
+    }
+    QScrollArea > QWidget {
+        background-color: #242424;
+    }
     QWidget#markerListInner {
         background-color: #242424; border: 1px solid #444; border-radius: 8px;
     }
@@ -97,15 +105,19 @@ _ICON_BTN = """
 _CLASS_ROW_H = 40
 _CLASS_ICON = 22
 _SHOT_EXPAND_AT = 5
-_TABS = """
-    QTabWidget::pane { border: 1px solid #444; border-radius: 8px; background: #1e1e1e; }
-    QTabBar::tab {
+_TABS = f"""
+    QTabWidget {{ background-color: {tok.BG_SHELL}; border: none; }}
+    QTabWidget > QStackedWidget {{ background-color: {tok.BG_SHELL}; }}
+    QTabWidget::pane {{
+        border: 1px solid #444; border-radius: 8px; background-color: {tok.BG_SHELL};
+    }}
+    QTabBar::tab {{
         background: #2a2a2a; color: #aaa; padding: 8px 16px; margin-right: 4px;
         border-top-left-radius: 6px; border-top-right-radius: 6px;
         font-family: 'Segoe UI', Arial; font-size: 12px; font-weight: bold;
-    }
-    QTabBar::tab:selected { background: #4a3d66; color: #fff; }
-    QTabBar::tab:hover:!selected { background: #353535; color: #ddd; }
+    }}
+    QTabBar::tab:selected {{ background: #4a3d66; color: #fff; }}
+    QTabBar::tab:hover:!selected {{ background: #353535; color: #ddd; }}
 """
 
 
@@ -224,10 +236,12 @@ class _ScreenshotGroup(QWidget):
 
 
 def _scroll_page(inner: QWidget) -> QScrollArea:
+    inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    inner.setStyleSheet(f"background-color: {tok.BG_SHELL};")
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
     scroll.setWidget(inner)
     return scroll
 
@@ -272,9 +286,9 @@ class MarkerSettingsDialog(SteempegDialog):
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(10)
+        from steempeg.ui.icon_utils import apply_square_icon, square_fit_pixmap
+
         title_icon = QLabel()
-        title_icon.setFixedSize(28, 28)
-        title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_pix = load_pixmap("pointuser.png", 26)
         if title_pix.isNull():
             # Fallback if icon_assets path misses the asset.
@@ -282,14 +296,8 @@ class MarkerSettingsDialog(SteempegDialog):
 
             raw = get_resource_path("pointuser.png")
             if os.path.isfile(raw):
-                title_pix = QPixmap(raw).scaled(
-                    26,
-                    26,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-        if not title_pix.isNull():
-            title_icon.setPixmap(title_pix)
+                title_pix = square_fit_pixmap(QPixmap(raw), 26, dpr=1.0)
+        apply_square_icon(title_icon, title_pix, 28)
         title_icon.setStyleSheet("background: transparent;")
         title_row.addWidget(title_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -492,15 +500,16 @@ class MarkerSettingsDialog(SteempegDialog):
         left.addWidget(self._section("Markers on clip"))
         self._marker_scroll = QScrollArea()
         self._marker_scroll.setWidgetResizable(True)
-        self._marker_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._marker_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self._marker_scroll.setMinimumWidth(220)
         self._marker_scroll.setMinimumHeight(240)
+        tok.apply_dialog_scroll_bg(self._marker_scroll, "#242424")
         self._marker_scroll.setStyleSheet(_MARKER_HOST)
         self._marker_list_inner = QWidget()
         self._marker_list_inner.setObjectName("markerListInner")
+        self._marker_list_inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._marker_list_layout = QVBoxLayout(self._marker_list_inner)
         self._marker_list_layout.setContentsMargins(4, 4, 4, 4)
         self._marker_list_layout.setSpacing(2)
@@ -528,11 +537,11 @@ class MarkerSettingsDialog(SteempegDialog):
 
         prev_row = QHBoxLayout()
         self._mk_preview = QLabel()
-        self._mk_preview.setFixedSize(48, 48)
         self._mk_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._mk_preview.setStyleSheet(
             "background: #1a1a1a; border-radius: 8px; border: 1px solid #555;"
         )
+        apply_square_icon(self._mk_preview, None, 48)
         self._mk_id_lbl = QLabel("")
         self._mk_id_lbl.setWordWrap(True)
         self._mk_id_lbl.setStyleSheet(
@@ -684,12 +693,10 @@ class MarkerSettingsDialog(SteempegDialog):
         lay.setSpacing(10)
 
         icon_lbl = QLabel()
-        icon_lbl.setFixedSize(_CLASS_ICON, _CLASS_ICON)
         icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_lbl.setStyleSheet("background: transparent;")
         pix = class_display_pixmap(cls, height=_CLASS_ICON)
-        if pix is not None and not pix.isNull():
-            icon_lbl.setPixmap(pix)
+        apply_square_icon(icon_lbl, pix, _CLASS_ICON)
         lay.addWidget(icon_lbl)
 
         name_lbl = QLabel(str(cls.get("name") or "Class"))
@@ -1116,11 +1123,10 @@ class MarkerSettingsDialog(SteempegDialog):
         tint = mprefs.resolve_tint_color(key, prefs=self._prefs)
         if pix is not None and tint and tintable:
             pix = tint_pixmap(pix, tint, height=40)
+        apply_square_icon(self._mk_preview, pix, 48)
         if pix is not None:
-            self._mk_preview.setPixmap(pix)
             self._mk_preview.setText("")
         else:
-            self._mk_preview.clear()
             self._mk_preview.setText("?")
 
     def _save_marker_fields(self) -> None:

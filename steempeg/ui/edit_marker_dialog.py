@@ -16,10 +16,14 @@ from PySide6.QtWidgets import (
 
 from steempeg.services import marker_prefs as mprefs
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.icon_utils import apply_square_icon
 from steempeg.ui.marker_icons import load_scaled_pixmap, tint_pixmap
 from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
+from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+
+_PREVIEW_EDGE = 36
 
 _FIELD_STYLE = """
     QLineEdit, QTextEdit, QComboBox {
@@ -29,7 +33,7 @@ _FIELD_STYLE = """
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border-color: #6b5a8e; }
     QComboBox::drop-down { border: none; width: 22px; }
-"""
+""" + COMBO_POPUP_ITEM_RULES
 
 _LABEL_STYLE = (
     f"color: {tok.TEXT_MUTED}; font-size: 11px; font-weight: 600; "
@@ -63,11 +67,11 @@ class EditSteamMarkerDialog(SteempegDialog):
         icon_row = QHBoxLayout()
         icon_row.setSpacing(10)
         self._preview = QLabel()
-        self._preview.setFixedSize(44, 44)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setStyleSheet(
             "background: #1a1a1a; border-radius: 10px; border: 1px solid #444;"
         )
+        apply_square_icon(self._preview, None, 44)
         icon_row.addWidget(self._preview)
         icon_btns = QHBoxLayout()
         btn_icon = QPushButton("Set icon…")
@@ -178,7 +182,7 @@ class EditSteamMarkerDialog(SteempegDialog):
                 path = str(cls["icon"])
         if not path:
             path = mprefs.legacy_asset_path("usermarker")
-        pix = load_scaled_pixmap(path, 36) if path else None
+        pix = load_scaled_pixmap(path, _PREVIEW_EDGE) if path else None
         tint = None
         no_tint = bool(getattr(self, "_no_tint", None) and self._no_tint.isChecked())
         if class_id and not has_custom and not no_tint:
@@ -186,11 +190,12 @@ class EditSteamMarkerDialog(SteempegDialog):
             if cls and not (cls.get("icon") and os.path.isfile(str(cls.get("icon") or ""))):
                 tint = str(cls.get("color") or "").strip() or None
         if pix is not None and tint:
-            pix = tint_pixmap(pix, str(tint), height=36)
-        if pix is not None:
-            self._preview.setPixmap(pix)
-        else:
+            pix = tint_pixmap(pix, str(tint), height=_PREVIEW_EDGE)
+        apply_square_icon(self._preview, pix, 44)
+        if pix is None:
             self._preview.setText("?")
+        else:
+            self._preview.setText("")
 
     def _pick_icon(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

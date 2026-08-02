@@ -281,13 +281,10 @@ class PlayerMixin:
             return
         # Use a pixmap only and clear any stylesheet image — mixing the two stacked a
         # stretched game icon behind the logo and left a square halo around it.
-        self.place_logo.setStyleSheet("")
-        logo_path = get_resource_path("logo.png")
-        if os.path.exists(logo_path):
-            self.place_logo.setPixmap(
-                QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-        self.place_logo.setAlignment(Qt.AlignCenter)
+        from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
+
+        self.place_logo.setStyleSheet("background: transparent; border: none;")
+        apply_square_icon(self.place_logo, app_logo_pixmap(80, dpr=1.0), 80)
         self.place_logo.show()
         self.place_text.setText("Please select a clip from the library")
         self.place_text.setStyleSheet(
@@ -393,16 +390,17 @@ class PlayerMixin:
             )
         if hasattr(self, 'custom_icon_label'):
             from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+            from steempeg.ui.icon_utils import apply_square_icon
 
             unknown = get_resource_path("unknown_icon.png")
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             src = QPixmap(unknown)
-            if not src.isNull():
-                self.custom_icon_label.setPixmap(
-                    shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
-                )
-            else:
-                self.custom_icon_label.setPixmap(QIcon(unknown).pixmap(24, 24))
+            shaped = (
+                shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                if not src.isNull()
+                else None
+            )
+            apply_square_icon(self.custom_icon_label, shaped, 24)
         # Forget the previewed clip / queue selection so the top-right badge
         # ("Preview" / "In queue (N)") clears instead of lingering after close.
         self._preview_clip_path = None

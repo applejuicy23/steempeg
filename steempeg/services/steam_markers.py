@@ -328,21 +328,27 @@ class MarkerIconStore:
         renderer = self._renderer_for(app_id)
         return renderer is not None and renderer.elementExists(icon_id)
 
-    def get_icon(self, app_id, icon_id, size=36):
-        """QPixmap for icon_id from app_id's sprite, or None if unavailable."""
-        key = (app_id, icon_id, size)
+    def get_icon(self, app_id, icon_id, size=36, *, dpr=1.0):
+        """QPixmap for icon_id from app_id's sprite, or None if unavailable.
+
+        ``size`` is logical pixels; ``dpr`` builds a denser buffer for HiDPI / HD.
+        """
+        dpr = float(dpr) if dpr and dpr > 0 else 1.0
+        phys = max(1, int(round(max(1, int(size)) * dpr)))
+        key = (app_id, icon_id, phys, round(dpr, 3))
         if key in self._pixmaps:
             return self._pixmaps[key]
 
         renderer = self._renderer_for(app_id)
         pixmap = None
         if renderer is not None and renderer.elementExists(icon_id):
-            pm = QPixmap(size, size)
-            pm.fill(Qt.transparent)
+            pm = QPixmap(phys, phys)
+            pm.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pm)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             renderer.render(painter, icon_id)
             painter.end()
+            pm.setDevicePixelRatio(dpr)
             pixmap = pm
 
         self._pixmaps[key] = pixmap

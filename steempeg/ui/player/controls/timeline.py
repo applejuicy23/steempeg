@@ -447,44 +447,71 @@ class TimelineCanvas(QWidget):
             
         return 'point', False 
 
+    def _marker_icon_dpr(self) -> float:
+        from steempeg.ui.marker_icons import timeline_marker_dpr
+
+        return timeline_marker_dpr()
+
     def _legacy_icon_pixmap(self, icon_key, is_round):
-        """ Gets an icon or GLUES the round numbers (RETINA 2X RESOLUTION) """
-        
-        if icon_key in self.cached_pixmaps:
-            return self.cached_pixmaps[icon_key]
-            
+        """Bundled PNG markers — square-fit + ≥2× DPR (round digits stay wide)."""
+        from steempeg.ui.marker_icons import (
+            TIMELINE_MARKER_LOGICAL,
+            load_timeline_marker_pixmap,
+        )
+
+        dpr = self._marker_icon_dpr()
+        cache_key = (str(icon_key), bool(is_round), round(dpr, 3))
+        if cache_key in self.cached_pixmaps:
+            return self.cached_pixmaps[cache_key]
+
         if is_round:
+            phys_h = max(1, int(round(TIMELINE_MARKER_LOGICAL * dpr)))
             pixmaps = []
-            for digit in str(icon_key): 
+            for digit in str(icon_key):
                 path = self.digit_paths.get(digit)
                 if path and os.path.exists(path):
-                    pixmaps.append(QPixmap(path).scaledToHeight(36, Qt.SmoothTransformation))
-            
-            if not pixmaps: return None
-            
+                    raw = QPixmap(path)
+                    raw.setDevicePixelRatio(1.0)
+                    pixmaps.append(
+                        raw.scaledToHeight(
+                            phys_h, Qt.TransformationMode.SmoothTransformation
+                        )
+                    )
+
+            if not pixmaps:
+                return None
+
             total_width = sum(p.width() for p in pixmaps)
-            result = QPixmap(total_width, 36)
-            result.fill(Qt.transparent)
+            result = QPixmap(total_width, phys_h)
+            result.fill(Qt.GlobalColor.transparent)
             painter = QPainter(result)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             x_offset = 0
             for p in pixmaps:
                 painter.drawPixmap(x_offset, 0, p)
                 x_offset += p.width()
             painter.end()
-            
-            self.cached_pixmaps[icon_key] = result
+            result.setDevicePixelRatio(dpr)
+            self.cached_pixmaps[cache_key] = result
             return result
-        else:
-            path = self.icon_paths.get(icon_key, self.icon_paths['point'])
-            if path and os.path.exists(path):
-                pixmap = QPixmap(path).scaledToHeight(36, Qt.SmoothTransformation)
-                self.cached_pixmaps[icon_key] = pixmap
+
+        path = self.icon_paths.get(icon_key, self.icon_paths["point"])
+        if path and os.path.exists(path):
+            pixmap = load_timeline_marker_pixmap(path)
+            if pixmap is not None:
+                self.cached_pixmaps[cache_key] = pixmap
                 return pixmap
         return None
+
     def get_icon_pixmap(self, marker):
         """Icon: prefs override → CS2 pack / Steam SVG → legacy PNG assets."""
         from steempeg.services import marker_prefs as mprefs
-        from steempeg.ui.marker_icons import load_scaled_pixmap, tint_pixmap
+        from steempeg.ui.marker_icons import (
+            TIMELINE_MARKER_LOGICAL,
+            load_timeline_marker_pixmap,
+            tint_pixmap,
+            timeline_marker_dpr,
+        )
 
         prefs = getattr(self, "_marker_prefs_cache", None)
         if prefs is None:
@@ -495,11 +522,13 @@ class TimelineCanvas(QWidget):
         icon_key = str(marker.get("icon_key") or "point")
         app_id = self.current_app_id
         tintable = mprefs.is_tintable_marker(marker)
+        logical = TIMELINE_MARKER_LOGICAL
+        dpr = timeline_marker_dpr()
 
         # 1) Explicit custom icon (per-instance / per-type / class).
         custom = mprefs.resolve_custom_icon_path_for_marker(marker, prefs=prefs)
         if custom:
-            pix = load_scaled_pixmap(custom, 36)
+            pix = load_timeline_marker_pixmap(custom)
             if pix is not None:
                 return pix
 
@@ -510,16 +539,16 @@ class TimelineCanvas(QWidget):
             if pix is not None:
                 tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
                 if tint and tintable:
-                    return tint_pixmap(pix, tint, height=36)
+                    return tint_pixmap(pix, tint, height=logical)
                 return pix
 
         # 3) Steam SVG sprite.
         if steam_icon and app_id:
-            pix = self.marker_store.get_icon(app_id, steam_icon, 36)
+            pix = self.marker_store.get_icon(app_id, steam_icon, logical, dpr=dpr)
             if pix is not None:
                 tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
                 if tint and tintable:
-                    return tint_pixmap(pix, tint, height=36)
+                    return tint_pixmap(pix, tint, height=logical)
                 return pix
 
         # 4) Legacy / bundled PNGs.
@@ -528,7 +557,7 @@ class TimelineCanvas(QWidget):
             return None
         tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
         if tint and tintable:
-            return tint_pixmap(pix, tint, height=36)
+            return tint_pixmap(pix, tint, height=logical)
         return pix
 
     def invalidate_marker_prefs_cache(self) -> None:
@@ -851,39 +880,53 @@ class TimelineCanvas(QWidget):
             start_x_vp = scroll_area.horizontalScrollBar().value()
             end_x_vp = start_x_vp + scroll_area.viewport().width()
 
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        
-        conn_pen = QPen(QColor(255, 255, 255, 150), 1) 
-        conn_pen.setCapStyle(Qt.RoundCap) 
-        
-        def draw_marker(marker, is_hovered):
-            m_x = self.ms_to_x(marker['time_ms'])
-            pix = self.get_icon_pixmap(marker)
-            if not pix: return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-            # Visually Shrinking a Massive 36px Image Down to 18px
-            base_w = pix.width() / 2.0
-            base_h = pix.height() / 2.0
-            
-            draw_w = int(base_w * 1.2) if is_hovered else int(base_w)
-            draw_h = int(base_h * 1.2) if is_hovered else int(base_h)
-            
-            base_icon_y = 2 
+        conn_pen = QPen(QColor(255, 255, 255, 150), 1)
+        conn_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        def draw_marker(marker, is_hovered):
+            m_x = self.ms_to_x(marker["time_ms"])
+            pix = self.get_icon_pixmap(marker)
+            if not pix:
+                return
+
+            # Logical size from DPR metadata (≥2× buffer painted crisply on HD).
+            dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
+            base_w = pix.width() / dpr
+            base_h = pix.height() / dpr
+
+            base_icon_y = 2.0
             base_bottom = base_icon_y + base_h
-            
-            draw_x = int(m_x - draw_w / 2)
-            draw_y = int(base_icon_y - (draw_h - base_h) / 2)
-            
-            if not marker['is_round']:
-                conn_x = int(m_x)
+            draw_x = m_x - base_w / 2.0
+
+            if not marker["is_round"]:
                 if is_hovered:
-                    painter.setPen(QPen(QColor(255, 255, 255, 255), 2, Qt.SolidLine, Qt.RoundCap))
+                    painter.setPen(
+                        QPen(
+                            QColor(255, 255, 255, 255),
+                            2,
+                            Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap,
+                        )
+                    )
                 else:
                     painter.setPen(conn_pen)
-                painter.drawLine(int(conn_x), int(base_bottom), int(conn_x), int(track_y))
-            
-            smooth_pix = pix.scaled(draw_w, draw_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            painter.drawPixmap(draw_x, draw_y, smooth_pix)
+                painter.drawLine(
+                    int(m_x), int(base_bottom), int(m_x), int(track_y)
+                )
+
+            # drawPixmap(QPointF) honours pixmap DPR; scale painter for hover.
+            if is_hovered:
+                painter.save()
+                cy = base_icon_y + base_h / 2.0
+                painter.translate(m_x, cy)
+                painter.scale(1.2, 1.2)
+                painter.translate(-m_x, -cy)
+            painter.drawPixmap(QPointF(draw_x, base_icon_y), pix)
+            if is_hovered:
+                painter.restore()
 
         # 1. BACKGROUND LAYER: Draw ALL standard icons 
         hovered_m = getattr(self, 'hovered_marker', None)
@@ -1247,11 +1290,12 @@ class TimelineCanvas(QWidget):
         for marker in getattr(self, 'markers', []):
             m_x = self.ms_to_x(marker['time_ms'])
             pix = self.get_icon_pixmap(marker)
+            if pix:
+                dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
+                pw = pix.width() / dpr
+            else:
+                pw = 18.0
 
-            
-            # DIVIDE THE WIDTH BY 2 (since the image in the cache is now 36px, while on the screen it is 18px).
-            pw = (pix.width() / 2.0) if pix else 18.0
-            
             if abs(x - m_x) <= (pw / 2) + 8 and 0 <= y <= 28:
                 found_marker = marker
                 break
