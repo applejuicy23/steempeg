@@ -67,6 +67,19 @@ _SC_MINIMIZE = 0xF020
 _SC_MAXIMIZE = 0xF030
 _SC_RESTORE = 0xF120
 
+_SW_SHOWMAXIMIZED = 3
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [
+        ("length", wintypes.UINT),
+        ("flags", wintypes.UINT),
+        ("showCmd", wintypes.UINT),
+        ("ptMinPosition", wintypes.POINT),
+        ("ptMaxPosition", wintypes.POINT),
+        ("rcNormalPosition", wintypes.RECT),
+    ]
+
 _SM_CXSIZEFRAME = 32
 _SM_CXPADDEDBORDER = 92
 
@@ -1440,6 +1453,44 @@ def enable_frameless(window: QWidget) -> None:
     refresh_dwm_chrome(window)
 
 
+def _seed_startup_restore_rect(window: QWidget) -> None:
+    """While maximized, ensure Win32 has a real restore target for Aero.
+
+    Cold-start ``showMaximized`` plus a later FRAMECHANGED poke can leave
+    ``rcNormalPosition`` empty or equal to the work area. The first
+    SC_RESTORE then snaps with no animation; after one max↔restore cycle
+    Windows has a proper rect and later toggles animate. Re-seed placement
+    without changing show state (no flash).
+    """
+    if os.name != "nt":
+        return
+    try:
+        hwnd = int(window.winId())
+        user32 = ctypes.windll.user32
+        if not user32.IsZoomed(hwnd):
+            return
+        normal = getattr(window, "_startup_restore_geometry", None)
+        if not isinstance(normal, QRect) or not normal.isValid() or normal.isEmpty():
+            screen = window.screen() or QApplication.primaryScreen()
+            if screen is None:
+                return
+            # Match app.py startup inset used before the first showMaximized.
+            normal = screen.availableGeometry().adjusted(80, 60, -80, -60)
+        wp = _WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        if not user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return
+        wp.showCmd = _SW_SHOWMAXIMIZED
+        # Win32 RECT is exclusive on right/bottom; QRect right()/bottom() are inclusive.
+        wp.rcNormalPosition.left = int(normal.x())
+        wp.rcNormalPosition.top = int(normal.y())
+        wp.rcNormalPosition.right = int(normal.x() + normal.width())
+        wp.rcNormalPosition.bottom = int(normal.y() + normal.height())
+        user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
+    except Exception:
+        pass
+
+
 def ensure_startup_maximized(window: QWidget) -> None:
     """Re-assert maximize after Win32 chrome / post-update settle.
 
@@ -1454,11 +1505,13 @@ def ensure_startup_maximized(window: QWidget) -> None:
     if host is not None and getattr(host, "is_fullscreen", False):
         return
     try:
-        if window.isMaximized():
-            return
-        window.showMaximized()
+        if not window.isMaximized():
+            window.showMaximized()
     except RuntimeError:
-        pass
+        return
+    # After FRAMECHANGED settle, re-plant restore geometry so the first
+    # green-button restore still gets a DWM animation.
+    _seed_startup_restore_rect(window)
 
 
 # Back-compat name used by app.py.

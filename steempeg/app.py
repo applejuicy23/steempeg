@@ -4218,7 +4218,9 @@ def main():
             window.ui.setMinimumSize(_min_w, _min_h)
             if sys.platform == "win32":
                 # Inset; showMaximized() below fills the work area natively.
+                # Stash for WINDOWPLACEMENT so the first restore still animates.
                 window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
+                window.ui._startup_restore_geometry = window.ui.geometry()
             else:
                 # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
                 # Fake-maximize by filling the work area (taskbar still visible).
