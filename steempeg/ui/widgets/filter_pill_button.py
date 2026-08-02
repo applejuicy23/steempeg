@@ -42,4 +42,9 @@ class FilterPillButton(QPushButton):
             background-color: #3a324a;
             border: {border}px solid #b29ae7;
         }}
+        QPushButton#FilterPill:disabled {{
+            background-color: #2f2f2f;
+            border: {border}px solid #3a3a3a;
+            color: #777777;
+        }}
     """)

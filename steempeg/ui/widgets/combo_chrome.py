@@ -249,6 +249,11 @@ COMPACT_COMBO_RULES = """
     }
     QComboBox:hover { background-color: #404040; border: 2px solid #6b5a8e; }
     QComboBox:on { background-color: #383838; }
+    QComboBox:disabled {
+        background-color: #2f2f2f;
+        color: #777777;
+        border: 2px solid #3a3a3a;
+    }
     QComboBox::drop-down { border: none; padding-right: 5px; background: transparent; }
 """
 
@@ -277,6 +282,11 @@ def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
     }}
     QComboBox:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
     QComboBox:on {{ background-color: #383838; }}
+    QComboBox:disabled {{
+        background-color: #2f2f2f;
+        color: #777777;
+        border: {border}px solid #3a3a3a;
+    }}
     QComboBox::drop-down {{ border: none; padding-right: 4px; background: transparent; }}
 """
 

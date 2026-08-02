@@ -2562,6 +2562,7 @@ class LibraryMixin:
     def _sync_library_scan_interaction_lock(self, *, busy: bool) -> None:
         """Roskomnadzor mode: while clips are loading, freeze Queue + Clips Manager."""
         enabled = not busy
+        wait_tip = "Wait until library finishes loading…"
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None:
             try:
@@ -2590,6 +2591,31 @@ class LibraryMixin:
                     w.setEnabled(enabled)
                 except RuntimeError:
                     pass
+        # Sorting + Filters are unsafe while the clips table is rebuilding.
+        combo = getattr(self, "combo_sort", None)
+        if combo is not None:
+            try:
+                combo.setEnabled(enabled)
+                combo.setToolTip("" if enabled else wait_tip)
+            except RuntimeError:
+                pass
+        pill = getattr(self, "btn_filter_pill", None)
+        if pill is not None:
+            try:
+                pill.setEnabled(enabled)
+                pill.setToolTip("Filters" if enabled else wait_tip)
+            except RuntimeError:
+                pass
+        if busy:
+            for attr in ("filter_menu", "rendered_filter_menu"):
+                menu = getattr(self, attr, None)
+                if menu is not None:
+                    try:
+                        menu.hide()
+                        menu.deleteLater()
+                    except RuntimeError:
+                        pass
+                    setattr(self, attr, None)
         try:
             from steempeg.ui.portable.chrome import sync_portable_library_scan_badge
 
@@ -3088,7 +3114,9 @@ class LibraryMixin:
     def show_filter_menu(self):
         """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
         if not hasattr(self, 'btn_filter_pill'): return
-        
+        if getattr(self, "_clips_scan_active", False):
+            return
+
         # 1. Forcefully destroy the old window to reset the Qt focus bug.
         if hasattr(self, 'filter_menu') and self.filter_menu:
             self.filter_menu.deleteLater()
