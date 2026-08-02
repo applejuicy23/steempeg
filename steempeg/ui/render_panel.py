@@ -1083,7 +1083,10 @@ def apply_settings_panel_density(ui, dense) -> None:
         elif combo.minimumWidth() > 0 or combo.maximumWidth() < 16777215:
             combo.setFixedWidth(combo_w)
 
-    from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
+    from steempeg.ui.widgets.combo_chrome import (
+        apply_dark_combo_popup,
+        settings_panel_stylesheet,
+    )
 
     combo_qss = settings_panel_stylesheet(
         f"QComboBox {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
@@ -1092,6 +1095,7 @@ def apply_settings_panel_density(ui, dense) -> None:
     )
     for combo in root.findChildren(QComboBox):
         combo.setStyleSheet(combo_qss)
+        apply_dark_combo_popup(combo, dense=dense)
         fnt = combo.font()
         fnt.setFamily("Segoe UI")
         fnt.setBold(True)

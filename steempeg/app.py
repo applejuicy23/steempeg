@@ -19,6 +19,7 @@ from steempeg.ui.lifecycle import LifecycleMixin
 from steempeg.ui.splitter_rules import SplitterRulesMixin
 from steempeg.ui.hide_watcher import HideWatcher
 from steempeg.ui.widgets.combo_chrome import (
+    apply_dark_combo_popup,
     compact_combo_stylesheet,
     settings_panel_stylesheet,
 )
@@ -686,6 +687,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.combo_sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.combo_sort.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.combo_sort.setStyleSheet(compact_combo_stylesheet(settings_popup=True))
+        apply_dark_combo_popup(self.combo_sort)
 
         # 3. Adding elements with attractive icons
         self.combo_sort.addItem(QIcon(get_resource_path("defaultsort.png")), "Default")
@@ -755,20 +757,32 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'settings_tabs'):
             from PySide6.QtWidgets import QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QFrame, QScrollArea, QSizePolicy
             from PySide6.QtCore import QObject, QEvent
+            from steempeg.ui import design_tokens as tok
+
+            # Hierarchy: nav/card face (BG_CARD) → curved divider → settings (BG_SETTINGS_PANEL).
+            _neo_card = tok.BG_CARD
+            _neo_settings = tok.BG_SETTINGS_PANEL
+            _neo_border = tok.BORDER_CARD
+            _neo_radius = float(tok.RADIUS_NEO_PANEL)
+            _neo_r_px = int(round(_neo_radius))
             
             # 1. Hide the old tab bar
             self.ui.settings_tabs.tabBar().hide()
             
             # STEP 1
-            # Apply transparency ONLY to the page itself using its ID, so as not to break the buttons inside
+            # Opaque shell fill on each page (not transparent — Windows can paint that black).
             for i in range(self.ui.settings_tabs.count()):
                 widget = self.ui.settings_tabs.widget(i)
                 if widget:
                     obj_name = widget.objectName()
                     if obj_name:
-                        widget.setStyleSheet(f"QWidget#{obj_name} {{ background: transparent; border: none; }}")
+                        widget.setStyleSheet(
+                            f"QWidget#{obj_name} {{ background-color: {_neo_settings}; border: none; }}"
+                        )
                     else:
-                        widget.setAttribute(Qt.WA_TranslucentBackground)
+                        widget.setStyleSheet(
+                            f"background-color: {_neo_settings}; border: none;"
+                        )
             
             # --- REMEMBERING THE OLD LOCATION ---
             parent_widget = self.ui.settings_tabs.parentWidget()
@@ -782,22 +796,29 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.settings_tabs.setParent(None)
             
             # 2. MAIN CONTAINER
+
             self.neo_wrapper = QWidget()
             self.neo_wrapper.setObjectName("neo_wrapper")
-            self.neo_wrapper.setStyleSheet("QWidget#neo_wrapper { background-color: #2d2d2d; border-radius: 16px; border: 1px solid #383838; }")
+            self.neo_wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.neo_wrapper.setStyleSheet(
+                f"QWidget#neo_wrapper {{ background-color: {_neo_card}; "
+                f"border-radius: {_neo_r_px}px; border: 1px solid {_neo_border}; }}"
+            )
             
             neo_layout = QHBoxLayout(self.neo_wrapper)
             neo_layout.setContentsMargins(0, 0, 0, 0)
             neo_layout.setSpacing(0)
             
-            # 3. LEFT CIRCLE (Sidebar)
+            # 3. Neo-nav rail — icons stay; no heavy slab fill / rect border (divider is
+            # the curved left edge of the settings host against this card face).
             sidebar_frame = QFrame()
             self._neo_sidebar = sidebar_frame
+            sidebar_frame.setObjectName("neo_sidebar")
             sidebar_frame.setFixedWidth(220)
             sidebar_frame.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-            sidebar_frame.setStyleSheet("""
-                QFrame { background: transparent; border: none; border-right: 1px solid #383838; }
-            """)
+            sidebar_frame.setStyleSheet(
+                "QFrame#neo_sidebar { background: transparent; border: none; }"
+            )
             sidebar_layout = QVBoxLayout(sidebar_frame)
             self._neo_sidebar_layout = sidebar_layout
             sidebar_layout.setAlignment(Qt.AlignTop)
@@ -827,7 +848,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             # Presets tab must exist before neo buttons are counted.
             from steempeg.ui.render_panel import ensure_presets_tab
 
-            ensure_presets_tab(self.ui)
+            _presets_page = ensure_presets_tab(self.ui)
+            _presets_page.setStyleSheet(
+                f"QWidget#tab_presets {{ background-color: {_neo_settings}; border: none; }}"
+            )
 
             for i in range(self.ui.settings_tabs.count()):
                 text = custom_names[i] if i < len(custom_names) else self.ui.settings_tabs.tabText(i)
@@ -854,47 +878,81 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
             neo_layout.addWidget(sidebar_frame)
             
-            # 4. Right circle with scrol
+            # 4. Settings content host — opaque shell gray (not #000 void / not transparent).
             self.right_scroll = QScrollArea()
+            self.right_scroll.setObjectName("neo_settings_scroll")
             self.right_scroll.setWidgetResizable(True)
             self.right_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            
-            self.right_scroll.setStyleSheet("""
-                QScrollArea { 
-                    background: transparent; 
+            self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self.right_scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+            # Left radii only (= divider curve). Right edge stays square so the opaque
+            # settings fill reaches the card edge; neo_wrapper's outer mask clips TR/BR.
+            # (Rounding the host's right corners here re-opens the light card bleed.)
+            self.right_scroll.setStyleSheet(f"""
+                QScrollArea#neo_settings_scroll {{
+                    background-color: {_neo_settings};
                     border: none;
-                }
-                QWidget#qt_scrollarea_viewport {
-                    background: transparent;
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
+                    border-left: 1px solid {_neo_border};
+                }}
+                QScrollArea#neo_settings_scroll > QWidget {{
+                    background-color: {_neo_settings};
                     border: none;
-                }
-                QScrollBar:vertical {
+                }}
+                QWidget#qt_scrollarea_viewport {{
+                    background-color: {_neo_settings};
+                    border: none;
+                }}
+                QScrollBar:vertical {{
                     background: transparent;
                     width: 12px;
                     margin: 15px 5px 15px 0px;
-                }
-                QScrollBar::handle:vertical {
+                }}
+                QScrollBar::handle:vertical {{
                     background: #5a4b7a;
                     min-height: 30px;
                     border-radius: 5px;
-                }
-                QScrollBar::handle:vertical:hover {
+                }}
+                QScrollBar::handle:vertical:hover {{
                     background: #8e7cc3;
-                }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                    height: 0px; 
-                }
-                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                    height: 0px;
+                }}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                     background: none;
-                }
+                }}
             """)
+            # Palette lock — Windows light theme must not paint the viewport black/white.
+            from PySide6.QtGui import QColor, QPalette
+
+            _vp = self.right_scroll.viewport()
+            if _vp is not None:
+                _vp.setAutoFillBackground(True)
+                _pal = _vp.palette()
+                _qc = QColor(_neo_settings)
+                for _group in (
+                    QPalette.ColorGroup.Active,
+                    QPalette.ColorGroup.Inactive,
+                    QPalette.ColorGroup.Disabled,
+                ):
+                    _pal.setColor(_group, QPalette.ColorRole.Window, _qc)
+                    _pal.setColor(_group, QPalette.ColorRole.Base, _qc)
+                _vp.setPalette(_pal)
             
             self.ui.settings_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            self.ui.settings_tabs.setStyleSheet("""
-                QTabWidget { background: transparent; border: none; }
-                QTabWidget::pane { border: none; background: transparent; }
+            self.ui.settings_tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.ui.settings_tabs.setStyleSheet(f"""
+                QTabWidget {{ background-color: {_neo_settings}; border: none; }}
+                QTabWidget::pane {{ border: none; background-color: {_neo_settings}; }}
+                QTabWidget > QStackedWidget {{ background-color: {_neo_settings}; border: none; }}
+                QStackedWidget > QWidget {{ background-color: {_neo_settings}; }}
 
-                QLabel { color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }
+                QLabel {{ color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }}
             """ + settings_panel_stylesheet("""
                 QPushButton {
                     background-color: #303030; color: #ffffff;
@@ -909,19 +967,26 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.right_scroll.setWidget(self.ui.settings_tabs)
             
             # --- SAFE MASK (QRegion), applied after the resize settles ---
-            # Rebuilding a QRegion mask via setMask() on every resize event reclips and
-            # repaints the whole subtree, which shows up as vertical band artifacts
-            # during a splitter drag. Debounce it so the mask is rebuilt once the drag
-            # stops instead of on every pixel.
+            # Outer card mask on neo_wrapper clips all four corners (same radius as
+            # stylesheet). Settings host mask rounds LEFT corners only — the nav↔
+            # content curve — while keeping the right edge rectangular so the TR/BR
+            # fill stays opaque. A full 4-corner mask on right_scroll used to punch
+            # holes that let the lighter card face bleed through as 1px crumbs.
+            # Debounced: setMask on every resize reclips/repaints the subtree.
             #
             # Linux/XWayland+NVIDIA: skip entirely. Even a debounced setMask next to
             # an embedded mpv wid= surface shears the shell when the right splitter
             # grows the player into the queue (ghost chrome / black bands).
             if sys.platform == "win32":
-                class RoundedCornerFilter(QObject):
-                    def __init__(self, target):
+                from PySide6.QtCore import QRectF
+                from PySide6.QtGui import QPainterPath, QRegion
+
+                class _DebouncedRegionMask(QObject):
+                    def __init__(self, target, radius: float, *, left_only: bool = False):
                         super().__init__(target)
                         self._target = target
+                        self._radius = float(radius)
+                        self._left_only = bool(left_only)
                         self._timer = QTimer(self)
                         self._timer.setSingleShot(True)
                         self._timer.timeout.connect(self._apply_mask)
@@ -936,17 +1001,34 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         if obj is None or obj.width() <= 0 or obj.height() <= 0:
                             return
                         try:
-                            from PySide6.QtGui import QPainterPath, QRegion
+                            w = float(obj.width())
+                            h = float(obj.height())
+                            r = min(self._radius, w * 0.5, h * 0.5)
                             path = QPainterPath()
-                            path.addRoundedRect(
-                                0.0, 0.0, float(obj.width()), float(obj.height()), 16.0, 16.0
-                            )
+                            if self._left_only:
+                                # Square right edge; arc only TL / BL (divider curve).
+                                path.moveTo(w, 0.0)
+                                path.lineTo(w, h)
+                                path.lineTo(r, h)
+                                path.arcTo(QRectF(0.0, h - 2.0 * r, 2.0 * r, 2.0 * r), 270.0, -90.0)
+                                path.lineTo(0.0, r)
+                                path.arcTo(QRectF(0.0, 0.0, 2.0 * r, 2.0 * r), 180.0, -90.0)
+                                path.closeSubpath()
+                            else:
+                                # Exact bounds — inset masks leave 1px parent crumbs at TR/BR.
+                                path.addRoundedRect(QRectF(0.0, 0.0, w, h), r, r)
                             obj.setMask(QRegion(path.toFillPolygon().toPolygon()))
                         except Exception:
                             pass
 
-                self.corner_mask = RoundedCornerFilter(self.right_scroll)
+                self.corner_mask = _DebouncedRegionMask(
+                    self.right_scroll, _neo_radius, left_only=True
+                )
                 self.right_scroll.installEventFilter(self.corner_mask)
+                self._neo_wrapper_mask = _DebouncedRegionMask(
+                    self.neo_wrapper, _neo_radius, left_only=False
+                )
+                self.neo_wrapper.installEventFilter(self._neo_wrapper_mask)
             
             neo_layout.addWidget(self.right_scroll)
             
@@ -980,6 +1062,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             )
             for _combo in self.ui.settings_tabs.findChildren(_QComboBox):
                 _combo.setStyleSheet(_combo_qss)
+                apply_dark_combo_popup(_combo)
         # Collapse non-active settings pages so the scroll area fits the visible page
         if hasattr(self, 'fit_settings_tab_to_page'):
             self.fit_settings_tab_to_page()
@@ -1280,13 +1363,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 top_row.addWidget(summary_left, 1, qtc.Qt.AlignVCenter)
 
                 def reset_bottom_summary():
-                    css_icon = get_resource_path("unknown_icon.png").replace('\\', '/')
+                    # Prefer setPixmap in a square slot — CSS ``image:`` stretches
+                    # into whatever geometry the label has (ovals on HD layouts).
+                    from PySide6.QtGui import QPixmap
+                    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+                    from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
 
-                    self.bottom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
+                    unknown = get_resource_path("unknown_icon.png")
+                    unknown_pix = shaped_game_icon_pixmap(QPixmap(unknown), 24, ICON_SHAPE_CIRCLE)
+                    self.bottom_icon_label.setStyleSheet("background: transparent; border: none;")
+                    apply_square_icon(self.bottom_icon_label, unknown_pix, 24)
                     self.bottom_text_label.setText("Select a clip to begin...")
 
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
-                        self.custom_icon_label.setStyleSheet(f"image: url('{css_icon}'); background: transparent; border: none;")
+                        self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
+                        apply_square_icon(self.custom_icon_label, unknown_pix, 24)
                         from steempeg.ui.player_header_layout import set_player_header_game_text
 
                         set_player_header_game_text(
@@ -1295,9 +1386,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                             placeholder=True,
                         )
 
-                    css_logo_main = get_resource_path("logo.png").replace('\\', '/')
                     if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
-                        self.place_logo.setStyleSheet(f"image: url('{css_logo_main}'); background: transparent; border: none;")
+                        self.place_logo.setStyleSheet("background: transparent; border: none;")
+                        apply_square_icon(self.place_logo, app_logo_pixmap(80, dpr=1.0), 80)
                         self.place_text.setText("Please select a clip from the library")
                         self.place_text.setStyleSheet("color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;")
 
@@ -1489,13 +1580,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         card_lay.setAlignment(Qt.AlignCenter)
 
         self.place_logo = QLabel()
-        logo_path = get_resource_path("logo.png")
-        if os.path.exists(logo_path):
-            from PySide6.QtGui import QPixmap
-            self.place_logo.setPixmap(
-                QPixmap(logo_path).scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
-        self.place_logo.setAlignment(Qt.AlignCenter)
+        from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
+
+        apply_square_icon(self.place_logo, app_logo_pixmap(80, dpr=1.0), 80)
 
         self.place_text = QLabel("Please select a clip from the library")
         self.place_text.setStyleSheet(
@@ -1544,9 +1631,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         title_row.setSpacing(8)
 
         self.custom_icon_label = QLabel()
-        self.custom_icon_label.setFixedSize(24, 24)
-        self.custom_icon_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-        self.custom_icon_label.setPixmap(QIcon(get_resource_path("unknown_icon.png")).pixmap(24, 24))
+        from PySide6.QtGui import QPixmap
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        apply_square_icon(
+            self.custom_icon_label,
+            shaped_game_icon_pixmap(
+                QPixmap(get_resource_path("unknown_icon.png")), 24, ICON_SHAPE_CIRCLE
+            ),
+            24,
+        )
 
         self.custom_text_label = QLabel("Select a clip to preview...")
         self.custom_text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
@@ -2865,11 +2960,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             title_row.setContentsMargins(0, 0, 0, 0)
             title_row.setSpacing(8)
 
+            from steempeg.ui.icon_utils import apply_square_icon
+
             icon_lbl = QLabel()
-            icon_lbl.setFixedSize(_ICON_SZ, _ICON_SZ)
-            icon_lbl.setAlignment(
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
-            )
             icon_lbl.setStyleSheet("background: transparent; border: none;")
             src_pix = QPixmap()
             icon_path = getattr(self, "current_game_icon", "") or ""
@@ -2888,8 +2981,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 unknown = get_resource_path("unknown_icon.png")
                 if unknown and os.path.isfile(unknown):
                     src_pix = QPixmap(unknown)
-            if not src_pix.isNull():
-                icon_lbl.setPixmap(shaped_game_icon_pixmap(src_pix, _ICON_SZ))
+            shaped = (
+                shaped_game_icon_pixmap(src_pix, _ICON_SZ)
+                if not src_pix.isNull()
+                else None
+            )
+            apply_square_icon(icon_lbl, shaped, _ICON_SZ)
             title_row.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
             name = QLabel(title_line)
@@ -3442,9 +3539,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         combo = getattr(self, "combo_sort", None)
         if combo is not None:
-            from steempeg.ui.widgets.combo_chrome import compact_combo_stylesheet
-
             combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
+            apply_dark_combo_popup(combo, dense=dense)
             fnt = combo.font()
             fnt.setFamily("Segoe UI")
             fnt.setBold(True)
