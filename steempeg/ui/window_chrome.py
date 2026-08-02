@@ -29,7 +29,11 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
-from steempeg.ui.icon_utils import app_logo_pixmap
+from steempeg.ui.icon_utils import (
+    app_logo_pixmap,
+    apply_square_icon,
+    chrome_icon_slot_size,
+)
 from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import (
@@ -354,15 +358,14 @@ class SteempegTitleBar(QWidget):
         root.setContentsMargins(10, 0, 12, 0)
         root.setSpacing(0)
 
-        pixmap = app_logo_pixmap(16)
+        # Square slot only — a 16×bar_h label stretches/clips the logo on short HD bars.
+        icon_sz = chrome_icon_slot_size(16, bar_height=bar_h)
+        pixmap = app_logo_pixmap(icon_sz)
         if pixmap is not None and not pixmap.isNull():
             icon_lbl = QLabel()
-            icon_lbl.setPixmap(pixmap)
-            icon_lbl.setFixedHeight(bar_h)
-            icon_lbl.setFixedWidth(16)
-            icon_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+            apply_square_icon(icon_lbl, pixmap, icon_sz)
             icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            root.addWidget(icon_lbl)
+            root.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
             root.addSpacing(7)
 
         title_lbl = QLabel(title)

@@ -68,27 +68,35 @@ def shaped_game_icon_pixmap(
     size: int,
     shape: str | None = None,
 ) -> QPixmap:
-    """Return a transparent ``size×size`` pixmap clipped to ``shape``."""
+    """Return a transparent ``size×size`` pixmap clipped to ``shape``.
+
+    Always square — callers must place it in a square ``QLabel`` (see
+    ``icon_utils.apply_square_icon``). Cover-crop keeps aspect; never stretch.
+    """
+    edge = max(1, int(size))
     if source is None or source.isNull() or size <= 0:
-        out = QPixmap(max(1, size), max(1, size))
+        out = QPixmap(edge, edge)
         out.fill(Qt.GlobalColor.transparent)
         return out
 
     mode = normalize_icon_shape(shape if shape is not None else _current_shape)
-    scaled = source.scaled(
-        size,
-        size,
+    # Normalize source DPR so width/height are buffer pixels for the crop math.
+    raw = QPixmap(source)
+    raw.setDevicePixelRatio(1.0)
+    scaled = raw.scaled(
+        edge,
+        edge,
         Qt.AspectRatioMode.KeepAspectRatioByExpanding,
         Qt.TransformationMode.SmoothTransformation,
     )
-    x = max(0, (scaled.width() - size) // 2)
-    y = max(0, (scaled.height() - size) // 2)
-    cropped = scaled.copy(x, y, size, size)
+    x = max(0, (scaled.width() - edge) // 2)
+    y = max(0, (scaled.height() - edge) // 2)
+    cropped = scaled.copy(x, y, edge, edge)
 
     if mode == ICON_SHAPE_SQUARE:
-        if cropped.width() == size and cropped.height() == size:
+        if cropped.width() == edge and cropped.height() == edge:
             return cropped
-        square = QPixmap(size, size)
+        square = QPixmap(edge, edge)
         square.fill(Qt.GlobalColor.transparent)
         p = QPainter(square)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -96,17 +104,17 @@ def shaped_game_icon_pixmap(
         p.end()
         return square
 
-    result = QPixmap(size, size)
+    result = QPixmap(edge, edge)
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     clip = QPainterPath()
     if mode == ICON_SHAPE_CIRCLE:
-        clip.addEllipse(0, 0, float(size), float(size))
+        clip.addEllipse(0, 0, float(edge), float(edge))
     else:
-        r = soft_corner_radius(size)
-        clip.addRoundedRect(0, 0, float(size), float(size), r, r)
+        r = soft_corner_radius(edge)
+        clip.addRoundedRect(0, 0, float(edge), float(edge), r, r)
     painter.setClipPath(clip)
     painter.drawPixmap(0, 0, cropped)
     painter.end()

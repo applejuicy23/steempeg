@@ -16,10 +16,15 @@ _ARROW_ROTATIONS = {
 
 
 def load_pixmap(name: str, size: int = 16) -> QPixmap:
+    """Load a bundled asset into a transparent ``size×size`` pixmap (never stretched)."""
     pix = QPixmap(get_resource_path(name))
     if pix.isNull():
         return QPixmap()
-    return pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    from steempeg.ui.icon_utils import square_fit_pixmap
+
+    # dpr=1.0: callers pass these to QLabel/QIcon at logical px; HiDPI chrome
+    # logos go through app_logo_pixmap instead.
+    return square_fit_pixmap(pix, size, dpr=1.0)
 
 
 def _icon_from_pixmap(pix: QPixmap) -> QIcon:
@@ -148,16 +153,13 @@ def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:
 
 
 def tinted_pixmap(name: str, color: str | QColor, size: int = 16) -> QPixmap:
-    """Recolor a bundled asset (keeps alpha) via SourceIn tint."""
+    """Recolor a bundled asset (keeps alpha) via SourceIn tint into a square."""
+    from steempeg.ui.icon_utils import square_fit_pixmap
+
     src = QPixmap(get_resource_path(name))
     if src.isNull():
         return QPixmap()
-    scaled = src.scaled(
-        size,
-        size,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
+    scaled = square_fit_pixmap(src, size, dpr=1.0)
     if isinstance(color, str):
         color = QColor(color)
     out = QPixmap(scaled.size())
