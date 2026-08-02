@@ -5,8 +5,16 @@ BG_SHELL = "#1e1e1e"
 BG_TITLE_BAR = "#0d0d0d"
 # Idle player "Please select a clip…" chip fill (canvas stays #1e1e1e / black).
 BG_PLAYER_CANVAS = "#2d2d2d"
+# Queue / neo-nav card face — same family as player canvas chips.
+BG_CARD = BG_PLAYER_CANVAS
+# Render settings content (right of neo-nav) — darker than cards (#2d2d2d), not near-black.
+BG_SETTINGS_PANEL = "#242424"
+# Neo-nav + settings host shared corner radius (stylesheet + QRegion must match).
+RADIUS_NEO_PANEL = 20
 BORDER_SUBTLE = "#000000"
 BORDER_DEFAULT = "#444444"
+# Neo-nav ↔ settings divider / card outline.
+BORDER_CARD = "#383838"
 
 # Text
 TEXT_PRIMARY = "#cccccc"
@@ -85,6 +93,39 @@ def with_tooltip_style(qss: str = "") -> str:
     if "QToolTip" in body:
         return body
     return f"{body}\n{STYLE_TOOLTIP}" if body else STYLE_TOOLTIP
+
+
+def dialog_scroll_stylesheet(bg: str | None = None) -> str:
+    """Opaque scroll fill — never ``transparent`` (Windows light theme leaks in)."""
+    color = bg or BG_SHELL
+    return (
+        f"QScrollArea {{ background-color: {color}; border: none; }}\n"
+        f"QScrollArea > QWidget {{ background-color: {color}; }}"
+    )
+
+
+def apply_dialog_scroll_bg(scroll, color: str | None = None) -> None:
+    """Force dark QScrollArea + viewport (stylesheet + palette; ignore OS theme)."""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QFrame
+
+    bg = color or BG_SHELL
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setStyleSheet(dialog_scroll_stylesheet(bg))
+    vp = scroll.viewport()
+    if vp is None:
+        return
+    vp.setAutoFillBackground(True)
+    pal = vp.palette()
+    qc = QColor(bg)
+    for group in (
+        QPalette.ColorGroup.Active,
+        QPalette.ColorGroup.Inactive,
+        QPalette.ColorGroup.Disabled,
+    ):
+        pal.setColor(group, QPalette.ColorRole.Window, qc)
+        pal.setColor(group, QPalette.ColorRole.Base, qc)
+    vp.setPalette(pal)
 
 
 # Trim / Cancel — same language as portable Render (dark fill + bright border).
