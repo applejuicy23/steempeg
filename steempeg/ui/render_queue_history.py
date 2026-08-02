@@ -157,10 +157,11 @@ class RenderQueueHistoryDialog(SteempegDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        tok.apply_dialog_scroll_bg(scroll, self._bg_color)
 
         host = QWidget()
+        host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        host.setStyleSheet(f"background-color: {self._bg_color};")
         host_layout = QVBoxLayout(host)
         host_layout.setContentsMargins(0, 0, 0, 0)
         host_layout.setSpacing(12)

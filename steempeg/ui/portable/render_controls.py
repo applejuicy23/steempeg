@@ -214,17 +214,13 @@ class PortableRenderControlStrip(QFrame):
     def sync_game_header(self) -> None:
         """Compact game icon + name from the desktop summary / player header."""
         app = self._app
-        icon_css = ""
         name = ""
 
         bottom_text = getattr(app, "bottom_text_label", None)
-        bottom_icon = getattr(app, "bottom_icon_label", None)
         if bottom_text is not None:
             raw = (bottom_text.text() or "").strip()
             if raw and not raw.lower().startswith("select a clip"):
                 name = raw.split("  •  ")[0].strip() or raw
-        if bottom_icon is not None:
-            icon_css = bottom_icon.styleSheet() or ""
 
         if not name:
             custom_text = getattr(app, "custom_text_label", None)
@@ -234,34 +230,40 @@ class PortableRenderControlStrip(QFrame):
                 title = plain_header_title(custom_text.text() or "")
                 if title and "select a clip" not in title.lower():
                     name = title
-            custom_icon = getattr(app, "custom_icon_label", None)
-            if custom_icon is not None and not icon_css:
-                icon_css = custom_icon.styleSheet() or ""
+
+        from PySide6.QtGui import QPixmap
+
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        def _set_unknown_icon() -> None:
+            unknown = get_resource_path("unknown_icon.png")
+            self.game_icon.setStyleSheet("background: transparent; border: none;")
+            apply_square_icon(
+                self.game_icon,
+                shaped_game_icon_pixmap(QPixmap(unknown), _GAME_ICON, ICON_SHAPE_CIRCLE),
+                _GAME_ICON,
+            )
 
         if not name:
             name = "Select a clip…"
-            from steempeg.infra.paths import get_resource_path
-
-            unknown = get_resource_path("unknown_icon.png").replace("\\", "/")
-            self.game_icon.setStyleSheet(
-                f"image: url('{unknown}'); background: transparent; border: none;"
-            )
+            _set_unknown_icon()
             self.game_label.setText(name)
             self.game_label.setToolTip(name)
             return
 
         self.game_label.setText(name)
         self.game_label.setToolTip(name)
-        if "image: url(" in icon_css:
-            # Keep pixmap size small via label fixed size; reuse CSS image.
-            self.game_icon.setStyleSheet(icon_css)
-        else:
-            from steempeg.infra.paths import get_resource_path
-
-            unknown = get_resource_path("unknown_icon.png").replace("\\", "/")
-            self.game_icon.setStyleSheet(
-                f"image: url('{unknown}'); background: transparent; border: none;"
-            )
+        # Prefer live header/bottom pixmaps (square-safe). Never use CSS ``image:``.
+        for attr in ("custom_icon_label", "bottom_icon_label"):
+            src_lbl = getattr(app, attr, None)
+            header_pm = src_lbl.pixmap() if src_lbl is not None else None
+            if header_pm is not None and not header_pm.isNull():
+                self.game_icon.setStyleSheet("background: transparent; border: none;")
+                apply_square_icon(self.game_icon, header_pm, _GAME_ICON)
+                return
+        _set_unknown_icon()
 
     def _set_dot_color(self, color: str) -> None:
         r = max(3, _DOT_SIZE // 2)

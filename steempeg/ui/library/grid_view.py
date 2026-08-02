@@ -81,9 +81,11 @@ class ClipCard(qtw.QWidget):
         )
         shape = ICON_SHAPE_CIRCLE if use_force_circle else get_icon_shape()
         if pix_path and os.path.exists(pix_path):
+            from steempeg.ui.icon_utils import apply_square_icon
+
             src = qtg.QPixmap(pix_path)
-            if not src.isNull():
-                self.icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
+            shaped = shaped_game_icon_pixmap(src, 24, shape) if not src.isNull() else None
+            apply_square_icon(self.icon_label, shaped, 24)
 
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
         self.badge_label.setStyleSheet(

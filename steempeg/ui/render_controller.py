@@ -1043,9 +1043,13 @@ class RenderMixin:
         is_unknown = os.path.basename(path).lower() == "unknown_icon.png"
         self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
         src = QPixmap(path)
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        shaped = None
         if not src.isNull():
             shape = ICON_SHAPE_CIRCLE if is_unknown else None
-            self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
+            shaped = shaped_game_icon_pixmap(src, 24, shape)
+        apply_square_icon(self.custom_icon_label, shaped, 24)
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
         """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
@@ -2612,14 +2616,18 @@ class RenderMixin:
             if hasattr(self, "_set_bottom_summary_icon"):
                 self._set_bottom_summary_icon(target_icon)
             elif hasattr(self, "bottom_icon_label"):
+                from steempeg.ui.icon_utils import apply_square_icon
+
                 self.bottom_icon_label.setStyleSheet(
                     "background: transparent; border: none;"
                 )
                 bottom_pix = QPixmap(target_icon)
-                if not bottom_pix.isNull():
-                    self.bottom_icon_label.setPixmap(
-                        shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
-                    )
+                shaped = (
+                    shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
+                    if not bottom_pix.isNull()
+                    else None
+                )
+                apply_square_icon(self.bottom_icon_label, shaped, 24)
 
             # We are updating the TOP panel of the player!
             if hasattr(self, 'custom_text_label') and hasattr(self, 'custom_icon_label'):
@@ -2628,13 +2636,18 @@ class RenderMixin:
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
             if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
+                from steempeg.ui.icon_utils import apply_square_icon
+
                 # Pixmap only (no stylesheet image) so the game icon scales with the
                 # aspect ratio kept and never overlaps the Steempeg logo underneath.
-                self.place_logo.setStyleSheet("")
+                self.place_logo.setStyleSheet("background: transparent; border: none;")
                 game_pix = QPixmap(place_icon)
-                if not game_pix.isNull():
-                    self.place_logo.setPixmap(shaped_game_icon_pixmap(game_pix, 80))
-                self.place_logo.setAlignment(Qt.AlignCenter)
+                shaped = (
+                    shaped_game_icon_pixmap(game_pix, 80)
+                    if not game_pix.isNull()
+                    else None
+                )
+                apply_square_icon(self.place_logo, shaped, 80)
                 self.place_logo.show()
                 self.place_text.setText(f"Ready to play: {game_name}")
                 self.place_text.setStyleSheet(
@@ -3484,12 +3497,13 @@ class RenderMixin:
             path = icon_path if icon_path and os.path.exists(icon_path) else unknown
             if path and os.path.exists(path):
                 from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+                from steempeg.ui.icon_utils import apply_square_icon
 
                 if icon_path and os.path.exists(icon_path):
                     self.current_game_icon = icon_path
                 src = QPixmap(path)
-                if not src.isNull():
-                    self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
+                shaped = shaped_game_icon_pixmap(src, 24) if not src.isNull() else None
+                apply_square_icon(self.custom_icon_label, shaped, 24)
 
     def _sync_queue_job_render_status(self, job, success, error_msg, output_file: str = ""):
         """Update the *specific* queue job (by id) — clip_path is not unique when duplicates exist."""

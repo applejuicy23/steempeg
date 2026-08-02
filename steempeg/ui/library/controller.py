@@ -3322,7 +3322,13 @@ class LibraryMixin:
                 if force_circle or os.path.basename(pix_path).lower() == "unknown_icon.png"
                 else get_icon_shape()
             )
-            card.icon_label.setPixmap(shaped_game_icon_pixmap(src, 24, shape))
+            from steempeg.ui.icon_utils import apply_square_icon
+
+            apply_square_icon(
+                card.icon_label,
+                shaped_game_icon_pixmap(src, 24, shape),
+                24,
+            )
 
         if hasattr(self, "grid_clips"):
             for idx in range(self.grid_clips.count()):
@@ -3372,9 +3378,11 @@ class LibraryMixin:
             unknown = get_resource_path("unknown_icon.png")
             pix_path = icon_path if icon_path and os.path.exists(icon_path) else unknown
             if pix_path and os.path.exists(pix_path):
+                from steempeg.ui.icon_utils import apply_square_icon
+
                 src = QPixmap(pix_path)
-                if not src.isNull():
-                    icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
+                shaped = shaped_game_icon_pixmap(src, 24) if not src.isNull() else None
+                apply_square_icon(icon_label, shaped, 24)
 
     def _refresh_header_game_icon_shapes(self) -> None:
         """Re-shape player header / bottom summary / center place logo icons."""
@@ -3391,6 +3399,8 @@ class LibraryMixin:
         is_unknown = os.path.basename(path).lower() == "unknown_icon.png"
         shape = ICON_SHAPE_CIRCLE if is_unknown else None
 
+        from steempeg.ui.icon_utils import apply_square_icon
+
         for attr, size in (
             ("custom_icon_label", 24),
             ("bottom_icon_label", 24),
@@ -3400,8 +3410,8 @@ class LibraryMixin:
                 continue
             label.setStyleSheet("background: transparent; border: none;")
             src = QPixmap(path)
-            if not src.isNull():
-                label.setPixmap(shaped_game_icon_pixmap(src, size, shape))
+            shaped = shaped_game_icon_pixmap(src, size, shape) if not src.isNull() else None
+            apply_square_icon(label, shaped, size)
 
         place = getattr(self, "place_logo", None)
         if place is not None and place.isVisible():
@@ -3409,10 +3419,10 @@ class LibraryMixin:
             place_path = path
             if is_unknown and logo_path and os.path.isfile(logo_path):
                 place_path = logo_path
-            place.setStyleSheet("")
+            place.setStyleSheet("background: transparent; border: none;")
             src = QPixmap(place_path)
-            if not src.isNull():
-                place.setPixmap(shaped_game_icon_pixmap(src, 80, shape))
+            shaped = shaped_game_icon_pixmap(src, 80, shape) if not src.isNull() else None
+            apply_square_icon(place, shaped, 80)
 
     def _icon_path_for_current_rendered(self) -> str:
         """Game icon path for the active Rendered-videos selection (if any)."""
@@ -3523,8 +3533,13 @@ class LibraryMixin:
                 pixmap = QPixmap(icon_path)
                 if not pixmap.isNull():
                     from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+                    from steempeg.ui.icon_utils import apply_square_icon
 
-                    card.icon_label.setPixmap(shaped_game_icon_pixmap(pixmap, 24))
+                    apply_square_icon(
+                        card.icon_label,
+                        shaped_game_icon_pixmap(pixmap, 24),
+                        24,
+                    )
 
     def _backfill_missing_game_icons(self) -> None:
         """Retry icon fetch for games that still show a blank list icon after scan."""

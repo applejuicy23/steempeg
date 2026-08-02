@@ -1727,6 +1727,8 @@ class RenderedLibraryMixin:
                 extra=extra,
             )
         if hasattr(self, "custom_icon_label"):
+            from steempeg.ui.icon_utils import apply_square_icon
+
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             if icon_path and os.path.isfile(icon_path):
                 from PySide6.QtGui import QPixmap
@@ -1734,8 +1736,8 @@ class RenderedLibraryMixin:
 
                 self.current_game_icon = icon_path
                 src = QPixmap(icon_path)
-                if not src.isNull():
-                    self.custom_icon_label.setPixmap(shaped_game_icon_pixmap(src, 24))
+                shaped = shaped_game_icon_pixmap(src, 24) if not src.isNull() else None
+                apply_square_icon(self.custom_icon_label, shaped, 24)
             elif is_unknown:
                 from steempeg.infra.paths import get_resource_path
                 from PySide6.QtGui import QPixmap
@@ -1745,15 +1747,17 @@ class RenderedLibraryMixin:
                 self.current_game_icon = unknown if os.path.isfile(unknown) else ""
                 if os.path.isfile(unknown):
                     src = QPixmap(unknown)
-                    if not src.isNull():
-                        self.custom_icon_label.setPixmap(
-                            shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
-                        )
+                    shaped = (
+                        shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                        if not src.isNull()
+                        else None
+                    )
+                    apply_square_icon(self.custom_icon_label, shaped, 24)
                 else:
-                    self.custom_icon_label.clear()
+                    apply_square_icon(self.custom_icon_label, None, 24)
             else:
                 self.current_game_icon = ""
-                self.custom_icon_label.clear()
+                apply_square_icon(self.custom_icon_label, None, 24)
 
         if hasattr(self, "btn_clip_health"):
             if hasattr(self, "update_clip_health_button"):
