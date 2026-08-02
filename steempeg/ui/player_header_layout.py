@@ -355,8 +355,9 @@ def sync_centered_title_width(app) -> None:
     """Keep Steam-like title at its natural width without collapsing to zero.
 
     Expanding wing/header spacers previously competed with ``Ignored`` policy and
-    ate the title cluster (icon + name + i) at startup / with short placeholder
-    text. Prefer ``Preferred`` + a half-bar cap so long names cannot shove ``|``.
+    ate the title cluster (icon + name + optional Clip info) at startup / with
+    short placeholder text. Prefer ``Preferred`` + a half-bar cap so long names
+    cannot shove ``|``.
     """
     title = getattr(app, "player_header_title", None)
     header = getattr(app, "player_header_frame", None)
@@ -368,12 +369,14 @@ def sync_centered_title_width(app) -> None:
         QSizePolicy.Policy.Preferred,
     )
     title.show()
-    for name in ("custom_icon_label", "custom_text_label", "btn_player_header_info"):
+    for name in ("custom_icon_label", "custom_text_label"):
         child = getattr(app, name, None)
         if _widget_alive(child):
             child.show()
             if name == "custom_text_label":
                 child.setMinimumWidth(0)
+    # Leave ``btn_player_header_info`` alone — ``refresh_player_header_info``
+    # owns show/hide (hidden when no clip is selected).
 
     if get_header_layout() != HEADER_LAYOUT_STEAM_LIKE:
         title.setMaximumWidth(16777215)

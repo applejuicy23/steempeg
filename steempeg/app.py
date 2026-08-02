@@ -1672,6 +1672,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.btn_player_header_info.setAccessibleName("Clip info")
         self.btn_player_header_info.setToolTip("No clip selected")
         self.btn_player_header_info.setEnabled(False)
+        # Hidden until a clip is open — empty header shows placeholder text only.
+        self.btn_player_header_info.hide()
         self.btn_player_header_info.clicked.connect(self.show_player_header_clip_info_popup)
         self.btn_player_header_info.setStyleSheet(with_tooltip_style(
             "QPushButton#playerHeaderInfo {"
@@ -3061,7 +3063,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 4)))
 
     def refresh_player_header_info(self, *, has_clip: bool | None = None) -> None:
-        """Enable/disable the header Clip info chip and refresh its tooltip."""
+        """Show/hide the header Clip info chip and refresh its tooltip.
+
+        When no clip is selected the chip is hidden entirely (not merely
+        disabled) so the empty header is only the placeholder text.
+        """
         btn = getattr(self, "btn_player_header_info", None)
         if btn is None:
             return
@@ -3071,11 +3077,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         tip = self._source_info_tooltip_text() if has_clip else "No clip selected"
         idle = getattr(self, "_player_header_info_icon_idle", None)
         if not has_clip or tip == "No clip selected":
+            btn.hide()
             btn.setEnabled(False)
             btn.setToolTip("No clip selected")
             if idle is not None:
                 btn.setIcon(idle)
         else:
+            btn.show()
             btn.setEnabled(True)
             btn.setToolTip(tip)
             if idle is not None and not btn.underMouse():
