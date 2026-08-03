@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
@@ -11,9 +10,9 @@ from steempeg.services import marker_prefs as mprefs
 from steempeg.ui.icon_utils import primary_device_pixel_ratio, square_fit_pixmap
 
 # On-canvas timeline pin size (logical px). Buffer uses ≥2× DPR for crisp HD.
-# Windows keeps compact Steam-like pins; Linux / Deck need a larger logical size
-# (typical 100% scale + XWayland) or pins look tiny vs the seek strip.
-TIMELINE_MARKER_LOGICAL = 18 if sys.platform == "win32" else 20
+# Same size on Windows / Linux / Deck — the old Windows-only 18px path left pins
+# looking tiny next to the 13px seek strip (same bug the Linux bump fixed).
+TIMELINE_MARKER_LOGICAL = 20
 
 
 def timeline_marker_dpr() -> float:
@@ -47,19 +46,50 @@ def load_timeline_marker_pixmap(path: str) -> QPixmap | None:
     )
 
 
+def _harden_tint_alpha(src: QPixmap) -> QPixmap:
+    """Boost soft anti-aliased glyphs so class tints keep a readable solid core.
+
+    Assets like ``screenshot.png`` are mostly translucent glow. SourceIn tint
+    then concentrates visible color into a tiny blob — markers look even smaller
+    once a class color is applied. Threshold + mild boost keeps the silhouette.
+    """
+    from PySide6.QtGui import QImage
+
+    img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32).copy()
+    w, h = img.width(), img.height()
+    for y in range(h):
+        for x in range(w):
+            c = img.pixelColor(x, y)
+            a = c.alpha()
+            if a <= 24:
+                c.setAlpha(0)
+            elif a < 220:
+                c.setAlpha(min(255, int(40 + a * 1.35)))
+            else:
+                continue
+            img.setPixelColor(x, y, c)
+    out = QPixmap.fromImage(img)
+    out.setDevicePixelRatio(src.devicePixelRatio())
+    return out
+
+
 def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixmap:
     """Recolor opaque pixels to ``color`` (keeps alpha) — for white mono icons.
 
     When ``height`` is set, scale by height only (KeepAspectRatio). Never squash
     wide pins (round digit strips, panoramic class art) into a square — that is
     what made class-tinted markers look "sausaged" on the timeline.
+
+    Drawing must ignore ``devicePixelRatio`` on the painter target: otherwise a
+    DPR-aware source is stamped at logical size into the top-left of a physical
+    buffer, and class-tinted pins shrink to half size on the timeline.
     """
     if src is None or src.isNull():
         return QPixmap()
     base = src
+    dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
     if height is not None:
         edge = max(1, int(height))
-        dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
         logical_h = base.height() / dpr
         if abs(logical_h - edge) > 0.51:
             phys_h = max(1, int(round(edge * dpr)))
@@ -69,16 +99,21 @@ def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixm
                 phys_h, Qt.TransformationMode.SmoothTransformation
             )
             base.setDevicePixelRatio(dpr)
-    out = QPixmap(base.size())
+            dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
+    # Work in raw device pixels for harden + SourceIn tint.
+    raw = QPixmap(base)
+    raw.setDevicePixelRatio(1.0)
+    raw = _harden_tint_alpha(raw)
+    out = QPixmap(raw.size())
     out.fill(Qt.GlobalColor.transparent)
     painter = QPainter(out)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    painter.drawPixmap(0, 0, base)
+    painter.drawPixmap(0, 0, raw)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(out.rect(), QColor(color))
     painter.end()
-    out.setDevicePixelRatio(base.devicePixelRatio())
+    out.setDevicePixelRatio(dpr)
     return out
 
 

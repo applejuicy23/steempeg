@@ -10,7 +10,6 @@ import json
 import os
 import re
 import logging
-import sys
 import time
 
 import PySide6.QtWidgets as qtw
@@ -47,12 +46,12 @@ def _paint_timeline_marker_pixmap(
     *,
     scale: float = 1.0,
 ) -> None:
-    """Draw a DPR-aware marker pixmap.
+    """Draw a DPR-aware marker pixmap into an explicit logical ``QRectF``.
 
-    On Windows ``drawPixmap(QPointF)`` honours pixmap DPR correctly. On Linux /
-    XWayland that path often smears icons horizontally (ghosted doubles) — paint
-    into an explicit logical ``QRectF`` instead. Hover scale is done via the
-    target rect (no ``painter.scale``), which also avoids blur on xcb.
+    Always use the rect path (Windows + Linux). ``drawPixmap(QPointF)`` can
+    under-size or smear pins depending on compositor / DPR; the rect path
+    matches the Linux/Deck fix and keeps cold-start Windows pins readable.
+    Hover scale is done via the target rect (no ``painter.scale``).
     """
     dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
     lw = pix.width() / dpr
@@ -64,9 +63,6 @@ def _paint_timeline_marker_pixmap(
         lh *= scale
         draw_x = cx - lw / 2.0
         draw_y = cy - lh / 2.0
-    if sys.platform == "win32" and scale == 1.0:
-        painter.drawPixmap(QPointF(draw_x, draw_y), pix)
-        return
     target = QRectF(draw_x, draw_y, lw, lh)
     source = QRectF(0.0, 0.0, float(pix.width()), float(pix.height()))
     painter.drawPixmap(target, pix, source)
@@ -80,7 +76,7 @@ class TimelineCanvas(QWidget):
     _RULER_FONT_PT = 8
     # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440.
     _TRACK_H = 13.0
-    # Leave room above the strip for timeline pins (Windows 18px / Linux 20px).
+    # Leave room above the strip for timeline pins (20px logical).
     _TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
     _CANVAS_H = int(_TRACK_Y + _TRACK_H + _RULER_GAP + _MAJOR_TICK_H + 8)
 
@@ -560,45 +556,50 @@ class TimelineCanvas(QWidget):
         tintable = mprefs.is_tintable_marker(marker)
         logical = TIMELINE_MARKER_LOGICAL
         dpr = timeline_marker_dpr()
-
-        # 1) Explicit custom icon (per-instance / per-type / class).
+        tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs) if tintable else None
         custom = mprefs.resolve_custom_icon_path_for_marker(marker, prefs=prefs)
+        tint_key = (tint or "", bool(tintable), str(custom or ""), steam_icon, icon_key,
+                    str(app_id or ""), bool(marker.get("is_round", False)),
+                    round(dpr, 3), logical)
+        tint_cache = getattr(self, "_tinted_marker_pixmaps", None)
+        if tint_cache is None:
+            tint_cache = {}
+            self._tinted_marker_pixmaps = tint_cache
+        if tint_key in tint_cache:
+            return tint_cache[tint_key]
+
+        pix = None
+        # 1) Explicit custom icon (per-instance / per-type / class).
         if custom:
             pix = load_timeline_marker_pixmap(custom)
-            if pix is not None:
-                return pix
 
         # 2) CS2 Steempeg pack — Emily's PNGs win over Steam SVG.
-        use_steempeg = mprefs.prefer_steempeg_pack(app_id, prefs)
-        if use_steempeg:
-            pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
-            if pix is not None:
-                tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
-                if tint and tintable:
-                    return tint_pixmap(pix, tint, height=logical)
-                return pix
+        if pix is None:
+            use_steempeg = mprefs.prefer_steempeg_pack(app_id, prefs)
+            if use_steempeg:
+                pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
 
         # 3) Steam SVG sprite.
-        if steam_icon and app_id:
+        if pix is None and steam_icon and app_id:
             pix = self.marker_store.get_icon(app_id, steam_icon, logical, dpr=dpr)
-            if pix is not None:
-                tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
-                if tint and tintable:
-                    return tint_pixmap(pix, tint, height=logical)
-                return pix
 
         # 4) Legacy / bundled PNGs.
-        pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
         if pix is None:
+            pix = self._legacy_icon_pixmap(icon_key, marker.get("is_round", False))
+
+        if pix is None:
+            tint_cache[tint_key] = None
             return None
-        tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs)
-        if tint and tintable:
-            return tint_pixmap(pix, tint, height=logical)
+        # Custom full-color art is never tinted (resolve_tint_color already None).
+        if tint and tintable and not custom:
+            pix = tint_pixmap(pix, tint, height=logical)
+        tint_cache[tint_key] = pix
         return pix
 
     def invalidate_marker_prefs_cache(self) -> None:
         self._marker_prefs_cache = None
         self.cached_pixmaps.clear()
+        self._tinted_marker_pixmaps = {}
         self.update()
     def _hide_hover_preview(self) -> None:
         self._hover_preview_bucket = -1
