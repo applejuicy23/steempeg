@@ -4221,10 +4221,9 @@ def main():
             _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
             window.ui.setMinimumSize(_min_w, _min_h)
             if sys.platform == "win32":
-                # Inset; showMaximized() below fills the work area natively.
-                # Stash for WINDOWPLACEMENT so the first restore still animates.
+                # Inset the window Windows restores to; showMaximized() below
+                # fills the work area natively without ever showing this size.
                 window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
-                window.ui._startup_restore_geometry = window.ui.geometry()
             else:
                 # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
                 # Fake-maximize by filling the work area (taskbar still visible).
@@ -4257,7 +4256,16 @@ def main():
             _force_native_window_icon(window.ui, icon_path)
             enable_frameless(window.ui)
 
-        window.ui.show()
+        if sys.platform == "win32":
+            # Maximize on the *first* show. Showing the inset normal state first
+            # and maximizing right after gives Windows no state change to record,
+            # so the first green-button restore snaps with no DWM transition —
+            # every later toggle animates because that first one seeded it.
+            window.ui.showMaximized()
+        else:
+            # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
+            window.ui.show()
+            logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
         window.ui.raise_()
         window.ui.activateWindow()
         try:
@@ -4266,11 +4274,6 @@ def main():
                 wh.requestActivate()
         except Exception:
             pass
-        QApplication.processEvents()
-        if sys.platform == "win32":
-            window.ui.showMaximized()
-        else:
-            logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
         QApplication.processEvents()
         window._sync_startup_layout()
         if ui_shell == UI_SHELL_PORTABLE:
