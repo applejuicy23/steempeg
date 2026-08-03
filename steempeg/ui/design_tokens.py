@@ -7,8 +7,8 @@ BG_TITLE_BAR = "#0d0d0d"
 BG_PLAYER_CANVAS = "#2d2d2d"
 # Queue / neo-nav card face — same family as player canvas chips.
 BG_CARD = BG_PLAYER_CANVAS
-# Render settings content (right of neo-nav) — darker than cards (#2d2d2d), not near-black.
-BG_SETTINGS_PANEL = "#242424"
+# Render settings content (right of neo-nav) — same family as player chrome / cards.
+BG_SETTINGS_PANEL = "#2d2d2d"
 # Neo-nav + settings host shared corner radius (stylesheet + QRegion must match).
 RADIUS_NEO_PANEL = 20
 BORDER_SUBTLE = "#000000"

@@ -62,7 +62,7 @@ _EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H) // 2
 _FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _FONT
 _TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT
 _TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _FONT
-_PATHBOX_QSS = ("QLabel { background-color: #252525; border-radius: 10px; padding: 8px 12px;"
+_PATHBOX_QSS = ("QLabel { background-color: #353535; border-radius: 10px; padding: 8px 12px;"
                 " color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Consolas', monospace; }")
 _STAT_CAP_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_VAL_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; border: none; " + _FONT
@@ -92,7 +92,7 @@ class SourcePathsBox(QWidget):
     directory paths; legacy setText() resets/placeholders are still handled."""
 
     _CAP_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
-    _ROW_QSS = "QFrame#srcRow { background-color: #252525; border-radius: 10px; }"
+    _ROW_QSS = "QFrame#srcRow { background-color: #353535; border-radius: 10px; }"
     _PATH_QSS = ("color: #b29ae7; font-size: 11px; font-weight: bold;"
                  " font-family: 'Consolas', monospace; background: transparent; border: none;")
     _MSG_QSS = ("color: #8a8a8a; font-size: 11px; font-weight: bold;"
@@ -906,7 +906,7 @@ def restyle_export_page(ui):
         path_row = QFrame()
         path_row.setObjectName("outputPathRow")
         path_row.setStyleSheet(
-            "QFrame#outputPathRow { background-color: #252525; border-radius: 10px; }"
+            "QFrame#outputPathRow { background-color: #353535; border-radius: 10px; }"
         )
         path_row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         path_row.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
