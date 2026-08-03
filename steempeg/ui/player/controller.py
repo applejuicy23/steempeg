@@ -520,20 +520,48 @@ class PlayerMixin:
             self._playback_stall_since = None
 
     def _mpv_is_buffering(self):
+        """True only while mpv has paused to wait for cache.
+
+        Do not use cache-buffering-state: on local files it often stays at 100
+        (fully filled) during healthy playback, which would pin the overlay on.
+        """
         if not hasattr(self, 'player') or not self.player:
             return False
         try:
-            cache_state = self.player['cache-buffering-state']
-            if cache_state is not None and int(cache_state) > 0:
-                return True
+            return bool(getattr(self.player, 'paused_for_cache', False))
         except Exception:
-            pass
-        try:
-            if self.player['paused-for-cache']:
-                return True
-        except Exception:
-            pass
-        return False
+            return False
+
+    def _playback_frame_interval_sec(self):
+        """Nominal video frame duration from mpv, or None if unknown."""
+        if not hasattr(self, 'player') or not self.player:
+            return None
+        fps = None
+        for attr in ('estimated_vf_fps', 'container_fps'):
+            try:
+                val = getattr(self.player, attr, None)
+                if val is not None and float(val) > 0:
+                    fps = float(val)
+                    break
+            except Exception:
+                continue
+        if not fps:
+            return None
+        return 1.0 / fps
+
+    def _playback_stall_threshold_sec(self):
+        """How long time_pos may stay flat before we treat it as buffering.
+
+        Low-FPS files advance time_pos only on frame boundaries (1s steps at
+        1 FPS). A fixed 0.35s threshold false-triggers between every frame and
+        the 0.2s continuous-recovery debounce can never clear it.
+        """
+        base = 0.35
+        frame_interval = self._playback_frame_interval_sec()
+        if frame_interval is None:
+            return base
+        # One frame + timer/jitter margin; never tighter than the DASH default.
+        return max(base, frame_interval + 0.25)
 
     def _update_playback_loading_state(self):
         """Show a loading overlay when MPV is buffering or playback time stalls."""
@@ -583,18 +611,24 @@ class PlayerMixin:
 
             last_pos = getattr(self, '_playback_last_time_pos', None)
             if last_pos is None or abs(time_sec - last_pos) > 0.02:
+                jump = 0.0 if last_pos is None else abs(time_sec - last_pos)
                 self._playback_last_time_pos = time_sec
                 self._playback_stall_since = None
                 if getattr(self, '_playback_loading_active', False):
-                    if self._playback_recover_at is None:
+                    # Low-FPS clocks jump once per frame then sit flat. Clear on a
+                    # real frame step; keep the short debounce only for tiny drifts.
+                    if jump >= 0.15:
+                        self._set_playback_loading(False)
+                    elif self._playback_recover_at is None:
                         self._playback_recover_at = now
                     elif now - self._playback_recover_at >= 0.2:
                         self._set_playback_loading(False)
                 return
 
+            stall_limit = self._playback_stall_threshold_sec()
             if self._playback_stall_since is None:
                 self._playback_stall_since = now
-            elif now - self._playback_stall_since >= 0.35:
+            elif now - self._playback_stall_since >= stall_limit:
                 self._set_playback_loading(True, "Buffering…")
         except Exception:
             pass
