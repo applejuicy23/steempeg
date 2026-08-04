@@ -430,6 +430,14 @@ class LifecycleMixin:
         if hasattr(self, "_persist_render_queue"):
             self._persist_render_queue()
 
+        # Shared panel snapshot so Desktop ↔ Portable see the same Export state.
+        try:
+            from steempeg.ui.portable.sheets import persist_render_settings
+
+            persist_render_settings(self)
+        except Exception:
+            pass
+
         if hasattr(self, "_library_ui_persist_ready"):
             self._library_ui_persist_ready = True
         if hasattr(self, "_persist_library_ui_state"):

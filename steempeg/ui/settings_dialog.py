@@ -160,7 +160,8 @@ class SettingsDialog(SteempegDialog):
         self.setMinimumWidth(480)
         from steempeg.ui.ui_density import scaled_dialog_size
 
-        w, h = scaled_dialog_size(520, 560, parent=parent or getattr(app, "ui", None))
+        # Compact default — content already has stretches; 560 left a USA-sized void.
+        w, h = scaled_dialog_size(500, 480, parent=parent or getattr(app, "ui", None))
         self.resize(w, h)
 
         settings = {}
@@ -634,6 +635,19 @@ class SettingsDialog(SteempegDialog):
             save_ui_shell(shell)
         if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
             save_ask_ui_shell(self._chk_ask_shell.isChecked())
+        # Flush queue + panel before relaunch so the other shell sees the same state.
+        app = self._app
+        if hasattr(app, "_persist_render_queue"):
+            try:
+                app._persist_render_queue()
+            except Exception:
+                pass
+        try:
+            from steempeg.ui.portable.sheets import persist_render_settings
+
+            persist_render_settings(app)
+        except Exception:
+            pass
         self.accept()
         from steempeg.ui.app_restart import restart_application
 

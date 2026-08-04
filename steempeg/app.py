@@ -2415,6 +2415,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     self._update_start_button_label()
                     self.refresh_render_queue_panel(sync_splitter=False)
 
+                # Shared Desktop/Portable panel snapshot (render_export_settings).
+                try:
+                    from steempeg.ui.portable.sheets import ensure_render_settings_restored
+
+                    ensure_render_settings_restored(self)
+                except Exception:
+                    pass
+
                 # Saving the new index for Fullscreen
                 self.controls_layout_index = top_v_layout.indexOf(self.player_footer_frame)
                 self.custom_timeline.pause_requested.connect(self.on_timeline_press)

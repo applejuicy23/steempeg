@@ -3129,6 +3129,12 @@ class RenderMixin:
                 lst.setCurrentItem(matches[0])
         self._set_preset_status(f"Saved preset “{key}”.")
         steempeg_information(self.ui, "Preset saved", f"Saved “{key}”.")
+        try:
+            from steempeg.ui.portable.sheets import persist_render_settings
+
+            persist_render_settings(self)
+        except Exception:
+            pass
 
     def apply_export_preset_to_panel(self) -> None:
         from steempeg.render.export_presets import get_preset_settings
@@ -3150,6 +3156,12 @@ class RenderMixin:
         # One summary rebuild at the end — not once per combo signal.
         apply_job_settings_to_ui(self, settings, refresh_summary=True)
         self._set_preset_status(f"Applied “{name}” to the export panel.")
+        try:
+            from steempeg.ui.portable.sheets import persist_render_settings
+
+            persist_render_settings(self)
+        except Exception:
+            pass
 
     def delete_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import delete_preset

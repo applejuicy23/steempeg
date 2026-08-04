@@ -189,7 +189,7 @@ def restore_portable_neo_chrome(app) -> None:
 
 
 def persist_render_settings(app) -> None:
-    """Snapshot export panel into settings.json."""
+    """Snapshot export panel into settings.json (shared by Desktop and Portable)."""
     try:
         data = asdict(snapshot_settings_from_ui(app))
         app.save_user_settings(RENDER_SETTINGS_KEY, data)
@@ -229,6 +229,16 @@ def restore_render_settings(app) -> None:
             apply_export_folder(app, permanent, persist=False)
     except Exception:
         _log.exception("Failed re-applying permanent export folder")
+
+
+def ensure_render_settings_restored(app) -> None:
+    """Restore the shared panel snapshot once per process (Desktop or Portable)."""
+    if getattr(app, "_render_settings_restored", False):
+        return
+    restore_render_settings(app)
+    app._render_settings_restored = True
+    # Back-compat for older portable chrome checks.
+    app._portable_render_settings_restored = True
 
 
 def _find_layout_index(layout, widget: QWidget):
@@ -457,6 +467,11 @@ class PortableRenderSettingsDialog(SteempegDialog):
                 wdg = getattr(self._app, name, None)
                 if wdg is not None:
                     wdg.show()
+        if hasattr(self._app, "refresh_export_presets_list"):
+            try:
+                self._app.refresh_export_presets_list()
+            except Exception:
+                pass
         if hasattr(self._queue, "refresh"):
             self._queue.refresh()
         if hasattr(self._strip, "sync_from_app"):

@@ -17,8 +17,8 @@ from steempeg.ui.player.controls.adaptive_trim_tools import (
 from steempeg.ui.portable.sheets import (
     PortableClipPickerDialog,
     PortableRenderSettingsDialog,
+    ensure_render_settings_restored,
     portable_render_sheet_compact,
-    restore_render_settings,
 )
 
 _log = logging.getLogger(__name__)
@@ -185,9 +185,10 @@ def ensure_portable_chrome(app) -> None:
         toggle.hide()
     if lbl is not None:
         lbl.hide()
-    if not getattr(app, "_portable_render_settings_restored", False):
-        restore_render_settings(app)
-        app._portable_render_settings_restored = True
+    if not getattr(app, "_render_settings_restored", False) and not getattr(
+        app, "_portable_render_settings_restored", False
+    ):
+        ensure_render_settings_restored(app)
     sync_portable_render_button(app)
     if hasattr(app, "_sync_library_scan_interaction_lock"):
         app._sync_library_scan_interaction_lock(
@@ -354,11 +355,13 @@ def _ensure_add_clip_button(app) -> None:
     _ensure_library_scan_badge(app, lay)
 
 
-_ADD_QUEUE_COLOR = "#ffcc00"
+# + Queue = white CTA (clip not queued yet); In queue stays yellow (QUEUED status).
+_ADD_QUEUE_COLOR = "#ffffff"
+_IN_QUEUE_COLOR = "#ffcc00"
 # Painted plus + " Queue" — same padding rhythm as Choose a Clip.
 _ADD_QUEUE_STYLE = with_tooltip_style(
     "QPushButton {"
-    f"background-color: rgba(255, 204, 0, 0.22);"
+    f"background-color: rgba(255, 255, 255, 0.12);"
     f"color: {_ADD_QUEUE_COLOR};"
     f"border: 2px solid {_ADD_QUEUE_COLOR};"
     "border-radius: 8px;"
@@ -367,8 +370,8 @@ _ADD_QUEUE_STYLE = with_tooltip_style(
     "padding: 2px 10px 2px 8px;"
     "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
     "}"
-    "QPushButton:hover { background-color: rgba(255, 204, 0, 0.35); }"
-    "QPushButton:pressed { background-color: rgba(255, 204, 0, 0.48); }"
+    "QPushButton:hover { background-color: rgba(255, 255, 255, 0.22); }"
+    "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.32); }"
     "QPushButton:disabled {"
     "background-color: rgba(80, 80, 80, 0.25);"
     "color: #777777;"
@@ -379,8 +382,8 @@ _ADD_QUEUE_STYLE = with_tooltip_style(
 _IN_QUEUE_STYLE = with_tooltip_style(
     "QPushButton {"
     f"background-color: rgba(255, 204, 0, 0.18);"
-    f"color: {_ADD_QUEUE_COLOR};"
-    f"border: 2px solid {_ADD_QUEUE_COLOR};"
+    f"color: {_IN_QUEUE_COLOR};"
+    f"border: 2px solid {_IN_QUEUE_COLOR};"
     "border-radius: 8px;"
     "font-weight: bold;"
     "font-size: 13px;"
@@ -398,7 +401,7 @@ def _style_add_to_queue_button(btn: QPushButton) -> None:
     # Glyph is ~10px; keep iconSize tight so side padding matches Choose a Clip
     # (an 18px empty box was reading as fat left/right margins).
     icon_sz = 12
-    btn.setIcon(bold_plus_icon(icon_sz, "#ffcc00"))
+    btn.setIcon(bold_plus_icon(icon_sz, _ADD_QUEUE_COLOR))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(" Queue")
     btn.setStyleSheet(_ADD_QUEUE_STYLE)
