@@ -31,6 +31,8 @@ class ClipCard(qtw.QWidget):
         health_color: Optional[str] = None,
         status_badge: Optional[str] = None,
         round_icon: bool = False,
+        queue_index: Optional[int] = None,
+        queue_color: Optional[str] = None,
         on_left_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         parent=None,
@@ -106,12 +108,23 @@ class ClipCard(qtw.QWidget):
             self.status_badge_label.move(6, 144 - 22)
 
         if health_color:
+            # True circle: radius = half the box (border counts toward the box).
             self.health_dot = qtw.QLabel(self.thumb_label)
-            self.health_dot.setFixedSize(12, 12)
+            self.health_dot.setFixedSize(14, 14)
             self.health_dot.setStyleSheet(
-                f"background-color: {health_color}; border: 2px solid #1a1a1a; border-radius: 8px;"
+                f"background-color: {health_color};"
+                "border: 2px solid #1a1a1a;"
+                "border-radius: 7px;"
             )
-            self.health_dot.move(254 - 18, 6)
+            self.health_dot.move(254 - 20, 6)
+
+        # Queue index (portable Choose a clip) — bottom-left; game icon stays top-left.
+        self.queue_index_badge = qtw.QLabel(self.thumb_label)
+        self.queue_index_badge.setFixedSize(26, 26)
+        self.queue_index_badge.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
+        self.queue_index_badge.move(6, 144 - 32)
+        self.queue_index_badge.hide()
+        self.set_queue_badge(queue_index, queue_color)
 
         text_widget = qtw.QWidget()
         text_widget.setStyleSheet("""
@@ -179,6 +192,32 @@ class ClipCard(qtw.QWidget):
         self._load_overlay.hide()
 
         self._border_overlay.raise_()
+
+    def set_queue_badge(
+        self,
+        queue_index: Optional[int] = None,
+        queue_color: Optional[str] = None,
+    ) -> None:
+        """Show/hide the portable queue # overlay (bottom-left; game icon stays top-left)."""
+        badge = getattr(self, "queue_index_badge", None)
+        icon = getattr(self, "icon_label", None)
+        if badge is None:
+            return
+        # Game avatar always stays in the top-left corner.
+        if icon is not None:
+            icon.move(8, 8)
+        if queue_index is None or int(queue_index) <= 0:
+            badge.hide()
+            return
+        from steempeg.ui.queue_card_shared import status_dot_style
+
+        color = queue_color or "#ffcc00"
+        badge.setText(str(int(queue_index)))
+        badge.setStyleSheet(status_dot_style(color, size=26))
+        # Bottom-left of the thumbnail, clear of the FG/CLIP tag on the right.
+        badge.move(6, 144 - 32)
+        badge.show()
+        badge.raise_()
 
     def set_loading(self, loading: bool, *, percent: int | None = None) -> None:
         """Show a spinner on the thumbnail while this clip opens in the player."""

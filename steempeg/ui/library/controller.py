@@ -2536,6 +2536,20 @@ class LibraryMixin:
         item.setData(Qt.UserRole, row)
         item.setData(Qt.UserRole + 1, clip_path)
 
+        queue_index = None
+        queue_color = None
+        if (
+            getattr(self, "_portable_shell", False)
+            and clip_path
+            and hasattr(self, "render_queue")
+        ):
+            job = self.render_queue.find_by_clip_path(clip_path)
+            if job is not None:
+                from steempeg.render.queue import STATUS_COLORS
+
+                queue_index = int(job.queue_index)
+                queue_color = STATUS_COLORS.get(job.status, "#ffcc00")
+
         card = ClipCard(
             title.strip(),
             footer_right,
@@ -2545,6 +2559,8 @@ class LibraryMixin:
             row,
             health_color=health_color,
             round_icon=is_unknown_clip,
+            queue_index=queue_index,
+            queue_color=queue_color,
             on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
             on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
         )
@@ -2558,6 +2574,36 @@ class LibraryMixin:
 
         if table.isRowHidden(row):
             item.setHidden(True)
+
+    def refresh_portable_clip_queue_badges(self) -> None:
+        """Update queue # overlays on Choose-a-clip cards without rebuilding the grid."""
+        if not getattr(self, "_portable_shell", False):
+            return
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or not hasattr(self, "render_queue"):
+            return
+        from steempeg.render.queue import STATUS_COLORS
+        from steempeg.ui.library.grid_view import ClipCard
+
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            card = grid.itemWidget(item)
+            if not isinstance(card, ClipCard):
+                continue
+            clip_path = item.data(Qt.UserRole + 1)
+            if not clip_path:
+                card.set_queue_badge(None)
+                continue
+            job = self.render_queue.find_by_clip_path(clip_path)
+            if job is None:
+                card.set_queue_badge(None)
+            else:
+                card.set_queue_badge(
+                    int(job.queue_index),
+                    STATUS_COLORS.get(job.status, "#ffcc00"),
+                )
 
     def _sync_library_scan_interaction_lock(self, *, busy: bool) -> None:
         """Roskomnadzor mode: while clips are loading, freeze Queue + Clips Manager."""
