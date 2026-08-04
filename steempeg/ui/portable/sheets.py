@@ -30,8 +30,9 @@ RENDER_SETTINGS_KEY = "render_export_settings"
 PORTABLE_SHEET_COMPACT_MAX_W = 1600
 
 # Compact-only neo rail trim (comfort default is 220).
-_PORTABLE_NEO_SIDEBAR_W = 200
-_PORTABLE_NEO_SIDEBAR_MARGINS = (10, 15, 6, 15)
+# Right margin matches settings page left (16) so tab→strip ≈ strip→content.
+_PORTABLE_NEO_SIDEBAR_W = 210
+_PORTABLE_NEO_SIDEBAR_MARGINS = (10, 15, 16, 15)
 
 # Inner chrome: content L/R margins (12+12) + body gap (10) + card rails (~4).
 _SHEET_INNER_CHROME_W = 38
@@ -199,6 +200,42 @@ def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
     return w, h
 
 
+def portable_settings_density(app):
+    """Settings column for the portable Render sheet.
+
+    Deck / compact: narrow Source·Video·Audio·Export so content clears the
+    Render right edge — width only. Keep comfort fonts/chrome (lerp made
+    the panel look intentionally squashed).
+    """
+    from dataclasses import replace
+
+    from steempeg.ui.ui_density import COMFORT
+
+    ui = getattr(app, "ui", None)
+    try:
+        tight = portable_shell_is_deck_native(ui, app=app) or portable_render_sheet_compact(
+            ui, app=app
+        )
+    except Exception:
+        tight = True
+    if not tight:
+        return COMFORT
+
+    # Comfort content is 646; ~560 + R=20 clears the scroll groove on Deck.
+    content_w = 560
+    gap = 8
+    warn = 8 + 16  # spacing + warn slot (same formula as UiDensity)
+    combo_w = (content_w - 16 - 2 * warn) // 2
+    stat_w = (content_w - 2 * gap) // 3
+    return replace(
+        COMFORT,
+        settings_content_w=content_w,
+        settings_stat_w=stat_w,
+        settings_combo_w=combo_w,
+        settings_page_margin=(16, 15, 20, 8),
+    )
+
+
 def apply_portable_neo_chrome(app) -> None:
     """Tighten neo sidebar width for compact portable Render sheets only."""
     if getattr(app, "_portable_neo_chrome_on", False):
@@ -220,10 +257,8 @@ def apply_portable_neo_chrome(app) -> None:
 
     sidebar.setFixedWidth(_PORTABLE_NEO_SIDEBAR_W)
 
-    # Keep desktop content inset from the nav divider (comfort left pad = 16).
-    from steempeg.ui.ui_density import COMFORT
-
-    left, top, right, bottom = COMFORT.settings_page_margin
+    dense = portable_settings_density(app)
+    left, top, right, bottom = dense.settings_page_margin
     tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
     if tabs is not None:
         for i in range(tabs.count()):
@@ -259,6 +294,18 @@ def restore_portable_neo_chrome(app) -> None:
     ):
         if hasattr(app, attr):
             delattr(app, attr)
+
+    # Undo Deck content shrink — restore shell settings column.
+    ui = getattr(app, "ui", None)
+    if ui is not None:
+        try:
+            from steempeg.ui.render_panel import apply_settings_panel_density
+            from steempeg.ui.ui_density import COMFORT
+
+            dense = getattr(app, "_ui_density", None) or COMFORT
+            apply_settings_panel_density(ui, dense)
+        except Exception:
+            pass
 
 
 def persist_render_settings(app) -> None:
@@ -839,6 +886,8 @@ class PortableClipPickerDialog(SteempegDialog):
 
         self._wire_pick_signals()
         self._mount_folder_refresh_in_toolbar()
+        if hasattr(app, "sync_library_filter_view"):
+            app.sync_library_filter_view()
 
     def _mount_folder_refresh_in_toolbar(self) -> None:
         """Place View → Choose Folder → Refresh → count in the library toolbar."""
