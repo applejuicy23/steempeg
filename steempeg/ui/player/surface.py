@@ -20,11 +20,16 @@ before ``winId()``) so startup does not create X11 children under NVIDIA.
 """
 from __future__ import annotations
 
+import logging
+import os
 import sys
+import time
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
+
+_FS_TRACE = os.environ.get("STEEMPEG_FS_TRACE") == "1"
 
 
 class MPVWrapper(QWidget):
@@ -170,6 +175,9 @@ class MPVWrapper(QWidget):
             return
         self._last_video_rect = video_rect
         self._border_ring = border_ring
+
+        if _FS_TRACE:
+            logging.info("[fstrace] %.3f mpv geom -> %s", time.perf_counter(), video_rect)
 
         self.mpv_screen.setGeometry(*video_rect)
 

@@ -52,6 +52,13 @@ from steempeg.ui.window_chrome import (
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, ThumbnailBatchThread
 from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
 
+_FS_TRACE = os.environ.get("STEEMPEG_FS_TRACE") == "1"
+
+
+def _fstrace(msg, *args):
+    if _FS_TRACE:
+        logging.info("[fstrace] %.3f " + msg, time.perf_counter(), *args)
+
 
 class PlayerMixin:
     def _discard_dead_linux_mpv(self) -> None:
@@ -1096,9 +1103,11 @@ class PlayerMixin:
         )
 
     def _show_immersive_transition_cover(self):
-        # Always mask enter/exit (idle and with clip). Skipping the cover on idle
-        # made the un-maximize animate visibly and stomped normalGeometry — the
-        # old "raise min size to max" hack. Gray cover ~0.1–0.5s is the lesser evil.
+        # The cover masks whatever the enter/exit switch still flashes. Set
+        # STEEMPEG_FS_COVER=0 to watch the raw transition when tuning it.
+        if os.environ.get("STEEMPEG_FS_COVER") == "0":
+            self._immersive_cover_gen = getattr(self, '_immersive_cover_gen', 0) + 1
+            return
         if getattr(self, '_immersive_transition_cover', None) is None:
             cover = QWidget()
             cover.setObjectName('immersiveTransitionCover')
@@ -1297,6 +1306,7 @@ class PlayerMixin:
     def _exit_immersive_mode(self):
         """Restore UI under a solid cover, then title bar — avoids MPV-only flash."""
         is_t = getattr(self, 'is_theater', False)
+        _fstrace("EXIT begin (theatre=%s)", is_t)
 
         self._show_immersive_transition_cover()
         # Same as enter: kill the SW_RESTORE/maximize cross-fade so exit is instant
@@ -1367,6 +1377,7 @@ class PlayerMixin:
         # dedicated fullscreen mode collapses it (handled in toggle_fullscreen).
         restore_content_insets(self.ui)
 
+        _fstrace("EXIT footer reparent start")
         footer = self.player_footer_frame
         footer.setWindowFlags(Qt.WindowType.Widget)
         footer.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
@@ -1389,6 +1400,7 @@ class PlayerMixin:
             "QFrame#HudFrame { background-color: #2d2d2d; border-radius: 6px; border: none; }"
         ))
 
+        _fstrace("EXIT footer reparent done")
         v_container = getattr(self.ui, 'video_container', None)
         if v_container:
             v_container.setMinimumSize(1, 1)
@@ -1416,8 +1428,10 @@ class PlayerMixin:
             if hasattr(self, '_sync_library_mode_chrome'):
                 self._sync_library_mode_chrome()
 
+        _fstrace("EXIT panels restored, activating layouts")
         self._activate_window_layouts()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        _fstrace("EXIT layouts activated (window still at monitor size)")
 
         def finish_exit():
             # Show the title bar *before* restoring the window state so WM_NCCALCSIZE
@@ -1436,7 +1450,9 @@ class PlayerMixin:
                 # Soft-redraw after maximize fights the cover and can flash Aero
                 # chrome at the edges — pause it until uncover settles.
                 self.ui._suppress_dwm_ghost_timer = True
+                _fstrace("EXIT window state restore start")
                 exit_immersive_chrome(self.ui)
+                _fstrace("EXIT window state restore done")
                 # showMaximized re-adds the native Aero caption for a frame or two —
                 # poke under the cover before uncovering (changeEvent alone races).
                 self._reassert_frameless_caption()
@@ -1444,6 +1460,7 @@ class PlayerMixin:
                     self.ui.title_bar.sync_window_state()
                 self._activate_window_layouts()
                 footer.show()
+                _fstrace("EXIT footer shown")
                 if right_layout:
                     right_layout.activate()
                 if hasattr(self, 'btn_fullscreen'):
@@ -1493,6 +1510,7 @@ class PlayerMixin:
             self.ui._suppress_dwm_ghost_timer = False
             set_window_transitions(self.ui, True)
             self._hide_immersive_transition_cover()
+            _fstrace("EXIT complete (uncovered)")
 
     def toggle_fullscreen(self):
         """Immersive player mode: hide chrome inside the current window (no showFullScreen)."""
@@ -1504,6 +1522,7 @@ class PlayerMixin:
         self.is_fullscreen = not getattr(self, 'is_fullscreen', False)
         
         if self.is_fullscreen:
+            _fstrace("ENTER begin")
             # --- ENTERING IMMERSIVE MODE (stay maximized / current window state) ---
             # Mask the whole transition with a solid cover: while growing the window
             # from the work area to the full monitor, Windows briefly paints the native
@@ -1632,6 +1651,7 @@ class PlayerMixin:
             """))
             self.player_footer_frame.show()
             self.player_footer_frame.raise_()
+            _fstrace("ENTER footer promoted to floating HUD")
 
             if hasattr(self, 'wake_up_fullscreen_controls'):
                 self.wake_up_fullscreen_controls()
@@ -1644,8 +1664,15 @@ class PlayerMixin:
             QTimer.singleShot(120, self._finish_fullscreen_enter)
             
         else:
-            self._exit_immersive_mode()
             # Fullscreen enter clears is_theater; portable must land back in theatre.
+            # Re-flag it *before* the exit runs: otherwise the exit takes the desktop
+            # restore path and re-shows every dock for a frame before the theatre
+            # shell hides them again. Setting it here also lets
+            # apply_portable_theatre_shell skip toggle_theater_mode, whose
+            # pre-theatre splitter snapshot would capture the collapsed sizes.
+            if getattr(self, "_portable_shell", False):
+                self.is_theater = True
+            self._exit_immersive_mode()
             if getattr(self, "_portable_shell", False):
                 QTimer.singleShot(0, self.apply_portable_theatre_shell)
 
