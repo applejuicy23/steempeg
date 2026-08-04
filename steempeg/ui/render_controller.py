@@ -2299,6 +2299,11 @@ class RenderMixin:
                 if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
+            if hasattr(self.ui, 'label_location'):
+                self.ui.label_location.setText("")
+            path_row = getattr(self.ui, "output_path_row", None)
+            if path_row is not None:
+                path_row.hide()
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
             if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
@@ -2358,6 +2363,9 @@ class RenderMixin:
             if hasattr(self.ui, 'label_location'):
                 display_path = full_path.replace('\\', '/')
                 self.ui.label_location.setText(display_path)
+            path_row = getattr(self.ui, "output_path_row", None)
+            if path_row is not None:
+                path_row.show()
 
             if hasattr(self, 'btn_copy_loc') and full_path:
                 self.btn_copy_loc.show()
@@ -3299,6 +3307,18 @@ class RenderMixin:
         if target_row < 0:
             return
 
+        # Filtered-out clips stay in the table as hidden rows. Selecting them and
+        # scrollToItem left a blank strip at the top of Choose-a-Clip — reveal
+        # just this card so the queue pick is visible without wiping the filter.
+        if table.isRowHidden(target_row):
+            table.setRowHidden(target_row, False)
+            if hasattr(self, "grid_clips"):
+                for i in range(self.grid_clips.count()):
+                    gi = self.grid_clips.item(i)
+                    if gi is not None and gi.data(Qt.UserRole) == target_row:
+                        gi.setHidden(False)
+                        break
+
         table.blockSignals(True)
         table.clearSelection()
         table.selectRow(target_row)
@@ -3315,12 +3335,14 @@ class RenderMixin:
                 if is_match:
                     anchor_item = gi
             self.grid_clips.blockSignals(False)
-            if anchor_item is not None:
+            if anchor_item is not None and not anchor_item.isHidden():
                 self._grid_anchor_item = anchor_item
                 self._grid_anchor_index = self._list_widget_item_index(self.grid_clips, anchor_item)
                 self.grid_clips.scrollToItem(anchor_item)
             if hasattr(self, "_sync_grid_card_visuals"):
                 self._sync_grid_card_visuals()
+            if hasattr(self, "_update_library_count_label"):
+                self._update_library_count_label()
 
     def remove_queue_job(self, job_id: str) -> None:
         self.remove_queue_jobs([job_id])
