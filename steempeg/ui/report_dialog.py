@@ -84,6 +84,7 @@ def show_report_dialog(app):
 
     card = QWidget(dialog)
     card.setObjectName("ReportCard")
+    card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     shell.addWidget(card)
 
     layout = QVBoxLayout(card)

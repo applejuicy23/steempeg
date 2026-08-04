@@ -133,6 +133,45 @@ def _crisp_icon(path, size, dpr=2.0):
     return scaled
 
 
+class _AboutEggLogo(QLabel):
+    """About logo that quietly toggles logo ↔ Phibe Chupe on left click.
+
+    A real subclass (not an instance monkey-patch) so Qt virtual dispatch
+    always delivers mouse presses. The hit target stays opaque for mouse
+    purposes so clicks cannot fall through a translucent About shell.
+    """
+
+    def __init__(self, normal: QPixmap, egg: QPixmap, parent=None):
+        super().__init__(parent)
+        self._normal = normal
+        self._egg = egg
+        self._egg_on = False
+        if not normal.isNull():
+            self.setPixmap(normal)
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self.setFixedWidth(128)
+        self.setMinimumHeight(120)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Transparent look is fine; do not let clicks pierce the dialog.
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._egg.isNull() and self._normal.isNull():
+                event.accept()
+                return
+            self._egg_on = not self._egg_on
+            pix = self._egg if self._egg_on and not self._egg.isNull() else self._normal
+            if not pix.isNull():
+                self.setPixmap(pix)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        event.accept()
+
+
 class LifecycleMixin:
     def eventFilter(self, source, event):
         if getattr(self, '_is_closing', False):
@@ -515,6 +554,10 @@ class LifecycleMixin:
 
         card = QWidget(dialog)
         card.setObjectName("AboutCard")
+        # Required on WA_TranslucentBackground shells — without this the card
+        # may not paint / hit-test, so clicks fall through to the main window
+        # (stuck press cursor, Phibe egg never toggles).
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         shell_layout.addWidget(card)
 
         main_layout = QHBoxLayout(card)
@@ -522,28 +565,9 @@ class LifecycleMixin:
         main_layout.setSpacing(24)
 
         # --- Left: the program logo (smoothly scaled, never pixelated) ---
-        logo_label = QLabel()
         logo_normal = _crisp_icon(get_resource_path("logo.png"), 120, dpr=1.0)
         logo_egg = _crisp_icon(get_resource_path("phibechipeegg.png"), 120, dpr=1.0)
-        if not logo_normal.isNull():
-            logo_label.setPixmap(logo_normal)
-        logo_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
-        logo_label.setFixedWidth(128)
-        logo_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Quiet toggle: click logo ↔ Phibe Chupe (in-place, no external viewer).
-        logo_egg_on = {"v": False}
-
-        def _logo_pressed(event) -> None:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return
-            if logo_egg.isNull() and logo_normal.isNull():
-                return
-            logo_egg_on["v"] = not logo_egg_on["v"]
-            pix = logo_egg if logo_egg_on["v"] and not logo_egg.isNull() else logo_normal
-            if not pix.isNull():
-                logo_label.setPixmap(pix)
-
-        logo_label.mousePressEvent = _logo_pressed  # type: ignore[method-assign]
+        logo_label = _AboutEggLogo(logo_normal, logo_egg)
         main_layout.addWidget(logo_label)
 
         # --- Right: the content column ---
@@ -641,6 +665,29 @@ class LifecycleMixin:
             tb = getattr(getattr(self, "ui", None), "title_bar", None)
             if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
                 tb.clear_shell_tool_hover()
+            else:
+                # Desktop footer About path may have no title-bar shell tools.
+                app = QApplication.instance()
+                if app is not None:
+                    while app.overrideCursor() is not None:
+                        app.restoreOverrideCursor()
+                    try:
+                        app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+                        app.restoreOverrideCursor()
+                    except RuntimeError:
+                        pass
+                ui = getattr(self, "ui", None)
+                if ui is not None:
+                    try:
+                        ui.unsetCursor()
+                    except RuntimeError:
+                        pass
+                    from PySide6.QtGui import QCursor
+
+                    try:
+                        QCursor.setPos(QCursor.pos())
+                    except RuntimeError:
+                        pass
 
 
     def setup_logs_menu(self):
