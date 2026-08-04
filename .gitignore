@@ -64,3 +64,6 @@ Steempeg_v*.zip
 
 # --- Local release-note drafts (paste into GitHub Releases by hand) ---
 docs/release-notes*.md
+
+# --- Local investigation notes ---
+mpvfullscreenguide.md
