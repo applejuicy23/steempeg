@@ -196,14 +196,15 @@ class ShellChooserDialog(SteempegDialog):
 
         hint = QLabel("How do you want to use Steempeg?")
         hint.setWordWrap(True)
+        # Same compact section face as Settings (not a marketing H1).
         hint.setStyleSheet(
-            f"color: {tok.TEXT_PRIMARY}; font-size: 13px; background: transparent; "
-            f"font-family: {tok.FONT_APP};"
+            f"color: {tok.TEXT_TITLE}; font-size: 13px; font-weight: bold; "
+            f"background: transparent; font-family: {tok.FONT_APP};"
         )
         self.content_layout.addWidget(hint)
 
         sub = QLabel(
-            "Desktop keeps the full layout. Portable is theatre-only — "
+            "Desktop keeps the full layout. Portable is theatre-only, "
             "built for Steam Deck and small screens."
         )
         sub.setWordWrap(True)
@@ -223,7 +224,7 @@ class ShellChooserDialog(SteempegDialog):
                 cramped = QLabel(
                     "Your display looks a bit small "
                     f"({screen_size_summary()}). Desktop may feel cramped or "
-                    "show layout artifacts — Portable is usually a better fit."
+                    "show layout artifacts. Portable is usually a better fit."
                 )
                 cramped.setWordWrap(True)
                 cramped.setStyleSheet(
@@ -259,7 +260,7 @@ class ShellChooserDialog(SteempegDialog):
         row.addStretch(1)
         self.content_layout.addLayout(row)
 
-        self._chk_remember = SteempegCheckBox("Don't ask again — remember this choice")
+        self._chk_remember = SteempegCheckBox("Don't ask again. Remember this choice")
         self._chk_remember.setChecked(False)
         self.content_layout.addSpacing(10)
         self.content_layout.addWidget(self._chk_remember)
