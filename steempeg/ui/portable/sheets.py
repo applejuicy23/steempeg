@@ -33,6 +33,39 @@ PORTABLE_SHEET_COMPACT_MAX_W = 1600
 _PORTABLE_NEO_SIDEBAR_W = 200
 _PORTABLE_NEO_SIDEBAR_MARGINS = (10, 15, 6, 15)
 
+# Inner chrome: content L/R margins (12+12) + body gap (10) + card rails (~4).
+_SHEET_INNER_CHROME_W = 38
+# Compact column floors / caps — used only for wide (~1480+) compact shells.
+_QUEUE_RAIL_MIN = 340
+_QUEUE_RAIL_MAX = 400
+_QUEUE_RAIL_SPACIOUS = 400
+_QUEUE_RAIL_GOLDEN = 390  # Deck / 1280×800: golden + room for queue text
+_RIGHT_COL_MIN = 720
+# True Deck LCD/OLED (~1280×800). Wider "Deck sims" (e.g. 1480×925) stay roomier.
+_DECK_NATIVE_MAX_W = 1320
+_DECK_NATIVE_MAX_H = 850
+
+
+def portable_shell_height(app=None, host=None) -> int:
+    shell = portable_shell_widget(app, host)
+    if shell is not None:
+        try:
+            h = int(shell.height() or 0)
+            if h > 32:
+                return h
+        except Exception:
+            pass
+    return 0
+
+
+def portable_shell_is_deck_native(host=None, app=None) -> bool:
+    """Steam Deck class footprint — not a stretched ~1480×925 desk simulation."""
+    w = portable_shell_width(app=app, host=host)
+    h = portable_shell_height(app=app, host=host)
+    if w <= 0:
+        return True
+    return w <= _DECK_NATIVE_MAX_W and (h <= 0 or h <= _DECK_NATIVE_MAX_H)
+
 _log = logging.getLogger(__name__)
 
 
@@ -88,8 +121,24 @@ def portable_render_sheet_compact(host=None, app=None) -> bool:
     return w <= PORTABLE_SHEET_COMPACT_MAX_W
 
 
-def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
-    """Fixed dialog size for the current shell footprint."""
+def _split_wide_compact_columns(inner_w: int) -> tuple[int, int]:
+    """Split for wide compact shells (~1480+): modest Queue, rest to render."""
+    gap = 10
+    usable = max(inner_w - gap, 1)
+    q_min, r_min = _QUEUE_RAIL_MIN, _RIGHT_COL_MIN
+    if usable >= q_min + r_min:
+        extra = usable - q_min - r_min
+        q_add = min(_QUEUE_RAIL_MAX - q_min, extra // 4)
+        return q_min + q_add, r_min + (extra - q_add)
+    queue = max(320, min(q_min, usable - 620))
+    right = max(620, usable - queue)
+    if queue + right > usable:
+        right = max(580, usable - queue)
+    return queue, right
+
+
+def portable_render_sheet_geometry(*, compact: bool, shell) -> tuple[int, int, int]:
+    """Return ``(sheet_w, sheet_h, queue_rail_w)`` for the current shell."""
     from steempeg.ui.ui_density import scaled_dialog_size
 
     hw = 0
@@ -102,17 +151,35 @@ def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
             hw = hh = 0
 
     if compact:
-        w, h = scaled_dialog_size(1480, 620, parent=shell, factor=0.98)
+        # --- Golden standard: true Deck / 1280×800 (pre-Gemini sim) ---
+        if portable_shell_is_deck_native(shell):
+            w, h = scaled_dialog_size(1480, 620, parent=shell, factor=0.98)
+            if hw > 0:
+                w = min(max(w, 1240), hw - 8, 1520)
+                w = min(w, hw - 8)
+            else:
+                w = max(1240, w)
+            if hh > 0:
+                h = min(max(h, 480), hh - 40)
+            else:
+                h = max(480, h)
+            return max(640, w), max(480, h), _QUEUE_RAIL_GOLDEN
+
+        # --- Wide compact (Gemini-style ~1480×925 desk sim) ---
+        margin = 16
         if hw > 0:
-            w = min(max(w, 1240), hw - 8, 1520)
-            w = min(w, hw - 8)
+            sheet_w = max(640, hw - margin)
         else:
-            w = max(1240, w)
+            sheet_w, _ = scaled_dialog_size(1180, 600, parent=shell, factor=0.98)
+            sheet_w = max(1080, min(sheet_w, 1280))
+        _, design_h = scaled_dialog_size(1180, 600, parent=shell, factor=0.98)
+        sheet_h = max(480, min(design_h, 640))
         if hh > 0:
-            h = min(max(h, 480), hh - 40)
-        else:
-            h = max(480, h)
-        return max(640, w), max(480, h)
+            sheet_h = min(sheet_h, hh - 40)
+            sheet_h = max(480, sheet_h)
+        inner = max(sheet_w - _SHEET_INNER_CHROME_W, _QUEUE_RAIL_MIN + _RIGHT_COL_MIN + 10)
+        queue_w, _right = _split_wide_compact_columns(inner)
+        return sheet_w, sheet_h, queue_w
 
     w, h = scaled_dialog_size(1480, 700, parent=shell, factor=0.90)
     if hw > 0:
@@ -123,7 +190,13 @@ def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
         h = min(max(h, 560), hh - 64)
     else:
         h = max(560, h)
-    return max(640, w), max(560, h)
+    return max(640, w), max(560, h), _QUEUE_RAIL_SPACIOUS
+
+
+def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
+    """Fixed dialog size for the current shell footprint."""
+    w, h, _queue = portable_render_sheet_geometry(compact=compact, shell=shell)
+    return w, h
 
 
 def apply_portable_neo_chrome(app) -> None:
@@ -336,7 +409,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
         app._portable_sheet_compact = compact
 
         self.setMinimumSize(1040, 420)
-        w, h = portable_render_sheet_size(compact=compact, shell=shell)
+        w, h, queue_w = portable_render_sheet_geometry(compact=compact, shell=shell)
         self.setFixedSize(w, h)
         self.content_layout.setContentsMargins(12, 8, 12, 0)
         self.content_layout.setSpacing(10)
@@ -345,6 +418,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
         body.setSpacing(10)
 
         self._queue = PortableQueueSidebar(app, self, compact=compact)
+        self._queue.apply_rail_width(compact=compact, width=queue_w)
         self._queue.job_selected.connect(self._on_queue_job)
         body.addWidget(self._queue, 0)
         app._portable_queue_sidebar = self._queue
@@ -453,8 +527,10 @@ class PortableRenderSettingsDialog(SteempegDialog):
         # Keep footprint in sync when the user resized the shell after prewarm.
         compact = bool(getattr(self, "_sheet_compact", True))
         self._app._portable_sheet_compact = compact
-        w, h = portable_render_sheet_size(compact=compact, shell=host)
+        w, h, queue_w = portable_render_sheet_geometry(compact=compact, shell=host)
         self.setFixedSize(w, h)
+        if hasattr(self._queue, "apply_rail_width"):
+            self._queue.apply_rail_width(compact=compact, width=queue_w)
         if self._neo is not None:
             self._neo.show()
             tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
