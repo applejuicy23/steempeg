@@ -510,7 +510,10 @@ class PlayerMixin:
             if not getattr(self, "_loading_queue_job", False):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
         if hasattr(self.ui, 'label_location'):
-            self.ui.label_location.setText("—")
+            self.ui.label_location.setText("")
+        path_row = getattr(self.ui, "output_path_row", None)
+        if path_row is not None:
+            path_row.hide()
             
         # Keep Start enabled when the queue still has work, even with no preview clip.
         if hasattr(self.ui, 'btn_start'):
