@@ -2402,6 +2402,121 @@ class LibraryMixin:
         grid.blockSignals(False)
         grid.setUpdatesEnabled(True)
 
+    def _library_filter_row_matches(self, row: int, saved: dict) -> bool:
+        """Whether table row ``row`` should stay visible under ``saved_filter_state``."""
+        from steempeg.ui.library.filters import (
+            FilterMenu,
+            _library_root_for_clip,
+            _row_display_health_level,
+        )
+
+        table = self.ui.table_clips
+        item_game = table.item(row, 0)
+        item_type = table.item(row, 1)
+        item_date = table.item(row, 2)
+        item_dur = table.item(row, 3)
+
+        selected_games = set(saved.get("games") or [])
+        selected_types = set(saved.get("types") or [])
+        selected_health = set(saved.get("health") or [])
+        selected_folders = list(saved.get("folders") or [])
+        roots = list(getattr(self, "clips_folders", None) or [])
+
+        if selected_games and item_game and item_game.text().strip() not in selected_games:
+            return False
+        if selected_types and item_type and item_type.text().strip() not in selected_types:
+            return False
+        if selected_health and item_game:
+            if _row_display_health_level(item_game) not in selected_health:
+                return False
+        if selected_folders and item_game:
+            clip_path = item_game.data(Qt.UserRole) or ""
+            root = _library_root_for_clip(clip_path, roots)
+            folder_keys = {
+                os.path.normcase(os.path.normpath(p)) for p in selected_folders if p
+            }
+            if root is None or os.path.normcase(os.path.normpath(root)) not in folder_keys:
+                return False
+
+        min_date = saved.get("min_date")
+        max_date = saved.get("max_date")
+        min_time = saved.get("min_time")
+        max_time = saved.get("max_time")
+        min_dur_t = saved.get("min_dur")
+        max_dur_t = saved.get("max_dur")
+        min_time_sec = FilterMenu._qtime_to_sec(min_time) if min_time is not None else 0
+        max_time_sec = (
+            FilterMenu._qtime_to_sec(max_time) if max_time is not None else 24 * 3600 - 1
+        )
+        min_dur = FilterMenu._qtime_to_sec(min_dur_t) if min_dur_t is not None else 0
+        max_dur = FilterMenu._qtime_to_sec(max_dur_t) if max_dur_t is not None else 0
+        skip_duration = max_dur <= 0 and min_dur <= 0
+
+        if item_date is not None:
+            q_dt = FilterMenu._parse_row_datetime(item_date.text())
+            if q_dt is not None:
+                r_date = q_dt.date()
+                if min_date is not None and hasattr(min_date, "isValid") and min_date.isValid():
+                    if r_date < min_date:
+                        return False
+                if max_date is not None and hasattr(max_date, "isValid") and max_date.isValid():
+                    if r_date > max_date:
+                        return False
+                r_time = (
+                    q_dt.time().hour() * 3600
+                    + q_dt.time().minute() * 60
+                    + q_dt.time().second()
+                )
+                if r_time < min_time_sec or r_time > max_time_sec:
+                    return False
+
+        if item_dur is not None and not skip_duration:
+            r_dur = FilterMenu._parse_row_duration(item_dur.text())
+            if r_dur < min_dur or r_dur > max_dur:
+                return False
+        return True
+
+    def reapply_saved_library_filters(self) -> None:
+        """Push ``saved_filter_state`` onto table + grid (or show everything).
+
+        Fixes the portable desync where the filter popup looks cleared (no saved
+        active state / defaults) while rows stay hidden from an earlier Apply —
+        ghost cards and a blank strip you can still click.
+        """
+        if not hasattr(self.ui, "table_clips"):
+            return
+        table = self.ui.table_clips
+        saved = getattr(self, "saved_filter_state", None)
+        active = bool(saved and saved.get("active"))
+
+        table.setUpdatesEnabled(False)
+        try:
+            if not active:
+                for row in range(table.rowCount()):
+                    table.setRowHidden(row, False)
+            else:
+                for row in range(table.rowCount()):
+                    table.setRowHidden(row, not self._library_filter_row_matches(row, saved))
+                # Preview / queue selection may be outside the filter — keep those
+                # cards visible so Choose-a-Clip doesn't scroll into empty space.
+                sm = table.selectionModel()
+                if sm is not None:
+                    for idx in sm.selectedRows():
+                        row = idx.row()
+                        if table.isRowHidden(row):
+                            table.setRowHidden(row, False)
+        finally:
+            table.setUpdatesEnabled(True)
+
+        if hasattr(self, "fast_sync_grid"):
+            self.fast_sync_grid()
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+
+    def sync_library_filter_view(self) -> None:
+        """Align grid visibility with remembered filters before showing the library."""
+        self.reapply_saved_library_filters()
+
     # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
     def refresh_library(self):
         """ Refresh button: wipe the active filter, deselect the current clip/queue job,
@@ -3139,12 +3254,25 @@ class LibraryMixin:
             host = None
 
         three_col = bool(getattr(menu, "_three_col", False))
-        if host is not None:
+        # 3-col may be wider than Choose-a-Clip — clamp to the main program shell.
+        clamp = host
+        if three_col:
+            shell = getattr(self, "ui", None)
             try:
-                # Stay mostly inside the sheet; allow a small left spill in 3-col.
-                pad = 48 if three_col else 8
-                min_x = host.mapToGlobal(QPoint(-pad if three_col else 8, 0)).x()
-                max_x = host.mapToGlobal(QPoint(host.width() - menu.width() - 8, 0)).x()
+                if shell is not None and int(shell.width() or 0) > int(
+                    (host.width() if host is not None else 0) or 0
+                ):
+                    clamp = shell
+            except RuntimeError:
+                pass
+
+        if clamp is not None:
+            try:
+                pad = 12 if three_col else 8
+                min_x = clamp.mapToGlobal(QPoint(pad, 0)).x()
+                max_x = clamp.mapToGlobal(
+                    QPoint(max(pad, clamp.width() - menu.width() - pad), 0)
+                ).x()
                 if three_col:
                     # Keep the right edge near the filter pill.
                     pill_right = self.btn_filter_pill.mapToGlobal(
@@ -3168,6 +3296,9 @@ class LibraryMixin:
             self.filter_menu.deleteLater()
             
         # 2. Creating a brand-new menu from scratch
+        # Heal view↔memory desync before rebuilding pills (ghost hidden cards).
+        if hasattr(self, "sync_library_filter_view"):
+            self.sync_library_filter_view()
         self.filter_menu = FilterMenu(self.ui)
         self.filter_menu.gather_statistics(self)
         dense = self._filter_menu_density()
