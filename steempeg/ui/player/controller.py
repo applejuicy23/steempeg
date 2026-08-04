@@ -286,6 +286,12 @@ class PlayerMixin:
         self._shell_paint_frozen = bool(frozen)
         try:
             self.ui.setUpdatesEnabled(not frozen)
+            # The HUD is a Tool window parented to the shell: freezing the shell
+            # propagates down to it, but thawing does not come back up to a
+            # top-level child — it would stay shown-but-never-painted.
+            footer = getattr(self, 'player_footer_frame', None)
+            if footer is not None:
+                footer.setUpdatesEnabled(not frozen)
         except RuntimeError:
             return
         if frozen:
@@ -1185,7 +1191,11 @@ class PlayerMixin:
             enable_frameless(self.ui)
             poke_frame(self.ui)
             refresh_dwm_chrome(self.ui)
-            soft_full_redraw(self.ui)
+            # RedrawWindow erases straight through Qt's disabled updates, and Qt
+            # then declines to repaint — the erased edges are the black/transparent
+            # frame around the video. The thaw repaints everything anyway.
+            if not getattr(self, '_shell_paint_frozen', False):
+                soft_full_redraw(self.ui)
         except Exception:
             pass
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
@@ -1624,6 +1634,14 @@ class PlayerMixin:
                     '_immersive_right_h_handle_visible',
                 )
 
+            # Grow to the monitor *before* tearing the layout down, mirroring the
+            # exit: the shell is then laid out once, at the final size. From
+            # maximized this only claims the taskbar band, so the one frame that
+            # is still painted here barely moves. Everything after is frozen.
+            set_window_transitions(self.ui, False)
+            self._enter_immersive_chrome()
+            self._set_shell_paint_frozen(True)
+
             # Hide ALL old and NEW panels
             self._set_left_library_panel_visible(False)
             if hasattr(self.ui, 'settings_tabs'): self.ui.settings_tabs.hide()
@@ -1684,18 +1702,14 @@ class PlayerMixin:
             # reaches every edge (otherwise a 9-11px border frames the fullscreen).
             collapse_content_insets(self.ui)
 
-            # Make the un-maximize into fullscreen instant (no SW_RESTORE cross-fade
-            # that leaks the desktop through the window). Re-enabled in _finish.
-            set_window_transitions(self.ui, False)
-
             self._enter_immersive_layout()
             if hasattr(self, 'right_h_splitter'):
                 self._hide_right_h_splitter_handle()
-            self._enter_immersive_chrome()
-            # Lay out at the new monitor size and place the embed right away.
-            # Leaving both to the 120 ms finish step kept the video at its windowed
-            # rect, framed by the black wrapper, for the first visible frames.
+            # Resolve the immersive layout, then place the embed once. Leaving the
+            # placement to the 120 ms finish step left the video sitting at its
+            # windowed rect, framed by the black wrapper, for the first frames.
             self._activate_window_layouts()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             self._freeze_mpv_surface(False)
 
             self.player_footer_frame.setParent(self.ui)
@@ -1830,6 +1844,11 @@ class PlayerMixin:
         
         self.ui.setCursor(Qt.ArrowCursor) 
         if hasattr(self, 'player_footer_frame'):
+            if self.player_footer_frame.isHidden():
+                # Align on the way in only: a freshly re-flagged Tool window would
+                # otherwise flash at its layout-derived full width. On plain mouse
+                # motion the HUD is already placed — leave its geometry alone.
+                self.align_fullscreen_hud()
             self.player_footer_frame.show()
             self.player_footer_frame.raise_()
         # Same as desktop with a clip playing — auto-hide the bar. Idle (no clip)
