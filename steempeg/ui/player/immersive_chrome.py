@@ -104,6 +104,36 @@ def win32_unmaximize_to_rect(widget, x, y, w, h):
     ctypes.windll.user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
 
 
+def win32_get_placement(widget):
+    """Snapshot WINDOWPLACEMENT: show state *and* restore rect in one struct."""
+    try:
+        wp = _WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        if not ctypes.windll.user32.GetWindowPlacement(_hwnd(widget), ctypes.byref(wp)):
+            return None
+        return wp
+    except Exception:
+        return None
+
+
+def win32_set_placement(widget, placement) -> bool:
+    """Apply a saved WINDOWPLACEMENT.
+
+    Windows applies ``rcNormalPosition`` and ``showCmd`` together, so a window
+    going back to maximized is never painted at its (small) restore size on the
+    way — which is what ``setGeometry(restore_rect)`` + ``showMaximized()`` does.
+    """
+    if placement is None:
+        return False
+    try:
+        placement.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        return bool(
+            ctypes.windll.user32.SetWindowPlacement(_hwnd(widget), ctypes.byref(placement))
+        )
+    except Exception:
+        return False
+
+
 class _MONITORINFO(ctypes.Structure):
     _fields_ = [
         ("cbSize", ctypes.c_ulong),
@@ -147,19 +177,28 @@ def enter_immersive_chrome(window, screen_geometry):
     window._immersive_saved_min_size = window.minimumSize()
 
     if os.name == 'nt':
-        # Do NOT strip Win32 styles or move the window via Win32 here. The window
-        # already has its native caption suppressed by the persistent WM_NCCALCSIZE
-        # handler (window_chrome.handle_native_event), which stays active even while
-        # the title bar is hidden. We only need to (a) drop the maximize state at the
-        # Qt level so Qt's layout matches the physical window, and (b) size the window
-        # to the full monitor via Qt geometry.
-        #
-        # Previously we resized a still-"maximized" window with raw Win32 SetWindowPos.
-        # Qt kept laying out its content at the old work-area height, so the extra
-        # bottom band (taskbar height) was never painted — leaving a stale "ghost" of
-        # the windowed bottom UI. Driving the state + geometry through Qt keeps
-        # everything consistent, so the client paints edge-to-edge with no ghost.
+        # Do NOT strip Win32 styles here. The window already has its native caption
+        # suppressed by the persistent WM_NCCALCSIZE handler
+        # (window_chrome.handle_native_event), which stays active even while the
+        # title bar is hidden. What matters is that the maximize state is really
+        # dropped — a still-"maximized" window resized by raw SetWindowPos keeps Qt
+        # laying out at the old work-area height, leaving a ghost of the windowed
+        # bottom UI in the taskbar band.
         window._immersive_chrome_mode = 'nt_geom'
+        # Both directions go through WINDOWPLACEMENT so the maximize state and the
+        # restore rect always move together. Qt's setWindowState(~Maximized) is a
+        # ShowWindow(SW_SHOWNORMAL), which snaps to the *old small* restore rect for
+        # a frame before setGeometry() grows it back — and on the way out the repair
+        # of that stomped restore rect is what produced the visible shrink-then-grow.
+        window._immersive_saved_placement = win32_get_placement(window)
+        bounds = win32_monitor_bounds(window)
+        if window._immersive_saved_placement is not None and bounds is not None:
+            # Leave maximized *directly* at the monitor rect (one atomic call), then
+            # pin the exact bounds since rcNormalPosition is in workspace coords.
+            win32_unmaximize_to_rect(window, *bounds)
+            win32_set_bounds(window, *bounds)
+            return
+
         if window._immersive_was_maximized:
             window.setWindowState(
                 window.windowState() & ~Qt.WindowState.WindowMaximized
@@ -188,10 +227,19 @@ def exit_immersive_chrome(window):
             pass
 
     if mode == 'nt_geom':
-        # Re-seed normalGeometry before maximize — enter's setGeometry(full screen)
-        # stomped Qt's restore rect. Under the gray cover this is invisible.
         from steempeg.ui.window_chrome import poke_frame, refresh_dwm_chrome
 
+        placement = getattr(window, '_immersive_saved_placement', None)
+        if win32_set_placement(window, placement):
+            # State + restore rect came back in the same call, so there is no frame
+            # where the window sits at its small restore size.
+            poke_frame(window)
+            refresh_dwm_chrome(window)
+            window._immersive_saved_placement = None
+            window._immersive_chrome_mode = None
+            return
+
+        # No placement snapshot: fall back to the visible shrink-then-grow repair.
         if was_maximized:
             if saved_geometry is not None and saved_geometry.isValid():
                 window.setGeometry(saved_geometry)
