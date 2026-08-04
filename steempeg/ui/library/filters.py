@@ -594,14 +594,15 @@ class FilterMenu(QWidget):
         host_w = self._filter_host_width()
         compact = bool(getattr(dense, "compact", False)) if dense is not None else False
         if three_col:
-            # Room for Date/Time steppers in column 3; small spill past the sheet is OK.
+            # Stay inside the Choose-a-Clip / main host; small left spill is OK.
             if host_w <= 0:
                 return 1000
-            return min(max(host_w + 120, 960), 1140)
+            return min(max(host_w - 32, 900), min(1140, host_w + 80))
         if host_w <= 0:
-            return 420 if compact else 460
+            return 480 if compact else 460
         usable = max(360, host_w - 24)
-        return min(usable, 520 if compact else 460)
+        # Wider stack on compact/Deck sheets so pills wrap less and height drops.
+        return min(usable, 640 if compact else 520)
 
     def _want_three_columns(self) -> bool:
         """
@@ -1214,12 +1215,12 @@ class FilterMenu(QWidget):
                 stack_games_h = max(games_floor, min(content, 220))
                 stack_h = chrome + non_games + stack_games_h
 
-                # Tall room → always stack. 3-col only when the popup would
-                # clearly stick out (squeezed main window / short sheet).
-                host_h = self._filter_host_height()
+                # If the classic stack would stick past the floor, go wide (3-col).
+                # Do NOT skip that just because avail/host look "tall" — short
+                # Choose-a-Clip / Deck shells still overflow in one column.
                 can_three = host_w <= 0 or host_w >= 780
-                tall_shell = host_h >= 820 or avail >= 640
-                three = bool(can_three and not tall_shell and stack_h > avail + 24)
+                stack_fits = stack_h <= avail - 8
+                three = bool(can_three and not stack_fits)
 
                 if three:
                     self._place_filter_columns(three_col=True)
