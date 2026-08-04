@@ -3448,7 +3448,10 @@ class RenderMixin:
             return f"In queue ({job.queue_index})", STATUS_COLORS[JobStatus.QUEUED]
 
         # Preview only shows while the Render Queue actually has clips in it.
+        # Portable replaces Preview with the Add to Queue button.
         if self._queue_is_active():
+            if getattr(self, "_portable_shell", False):
+                return None, None
             return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
 
         return None, None
@@ -3462,6 +3465,7 @@ class RenderMixin:
             self.label_playback_badge.hide()
             if hasattr(self, "update_clip_health_button"):
                 self.update_clip_health_button()
+            self._sync_portable_queue_header_controls()
             return
 
         self.label_playback_badge.setText(text)
@@ -3477,6 +3481,29 @@ class RenderMixin:
         self.label_playback_badge.show()
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
+        self._sync_portable_queue_header_controls()
+
+    def _sync_portable_queue_header_controls(self) -> None:
+        if not getattr(self, "_portable_shell", False):
+            return
+        try:
+            from steempeg.ui.portable.chrome import sync_portable_queue_header
+
+            sync_portable_queue_header(self)
+        except Exception:
+            pass
+        # Keep theatre Render Queue (N) label in sync with pending count.
+        try:
+            from steempeg.ui.portable.chrome import sync_portable_render_button
+
+            sync_portable_render_button(self)
+        except Exception:
+            pass
+        if hasattr(self, "refresh_portable_clip_queue_badges"):
+            try:
+                self.refresh_portable_clip_queue_badges()
+            except Exception:
+                pass
 
     def _apply_header_from_job(self, job):
         if not job or not hasattr(self, "custom_text_label"):

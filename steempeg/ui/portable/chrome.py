@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from PySide6.QtCore import QRectF, Qt, QSize, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
 from steempeg.ui.design_tokens import with_tooltip_style
@@ -45,7 +46,7 @@ _ADD_CLIP_STYLE = with_tooltip_style(
 )
 
 _RENDER_STYLE = with_tooltip_style(
-    # Same typeface as Trim: inherit app font + bold only (no forced 12px).
+    # Same pill language as Trim — rounded ends, bold label; flag emoji for now.
     "QPushButton {"
     "background-color: #2e6b32; color: #ffffff;"
     "border: 2px solid #3e8e41; border-radius: 15px;"
@@ -162,6 +163,7 @@ def sync_portable_library_scan_badge(
 def ensure_portable_chrome(app) -> None:
     """Create (once) and show portable theatre CTAs."""
     _ensure_add_clip_button(app)
+    _ensure_queue_header_controls(app)
     _ensure_render_button(app)
     ensure_adaptive_trim_hook(app)
     sync_trim_tools_placement(app)
@@ -232,6 +234,9 @@ def hide_portable_chrome(app) -> None:
         "portable_library_scan_badge",
         "btn_portable_render",
         "btn_portable_render_settings",
+        "btn_portable_add_to_queue",
+        "btn_portable_in_queue",
+        "btn_portable_queue_gear",
     ):
         btn = getattr(app, name, None)
         if btn is not None:
@@ -349,6 +354,262 @@ def _ensure_add_clip_button(app) -> None:
     _ensure_library_scan_badge(app, lay)
 
 
+_ADD_QUEUE_COLOR = "#ffcc00"
+# Painted plus + " Queue" — same padding rhythm as Choose a Clip.
+_ADD_QUEUE_STYLE = with_tooltip_style(
+    "QPushButton {"
+    f"background-color: rgba(255, 204, 0, 0.22);"
+    f"color: {_ADD_QUEUE_COLOR};"
+    f"border: 2px solid {_ADD_QUEUE_COLOR};"
+    "border-radius: 8px;"
+    "font-weight: bold;"
+    "font-size: 13px;"
+    "padding: 2px 10px 2px 8px;"
+    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+    "}"
+    "QPushButton:hover { background-color: rgba(255, 204, 0, 0.35); }"
+    "QPushButton:pressed { background-color: rgba(255, 204, 0, 0.48); }"
+    "QPushButton:disabled {"
+    "background-color: rgba(80, 80, 80, 0.25);"
+    "color: #777777;"
+    "border-color: #555555;"
+    "}"
+)
+
+_IN_QUEUE_STYLE = with_tooltip_style(
+    "QPushButton {"
+    f"background-color: rgba(255, 204, 0, 0.18);"
+    f"color: {_ADD_QUEUE_COLOR};"
+    f"border: 2px solid {_ADD_QUEUE_COLOR};"
+    "border-radius: 8px;"
+    "font-weight: bold;"
+    "font-size: 13px;"
+    "padding: 2px 10px 2px 8px;"
+    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+    "}"
+    "QPushButton:hover { background-color: rgba(255, 204, 0, 0.32); }"
+    "QPushButton:pressed { background-color: rgba(255, 204, 0, 0.45); }"
+)
+
+
+def _style_add_to_queue_button(btn: QPushButton) -> None:
+    from steempeg.ui.icon_assets import bold_plus_icon
+
+    # Glyph is ~10px; keep iconSize tight so side padding matches Choose a Clip
+    # (an 18px empty box was reading as fat left/right margins).
+    icon_sz = 12
+    btn.setIcon(bold_plus_icon(icon_sz, "#ffcc00"))
+    btn.setIconSize(QSize(icon_sz, icon_sz))
+    btn.setText(" Queue")
+    btn.setStyleSheet(_ADD_QUEUE_STYLE)
+    btn.setFixedHeight(30)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip("Add the current clip to the render queue")
+
+
+def _style_in_queue_button(btn: QPushButton, text: str) -> None:
+    from steempeg.ui.icon_assets import queue_chip_icon
+
+    icon_sz = 16
+    btn.setIcon(queue_chip_icon(icon_sz))
+    btn.setIconSize(QSize(icon_sz, icon_sz))
+    btn.setText(f" {text}")
+    btn.setStyleSheet(_IN_QUEUE_STYLE)
+    btn.setFixedHeight(30)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip("Open queue and render settings")
+
+
+def _on_portable_add_to_queue(app) -> None:
+    resolve = getattr(app, "_resolve_export_clip_path", None)
+    path = resolve() if callable(resolve) else None
+    if not path:
+        return
+    if hasattr(app, "add_clip_to_render_queue"):
+        app.add_clip_to_render_queue(path)
+
+
+def _ensure_queue_header_controls(app) -> None:
+    """+ Queue CTA and combined In queue / Queue chip (opens the sheet)."""
+    status = getattr(app, "player_header_status", None)
+    if status is None or status.layout() is None:
+        return
+    lay: QHBoxLayout = status.layout()
+    badge = getattr(app, "label_playback_badge", None)
+
+    # Legacy separate gear — hide forever; In queue chip replaces it.
+    legacy_gear = getattr(app, "btn_portable_queue_gear", None)
+    if legacy_gear is not None:
+        try:
+            legacy_gear.hide()
+        except RuntimeError:
+            app.btn_portable_queue_gear = None
+
+    add_btn = getattr(app, "btn_portable_add_to_queue", None)
+    if add_btn is not None:
+        try:
+            add_btn.objectName()
+        except RuntimeError:
+            app.btn_portable_add_to_queue = None
+            add_btn = None
+    if add_btn is None:
+        add_btn = QPushButton()
+        add_btn.setObjectName("portableAddToQueue")
+        add_btn.clicked.connect(lambda: _on_portable_add_to_queue(app))
+        add_btn.hide()
+        app.btn_portable_add_to_queue = add_btn
+        insert_at = lay.indexOf(badge) if badge is not None else -1
+        if insert_at >= 0:
+            lay.insertWidget(insert_at, add_btn)
+        else:
+            lay.addWidget(add_btn)
+    _style_add_to_queue_button(add_btn)
+
+    in_btn = getattr(app, "btn_portable_in_queue", None)
+    if in_btn is not None:
+        try:
+            in_btn.objectName()
+        except RuntimeError:
+            app.btn_portable_in_queue = None
+            in_btn = None
+    if in_btn is None:
+        in_btn = QPushButton()
+        in_btn.setObjectName("portableInQueue")
+        in_btn.clicked.connect(lambda: open_portable_render_settings(app))
+        in_btn.hide()
+        app.btn_portable_in_queue = in_btn
+        # After the Add button / badge slot.
+        insert_at = lay.indexOf(add_btn) if add_btn is not None else -1
+        if insert_at >= 0:
+            lay.insertWidget(insert_at + 1, in_btn)
+        else:
+            insert_at = lay.indexOf(badge) if badge is not None else -1
+            if insert_at >= 0:
+                lay.insertWidget(insert_at, in_btn)
+            else:
+                lay.addWidget(in_btn)
+    _style_in_queue_button(in_btn, "Queue")
+
+    if hasattr(app, "update_playback_badge"):
+        try:
+            app.update_playback_badge()
+        except Exception:
+            pass
+
+
+def sync_portable_queue_header(app) -> None:
+    """Show + Queue (clip open) vs Queue / In queue chip (open the sheet)."""
+    if not getattr(app, "_portable_shell", False):
+        return
+    add_btn = getattr(app, "btn_portable_add_to_queue", None)
+    in_btn = getattr(app, "btn_portable_in_queue", None)
+    gear = getattr(app, "btn_portable_queue_gear", None)
+    badge = getattr(app, "label_playback_badge", None)
+    if add_btn is None and in_btn is None:
+        return
+
+    if gear is not None:
+        try:
+            gear.hide()
+        except RuntimeError:
+            pass
+
+    # Sticky export path still resolves after Close — only a live preview counts.
+    idle = False
+    if hasattr(app, "_is_player_idle_placeholder"):
+        try:
+            idle = bool(app._is_player_idle_placeholder())
+        except Exception:
+            idle = False
+    preview = getattr(app, "_preview_clip_path", None)
+    path = None
+    if not idle and preview and hasattr(app, "_is_export_clip_path"):
+        try:
+            if app._is_export_clip_path(preview):
+                path = os.path.normpath(preview)
+        except Exception:
+            path = None
+    elif not idle and preview:
+        path = os.path.normpath(str(preview))
+
+    job = None
+    if path and hasattr(app, "_queue_job_for_clip"):
+        try:
+            job = app._queue_job_for_clip(path)
+        except Exception:
+            job = None
+
+    rendering = bool(getattr(app, "_is_rendering", False))
+    has_clip = bool(path)
+    can_add = has_clip and not rendering
+
+    pending = 0
+    if hasattr(app, "render_queue"):
+        try:
+            pending = int(app.render_queue.pending_count())
+        except Exception:
+            pending = 0
+
+    from steempeg.render.queue import JobStatus
+
+    show_add = False
+    show_queue_chip = False
+    queue_chip_text = "Queue"
+    if has_clip and job is not None:
+        st = job.status
+        if st == JobStatus.QUEUED:
+            show_queue_chip = True
+            queue_chip_text = f"In queue ({job.queue_index})"
+        elif st == JobStatus.RENDERING:
+            show_queue_chip = True
+            queue_chip_text = "Rendering"
+        elif st in (JobStatus.COMPLETED, JobStatus.ERROR):
+            # Status label handles these; no add/queue chip needed.
+            show_add = False
+            show_queue_chip = False
+        else:
+            show_add = can_add
+    elif has_clip:
+        # Clip open, not queued → add CTA.
+        show_add = can_add
+    else:
+        # Idle player: only show Queue when there is something in it.
+        if pending > 0:
+            show_queue_chip = True
+            queue_chip_text = f"Queue ({pending})"
+        else:
+            show_queue_chip = False
+
+    if add_btn is not None:
+        if show_add:
+            add_btn.setEnabled(can_add)
+            add_btn.show()
+        else:
+            add_btn.hide()
+
+    if in_btn is not None:
+        if show_queue_chip:
+            _style_in_queue_button(in_btn, queue_chip_text)
+            in_btn.show()
+            if badge is not None and (
+                show_add
+                or badge.text().strip().lower().startswith("in queue")
+                or badge.text().strip().lower() == "preview"
+            ):
+                badge.hide()
+        else:
+            in_btn.hide()
+
+    # Preview chip is replaced by + Queue / Queue.
+    if (
+        badge is not None
+        and (show_add or show_queue_chip)
+        and badge.isVisible()
+        and badge.text().strip().lower() == "preview"
+    ):
+        badge.hide()
+
+
 def _ensure_library_scan_badge(app, lay: QHBoxLayout) -> None:
     """Ring sits immediately after Choose a Clip (same header row)."""
     badge = getattr(app, "portable_library_scan_badge", None)
@@ -371,6 +632,19 @@ def _ensure_library_scan_badge(app, lay: QHBoxLayout) -> None:
         lay.addWidget(badge)
 
 
+def _style_portable_render_button(btn: QPushButton, *, pending: int = 0, has_clip: bool = False) -> None:
+    """Pill like Trim; flag emoji for now. Queue label only when a clip is open."""
+    btn.setIcon(QIcon())
+    if pending > 0 and has_clip:
+        btn.setText(f"🚩 Queue ({pending})")
+    else:
+        btn.setText("🚩 Render")
+    btn.setStyleSheet(_RENDER_STYLE)
+    btn.setFixedHeight(30)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip("Render settings and progress")
+
+
 def _ensure_render_button(app) -> None:
     if getattr(app, "btn_portable_render", None) is not None:
         # Rebind click to open the combined sheet (upgrade older instant-start wiring).
@@ -379,8 +653,17 @@ def _ensure_render_button(app) -> None:
         except (TypeError, RuntimeError):
             pass
         app.btn_portable_render.clicked.connect(lambda: open_portable_render_settings(app))
-        app.btn_portable_render.setToolTip("Render settings and progress")
-        app.btn_portable_render.setStyleSheet(_RENDER_STYLE)
+        pending = app.render_queue.pending_count() if hasattr(app, "render_queue") else 0
+        has_clip = False
+        resolve = getattr(app, "_resolve_export_clip_path", None)
+        if callable(resolve):
+            try:
+                has_clip = bool(resolve())
+            except Exception:
+                has_clip = False
+        _style_portable_render_button(
+            app.btn_portable_render, pending=pending, has_clip=has_clip
+        )
         trim = getattr(app, "btn_trim", None)
         if trim is not None:
             app.btn_portable_render.setFont(trim.font())
@@ -396,14 +679,11 @@ def _ensure_render_button(app) -> None:
         return
     host_layout = right_wrap.layout()
 
-    btn_render = QPushButton("🚩 Render")
+    btn_render = QPushButton()
     btn_render.setObjectName("portableRender")
-    btn_render.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn_render.setFixedHeight(30)
+    _style_portable_render_button(btn_render, pending=0, has_clip=False)
     if trim is not None:
         btn_render.setFont(trim.font())
-    btn_render.setStyleSheet(_RENDER_STYLE)
-    btn_render.setToolTip("Render settings and progress")
     btn_render.clicked.connect(lambda: open_portable_render_settings(app))
     app.btn_portable_render = btn_render
 
@@ -682,10 +962,23 @@ def sync_portable_render_button(app) -> None:
     if btn is None:
         return
     pending = app.render_queue.pending_count() if hasattr(app, "render_queue") else 0
-    if pending > 0:
-        btn.setText(f"🚩 Render ({pending})")
-    else:
-        btn.setText("🚩 Render")
+    idle = False
+    if hasattr(app, "_is_player_idle_placeholder"):
+        try:
+            idle = bool(app._is_player_idle_placeholder())
+        except Exception:
+            idle = False
+    preview = getattr(app, "_preview_clip_path", None)
+    has_clip = bool(preview) and not idle
+    if has_clip and hasattr(app, "_is_export_clip_path"):
+        try:
+            has_clip = bool(app._is_export_clip_path(preview))
+        except Exception:
+            has_clip = False
+    _style_portable_render_button(btn, pending=pending, has_clip=has_clip)
+    trim = getattr(app, "btn_trim", None)
+    if trim is not None:
+        btn.setFont(trim.font())
 
     # Keep the theatre CTA clickable so the user can open the sheet even mid-render
     # (to watch progress / Pause / Cancel). Always enabled in portable shell.

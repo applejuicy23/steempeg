@@ -455,6 +455,9 @@ def ensure_header_center_sync(app) -> None:
     for name in (
         "btn_clip_health",
         "label_playback_badge",
+        "btn_portable_add_to_queue",
+        "btn_portable_in_queue",
+        "btn_portable_queue_gear",
         "player_header_frame",
     ):
         child = getattr(app, name, None)
