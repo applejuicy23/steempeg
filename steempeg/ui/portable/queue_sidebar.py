@@ -37,8 +37,9 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
-# Compact rail on Deck-class shells; roomy rail when the host is wide.
-_SIDEBAR_W_COMPACT = 376
+# Fallback rails when geometry helper is unavailable; live width comes from sheets.
+# 390 = Deck / 1280×800 rail (golden + a little text room).
+_SIDEBAR_W_COMPACT = 390
 _SIDEBAR_W_SPACIOUS = 400
 _THUMB_W = 120
 _THUMB_H = 72
@@ -46,7 +47,8 @@ _TITLE_ICON = 22
 _QUEUE_ICON = 18
 _REMOVE_SIZE = 26
 _REMOVE_INSET = 8  # breathing room from the card corner
-# Gutter so title/meta clear the overlaid ✕.
+# Title-only gutter so the overlaid ✕ doesn't sit on the game name.
+# Meta / preset / path use the full text column (no dead air under the X).
 _REMOVE_TEXT_PAD = _REMOVE_SIZE + _REMOVE_INSET
 # Same typeface as desktop Refresh / Choose Folder (Segoe UI bold + footer_font).
 _HEADER_FONT = int(COMFORT.footer_font)
@@ -303,11 +305,13 @@ class _PortableQueueRow(QFrame):
 
         text = QVBoxLayout()
         text.setSpacing(3)
-        # Leave a slim gutter so lines don't sit under the overlaid ✕.
-        text.setContentsMargins(0, 0, _REMOVE_TEXT_PAD if job_can_remove(job) else 0, 0)
+        text.setContentsMargins(0, 0, 0, 0)
 
         title_row = QHBoxLayout()
-        title_row.setContentsMargins(0, 0, 0, 0)
+        # Reserve corner only for the title — lower lines can use full width.
+        title_row.setContentsMargins(
+            0, 0, _REMOVE_TEXT_PAD if job_can_remove(job) else 0, 0
+        )
         title_row.setSpacing(8)
 
         icon = QLabel()
@@ -528,7 +532,8 @@ class PortableQueueSidebar(QWidget):
             except Exception:
                 dismissed = False
         self._empty_hint_dismissed = dismissed
-        rail_w = _SIDEBAR_W_COMPACT if compact else _SIDEBAR_W_SPACIOUS
+        self._compact = bool(compact)
+        rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
         self.setFixedWidth(rail_w)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(_PANEL)
@@ -613,7 +618,8 @@ class PortableQueueSidebar(QWidget):
         list_panel.setObjectName("portableQueueList")
         list_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         list_lay = QVBoxLayout(list_panel)
-        list_lay.setContentsMargins(8, 8, 8, 8)
+        # Slightly tighter sides so elided meta/path get a few more px.
+        list_lay.setContentsMargins(6, 8, 6, 8)
         list_lay.setSpacing(0)
 
         scroll = QScrollArea()
@@ -700,6 +706,18 @@ class PortableQueueSidebar(QWidget):
                 "portable_queue_empty_hint_dismissed", self._empty_hint_dismissed
             )
         self.refresh()
+
+    def apply_rail_width(
+        self, *, compact: bool | None = None, width: int | None = None
+    ) -> None:
+        """Set Queue rail width from sheet geometry (or compact/spacious fallback)."""
+        if compact is not None:
+            self._compact = bool(compact)
+        if width is not None and int(width) > 0:
+            self.setFixedWidth(int(width))
+            return
+        rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
+        self.setFixedWidth(rail_w)
 
     def refresh(self) -> None:
         # Clear rows (keep stretch at end). Detach immediately — deleteLater alone
