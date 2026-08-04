@@ -4168,6 +4168,12 @@ def main():
         if chooser.exec() != QDialog.DialogCode.Accepted or not chooser.chosen_shell:
             sys.exit(0)
         ui_shell = chooser.chosen_shell
+        # Cards use PointingHand — without a resync the hand sticks on the
+        # whole portable/desktop shell until the mouse moves (or About closes).
+        from steempeg.ui.window_chrome import force_app_cursor_resync
+
+        force_app_cursor_resync()
+        QTimer.singleShot(0, force_app_cursor_resync)
     else:
         save_ui_shell(ui_shell)
 
@@ -4283,8 +4289,13 @@ def main():
             # Prewarm Clips/Render sheets off the critical path (map-suppressed —
             # no translucent HWND flash). First open stays snappy.
             from steempeg.ui.portable.chrome import prewarm_portable_sheets
+            from steempeg.ui.window_chrome import force_app_cursor_resync
 
             QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
+            # Shell chooser (or any startup modal) can leave PointingHand stuck
+            # over the empty theatre — resync after first paint.
+            QTimer.singleShot(0, force_app_cursor_resync)
+            QTimer.singleShot(50, force_app_cursor_resync)
         if hasattr(window, "schedule_silent_update_check"):
             # Quiet badge probe — never auto-installs; user still chooses backup/update.
             # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).

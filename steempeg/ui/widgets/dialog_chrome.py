@@ -431,7 +431,15 @@ class SteempegDialog(QDialog):
             # QDialog.exec() calls show(); still prep once so Windows centers before
             # the modal loop, and Linux has a non-tiny size before map flash guard.
             self._prepare_geometry_before_map()
-        return super().exec()
+        try:
+            return super().exec()
+        finally:
+            # PointingHand on cards/buttons sticks after modal close until move.
+            from PySide6.QtCore import QTimer
+            from steempeg.ui.window_chrome import force_app_cursor_resync
+
+            force_app_cursor_resync()
+            QTimer.singleShot(0, force_app_cursor_resync)
 
     def showEvent(self, event):
         if self._map_suppressed:

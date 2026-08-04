@@ -333,6 +333,32 @@ class _TitleBarUpdateButton(QPushButton):
         painter.end()
 
 
+def force_app_cursor_resync() -> None:
+    """Clear a stuck PointingHand left by a closed modal (chooser / About / sheets).
+
+    Qt often keeps the last dialog widget's cursor until the mouse moves. Push
+    Arrow onto the override stack and pop it so the widget under the pointer is
+    re-queried; nudge ``QCursor.setPos`` for Windows.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+    try:
+        while app.overrideCursor() is not None:
+            app.restoreOverrideCursor()
+        app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+        app.restoreOverrideCursor()
+        for w in app.topLevelWidgets():
+            try:
+                w.unsetCursor()
+            except RuntimeError:
+                pass
+        pos = QCursor.pos()
+        QCursor.setPos(pos)
+    except RuntimeError:
+        pass
+
+
 class SteempegTitleBar(QWidget):
     """Top chrome: branding left, window controls right (Windows order)."""
 
@@ -523,7 +549,12 @@ class SteempegTitleBar(QWidget):
         return super().eventFilter(watched, event)
 
     def clear_shell_tool_hover(self) -> None:
-        """Reset About/Settings hot icon + cursor after a modal eats Leave events."""
+        """Reset About/Settings hot icon + cursor after a modal eats Leave events.
+
+        Closing a frameless modal often leaves Qt stuck on that dialog's last
+        cursor (PointingHand from Close / logo) until the mouse moves — even
+        over empty chrome. Force a cursor resync after clearing hover/press.
+        """
         pairs = (
             (
                 getattr(self, "btn_about_info", None),
@@ -540,6 +571,7 @@ class SteempegTitleBar(QWidget):
             try:
                 if idle is not None:
                     btn.setIcon(idle)
+                btn.setDown(False)
                 btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
                 QApplication.sendEvent(btn, QEvent(QEvent.Type.Leave))
                 btn.unsetCursor()
@@ -553,6 +585,7 @@ class SteempegTitleBar(QWidget):
             try:
                 if hasattr(btn, "clear_hover_spin"):
                     btn.clear_hover_spin()
+                btn.setDown(False)
                 btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
                 QApplication.sendEvent(btn, QEvent(QEvent.Type.Leave))
                 btn.unsetCursor()
@@ -571,6 +604,10 @@ class SteempegTitleBar(QWidget):
         if app is not None:
             while app.overrideCursor() is not None:
                 app.restoreOverrideCursor()
+
+        # Immediate + deferred nudge: modal teardown finishes on the next tick.
+        force_app_cursor_resync()
+        QTimer.singleShot(0, force_app_cursor_resync)
 
     def _title_bar_press_is_interactive(self, pos: QPoint) -> bool:
         hit = self.childAt(pos)
