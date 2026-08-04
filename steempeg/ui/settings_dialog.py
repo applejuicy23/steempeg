@@ -855,7 +855,7 @@ def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:
         parent,
         "Small display",
         "Your screen is a bit small for Steempeg's comfort layout. "
-        "You may see cramped panels or visual artifacts — especially in Desktop mode.",
+        "You may see cramped panels or visual artifacts, especially in Desktop mode.",
         detail=(
             f"Detected: {summary}. Portable (theatre) usually fits small screens "
             "better. Switch shells anytime in Settings."
