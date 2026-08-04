@@ -506,7 +506,9 @@ class SteempegTitleBar(QWidget):
         root.addStretch(1)
 
         controls = QHBoxLayout()
-        controls.setSpacing(8)
+        # Gap ≈ diameter of the 13px dots — matches the airier Linux/macOS-style look;
+        # 8 felt packed on Windows DPI.
+        controls.setSpacing(12)
         self.btn_minimize = _TrafficLight(tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "minimize")
         self.btn_maximize = _TrafficLight(tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "maximize")
         self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "close")

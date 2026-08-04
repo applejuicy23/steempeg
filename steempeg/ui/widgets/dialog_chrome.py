@@ -92,7 +92,7 @@ class _DialogTitleBar(QWidget):
             )
             self.btn_minimize.clicked.connect(dialog.showMinimized)
             root.addWidget(self.btn_minimize, 0, Qt.AlignmentFlag.AlignVCenter)
-            root.addSpacing(6)
+            root.addSpacing(12)
         else:
             self.btn_minimize = None
 
