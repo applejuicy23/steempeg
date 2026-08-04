@@ -281,9 +281,9 @@ class FilterMenu(QWidget):
         cols_row.addWidget(self._col_games, 4, top)
         cols_row.addWidget(self._col_mid, 4, top)
         cols_row.addWidget(self._col_right, 5, top)
-        self._col_games.setMinimumWidth(200)
-        self._col_mid.setMinimumWidth(200)
-        self._col_right.setMinimumWidth(320)
+        self._col_games.setMinimumWidth(260)
+        self._col_mid.setMinimumWidth(220)
+        self._col_right.setMinimumWidth(380)
 
         sections_outer.addWidget(self._stack_page)
         sections_outer.addWidget(self._cols_page)
@@ -464,7 +464,7 @@ class FilterMenu(QWidget):
             lbl_b.setStyleSheet("color: #888888; font-weight: bold;")
             for w in (widget_a, widget_b):
                 w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                w.setMinimumWidth(108)
+                w.setMinimumWidth(128)
             row.addWidget(lbl_a, 0)
             row.addWidget(widget_a, 1)
             row.addSpacing(10)
@@ -579,6 +579,27 @@ class FilterMenu(QWidget):
                 pass
         return 0
 
+    def _filter_shell_width(self) -> int:
+        """Main program width — 3-col filters may spill past Choose-a-Clip into this."""
+        app = getattr(self, "app", None)
+        try:
+            from steempeg.ui.portable.sheets import portable_shell_width
+
+            w = int(portable_shell_width(app=app) or 0)
+            if w > 32:
+                return w
+        except Exception:
+            pass
+        ui = getattr(app, "ui", None) if app is not None else None
+        if ui is not None:
+            try:
+                w = int(ui.width() or 0)
+                if w > 32:
+                    return w
+            except RuntimeError:
+                pass
+        return self._filter_host_width()
+
     def _filter_host_height(self) -> int:
         app = getattr(self, "app", None)
         pill = getattr(app, "btn_filter_pill", None) if app is not None else None
@@ -592,12 +613,15 @@ class FilterMenu(QWidget):
 
     def _width_for_mode(self, three_col: bool, dense) -> int:
         host_w = self._filter_host_width()
+        shell_w = self._filter_shell_width()
         compact = bool(getattr(dense, "compact", False)) if dense is not None else False
         if three_col:
-            # Stay inside the Choose-a-Clip / main host; small left spill is OK.
-            if host_w <= 0:
-                return 1000
-            return min(max(host_w - 32, 900), min(1140, host_w + 80))
+            # Size to the main program window — Choose-a-Clip is narrower; spill is OK.
+            basis = shell_w if shell_w > 0 else host_w
+            if basis <= 0:
+                return 1100
+            # Leave a slim margin from shell edges; keep room for Games + Date steppers.
+            return max(1040, min(basis - 24, 1220))
         if host_w <= 0:
             return 480 if compact else 460
         usable = max(360, host_w - 24)
@@ -1191,7 +1215,6 @@ class FilterMenu(QWidget):
         """
         self._popup_avail_h = max(160, int(max_px))
         dense = getattr(self, "_density", None)
-        host_w = self._filter_host_width()
         games_floor = 108 if dense is not None and getattr(dense, "compact", False) else 124
         inset = 64 if dense is not None and getattr(dense, "compact", False) else 84
         avail = self._popup_avail_h
@@ -1218,7 +1241,9 @@ class FilterMenu(QWidget):
                 # If the classic stack would stick past the floor, go wide (3-col).
                 # Do NOT skip that just because avail/host look "tall" — short
                 # Choose-a-Clip / Deck shells still overflow in one column.
-                can_three = host_w <= 0 or host_w >= 780
+                # Shell width gates 3-col — Choose-a-Clip alone can be too narrow.
+                shell_w = self._filter_shell_width()
+                can_three = shell_w <= 0 or shell_w >= 780
                 stack_fits = stack_h <= avail - 8
                 three = bool(can_three and not stack_fits)
 
@@ -1808,6 +1833,9 @@ class FilterMenu(QWidget):
 
         self._is_gathering = False
         self.update_live_count()
+        # Clear used to only reset pills until Apply — grid stayed filtered with
+        # a "cleared" popup. Apply immediately so memory + view match.
+        self.apply_filters()
 
     def _resolved_duration_bounds(self):
         """Return min/max duration seconds, recovering from stale 0:00–0:00."""
@@ -1992,7 +2020,10 @@ class FilterMenu(QWidget):
                 if show and selected_folders and item_game:
                     clip_path = item_game.data(Qt.UserRole) or ""
                     root = _library_root_for_clip(clip_path, roots)
-                    if root is None or root not in selected_folders:
+                    folder_keys = {
+                        os.path.normcase(os.path.normpath(p)) for p in selected_folders if p
+                    }
+                    if root is None or os.path.normcase(os.path.normpath(root)) not in folder_keys:
                         show = False
 
                 if show and item_date:
