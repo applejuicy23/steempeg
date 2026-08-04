@@ -273,6 +273,44 @@ class PlayerMixin:
         elif hasattr(self, 'mpv_screen') and self.mpv_screen is not None:
             self.mpv_screen.hide()
 
+    def _set_shell_paint_frozen(self, frozen: bool):
+        """Hold the last painted frame while the shell is torn down / rebuilt.
+
+        The alternative to the gray cover: with updates disabled the window keeps
+        showing its last good frame, so the panel churn (footer vanishing, video
+        container swallowing its strip and being pushed back) never reaches the
+        screen — instead of replacing it with a flat rectangle.
+        """
+        if bool(getattr(self, '_shell_paint_frozen', False)) == bool(frozen):
+            return
+        self._shell_paint_frozen = bool(frozen)
+        try:
+            self.ui.setUpdatesEnabled(not frozen)
+        except RuntimeError:
+            return
+        if frozen:
+            # Watchdog — a raising step must never leave the shell unpainted.
+            self._shell_paint_thaw_gen = getattr(self, '_shell_paint_thaw_gen', 0) + 1
+            gen = self._shell_paint_thaw_gen
+            QTimer.singleShot(2000, lambda g=gen: self._thaw_shell_paint_if(g))
+        else:
+            self.ui.update()
+
+    def _thaw_shell_paint_if(self, gen: int):
+        if getattr(self, '_shell_paint_thaw_gen', 0) != gen:
+            return
+        self._set_shell_paint_frozen(False)
+
+    def _freeze_mpv_surface(self, frozen: bool):
+        """Hold the native embed still across an immersive transition."""
+        wrapper = getattr(self, 'mpv_wrapper', None)
+        if wrapper is None or not hasattr(wrapper, 'begin_transition'):
+            return
+        if frozen:
+            wrapper.begin_transition()
+        else:
+            wrapper.end_transition()
+
     def _on_video_stack_page_changed(self, _index: int = 0):
         """Keep native embed parked whenever video_container is not the top page."""
         stack = getattr(self, 'video_stack', None)
@@ -1191,12 +1229,16 @@ class PlayerMixin:
         try:
             if not getattr(self, 'is_fullscreen', False):
                 set_window_transitions(self.ui, True)
+                self._freeze_mpv_surface(False)
+                self._set_shell_paint_frozen(False)
                 return
             # Re-assert full-monitor geometry: clearing the maximized state queues a
             # restore to the old (small) normalGeometry which, with transitions disabled,
             # overrides the setGeometry done in enter_immersive_chrome. Applying it here
             # (after Qt processed the state change) makes the fullscreen size stick.
             self.ui.setGeometry(self._immersive_screen_geometry())
+            # Place the embed once, now that the fullscreen geometry is final.
+            self._freeze_mpv_surface(False)
             self.ui.raise_()
             self.ui.activateWindow()
             self.ui.update()
@@ -1209,19 +1251,24 @@ class PlayerMixin:
             # Prime caption suppress while still covered — kills first-exit Aero flash.
             self._warmup_frameless_caption_under_cover()
             if hasattr(self, 'player_footer_frame'):
+                self.align_fullscreen_hud()
                 self.player_footer_frame.show()
                 self.player_footer_frame.raise_()
             # Restore native min/max/restore animations that were disabled for the switch.
             set_window_transitions(self.ui, True)
             self._show_immersive_esc_hint()
         finally:
-            self._hide_immersive_transition_cover()
+            self._freeze_mpv_surface(False)
             if getattr(self, 'is_fullscreen', False) and hasattr(self, 'player_footer_frame'):
+                self.align_fullscreen_hud()
                 self.player_footer_frame.show()
                 self.player_footer_frame.raise_()
-                self.align_fullscreen_hud()
                 if self._is_player_idle_placeholder() and hasattr(self, 'fs_timer'):
                     self.fs_timer.stop()
+            # Thaw last, so the first frame the user sees is the finished layout.
+            self._set_shell_paint_frozen(False)
+            self.ui.repaint()
+            self._hide_immersive_transition_cover()
             if getattr(self, 'is_fullscreen', False):
                 self.ui.activateWindow()
                 self.ui.setCursor(Qt.CursorShape.ArrowCursor)
@@ -1303,15 +1350,47 @@ class PlayerMixin:
         if hint is not None:
             hint.hide()
 
+    def _restore_windowed_chrome(self):
+        """Title bar + maximized/normal state back, before the layout rebuild.
+
+        The title bar has to be visible first so WM_NCCALCSIZE re-applies the
+        maximized inset — a restored maximized window otherwise overhangs the
+        monitor and covers the taskbar.
+        """
+        if hasattr(self.ui, "title_bar"):
+            self.ui.title_bar.show()
+        try:
+            from steempeg.ui.window_chrome import refresh_windows_edge_resize
+
+            refresh_windows_edge_resize(self.ui)
+        except Exception:
+            pass
+        # Soft-redraw during the switch can flash Aero chrome at the edges.
+        self.ui._suppress_dwm_ghost_timer = True
+        _fstrace("EXIT window state restore start")
+        exit_immersive_chrome(self.ui)
+        _fstrace("EXIT window state restore done")
+        # showMaximized re-adds the native Aero caption for a frame or two.
+        self._reassert_frameless_caption()
+        if hasattr(self.ui, "title_bar"):
+            self.ui.title_bar.sync_window_state()
+
     def _exit_immersive_mode(self):
         """Restore UI under a solid cover, then title bar — avoids MPV-only flash."""
         is_t = getattr(self, 'is_theater', False)
         _fstrace("EXIT begin (theatre=%s)", is_t)
+        self._freeze_mpv_surface(True)
 
         self._show_immersive_transition_cover()
+        self._set_shell_paint_frozen(True)
         # Same as enter: kill the SW_RESTORE/maximize cross-fade so exit is instant
         # under the cover (no torn animation / desktop bleed). Restored in finish_exit.
         set_window_transitions(self.ui, False)
+        # Back to the windowed state *first*. Doing it after the rebuild meant every
+        # panel and the video were laid out at monitor size and then again at the
+        # final size — 9 mpv surface moves per exit, and the visible sequence of the
+        # video container swallowing the footer strip before being pushed back.
+        self._restore_windowed_chrome()
         self._hide_immersive_esc_hint()
         if hasattr(self, 'fs_timer'):
             self.fs_timer.stop()
@@ -1431,33 +1510,11 @@ class PlayerMixin:
         _fstrace("EXIT panels restored, activating layouts")
         self._activate_window_layouts()
         QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-        _fstrace("EXIT layouts activated (window still at monitor size)")
+        _fstrace("EXIT layouts activated (already at final window size)")
 
         def finish_exit():
-            # Show the title bar *before* restoring the window state so WM_NCCALCSIZE
-            # sees it visible and re-applies the maximized inset (otherwise a restored
-            # maximized window overhangs the monitor / covers the taskbar).
             gen = getattr(self, '_immersive_cover_gen', 0)
             try:
-                if hasattr(self.ui, "title_bar"):
-                    self.ui.title_bar.show()
-                try:
-                    from steempeg.ui.window_chrome import refresh_windows_edge_resize
-
-                    refresh_windows_edge_resize(self.ui)
-                except Exception:
-                    pass
-                # Soft-redraw after maximize fights the cover and can flash Aero
-                # chrome at the edges — pause it until uncover settles.
-                self.ui._suppress_dwm_ghost_timer = True
-                _fstrace("EXIT window state restore start")
-                exit_immersive_chrome(self.ui)
-                _fstrace("EXIT window state restore done")
-                # showMaximized re-adds the native Aero caption for a frame or two —
-                # poke under the cover before uncovering (changeEvent alone races).
-                self._reassert_frameless_caption()
-                if hasattr(self.ui, "title_bar"):
-                    self.ui.title_bar.sync_window_state()
                 self._activate_window_layouts()
                 footer.show()
                 _fstrace("EXIT footer shown")
@@ -1470,13 +1527,7 @@ class PlayerMixin:
                     self.btn_theater.clearFocus()
                     QApplication.postEvent(self.btn_theater, QEvent(QEvent.Type.Leave))
                 self._set_hide_watcher_suppressed(False)
-                # Keep transitions off until after uncover settle — turning them on
-                # here lets SW_RESTORE/maximize Aero paint bleed through the cover.
-                if right_layout:
-                    right_layout.activate()
                 self.ui.right_panel.updateGeometry()
-                self.ui.update()
-                self.ui.repaint()
                 # First EXIT is colder (DWM hasn't seen title_bar+maximize yet this
                 # session unless enter warmup ran). Hold cover longer + double poke.
                 first_exit = not getattr(self, "_fullscreen_exit_settled", False)
@@ -1487,13 +1538,19 @@ class PlayerMixin:
             except Exception:
                 self.ui._suppress_dwm_ghost_timer = False
                 set_window_transitions(self.ui, True)
+                self._freeze_mpv_surface(False)
+                self._set_shell_paint_frozen(False)
                 self._hide_immersive_transition_cover()
 
         QTimer.singleShot(0, finish_exit)
 
     def _finish_exit_uncover(self, gen: int, first_exit: bool = False) -> None:
         if getattr(self, '_immersive_cover_gen', 0) != gen:
+            self._freeze_mpv_surface(False)
+            self._set_shell_paint_frozen(False)
             return
+        # Layout has settled — place the embed once at its final rect.
+        self._freeze_mpv_surface(False)
         try:
             self._reassert_frameless_caption()
             if first_exit:
@@ -1503,14 +1560,16 @@ class PlayerMixin:
             if hasattr(self.ui, "title_bar") and self.ui.title_bar.isVisible():
                 self.ui.title_bar.sync_window_state()
                 self.ui.title_bar.update()
-            self.ui.repaint()
-            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         finally:
             self._fullscreen_exit_settled = True
             self.ui._suppress_dwm_ghost_timer = False
             set_window_transitions(self.ui, True)
+            # Thaw last, so the first frame the user sees is the finished layout.
+            self._set_shell_paint_frozen(False)
+            self.ui.repaint()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             self._hide_immersive_transition_cover()
-            _fstrace("EXIT complete (uncovered)")
+            _fstrace("EXIT complete (thawed)")
 
     def toggle_fullscreen(self):
         """Immersive player mode: hide chrome inside the current window (no showFullScreen)."""
@@ -1523,6 +1582,7 @@ class PlayerMixin:
         
         if self.is_fullscreen:
             _fstrace("ENTER begin")
+            self._freeze_mpv_surface(True)
             # --- ENTERING IMMERSIVE MODE (stay maximized / current window state) ---
             # Mask the whole transition with a solid cover: while growing the window
             # from the work area to the full monitor, Windows briefly paints the native
@@ -1632,6 +1692,11 @@ class PlayerMixin:
             if hasattr(self, 'right_h_splitter'):
                 self._hide_right_h_splitter_handle()
             self._enter_immersive_chrome()
+            # Lay out at the new monitor size and place the embed right away.
+            # Leaving both to the 120 ms finish step kept the video at its windowed
+            # rect, framed by the black wrapper, for the first visible frames.
+            self._activate_window_layouts()
+            self._freeze_mpv_surface(False)
 
             self.player_footer_frame.setParent(self.ui)
             self.player_footer_frame.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -1649,16 +1714,13 @@ class PlayerMixin:
                     border: none;
                 }
             """))
-            self.player_footer_frame.show()
-            self.player_footer_frame.raise_()
+            # Shown once, aligned, by _finish_fullscreen_enter. Showing it here too
+            # meant two appearances (here, then again after the geometry re-assert),
+            # which read as the floating panel blinking twice.
             _fstrace("ENTER footer promoted to floating HUD")
 
             if hasattr(self, 'wake_up_fullscreen_controls'):
                 self.wake_up_fullscreen_controls()
-
-            QTimer.singleShot(50, self.align_fullscreen_hud)
-            if self._is_player_idle_placeholder():
-                QTimer.singleShot(120, self.align_fullscreen_hud)
             # Same gray-cover path for idle and with-clip — no fast un-maximize
             # animation that corrupts the restore size.
             QTimer.singleShot(120, self._finish_fullscreen_enter)

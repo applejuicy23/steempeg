@@ -39,6 +39,7 @@ class MPVWrapper(QWidget):
 
         self._is_border_active = False
         self._border_ring = None  # (x, y, total_w, total_h, b, video_h) for Linux paint
+        self._transition_frozen = False
         # Windows: native child from the start. Linux: plain Qt until embed.
         self._native_embed = sys.platform == "win32"
 
@@ -125,7 +126,28 @@ class MPVWrapper(QWidget):
         if sys.platform != "win32":
             self.update()
 
+    def begin_transition(self):
+        """Stop tracking geometry until :meth:`end_transition`.
+
+        Immersive enter/exit rebuilds the layout several times, and every pass
+        moved the embedded HWND — visible as the video jumping between sizes.
+        The surface is left where it is (clipped by its parent at worst) so the
+        last decoded frame stays on screen instead of blanking.
+        """
+        self._transition_frozen = True
+
+    def end_transition(self):
+        """Apply the settled geometry once."""
+        if not self._transition_frozen:
+            return
+        self._transition_frozen = False
+        # Defeat the dedupe: the frozen passes already recorded intermediate rects.
+        self._last_video_rect = None
+        self.update_geometry()
+
     def update_geometry(self):
+        if self._transition_frozen:
+            return
         w = self.width()
         h = self.height()
 
