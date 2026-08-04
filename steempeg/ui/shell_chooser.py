@@ -102,10 +102,12 @@ class _ShellCard(QPushButton):
         title: str,
         subtitle: str,
         icon_file: str,
+        lit: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self._shell_id = shell_id
+        self._lit = bool(lit)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setCheckable(False)
         self.setFixedSize(_CARD_W, _CARD_H)
@@ -167,7 +169,8 @@ class _ShellCard(QPushButton):
         super().leaveEvent(event)
 
     def _apply_style(self, *, hover: bool) -> None:
-        border = "#b29ae7" if hover else "#4a4a4a"
+        # Recommended = outline only. Fill follows the cursor, not the tip.
+        border = "#b29ae7" if (hover or self._lit) else "#4a4a4a"
         bg = "#2e2a38" if hover else "#2a2a2a"
         self.setStyleSheet(
             f"""
@@ -178,7 +181,8 @@ class _ShellCard(QPushButton):
                 text-align: center;
             }}
             QPushButton:focus {{
-                border: 2px solid #b29ae7;
+                border: 2px solid {border};
+                background-color: {bg};
             }}
             """
         )
@@ -248,16 +252,18 @@ class ShellChooserDialog(SteempegDialog):
             title="Desktop",
             subtitle="Windows & Linux\nClips · Player · Queue",
             icon_file="desktop.png",
+            lit=not prefer_portable,
         )
         portable = _ShellCard(
             shell_id=UI_SHELL_PORTABLE,
             title="Portable",
             subtitle="Steam Deck\nTheatre mode only",
             icon_file="portable.png",
+            lit=prefer_portable,
         )
         desktop.chosen.connect(self._pick)
         portable.chosen.connect(self._pick)
-        # Small screens: Portable first + focused — matches the tip above.
+        # Small screens: Portable first + lit — matches the tip above.
         if prefer_portable:
             row.addWidget(portable)
             row.addWidget(desktop)
