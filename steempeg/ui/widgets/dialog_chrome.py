@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QPoint, QRectF, Signal
+from PySide6.QtCore import Qt, QPoint, QRectF, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -389,21 +389,38 @@ class SteempegDialog(QDialog):
         w, h = scaled_dialog_size(*self._comfort_size, parent=self.parent())
         self.setFixedSize(w, h)
 
+    def _resolve_map_size(self) -> QSize:
+        """Size used for pre-map centering — keep author size; only fill in if tiny."""
+        if self._comfort_size:
+            from steempeg.ui.ui_density import scaled_dialog_size
+
+            w, h = scaled_dialog_size(*self._comfort_size, parent=self.parent())
+            return QSize(w, h)
+        w, h = self.width(), self.height()
+        if w >= 80 and h >= 80:
+            return QSize(w, h)
+        hint = self.sizeHint()
+        if hint.width() >= 80 and hint.height() >= 80:
+            return QSize(hint.width(), hint.height())
+        return QSize(max(w, 80), max(h, 80))
+
     def _prepare_geometry_before_map(self) -> None:
         """Size + center before the window is mapped.
 
         Moving a translucent frameless dialog *after* first expose leaves a tiny
         empty dark ghost window on Windows (seen next to Update Center). On
         Linux/XWayland the same flash is a bare micro-surface until resize.
+
+        Only bump size when the pre-map footprint is still ~0×0 — never inflate
+        to sizeHint (that blew Shell Chooser / Settings up toward fullscreen).
         """
         self._apply_scaled_size()
         self.ensurePolished()
-        # Dialogs that only resize() (Update Center) still need a real footprint
-        # before the compositor maps them.
-        if self.width() < 80 or self.height() < 80:
-            hint = self.sizeHint()
-            if hint.width() >= 80 and hint.height() >= 80:
-                self.resize(hint)
+        sz = self._resolve_map_size()
+        if self._comfort_size:
+            self.setFixedSize(sz)
+        elif self.width() < 80 or self.height() < 80:
+            self.resize(sz)
         self._center_on_parent()
 
     def _show_without_map_flash(self):
@@ -470,26 +487,37 @@ class SteempegDialog(QDialog):
             if isinstance(aw, QWidget):
                 ref = aw
 
+        # Use the dialog's current size only — do not resize here.
+        dw, dh = max(self.width(), 1), max(self.height(), 1)
+
         if ref is not None and ref.isVisible():
-            geo = ref.frameGeometry()
-            x = geo.x() + (geo.width() - self.width()) // 2
-            y = geo.y() + (geo.height() - self.height()) // 2
+            # Client rect in global coords — more reliable than frameGeometry for
+            # frameless custom-chrome main windows under DWM.
+            origin = ref.mapToGlobal(QPoint(0, 0))
+            rw, rh = max(ref.width(), 1), max(ref.height(), 1)
+            x = origin.x() + max(0, (rw - dw) // 2)
+            y = origin.y() + max(0, (rh - dh) // 2)
+            # Prefer staying inside the app window (Steam Deck / small shells).
+            x = max(origin.x(), min(x, origin.x() + max(0, rw - dw)))
+            y = max(origin.y(), min(y, origin.y() + max(0, rh - dh)))
         else:
             screen = QGuiApplication.primaryScreen()
             if screen is None:
                 return
             avail = screen.availableGeometry()
-            x = avail.x() + (avail.width() - self.width()) // 2
-            y = avail.y() + (avail.height() - self.height()) // 2
+            x = avail.x() + max(0, (avail.width() - dw) // 2)
+            y = avail.y() + max(0, (avail.height() - dh) // 2)
 
-        # Keep fully inside the screen that contains the reference point.
-        screen = QGuiApplication.screenAt(ref.frameGeometry().center()) if ref else None
+        # Then keep fully inside the screen that contains the reference point.
+        screen = None
+        if ref is not None:
+            screen = QGuiApplication.screenAt(ref.mapToGlobal(ref.rect().center()))
         if screen is None:
             screen = QGuiApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            x = max(avail.x(), min(x, avail.x() + avail.width() - self.width()))
-            y = max(avail.y(), min(y, avail.y() + avail.height() - self.height()))
+            x = max(avail.x(), min(x, avail.x() + max(0, avail.width() - dw)))
+            y = max(avail.y(), min(y, avail.y() + max(0, avail.height() - dh)))
         self.move(x, y)
 
     def resizeEvent(self, event):
