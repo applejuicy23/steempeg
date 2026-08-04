@@ -92,7 +92,7 @@ class SourcePathsBox(QWidget):
     directory paths; legacy setText() resets/placeholders are still handled."""
 
     _CAP_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
-    _ROW_QSS = "QFrame#srcRow { background-color: #353535; border-radius: 10px; }"
+    _ROW_QSS = "QFrame#srcRow { background-color: #252525; border-radius: 10px; }"
     _PATH_QSS = ("color: #b29ae7; font-size: 11px; font-weight: bold;"
                  " font-family: 'Consolas', monospace; background: transparent; border: none;")
     _MSG_QSS = ("color: #8a8a8a; font-size: 11px; font-weight: bold;"
@@ -275,6 +275,8 @@ class SummaryLabel(QWidget):
         self._cols = 2
         self._key_qss = self._KEY_QSS
         self._val_qss = self._VAL_QSS
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setVerticalSpacing(7)
@@ -343,10 +345,15 @@ class SummaryLabel(QWidget):
                 w.setParent(None)
                 w.deleteLater()
 
-    def _label(self, text, qss):
-        lbl = QLabel(text)
+    def _label(self, text, qss, *, elide: bool = False):
+        if elide:
+            lbl = ElidedLabel(text)
+            lbl.setMinimumWidth(0)
+            lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        else:
+            lbl = QLabel(text)
+            lbl.setTextFormat(Qt.PlainText)
         lbl.setStyleSheet(qss)
-        lbl.setTextFormat(Qt.PlainText)
         return lbl
 
     def _rebuild(self):
@@ -366,13 +373,15 @@ class SummaryLabel(QWidget):
             self._grid.addWidget(
                 self._label(k, self._key_qss), r, base, Qt.AlignLeft | Qt.AlignVCenter
             )
-            self._grid.addWidget(
-                self._label(v, self._val_qss), r, base + 1, Qt.AlignLeft | Qt.AlignVCenter
-            )
+            # No AlignLeft — that sizes the cell to sizeHint (0 for ElidedLabel)
+            # and blanks every value. Fill the cell so stretch width elides properly.
+            self._grid.addWidget(self._label(v, self._val_qss, elide=True), r, base + 1)
 
-        # No column stretch -> columns hug their content so the whole grid stays compact.
+        # Value columns share width and elide (Est. File Size was clipped hard).
         if cols == 2:
             self._grid.setColumnMinimumWidth(2, 24)  # gutter between the two pairs
+            self._grid.setColumnStretch(1, 1)
+            self._grid.setColumnStretch(4, 1)
 
 
 class _OverlayPositioner(QObject):
@@ -906,7 +915,7 @@ def restyle_export_page(ui):
         path_row = QFrame()
         path_row.setObjectName("outputPathRow")
         path_row.setStyleSheet(
-            "QFrame#outputPathRow { background-color: #353535; border-radius: 10px; }"
+            "QFrame#outputPathRow { background-color: #252525; border-radius: 10px; }"
         )
         path_row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         path_row.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
@@ -927,6 +936,7 @@ def restyle_export_page(ui):
         loc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         path_layout.addWidget(loc_label, 1)
         ui.output_path_row = path_row
+        path_row.hide()  # only with a real clip / output path
         root.addWidget(path_row)
 
     root.addStretch()
