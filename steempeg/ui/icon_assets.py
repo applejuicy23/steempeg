@@ -227,6 +227,46 @@ def add_clip_icon(size: int = 18) -> QIcon:
     return tinted_icon("addclip.png", "#d4c8f5", size)
 
 
+def add_to_queue_icon(size: int = 14) -> QIcon:
+    """Painted bold plus — weight matched to 13px bold chip text (not plus.png)."""
+    return bold_plus_icon(size, "#ffcc00")
+
+
+def bold_plus_icon(size: int = 12, color: str | QColor = "#ffcc00") -> QIcon:
+    """Plus for chip labels — tight box, glyph ≈ cap-height of bold 13px Q."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPen
+
+    if isinstance(color, str):
+        color = QColor(color)
+    dpr = 2.0
+    px = max(int(round(size * dpr)), 1)
+    pix = QPixmap(px, px)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    # Fill most of the (small) icon box — no empty 18px margins.
+    arm = max(size - 2, 8) * dpr
+    thickness = max(2.0, size * 0.22) * dpr
+    mid = px * 0.5
+    mid_y = mid + 0.5 * dpr
+    half = arm * 0.5
+    pen = QPen(color)
+    pen.setWidthF(thickness)
+    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+    painter.setPen(pen)
+    painter.drawLine(QPointF(mid - half, mid_y), QPointF(mid + half, mid_y))
+    painter.drawLine(QPointF(mid, mid_y - half), QPointF(mid, mid_y + half))
+    painter.end()
+    pix.setDevicePixelRatio(dpr)
+    return _icon_from_pixmap(pix)
+
+
+def queue_chip_icon(size: int = 16, *, color: str = "#ffcc00") -> QIcon:
+    """Tinted queue.png for portable queue chips (yellow header / green theatre CTA)."""
+    return tinted_icon("queue.png", color, size)
+
+
 def preview_settings_icon(size: int = 16) -> QIcon:
     """settings.png for the player header preview-quality chip."""
     return load_icon("settings.png", size)
