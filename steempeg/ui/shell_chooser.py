@@ -214,6 +214,7 @@ class ShellChooserDialog(SteempegDialog):
         )
         self.content_layout.addWidget(sub)
 
+        prefer_portable = False
         try:
             from steempeg.ui.screen_metrics import (
                 is_screen_undersized,
@@ -221,6 +222,7 @@ class ShellChooserDialog(SteempegDialog):
             )
 
             if is_screen_undersized():
+                prefer_portable = True
                 cramped = QLabel(
                     "Your display looks a bit small "
                     f"({screen_size_summary()}). Desktop may feel cramped or "
@@ -255,10 +257,16 @@ class ShellChooserDialog(SteempegDialog):
         )
         desktop.chosen.connect(self._pick)
         portable.chosen.connect(self._pick)
-        row.addWidget(desktop)
-        row.addWidget(portable)
+        # Small screens: Portable first + focused — matches the tip above.
+        if prefer_portable:
+            row.addWidget(portable)
+            row.addWidget(desktop)
+        else:
+            row.addWidget(desktop)
+            row.addWidget(portable)
         row.addStretch(1)
         self.content_layout.addLayout(row)
+        self._focus_card = portable if prefer_portable else desktop
 
         self._chk_remember = SteempegCheckBox("Don't ask again. Remember this choice")
         self._chk_remember.setChecked(False)
@@ -273,6 +281,12 @@ class ShellChooserDialog(SteempegDialog):
         )
         self.content_layout.addSpacing(4)
         self.content_layout.addWidget(foot)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        card = getattr(self, "_focus_card", None)
+        if card is not None:
+            card.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _pick(self, shell_id: str) -> None:
         self._chosen = shell_id
