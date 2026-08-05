@@ -152,6 +152,7 @@ class ClipCard(qtw.QWidget):
         date_lbl.setStyleSheet(
             "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
         )
+        self.date_lbl = date_lbl
 
         text_layout.addWidget(title_lbl)
         text_layout.addStretch()
@@ -243,6 +244,12 @@ class ClipCard(qtw.QWidget):
 
     def is_loading(self) -> bool:
         return bool(getattr(self, "_loading", False))
+
+    def set_date_footer(self, text: str) -> None:
+        """Update the muted date/duration strip without rebuilding the card."""
+        lbl = getattr(self, "date_lbl", None)
+        if lbl is not None:
+            lbl.setText(text)
 
     def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
         """Dim dead / empty-thumb cards without relying on Qt disabled look."""
