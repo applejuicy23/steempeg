@@ -600,6 +600,37 @@ class FilterMenu(QWidget):
                 pass
         return self._filter_host_width()
 
+    def _filter_shell_height(self) -> int:
+        app = getattr(self, "app", None)
+        try:
+            from steempeg.ui.portable.sheets import portable_shell_height
+
+            h = int(portable_shell_height(app=app) or 0)
+            if h > 32:
+                return h
+        except Exception:
+            pass
+        return self._filter_host_height()
+
+    def _filter_shell_is_small(self) -> bool:
+        """Deck / small-laptop class may use wide 3-col; big desks stay stacked."""
+        try:
+            from steempeg.ui.portable.sheets import portable_shell_is_deck_native
+
+            app = getattr(self, "app", None)
+            if portable_shell_is_deck_native(app=app):
+                return True
+        except Exception:
+            pass
+        w = self._filter_shell_width()
+        h = self._filter_shell_height()
+        # Wider/taller than Deck native → classic vertical filters (scroll OK).
+        if w > 1400 or (h > 0 and h > 900):
+            return False
+        if w <= 0:
+            return True
+        return w <= 1400 and (h <= 0 or h <= 900)
+
     def _filter_host_height(self) -> int:
         app = getattr(self, "app", None)
         pill = getattr(app, "btn_filter_pill", None) if app is not None else None
@@ -1238,14 +1269,16 @@ class FilterMenu(QWidget):
                 stack_games_h = max(games_floor, min(content, 220))
                 stack_h = chrome + non_games + stack_games_h
 
-                # If the classic stack would stick past the floor, go wide (3-col).
-                # Do NOT skip that just because avail/host look "tall" — short
-                # Choose-a-Clip / Deck shells still overflow in one column.
-                # Shell width gates 3-col — Choose-a-Clip alone can be too narrow.
+                # Big desks: classic vertical stack (popup may scroll).
+                # Small / Deck: wide 3-col when the stack would stick past the floor.
                 shell_w = self._filter_shell_width()
                 can_three = shell_w <= 0 or shell_w >= 780
                 stack_fits = stack_h <= avail - 8
-                three = bool(can_three and not stack_fits)
+                three = bool(
+                    self._filter_shell_is_small()
+                    and can_three
+                    and not stack_fits
+                )
 
                 if three:
                     self._place_filter_columns(three_col=True)
