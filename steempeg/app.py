@@ -270,19 +270,69 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             os.makedirs(self.logs_dir)
 
         self._session_ts = session_timestamp()
-        self.current_log_file = setup_logging(self.logs_dir, APP_VERSION_STR, self._session_ts)
+        # Load prefs early so log level / date / FFmpeg apply from the first line.
+        early_settings = {}
+        try:
+            early_path = os.path.join(self.cache_dir, "settings.json")
+            if os.path.isfile(early_path):
+                from steempeg.infra import cache as _cache
+
+                early_settings = _cache.read_json(early_path) or {}
+        except Exception:
+            early_settings = {}
+        try:
+            from steempeg.ui.settings_prefs import (
+                configure_runtime_prefs,
+                load_app_log_level,
+                load_media_cache_limit_gb,
+                resolve_screenshots_folder,
+            )
+
+            app_level = load_app_log_level(early_settings)
+        except Exception:
+            app_level = "debug"
+            configure_runtime_prefs = None  # type: ignore
+            load_media_cache_limit_gb = None  # type: ignore
+            resolve_screenshots_folder = None  # type: ignore
+
+        self.current_log_file = setup_logging(
+            self.logs_dir, APP_VERSION_STR, self._session_ts, level=app_level
+        )
         self.current_mpv_log_file = mpv_log_path(self.logs_dir, self._session_ts)
         prune_old_logs(
             self.logs_dir,
             keep_paths=(self.current_log_file, self.current_mpv_log_file),
             max_files=40,
         )
+        if configure_runtime_prefs is not None:
+            try:
+                configure_runtime_prefs(early_settings)
+            except Exception:
+                logging.exception("configure_runtime_prefs failed")
         logging.info("Logs dir: %s", self.logs_dir)
         logging.info("Cache dir: %s", self.cache_dir)
 
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir) # Create a cache folder if it doesn't exist
-            
+
+        if load_media_cache_limit_gb is not None:
+            try:
+                from steempeg.infra.media_cache import prune_media_cache
+
+                prune_media_cache(
+                    self.cache_dir, load_media_cache_limit_gb(early_settings)
+                )
+            except Exception:
+                logging.exception("media cache prune at startup failed")
+
+        if resolve_screenshots_folder is not None:
+            try:
+                self.screenshots_dir = resolve_screenshots_folder(early_settings)
+            except Exception:
+                pass
+        if not os.path.exists(self.screenshots_dir):
+            os.makedirs(self.screenshots_dir)
+
         self.json_cache_path = os.path.join(self.cache_dir, "games.json")
         self.game_names_cache = self.load_json_cache() # JSON
         self.game_icons_cache = {} # This is where we store downloaded images in memory
@@ -2477,15 +2527,20 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._linux_mpv_vo_attached = False
         self.current_mpv_log_file = mpv_log_path_str
         if sys.platform == "win32":
+            from steempeg.ui.settings_prefs import (
+                current_hwdec_preview,
+                current_mpv_loglevel,
+            )
+
             mpv_opts = {
                 "panscan": 1.0,
                 "keepaspect": "no",
                 "keep_open": "yes",
                 "log_file": mpv_log_path_str,
-                "loglevel": "info",
+                "loglevel": current_mpv_loglevel(),
                 "wid": int(self.mpv_screen.winId()),
                 "vo": "gpu",
-                "hwdec": "auto",
+                "hwdec": current_hwdec_preview(),
                 "ao": "wasapi",
             }
             self.player = mpv.MPV(**mpv_opts)
@@ -3208,10 +3263,30 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         def _start():
             # Clips first; Rendered is deferred until clips finishes.
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                try:
+                    settings = self.load_user_settings() or {}
+                except Exception:
+                    settings = {}
+            from steempeg.ui.settings_prefs import (
+                SCAN_CACHE,
+                SCAN_FULL,
+                load_startup_library_scan,
+            )
+
+            mode = load_startup_library_scan(settings)
+            if mode == SCAN_CACHE:
+                logging.info("Startup library scan skipped (open without scanning)")
+                if hasattr(self, "update_status_indicator"):
+                    self.update_status_indicator(
+                        "Ready — Refresh to load library", "ready"
+                    )
+                return
             if getattr(self, "clips_folders", None):
                 self._startup_library_scan_active = True
                 self._defer_rendered_scan_until_clips_done = True
-                self.scan_clips()
+                self.scan_clips(fast=(mode != SCAN_FULL))
             elif hasattr(self, "scan_rendered_outputs"):
                 self.scan_rendered_outputs()
 
