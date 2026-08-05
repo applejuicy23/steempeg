@@ -155,14 +155,19 @@ class PlayerMixin:
             modes.append("external")
 
             last_exc = None
+            from steempeg.ui.settings_prefs import (
+                current_hwdec_preview,
+                current_mpv_loglevel,
+            )
+
             for mode in modes:
                 for vo in vo_attempts:
                     opts = {
                         "panscan": 1.0,
                         "keepaspect": "no" if mode == "embed" else "yes",
                         "keep_open": "yes",
-                        "loglevel": "info",
-                        "hwdec": "no",
+                        "loglevel": current_mpv_loglevel(),
+                        "hwdec": current_hwdec_preview(),
                         "ao": ao,
                         "osc": "no",
                         "input_default_bindings": "no",
@@ -3464,8 +3469,18 @@ class PlayerMixin:
         if not hasattr(self, 'player') or not self.player: return
         
         # Ensure the global folder exists (just in case)
-        if not hasattr(self, 'screenshots_dir') or not os.path.exists(self.screenshots_dir):
-            self.screenshots_dir = os.path.join(get_save_directory(), "Screenshots")
+        try:
+            from steempeg.ui.settings_prefs import resolve_screenshots_folder
+
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                settings = self.load_user_settings() or {}
+            self.screenshots_dir = resolve_screenshots_folder(settings)
+        except Exception:
+            if not hasattr(self, 'screenshots_dir') or not os.path.exists(self.screenshots_dir):
+                self.screenshots_dir = os.path.join(get_save_directory(), "Screenshots")
+                os.makedirs(self.screenshots_dir, exist_ok=True)
+        if not os.path.isdir(self.screenshots_dir):
             os.makedirs(self.screenshots_dir, exist_ok=True)
             
         # Get the clip name (if selected) to add to the file name
