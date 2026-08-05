@@ -1,7 +1,10 @@
 """App-wide Settings dialog — prefs that are not one click away elsewhere."""
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -10,11 +13,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from steempeg.ui.icon_assets import title_bar_info_pixmap
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_shape import (
     ICON_SHAPE_DEFAULT,
@@ -50,22 +55,78 @@ from steempeg.ui.shell_chooser import (
     save_ui_shell,
 )
 from steempeg.ui.settings_prefs import (
+    CLOCK_FORMAT_LABELS,
+    DATE_FORMAT_LABELS,
+    DEFAULT_CLOCK_FORMAT,
+    DEFAULT_DATE_FORMAT,
+    DEFAULT_DISPLAY_TIMEZONE,
+    DEFAULT_HWDEC_PREVIEW,
+    DEFAULT_MARKER_TRIM_OFFSET_MS,
+    DEFAULT_MEDIA_CACHE_LIMIT_GB,
+    DEFAULT_STARTUP_LIBRARY_SCAN,
+    DISPLAY_TIMEZONE_LABELS,
+    HWDEC_LABELS,
+    KEY_APP_LOG_LEVEL,
+    KEY_CLOCK_FORMAT,
+    KEY_CONFIRM_BEFORE_DELETE,
+    KEY_DATE_FORMAT,
     KEY_DEFAULT_RENDER_TAB,
+    KEY_DISPLAY_TIMEZONE,
+    KEY_FFMPEG_LOG_LEVEL,
+    KEY_HWDEC_PREVIEW,
+    KEY_MARKER_TRIM_OFFSET_MS,
+    KEY_MEDIA_CACHE_LIMIT_GB,
+    KEY_MPV_LOG_LEVEL,
+    KEY_REMEMBER_LIBRARY_TAB,
+    KEY_SCREENSHOTS_FOLDER,
+    KEY_STARTUP_LIBRARY_SCAN,
     KEY_UPDATE_CHECK_INTERVAL,
+    LOG_LEVEL_LABELS,
+    MARKER_TRIM_LABELS,
+    MEDIA_CACHE_LIMIT_LABELS,
     RENDER_TAB_LABELS,
+    STARTUP_SCAN_LABELS,
+    TZ_SYSTEM,
     UPDATE_INTERVAL_LABELS,
     apply_default_render_tab,
     apply_export_folder,
+    configure_runtime_prefs,
     default_export_dir,
+    default_screenshots_dir,
     ensure_usable_export_folder,
     is_outside_default_rendered,
+    load_app_log_level,
+    load_clock_format,
+    load_confirm_before_delete,
+    load_date_format,
     load_default_render_tab,
+    load_display_timezone,
+    load_ffmpeg_log_level,
+    load_hwdec_preview,
+    load_marker_trim_offset_ms,
+    load_media_cache_limit_gb,
+    load_mpv_log_level,
+    load_remember_library_tab,
+    load_startup_library_scan,
+    normalize_clock_format,
+    normalize_date_format,
+    normalize_display_timezone,
     normalize_export_folder,
+    normalize_hwdec_preview,
+    normalize_log_level,
+    normalize_marker_trim_offset_ms,
+    normalize_media_cache_limit_gb,
     normalize_render_tab,
+    normalize_screenshots_folder,
+    normalize_startup_library_scan,
     normalize_update_check_interval,
     notify_export_folder_fallback,
     resolve_permanent_export_folder,
+    resolve_screenshots_folder,
     resolve_update_check_interval,
+    DEFAULT_APP_LOG_LEVEL,
+    DEFAULT_FFMPEG_LOG_LEVEL,
+    DEFAULT_MPV_LOG_LEVEL,
 )
 from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -150,7 +211,7 @@ def _tab_page() -> tuple[QWidget, QVBoxLayout]:
 
 
 class SettingsDialog(SteempegDialog):
-    """App Settings — tabbed: General · Visual · Notifications · Performance · Support."""
+    """App Settings — tabbed: General · Visual · Notifications · Performance · Support · Advanced."""
 
     def __init__(self, app, parent=None, **theme_kwargs):
         if not theme_kwargs.get("bar_color"):
@@ -161,7 +222,7 @@ class SettingsDialog(SteempegDialog):
         from steempeg.ui.ui_density import scaled_dialog_size
 
         # Compact default — content already has stretches; 560 left a USA-sized void.
-        w, h = scaled_dialog_size(500, 480, parent=parent or getattr(app, "ui", None))
+        w, h = scaled_dialog_size(540, 560, parent=parent or getattr(app, "ui", None))
         self.resize(w, h)
 
         settings = {}
@@ -199,7 +260,7 @@ class SettingsDialog(SteempegDialog):
         upd_row.addWidget(upd_lbl)
         upd_row.addWidget(self._combo_update_interval, 1)
         g.addLayout(upd_row)
-        g.addWidget(self._hint("Quiet badge only — never installs without you."))
+        g.addWidget(self._hint("Quiet badge only: never installs without you."))
 
         g.addWidget(self._section("Export"))
         export_row = QHBoxLayout()
@@ -275,7 +336,7 @@ class SettingsDialog(SteempegDialog):
             g.addWidget(
                 self._hint(
                     "Steam Deck builds start in Portable. Desktop is available "
-                    "here if you want it — applies next launch."
+                    "here if you want it. Applies next launch."
                 )
             )
         else:
@@ -284,13 +345,16 @@ class SettingsDialog(SteempegDialog):
 
         restart_row = QHBoxLayout()
         restart_row.setSpacing(8)
+        restart_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         btn_restart = QPushButton("Restart app")
         btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_restart.setStyleSheet(_BTN_SECONDARY)
         btn_restart.clicked.connect(self._restart_app)
-        restart_row.addWidget(btn_restart, 0)
+        restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         restart_row.addWidget(
-            self._hint("Quit and relaunch — use after changing shell."), 1
+            self._hint("Quit and relaunch. Use after changing shell."),
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
         )
         g.addLayout(restart_row)
         g.addStretch(1)
@@ -350,9 +414,9 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(header_row)
         v.addWidget(
             self._hint(
-                "SteempegUI — left-aligned title with date/time and duration. "
-                "Steam-like — centered logo + game name; date/duration only in the "
-                "info (i) tip. Combo previews live; Save persists. "
+                "Steam-like (default): centered logo + game name; date/duration only in the "
+                "info (i) tip. SteempegUI: left-aligned title with date/time and duration. "
+                "Combo previews live; Save persists. "
                 "Cancel restores the last saved layout."
             )
         )
@@ -361,6 +425,84 @@ class SettingsDialog(SteempegDialog):
         self._header_layout_preview_timer.setInterval(200)
         self._header_layout_preview_timer.timeout.connect(self._apply_header_layout_preview)
         self._combo_header_layout.currentIndexChanged.connect(self._preview_header_layout)
+
+        v.addWidget(self._section("Date & time"))
+        date_row = QHBoxLayout()
+        date_row.setSpacing(8)
+        date_lbl = QLabel("Date format")
+        date_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_date_format = QComboBox()
+        self._combo_date_format.setStyleSheet(_COMBO)
+        for value, label in DATE_FORMAT_LABELS:
+            self._combo_date_format.addItem(label, value)
+        cur_date = load_date_format(settings)
+        didx = self._combo_date_format.findData(cur_date)
+        self._combo_date_format.setCurrentIndex(max(0, didx))
+        date_row.addWidget(date_lbl)
+        date_row.addWidget(self._combo_date_format, 1)
+        v.addLayout(date_row)
+
+        clock_row = QHBoxLayout()
+        clock_row.setSpacing(8)
+        clock_lbl = QLabel("Clock")
+        clock_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_clock_format = QComboBox()
+        self._combo_clock_format.setStyleSheet(_COMBO)
+        for value, label in CLOCK_FORMAT_LABELS:
+            self._combo_clock_format.addItem(label, value)
+        cur_clock = load_clock_format(settings)
+        cidx = self._combo_clock_format.findData(cur_clock)
+        self._combo_clock_format.setCurrentIndex(max(0, cidx))
+        clock_row.addWidget(clock_lbl)
+        clock_row.addWidget(self._combo_clock_format, 1)
+        v.addLayout(clock_row)
+
+        tz_row = QHBoxLayout()
+        tz_row.setSpacing(8)
+        tz_lbl = QLabel("Timezone")
+        tz_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_timezone = QComboBox()
+        self._combo_timezone.setStyleSheet(_COMBO)
+        for value, label in DISPLAY_TIMEZONE_LABELS:
+            self._combo_timezone.addItem(label, value)
+        cur_tz = load_display_timezone(settings)
+        tidx = self._combo_timezone.findData(cur_tz)
+        if tidx < 0 and cur_tz != TZ_SYSTEM:
+            self._combo_timezone.addItem(cur_tz, cur_tz)
+            tidx = self._combo_timezone.findData(cur_tz)
+        self._combo_timezone.setCurrentIndex(max(0, tidx))
+        tz_row.addWidget(tz_lbl)
+        tz_row.addWidget(self._combo_timezone, 1)
+        v.addLayout(tz_row)
+        v.addWidget(
+            self._hint(
+                "Queue, library, filters, and render history. "
+                "Named timezones use Qt IANA data. "
+                "Save updates date labels instantly, with no library reload."
+            )
+        )
+
+        v.addWidget(self._section("Markers"))
+        trim_row = QHBoxLayout()
+        trim_row.setSpacing(8)
+        trim_lbl = QLabel("Trim from marker")
+        trim_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_marker_trim = QComboBox()
+        self._combo_marker_trim.setStyleSheet(_COMBO)
+        for value, label in MARKER_TRIM_LABELS:
+            self._combo_marker_trim.addItem(label, value)
+        cur_trim = load_marker_trim_offset_ms(settings)
+        tridx = self._combo_marker_trim.findData(cur_trim)
+        self._combo_marker_trim.setCurrentIndex(max(0, tridx))
+        trim_row.addWidget(trim_lbl)
+        trim_row.addWidget(self._combo_marker_trim, 1)
+        v.addLayout(trim_row)
+        v.addWidget(
+            self._hint(
+                "When setting trim start from a marker: Exact snaps to the mark; "
+                "lead-in starts 1s or 2s earlier."
+            )
+        )
 
         v.addStretch(1)
         tabs.addTab(visual, "Visual")
@@ -406,6 +548,51 @@ class SettingsDialog(SteempegDialog):
         )
         p.addWidget(self._chk_pause_preview)
         p.addWidget(self._hint("Keeps CPU/GPU freer for FFmpeg. Off by default."))
+
+        p.addWidget(self._section("Library startup"))
+        scan_row = QHBoxLayout()
+        scan_row.setSpacing(8)
+        scan_lbl = QLabel("On launch")
+        scan_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_startup_scan = QComboBox()
+        self._combo_startup_scan.setStyleSheet(_COMBO)
+        for value, label in STARTUP_SCAN_LABELS:
+            self._combo_startup_scan.addItem(label, value)
+        cur_scan = load_startup_library_scan(settings)
+        scidx = self._combo_startup_scan.findData(cur_scan)
+        self._combo_startup_scan.setCurrentIndex(max(0, scidx))
+        scan_row.addWidget(scan_lbl)
+        scan_row.addWidget(self._combo_startup_scan, 1)
+        p.addLayout(scan_row)
+        p.addWidget(
+            self._hint(
+                "Quick uses cached health (default). Full re-runs ffprobe. "
+                "Skip opens immediately. Use Refresh library for a scan."
+            )
+        )
+
+        p.addWidget(self._section("Media cache"))
+        cache_row = QHBoxLayout()
+        cache_row.setSpacing(8)
+        cache_lbl = QLabel("Size limit")
+        cache_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_cache_limit = QComboBox()
+        self._combo_cache_limit.setStyleSheet(_COMBO)
+        for value, label in MEDIA_CACHE_LIMIT_LABELS:
+            self._combo_cache_limit.addItem(label, value)
+        cur_cache = load_media_cache_limit_gb(settings)
+        caidx = self._combo_cache_limit.findData(cur_cache)
+        self._combo_cache_limit.setCurrentIndex(max(0, caidx))
+        cache_row.addWidget(cache_lbl)
+        cache_row.addWidget(self._combo_cache_limit, 1)
+        p.addLayout(cache_row)
+        p.addWidget(
+            self._hint(
+                "Caps clip posters, rendered posters, and remux leftovers. "
+                "Oldest files prune first. Deleting a clip also purges its cache."
+            )
+        )
+
         p.addStretch(1)
         tabs.addTab(perf, "Performance")
 
@@ -413,14 +600,17 @@ class SettingsDialog(SteempegDialog):
         support, s = _tab_page()
         s.addWidget(self._section("Hints"))
         hints_row = QHBoxLayout()
+        hints_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         hints_row.addWidget(
-            self._hint("Restore dismissed «Don't show again» dialogs."), 1
+            self._hint("Restore dismissed «Don't show again» dialogs."),
+            1,
+            Qt.AlignmentFlag.AlignVCenter,
         )
         btn_reset_hints = QPushButton("Reset all")
         btn_reset_hints.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset_hints.setStyleSheet(_BTN_SECONDARY)
         btn_reset_hints.clicked.connect(self._reset_hints)
-        hints_row.addWidget(btn_reset_hints, 0)
+        hints_row.addWidget(btn_reset_hints, 0, Qt.AlignmentFlag.AlignVCenter)
         s.addLayout(hints_row)
         self._hints_status = QLabel("")
         self._hints_status.setStyleSheet(_HINT)
@@ -442,20 +632,50 @@ class SettingsDialog(SteempegDialog):
         support_row.addStretch(1)
         s.addLayout(support_row)
 
+        s.addWidget(self._section("Log levels"))
+        for attr, label, loader, _default in (
+            ("_combo_app_log", "App", load_app_log_level, DEFAULT_APP_LOG_LEVEL),
+            ("_combo_ffmpeg_log", "FFmpeg", load_ffmpeg_log_level, DEFAULT_FFMPEG_LOG_LEVEL),
+            ("_combo_mpv_log", "MPV", load_mpv_log_level, DEFAULT_MPV_LOG_LEVEL),
+        ):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            lbl = QLabel(label)
+            lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+            combo = QComboBox()
+            combo.setStyleSheet(_COMBO)
+            for value, text in LOG_LEVEL_LABELS:
+                combo.addItem(text, value)
+            cur = loader(settings)
+            idx = combo.findData(cur)
+            combo.setCurrentIndex(max(0, idx))
+            setattr(self, attr, combo)
+            row.addWidget(lbl)
+            row.addWidget(combo, 1)
+            s.addLayout(row)
+        s.addWidget(
+            self._hint(
+                "App applies immediately. FFmpeg on the next encode/thumb. "
+                "MPV on the next player create / app restart."
+            )
+        )
+
         import_row = QHBoxLayout()
         import_row.setSpacing(8)
+        import_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         import_row.addWidget(
             self._hint(
                 "Pull rendered videos, Screenshots, and cache from an "
                 "old_version backup (skips files that already exist)."
             ),
             1,
+            Qt.AlignmentFlag.AlignVCenter,
         )
         btn_import = QPushButton("Import from backup…")
         btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_import.setStyleSheet(_BTN_SECONDARY)
         btn_import.clicked.connect(self._import_from_backup)
-        import_row.addWidget(btn_import, 0)
+        import_row.addWidget(btn_import, 0, Qt.AlignmentFlag.AlignVCenter)
         s.addLayout(import_row)
         self._import_status = QLabel("")
         self._import_status.setWordWrap(True)
@@ -463,6 +683,66 @@ class SettingsDialog(SteempegDialog):
         s.addWidget(self._import_status)
         s.addStretch(1)
         tabs.addTab(support, "Support")
+
+        # ----- Advanced -----
+        advanced, a = _tab_page()
+        a.addWidget(self._section("Safety"))
+        self._chk_confirm_delete = SteempegCheckBox("Confirm before deleting clips / renders")
+        self._chk_confirm_delete.setChecked(load_confirm_before_delete(settings))
+        a.addWidget(self._chk_confirm_delete)
+
+        a.addWidget(self._section("Library"))
+        self._chk_remember_tab = SteempegCheckBox("Remember last library tab")
+        self._chk_remember_tab.setChecked(load_remember_library_tab(settings))
+        a.addWidget(self._chk_remember_tab)
+        a.addWidget(
+            self._hint("Off = always open Clips Manager. On = restore Clips / Rendered.")
+        )
+
+        a.addWidget(self._section("Screenshots"))
+        shot_row = QHBoxLayout()
+        shot_row.setSpacing(8)
+        self._edit_screenshots = QLineEdit()
+        self._edit_screenshots.setStyleSheet(_EDIT)
+        self._edit_screenshots.setPlaceholderText(default_screenshots_dir())
+        self._edit_screenshots.setText(resolve_screenshots_folder(settings))
+        btn_browse_shots = QPushButton("Browse…")
+        btn_browse_shots.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_browse_shots.setStyleSheet(_BTN_SECONDARY)
+        btn_browse_shots.clicked.connect(self._browse_screenshots_folder)
+        btn_reset_shots = QPushButton("Reset")
+        btn_reset_shots.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset_shots.setStyleSheet(_BTN_SECONDARY)
+        btn_reset_shots.clicked.connect(self._reset_screenshots_folder)
+        shot_row.addWidget(self._edit_screenshots, 1)
+        shot_row.addWidget(btn_browse_shots, 0)
+        shot_row.addWidget(btn_reset_shots, 0)
+        a.addLayout(shot_row)
+        a.addWidget(self._hint("Player screenshots save here (PNG)."))
+
+        a.addWidget(self._section("Preview decode"))
+        hw_row = QHBoxLayout()
+        hw_row.setSpacing(8)
+        hw_lbl = QLabel("Hardware decode")
+        hw_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_hwdec = QComboBox()
+        self._combo_hwdec.setStyleSheet(_COMBO)
+        for value, label in HWDEC_LABELS:
+            self._combo_hwdec.addItem(label, value)
+        cur_hw = load_hwdec_preview(settings)
+        hwidx = self._combo_hwdec.findData(cur_hw)
+        self._combo_hwdec.setCurrentIndex(max(0, hwidx))
+        hw_row.addWidget(hw_lbl)
+        hw_row.addWidget(self._combo_hwdec, 1)
+        a.addLayout(hw_row)
+        a.addWidget(
+            self._hint(
+                "MPV hwdec for preview. Applies on next player create / restart. "
+                "Off if hardware decode glitches."
+            )
+        )
+        a.addStretch(1)
+        tabs.addTab(advanced, "Advanced")
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -486,11 +766,52 @@ class SettingsDialog(SteempegDialog):
         return lbl
 
     @staticmethod
-    def _hint(text: str) -> QLabel:
+    def _hint(text: str) -> QWidget:
+        """Muted helper line with circled info icon, optically centered on the text."""
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        # Prefer intrinsic height so a button row cannot stretch the icon to the top.
+        row.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+
         lbl = QLabel(text)
         lbl.setWordWrap(True)
         lbl.setStyleSheet(_HINT)
-        return lbl
+        font = QFont()
+        font.setFamilies(["Segoe UI", "Noto Sans", "Arial"])
+        font.setPointSize(11)
+        lbl.setFont(font)
+        line_h = max(QFontMetrics(font).height(), 14)
+
+        icon_sz = 12
+        icon_lbl = QLabel()
+        # Slot = one text line so the glyph sits on the same center as the first line.
+        icon_lbl.setFixedSize(icon_sz, line_h)
+        icon_lbl.setStyleSheet("background: transparent; border: none; padding: 0;")
+        pix = title_bar_info_pixmap(tok.TEXT_MUTED, icon_sz)
+        if pix is not None and not pix.isNull():
+            icon_lbl.setPixmap(pix)
+        icon_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+        )
+
+        lay.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(lbl, 1, Qt.AlignmentFlag.AlignTop)
+        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        row._hint_label = lbl  # type: ignore[attr-defined]
+        return row
+
+    @staticmethod
+    def _set_hint_text(hint_widget: QWidget, text: str) -> None:
+        lbl = getattr(hint_widget, "_hint_label", None)
+        if isinstance(lbl, QLabel):
+            lbl.setText(text)
+        elif isinstance(hint_widget, QLabel):
+            hint_widget.setText(text)
 
     def _save_setting(self, key: str, value) -> None:
         if hasattr(self._app, "save_user_settings"):
@@ -520,17 +841,33 @@ class SettingsDialog(SteempegDialog):
         self._edit_export_folder.setText(default_export_dir())
         self._refresh_export_folder_hint()
 
+    def _browse_screenshots_folder(self) -> None:
+        start = normalize_screenshots_folder(
+            self._edit_screenshots.text()
+        ) or default_screenshots_dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select screenshots folder", start
+        )
+        if not folder:
+            return
+        self._edit_screenshots.setText(normalize_screenshots_folder(folder))
+
+    def _reset_screenshots_folder(self) -> None:
+        self._edit_screenshots.setText(default_screenshots_dir())
+
     def _refresh_export_folder_hint(self) -> None:
         folder = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         if is_outside_default_rendered(folder):
-            self._export_folder_hint.setText(
-                "Outside rendered_videos — exports OK; Rendered library still "
-                "scans this path, but «Open in Steempeg» may be limited."
+            self._set_hint_text(
+                self._export_folder_hint,
+                "Outside rendered_videos: exports OK; Rendered library still "
+                "scans this path, but «Open in Steempeg» may be limited.",
             )
         else:
-            self._export_folder_hint.setText(
+            self._set_hint_text(
+                self._export_folder_hint,
                 "Permanent output folder for exports. Save syncs the Export "
-                "panel. Reset returns to the default rendered_videos folder."
+                "panel. Reset returns to the default rendered_videos folder.",
             )
 
     def _reset_hints(self) -> None:
@@ -625,7 +962,7 @@ class SettingsDialog(SteempegDialog):
             self,
             "Restart Steempeg?",
             "Steempeg will quit and open again.",
-            detail="Unsaved dialog choices in this window are discarded — Save first if needed.",
+            detail="Unsaved dialog choices in this window are discarded. Save first if needed.",
         ):
             return
         # Persist shell prefs before relaunch so Restart after a shell change works
@@ -792,6 +1129,88 @@ class SettingsDialog(SteempegDialog):
         logging.info("Player header layout applied → %s (settings.json)", header_layout)
         self._refresh_header_layout(header_layout)
 
+        date_fmt = normalize_date_format(self._combo_date_format.currentData())
+        clock_fmt = normalize_clock_format(self._combo_clock_format.currentData())
+        tz = normalize_display_timezone(self._combo_timezone.currentData())
+        prev = {}
+        if hasattr(self._app, "load_user_settings"):
+            try:
+                prev = self._app.load_user_settings() or {}
+            except Exception:
+                prev = {}
+        date_changed = (
+            normalize_date_format(prev.get(KEY_DATE_FORMAT)) != date_fmt
+            or normalize_clock_format(prev.get(KEY_CLOCK_FORMAT)) != clock_fmt
+            or normalize_display_timezone(prev.get(KEY_DISPLAY_TIMEZONE)) != tz
+        )
+        self._save_setting(KEY_DATE_FORMAT, date_fmt)
+        self._save_setting(KEY_CLOCK_FORMAT, clock_fmt)
+        self._save_setting(KEY_DISPLAY_TIMEZONE, tz)
+
+        trim_ms = normalize_marker_trim_offset_ms(self._combo_marker_trim.currentData())
+        self._save_setting(KEY_MARKER_TRIM_OFFSET_MS, trim_ms)
+
+        scan_mode = normalize_startup_library_scan(self._combo_startup_scan.currentData())
+        self._save_setting(KEY_STARTUP_LIBRARY_SCAN, scan_mode)
+
+        cache_gb = normalize_media_cache_limit_gb(self._combo_cache_limit.currentData())
+        self._save_setting(KEY_MEDIA_CACHE_LIMIT_GB, cache_gb)
+        try:
+            from steempeg.infra.media_cache import prune_media_cache
+
+            prune_media_cache(getattr(self._app, "cache_dir", None), cache_gb)
+        except Exception:
+            logging.exception("media cache prune on Save failed")
+
+        app_log = normalize_log_level(
+            self._combo_app_log.currentData(), default=DEFAULT_APP_LOG_LEVEL
+        )
+        ff_log = normalize_log_level(
+            self._combo_ffmpeg_log.currentData(), default=DEFAULT_FFMPEG_LOG_LEVEL
+        )
+        mpv_log = normalize_log_level(
+            self._combo_mpv_log.currentData(), default=DEFAULT_MPV_LOG_LEVEL
+        )
+        self._save_setting(KEY_APP_LOG_LEVEL, app_log)
+        self._save_setting(KEY_FFMPEG_LOG_LEVEL, ff_log)
+        self._save_setting(KEY_MPV_LOG_LEVEL, mpv_log)
+
+        self._save_setting(
+            KEY_CONFIRM_BEFORE_DELETE, self._chk_confirm_delete.isChecked()
+        )
+        self._save_setting(
+            KEY_REMEMBER_LIBRARY_TAB, self._chk_remember_tab.isChecked()
+        )
+
+        shots = normalize_screenshots_folder(self._edit_screenshots.text())
+        if not shots:
+            shots = default_screenshots_dir()
+        else:
+            try:
+                os.makedirs(shots, exist_ok=True)
+            except OSError:
+                shots = default_screenshots_dir()
+        self._save_setting(KEY_SCREENSHOTS_FOLDER, shots)
+        self._edit_screenshots.setText(shots)
+        if hasattr(self._app, "screenshots_dir"):
+            self._app.screenshots_dir = shots
+
+        hwdec = normalize_hwdec_preview(self._combo_hwdec.currentData())
+        self._save_setting(KEY_HWDEC_PREVIEW, hwdec)
+
+        # Refresh live runtime (logs / date / ffmpeg / marker trim / hwdec).
+        try:
+            fresh = self._app.load_user_settings() if hasattr(self._app, "load_user_settings") else {}
+            configure_runtime_prefs(fresh or {})
+        except Exception:
+            logging.exception("configure_runtime_prefs after Save failed")
+
+        if date_changed and hasattr(self._app, "refresh_library_datetime_displays"):
+            try:
+                self._app.refresh_library_datetime_displays()
+            except Exception:
+                logging.exception("datetime display refresh after Save failed")
+
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
             save_ui_shell(shell)
@@ -807,13 +1226,39 @@ class SettingsDialog(SteempegDialog):
 
 
 def show_settings_dialog(app) -> None:
+    from PySide6.QtWidgets import QWidget
+
+    from steempeg.ui.window_chrome import force_app_cursor_resync
+
     dlg = SettingsDialog(app, parent=getattr(app, "ui", None))
     try:
         dlg.exec()
     finally:
+        # Modal buttons keep PointingHand on the cursor stack until destroyed.
+        # Strip them now, then resync after deleteLater so Qt re-queries a live widget.
+        try:
+            for w in dlg.findChildren(QWidget):
+                try:
+                    if hasattr(w, "_set_hovered"):
+                        w._set_hovered(False)
+                    w.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+                    w.unsetCursor()
+                except RuntimeError:
+                    pass
+            dlg.unsetCursor()
+        except RuntimeError:
+            pass
         tb = getattr(getattr(app, "ui", None), "title_bar", None)
         if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
             tb.clear_shell_tool_hover()
+        else:
+            force_app_cursor_resync()
+        try:
+            dlg.deleteLater()
+        except RuntimeError:
+            pass
+        QTimer.singleShot(0, force_app_cursor_resync)
+        QTimer.singleShot(50, force_app_cursor_resync)
 
 
 def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:
