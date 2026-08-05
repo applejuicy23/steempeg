@@ -5,8 +5,7 @@ Two modes:
 * ``steempeg_ui`` — classic left-aligned title + date/time (+ duration) meta
 * ``steam_like`` — centered logo + game name; meta lives in the Clip info tip/popup only
 
-Default is ``steempeg_ui`` for classic familiarity (icon shape Soft/Steam-like is
-independent).
+Default is ``steam_like`` (matches Soft / Steam-like game icons).
 """
 from __future__ import annotations
 
@@ -20,11 +19,11 @@ KEY_PLAYER_HEADER_LAYOUT = "player_header_layout"
 HEADER_LAYOUT_STEEMPEG_UI = "steempeg_ui"
 HEADER_LAYOUT_STEAM_LIKE = "steam_like"
 
-HEADER_LAYOUT_DEFAULT = HEADER_LAYOUT_STEEMPEG_UI
+HEADER_LAYOUT_DEFAULT = HEADER_LAYOUT_STEAM_LIKE
 
 HEADER_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
-    (HEADER_LAYOUT_STEEMPEG_UI, "SteempegUI"),
     (HEADER_LAYOUT_STEAM_LIKE, "Steam-like"),
+    (HEADER_LAYOUT_STEEMPEG_UI, "SteempegUI"),
 )
 
 # SteempegUI separators (v41.1 / v42.1 mix): large bullet after the game name,
