@@ -692,6 +692,16 @@ class RenderedLibraryMixin:
                 self._rendered_view_mode = rendered_vm
 
             mode = state.get("library_panel_mode", "clips")
+            try:
+                from steempeg.ui.settings_prefs import load_remember_library_tab
+
+                settings = {}
+                if hasattr(self, "load_user_settings"):
+                    settings = self.load_user_settings() or {}
+                if not load_remember_library_tab(settings):
+                    mode = "clips"
+            except Exception:
+                pass
             if mode == "rendered" and "rendered" in getattr(self, "_library_tabs", {}):
                 self.open_library_panel("rendered")
             elif mode in getattr(self, "_library_tabs", {}):
@@ -1195,6 +1205,10 @@ class RenderedLibraryMixin:
 
         date_item = QTableWidgetItem(f"{scanned.date_str}\n{scanned.time_str}")
         date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+        try:
+            date_item.setData(Qt.ItemDataRole.UserRole, float(scanned.file_mtime))
+        except (TypeError, ValueError):
+            pass
         self.table_rendered.setItem(row, 2, date_item)
 
         size_item = QTableWidgetItem(scanned.size_str)
@@ -1943,7 +1957,17 @@ class RenderedLibraryMixin:
         if not paths:
             return
         title, message, detail = self._rendered_delete_confirm_copy(paths)
-        if not steempeg_confirm_delete(
+        confirm = True
+        try:
+            from steempeg.ui.settings_prefs import load_confirm_before_delete
+
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                settings = self.load_user_settings() or {}
+            confirm = load_confirm_before_delete(settings)
+        except Exception:
+            confirm = True
+        if confirm and not steempeg_confirm_delete(
             self.ui,
             title,
             message,
