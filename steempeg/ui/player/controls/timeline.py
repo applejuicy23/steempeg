@@ -1170,8 +1170,15 @@ class TimelineCanvas(QWidget):
             self.screenshot_requested.emit(float(time_ms))
 
     def set_trim_start_from_marker(self, marker):
-        """ Magic method: Snaps the start directly to the marker! """
+        """Snap trim start to the marker, optionally with a Settings lead-in."""
         marker_ms = float(marker.get('time_ms', 0))
+        try:
+            from steempeg.ui.settings_prefs import current_marker_trim_offset_ms
+
+            lead_ms = max(0, int(current_marker_trim_offset_ms()))
+        except Exception:
+            lead_ms = 0
+        marker_ms = max(0.0, marker_ms - lead_ms)
         
         # 1. If trim mode is OFF - emulate a click on the real Trim button!
         if not self.is_trim_mode:
