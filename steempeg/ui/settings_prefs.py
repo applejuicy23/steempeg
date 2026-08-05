@@ -403,3 +403,448 @@ def stamp_last_update_check(app, *, ts: float | None = None) -> None:
     if not hasattr(app, "save_user_settings"):
         return
     app.save_user_settings(KEY_LAST_UPDATE_CHECK_TS, float(time.time() if ts is None else ts))
+
+
+# ----- Date / time / timezone display -----
+
+KEY_DATE_FORMAT = "date_format"
+KEY_CLOCK_FORMAT = "clock_format"
+KEY_DISPLAY_TIMEZONE = "display_timezone"
+
+DATE_FMT_SYSTEM = "system"
+DATE_FMT_US = "us"
+DATE_FMT_EU = "eu"
+DATE_FMT_ISO = "iso"
+DEFAULT_DATE_FORMAT = DATE_FMT_SYSTEM
+
+DATE_FORMAT_LABELS: tuple[tuple[str, str], ...] = (
+    (DATE_FMT_SYSTEM, "System locale (e.g. 11 May 2026)"),
+    (DATE_FMT_US, "US — 12/03/01"),
+    (DATE_FMT_EU, "EU — 29.12.2001"),
+    (DATE_FMT_ISO, "ISO — 2000/12/22"),
+)
+
+CLOCK_AUTO = "auto"
+CLOCK_12 = "12"
+CLOCK_24 = "24"
+DEFAULT_CLOCK_FORMAT = CLOCK_AUTO
+
+CLOCK_FORMAT_LABELS: tuple[tuple[str, str], ...] = (
+    (CLOCK_AUTO, "Auto (follow date / OS)"),
+    (CLOCK_12, "12-hour (AM/PM)"),
+    (CLOCK_24, "24-hour"),
+)
+
+TZ_SYSTEM = "system"
+DEFAULT_DISPLAY_TIMEZONE = TZ_SYSTEM
+
+# Common IANA zones for the Settings combo (System always first).
+DISPLAY_TIMEZONE_LABELS: tuple[tuple[str, str], ...] = (
+    (TZ_SYSTEM, "System local"),
+    ("UTC", "UTC"),
+    ("America/New_York", "America/New_York"),
+    ("America/Chicago", "America/Chicago"),
+    ("America/Denver", "America/Denver"),
+    ("America/Los_Angeles", "America/Los_Angeles"),
+    ("America/Sao_Paulo", "America/Sao_Paulo"),
+    ("Europe/London", "Europe/London"),
+    ("Europe/Berlin", "Europe/Berlin"),
+    ("Europe/Moscow", "Europe/Moscow"),
+    ("Asia/Tokyo", "Asia/Tokyo"),
+    ("Asia/Shanghai", "Asia/Shanghai"),
+    ("Asia/Seoul", "Asia/Seoul"),
+    ("Australia/Sydney", "Australia/Sydney"),
+)
+
+
+def normalize_date_format(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "locale": DATE_FMT_SYSTEM,
+        "default": DATE_FMT_SYSTEM,
+        "os": DATE_FMT_SYSTEM,
+        "usa": DATE_FMT_US,
+        "us_ish": DATE_FMT_US,
+        "eu_day_first": DATE_FMT_EU,
+        "european": DATE_FMT_EU,
+        "server": DATE_FMT_ISO,
+        "iso_ish": DATE_FMT_ISO,
+        "ymd": DATE_FMT_ISO,
+    }
+    if text in (DATE_FMT_SYSTEM, DATE_FMT_US, DATE_FMT_EU, DATE_FMT_ISO):
+        return text
+    return aliases.get(text, DEFAULT_DATE_FORMAT)
+
+
+def normalize_clock_format(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    if text in (CLOCK_AUTO, "os", "locale", "system", ""):
+        return CLOCK_AUTO
+    if text in (CLOCK_12, "12h", "12_hour", "ampm", "am_pm"):
+        return CLOCK_12
+    if text in (CLOCK_24, "24h", "24_hour"):
+        return CLOCK_24
+    return DEFAULT_CLOCK_FORMAT
+
+
+def normalize_display_timezone(value: object | None) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in ("local", "system", "os"):
+        return TZ_SYSTEM
+    return text
+
+
+def load_date_format(settings: dict | None) -> str:
+    return normalize_date_format((settings or {}).get(KEY_DATE_FORMAT))
+
+
+def load_clock_format(settings: dict | None) -> str:
+    return normalize_clock_format((settings or {}).get(KEY_CLOCK_FORMAT))
+
+
+def load_display_timezone(settings: dict | None) -> str:
+    return normalize_display_timezone((settings or {}).get(KEY_DISPLAY_TIMEZONE))
+
+
+# ----- Marker trim offset -----
+
+KEY_MARKER_TRIM_OFFSET_MS = "marker_trim_offset_ms"
+
+MARKER_TRIM_EXACT = 0
+MARKER_TRIM_1S = 1000
+MARKER_TRIM_2S = 2000
+DEFAULT_MARKER_TRIM_OFFSET_MS = MARKER_TRIM_EXACT
+
+MARKER_TRIM_LABELS: tuple[tuple[int, str], ...] = (
+    (MARKER_TRIM_EXACT, "Exact (at marker)"),
+    (MARKER_TRIM_1S, "Lead-in 1 second"),
+    (MARKER_TRIM_2S, "Lead-in 2 seconds"),
+)
+
+
+def normalize_marker_trim_offset_ms(value: object | None) -> int:
+    try:
+        ms = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_MARKER_TRIM_OFFSET_MS
+    if ms in (MARKER_TRIM_EXACT, MARKER_TRIM_1S, MARKER_TRIM_2S):
+        return ms
+    # Tolerate seconds typed as 1 / 2.
+    if ms in (1, 2):
+        return ms * 1000
+    return DEFAULT_MARKER_TRIM_OFFSET_MS
+
+
+def load_marker_trim_offset_ms(settings: dict | None) -> int:
+    return normalize_marker_trim_offset_ms(
+        (settings or {}).get(KEY_MARKER_TRIM_OFFSET_MS, DEFAULT_MARKER_TRIM_OFFSET_MS)
+    )
+
+
+# ----- Startup library scan -----
+
+KEY_STARTUP_LIBRARY_SCAN = "startup_library_scan"
+
+SCAN_FULL = "full"
+SCAN_QUICK = "quick"
+SCAN_CACHE = "cache"
+DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_QUICK
+
+STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
+    (SCAN_QUICK, "Quick — folders + cached health"),
+    (SCAN_FULL, "Full — folders + ffprobe health"),
+    (SCAN_CACHE, "Skip — open without scanning"),
+)
+
+
+def normalize_startup_library_scan(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "fast": SCAN_QUICK,
+        "incremental": SCAN_QUICK,
+        "cached_health": SCAN_QUICK,
+        "ffprobe": SCAN_FULL,
+        "complete": SCAN_FULL,
+        "off": SCAN_CACHE,
+        "skip": SCAN_CACHE,
+        "none": SCAN_CACHE,
+        "open_from_cache": SCAN_CACHE,
+        "from_cache": SCAN_CACHE,
+        "no_scan": SCAN_CACHE,
+    }
+    if text in (SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
+        return text
+    return aliases.get(text, DEFAULT_STARTUP_LIBRARY_SCAN)
+
+
+def load_startup_library_scan(settings: dict | None) -> str:
+    return normalize_startup_library_scan(
+        (settings or {}).get(KEY_STARTUP_LIBRARY_SCAN, DEFAULT_STARTUP_LIBRARY_SCAN)
+    )
+
+
+# ----- Media / PyAV-style disk cache -----
+
+KEY_MEDIA_CACHE_LIMIT_GB = "media_cache_limit_gb"
+# 0 = unlimited. Default 4 GiB covers posters + remux leftovers.
+DEFAULT_MEDIA_CACHE_LIMIT_GB = 4
+
+MEDIA_CACHE_LIMIT_LABELS: tuple[tuple[int, str], ...] = (
+    (0, "Unlimited"),
+    (1, "1 GB"),
+    (2, "2 GB"),
+    (4, "4 GB"),
+    (8, "8 GB"),
+)
+
+
+def normalize_media_cache_limit_gb(value: object | None) -> int:
+    try:
+        gb = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_MEDIA_CACHE_LIMIT_GB
+    if gb < 0:
+        return 0
+    allowed = {v for v, _ in MEDIA_CACHE_LIMIT_LABELS}
+    if gb in allowed:
+        return gb
+    # Snap to nearest allowed bucket.
+    return min(allowed, key=lambda x: abs(x - gb))
+
+
+def load_media_cache_limit_gb(settings: dict | None) -> int:
+    return normalize_media_cache_limit_gb(
+        (settings or {}).get(KEY_MEDIA_CACHE_LIMIT_GB, DEFAULT_MEDIA_CACHE_LIMIT_GB)
+    )
+
+
+# ----- Log levels -----
+
+KEY_APP_LOG_LEVEL = "app_log_level"
+KEY_FFMPEG_LOG_LEVEL = "ffmpeg_log_level"
+KEY_MPV_LOG_LEVEL = "mpv_log_level"
+
+LOG_LEVEL_DEBUG = "debug"
+LOG_LEVEL_INFO = "info"
+LOG_LEVEL_WARNING = "warning"
+LOG_LEVEL_ERROR = "error"
+
+DEFAULT_APP_LOG_LEVEL = LOG_LEVEL_DEBUG
+DEFAULT_FFMPEG_LOG_LEVEL = LOG_LEVEL_ERROR
+DEFAULT_MPV_LOG_LEVEL = LOG_LEVEL_INFO
+
+LOG_LEVEL_LABELS: tuple[tuple[str, str], ...] = (
+    (LOG_LEVEL_DEBUG, "Debug"),
+    (LOG_LEVEL_INFO, "Info"),
+    (LOG_LEVEL_WARNING, "Warning"),
+    (LOG_LEVEL_ERROR, "Error"),
+)
+
+_FFMPEG_LEVEL_MAP = {
+    LOG_LEVEL_DEBUG: "debug",
+    LOG_LEVEL_INFO: "info",
+    LOG_LEVEL_WARNING: "warning",
+    LOG_LEVEL_ERROR: "error",
+}
+
+
+def normalize_log_level(value: object | None, *, default: str) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {
+        "warn": LOG_LEVEL_WARNING,
+        "err": LOG_LEVEL_ERROR,
+        "critical": LOG_LEVEL_ERROR,
+        "fatal": LOG_LEVEL_ERROR,
+        "verbose": LOG_LEVEL_DEBUG,
+        "trace": LOG_LEVEL_DEBUG,
+    }
+    if text in (
+        LOG_LEVEL_DEBUG,
+        LOG_LEVEL_INFO,
+        LOG_LEVEL_WARNING,
+        LOG_LEVEL_ERROR,
+    ):
+        return text
+    return aliases.get(text, default)
+
+
+def load_app_log_level(settings: dict | None) -> str:
+    return normalize_log_level(
+        (settings or {}).get(KEY_APP_LOG_LEVEL), default=DEFAULT_APP_LOG_LEVEL
+    )
+
+
+def load_ffmpeg_log_level(settings: dict | None) -> str:
+    return normalize_log_level(
+        (settings or {}).get(KEY_FFMPEG_LOG_LEVEL), default=DEFAULT_FFMPEG_LOG_LEVEL
+    )
+
+
+def load_mpv_log_level(settings: dict | None) -> str:
+    return normalize_log_level(
+        (settings or {}).get(KEY_MPV_LOG_LEVEL), default=DEFAULT_MPV_LOG_LEVEL
+    )
+
+
+def ffmpeg_cli_loglevel(settings: dict | None = None) -> str:
+    """Value for FFmpeg ``-loglevel``."""
+    level = load_ffmpeg_log_level(settings)
+    return _FFMPEG_LEVEL_MAP.get(level, "error")
+
+
+def apply_app_log_level(level: object | None) -> None:
+    """Reconfigure root logger level (immediate)."""
+    import logging as _logging
+
+    name = normalize_log_level(level, default=DEFAULT_APP_LOG_LEVEL)
+    py_level = {
+        LOG_LEVEL_DEBUG: _logging.DEBUG,
+        LOG_LEVEL_INFO: _logging.INFO,
+        LOG_LEVEL_WARNING: _logging.WARNING,
+        LOG_LEVEL_ERROR: _logging.ERROR,
+    }.get(name, _logging.DEBUG)
+    root = _logging.getLogger()
+    root.setLevel(py_level)
+    for handler in root.handlers:
+        try:
+            handler.setLevel(py_level)
+        except Exception:
+            pass
+
+
+# ----- Advanced -----
+
+KEY_CONFIRM_BEFORE_DELETE = "confirm_before_delete"
+DEFAULT_CONFIRM_BEFORE_DELETE = True
+
+KEY_REMEMBER_LIBRARY_TAB = "remember_library_tab"
+DEFAULT_REMEMBER_LIBRARY_TAB = True
+
+KEY_SCREENSHOTS_FOLDER = "screenshots_folder"
+
+KEY_HWDEC_PREVIEW = "hwdec_preview"
+HWDEC_OFF = "no"
+HWDEC_AUTO = "auto"
+HWDEC_YES = "yes"
+DEFAULT_HWDEC_PREVIEW = HWDEC_AUTO
+
+HWDEC_LABELS: tuple[tuple[str, str], ...] = (
+    (HWDEC_AUTO, "Auto"),
+    (HWDEC_YES, "Force on"),
+    (HWDEC_OFF, "Off (software)"),
+)
+
+
+def normalize_hwdec_preview(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "off": HWDEC_OFF,
+        "software": HWDEC_OFF,
+        "sw": HWDEC_OFF,
+        "false": HWDEC_OFF,
+        "0": HWDEC_OFF,
+        "on": HWDEC_YES,
+        "force": HWDEC_YES,
+        "true": HWDEC_YES,
+        "1": HWDEC_YES,
+        "hw": HWDEC_YES,
+        "hardware": HWDEC_YES,
+    }
+    if text in (HWDEC_OFF, HWDEC_AUTO, HWDEC_YES):
+        return text
+    return aliases.get(text, DEFAULT_HWDEC_PREVIEW)
+
+
+def load_hwdec_preview(settings: dict | None) -> str:
+    return normalize_hwdec_preview(
+        (settings or {}).get(KEY_HWDEC_PREVIEW, DEFAULT_HWDEC_PREVIEW)
+    )
+
+
+def load_confirm_before_delete(settings: dict | None) -> bool:
+    if KEY_CONFIRM_BEFORE_DELETE not in (settings or {}):
+        return DEFAULT_CONFIRM_BEFORE_DELETE
+    return bool((settings or {}).get(KEY_CONFIRM_BEFORE_DELETE))
+
+
+def load_remember_library_tab(settings: dict | None) -> bool:
+    if KEY_REMEMBER_LIBRARY_TAB not in (settings or {}):
+        return DEFAULT_REMEMBER_LIBRARY_TAB
+    return bool((settings or {}).get(KEY_REMEMBER_LIBRARY_TAB))
+
+
+def normalize_screenshots_folder(value: object | None) -> str:
+    return str(value or "").strip().replace("\\", "/")
+
+
+def default_screenshots_dir() -> str:
+    from steempeg.infra.paths import get_save_directory
+
+    path = os.path.join(get_save_directory(), "Screenshots").replace("\\", "/")
+    if not os.path.isdir(path):
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            logging.exception("Could not create screenshots dir %s", path)
+    return path
+
+
+def resolve_screenshots_folder(settings: dict | None) -> str:
+    folder = normalize_screenshots_folder((settings or {}).get(KEY_SCREENSHOTS_FOLDER))
+    if folder and os.path.isdir(folder):
+        return folder
+    if folder:
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if os.path.isdir(folder):
+                return folder
+        except OSError:
+            logging.warning("Could not create screenshots folder %s", folder)
+    return default_screenshots_dir()
+
+
+# Live values used by FFmpeg CLI / MPV create (updated at startup + Settings Save).
+_runtime_ffmpeg_loglevel = "error"
+_runtime_mpv_loglevel = DEFAULT_MPV_LOG_LEVEL
+_runtime_hwdec = DEFAULT_HWDEC_PREVIEW
+_runtime_marker_trim_ms = DEFAULT_MARKER_TRIM_OFFSET_MS
+
+
+def configure_runtime_prefs(settings: dict | None = None) -> None:
+    """Apply log / hwdec / marker-trim / date prefs for the live process."""
+    global _runtime_ffmpeg_loglevel, _runtime_mpv_loglevel
+    global _runtime_hwdec, _runtime_marker_trim_ms
+    settings = settings or {}
+    apply_app_log_level(load_app_log_level(settings))
+    _runtime_ffmpeg_loglevel = ffmpeg_cli_loglevel(settings)
+    try:
+        from steempeg.infra.logging import set_ffmpeg_cli_loglevel
+
+        set_ffmpeg_cli_loglevel(_runtime_ffmpeg_loglevel)
+    except Exception:
+        pass
+    _runtime_mpv_loglevel = load_mpv_log_level(settings)
+    _runtime_hwdec = load_hwdec_preview(settings)
+    _runtime_marker_trim_ms = load_marker_trim_offset_ms(settings)
+    try:
+        from steempeg.infra.locale_time import configure_display_time
+
+        configure_display_time(settings)
+    except Exception:
+        logging.exception("configure_display_time failed")
+
+
+def current_ffmpeg_loglevel() -> str:
+    return _runtime_ffmpeg_loglevel or "error"
+
+
+def current_mpv_loglevel() -> str:
+    return _runtime_mpv_loglevel or DEFAULT_MPV_LOG_LEVEL
+
+
+def current_hwdec_preview() -> str:
+    return _runtime_hwdec or DEFAULT_HWDEC_PREVIEW
+
+
+def current_marker_trim_offset_ms() -> int:
+    return int(_runtime_marker_trim_ms or 0)
