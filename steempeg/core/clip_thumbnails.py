@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from steempeg.core.dash import discovery, repair
+from steempeg.infra.logging import ffmpeg_cli_loglevel
 
 _THUMB_NAMES = ("thumbnail.jpg", "thumbnail.jpeg", "thumbnail.png")
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
@@ -112,7 +113,7 @@ def extract_clip_poster_frame(clip_path: str, cache_dir: str) -> str:
                     "-y",
                     "-hide_banner",
                     "-loglevel",
-                    "error",
+                    ffmpeg_cli_loglevel(),
                     "-ss",
                     seek,
                     "-i",

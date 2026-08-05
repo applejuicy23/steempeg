@@ -22,6 +22,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from steempeg.core.rendered_media import resolve_ffmpeg_exe
+from steempeg.infra.logging import ffmpeg_cli_loglevel
 
 _log = logging.getLogger(__name__)
 
@@ -317,7 +318,7 @@ class PreviewSniperWorker(QThread):
             return None
         gen = self._decode_gen
         cmd = [
-            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", ffmpeg_cli_loglevel(),
             "-ss", str(max(0, sec)),
             "-i", media_path,
             "-frames:v", "1",
@@ -835,7 +836,7 @@ class ThumbnailBatchThread(QThread):
         _ensure_thumb_dir(self.thumb_dir)
 
         cmd = [
-            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+            resolve_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", ffmpeg_cli_loglevel(),
             "-hwaccel", "auto",
             "-threads", "2",
             "-t", str(batch_sec),

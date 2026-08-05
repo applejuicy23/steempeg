@@ -23,6 +23,8 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+
+from steempeg.infra.logging import ffmpeg_cli_loglevel
 from typing import Optional, Tuple
 
 from steempeg.core.dash.health import ClipHealth, ClipHealthReport
@@ -208,7 +210,7 @@ def remux_shortest(file_path: str, *, ffmpeg_exe: str | None = None) -> bool:
         safe_in = file_path.replace("\\", "/")
         safe_out = tmp_path.replace("\\", "/")
         cmd = [
-            ffmpeg, "-hide_banner", "-loglevel", "error",
+            ffmpeg, "-hide_banner", "-loglevel", ffmpeg_cli_loglevel(),
             "-i", safe_in,
             "-map", "0:v:0", "-map", "0:a:0?",
             "-c", "copy", "-shortest",

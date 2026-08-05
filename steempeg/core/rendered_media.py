@@ -9,6 +9,8 @@ import re
 import subprocess
 import sys
 
+from steempeg.infra.logging import ffmpeg_cli_loglevel
+
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 # Anything above ~48 h is almost certainly corrupt container metadata (Steam copy bugs).
 MAX_SANE_MEDIA_DURATION_SEC = 48 * 3600
@@ -327,7 +329,7 @@ def extract_poster_frame(file_path: str, cache_dir: str) -> str:
     try:
         subprocess.run(
             [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", ffmpeg_cli_loglevel(),
                 "-ss", "1", "-i", file_path,
                 "-frames:v", "1", "-q:v", "3",
                 out_path,

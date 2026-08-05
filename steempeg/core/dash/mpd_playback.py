@@ -20,6 +20,7 @@ import sys
 import threading
 
 from steempeg.core.rendered_media import resolve_ffmpeg_exe
+from steempeg.infra.logging import ffmpeg_cli_loglevel
 from steempeg.infra.paths import get_save_directory
 
 _log = logging.getLogger(__name__)
@@ -213,7 +214,7 @@ class RemuxJob:
             ffmpeg,
             "-hide_banner",
             "-loglevel",
-            "error",
+            ffmpeg_cli_loglevel(),
             "-y",
             "-i",
             self.abs_mpd,
