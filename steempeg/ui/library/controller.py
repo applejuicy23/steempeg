@@ -1979,8 +1979,17 @@ class LibraryMixin:
 
     def delete_clip(self, clip_path):
         """ Prompts for confirmation and deletes the clip folder permanently. """
-        
-        if not steempeg_confirm_delete(
+        confirm = True
+        try:
+            from steempeg.ui.settings_prefs import load_confirm_before_delete
+
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                settings = self.load_user_settings() or {}
+            confirm = load_confirm_before_delete(settings)
+        except Exception:
+            confirm = True
+        if confirm and not steempeg_confirm_delete(
             self.ui,
             "Delete Clip",
             "Are you sure you want to delete this clip?",
@@ -1992,6 +2001,13 @@ class LibraryMixin:
             # Must unload first — Windows won't delete a clip folder mpv still holds.
             if hasattr(self, "release_media_before_delete"):
                 self.release_media_before_delete(clip_path)
+
+            try:
+                from steempeg.infra.media_cache import purge_clip_media_cache
+
+                purge_clip_media_cache(getattr(self, "cache_dir", None), clip_path)
+            except Exception:
+                logging.exception("Clip media-cache purge failed")
 
             shutil.rmtree(clip_path)
             logging.info(f"Deleted clip folder: {clip_path}")
@@ -2689,6 +2705,137 @@ class LibraryMixin:
 
         if table.isRowHidden(row):
             item.setHidden(True)
+
+    def refresh_library_datetime_displays(self) -> None:
+        """Reformat clip/rendered date cells from stamps — no folder rescan."""
+        from datetime import datetime
+
+        from steempeg.infra.locale_time import format_clip_date, format_clip_time
+        from steempeg.library.scan import clip_folder_recorded_at
+        from steempeg.ui.library.grid_view import ClipCard
+
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is not None:
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                date_item = table.item(row, 2)
+                if name_item is None or date_item is None:
+                    continue
+                path = name_item.data(Qt.UserRole)
+                dt = clip_folder_recorded_at(path) if path else None
+                if dt is None:
+                    raw = (date_item.text() or "").replace("\n", " at ")
+                    qdt = parse_clip_datetime_text(raw)
+                    if qdt is None:
+                        continue
+                    dt = datetime(
+                        qdt.date().year(),
+                        qdt.date().month(),
+                        qdt.date().day(),
+                        qdt.time().hour(),
+                        qdt.time().minute(),
+                        qdt.time().second(),
+                    )
+                new_date = format_clip_date(dt)
+                new_time = format_clip_time(dt)
+                date_item.setText(f"{new_date}\n{new_time}")
+
+                dur_item = table.item(row, 3)
+                dur = dur_item.text() if dur_item else ""
+                title = (name_item.text() or "").strip()
+                if title.lower() == "unknown":
+                    footer = "FG"
+                else:
+                    footer = f"{new_date}\n{new_time} • {dur}" if dur else f"{new_date}\n{new_time}"
+
+                grid = getattr(self, "grid_clips", None)
+                if grid is not None:
+                    for i in range(grid.count()):
+                        gitem = grid.item(i)
+                        if gitem is None or gitem.data(Qt.UserRole) != row:
+                            continue
+                        card = grid.itemWidget(gitem)
+                        if isinstance(card, ClipCard):
+                            card.set_date_footer(footer)
+                        break
+
+        # Rendered videos — reformat from file mtime (stored or live).
+        rendered = getattr(self, "table_rendered", None)
+        if rendered is not None:
+            for row in range(rendered.rowCount()):
+                name_item = rendered.item(row, 0)
+                date_item = rendered.item(row, 2)
+                if name_item is None or date_item is None:
+                    continue
+                path = name_item.data(Qt.ItemDataRole.UserRole)
+                mtime = date_item.data(Qt.ItemDataRole.UserRole)
+                dt = None
+                if mtime:
+                    try:
+                        dt = datetime.fromtimestamp(float(mtime))
+                    except (TypeError, ValueError, OSError):
+                        dt = None
+                if dt is None and path and os.path.isfile(path):
+                    try:
+                        dt = datetime.fromtimestamp(os.path.getmtime(path))
+                    except OSError:
+                        dt = None
+                if dt is None:
+                    continue
+                new_date = format_clip_date(dt)
+                new_time = format_clip_time(dt)
+                date_item.setText(f"{new_date}\n{new_time}")
+                date_item.setData(Qt.ItemDataRole.UserRole, float(dt.timestamp()))
+                size_item = rendered.item(row, 3)
+                size_str = size_item.text() if size_item else ""
+                is_unknown = (name_item.text() or "").strip().lower().startswith("unknown")
+                footer = (
+                    f"Unknown • {size_str}"
+                    if is_unknown
+                    else f"{new_date}\n{new_time} • {size_str}"
+                )
+                grid_r = getattr(self, "grid_rendered", None)
+                if grid_r is not None:
+                    for i in range(grid_r.count()):
+                        gitem = grid_r.item(i)
+                        if gitem is None or gitem.data(Qt.ItemDataRole.UserRole) != row:
+                            continue
+                        card = grid_r.itemWidget(gitem)
+                        if card is not None and hasattr(card, "set_date_footer"):
+                            card.set_date_footer(footer)
+                        elif card is not None and hasattr(card, "date_lbl"):
+                            card.date_lbl.setText(footer)
+                        break
+
+        self._refresh_selected_clip_header_datetime()
+
+    def _refresh_selected_clip_header_datetime(self) -> None:
+        """Update player header / Clip info date line for the active selection."""
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is None:
+            return
+        row = table.currentRow()
+        if row < 0:
+            return
+        name_item = table.item(row, 0)
+        date_item = table.item(row, 2)
+        if name_item is None or date_item is None:
+            return
+        date_part, _, time_part = (date_item.text() or "").partition("\n")
+        dur_item = table.item(row, 3)
+        duration = dur_item.text() if dur_item else ""
+        try:
+            from steempeg.ui.player_header_layout import set_player_header_game_text
+
+            set_player_header_game_text(
+                self,
+                title=(name_item.text() or "").strip(),
+                date=date_part.strip(),
+                time=time_part.strip(),
+                duration=duration,
+            )
+        except Exception:
+            logging.exception("header datetime refresh failed")
 
     def refresh_portable_clip_queue_badges(self) -> None:
         """Update queue # overlays on Choose-a-clip cards without rebuilding the grid."""
