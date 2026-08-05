@@ -19,6 +19,30 @@ from steempeg.core.dash import health, repair
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
 
 
+def clip_folder_recorded_at(clip_path: str | None) -> datetime | None:
+    """UTC timestamp baked into a Steam clip folder name (``…_YYYYMMDD_HHMMSS``).
+
+    Walks up a couple of parents so ``…/clip_…/vid`` still resolves.
+    """
+    if not clip_path:
+        return None
+    path = os.path.normpath(clip_path)
+    for _ in range(4):
+        folder = os.path.basename(path)
+        parts = folder.split("_")
+        if len(parts) >= 4 and parts[1].isdigit():
+            try:
+                dt = datetime.strptime(f"{parts[2]}_{parts[3]}", "%Y%m%d_%H%M%S")
+                return dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+        parent = os.path.dirname(path)
+        if not parent or parent == path:
+            break
+        path = parent
+    return None
+
+
 @dataclass
 class ScannedClip:
     full_path: str
@@ -352,12 +376,11 @@ def scan_single_clip(
         use_unknown_icon = False
 
         try:
-            raw_datetime_str = f"{parts[2]}_{parts[3]}"
-            dt_utc = datetime.strptime(raw_datetime_str, "%Y%m%d_%H%M%S")
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-            dt_local = dt_utc.astimezone()
-            formatted_date = format_clip_date(dt_local)
-            formatted_time = format_clip_time(dt_local)
+            dt_utc = clip_folder_recorded_at(full_path)
+            if dt_utc is None:
+                raise ValueError("no folder stamp")
+            formatted_date = format_clip_date(dt_utc)
+            formatted_time = format_clip_time(dt_utc)
         except Exception:
             try:
                 formatted_date = format_clip_date(datetime.strptime(parts[2], "%Y%m%d"))
