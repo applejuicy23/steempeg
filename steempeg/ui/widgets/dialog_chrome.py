@@ -453,10 +453,23 @@ class SteempegDialog(QDialog):
         finally:
             # PointingHand on cards/buttons sticks after modal close until move.
             from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QWidget
             from steempeg.ui.window_chrome import force_app_cursor_resync
 
+            try:
+                for w in self.findChildren(QWidget):
+                    try:
+                        if hasattr(w, "_set_hovered"):
+                            w._set_hovered(False)
+                        w.unsetCursor()
+                    except RuntimeError:
+                        pass
+                self.unsetCursor()
+            except RuntimeError:
+                pass
             force_app_cursor_resync()
             QTimer.singleShot(0, force_app_cursor_resync)
+            QTimer.singleShot(50, force_app_cursor_resync)
 
     def showEvent(self, event):
         if self._map_suppressed:

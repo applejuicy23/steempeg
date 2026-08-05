@@ -338,7 +338,8 @@ def force_app_cursor_resync() -> None:
 
     Qt often keeps the last dialog widget's cursor until the mouse moves. Push
     Arrow onto the override stack and pop it so the widget under the pointer is
-    re-queried; nudge ``QCursor.setPos`` for Windows.
+    re-queried; nudge ``QCursor.setPos`` for Windows. Also strip cursors from
+    the widget chain under the pointer (destroyed dialog buttons leave ghosts).
     """
     app = QApplication.instance()
     if app is None:
@@ -346,15 +347,40 @@ def force_app_cursor_resync() -> None:
     try:
         while app.overrideCursor() is not None:
             app.restoreOverrideCursor()
+        # Widget under the pointer may still be a dying modal button with
+        # PointingHand — clear the whole parent chain before the Arrow nudge.
+        under = app.widgetAt(QCursor.pos())
+        walk = under
+        while walk is not None:
+            try:
+                walk.unsetCursor()
+            except RuntimeError:
+                break
+            walk = walk.parentWidget()
         app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
         app.restoreOverrideCursor()
         for w in app.topLevelWidgets():
             try:
-                w.unsetCursor()
+                # Don't wipe intentional caption arrows — only clear if the
+                # window itself somehow inherited a hand from a child.
+                if w.cursor().shape() == Qt.CursorShape.PointingHandCursor:
+                    w.unsetCursor()
             except RuntimeError:
                 pass
         pos = QCursor.pos()
         QCursor.setPos(pos)
+        # Re-query after the nudge; if still a hand, force Arrow for one frame.
+        under2 = app.widgetAt(QCursor.pos())
+        if under2 is not None:
+            try:
+                shape = under2.cursor().shape()
+            except RuntimeError:
+                shape = Qt.CursorShape.ArrowCursor
+            if shape == Qt.CursorShape.PointingHandCursor and not isinstance(
+                under2, QAbstractButton
+            ):
+                app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
+                app.restoreOverrideCursor()
     except RuntimeError:
         pass
 
