@@ -53,9 +53,10 @@ def _format_batch_when(iso: str) -> str:
     if not iso:
         return "Unknown time"
     try:
+        from steempeg.infra.locale_time import format_clip_datetime
+
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        local = dt.astimezone()
-        return local.strftime("%d %b %Y, %I:%M %p")
+        return format_clip_datetime(dt)
     except ValueError:
         return iso[:16].replace("T", " ")
 
