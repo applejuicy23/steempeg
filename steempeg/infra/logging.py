@@ -19,14 +19,45 @@ def session_timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def setup_logging(logs_dir, version_str, session_ts=None):
-    """Configure file logging for a run and return the path of the created log file."""
+# Live FFmpeg -loglevel for CLI helpers (updated via settings_prefs.configure_runtime_prefs).
+_ffmpeg_cli_level = "error"
+
+
+def set_ffmpeg_cli_loglevel(level: str | None) -> None:
+    global _ffmpeg_cli_level
+    text = str(level or "error").strip().lower() or "error"
+    _ffmpeg_cli_level = text
+
+
+def ffmpeg_cli_loglevel() -> str:
+    return _ffmpeg_cli_level or "error"
+
+
+def setup_logging(logs_dir, version_str, session_ts=None, level=None):
+    """Configure file logging for a run and return the path of the created log file.
+
+    *level* may be a ``logging`` int or a name (``debug`` / ``info`` / …).
+    Defaults to DEBUG when omitted.
+    """
     if session_ts is None:
         session_ts = session_timestamp()
     log_filename = os.path.join(logs_dir, f"steempeg_{session_ts}.log")
+    if level is None:
+        py_level = logging.DEBUG
+    elif isinstance(level, int):
+        py_level = level
+    else:
+        name = str(level).strip().lower()
+        py_level = {
+            "debug": logging.DEBUG,
+            "info": logging.INFO,
+            "warning": logging.WARNING,
+            "warn": logging.WARNING,
+            "error": logging.ERROR,
+        }.get(name, logging.DEBUG)
     logging.basicConfig(
         filename=log_filename,
-        level=logging.DEBUG,
+        level=py_level,
         format="[%(asctime)s] [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
         encoding="utf-8",
