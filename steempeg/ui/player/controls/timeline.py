@@ -71,9 +71,9 @@ def _paint_timeline_marker_pixmap(
 class TimelineCanvas(QWidget):
     """ The inner canvas of the timeline (the one that stretches when you zoom) """
     _RULER_GAP = 4
-    _MAJOR_TICK_H = 10      # longer major ticks (was 8)
-    _MINOR_TICK_H = 4
-    _RULER_FONT_PT = 8
+    _MAJOR_TICK_H = 11      # +1 vs previous 10 — slightly taller major ticks
+    _MINOR_TICK_H = 5      # +1 vs previous 4
+    _RULER_FONT_PT = 9     # +1 vs previous 8pt
     # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440.
     _TRACK_H = 13.0
     # Leave room above the strip for timeline pins (20px logical).
