@@ -10,7 +10,8 @@ Steam stores one ``markers.svg`` sprite per game: an SVG whose ``<defs>`` holds
 
 Inside the Steam client the same file is served via ``steamloopback.host/assets/...``.
 
-Renders icons with one QSvgRenderer per game, then ``render(painter, icon_id)`` per marker.
+Renders icons with one QSvgRenderer per game, letterboxed into a square
+(KeepAspectRatio) so tall glyphs like ``cs2_death`` are not stretched wide.
 """
 import glob
 import json
@@ -21,7 +22,7 @@ import threading
 
 import requests
 
-from PySide6.QtCore import QByteArray, Qt, QTimer
+from PySide6.QtCore import QByteArray, QRectF, Qt, QTimer
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
@@ -332,10 +333,12 @@ class MarkerIconStore:
         """QPixmap for icon_id from app_id's sprite, or None if unavailable.
 
         ``size`` is logical pixels; ``dpr`` builds a denser buffer for HiDPI / HD.
+        Elements are letterboxed into the square (KeepAspectRatio) so tall glyphs
+        like ``cs2_death`` are not stretched into a wide “fat” skull.
         """
         dpr = float(dpr) if dpr and dpr > 0 else 1.0
         phys = max(1, int(round(max(1, int(size)) * dpr)))
-        key = (app_id, icon_id, phys, round(dpr, 3))
+        key = (app_id, icon_id, phys, round(dpr, 3), "fit")
         if key in self._pixmaps:
             return self._pixmaps[key]
 
@@ -346,7 +349,19 @@ class MarkerIconStore:
             pm.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pm)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            renderer.render(painter, icon_id)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            bounds = renderer.boundsOnElement(icon_id)
+            bw = max(float(bounds.width()), 0.01)
+            bh = max(float(bounds.height()), 0.01)
+            if bw >= bh:
+                draw_w = float(phys)
+                draw_h = float(phys) * (bh / bw)
+            else:
+                draw_h = float(phys)
+                draw_w = float(phys) * (bw / bh)
+            x = (float(phys) - draw_w) * 0.5
+            y = (float(phys) - draw_h) * 0.5
+            renderer.render(painter, icon_id, QRectF(x, y, draw_w, draw_h))
             painter.end()
             pm.setDevicePixelRatio(dpr)
             pixmap = pm

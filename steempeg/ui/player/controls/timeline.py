@@ -368,7 +368,8 @@ class TimelineCanvas(QWidget):
                     'icon_key': icon_key,
                     'is_round': is_round,
                     'title': title,
-                    'desc': desc
+                    'desc': desc,
+                    'self_kill': self._is_self_kill_event(title, desc),
                 }
                 if icon_key == 'usermarker' and steempeg_file:
                     marker['steempeg_owned'] = True
@@ -447,6 +448,17 @@ class TimelineCanvas(QWidget):
         except Exception as e:
             print(f"Error loading JSON: {e}")
 
+    @staticmethod
+    def _is_self_kill_event(title, desc="") -> bool:
+        """True when Steam/CS2 marks a self-kill (nade, molotov, fall, …)."""
+        blob = f"{title or ''} {desc or ''}".lower()
+        return (
+            "killed yourself" in blob
+            or "kill yourself" in blob
+            or "you killed yourself" in blob
+            or ("suicide" in blob and "assist" not in blob)
+        )
+
     def parse_event_to_icon(self, type_, title, desc):
         """ Smart detector: understands who killed whom and with what """
         t_low = title.lower()
@@ -464,7 +476,10 @@ class TimelineCanvas(QWidget):
         if 'bomb planted' in t_low: return 'bomb', False
         if 'bomb exploded' in t_low or 'explosion' in t_low: return 'explosion', False
         if 'bomb defused' in t_low or 'defuse' in t_low: return 'defuse', False 
-        if 'killed by' in t_low or 'killed yourself' in t_low: return 'death', False
+        # Self-kill (nade / molotov / world) — same death glyph, greyer on draw.
+        if 'killed yourself' in t_low or 'kill yourself' in t_low:
+            return 'death', False
+        if 'killed by' in t_low: return 'death', False
         
         
         # Kills 
@@ -556,11 +571,23 @@ class TimelineCanvas(QWidget):
         tintable = mprefs.is_tintable_marker(marker)
         logical = TIMELINE_MARKER_LOGICAL
         dpr = timeline_marker_dpr()
+        self_kill = bool(marker.get("self_kill")) or self._is_self_kill_event(
+            marker.get("title"), marker.get("desc")
+        )
         tint = mprefs.resolve_tint_color_for_marker(marker, prefs=prefs) if tintable else None
         custom = mprefs.resolve_custom_icon_path_for_marker(marker, prefs=prefs)
-        tint_key = (tint or "", bool(tintable), str(custom or ""), steam_icon, icon_key,
-                    str(app_id or ""), bool(marker.get("is_round", False)),
-                    round(dpr, 3), logical)
+        tint_key = (
+            tint or "",
+            bool(tintable),
+            str(custom or ""),
+            steam_icon,
+            icon_key,
+            str(app_id or ""),
+            bool(marker.get("is_round", False)),
+            bool(self_kill),
+            round(dpr, 3),
+            logical,
+        )
         tint_cache = getattr(self, "_tinted_marker_pixmaps", None)
         if tint_cache is None:
             tint_cache = {}
@@ -593,6 +620,11 @@ class TimelineCanvas(QWidget):
         # Custom full-color art is never tinted (resolve_tint_color already None).
         if tint and tintable and not custom:
             pix = tint_pixmap(pix, tint, height=logical)
+        # Self-kill death skull → grey (Steam stock SVG / bundled death.png).
+        elif self_kill and not custom and (
+            steam_icon == "cs2_death" or icon_key == "death"
+        ):
+            pix = tint_pixmap(pix, "#9a9a9a", height=logical)
         tint_cache[tint_key] = pix
         return pix
 
