@@ -1304,6 +1304,11 @@ class PlayerMixin:
 
     def _get_immersive_esc_hint(self):
         if getattr(self, '_immersive_esc_hint', None) is None:
+            from steempeg.ui.ui_density import COMFORT
+
+            # Match Refresh button typeface (Segoe UI bold + footer_font);
+            # pill radius so it reads as a chip, not a square Tool tip.
+            font_px = int(COMFORT.footer_font)
             hint = QLabel("Press ESC to exit full screen")
             hint.setWindowFlags(
                 Qt.WindowType.Tool
@@ -1315,12 +1320,18 @@ class PlayerMixin:
                 "QLabel {"
                 " background-color: rgba(15, 15, 15, 210);"
                 " color: #eeeeee;"
-                " padding: 12px 24px;"
-                " border-radius: 6px;"
-                " font-size: 15px;"
+                " padding: 10px 22px;"
+                " border-radius: 18px;"
+                f" font-size: {font_px}px;"
+                " font-weight: bold;"
                 " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
                 "}"
             )
+            font = hint.font()
+            font.setFamily("Segoe UI")
+            font.setBold(True)
+            font.setPixelSize(font_px)
+            hint.setFont(font)
             self._immersive_esc_hint = hint
         return self._immersive_esc_hint
 
@@ -2289,7 +2300,9 @@ class PlayerMixin:
         if cache and cache[0] == os.path.normpath(path):
             return cache[1]
 
-        meta = load_rendered_companion_meta(path) or {}
+        meta = load_rendered_companion_meta(
+            path, cache_dir=getattr(self, "cache_dir", None)
+        ) or {}
 
         def _diverge(a: float, b: float) -> bool:
             diff = abs(a - b)
@@ -2548,6 +2561,9 @@ class PlayerMixin:
 
         if hasattr(self.ui, "btn_play"):
             self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
+
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
 
     def _norm_clip_path_key(self, path: str | None) -> str:
         if not path:
