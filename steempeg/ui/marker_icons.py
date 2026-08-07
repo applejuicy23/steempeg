@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QColor, QPixmap
 
 from steempeg.services import marker_prefs as mprefs
 from steempeg.ui.icon_utils import primary_device_pixel_ratio, square_fit_pixmap
@@ -47,11 +47,10 @@ def load_timeline_marker_pixmap(path: str) -> QPixmap | None:
 
 
 def _harden_tint_alpha(src: QPixmap) -> QPixmap:
-    """Boost soft anti-aliased glyphs so class tints keep a readable solid core.
+    """Mildly boost soft anti-aliased edges so recolor keeps a readable silhouette.
 
-    Assets like ``screenshot.png`` are mostly translucent glow. SourceIn tint
-    then concentrates visible color into a tiny blob — markers look even smaller
-    once a class color is applied. Threshold + mild boost keeps the silhouette.
+    Soft glow assets (e.g. screenshot.png) otherwise fade into near-invisible
+    tinted mist. This is NOT a solid fill — only alpha is adjusted.
     """
     from PySide6.QtGui import QImage
 
@@ -61,10 +60,10 @@ def _harden_tint_alpha(src: QPixmap) -> QPixmap:
         for x in range(w):
             c = img.pixelColor(x, y)
             a = c.alpha()
-            if a <= 24:
+            if a <= 20:
                 c.setAlpha(0)
-            elif a < 220:
-                c.setAlpha(min(255, int(40 + a * 1.35)))
+            elif a < 180:
+                c.setAlpha(min(255, int(28 + a * 1.2)))
             else:
                 continue
             img.setPixelColor(x, y, c)
@@ -74,7 +73,11 @@ def _harden_tint_alpha(src: QPixmap) -> QPixmap:
 
 
 def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixmap:
-    """Recolor opaque pixels to ``color`` (keeps alpha) — for white mono icons.
+    """Recolor a glyph while keeping shading / outlines (not a flat paint fill).
+
+    White mono icons take the tint's hue+saturation; each pixel's brightness
+    stays from the source so edges and inner detail stay readable — pinkish
+    skull, not a solid pink blob.
 
     When ``height`` is set, scale by height only (KeepAspectRatio). Never squash
     wide pins (round digit strips, panoramic class art) into a square — that is
@@ -100,19 +103,39 @@ def tint_pixmap(src: QPixmap, color: str, *, height: int | None = None) -> QPixm
             )
             base.setDevicePixelRatio(dpr)
             dpr = max(float(base.devicePixelRatio() or 1.0), 1.0)
-    # Work in raw device pixels for harden + SourceIn tint.
+
+    tint = QColor(color)
+    if not tint.isValid():
+        return QPixmap(base)
+
+    # Work in raw device pixels.
     raw = QPixmap(base)
     raw.setDevicePixelRatio(1.0)
     raw = _harden_tint_alpha(raw)
-    out = QPixmap(raw.size())
-    out.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(out)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    painter.drawPixmap(0, 0, raw)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(out.rect(), QColor(color))
-    painter.end()
+
+    from PySide6.QtGui import QImage
+
+    img = raw.toImage().convertToFormat(QImage.Format.Format_ARGB32).copy()
+    th = tint.hue()
+    ts = tint.saturation()
+    # Grayscale / near-gray tints (self-kill skull): keep value path but allow
+    # low sat so outlines stay soft gray rather than forced chroma.
+    for y in range(img.height()):
+        for x in range(img.width()):
+            c = img.pixelColor(x, y)
+            a = c.alpha()
+            if a == 0:
+                continue
+            # Brightness from the glyph (white core → full tint, AA edge → darker).
+            src_v = max(c.red(), c.green(), c.blue())
+            if ts <= 0 or th < 0:
+                # Achromatic tint (#9a9a9a): scale gray by source value.
+                g = int(round(tint.red() * (src_v / 255.0)))
+                img.setPixelColor(x, y, QColor(g, g, g, a))
+            else:
+                # Hue/sat from class color; value from the artwork.
+                img.setPixelColor(x, y, QColor.fromHsv(th, ts, src_v, a))
+    out = QPixmap.fromImage(img)
     out.setDevicePixelRatio(dpr)
     return out
 
