@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
@@ -38,6 +39,15 @@ from steempeg.core.rendered_media import (
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.library.rendered_scan import ScannedRenderedFile
+from steempeg.library.rendered_library_cache import (
+    files_from_rendered_library_cache,
+    save_rendered_library_cache,
+)
+from steempeg.library.screenshots_library_cache import (
+    files_from_screenshots_library_cache,
+    save_screenshots_library_cache,
+    screenshot_thumb_path_nostat,
+)
 from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillWorker
 from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
 from steempeg.ui.library.filters import clip_folder_sort_key
@@ -61,6 +71,15 @@ _RENDERED_THUMB_ROLE = Qt.ItemDataRole.UserRole + 7
 _RENDERED_ICON_ROLE = Qt.ItemDataRole.UserRole + 8
 _HEALTH_SORT_INDICES = (5, 6)
 _FOLDER_SORT_INDICES = (11, 12)
+_TYPE_SORT_INDICES = (3, 4)
+_DURATION_SORT_INDICES = (9, 10)
+# Screenshots: keep Default / Game / Date; hide Type, Health, Duration, Folder.
+_SCREENSHOT_HIDDEN_SORT = (
+    _TYPE_SORT_INDICES + _HEALTH_SORT_INDICES + _DURATION_SORT_INDICES + _FOLDER_SORT_INDICES
+)
+_SHOT_GAME_ROLE = Qt.ItemDataRole.UserRole + 1
+_SHOT_MTIME_ROLE = Qt.ItemDataRole.UserRole + 2
+_SCREENSHOT_NAME_RE = re.compile(r"^(.+?)_\d+ms_\d{8}_\d{6}$", re.IGNORECASE)
 
 _LIBRARY_TAB_INACTIVE = """
     QPushButton {
@@ -105,8 +124,20 @@ _ADD_PANEL_BTN = """
 _LIBRARY_PANEL_DEFS = (
     ("clips", "📁  Clips Manager"),
     ("rendered", "🎬  Rendered videos"),
+    ("screenshots", "📷  Screenshots"),
     # ("queue", "📋  Render Queue"),  # future
 )
+
+_SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+
+def _parse_screenshot_game_name(filename: str) -> str:
+    """Game prefix from ``{Game}_{ms}ms_{YYYYMMDD}_{HHMMSS}.ext`` names."""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    match = _SCREENSHOT_NAME_RE.match(stem)
+    if match:
+        return match.group(1).strip() or stem
+    return stem
 
 
 def _rendered_type_label(ext: str) -> str:
@@ -147,6 +178,15 @@ class RenderedLibraryMixin:
         self._clips_scan_active = False
         self._rendered_scan_active = False
         self._startup_library_scan_active = False
+        # Independent sort choice per library tab (survives tab switches + restart).
+        self._sort_index_by_panel = {
+            "clips": 0,
+            "rendered": 0,
+            "screenshots": 8,  # Date newest — matches previous scan order
+        }
+        # Last sort index actually applied to each panel's data (skip rebuild on tab switch).
+        self._sort_applied_by_panel: dict[str, int] = {}
+        self._library_rendered_rows: list[ScannedRenderedFile] = []
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         from steempeg.ui.ui_density import COMFORT, tab_label
@@ -239,14 +279,52 @@ class RenderedLibraryMixin:
     def _sync_sort_combo_for_panel(self):
         if not hasattr(self, "combo_sort"):
             return
-        rendered = self._library_panel_mode == "rendered"
+        mode = getattr(self, "_library_panel_mode", "clips")
         view = self.combo_sort.view()
-        for i in _HEALTH_SORT_INDICES:
-            view.setRowHidden(i, rendered)
-        if rendered and self.combo_sort.currentIndex() in _HEALTH_SORT_INDICES:
-            self.combo_sort.blockSignals(True)
-            self.combo_sort.setCurrentIndex(0)
-            self.combo_sort.blockSignals(False)
+        for i in range(self.combo_sort.count()):
+            view.setRowHidden(i, False)
+        if mode == "screenshots":
+            for i in _SCREENSHOT_HIDDEN_SORT:
+                view.setRowHidden(i, True)
+        elif mode == "rendered":
+            for i in _HEALTH_SORT_INDICES:
+                view.setRowHidden(i, True)
+
+    def _sort_indices_valid_for_panel(self, mode: str) -> set[int]:
+        hidden = set()
+        if mode == "screenshots":
+            hidden = set(_SCREENSHOT_HIDDEN_SORT)
+        elif mode == "rendered":
+            hidden = set(_HEALTH_SORT_INDICES)
+        total = self.combo_sort.count() if hasattr(self, "combo_sort") else 13
+        return {i for i in range(total) if i not in hidden}
+
+    def _stash_sort_for_panel(self, mode: str) -> None:
+        if not hasattr(self, "combo_sort") or not mode:
+            return
+        if not hasattr(self, "_sort_index_by_panel"):
+            self._sort_index_by_panel = {}
+        self._sort_index_by_panel[mode] = int(self.combo_sort.currentIndex())
+
+    def _restore_sort_for_panel(self, mode: str) -> None:
+        if not hasattr(self, "combo_sort") or not mode:
+            return
+        if not hasattr(self, "_sort_index_by_panel"):
+            self._sort_index_by_panel = {"clips": 0, "rendered": 0, "screenshots": 8}
+        idx = int(self._sort_index_by_panel.get(mode, 0))
+        valid = self._sort_indices_valid_for_panel(mode)
+        if idx not in valid:
+            idx = 8 if mode == "screenshots" else 0
+            self._sort_index_by_panel[mode] = idx
+        if self.combo_sort.currentIndex() == idx:
+            return
+        self.combo_sort.blockSignals(True)
+        self.combo_sort.setCurrentIndex(idx)
+        self.combo_sort.blockSignals(False)
+
+    def _remember_current_panel_sort(self) -> None:
+        mode = getattr(self, "_library_panel_mode", "clips")
+        self._stash_sort_for_panel(mode)
 
     def _stash_library_tab_selection(self, tab: str) -> None:
         if tab == "rendered" and hasattr(self, "table_rendered"):
@@ -267,6 +345,12 @@ class RenderedLibraryMixin:
                 self._saved_clips_selection_path = ""
 
     def _clear_clips_selection_visual(self) -> None:
+        selected_rows: set[int] = set()
+        if hasattr(self, "grid_clips"):
+            for item in self.grid_clips.selectedItems():
+                row = item.data(Qt.ItemDataRole.UserRole)
+                if row is not None:
+                    selected_rows.add(int(row))
         if hasattr(self.ui, "table_clips"):
             self.ui.table_clips.blockSignals(True)
             self.ui.table_clips.clearSelection()
@@ -276,8 +360,18 @@ class RenderedLibraryMixin:
             self.grid_clips.blockSignals(True)
             self.grid_clips.clearSelection()
             self.grid_clips.blockSignals(False)
-            if hasattr(self, "_sync_grid_card_visuals"):
-                self._sync_grid_card_visuals()
+            # Only repaint cards that were selected — full-grid sync is slow on tab switch.
+            if selected_rows:
+                for i in range(self.grid_clips.count()):
+                    item = self.grid_clips.item(i)
+                    if item is None:
+                        continue
+                    row = item.data(Qt.ItemDataRole.UserRole)
+                    if row not in selected_rows:
+                        continue
+                    card = self.grid_clips.itemWidget(item)
+                    if card is not None and hasattr(card, "set_selected"):
+                        card.set_selected(False)
 
     def _clear_rendered_selection_visual(self) -> None:
         if hasattr(self, "table_rendered"):
@@ -403,6 +497,8 @@ class RenderedLibraryMixin:
             return
         if mode == "rendered":
             self._ensure_rendered_widgets()
+        elif mode == "screenshots":
+            self._ensure_screenshots_widgets()
         tab = self._make_library_tab_button(labels[mode], mode)
         order = [m for m, _ in _LIBRARY_PANEL_DEFS]
         insert_idx = sum(1 for m in order[: order.index(mode)] if m in self._library_tabs)
@@ -428,6 +524,7 @@ class RenderedLibraryMixin:
         old_mode = getattr(self, "_library_panel_mode", "clips")
         if old_mode != mode:
             self._stash_library_tab_selection(old_mode)
+            self._stash_sort_for_panel(old_mode)
             # Trim belongs to a clip preview; leaving the Clips tab must drop the trim
             # handles/button so they don't linger over a rendered preview.
             if old_mode == "clips" and hasattr(self, "cancel_trim_mode"):
@@ -436,20 +533,39 @@ class RenderedLibraryMixin:
         for key, tab in self._library_tabs.items():
             tab.set_active(key == mode)
         if hasattr(self, "library_stack"):
-            self.library_stack.setCurrentIndex(1 if mode == "rendered" else 0)
+            self.library_stack.setCurrentIndex(self._library_stack_index_for(mode))
         if mode == "rendered":
             self._clear_clips_selection_visual()
+            self._clear_screenshots_selection_visual()
             self._ensure_rendered_widgets()
             self._apply_rendered_view_mode()
+        elif mode == "screenshots":
+            self._clear_clips_selection_visual()
+            self._clear_rendered_selection_visual()
+            self._ensure_screenshots_widgets()
+            self.refresh_screenshots_library(force=False)
         else:
             self._clear_rendered_selection_visual()
+            self._clear_screenshots_selection_visual()
             if hasattr(self, "grid_clips"):
                 self.set_view_mode(self._clips_view_mode)
         self._sync_sort_combo_for_panel()
         if old_mode != mode:
+            self._restore_sort_for_panel(mode)
             self._restore_library_tab_selection(mode)
+            # Re-sort only when this panel's data isn't already in the combo order.
+            # Full apply_rendered_sorting rebuilds every grid card — too slow on tab flip.
+            want = (
+                int(self.combo_sort.currentIndex())
+                if hasattr(self, "combo_sort")
+                else 0
+            )
+            last = getattr(self, "_sort_applied_by_panel", {}).get(mode)
+            if last != want and hasattr(self, "apply_sorting"):
+                self.apply_sorting()
         self._update_library_count_label()
         self._sync_library_mode_chrome()
+        self._sync_library_footer_for_mode()
         if hasattr(self, "update_final_setup") and not (
             hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media()
         ):
@@ -457,6 +573,86 @@ class RenderedLibraryMixin:
             if hasattr(self, "_update_start_button_label"):
                 self._update_start_button_label()
         self._persist_library_ui_state()
+
+    def _library_stack_index_for(self, mode: str) -> int:
+        if not hasattr(self, "library_stack"):
+            return 0
+        if mode == "rendered":
+            self._ensure_rendered_widgets()
+            idx = self.library_stack.indexOf(self.rendered_page)
+            return idx if idx >= 0 else 0
+        if mode == "screenshots":
+            self._ensure_screenshots_widgets()
+            idx = self.library_stack.indexOf(self.screenshots_page)
+            return idx if idx >= 0 else 0
+        idx = self.library_stack.indexOf(getattr(self, "clips_page", None))
+        return idx if idx >= 0 else 0
+
+    def _sync_library_footer_for_mode(self) -> None:
+        """Swap Choose Folder / Refresh chrome to match the active library tab."""
+        from steempeg.ui.ui_density import (
+            COMFORT,
+            folder_button_label,
+            records_folder_button_label,
+            screenshots_folder_button_label,
+        )
+
+        mode = getattr(self, "_library_panel_mode", "clips")
+        dense = (
+            getattr(self, "_ui_density", None)
+            or COMFORT
+        )
+        picker = getattr(self, "folder_picker", None)
+        refresh = getattr(self, "btn_refresh", None)
+
+        if picker is not None:
+            try:
+                picker.main_btn.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                picker.add_btn.clicked.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+            if mode == "rendered":
+                path = getattr(self, "custom_destination", "") or ""
+                tip = path or "Export / Records folder"
+                picker.set_folder_label(records_folder_button_label(dense), tip)
+                picker.set_add_visible(False)
+                picker.main_btn.clicked.connect(self.choose_records_folder)
+            elif mode == "screenshots":
+                folder = self._screenshots_folder_path()
+                tip = folder or "Screenshots folder"
+                picker.set_folder_label(screenshots_folder_button_label(dense), tip)
+                picker.set_add_visible(False)
+                picker.main_btn.clicked.connect(self.choose_screenshots_folder)
+            else:
+                folders = getattr(self, "clips_folders", []) or []
+                tip = ("Library folders:\n" + "\n".join(folders)) if len(folders) > 1 else ""
+                picker.set_folder_label(folder_button_label(len(folders), dense), tip)
+                picker.set_add_visible(bool(folders))
+                picker.main_btn.clicked.connect(self.choose_folder)
+                picker.add_btn.clicked.connect(self.show_folders_panel)
+
+        if refresh is not None:
+            # Keep the ▾ split on every tab (hiding it made Refresh stretch weirdly).
+            if hasattr(refresh, "set_menu_visible"):
+                refresh.set_menu_visible(True)
+            if mode == "rendered":
+                refresh.main_btn.setToolTip(
+                    "Rescan Rendered videos / Records folder only"
+                )
+            elif mode == "screenshots":
+                refresh.main_btn.setToolTip("Rescan the Screenshots folder only")
+            else:
+                refresh.main_btn.setToolTip(
+                    "Rescan Clips Manager only (use ▾ → Refresh all for everything)"
+                )
+            if hasattr(refresh, "menu_btn"):
+                refresh.menu_btn.setToolTip(
+                    "Refresh all libraries… (and Clips Steam tools when on Clips)"
+                )
 
     def _sync_library_mode_chrome(self):
         """Hide export settings while previewing finished media, not only on the tab."""
@@ -523,6 +719,9 @@ class RenderedLibraryMixin:
             return False
         if self._render_dock_kept_alive():
             return True
+        # Screenshots tab has nothing to export — hide the dock.
+        if getattr(self, "_library_panel_mode", "clips") == "screenshots":
+            return False
         # Idle Rendered Videos / finished-export preview: hide settings + controls.
         return not self._is_previewing_rendered_media()
 
@@ -565,7 +764,9 @@ class RenderedLibraryMixin:
         return index
 
     def _lookup_rendered_source_meta(self, file_path: str, basename: str) -> dict:
-        companion = load_rendered_companion_meta(file_path)
+        companion = load_rendered_companion_meta(
+            file_path, cache_dir=getattr(self, "cache_dir", None)
+        )
         if companion:
             return companion
 
@@ -632,15 +833,22 @@ class RenderedLibraryMixin:
             preview_path = self._rendered_media_path
 
         rendered_tab_open = "rendered" in getattr(self, "_library_tabs", {})
+        screenshots_tab_open = "screenshots" in getattr(self, "_library_tabs", {})
+        self._remember_current_panel_sort()
+        sorts = getattr(self, "_sort_index_by_panel", {}) or {}
         payload = {
             "library_panel_mode": getattr(self, "_library_panel_mode", "clips"),
             "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
             "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
             "rendered_tab_open": rendered_tab_open,
+            "screenshots_tab_open": screenshots_tab_open,
             "clips_selected_path": clips_selected,
             "rendered_selected_path": rendered_selected,
             "preview_kind": preview_kind,
             "preview_path": preview_path,
+            "clips_sort_index": int(sorts.get("clips", 0)),
+            "rendered_sort_index": int(sorts.get("rendered", 0)),
+            "screenshots_sort_index": int(sorts.get("screenshots", 8)),
         }
         try:
             cache.write_json(self._library_ui_path(), payload)
@@ -675,6 +883,13 @@ class RenderedLibraryMixin:
                 state.get("library_panel_mode", "clips"),
             )
 
+        wants_shots = bool(
+            state.get("screenshots_tab_open")
+            or state.get("library_panel_mode") == "screenshots"
+        )
+        if wants_shots and "screenshots" not in self._library_tabs:
+            self._ensure_library_tab("screenshots")
+
         if getattr(self, "_library_ui_restored", False):
             if wants_rendered and "rendered" not in self._library_tabs:
                 self._ensure_rendered_tab()
@@ -690,6 +905,19 @@ class RenderedLibraryMixin:
                 self._clips_view_mode = clips_vm
             if rendered_vm in ("grid", "list"):
                 self._rendered_view_mode = rendered_vm
+
+            if not hasattr(self, "_sort_index_by_panel"):
+                self._sort_index_by_panel = {}
+            for key, field, default in (
+                ("clips", "clips_sort_index", 0),
+                ("rendered", "rendered_sort_index", 0),
+                ("screenshots", "screenshots_sort_index", 8),
+            ):
+                raw = state.get(field)
+                try:
+                    self._sort_index_by_panel[key] = int(raw) if raw is not None else default
+                except (TypeError, ValueError):
+                    self._sort_index_by_panel[key] = default
 
             mode = state.get("library_panel_mode", "clips")
             try:
@@ -951,6 +1179,372 @@ class RenderedLibraryMixin:
         self.table_rendered.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.grid_rendered.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
+    def _screenshots_folder_path(self) -> str:
+        try:
+            from steempeg.ui.settings_prefs import resolve_screenshots_folder
+
+            settings = {}
+            if hasattr(self, "load_user_settings"):
+                settings = self.load_user_settings() or {}
+            return resolve_screenshots_folder(settings)
+        except Exception:
+            from steempeg.infra.paths import get_save_directory
+
+            return os.path.join(get_save_directory(), "Screenshots")
+
+    def _ensure_screenshots_widgets(self):
+        if hasattr(self, "grid_screenshots"):
+            return
+
+        self.screenshots_page = QWidget()
+        self.screenshots_page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(self.screenshots_page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        self.grid_screenshots = QListWidget()
+        self.grid_screenshots.setViewMode(QListWidget.ViewMode.IconMode)
+        self.grid_screenshots.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.grid_screenshots.setSpacing(12)
+        self.grid_screenshots.setUniformItemSizes(True)
+        self.grid_screenshots.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.grid_screenshots.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.grid_screenshots.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.grid_screenshots.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        self.grid_screenshots.setMovement(QListWidget.Movement.Static)
+        self.grid_screenshots.setStyleSheet(LIBRARY_GRID_STYLE)
+        self.grid_screenshots.setIconSize(QSize(160, 90))
+        self.grid_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.grid_screenshots.itemDoubleClicked.connect(self._on_screenshot_item_activated)
+        self.grid_screenshots.itemSelectionChanged.connect(self._update_library_count_label)
+
+        lay.addWidget(self.grid_screenshots)
+        if hasattr(self, "library_stack"):
+            self.library_stack.addWidget(self.screenshots_page)
+
+    def _clear_screenshots_selection_visual(self) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        grid.blockSignals(True)
+        grid.clearSelection()
+        grid.setCurrentItem(None)
+        grid.blockSignals(False)
+
+    def choose_records_folder(self) -> None:
+        """Change the export / Records folder from the Rendered tab footer."""
+        old = os.path.normpath(getattr(self, "custom_destination", "") or "")
+        if hasattr(self, "choose_destination"):
+            self.choose_destination()
+        new = os.path.normpath(getattr(self, "custom_destination", "") or "")
+        if new and old and new != old:
+            # Full migrate UX is v44/45 — ask but keep it soft for now.
+            try:
+                move = steempeg_question(
+                    self.ui,
+                    "Move existing exports?",
+                    "Records folder changed.\n\n"
+                    "Move existing rendered files into the new folder?\n\n"
+                    "Yes = remember for later (migrate not built yet).\n"
+                    "No = just change the path; files stay where they are.",
+                )
+                if move:
+                    steempeg_information(
+                        self.ui,
+                        "Move exports",
+                        "File move isn’t in this spike yet — path is updated. "
+                        "Migrate lands with the v44/45 library chrome overhaul.",
+                    )
+            except Exception:
+                pass
+        if hasattr(self, "refresh_rendered_library"):
+            self.refresh_rendered_library()
+        self._sync_library_footer_for_mode()
+
+    def choose_screenshots_folder(self) -> None:
+        """Pick the folder used for Steempeg screenshots (Settings key)."""
+        from PySide6.QtWidgets import QFileDialog
+        from steempeg.ui.settings_prefs import (
+            KEY_SCREENSHOTS_FOLDER,
+            normalize_screenshots_folder,
+            resolve_screenshots_folder,
+        )
+
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            settings = self.load_user_settings() or {}
+        start = resolve_screenshots_folder(settings)
+        folder = QFileDialog.getExistingDirectory(
+            self.ui, "Select Screenshots Folder", start
+        )
+        if not folder:
+            return
+        folder = normalize_screenshots_folder(folder)
+        if hasattr(self, "save_user_settings"):
+            self.save_user_settings(KEY_SCREENSHOTS_FOLDER, folder)
+        self.screenshots_dir = folder
+        self.refresh_screenshots_library(force=True)
+        self._sync_library_footer_for_mode()
+
+    def refresh_screenshots_library(self, *, force: bool = True) -> None:
+        """Rescan the Screenshots folder into the grid (does not touch Clips).
+
+        Paint is cheap: only probe local thumb cache on the UI thread. Full PNG
+        decode / thumb write runs on ``ScreenshotThumbBackfillWorker``.
+        """
+        self._ensure_screenshots_widgets()
+        folder = self._screenshots_folder_path()
+        if not force and getattr(self, "_screenshots_scanned_folder", None) == folder:
+            if self.grid_screenshots.count() > 0:
+                self._update_library_count_label()
+                return
+
+        self._stop_screenshot_thumb_backfill()
+        self.grid_screenshots.clear()
+        files: list[tuple[str, float]] = []
+        if folder and os.path.isdir(folder):
+            try:
+                for name in os.listdir(folder):
+                    path = os.path.join(folder, name)
+                    if not os.path.isfile(path):
+                        continue
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in _SCREENSHOT_EXTS:
+                        continue
+                    try:
+                        mtime = os.path.getmtime(path)
+                    except OSError:
+                        mtime = 0.0
+                    files.append((path, mtime))
+            except OSError as exc:
+                logging.warning("Screenshots scan failed for %s: %s", folder, exc)
+
+        files.sort(key=lambda t: t[1], reverse=True)
+        cache_dir = getattr(self, "cache_dir", None) or ""
+        snapshot: list[dict] = []
+        missing_thumbs: list[tuple[str, float]] = []
+
+        self.grid_screenshots.setUpdatesEnabled(False)
+        try:
+            for path, mtime in files:
+                game = _parse_screenshot_game_name(path)
+                item = self._make_screenshot_item(path, mtime, game)
+                thumb = ""
+                if cache_dir:
+                    candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
+                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                        thumb = candidate
+                        self._apply_screenshot_thumb(item, thumb)
+                    else:
+                        missing_thumbs.append((path, mtime))
+                else:
+                    missing_thumbs.append((path, mtime))
+                self.grid_screenshots.addItem(item)
+                snapshot.append(
+                    {"full_path": path, "mtime": mtime, "game_name": game}
+                )
+        finally:
+            self.grid_screenshots.setUpdatesEnabled(True)
+
+        self._screenshots_scanned_folder = folder
+        self._persist_screenshots_library_snapshot(folder, snapshot)
+        if getattr(self, "_library_panel_mode", "") == "screenshots":
+            self.apply_screenshots_sorting()
+        self._update_library_count_label()
+        if hasattr(self, "set_status"):
+            n = len(files)
+            self.set_status(f"Screenshots: {n} file{'s' if n != 1 else ''}")
+        if missing_thumbs and cache_dir:
+            QTimer.singleShot(
+                50,
+                lambda: self._schedule_screenshot_thumb_backfill(missing_thumbs),
+            )
+
+    def _make_screenshot_item(
+        self, path: str, mtime: float, game: str
+    ) -> QListWidgetItem:
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, path)
+        item.setData(_SHOT_MTIME_ROLE, float(mtime))
+        item.setData(_SHOT_GAME_ROLE, game)
+        item.setToolTip(path)
+        item.setSizeHint(QSize(176, 130))
+        item.setText(os.path.basename(path))
+        return item
+
+    def _apply_screenshot_thumb(self, item: QListWidgetItem, thumb_path: str) -> None:
+        if not item or not thumb_path:
+            return
+        pix = QPixmap(thumb_path)
+        if pix.isNull():
+            return
+        item.setIcon(QIcon(pix))
+
+    def _persist_screenshots_library_snapshot(
+        self, folder: str, files: list[dict]
+    ) -> None:
+        try:
+            save_screenshots_library_cache(
+                getattr(self, "cache_dir", None),
+                folder=folder or "",
+                files=files,
+            )
+        except Exception:
+            logging.exception("Failed to save screenshots library snapshot")
+
+    def _stop_screenshot_thumb_backfill(self) -> None:
+        worker = getattr(self, "_screenshot_thumb_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(3000)
+        self._screenshot_thumb_worker = None
+
+    def _schedule_screenshot_thumb_backfill(
+        self, entries: list[tuple[str, float]]
+    ) -> None:
+        cache_dir = getattr(self, "cache_dir", None)
+        if not cache_dir or not entries:
+            return
+        self._stop_screenshot_thumb_backfill()
+        from steempeg.ui.library.screenshot_thumb_backfill import (
+            ScreenshotThumbBackfillWorker,
+        )
+
+        worker = ScreenshotThumbBackfillWorker(
+            entries, cache_dir, parent=getattr(self, "ui", None)
+        )
+        self._screenshot_thumb_worker = worker
+        worker.thumb_ready.connect(self._on_screenshot_thumb_ready)
+        worker.finished_batch.connect(self._on_screenshot_thumb_backfill_finished)
+        worker.start()
+
+    def _on_screenshot_thumb_ready(self, file_path: str, thumb_path: str) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or not file_path or not thumb_path:
+            return
+        norm = os.path.normpath(file_path)
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path and os.path.normpath(str(path)) == norm:
+                self._apply_screenshot_thumb(item, thumb_path)
+                break
+
+    def _on_screenshot_thumb_backfill_finished(self) -> None:
+        self._screenshot_thumb_worker = None
+
+    def restore_screenshots_from_session_cache(self) -> bool:
+        """Skip startup: paint last Screenshots session JSON — no folder walk."""
+        folder = self._screenshots_folder_path()
+        rows = files_from_screenshots_library_cache(
+            getattr(self, "cache_dir", None),
+            folder=folder,
+        )
+        if not rows:
+            return False
+
+        self._ensure_screenshots_widgets()
+        self._stop_screenshot_thumb_backfill()
+        self.grid_screenshots.clear()
+
+        cache_dir = getattr(self, "cache_dir", None) or ""
+        missing_thumbs: list[tuple[str, float]] = []
+
+        self.grid_screenshots.setUpdatesEnabled(False)
+        try:
+            for row in rows:
+                path = str(row.get("full_path") or "")
+                if not path:
+                    continue
+                try:
+                    mtime = float(row.get("mtime") or 0.0)
+                except (TypeError, ValueError):
+                    mtime = 0.0
+                game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
+                item = self._make_screenshot_item(path, mtime, game)
+                if cache_dir:
+                    candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
+                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                        self._apply_screenshot_thumb(item, candidate)
+                    else:
+                        missing_thumbs.append((path, mtime))
+                self.grid_screenshots.addItem(item)
+        finally:
+            self.grid_screenshots.setUpdatesEnabled(True)
+
+        self._screenshots_scanned_folder = folder
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        if hasattr(self, "combo_sort"):
+            self._sort_applied_by_panel["screenshots"] = int(
+                self.combo_sort.currentIndex()
+            )
+        if getattr(self, "_library_panel_mode", "") == "screenshots":
+            self.apply_screenshots_sorting()
+        self._update_library_count_label()
+        logging.info(
+            "Skip: painted %d screenshots from session snapshot", len(rows)
+        )
+        if missing_thumbs and cache_dir:
+            # Quiet — may touch screenshot files later; UI already painted.
+            QTimer.singleShot(
+                800,
+                lambda: self._schedule_screenshot_thumb_backfill(missing_thumbs),
+            )
+        return True
+
+    def apply_screenshots_sorting(self):
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or not hasattr(self, "combo_sort"):
+            return
+        idx = self.combo_sort.currentIndex()
+        items = [grid.takeItem(0) for _ in range(grid.count())]
+
+        def game_key(item: QListWidgetItem) -> str:
+            return (item.data(_SHOT_GAME_ROLE) or item.text() or "").lower()
+
+        def date_key(item: QListWidgetItem) -> float:
+            cached = item.data(_SHOT_MTIME_ROLE)
+            if cached is not None:
+                try:
+                    return float(cached)
+                except (TypeError, ValueError):
+                    pass
+            path = item.data(Qt.ItemDataRole.UserRole)
+            try:
+                return os.path.getmtime(path) if path else 0.0
+            except OSError:
+                return 0.0
+
+        if idx in (1, 2):
+            items.sort(key=game_key, reverse=(idx == 2))
+        elif idx == 7:
+            items.sort(key=date_key)
+        elif idx in (0, 8):
+            # Default + Newest First
+            items.sort(key=date_key, reverse=True)
+        else:
+            items.sort(key=date_key, reverse=True)
+
+        for item in items:
+            grid.addItem(item)
+
+    def _on_screenshot_item_activated(self, item: QListWidgetItem) -> None:
+        path = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not path or not os.path.isfile(path):
+            return
+        if hasattr(self, "_open_file_with_default_app"):
+            self._open_file_with_default_app(path)
+        else:
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]
+            except Exception as exc:
+                logging.warning("Could not open screenshot %s: %s", path, exc)
+
     def _seed_rendered_icons_cache(self) -> dict[str, str]:
         """Reuse game icons already fetched during the Clips Manager scan."""
         seeded: dict[str, str] = {}
@@ -1028,6 +1622,7 @@ class RenderedLibraryMixin:
         if hasattr(self, "grid_rendered"):
             self._rendered_grid_anchor_index = -1
             self.grid_rendered.clear()
+        self._library_rendered_rows = []
 
         self._sync_library_scrollbars(force_hide=True)
 
@@ -1087,6 +1682,7 @@ class RenderedLibraryMixin:
     ) -> None:
         if generation != getattr(self, "_rendered_scan_generation", 0):
             return
+        self._library_rendered_rows.append(row)
         table_row = self._insert_rendered_file_row(row)
         if table_row >= 0:
             self._append_rendered_grid_card_for_row(table_row)
@@ -1126,6 +1722,7 @@ class RenderedLibraryMixin:
             self.apply_rendered_sorting()
         else:
             self._sync_rendered_grid_from_table()
+        self._persist_rendered_library_snapshot()
         self._schedule_rendered_poster_backfill()
         self._update_library_count_label()
 
@@ -1144,6 +1741,82 @@ class RenderedLibraryMixin:
             stats.scan_roots,
             stats.file_count,
         )
+
+    def _persist_rendered_library_snapshot(self) -> None:
+        """Write the current Rendered list for Skip startup restores."""
+        try:
+            save_rendered_library_cache(
+                getattr(self, "cache_dir", None),
+                scan_roots=self._collect_rendered_scan_roots()
+                if hasattr(self, "_collect_rendered_scan_roots")
+                else [],
+                files=list(getattr(self, "_library_rendered_rows", None) or []),
+            )
+        except Exception:
+            logging.exception("Failed to save rendered library snapshot")
+
+    def restore_rendered_from_session_cache(self) -> bool:
+        """Skip startup: paint last Rendered session JSON — no export-folder walk."""
+        files = files_from_rendered_library_cache(
+            getattr(self, "cache_dir", None),
+            require_exists=False,
+        )
+        if not files:
+            return False
+
+        self._ensure_rendered_widgets()
+        if not hasattr(self, "table_rendered"):
+            return False
+
+        self._stop_rendered_scan()
+        self._stop_rendered_poster_backfill()
+        self._saved_rendered_selection_path = ""
+        self._clear_rendered_selection_visual()
+
+        self.table_rendered.setSortingEnabled(False)
+        self.table_rendered.setRowCount(0)
+        if hasattr(self, "grid_rendered"):
+            self._rendered_grid_anchor_index = -1
+            self.grid_rendered.clear()
+
+        self._library_rendered_rows = list(files)
+        self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
+        self._rendered_scan_active = False
+
+        table = self.table_rendered
+        grid = getattr(self, "grid_rendered", None)
+        table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
+        try:
+            for row in files:
+                table_row = self._insert_rendered_file_row(row)
+                if table_row >= 0:
+                    self._append_rendered_grid_card_for_row(table_row)
+                if hasattr(self, "_seed_rendered_health_cache_row"):
+                    self._seed_rendered_health_cache_row(row)
+        finally:
+            table.setUpdatesEnabled(True)
+            if grid is not None:
+                grid.setUpdatesEnabled(True)
+
+        table.setSortingEnabled(True)
+        table.horizontalHeader().setSectionsClickable(False)
+        if hasattr(self, "apply_rendered_sorting"):
+            self.apply_rendered_sorting()
+        else:
+            self._sync_rendered_grid_from_table()
+
+        self._update_library_count_label()
+        logging.info("Skip: painted %d rendered files from session snapshot", len(files))
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        if hasattr(self, "combo_sort"):
+            self._sort_applied_by_panel["rendered"] = int(self.combo_sort.currentIndex())
+        # Quiet poster top-up later (may touch export paths).
+        QTimer.singleShot(900, self._schedule_rendered_poster_backfill)
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+        return True
 
     def _on_rendered_scan_error(self, message: str, generation: int) -> None:
         if generation != getattr(self, "_rendered_scan_generation", 0):
@@ -1444,6 +2117,12 @@ class RenderedLibraryMixin:
                 self.lbl_clip_count.setText("• 0 Files")
             return
 
+        if mode == "screenshots":
+            grid = getattr(self, "grid_screenshots", None)
+            n = grid.count() if grid is not None else 0
+            self.lbl_clip_count.setText(f"• {n} Shots")
+            return
+
         if not hasattr(self.ui, "table_clips"):
             return
         table = self.ui.table_clips
@@ -1491,31 +2170,39 @@ class RenderedLibraryMixin:
             item = self.table_rendered.item(row, 0)
             return item.data(Qt.ItemDataRole.UserRole) if item else ""
 
+        reordered = False
         if idx == 0:
             pass
         elif idx == 1:
             rows.sort(key=lambda r: cell(r, 0).lower())
+            reordered = True
         elif idx == 2:
             rows.sort(key=lambda r: cell(r, 0).lower(), reverse=True)
+            reordered = True
         elif idx == 3:
             rows.sort(key=lambda r: cell(r, 1).lower())
+            reordered = True
         elif idx == 4:
             rows.sort(key=lambda r: cell(r, 1).lower(), reverse=True)
+            reordered = True
         elif idx in (7, 8):
             rows.sort(key=lambda r: cell(r, 2))
             if idx == 8:
                 rows.reverse()
+            reordered = True
         elif idx in (9, 10):
             rows.sort(key=lambda r: os.path.getsize(path(r)) if path(r) and os.path.exists(path(r)) else 0)
             if idx == 10:
                 rows.reverse()
+            reordered = True
         elif idx in _FOLDER_SORT_INDICES:
             roots = getattr(self, "clips_folders", None) or []
             rows.sort(key=lambda r: clip_folder_sort_key(path(r), roots), reverse=(idx == 12))
+            reordered = True
         elif idx in _HEALTH_SORT_INDICES:
             pass
 
-        if idx != 0:
+        if reordered:
             data = []
             for row in rows:
                 data.append([self.table_rendered.takeItem(row, col) for col in range(4)])
@@ -1530,8 +2217,14 @@ class RenderedLibraryMixin:
                     if item:
                         self.table_rendered.setItem(row, col, item)
                 self.table_rendered.setRowHidden(row, hidden)
+            # Grid cards follow table order — only rebuild after a real reorder.
+            self.build_rendered_grid()
+        else:
+            self._sync_rendered_grid_from_table()
 
-        self.build_rendered_grid()
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        self._sort_applied_by_panel["rendered"] = int(idx)
 
     def show_rendered_filter_menu(self):
         from steempeg.ui.library.rendered_filters import RenderedFilterMenu
@@ -1984,11 +2677,11 @@ class RenderedLibraryMixin:
         for file_path in paths:
             try:
                 os.remove(file_path)
-                from steempeg.core.rendered_media import companion_meta_path
+                from steempeg.core.rendered_media import remove_rendered_companion_meta
 
-                meta_sidecar = companion_meta_path(file_path)
-                if os.path.isfile(meta_sidecar):
-                    os.remove(meta_sidecar)
+                remove_rendered_companion_meta(
+                    file_path, cache_dir=getattr(self, "cache_dir", None)
+                )
             except Exception as exc:
                 logging.error("Failed to delete rendered file %s: %s", file_path, exc)
                 failed.append(os.path.basename(file_path))
@@ -2019,22 +2712,48 @@ class RenderedLibraryMixin:
         self._persist_library_ui_state()
 
     def apply_sorting(self):
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+        self._remember_current_panel_sort()
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "rendered":
             self.apply_rendered_sorting()
+            self._persist_library_ui_state()
+            return
+        if mode == "screenshots":
+            self.apply_screenshots_sorting()
+            if not hasattr(self, "_sort_applied_by_panel"):
+                self._sort_applied_by_panel = {}
+            if hasattr(self, "combo_sort"):
+                self._sort_applied_by_panel["screenshots"] = int(
+                    self.combo_sort.currentIndex()
+                )
+            self._persist_library_ui_state()
             return
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.apply_sorting(self)
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        if hasattr(self, "combo_sort"):
+            self._sort_applied_by_panel["clips"] = int(self.combo_sort.currentIndex())
+        self._persist_library_ui_state()
 
     def show_filter_menu(self):
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "rendered":
             self.show_rendered_filter_menu()
+            return
+        if mode == "screenshots":
+            # Screenshots tab: no filter sheet yet (v43 spike).
             return
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.show_filter_menu(self)
 
     def refresh_library(self):
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "rendered":
             self.refresh_rendered_library()
+            return
+        if mode == "screenshots":
+            self.refresh_screenshots_library(force=True)
             return
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.refresh_library(self)
