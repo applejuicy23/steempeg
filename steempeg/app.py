@@ -1358,6 +1358,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if hasattr(self.ui, 'btn_cancel'): 
                 self.ui.btn_cancel.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_cancel))
                 self.ui.btn_cancel.setMinimumSize(0, 0)
+
+            if hasattr(self, "_apply_desktop_dash_render_icons"):
+                self._apply_desktop_dash_render_icons()
+            if hasattr(self, "_update_start_button_label"):
+                self._update_start_button_label()
                 
             if hasattr(self.ui, 'btn_logs'): 
                 self.ui.btn_logs.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_logs))
@@ -4376,6 +4381,13 @@ def main():
             # Match the work area immediately so the first paint is never an
             # inset "half screen" that then jumps after showMaximized settles.
             window.ui.setGeometry(_avail)
+            # __init__ applied Deck/compact density while the HWND was still
+            # tiny. Restyle for the real width BEFORE the first show — otherwise
+            # the first paint is a shrunk UI on a fullscreen window, and a brief
+            # UI stall freezes that frame as "(Not Responding)".
+            window._ui_density = None
+            window._density_resize_defer_ms = 0
+            window._apply_startup_splitter_sizes()
             logging.info(
                 "Primary screen %r avail=%sx%s",
                 _screen.name(),
@@ -4422,8 +4434,10 @@ def main():
                 wh.requestActivate()
         except Exception:
             pass
-        QApplication.processEvents()
+        # Density / splitters first — then pump events so the first visible
+        # paint is already at comfort size, not the compact __init__ chrome.
         window._sync_startup_layout()
+        QApplication.processEvents()
         if ui_shell == UI_SHELL_PORTABLE:
             # Library restore (500ms) must not fight theatre — re-assert after it.
             window.apply_portable_theatre_shell()
