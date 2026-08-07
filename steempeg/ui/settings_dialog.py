@@ -566,8 +566,10 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
-                "Quick uses cached health (default). Full re-runs ffprobe. "
-                "Skip opens immediately. Use Refresh library for a scan."
+                "Quick rescans folders using cached health (default). "
+                "Full re-runs ffprobe. "
+                "Skip paints last session’s list instantly (no folder I/O). "
+                "Refresh rebuilds the whole library."
             )
         )
 
