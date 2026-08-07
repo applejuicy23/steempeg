@@ -14,7 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from steempeg.core import games
 from steempeg.core.dash import health
-from steempeg.library.scan import _resolve_clip_health
+from steempeg.library.scan import _find_mpd, _parse_duration_from_mpd, _resolve_clip_health
 
 
 class ClipHealthRecheckWorker(QThread):
@@ -69,6 +69,43 @@ class ClipHealthRecheckWorker(QThread):
             )
         except Exception as exc:
             logging.exception("Clip health recheck worker failed")
+            self.failed.emit(str(exc))
+
+
+class ClipDurationBackfillWorker(QThread):
+    """Parse MPD durations for Skip-restored rows that still show ``--:--``.
+
+    No health / Steam / folder discovery — just duration strings for known paths.
+    """
+
+    duration_ready = Signal(str, str)  # clip_path, duration_str
+    finished_backfill = Signal(int)  # updated count
+    failed = Signal(str)
+
+    def __init__(self, clip_paths: List[str], parent=None):
+        super().__init__(parent)
+        self._clip_paths = list(clip_paths)
+
+    def run(self) -> None:
+        try:
+            updated = 0
+            for path in self._clip_paths:
+                if self.isInterruptionRequested():
+                    break
+                if not path or not os.path.isdir(path):
+                    continue
+                try:
+                    _has_mpd, _has_chunks, mpd_path = _find_mpd(path)
+                    dur = _parse_duration_from_mpd(mpd_path, dead=False)
+                except Exception:
+                    continue
+                if not dur or dur in ("--:--", "—", "--"):
+                    continue
+                self.duration_ready.emit(os.path.normpath(path), dur)
+                updated += 1
+            self.finished_backfill.emit(updated)
+        except Exception as exc:
+            logging.exception("Clip duration backfill failed")
             self.failed.emit(str(exc))
 
 
