@@ -1320,15 +1320,19 @@ class RenderMixin:
             return
         pending = self._queue_pending_count()
         btn = self.ui.btn_start
-        # Desktop: plain text only (queue icon belongs on portable Queue chip).
+        # Desktop: white startrender glyph before the label.
         if not getattr(self, "_portable_shell", False):
-            from PySide6.QtGui import QIcon
+            from PySide6.QtCore import QSize
 
-            btn.setIcon(QIcon())
+            from steempeg.ui.icon_assets import start_render_icon
+
+            icon_sz = 16
+            btn.setIcon(start_render_icon(icon_sz))
+            btn.setIconSize(QSize(icon_sz, icon_sz))
             if pending > 0:
-                btn.setText("Render Queue")
+                btn.setText(" Render Queue")
             else:
-                btn.setText("START RENDER")
+                btn.setText(" START RENDER")
         else:
             if pending > 0:
                 btn.setText("🚩 Render Queue")
@@ -1341,6 +1345,50 @@ class RenderMixin:
             from steempeg.ui.portable import sync_portable_render_button
 
             sync_portable_render_button(self)
+
+    def _apply_desktop_dash_render_icons(self) -> None:
+        """White glyphs on desktop Start / Pause / Cancel (portable keeps emoji labels)."""
+        if getattr(self, "_portable_shell", False):
+            return
+        from PySide6.QtCore import QSize
+
+        from steempeg.ui.icon_assets import (
+            cancel_render_icon,
+            logs_info_icon,
+            pause_render_icon,
+            start_render_icon,
+        )
+
+        icon_sz = 16
+        size = QSize(icon_sz, icon_sz)
+        if hasattr(self.ui, "btn_start"):
+            self.ui.btn_start.setIcon(start_render_icon(icon_sz))
+            self.ui.btn_start.setIconSize(size)
+        if hasattr(self.ui, "btn_pause"):
+            self.ui.btn_pause.setIcon(pause_render_icon(icon_sz))
+            self.ui.btn_pause.setIconSize(size)
+            # Keep leading space so icon doesn't glue to the label.
+            text = (self.ui.btn_pause.text() or "Pause").strip()
+            self.ui.btn_pause.setText(f" {text}")
+        if hasattr(self.ui, "btn_cancel"):
+            self.ui.btn_cancel.setIcon(cancel_render_icon(icon_sz))
+            self.ui.btn_cancel.setIconSize(size)
+            text = (self.ui.btn_cancel.text() or "Cancel").strip()
+            self.ui.btn_cancel.setText(f" {text}")
+        if hasattr(self.ui, "btn_logs"):
+            self.ui.btn_logs.setIcon(logs_info_icon(icon_sz))
+            self.ui.btn_logs.setIconSize(size)
+            text = (self.ui.btn_logs.text() or "Logs").strip()
+            self.ui.btn_logs.setText(f" {text}")
+
+    def _set_desktop_pause_label(self, text: str) -> None:
+        if not hasattr(self.ui, "btn_pause"):
+            return
+        label = (text or "Pause").strip()
+        if getattr(self, "_portable_shell", False):
+            self.ui.btn_pause.setText(label)
+        else:
+            self.ui.btn_pause.setText(f" {label}")
 
     def _queue_pending_count(self) -> int:
         if not hasattr(self, "render_queue"):
@@ -3533,18 +3581,23 @@ class RenderMixin:
         from PySide6.QtCore import QSize
         from PySide6.QtGui import QIcon
 
-        from steempeg.ui.icon_assets import queue_chip_icon
+        from steempeg.ui.icon_assets import preview_badge_icon, queue_chip_icon
 
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-        is_queue = text.strip().lower().startswith("in queue")
-        if is_queue:
+        label = text.strip()
+        low = label.lower()
+        if low.startswith("in queue"):
             # Match desktop health chip height (was squashed at 16px + 2px pad).
             badge.setIcon(queue_chip_icon(18, color=color))
             badge.setIconSize(QSize(18, 18))
-            badge.setText(f" {text}")
+            badge.setText(f" {label}")
+        elif low == "preview":
+            badge.setIcon(preview_badge_icon(18, color=color))
+            badge.setIconSize(QSize(18, 18))
+            badge.setText(f" {label}")
         else:
             badge.setIcon(QIcon())
-            badge.setText(text)
+            badge.setText(label)
         badge.setMinimumHeight(30)
         badge.setStyleSheet(
             f"QPushButton {{"
@@ -4013,7 +4066,7 @@ class RenderMixin:
             self.ui.btn_cancel.setEnabled(False)
         if hasattr(self.ui, 'btn_pause'):
             self.ui.btn_pause.setEnabled(False)
-            self.ui.btn_pause.setText("Pause")
+            self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
         self.refresh_render_queue_panel()
         self.update_playback_badge()
@@ -4057,7 +4110,7 @@ class RenderMixin:
             self.ui.btn_cancel.setEnabled(False)
         if hasattr(self.ui, 'btn_pause'):
             self.ui.btn_pause.setEnabled(False)
-            self.ui.btn_pause.setText("Pause")
+            self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
         self.refresh_render_queue_panel()
         self.update_playback_badge()
@@ -4235,10 +4288,10 @@ class RenderMixin:
             
             # Change the button text depending on the status
             if is_paused:
-                if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setText("Resume")
+                if hasattr(self.ui, 'btn_pause'): self._set_desktop_pause_label("Resume")
                 self.update_status_indicator("Paused...", "paused")
             else:
-                if hasattr(self.ui, 'btn_pause'): self.ui.btn_pause.setText("Pause")
+                if hasattr(self.ui, 'btn_pause'): self._set_desktop_pause_label("Pause")
                 self.update_status_indicator("Processing...", "rendering")
 
     def on_render_finished(self, success, error_msg, output_file):
@@ -4288,7 +4341,7 @@ class RenderMixin:
         if hasattr(self.ui, 'btn_cancel'): self.ui.btn_cancel.setEnabled(False)
         if hasattr(self.ui, 'btn_pause'):
             self.ui.btn_pause.setEnabled(False)
-            self.ui.btn_pause.setText("Pause")
+            self._set_desktop_pause_label("Pause")
 
         if success:
             logging.info("=== RENDER SUCCESS ===")
