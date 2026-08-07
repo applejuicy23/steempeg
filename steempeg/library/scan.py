@@ -175,6 +175,20 @@ def collect_clip_roots(base_folder: str) -> Set[str]:
     return roots
 
 
+def _path_under_any_root(path: str, roots: List[str]) -> bool:
+    """True when ``path`` is equal to or nested under any library root."""
+    if not roots:
+        return True
+    norm = os.path.normcase(os.path.normpath(path))
+    for root in roots:
+        if not root:
+            continue
+        r = os.path.normcase(os.path.normpath(root))
+        if norm == r or norm.startswith(r + os.sep):
+            return True
+    return False
+
+
 def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
     """Return sorted clip folder paths and duplicate count from session dedupe."""
     library_root_norms = {os.path.normpath(r) for r in library_roots}
@@ -220,6 +234,46 @@ def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
         seen_clip_ids.add(dedupe_key)
         candidates.append(full_path)
 
+    return candidates, duplicate_count
+
+
+def discover_clip_paths_from_health_cache(
+    health_cache: Dict[str, dict],
+    library_roots: List[str],
+) -> Tuple[List[str], int]:
+    """Reuse last-known clip paths from ``clip_health_cache`` (no folder walk).
+
+    Only keeps paths that still exist and sit under the configured library roots.
+    Session dedupe matches a live scan so Skip does not resurrect duplicate peers.
+    """
+    existing: List[str] = []
+    for raw in health_cache.keys():
+        path = os.path.normpath(str(raw or ""))
+        if not path or not os.path.isdir(path):
+            continue
+        if not _path_under_any_root(path, library_roots):
+            continue
+        existing.append(path)
+
+    sorted_folders = sorted(
+        existing,
+        key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0,
+        reverse=True,
+    )
+    sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
+
+    candidates: List[str] = []
+    seen_clip_ids: Set[str] = set()
+    duplicate_count = session_dupes
+    for full_path in sorted_folders:
+        folder_name = os.path.basename(full_path).lower()
+        session_key = steam_session_key(folder_name)
+        dedupe_key = session_key or folder_name
+        if dedupe_key in seen_clip_ids:
+            duplicate_count += 1
+            continue
+        seen_clip_ids.add(dedupe_key)
+        candidates.append(full_path)
     return candidates, duplicate_count
 
 
@@ -296,9 +350,13 @@ def _parse_duration_from_mpd(mpd_path: Optional[str], *, dead: bool) -> str:
 def _resolve_game_name(
     app_id: str,
     game_names_cache: Dict[str, str],
+    *,
+    allow_network: bool = True,
 ) -> str:
     if app_id in game_names_cache:
         return game_names_cache[app_id]
+    if not allow_network:
+        return f"Unknown Game ({app_id})"
     name = games.fetch_game_name(app_id)
     if name:
         game_names_cache[app_id] = name
@@ -338,11 +396,12 @@ def scan_single_clip(
     game_names_cache: Dict[str, str],
     icons_cache: Dict[str, str] | None = None,
     fast: bool,
+    allow_network: bool = True,
 ) -> Optional[ScannedClip]:
     has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
 
     if has_chunks and not has_mpd:
-        if repair.recover_orphaned_clip(full_path):
+        if allow_network and repair.recover_orphaned_clip(full_path):
             has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
 
     if not has_mpd and not has_chunks:
@@ -370,9 +429,16 @@ def scan_single_clip(
         else:
             rec_type = "Unknown"
 
-        raw_name = _resolve_game_name(app_id, game_names_cache)
+        raw_name = _resolve_game_name(
+            app_id, game_names_cache, allow_network=allow_network
+        )
         game_name = f"   {raw_name}"
-        icon_disk_path = _resolve_icon_path(app_id, cache_dir, icons_cache)
+        icon_disk_path = _resolve_icon_path(
+            app_id,
+            cache_dir,
+            icons_cache,
+            allow_download=allow_network,
+        )
         use_unknown_icon = False
 
         try:
@@ -425,20 +491,37 @@ def run_library_scan(
     on_discovered: Callable[[int], None],
     on_clip: Callable[[ScannedClip, int, int], None],
     should_cancel: Callable[[], bool],
+    from_cache: bool = False,
+    known_paths: Set[str] | None = None,
 ) -> ScanFinishedStats:
     """Scan all library roots; invoke callbacks for progress (no Qt).
 
     fast=True skips ffprobe during health checks only. Game names and icons are
-    still fetched from Steam when missing from cache (first launch, new app id).
+    still fetched from Steam when missing from cache (first launch, new app id),
+    unless ``from_cache`` is set (known health-cache paths only, no Steam).
+
+    ``known_paths`` — when set, only emit clips whose path is not already known
+    (Skip: quiet append of newly appeared folders after snapshot restore).
     """
     on_discovered(0)
-    candidates, duplicate_count = discover_clip_paths(library_roots)
+    if from_cache:
+        candidates, duplicate_count = discover_clip_paths_from_health_cache(
+            health_cache, library_roots
+        )
+    else:
+        candidates, duplicate_count = discover_clip_paths(library_roots)
+
+    if known_paths is not None:
+        known = {os.path.normpath(p) for p in known_paths}
+        candidates = [p for p in candidates if os.path.normpath(p) not in known]
+
     total = len(candidates)
     on_discovered(total)
 
     health_counts = {"healthy": 0, "issues": 0, "dead": 0}
     clip_count = 0
     icons_cache: Dict[str, str] = {}
+    allow_network = not from_cache
 
     for index, full_path in enumerate(candidates, start=1):
         if should_cancel():
@@ -451,6 +534,7 @@ def run_library_scan(
                 game_names_cache=game_names_cache,
                 icons_cache=icons_cache,
                 fast=fast,
+                allow_network=allow_network,
             )
         except Exception as exc:
             logging.warning("Scan skipped %s: %s", full_path, exc)
