@@ -73,6 +73,18 @@ def clip_poster_cache_path(cache_dir: str, clip_path: str) -> str:
     return os.path.join(folder, f"{key}.jpg")
 
 
+def clip_poster_cache_path_nostat(cache_dir: str, clip_path: str) -> str:
+    """Poster path keyed only by folder path — no ``stat`` of the library root.
+
+    Used by Skip restore so painting never wakes a sleeping drive. May miss
+    posters written under the mtime-keyed name until Refresh/backfill.
+    """
+    norm = os.path.normcase(os.path.normpath(clip_path or ""))
+    key = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:20]
+    folder = os.path.join(cache_dir, "clip_posters")
+    return os.path.join(folder, f"{key}.jpg")
+
+
 def _find_poster_mpd(clip_path: str) -> str:
     """Best playable manifest to sample a poster frame from."""
     mpds = discovery.find_mpd_paths(clip_path)
