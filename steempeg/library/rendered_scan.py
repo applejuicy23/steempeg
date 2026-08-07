@@ -63,8 +63,10 @@ def _format_file_size(num_bytes: int) -> str:
     return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def _lookup_source_meta(file_path: str, basename: str, meta_index: Dict[str, dict]) -> dict:
-    companion = load_rendered_companion_meta(file_path)
+def _lookup_source_meta(
+    file_path: str, basename: str, meta_index: Dict[str, dict], cache_dir: str = ""
+) -> dict:
+    companion = load_rendered_companion_meta(file_path, cache_dir=cache_dir or None)
     if companion:
         return companion
     norm = os.path.normcase(os.path.normpath(file_path))
@@ -106,7 +108,7 @@ def scan_single_rendered_file(
 ) -> ScannedRenderedFile:
     basename = os.path.basename(full_path)
     stem = os.path.splitext(basename)[0]
-    source = _lookup_source_meta(full_path, basename, meta_index)
+    source = _lookup_source_meta(full_path, basename, meta_index, cache_dir)
 
     app_id = source.get("app_id") or parse_app_id_from_name(basename)
     clip_path = (source.get("clip_path") or "").strip()
