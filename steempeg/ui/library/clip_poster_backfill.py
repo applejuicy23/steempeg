@@ -27,10 +27,14 @@ class ClipPosterBackfillWorker(QThread):
         for clip_path in self._clip_paths:
             if self.isInterruptionRequested():
                 break
-            if find_clip_thumbnail(clip_path):
+            # Steam folder thumbs must be emitted — a bare ``continue`` left Skip
+            # cards black forever even when thumbnail.jpg was right there.
+            steam_thumb = find_clip_thumbnail(clip_path)
+            if steam_thumb:
+                self.poster_ready.emit(clip_path, steam_thumb)
                 continue
             cached = clip_poster_cache_path(self._cache_dir, clip_path)
-            if os.path.isfile(cached):
+            if os.path.isfile(cached) and os.path.getsize(cached) > 0:
                 self.poster_ready.emit(clip_path, cached)
                 continue
             thumb = extract_clip_poster_frame(clip_path, self._cache_dir)
