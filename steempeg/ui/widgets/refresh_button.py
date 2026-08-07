@@ -98,5 +98,26 @@ class RefreshButton(QWidget):
         layout.addWidget(self.menu_btn)
         self.apply_density(COMFORT)
 
+    def set_menu_visible(self, visible: bool) -> None:
+        """Show/hide the ▾ half. Prefer keeping it visible — hide stretches main oddly."""
+        self.menu_btn.setVisible(bool(visible))
+        # When ▾ is gone, round the main button on both sides (same idea as Folder +).
+        r = getattr(self, "_density", COMFORT).footer_radius
+        if visible:
+            self.main_btn.setStyleSheet("")
+        else:
+            self.main_btn.setStyleSheet(
+                f"QPushButton#RefreshMain {{"
+                f" border: 2px solid #444444;"
+                f" border-top-right-radius: {r}px;"
+                f" border-bottom-right-radius: {r}px; }}"
+                f"QPushButton#RefreshMain:hover {{ border: 2px solid #6b5a8e; }}"
+                f"QPushButton#RefreshMain:pressed {{ border: 2px solid #b29ae7; }}"
+            )
+
     def apply_density(self, dense: UiDensity) -> None:
+        self._density = dense
         self.setStyleSheet(_refresh_style(dense))
+        # Re-apply radius if menu is currently hidden.
+        if not self.menu_btn.isVisible():
+            self.set_menu_visible(False)
