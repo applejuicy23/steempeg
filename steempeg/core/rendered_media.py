@@ -72,7 +72,41 @@ def is_default_rendered_basename(stem: str, app_id: str | None) -> bool:
 
 
 def companion_meta_path(file_path: str) -> str:
+    """Legacy beside-file sidecar (still read; new writes prefer cache)."""
     return file_path + _COMPANION_SUFFIX
+
+
+def legacy_companion_meta_paths(file_path: str) -> list[str]:
+    """Beside-file companions: ``.steempeg.json`` and bare ``.steempeg``."""
+    return [
+        file_path + _COMPANION_SUFFIX,
+        file_path + ".steempeg",
+    ]
+
+
+def companion_meta_cache_path(cache_dir: str, file_path: str) -> str:
+    """Stable cache path keyed by absolute file path (not mtime/size)."""
+    norm = os.path.normcase(os.path.normpath(os.path.abspath(file_path)))
+    key = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:20]
+    folder = os.path.join(cache_dir, "rendered_meta")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, f"{key}.json")
+
+
+def remove_rendered_companion_meta(file_path: str, cache_dir: str | None = None) -> None:
+    paths: list[str] = []
+    if cache_dir:
+        try:
+            paths.append(companion_meta_cache_path(cache_dir, file_path))
+        except OSError:
+            pass
+    paths.extend(legacy_companion_meta_paths(file_path))
+    for meta_path in paths:
+        try:
+            if os.path.isfile(meta_path):
+                os.remove(meta_path)
+        except OSError:
+            pass
 
 
 def is_sane_media_duration(sec: float | int | None) -> bool:
@@ -220,22 +254,18 @@ def save_rendered_companion_meta(
     health_cured: bool | None = None,
     health_rules_version: int | None = None,
     stream_copy: bool | None = None,
+    cache_dir: str | None = None,
 ) -> None:
-    """Write ``<video>.steempeg.json`` so renamed exports keep their game metadata."""
+    """Write companion meta under ``cache/rendered_meta/`` when ``cache_dir`` is set.
+
+    Legacy beside-file ``*.steempeg.json`` / ``*.steempeg`` are still read; new writes
+    stay out of the export folder when a cache dir is available.
+    """
     try:
         st = os.stat(file_path)
     except OSError:
         return
-    existing: dict = {}
-    direct = companion_meta_path(file_path)
-    if os.path.isfile(direct):
-        try:
-            with open(direct, encoding="utf-8") as handle:
-                data = json.load(handle)
-            if isinstance(data, dict):
-                existing = data
-        except (OSError, json.JSONDecodeError):
-            pass
+    existing = load_rendered_companion_meta(file_path, cache_dir=cache_dir) or {}
 
     payload = dict(existing)
     payload.update({
@@ -245,6 +275,7 @@ def save_rendered_companion_meta(
         "game_icon_path": game_icon_path or "",
         "size": st.st_size,
         "mtime_ns": st.st_mtime_ns,
+        "source_path": os.path.normpath(file_path),
     })
     # Prefer explicit duration; else probe the output file; else source clip estimate.
     if duration_sec is None:
@@ -269,23 +300,46 @@ def save_rendered_companion_meta(
         payload["health_rules_version"] = int(health_rules_version)
     if stream_copy is not None:
         payload["stream_copy"] = bool(stream_copy)
+
+    out_path = (
+        companion_meta_cache_path(cache_dir, file_path)
+        if cache_dir
+        else companion_meta_path(file_path)
+    )
     try:
-        with open(companion_meta_path(file_path), "w", encoding="utf-8") as handle:
+        with open(out_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
     except OSError as exc:
         logging.debug("Could not write rendered companion meta for %s: %s", file_path, exc)
 
 
-def load_rendered_companion_meta(file_path: str) -> dict | None:
-    direct = companion_meta_path(file_path)
-    if os.path.isfile(direct):
+def _read_companion_json(meta_path: str) -> dict | None:
+    try:
+        with open(meta_path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def load_rendered_companion_meta(
+    file_path: str, cache_dir: str | None = None
+) -> dict | None:
+    """Load companion meta: cache first, then legacy beside-file paths."""
+    candidates: list[str] = []
+    if cache_dir:
         try:
-            with open(direct, encoding="utf-8") as handle:
-                data = json.load(handle)
-            if isinstance(data, dict):
-                return data
-        except (OSError, json.JSONDecodeError):
+            candidates.append(companion_meta_cache_path(cache_dir, file_path))
+        except OSError:
             pass
+    candidates.extend(legacy_companion_meta_paths(file_path))
+
+    for meta_path in candidates:
+        if not os.path.isfile(meta_path):
+            continue
+        data = _read_companion_json(meta_path)
+        if data is not None:
+            return data
 
     folder = os.path.dirname(file_path) or "."
     try:
@@ -294,20 +348,16 @@ def load_rendered_companion_meta(file_path: str) -> dict | None:
         return None
     try:
         for name in os.listdir(folder):
-            if not name.endswith(_COMPANION_SUFFIX):
+            if not (name.endswith(_COMPANION_SUFFIX) or name.endswith(".steempeg")):
                 continue
             meta_path = os.path.join(folder, name)
-            try:
-                with open(meta_path, encoding="utf-8") as handle:
-                    data = json.load(handle)
-                if (
-                    isinstance(data, dict)
-                    and data.get("size") == st.st_size
-                    and data.get("mtime_ns") == st.st_mtime_ns
-                ):
-                    return data
-            except (OSError, json.JSONDecodeError):
-                continue
+            data = _read_companion_json(meta_path)
+            if (
+                data is not None
+                and data.get("size") == st.st_size
+                and data.get("mtime_ns") == st.st_mtime_ns
+            ):
+                return data
     except OSError:
         pass
     return None
