@@ -131,6 +131,7 @@ def assess_rendered_health(
     file_path: str,
     *,
     expected_duration_sec: float | None = None,
+    cache_dir: str | None = None,
 ) -> RenderedHealthAssessment:
     """Assess a flat export. Does not apply the cured overlay."""
     if not file_path or not os.path.isfile(file_path):
@@ -175,7 +176,7 @@ def assess_rendered_health(
 
     expected = expected_duration_sec
     if expected is None:
-        meta = load_rendered_companion_meta(file_path) or {}
+        meta = load_rendered_companion_meta(file_path, cache_dir=cache_dir) or {}
         raw = meta.get("expected_duration_sec")
         if is_sane_media_duration(raw):
             expected = float(raw)
@@ -266,11 +267,12 @@ def apply_assessment_to_companion(
     stream_copy: bool | None = None,
     expected_duration_sec: float | None = None,
     extra: dict | None = None,
+    cache_dir: str | None = None,
 ) -> None:
-    """Merge health + playable duration into ``<file>.steempeg.json`` (preserve game fields)."""
+    """Merge health + playable duration into companion meta (preserve game fields)."""
     from steempeg.core.rendered_media import save_rendered_companion_meta
 
-    meta = load_rendered_companion_meta(file_path) or {}
+    meta = load_rendered_companion_meta(file_path, cache_dir=cache_dir) or {}
     if extra:
         meta.update(extra)
 
@@ -295,6 +297,7 @@ def apply_assessment_to_companion(
         "expected_duration_sec": expected_duration_sec
         if expected_duration_sec is not None
         else meta.get("expected_duration_sec"),
+        "cache_dir": cache_dir,
     }
     if stream_copy is not None:
         kwargs["stream_copy"] = bool(stream_copy)
