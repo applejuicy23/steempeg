@@ -553,7 +553,7 @@ DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_QUICK
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
     (SCAN_QUICK, "Quick — folders + cached health"),
     (SCAN_FULL, "Full — folders + ffprobe health"),
-    (SCAN_CACHE, "Skip — open without scanning"),
+    (SCAN_CACHE, "Skip — instant last session"),
 )
 
 
