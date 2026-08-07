@@ -1161,9 +1161,12 @@ class RenderMixin:
                 duration_sec=None,
                 expected_duration_sec=expected_sec,
                 stream_copy=stream_copy,
+                cache_dir=getattr(self, "cache_dir", None),
             )
             assessment = assess_rendered_health(
-                output_file, expected_duration_sec=expected_sec
+                output_file,
+                expected_duration_sec=expected_sec,
+                cache_dir=getattr(self, "cache_dir", None),
             )
             apply_assessment_to_companion(
                 output_file,
@@ -1177,6 +1180,7 @@ class RenderMixin:
                     "clip_path": job.clip_path or "",
                     "game_icon_path": job.game_icon_path or "",
                 },
+                cache_dir=getattr(self, "cache_dir", None),
             )
             if hasattr(self, "_store_rendered_health_cache"):
                 self._store_rendered_health_cache(output_file, assessment)
@@ -1315,13 +1319,24 @@ class RenderMixin:
         if not hasattr(self.ui, "btn_start"):
             return
         pending = self._queue_pending_count()
-        if pending > 0:
-            self.ui.btn_start.setText(f"🚩 Render Queue ({pending})")
+        btn = self.ui.btn_start
+        # Desktop: plain text only (queue icon belongs on portable Queue chip).
+        if not getattr(self, "_portable_shell", False):
+            from PySide6.QtGui import QIcon
+
+            btn.setIcon(QIcon())
+            if pending > 0:
+                btn.setText("Render Queue")
+            else:
+                btn.setText("START RENDER")
         else:
-            self.ui.btn_start.setText("🚩 START RENDER")
+            if pending > 0:
+                btn.setText("🚩 Render Queue")
+            else:
+                btn.setText("🚩 START RENDER")
         # Any label refresh must not leave a pending queue with a dead Start button.
         if pending > 0 and not getattr(self, "_is_rendering", False):
-            self.ui.btn_start.setEnabled(True)
+            btn.setEnabled(True)
         if getattr(self, "_portable_shell", False):
             from steempeg.ui.portable import sync_portable_render_button
 
@@ -3455,6 +3470,7 @@ class RenderMixin:
     def _playback_badge_for_context(self):
         clip_path = self._current_header_clip_path()
         if not clip_path:
+            # No open clip → no Queue plank (desktop sidebar / portable chip cover totals).
             return None, None
 
         if hasattr(self, "get_clip_health_report"):
@@ -3462,6 +3478,11 @@ class RenderMixin:
                 if hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path):
                     job = self._queue_job_for_clip(clip_path)
                     if job:
+                        if job.status == JobStatus.QUEUED:
+                            return (
+                                f"In queue ({job.queue_index})",
+                                STATUS_COLORS[JobStatus.QUEUED],
+                            )
                         return STATUS_HEADER_LABELS[job.status], STATUS_COLORS[job.status]
                 return None, None
 
@@ -3482,7 +3503,7 @@ class RenderMixin:
             return f"In queue ({job.queue_index})", STATUS_COLORS[JobStatus.QUEUED]
 
         # Preview only shows while the Render Queue actually has clips in it.
-        # Portable replaces Preview with the Add to Queue button.
+        # Portable replaces Preview with the Add to Queue / Queue chip.
         if self._queue_is_active():
             if getattr(self, "_portable_shell", False):
                 return None, None
@@ -3495,24 +3516,49 @@ class RenderMixin:
             return
 
         text, color = self._playback_badge_for_context()
+        badge = self.label_playback_badge
         if not text:
-            self.label_playback_badge.hide()
+            badge.hide()
+            try:
+                from PySide6.QtGui import QIcon
+
+                badge.setIcon(QIcon())
+            except Exception:
+                pass
             if hasattr(self, "update_clip_health_button"):
                 self.update_clip_health_button()
             self._sync_portable_queue_header_controls()
             return
 
-        self.label_playback_badge.setText(text)
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+
+        from steempeg.ui.icon_assets import queue_chip_icon
+
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
-        self.label_playback_badge.setStyleSheet(
+        is_queue = text.strip().lower().startswith("in queue")
+        if is_queue:
+            # Match desktop health chip height (was squashed at 16px + 2px pad).
+            badge.setIcon(queue_chip_icon(18, color=color))
+            badge.setIconSize(QSize(18, 18))
+            badge.setText(f" {text}")
+        else:
+            badge.setIcon(QIcon())
+            badge.setText(text)
+        badge.setMinimumHeight(30)
+        badge.setStyleSheet(
+            f"QPushButton {{"
             f"color: {color};"
             f"background-color: rgba({r}, {g}, {b}, 0.18);"
             f"border: 2px solid {color};"
-            "border-radius: 8px; padding: 4px 10px;"
-            "font-weight: bold; font-size: 13px;"
-            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
+            f"border-radius: 8px;"
+            f"padding: 4px 12px 4px 10px;"
+            f"font-weight: bold;"
+            f"font-size: 13px;"
+            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
+            f"}}"
         )
-        self.label_playback_badge.show()
+        badge.show()
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
         self._sync_portable_queue_header_controls()
@@ -3526,7 +3572,7 @@ class RenderMixin:
             sync_portable_queue_header(self)
         except Exception:
             pass
-        # Keep theatre Render Queue (N) label in sync with pending count.
+        # Keep portable theatre CTA label in sync (count stays on Queue chip).
         try:
             from steempeg.ui.portable.chrome import sync_portable_render_button
 
