@@ -311,6 +311,77 @@ def queue_chip_icon(size: int = 16, *, color: str = "#ffcc00") -> QIcon:
     return tinted_icon("queue.png", color, size)
 
 
+def _glyph_pixmap_from_bw(name: str, size: int = 16, *, color: str = "#ffffff") -> QPixmap:
+    """Black-bg white line art → tinted glyph with alpha (black becomes transparent)."""
+    src = QPixmap(get_resource_path(name))
+    if src.isNull():
+        return QPixmap()
+    tint = QColor(color)
+    img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    w, h = img.width(), img.height()
+    for y in range(h):
+        for x in range(w):
+            c = img.pixelColor(x, y)
+            # Luminance as alpha so anti-aliased edges stay soft.
+            alpha = max(c.red(), c.green(), c.blue())
+            img.setPixelColor(
+                x,
+                y,
+                QColor(tint.red(), tint.green(), tint.blue(), alpha),
+            )
+    pix = QPixmap.fromImage(img)
+    from steempeg.ui.icon_utils import square_fit_pixmap
+
+    return square_fit_pixmap(pix, size, dpr=1.0)
+
+
+def _white_glyph_pixmap(name: str, size: int = 16) -> QPixmap:
+    return _glyph_pixmap_from_bw(name, size, color="#ffffff")
+
+
+def _dash_button_glyph_icon(name: str, size: int = 16) -> QIcon:
+    """Enabled = white; disabled = #555555 to match dash ``QPushButton:disabled`` text."""
+    normal = _glyph_pixmap_from_bw(name, size, color="#ffffff")
+    disabled = _glyph_pixmap_from_bw(name, size, color="#555555")
+    if normal.isNull():
+        return QIcon()
+    icon = QIcon()
+    icon.addPixmap(normal, QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(normal, QIcon.Mode.Active, QIcon.State.Off)
+    icon.addPixmap(normal, QIcon.Mode.Selected, QIcon.State.Off)
+    icon.addPixmap(
+        disabled if not disabled.isNull() else normal,
+        QIcon.Mode.Disabled,
+        QIcon.State.Off,
+    )
+    return icon
+
+
+def start_render_icon(size: int = 16) -> QIcon:
+    """Desktop Start Render / Render Queue dash button glyph."""
+    return _dash_button_glyph_icon("startrender.png", size)
+
+
+def pause_render_icon(size: int = 16) -> QIcon:
+    """Desktop Pause dash button glyph."""
+    return _dash_button_glyph_icon("pauserender.png", size)
+
+
+def cancel_render_icon(size: int = 16) -> QIcon:
+    """Desktop Cancel dash button glyph."""
+    return _dash_button_glyph_icon("cancelrender.png", size)
+
+
+def logs_info_icon(size: int = 16) -> QIcon:
+    """Desktop Logs dash button glyph."""
+    return _dash_button_glyph_icon("logsinfo.png", size)
+
+
+def preview_badge_icon(size: int = 16, *, color: str = "#ffffff") -> QIcon:
+    """Desktop player-header Preview chip glyph (``play2.png``)."""
+    return _icon_from_pixmap(_glyph_pixmap_from_bw("play2.png", size, color=color))
+
+
 def preview_settings_icon(size: int = 16) -> QIcon:
     """settings.png for the player header preview-quality chip."""
     return load_icon("settings.png", size)
