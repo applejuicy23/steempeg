@@ -20,11 +20,15 @@ class SteempegCheckBox(QCheckBox):
         *,
         accent_label: bool = True,
         font_size: int = 11,
+        label_bold: bool = False,
+        label_color: str | None = None,
     ):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._accent_label = accent_label
         self._font_size = font_size
+        self._label_bold = bool(label_bold)
+        self._label_color_override = str(label_color).strip() if label_color else ""
         self._progress = 1.0 if self.isChecked() else 0.0
 
         self._anim = QPropertyAnimation(self, b"checkProgress", self)
@@ -38,9 +42,11 @@ class SteempegCheckBox(QCheckBox):
         )
 
     def _label_color(self) -> QColor:
-        if self.isEnabled():
-            return QColor("#b29ae7" if self._accent_label else "#cccccc")
-        return QColor("#666666")
+        if not self.isEnabled():
+            return QColor("#666666")
+        if self._label_color_override:
+            return QColor(self._label_color_override)
+        return QColor("#b29ae7" if self._accent_label else "#cccccc")
 
     def _indicator_rect(self) -> QRectF:
         y = (self.height() - self._IND) / 2.0
@@ -132,7 +138,9 @@ class SteempegCheckBox(QCheckBox):
 
         font = QFont("Segoe UI")
         font.setPixelSize(self._font_size)
-        if self._accent_label:
+        if self._label_bold:
+            font.setWeight(QFont.Weight.Bold)
+        elif self._accent_label:
             font.setWeight(QFont.Weight.DemiBold)
         p.setFont(font)
         p.setPen(self._label_color())
