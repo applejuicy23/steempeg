@@ -62,62 +62,141 @@ def info_icon(size: int = 14) -> QIcon:
     return load_icon("info.png", size)
 
 
+# Opaque-crop + tint caches. info.png / update.png are ~400–860px masters;
+# Settings alone used to re-scan them per hint (~20×) on the UI thread.
+_OPAQUE_RECT_CACHE: dict[tuple[int, int], tuple[int, int, int, int]] = {}
+_CROPPED_SQUARE_CACHE: dict[str, QPixmap] = {}
+_TINTED_CROP_CACHE: dict[tuple[str, str, int], QPixmap] = {}
+
+
 def _opaque_content_rect(pix: QPixmap, *, alpha_min: int = 24) -> tuple[int, int, int, int]:
-    """Tight bbox of non-transparent pixels (x, y, w, h), or full pixmap if empty."""
+    """Tight bbox of non-transparent pixels (x, y, w, h), or full pixmap if empty.
+
+    Scans raw ARGB bytes (not per-pixel QColor) and caches by pixmap cacheKey.
+    """
+    key = (int(pix.cacheKey()), int(alpha_min))
+    hit = _OPAQUE_RECT_CACHE.get(key)
+    if hit is not None:
+        return hit
+
     img = pix.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return 0, 0, max(w, 0), max(h, 0)
+
     min_x, min_y, max_x, max_y = w, h, -1, -1
-    for y in range(h):
-        for x in range(w):
-            if img.pixelColor(x, y).alpha() >= alpha_min:
-                if x < min_x:
-                    min_x = x
-                if y < min_y:
-                    min_y = y
-                if x > max_x:
-                    max_x = x
-                if y > max_y:
-                    max_y = y
+    bpl = img.bytesPerLine()
+    # ARGB32 little-endian layout is B,G,R,A — alpha at +3.
+    try:
+        mv = memoryview(img.constBits()).cast("B")
+        for y in range(h):
+            row = y * bpl
+            for x in range(w):
+                if mv[row + x * 4 + 3] >= alpha_min:
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+    except (TypeError, ValueError, BufferError):
+        # Fallback if constBits is not a buffer on this Qt build.
+        for y in range(h):
+            for x in range(w):
+                if img.pixelColor(x, y).alpha() >= alpha_min:
+                    if x < min_x:
+                        min_x = x
+                    if y < min_y:
+                        min_y = y
+                    if x > max_x:
+                        max_x = x
+                    if y > max_y:
+                        max_y = y
+
     if max_x < min_x or max_y < min_y:
-        return 0, 0, w, h
-    return min_x, min_y, max_x - min_x + 1, max_y - min_y + 1
+        result = (0, 0, w, h)
+    else:
+        result = (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
+    _OPAQUE_RECT_CACHE[key] = result
+    return result
 
 
-def title_bar_info_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
-    """Tinted info.png for the title-bar About (i), geometrically centered in ``size``.
+def _cropped_opaque_square(asset_name: str) -> QPixmap:
+    """Load ``asset_name``, crop to opaque glyph square once, cache forever."""
+    hit = _CROPPED_SQUARE_CACHE.get(asset_name)
+    if hit is not None and not hit.isNull():
+        return hit
 
-    Crops to the opaque ring first so asymmetric PNG padding cannot skew the glyph
-    inside the circular hover hitbox.
-    """
-    raw = QPixmap(get_resource_path("info.png"))
+    raw = QPixmap(get_resource_path(asset_name))
     if raw.isNull():
-        return QPixmap()
+        _CROPPED_SQUARE_CACHE[asset_name] = raw
+        return raw
+
     x, y, bw, bh = _opaque_content_rect(raw)
-    side = max(bw, bh)
-    # Square crop around the opaque content center.
+    side = max(bw, bh, 1)
     cx = x + bw / 2.0
     cy = y + bh / 2.0
     left = int(round(cx - side / 2.0))
     top = int(round(cy - side / 2.0))
-    cropped = raw.copy(max(left, 0), max(top, 0), side, side)
-    if isinstance(color, str):
-        color = QColor(color)
+    src_x, src_y = max(left, 0), max(top, 0)
+    src_w = min(side, raw.width() - src_x)
+    src_h = min(side, raw.height() - src_y)
+    cropped = QPixmap(side, side)
+    cropped.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(cropped)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    painter.drawPixmap(src_x - left, src_y - top, raw.copy(src_x, src_y, src_w, src_h))
+    painter.end()
+    _CROPPED_SQUARE_CACHE[asset_name] = cropped
+    return cropped
+
+
+def _tinted_cropped_asset(asset_name: str, color: str | QColor, size: int) -> QPixmap:
+    """Scale + SourceIn-tint a once-cropped opaque square (cached per color/size)."""
+    if isinstance(color, QColor):
+        color_key = color.name(QColor.NameFormat.HexArgb)
+        fill = color
+    else:
+        color_key = str(color)
+        fill = QColor(color)
+    cache_key = (asset_name, color_key, int(size))
+    hit = _TINTED_CROP_CACHE.get(cache_key)
+    if hit is not None and not hit.isNull():
+        return QPixmap(hit)
+
+    cropped = _cropped_opaque_square(asset_name)
+    if cropped.isNull():
+        return QPixmap()
+    edge = max(1, int(size))
     scaled = cropped.scaled(
-        size,
-        size,
+        edge,
+        edge,
         Qt.AspectRatioMode.IgnoreAspectRatio,
         Qt.TransformationMode.SmoothTransformation,
     )
-    out = QPixmap(size, size)
+    out = QPixmap(edge, edge)
     out.fill(Qt.GlobalColor.transparent)
     painter = QPainter(out)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
     painter.drawPixmap(0, 0, scaled)
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(out.rect(), color)
+    painter.fillRect(out.rect(), fill)
     painter.end()
-    return out
+    _TINTED_CROP_CACHE[cache_key] = out
+    return QPixmap(out)
+
+
+def title_bar_info_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted info.png for the title-bar About (i), geometrically centered in ``size``.
+
+    Crops to the opaque ring first so asymmetric PNG padding cannot skew the glyph
+    inside the circular hover hitbox. Crop + tint are cached — Settings hints
+    used to re-scan the 858px master on every ``_hint`` call.
+    """
+    return _tinted_cropped_asset("info.png", color, size)
 
 
 def title_bar_info_icons(size: int = 16) -> tuple[QIcon, QIcon]:
@@ -146,42 +225,7 @@ def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
     Crops to the opaque glyph and recenters in a square so rotation orbits the
     visual center (source asset is non-square 387×396 with uneven padding).
     """
-    raw = QPixmap(get_resource_path("update.png"))
-    if raw.isNull():
-        return QPixmap()
-    x, y, bw, bh = _opaque_content_rect(raw)
-    side = max(bw, bh, 1)
-    cx = x + bw / 2.0
-    cy = y + bh / 2.0
-    left = int(round(cx - side / 2.0))
-    top = int(round(cy - side / 2.0))
-    src_x, src_y = max(left, 0), max(top, 0)
-    src_w = min(side, raw.width() - src_x)
-    src_h = min(side, raw.height() - src_y)
-    cropped = QPixmap(side, side)
-    cropped.fill(Qt.GlobalColor.transparent)
-    crop_p = QPainter(cropped)
-    crop_p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    crop_p.drawPixmap(src_x - left, src_y - top, raw.copy(src_x, src_y, src_w, src_h))
-    crop_p.end()
-    if isinstance(color, str):
-        color = QColor(color)
-    scaled = cropped.scaled(
-        size,
-        size,
-        Qt.AspectRatioMode.IgnoreAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-    out = QPixmap(size, size)
-    out.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(out)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
-    painter.drawPixmap(0, 0, scaled)
-    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(out.rect(), color)
-    painter.end()
-    return out
+    return _tinted_cropped_asset("update.png", color, size)
 
 
 def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:
