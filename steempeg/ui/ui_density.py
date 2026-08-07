@@ -216,11 +216,13 @@ COMPACT = UiDensity(
 TAB_LABELS_COMFORT = {
     "clips": "📁 Clips Manager",
     "rendered": "🎬 Rendered videos",
+    "screenshots": "📷 Screenshots",
     "queue": "🎬 Render Queue",
 }
 TAB_LABELS_COMPACT = {
     "clips": "📁 Clips",
     "rendered": "🎬 Rendered",
+    "screenshots": "📷 Shots",
     "queue": "🎬 Queue",
 }
 
@@ -414,6 +416,14 @@ def folder_button_label(folder_count: int, dense: UiDensity) -> str:
     if folder_count > 1:
         return f"{base} ({folder_count})"
     return base
+
+
+def records_folder_button_label(dense: UiDensity) -> str:
+    return "📂 Records" if dense.compact else "📂 Records folder…"
+
+
+def screenshots_folder_button_label(dense: UiDensity) -> str:
+    return "📂 Shots folder" if dense.compact else "📂 Screenshots folder…"
 
 
 def updates_button_label(dense: UiDensity) -> str:
