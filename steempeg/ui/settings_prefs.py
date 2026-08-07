@@ -773,6 +773,18 @@ def load_remember_library_tab(settings: dict | None) -> bool:
     return bool((settings or {}).get(KEY_REMEMBER_LIBRARY_TAB))
 
 
+# Experimental: skip the grey #1e1e1e flash cover on immersive fullscreen
+# enter/exit (same as STEEMPEG_FS_COVER=0). Default keeps the cover.
+KEY_TEST_NEW_FULLSCREEN = "test_new_fullscreen"
+DEFAULT_TEST_NEW_FULLSCREEN = False
+
+
+def load_test_new_fullscreen(settings: dict | None) -> bool:
+    if KEY_TEST_NEW_FULLSCREEN not in (settings or {}):
+        return DEFAULT_TEST_NEW_FULLSCREEN
+    return bool((settings or {}).get(KEY_TEST_NEW_FULLSCREEN))
+
+
 def normalize_screenshots_folder(value: object | None) -> str:
     return str(value or "").strip().replace("\\", "/")
 
@@ -808,12 +820,14 @@ _runtime_ffmpeg_loglevel = "error"
 _runtime_mpv_loglevel = DEFAULT_MPV_LOG_LEVEL
 _runtime_hwdec = DEFAULT_HWDEC_PREVIEW
 _runtime_marker_trim_ms = DEFAULT_MARKER_TRIM_OFFSET_MS
+_runtime_test_new_fullscreen = DEFAULT_TEST_NEW_FULLSCREEN
 
 
 def configure_runtime_prefs(settings: dict | None = None) -> None:
     """Apply log / hwdec / marker-trim / date prefs for the live process."""
     global _runtime_ffmpeg_loglevel, _runtime_mpv_loglevel
     global _runtime_hwdec, _runtime_marker_trim_ms
+    global _runtime_test_new_fullscreen
     settings = settings or {}
     apply_app_log_level(load_app_log_level(settings))
     _runtime_ffmpeg_loglevel = ffmpeg_cli_loglevel(settings)
@@ -826,12 +840,26 @@ def configure_runtime_prefs(settings: dict | None = None) -> None:
     _runtime_mpv_loglevel = load_mpv_log_level(settings)
     _runtime_hwdec = load_hwdec_preview(settings)
     _runtime_marker_trim_ms = load_marker_trim_offset_ms(settings)
+    _runtime_test_new_fullscreen = load_test_new_fullscreen(settings)
     try:
         from steempeg.infra.locale_time import configure_display_time
 
         configure_display_time(settings)
     except Exception:
         logging.exception("configure_display_time failed")
+
+
+def immersive_transition_cover_enabled() -> bool:
+    """Whether the grey fullscreen enter/exit cover should show.
+
+    Env STEEMPEG_FS_COVER overrides the Settings toggle (0=off, 1=on).
+    """
+    raw = (os.environ.get("STEEMPEG_FS_COVER") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return not bool(_runtime_test_new_fullscreen)
 
 
 def current_ffmpeg_loglevel() -> str:
