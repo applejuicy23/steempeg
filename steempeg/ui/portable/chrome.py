@@ -562,7 +562,7 @@ def sync_portable_queue_header(app) -> None:
         st = job.status
         if st == JobStatus.QUEUED:
             show_queue_chip = True
-            queue_chip_text = f"In queue ({job.queue_index})"
+            queue_chip_text = f"In queue ({pending if pending > 0 else job.queue_index})"
         elif st == JobStatus.RENDERING:
             show_queue_chip = True
             queue_chip_text = "Rendering"
