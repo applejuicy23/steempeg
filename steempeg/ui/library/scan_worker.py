@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from PySide6.QtCore import QThread, Signal
 
@@ -26,6 +26,8 @@ class LibraryScanWorker(QThread):
         game_names_cache: Dict[str, str],
         *,
         fast: bool,
+        from_cache: bool = False,
+        known_paths: Set[str] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -34,6 +36,8 @@ class LibraryScanWorker(QThread):
         self._health_cache = copy.deepcopy(health_cache)
         self._game_names_cache = dict(game_names_cache)
         self._fast = fast
+        self._from_cache = from_cache
+        self._known_paths = set(known_paths) if known_paths is not None else None
         self._stats: ScanFinishedStats | None = None
 
     @property
@@ -61,6 +65,8 @@ class LibraryScanWorker(QThread):
                 on_discovered=on_discovered,
                 on_clip=on_clip,
                 should_cancel=self.isInterruptionRequested,
+                from_cache=self._from_cache,
+                known_paths=self._known_paths,
             )
             self.finished_scan.emit(self._stats)
         except Exception as exc:
