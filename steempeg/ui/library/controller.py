@@ -28,15 +28,25 @@ from PySide6.QtWidgets import (
 from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
 from steempeg.core.clip_identity import is_nested_same_session
-from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
+from steempeg.core.clip_thumbnails import (
+    clip_poster_cache_path_nostat,
+    resolve_clip_thumbnail,
+)
 from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
 from steempeg.ui.library.scan_worker import LibraryScanWorker
 from steempeg.ui.library.refresh_workers import (
+    ClipDurationBackfillWorker,
     ClipHealthRecheckWorker,
     SteamIconsRefreshWorker,
     SteamNamesRefreshWorker,
 )
 from steempeg.library.scan import ScannedClip
+from steempeg.library.clips_library_cache import (
+    clear_clips_library_cache,
+    clips_from_library_cache,
+    save_clips_library_cache,
+    seed_clips_from_health_cache,
+)
 from steempeg.core.dash import discovery, health, mpd
 from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.core.steam_paths import (
@@ -333,7 +343,9 @@ class LibraryMixin:
                     duration_sec=entry.get("duration_sec"),
                 )
 
-            meta = load_rendered_companion_meta(file_path) or {}
+            meta = load_rendered_companion_meta(
+                file_path, cache_dir=getattr(self, "cache_dir", None)
+            ) or {}
             if (
                 meta.get("mtime_ns") == getattr(st, "st_mtime_ns", None)
                 and meta.get("size") == size
@@ -361,11 +373,17 @@ class LibraryMixin:
                 return assessment
 
         expected = None
-        meta = load_rendered_companion_meta(file_path) or {}
+        meta = load_rendered_companion_meta(
+            file_path, cache_dir=getattr(self, "cache_dir", None)
+        ) or {}
         raw = meta.get("expected_duration_sec")
         if is_sane_media_duration(raw):
             expected = float(raw)
-        assessment = assess_rendered_health(file_path, expected_duration_sec=expected)
+        assessment = assess_rendered_health(
+            file_path,
+            expected_duration_sec=expected,
+            cache_dir=getattr(self, "cache_dir", None),
+        )
         self._store_rendered_health_cache(file_path, assessment)
         return assessment
 
@@ -377,8 +395,29 @@ class LibraryMixin:
         from steempeg.core.rendered_media import load_rendered_companion_meta
 
         assessment = self._resolve_rendered_health(file_path)
-        meta = load_rendered_companion_meta(file_path)
+        meta = load_rendered_companion_meta(
+            file_path, cache_dir=getattr(self, "cache_dir", None)
+        )
         return display_report_from_companion(meta, assessment.report)
+
+    def _active_rendered_preview_path(self) -> str | None:
+        """Flat export currently in the player (mp4/mkv/…), if any.
+
+        Prefer this over DASH folder health — panel mode alone is not enough
+        (tab switch / queue open can leave an export playing under Clips chrome).
+        """
+        from steempeg.ui.library.rendered_library import RENDERED_ALL_EXTS
+
+        for candidate in (
+            getattr(self, "_rendered_media_path", None),
+            getattr(self, "_preview_clip_path", None),
+        ):
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            ext = os.path.splitext(candidate)[1].lower()
+            if ext in RENDERED_ALL_EXTS:
+                return candidate
+        return None
 
     def _resolve_clip_health(
         self, full_path: str, *, fast: bool, force: bool = False
@@ -427,36 +466,74 @@ class LibraryMixin:
         return ids
 
     def setup_refresh_menu(self):
-        """Attach the Refresh ▾ dropdown (Steam icons, health re-check, …)."""
+        """Attach the Refresh ▾ dropdown (Refresh all + Clips-only Steam extras)."""
         btn = getattr(self, "btn_refresh", None)
         if btn is None or not hasattr(btn, "menu_btn"):
             return
-        menu = QMenu(self.ui)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
-
-        action_icons = menu.addAction("🖼️  Refresh game icons from Steam…")
-        action_names = menu.addAction("🏷️  Refresh game names from Steam…")
-        menu.addSeparator()
-        action_health = menu.addAction("🩺  Re-check clip health (ffprobe)…")
-
-        action_icons.setToolTip(
-            "Re-downloads icons for games in your library. Uses the Steam CDN — run only when icons look wrong."
-        )
-        action_names.setToolTip(
-            "Re-fetches display names from the Steam store API. Uses network — run only when a title is wrong."
-        )
-        action_health.setToolTip(
-            "Runs a full playback health pass (may call ffprobe per clip). Does not rescan folders."
-        )
-
-        action_icons.triggered.connect(self.refresh_steam_icons)
-        action_names.triggered.connect(self.refresh_steam_names)
-        action_health.triggered.connect(self.recheck_clip_health)
+        # Avoid stacking handlers if setup runs more than once.
+        try:
+            btn.menu_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
 
         def _show_menu():
+            menu = QMenu(self.ui)
+            menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+            mode = getattr(self, "_library_panel_mode", "clips")
+
+            action_all = menu.addAction("🔄  Refresh all")
+            action_all.setToolTip(
+                "Rescan Clips Manager, Rendered videos, and Screenshots."
+            )
+            action_all.triggered.connect(self.refresh_all_libraries)
+
+            if mode == "clips":
+                menu.addSeparator()
+                action_icons = menu.addAction("🖼️  Refresh game icons from Steam…")
+                action_names = menu.addAction("🏷️  Refresh game names from Steam…")
+                menu.addSeparator()
+                action_health = menu.addAction("🩺  Re-check clip health (ffprobe)…")
+
+                action_icons.setToolTip(
+                    "Re-downloads icons for games in your library. Uses the Steam CDN — "
+                    "run only when icons look wrong."
+                )
+                action_names.setToolTip(
+                    "Re-fetches display names from the Steam store API. Uses network — "
+                    "run only when a title is wrong."
+                )
+                action_health.setToolTip(
+                    "Runs a full playback health pass (may call ffprobe per clip). "
+                    "Does not rescan folders."
+                )
+                action_icons.triggered.connect(self.refresh_steam_icons)
+                action_names.triggered.connect(self.refresh_steam_names)
+                action_health.triggered.connect(self.recheck_clip_health)
+            elif mode == "rendered":
+                menu.addSeparator()
+                action_rh = menu.addAction("🩺  Re-check rendered health…")
+                action_rh.setToolTip(
+                    "Re-probe duration metadata for files in the Rendered videos list "
+                    "(not a full A/V corruption scan)."
+                )
+                action_rh.triggered.connect(self.recheck_rendered_health)
+
             menu.exec(btn.menu_btn.mapToGlobal(QPoint(0, btn.menu_btn.height())))
 
         btn.menu_btn.clicked.connect(_show_menu)
+
+    def refresh_all_libraries(self) -> None:
+        """Rescan every library panel (Clips + Rendered + Screenshots)."""
+        if hasattr(self, "set_status"):
+            self.set_status("Refreshing all libraries…")
+        # Clips — always (even if another tab is active).
+        from steempeg.ui.library.controller import LibraryMixin
+
+        LibraryMixin.refresh_library(self)
+        if hasattr(self, "refresh_rendered_library"):
+            self.refresh_rendered_library()
+        if hasattr(self, "refresh_screenshots_library"):
+            self.refresh_screenshots_library(force=True)
 
     def _refresh_menu_busy(self) -> bool:
         for attr in (
@@ -601,6 +678,69 @@ class LibraryMixin:
         worker.failed.connect(self._on_refresh_worker_failed)
         worker.start()
 
+    def recheck_rendered_health(self) -> None:
+        """Force-reprobe duration health for every file in the Rendered videos list."""
+        if not hasattr(self, "table_rendered"):
+            if hasattr(self, "_ensure_rendered_widgets"):
+                self._ensure_rendered_widgets()
+        table = getattr(self, "table_rendered", None)
+        if table is None:
+            return
+        if self._refresh_menu_busy():
+            if hasattr(self, "set_status"):
+                self.set_status("A library refresh job is already running…")
+            return
+
+        paths: list[str] = []
+        for row in range(table.rowCount()):
+            cell = table.item(row, 0)
+            if not cell:
+                continue
+            path = cell.data(Qt.ItemDataRole.UserRole)
+            if path and os.path.isfile(path):
+                paths.append(path)
+        if not paths:
+            if hasattr(self, "set_status"):
+                self.set_status("No rendered files to check.")
+            return
+
+        if hasattr(self, "set_status"):
+            self.set_status(f"Re-checking rendered health (0/{len(paths)})…")
+
+        healthy = degraded = dead = cured = 0
+        for i, path in enumerate(paths, start=1):
+            assessment = self._resolve_rendered_health(path, force=True)
+            level = assessment.report.level
+            if level == health.ClipHealth.HEALTHY:
+                healthy += 1
+            elif level == health.ClipHealth.DEGRADED:
+                degraded += 1
+            elif level == health.ClipHealth.CURED:
+                cured += 1
+            else:
+                dead += 1
+            if hasattr(self, "set_status") and (i == len(paths) or i % 5 == 0):
+                self.set_status(f"Re-checking rendered health ({i}/{len(paths)})…")
+                QApplication.processEvents()
+
+        if hasattr(self, "update_clip_health_button"):
+            self.update_clip_health_button()
+        if hasattr(self, "set_status"):
+            self.set_status(
+                f"Rendered health: {healthy} healthy · {degraded} issues · "
+                f"{cured} cured · {dead} dead"
+            )
+        steempeg_information(
+            self.ui,
+            "Rendered health",
+            f"Checked {len(paths)} file(s).\n\n"
+            f"Healthy: {healthy}\n"
+            f"Issues: {degraded}\n"
+            f"Cured: {cured}\n"
+            f"Dead: {dead}\n\n"
+            "This checks duration metadata only — not mid-file A/V corruption.",
+        )
+
     def _on_health_recheck_progress(self, done: int, total: int) -> None:
         if hasattr(self, "set_status"):
             self.set_status(f"Re-checking clip health ({done}/{total})…")
@@ -667,12 +807,11 @@ class LibraryMixin:
         )
     def _stop_library_scan(self):
         worker = getattr(self, "_library_scan_worker", None)
-        if worker is None:
-            return
-        if worker.isRunning():
-            worker.requestInterruption()
-            worker.wait(5000)
-        self._library_scan_worker = None
+        if worker is not None:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.wait(5000)
+            self._library_scan_worker = None
 
     def _stop_clip_poster_backfill(self):
         worker = getattr(self, "_clip_poster_worker", None)
@@ -683,8 +822,12 @@ class LibraryMixin:
             worker.wait(3000)
         self._clip_poster_worker = None
 
-    def _schedule_clip_poster_backfill(self):
-        """Generate ffmpeg posters for clips with no thumbnail.jpg on disk."""
+    def _schedule_clip_poster_backfill(self, *, skip_ui_probe: bool = False):
+        """Generate ffmpeg posters for clips with no thumbnail.jpg on disk.
+
+        ``skip_ui_probe`` — Skip startup: don't ``isdir``/resolve 250+ library
+        paths on the GUI thread; hand every row to the worker and let it decide.
+        """
         if not hasattr(self, "cache_dir") or not hasattr(self.ui, "table_clips"):
             return
 
@@ -694,7 +837,12 @@ class LibraryMixin:
             if not item:
                 continue
             clip_path = item.data(Qt.UserRole)
-            if not clip_path or not os.path.isdir(clip_path):
+            if not clip_path:
+                continue
+            if skip_ui_probe:
+                missing.append(clip_path)
+                continue
+            if not os.path.isdir(clip_path):
                 continue
             if resolve_clip_thumbnail(clip_path, self.cache_dir, allow_generate=False):
                 continue
@@ -978,15 +1126,10 @@ class LibraryMixin:
         if not hasattr(self, "btn_clip_health"):
             return
 
-        # Rendered exports: show flat-file health for the active preview file.
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
-            file_path = getattr(self, "_rendered_media_path", None) or getattr(
-                self, "_preview_clip_path", None
-            )
-            if not file_path or not os.path.isfile(file_path):
-                self.btn_clip_health.hide()
-                return
-            report = self.get_rendered_display_health_report(file_path)
+        # Flat exports (Rendered shelf / Open in Steempeg) — never DASH folder health.
+        rendered_path = self._active_rendered_preview_path()
+        if rendered_path:
+            report = self.get_rendered_display_health_report(rendered_path)
             self._apply_clip_health_button_style(report)
             return
 
@@ -998,7 +1141,8 @@ class LibraryMixin:
             if item:
                 clip_path = item.data(Qt.UserRole)
 
-        if not clip_path or (clip_path and os.path.isfile(clip_path)):
+        # Files are not Steam DASH clips — hide rather than assess as empty folders.
+        if not clip_path or os.path.isfile(clip_path):
             self.btn_clip_health.hide()
             return
 
@@ -1028,12 +1172,9 @@ class LibraryMixin:
         self.btn_clip_health.show()
 
     def show_clip_health_menu(self):
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
-            file_path = getattr(self, "_rendered_media_path", None) or getattr(
-                self, "_preview_clip_path", None
-            )
-            if file_path and os.path.isfile(file_path):
-                self._show_rendered_health_menu(file_path)
+        rendered_path = self._active_rendered_preview_path()
+        if rendered_path:
+            self._show_rendered_health_menu(rendered_path)
             return
 
         clip_path = None
@@ -1043,7 +1184,7 @@ class LibraryMixin:
             item = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0)
             if item:
                 clip_path = item.data(Qt.UserRole)
-        if not clip_path:
+        if not clip_path or os.path.isfile(clip_path):
             return
 
         display = self.get_clip_display_health_report(clip_path)
@@ -1190,7 +1331,12 @@ class LibraryMixin:
                 "Could not read a usable stream duration for this file.",
             )
             return
-        apply_assessment_to_companion(file_path, assessment, cured=True)
+        apply_assessment_to_companion(
+            file_path,
+            assessment,
+            cured=True,
+            cache_dir=getattr(self, "cache_dir", None),
+        )
         self._store_rendered_health_cache(file_path, assessment)
         self._refresh_rendered_playback_duration(file_path, float(playable))
         if hasattr(self, "update_clip_health_button"):
@@ -1233,7 +1379,12 @@ class LibraryMixin:
             return
 
         assessment = self._resolve_rendered_health(file_path, force=True)
-        apply_assessment_to_companion(file_path, assessment, cured=True)
+        apply_assessment_to_companion(
+            file_path,
+            assessment,
+            cured=True,
+            cache_dir=getattr(self, "cache_dir", None),
+        )
         self._store_rendered_health_cache(file_path, assessment)
         playable = assessment.duration_stream_sec or assessment.duration_sec
         if is_sane_media_duration(playable):
@@ -2059,6 +2210,11 @@ class LibraryMixin:
             self.save_user_settings("last_clips_folder", self.clips_folders[0])
 
     def _update_folder_picker_label(self):
+        # Tab-aware footer owns the label when Rendered / Screenshots is active.
+        if getattr(self, "_library_panel_mode", "clips") != "clips":
+            if hasattr(self, "_sync_library_footer_for_mode"):
+                self._sync_library_footer_for_mode()
+            return
         picker = getattr(self, "folder_picker", None)
         if picker is None:
             return
@@ -2217,6 +2373,8 @@ class LibraryMixin:
         self.clips_folder = ""
         self.save_user_settings("user_cleared_library", True)
         self._save_clips_folders()
+        self._library_clip_rows = []
+        clear_clips_library_cache(getattr(self, "cache_dir", None))
         self._update_folder_picker_label()
         self.scan_clips()
 
@@ -2564,6 +2722,12 @@ class LibraryMixin:
 
     def _insert_scanned_clip_row(self, row: ScannedClip) -> int:
         """Append one scanned clip to the hidden table (+ grid card). Returns row index."""
+        rows = getattr(self, "_library_clip_rows", None)
+        if rows is None:
+            rows = []
+            self._library_clip_rows = rows
+        rows.append(row)
+
         table = self.ui.table_clips
         row_position = table.rowCount()
         table.insertRow(row_position)
@@ -2604,6 +2768,24 @@ class LibraryMixin:
         self._append_grid_card_for_row(row_position)
         return row_position
 
+    def _clip_card_footer_text(self, title: str, date_raw: str, duration: str) -> str:
+        """Grid footer: ``date\\ntime • duration`` (omit empty / placeholder duration)."""
+        if title.strip().lower() == "unknown":
+            return "FG"
+        lines = (date_raw or "").split("\n", 1)
+        date_line = (lines[0] if lines else "").strip() or "Today"
+        time_line = lines[1].strip() if len(lines) > 1 else ""
+        dur = (duration or "").strip()
+        if dur in ("--:--", "—", "--"):
+            dur = ""
+        if time_line and dur:
+            return f"{date_line}\n{time_line} • {dur}"
+        if time_line:
+            return f"{date_line}\n{time_line}"
+        if dur:
+            return f"{date_line} • {dur}"
+        return date_line
+
     def _append_grid_card_for_row(self, row: int) -> None:
         """Add one grid card for ``row`` without rebuilding the whole grid."""
         if not hasattr(self, "grid_clips") or not hasattr(self.ui, "table_clips"):
@@ -2616,9 +2798,11 @@ class LibraryMixin:
             return
 
         title = title_item.text() if title_item else "Unknown"
-        date_str = date_item.text() if date_item else "Today"
+        date_raw = date_item.text() if date_item else "Today"
         time_item = table.item(row, 3)
-        time_str = time_item.text() if time_item else "00:00"
+        dur_str = time_item.text().strip() if time_item else ""
+        footer_right = self._clip_card_footer_text(title.strip(), date_raw, dur_str)
+
         clip_path = title_item.data(Qt.UserRole)
         health_color = None
         if title_item.data(_CLIP_CURED_ROLE):
@@ -2654,12 +2838,16 @@ class LibraryMixin:
             if not icon_path and len(parts) >= 2 and parts[1].isdigit():
                 icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
 
-            if os.path.exists(clip_path):
-                thumb_path = resolve_clip_thumbnail(
-                    clip_path, self.cache_dir, allow_generate=False
-                )
+            # Skip restore must not touch library roots (W: sleep / network = multi-second).
+            # Local poster cache + game icons only; thumbs backfill later if needed.
+            if not getattr(self, "_scan_snapshot_restore", False):
+                if os.path.exists(clip_path):
+                    thumb_path = resolve_clip_thumbnail(
+                        clip_path, self.cache_dir, allow_generate=False
+                    )
+            else:
+                thumb_path = self._snapshot_local_poster_only(clip_path)
 
-        footer_right = "FG" if title.strip().lower() == "unknown" else f"{date_str} • {time_str}"
         is_unknown_clip = title.strip().lower() == "unknown"
 
         item = QListWidgetItem(self.grid_clips)
@@ -2700,7 +2888,11 @@ class LibraryMixin:
             level = title_item.data(_CLIP_HEALTH_ROLE)
             is_dead = level == health.ClipHealth.DEAD.value
         has_thumb = bool(thumb_path and os.path.exists(thumb_path))
-        card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
+        # Skip paints before thumbs are resolved — never veil the whole library grey.
+        if getattr(self, "_scan_snapshot_restore", False):
+            card.set_unavailable(dead=is_dead, no_preview=False)
+        else:
+            card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
         self.grid_clips.setItemWidget(item, card)
 
         if table.isRowHidden(row):
@@ -2743,10 +2935,7 @@ class LibraryMixin:
                 dur_item = table.item(row, 3)
                 dur = dur_item.text() if dur_item else ""
                 title = (name_item.text() or "").strip()
-                if title.lower() == "unknown":
-                    footer = "FG"
-                else:
-                    footer = f"{new_date}\n{new_time} • {dur}" if dur else f"{new_date}\n{new_time}"
+                footer = self._clip_card_footer_text(title, f"{new_date}\n{new_time}", dur)
 
                 grid = getattr(self, "grid_clips", None)
                 if grid is not None:
@@ -2967,6 +3156,15 @@ class LibraryMixin:
         if total > 0:
             self._scan_total = int(total)
             self._scan_inserted = 0
+        # Quiet Skip top-up: stay Ready until something new actually appears.
+        if getattr(self, "_scan_append_new_only", False):
+            if total <= 0:
+                return
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator(
+                    f"Found {total} new clip(s)", "busy", scan_phase="search"
+                )
+            return
         if hasattr(self, "update_status_indicator") and getattr(self, "_clips_scan_active", False):
             if total <= 0:
                 self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
@@ -3012,19 +3210,33 @@ class LibraryMixin:
                     self._finalize_scan_finished(stats, gen, announce)
             return
 
-        batch = 4
+        batch = 12 if getattr(self, "_scan_snapshot_restore", False) else 4
         inserted_before = int(getattr(self, "_scan_inserted", 0))
         n = min(batch, len(pending))
         last_row = None
-        for _ in range(n):
-            row, index, total = pending.pop(0)
-            self._insert_scanned_clip_row(row)
-            last_row = row
+
+        table = getattr(self.ui, "table_clips", None)
+        grid = getattr(self, "grid_clips", None)
+        if table is not None:
+            table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
+        try:
+            for _ in range(n):
+                row, index, total = pending.pop(0)
+                self._insert_scanned_clip_row(row)
+                last_row = row
+        finally:
+            if table is not None:
+                table.setUpdatesEnabled(True)
+            if grid is not None:
+                grid.setUpdatesEnabled(True)
 
         if (
             last_row is not None
             and hasattr(self, "update_status_indicator")
             and getattr(self, "_clips_scan_active", False)
+            and not getattr(self, "_scan_append_new_only", False)
         ):
             inserted = inserted_before + n
             self._scan_inserted = inserted
@@ -3033,8 +3245,13 @@ class LibraryMixin:
             pct = int(100 * inserted / denom) if denom else 0
             if inserted >= denom and getattr(self, "_scan_finalize_pending", None) is None:
                 pct = min(pct, 99)
+            verb = (
+                "Restoring"
+                if getattr(self, "_scan_snapshot_restore", False)
+                else "Loading"
+            )
             self.update_status_indicator(
-                f"Loading {inserted}/{denom} — {label} ({pct}%)",
+                f"{verb} {inserted}/{denom} — {label} ({pct}%)",
                 "busy",
                 scan_phase="loading",
             )
@@ -3050,7 +3267,9 @@ class LibraryMixin:
 
         if pending:
             self._scan_flush_scheduled = True
-            QTimer.singleShot(20, lambda g=generation: self._flush_scanned_clips(g))
+            # Yield so maximize / density layout can paint between batches.
+            delay = 0 if getattr(self, "_scan_snapshot_restore", False) else 20
+            QTimer.singleShot(delay, lambda g=generation: self._flush_scanned_clips(g))
             return
 
         # pending is empty; finalization is handled at the top of this method.
@@ -3095,13 +3314,26 @@ class LibraryMixin:
 
         self.ui.table_clips.setSortingEnabled(True)
         self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
-        # Re-apply the active sort mode (scan order alone is mtime / discovery).
-        # Call the clips sorter directly — RenderedLibraryMixin.apply_sorting would
-        # target the rendered table when that panel is active.
-        LibraryMixin.apply_sorting(self)
-        self.sync_grid_from_table_selection()
-        self._backfill_missing_game_icons()
-        self._schedule_clip_poster_backfill()
+        # Snapshot order is already the last-session order — never re-stat W: via
+        # Default sort's getmtime (that alone made Skip feel like a rescan).
+        snapshot_restore = bool(getattr(self, "_scan_snapshot_restore", False))
+        if not snapshot_restore:
+            LibraryMixin.apply_sorting(self)
+            self.sync_grid_from_table_selection()
+        else:
+            if hasattr(self, "fast_sync_grid"):
+                self.fast_sync_grid()
+
+        quiet_append = bool(getattr(self, "_scan_append_new_only", False))
+        if not quiet_append and not snapshot_restore:
+            self._backfill_missing_game_icons()
+            self._schedule_clip_poster_backfill()
+
+        self._persist_clips_library_snapshot()
+        self._scan_append_new_only = False
+        self._scan_snapshot_restore = False
+        want_append = bool(getattr(self, "_snapshot_append_new_after", False))
+        self._snapshot_append_new_after = False
 
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
@@ -3128,6 +3360,14 @@ class LibraryMixin:
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
 
+        if snapshot_restore and want_append:
+            # Quiet top-up long after paint — must not compete with first frame.
+            QTimer.singleShot(2500, self._append_new_clips_only)
+        if snapshot_restore:
+            QTimer.singleShot(400, self._schedule_clip_duration_backfill)
+        elif not quiet_append:
+            QTimer.singleShot(0, self._schedule_clip_duration_backfill)
+
         if announce_duplicates and stats.duplicate_count:
             noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
             steempeg_information(
@@ -3140,7 +3380,7 @@ class LibraryMixin:
 
         logging.info(
             "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d "
-            "ignored_duplicates=%d fast=%s",
+            "ignored_duplicates=%d fast=%s quiet_append=%s snapshot=%s",
             stats.library_roots,
             stats.clip_count,
             stats.health_counts.get("healthy", 0),
@@ -3148,6 +3388,8 @@ class LibraryMixin:
             stats.health_counts.get("dead", 0),
             stats.duplicate_count,
             stats.fast,
+            quiet_append,
+            snapshot_restore,
         )
 
     def _on_scan_error(self, message: str, generation: int) -> None:
@@ -3162,23 +3404,315 @@ class LibraryMixin:
         QTimer.singleShot(0, self._sync_library_scrollbars)
         self._maybe_start_deferred_rendered_scan()
 
-    def scan_clips(self, announce_duplicates: bool = False, *, fast: bool = True):
+    def _persist_clips_library_snapshot(self) -> None:
+        """Write the current Clips Manager list for Skip startup restores."""
+        roots = [f for f in (getattr(self, "clips_folders", None) or []) if f]
+        rows = list(getattr(self, "_library_clip_rows", None) or [])
+        try:
+            save_clips_library_cache(
+                getattr(self, "cache_dir", None),
+                library_roots=roots,
+                clips=rows,
+            )
+        except Exception:
+            logging.exception("Failed to save clips library snapshot")
+
+    def _snapshot_local_poster_only(self, clip_path: str) -> str:
+        """Skip paint: probe local poster cache only (no library-root I/O)."""
+        cache_dir = getattr(self, "cache_dir", None)
+        if not cache_dir or not clip_path:
+            return ""
+        try:
+            candidate = clip_poster_cache_path_nostat(cache_dir, clip_path)
+            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                return candidate
+        except OSError:
+            pass
+        return ""
+
+    def restore_clips_from_session_cache(self, *, append_new: bool = True) -> bool:
+        """Skip startup: paint last session JSON immediately — no disk recheck.
+
+        No ``isdir`` / ``getmtime`` on library roots, no Restoring progress, no
+        worker. Duration / new-clip top-ups happen silently afterward.
+        """
+        if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
+            return False
+
+        if not getattr(self, "clips_folders", None):
+            self._load_clips_folders_from_settings()
+        library_roots = list(getattr(self, "clips_folders", None) or [])
+        if not library_roots:
+            return False
+
+        # JSON only — never touch W:/Steam paths here.
+        clips = clips_from_library_cache(
+            getattr(self, "cache_dir", None),
+            library_roots=library_roots,
+            require_exists=False,
+        )
+        if not clips:
+            self._ensure_clip_health_cache()
+            clips = seed_clips_from_health_cache(
+                getattr(self, "cache_dir", None),
+                library_roots=library_roots,
+                health_cache=getattr(self, "_clip_health_cache", {}) or {},
+                game_names_cache=getattr(self, "game_names_cache", {}) or {},
+            )
+        if not clips:
+            return False
+
+        self._stop_library_scan()
+        self._stop_clip_poster_backfill()
+        self._stop_clip_duration_backfill()
+        self._scan_pending_rows = []
+        self._scan_flush_scheduled = False
+        self._scan_total = 0
+        self._scan_inserted = 0
+        self._scan_finalize_pending = None
+        self._scan_append_new_only = False
+        self._scan_snapshot_restore = True
+        self._snapshot_append_new_after = bool(append_new)
+        self._library_clip_rows = []
+        self._saved_clips_selection_path = ""
+        self._preview_clip_path = None
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+
+        table = self.ui.table_clips
+        grid = getattr(self, "grid_clips", None)
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        if grid is not None:
+            self._grid_anchor_item = None
+            self._grid_anchor_index = -1
+            grid.clear()
+
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        self._clips_scan_active = False
+        self._sync_library_scan_interaction_lock(busy=False)
+
+        table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
+        try:
+            for row in clips:
+                self._insert_scanned_clip_row(row)
+        finally:
+            table.setUpdatesEnabled(True)
+            if grid is not None:
+                grid.setUpdatesEnabled(True)
+
+        table.setSortingEnabled(True)
+        table.horizontalHeader().setSectionsClickable(False)
+        if hasattr(self, "fast_sync_grid"):
+            self.fast_sync_grid()
+        self._persist_clips_library_snapshot()
+
+        self._scan_snapshot_restore = False
+        want_append = bool(getattr(self, "_snapshot_append_new_after", False))
+        self._snapshot_append_new_after = False
+
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+
+        if getattr(self, "_startup_library_scan_active", False) and hasattr(
+            self, "preload_render_history"
+        ):
+            self._startup_library_scan_active = False
+            self.preload_render_history(announce=True)
+        elif hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+        logging.info("Skip: painted %d clips from session snapshot", len(clips))
+
+        # Background only — UI already Ready.
+        QTimer.singleShot(400, self._schedule_clip_duration_backfill)
+        # Thumbs were skipped on paint (no W: I/O); resolve/generate off-thread.
+        QTimer.singleShot(
+            700,
+            lambda: self._schedule_clip_poster_backfill(skip_ui_probe=True),
+        )
+        if want_append:
+            QTimer.singleShot(2500, self._append_new_clips_only)
+        return True
+
+    def _stop_clip_duration_backfill(self) -> None:
+        worker = getattr(self, "_clip_duration_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(3000)
+        self._clip_duration_worker = None
+
+    def _schedule_clip_duration_backfill(self) -> None:
+        """Fill missing clip durations from MPD (Skip seed / sparse Refresh leftovers)."""
+        if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
+            return
+        self._stop_clip_duration_backfill()
+        paths: list[str] = []
+        table = self.ui.table_clips
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 0)
+            dur_item = table.item(row, 3)
+            if name_item is None:
+                continue
+            path = name_item.data(Qt.UserRole)
+            dur = (dur_item.text() if dur_item else "").strip()
+            if not path:
+                continue
+            if dur and dur not in ("--:--", "—", "--"):
+                continue
+            paths.append(str(path))
+        if not paths:
+            return
+
+        worker = ClipDurationBackfillWorker(paths, parent=self.ui)
+        self._clip_duration_worker = worker
+        worker.duration_ready.connect(self._on_clip_duration_ready)
+        worker.finished_backfill.connect(self._on_clip_duration_backfill_finished)
+        worker.failed.connect(
+            lambda msg: logging.warning("Duration backfill failed: %s", msg)
+        )
+        worker.start()
+
+    def _on_clip_duration_ready(self, clip_path: str, duration_str: str) -> None:
+        if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
+            return
+        norm = os.path.normpath(clip_path)
+        table = self.ui.table_clips
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 0)
+            if name_item is None:
+                continue
+            path = name_item.data(Qt.UserRole)
+            if not path or os.path.normpath(str(path)) != norm:
+                continue
+            dur_item = table.item(row, 3)
+            if dur_item is None:
+                dur_item = QTableWidgetItem()
+                dur_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+                table.setItem(row, 3, dur_item)
+            dur_item.setText(duration_str)
+
+            for stored in getattr(self, "_library_clip_rows", None) or []:
+                if os.path.normpath(stored.full_path) == norm:
+                    stored.duration_str = duration_str
+                    break
+
+            date_item = table.item(row, 2)
+            date_raw = date_item.text() if date_item else ""
+            title = (name_item.text() or "").strip()
+            footer = self._clip_card_footer_text(title, date_raw, duration_str)
+            if hasattr(self, "grid_clips"):
+                for i in range(self.grid_clips.count()):
+                    gitem = self.grid_clips.item(i)
+                    if gitem is None:
+                        continue
+                    if os.path.normpath(str(gitem.data(Qt.UserRole + 1) or "")) != norm:
+                        continue
+                    card = self.grid_clips.itemWidget(gitem)
+                    if card is not None and hasattr(card, "set_date_footer"):
+                        card.set_date_footer(footer)
+                    break
+            break
+
+    def _on_clip_duration_backfill_finished(self, updated: int) -> None:
+        self._clip_duration_worker = None
+        if updated:
+            self._persist_clips_library_snapshot()
+            logging.info("Filled %d clip duration(s) from MPD", updated)
+
+    def _append_new_clips_only(self) -> None:
+        """Quiet Skip follow-up: discover folders and parse only paths not already listed."""
+        if getattr(self, "_clips_scan_active", False):
+            return
+        if not getattr(self, "clips_folders", None):
+            self._load_clips_folders_from_settings()
+        library_roots = [
+            f for f in (getattr(self, "clips_folders", None) or []) if f and os.path.exists(f)
+        ]
+        if not library_roots:
+            return
+
+        known = {
+            os.path.normpath(r.full_path)
+            for r in (getattr(self, "_library_clip_rows", None) or [])
+        }
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        generation = self._scan_generation
+        self._ensure_clip_health_cache()
+        self._scan_pending_rows = []
+        self._scan_flush_scheduled = False
+        self._scan_total = 0
+        self._scan_inserted = 0
+        self._scan_finalize_pending = None
+        self._scan_append_new_only = True
+        self._scan_snapshot_restore = False
+        self._clips_scan_active = True
+        # Do not lock the whole UI for a quiet top-up.
+        self._sync_library_scan_interaction_lock(busy=False)
+
+        worker = LibraryScanWorker(
+            library_roots,
+            self.cache_dir,
+            self._clip_health_cache,
+            self.game_names_cache,
+            fast=True,
+            from_cache=False,
+            known_paths=known,
+            parent=self.ui,
+        )
+        self._library_scan_worker = worker
+        worker.discovering.connect(
+            lambda total: self._on_scan_discovering(total, generation)
+        )
+        worker.clip_ready.connect(
+            lambda row, index, total: self._on_scan_clip_ready(
+                row, index, total, generation
+            )
+        )
+        worker.finished_scan.connect(
+            lambda stats: self._on_scan_finished(stats, generation, False)
+        )
+        worker.scan_error.connect(
+            lambda msg: self._on_scan_error(msg, generation)
+        )
+        worker.start()
+
+    def scan_clips(
+        self,
+        announce_duplicates: bool = False,
+        *,
+        fast: bool = True,
+        from_cache: bool = False,
+    ):
         """Scan library roots on a background thread with live progress in the status bar.
 
         fast=True skips ffprobe during health checks only. Game names and icons are
         still fetched from Steam when missing from cache (first launch, new app id).
         Use Refresh ▾ → Re-check clip health for a full ffprobe pass.
+
+        from_cache=True rebuilds rows from clip_health_cache paths (seed when no
+        session snapshot exists yet). Prefer ``restore_clips_from_session_cache``
+        for Settings → Skip.
         """
         if not hasattr(self.ui, "table_clips"):
             return
 
         self._stop_library_scan()
         self._stop_clip_poster_backfill()
+        self._stop_clip_duration_backfill()
         self._scan_pending_rows = []
         self._scan_flush_scheduled = False
         self._scan_total = 0
         self._scan_inserted = 0
         self._scan_finalize_pending = None
+        self._scan_append_new_only = False
+        self._scan_snapshot_restore = False
+        self._library_clip_rows = []
         self._saved_clips_selection_path = ""
         self._preview_clip_path = None
         if hasattr(self, "_clear_clips_selection_visual"):
@@ -3217,7 +3751,14 @@ class LibraryMixin:
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
         if hasattr(self, "update_status_indicator"):
-            self.update_status_indicator("Searching for clips…", "busy", scan_phase="search")
+            if from_cache:
+                self.update_status_indicator(
+                    "Restoring clips from cache…", "busy", scan_phase="search"
+                )
+            else:
+                self.update_status_indicator(
+                    "Searching for clips…", "busy", scan_phase="search"
+                )
 
         worker = LibraryScanWorker(
             library_roots,
@@ -3225,6 +3766,7 @@ class LibraryMixin:
             self._clip_health_cache,
             self.game_names_cache,
             fast=fast,
+            from_cache=from_cache,
             parent=self.ui,
         )
         self._library_scan_worker = worker
