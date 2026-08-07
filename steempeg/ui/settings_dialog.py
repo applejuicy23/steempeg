@@ -80,6 +80,7 @@ from steempeg.ui.settings_prefs import (
     KEY_REMEMBER_LIBRARY_TAB,
     KEY_SCREENSHOTS_FOLDER,
     KEY_STARTUP_LIBRARY_SCAN,
+    KEY_TEST_NEW_FULLSCREEN,
     KEY_UPDATE_CHECK_INTERVAL,
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
@@ -108,6 +109,7 @@ from steempeg.ui.settings_prefs import (
     load_mpv_log_level,
     load_remember_library_tab,
     load_startup_library_scan,
+    load_test_new_fullscreen,
     normalize_clock_format,
     normalize_date_format,
     normalize_display_timezone,
@@ -688,6 +690,27 @@ class SettingsDialog(SteempegDialog):
 
         # ----- Advanced -----
         advanced, a = _tab_page()
+        a.addWidget(self._section("Fullscreen"))
+        self._chk_test_new_fullscreen = SteempegCheckBox(
+            "TEST NEW FULLSCREEN — no grey flash on enter/exit",
+            font_size=13,
+            label_bold=True,
+            label_color="#ffffff",
+        )
+        self._chk_test_new_fullscreen.setChecked(load_test_new_fullscreen(settings))
+        a.addWidget(self._chk_test_new_fullscreen)
+        loud_hint = QLabel(
+            "If the old grey screen before enter/exit bothers you — turn this on. "
+            "Skips the transition cover (same as STEEMPEG_FS_COVER=0). "
+            "May briefly show a black edge on exit."
+        )
+        loud_hint.setWordWrap(True)
+        loud_hint.setStyleSheet(
+            f"color: {tok.TEXT_TITLE}; font-size: 12px; font-weight: bold; "
+            f"background: transparent; font-family: {tok.FONT_APP};"
+        )
+        a.addWidget(loud_hint)
+
         a.addWidget(self._section("Safety"))
         self._chk_confirm_delete = SteempegCheckBox("Confirm before deleting clips / renders")
         self._chk_confirm_delete.setChecked(load_confirm_before_delete(settings))
@@ -1182,6 +1205,9 @@ class SettingsDialog(SteempegDialog):
         )
         self._save_setting(
             KEY_REMEMBER_LIBRARY_TAB, self._chk_remember_tab.isChecked()
+        )
+        self._save_setting(
+            KEY_TEST_NEW_FULLSCREEN, self._chk_test_new_fullscreen.isChecked()
         )
 
         shots = normalize_screenshots_folder(self._edit_screenshots.text())
