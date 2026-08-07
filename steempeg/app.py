@@ -152,11 +152,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         from PySide6.QtWidgets import QSizePolicy
         from steempeg.ui.design_tokens import with_tooltip_style
+        from steempeg.ui.widgets.press_feedback import install_press_feedback
+
         tip_qss = with_tooltip_style(_PLAYBACK_BUTTONS_QSS)
         for btn in (self.ui.btn_play, self.ui.btn_skip_back, self.ui.btn_skip_forward):
             btn.setFlat(True)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setStyleSheet(tip_qss)
+            install_press_feedback(btn)
         self.ui.btn_skip_back.setMinimumSize(40, 48)
         self.ui.btn_skip_back.setMaximumSize(40, 48)
         self.ui.btn_skip_forward.setMinimumSize(40, 48)
@@ -1278,8 +1281,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.btn_refresh.main_btn.clicked.connect(self.refresh_library)
         if hasattr(self, "setup_refresh_menu"):
             self.setup_refresh_menu()
+        # Folder button is rewired by `_sync_library_footer_for_mode` per tab.
         self.folder_picker.main_btn.clicked.connect(self.choose_folder)
         self.folder_picker.add_btn.clicked.connect(self.show_folders_panel)
+        if hasattr(self, "_sync_library_footer_for_mode"):
+            self._sync_library_footer_for_mode()
         if hasattr(self.ui, 'destination_button'):
             self.ui.destination_button.clicked.connect(self.choose_destination)
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)
@@ -1810,10 +1816,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.btn_clip_health.clicked.connect(self.show_clip_health_menu)
         status_row.addWidget(self.btn_clip_health)
 
-        self.label_playback_badge = QLabel()
-        self.label_playback_badge.setStyleSheet(
-            "color: #ffffff; font-weight: bold; font-size: 12px;"
-            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        # Chip (not plain QLabel) so In queue can show the same queue.png as portable.
+        self.label_playback_badge = QPushButton()
+        self.label_playback_badge.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.label_playback_badge.setCursor(Qt.CursorShape.ArrowCursor)
+        self.label_playback_badge.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
         self.label_playback_badge.hide()
         status_row.addWidget(self.label_playback_badge)
@@ -3261,27 +3269,59 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         self._start_startup_scans_pending = False
 
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        from steempeg.ui.settings_prefs import (
+            SCAN_CACHE,
+            SCAN_FULL,
+            load_startup_library_scan,
+        )
+
+        mode = load_startup_library_scan(settings)
+        # Skip paints from JSON only — no need to wait for maximize settle.
+        delay_ms = 0
+
         def _start():
             # Clips first; Rendered is deferred until clips finishes.
-            settings = {}
-            if hasattr(self, "load_user_settings"):
-                try:
-                    settings = self.load_user_settings() or {}
-                except Exception:
-                    settings = {}
-            from steempeg.ui.settings_prefs import (
-                SCAN_CACHE,
-                SCAN_FULL,
-                load_startup_library_scan,
-            )
-
-            mode = load_startup_library_scan(settings)
             if mode == SCAN_CACHE:
-                logging.info("Startup library scan skipped (open without scanning)")
-                if hasattr(self, "update_status_indicator"):
-                    self.update_status_indicator(
-                        "Ready — Refresh to load library", "ready"
+                logging.info("Startup library scan: Skip (session snapshot)")
+                self._defer_rendered_scan_until_clips_done = False
+                restored_clips = False
+                if getattr(self, "clips_folders", None):
+                    self._startup_library_scan_active = True
+                    if hasattr(self, "restore_clips_from_session_cache"):
+                        restored_clips = bool(
+                            self.restore_clips_from_session_cache(append_new=True)
+                        )
+                # Paint Rendered from last session JSON (no export-folder walk).
+                restored_rendered = False
+                if hasattr(self, "restore_rendered_from_session_cache"):
+                    restored_rendered = bool(
+                        self.restore_rendered_from_session_cache()
                     )
+                restored_shots = False
+                if hasattr(self, "restore_screenshots_from_session_cache"):
+                    restored_shots = bool(
+                        self.restore_screenshots_from_session_cache()
+                    )
+                # Clips restore clears startup + Ready itself when it succeeds.
+                if not restored_clips:
+                    self._startup_library_scan_active = False
+                    if hasattr(self, "update_status_indicator"):
+                        if restored_rendered or restored_shots:
+                            self.update_status_indicator("Ready", "ready")
+                        elif getattr(self, "clips_folders", None):
+                            self.update_status_indicator(
+                                "Ready — no library snapshot", "ready"
+                            )
+                        else:
+                            self.update_status_indicator(
+                                "Ready — no library folders", "ready"
+                            )
                 return
             if getattr(self, "clips_folders", None):
                 self._startup_library_scan_active = True
@@ -3289,8 +3329,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.scan_clips(fast=(mode != SCAN_FULL))
             elif hasattr(self, "scan_rendered_outputs"):
                 self.scan_rendered_outputs()
+            # Screenshots: seed from last session while clips/rendered scan runs.
+            if hasattr(self, "restore_screenshots_from_session_cache"):
+                self.restore_screenshots_from_session_cache()
 
-        QTimer.singleShot(0, _start)
+        QTimer.singleShot(delay_ms, _start)
 
     def on_main_window_resized(self):
         """Keep panel minimums + chrome density in sync with window width."""
@@ -3550,10 +3593,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             btn.setIconSize(QSize(sz, sz))
 
     def _apply_ui_density(self, dense):
-        """Resize fonts/paddings/labels along the continuous density scale."""
+        """Apply one density to every pane (portable / forced comfort path)."""
+        self._ui_density = dense
+        self._ui_density_library = dense
+        self._ui_density_player = dense
+        self._ui_density_queue = dense
+        self._apply_library_density(dense)
+        self._apply_player_density(dense)
+        self._apply_queue_density(dense)
+
+    def _apply_library_density(self, dense):
+        """Clips Manager + footer chrome from the left pane's density."""
         from steempeg.ui.ui_density import (
-            NEO_NAV_COMFORT,
-            NEO_NAV_COMPACT,
             folder_button_label,
             tab_label,
             updates_button_label,
@@ -3698,6 +3749,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if refresh is not None and hasattr(refresh, "apply_density"):
             refresh.apply_density(dense)
 
+    def _apply_player_density(self, dense):
+        """Player column + export settings chrome from the center pane's density."""
+        from steempeg.ui.ui_density import NEO_NAV_COMFORT, NEO_NAV_COMPACT
+
         # --- Neo settings sidebar ---
         neo = getattr(self, "_neo_sidebar", None)
         if neo is not None:
@@ -3816,6 +3871,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     f"QFrame {{ background-color: #4e4e4e; border-radius: {chip_r}px; border: none; }}"
                 )
 
+        # Sync press-feedback rest sizes after transport icon/min changes.
+        from steempeg.ui.widgets.press_feedback import install_press_feedback
+
+        for attr in ("btn_play", "btn_skip_back", "btn_skip_forward"):
+            b = getattr(self.ui, attr, None)
+            if b is not None:
+                install_press_feedback(b).sync_rest_icon_size()
+
         # --- Render settings (Source / Video / Audio / Export) ---
         from steempeg.ui.render_panel import apply_settings_panel_density
 
@@ -3830,7 +3893,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # --- Render status dashboard ---
         self._apply_render_dashboard_density(dense)
 
-        # --- Render queue ---
+    def _apply_queue_density(self, dense):
+        """Render queue chrome from the right pane's density."""
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None and hasattr(panel, "apply_density"):
             panel.apply_density(dense)
@@ -4309,14 +4373,9 @@ def main():
             _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
             _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
             window.ui.setMinimumSize(_min_w, _min_h)
-            if sys.platform == "win32":
-                # Inset the window Windows restores to; showMaximized() below
-                # fills the work area natively without ever showing this size.
-                window.ui.setGeometry(_avail.adjusted(80, 60, -80, -60))
-            else:
-                # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
-                # Fake-maximize by filling the work area (taskbar still visible).
-                window.ui.setGeometry(_avail)
+            # Match the work area immediately so the first paint is never an
+            # inset "half screen" that then jumps after showMaximized settles.
+            window.ui.setGeometry(_avail)
             logging.info(
                 "Primary screen %r avail=%sx%s",
                 _screen.name(),
