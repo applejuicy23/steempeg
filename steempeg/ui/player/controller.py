@@ -1155,9 +1155,15 @@ class PlayerMixin:
         )
 
     def _show_immersive_transition_cover(self):
-        # The cover masks whatever the enter/exit switch still flashes. Set
-        # STEEMPEG_FS_COVER=0 to watch the raw transition when tuning it.
-        if os.environ.get("STEEMPEG_FS_COVER") == "0":
+        # The cover masks whatever the enter/exit switch still flashes. Disable via
+        # Settings → Advanced → TEST NEW FULLSCREEN, or STEEMPEG_FS_COVER=0.
+        try:
+            from steempeg.ui.settings_prefs import immersive_transition_cover_enabled
+
+            cover_on = immersive_transition_cover_enabled()
+        except Exception:
+            cover_on = os.environ.get("STEEMPEG_FS_COVER") != "0"
+        if not cover_on:
             self._immersive_cover_gen = getattr(self, '_immersive_cover_gen', 0) + 1
             return
         if getattr(self, '_immersive_transition_cover', None) is None:
