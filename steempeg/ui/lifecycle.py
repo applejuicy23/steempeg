@@ -855,7 +855,9 @@ class LifecycleMixin:
             self._sync_start_render_enabled()
         else:
             self.ui.btn_start.setEnabled(False)
-            self.ui.btn_start.setText("Choose clip for render")
+            self.ui.btn_start.setText(" Choose clip for render")
+            if hasattr(self, "_apply_desktop_dash_render_icons"):
+                self._apply_desktop_dash_render_icons()
 
         if hasattr(self.ui, 'label_time'):
             self.ui.label_time.setText("00:00 / 00:00")
