@@ -116,3 +116,20 @@ def dedupe_steam_session_folders(folder_paths: List[str]) -> Tuple[List[str], in
     order = {os.path.normpath(p): i for i, p in enumerate(folder_paths)}
     deduped.sort(key=lambda p: order.get(os.path.normpath(p), len(folder_paths)))
     return deduped, ignored
+
+
+def session_duplicate_paths_to_drop(folder_paths: List[str]) -> List[str]:
+    """Paths that lose to a better clip_/bg_/fg_ sibling in the same list."""
+    if not folder_paths:
+        return []
+    keepers, _ignored = dedupe_steam_session_folders(list(folder_paths))
+    keep = {os.path.normpath(p) for p in keepers}
+    dropped: List[str] = []
+    seen: set[str] = set()
+    for path in folder_paths:
+        norm = os.path.normpath(path)
+        if norm in keep or norm in seen:
+            continue
+        seen.add(norm)
+        dropped.append(path)
+    return dropped
