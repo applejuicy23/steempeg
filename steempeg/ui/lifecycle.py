@@ -273,12 +273,29 @@ class LifecycleMixin:
             if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
                 return True
 
+        # Screenshots — photo tiles own click/open; kill IconMode rubber-band ghost.
+        if hasattr(self, "grid_screenshots") and source == self.grid_screenshots.viewport():
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.RightButton:
+                    if hasattr(self, "show_screenshots_grid_context_menu"):
+                        self.show_screenshots_grid_context_menu(event.position().toPoint())
+                    return True
+                if event.button() == Qt.LeftButton:
+                    # Empty space click: clear selection only (tiles handle their own LMB).
+                    item = self.grid_screenshots.itemAt(event.position().toPoint())
+                    if item is None:
+                        if hasattr(self, "_clear_screenshots_selection_visual"):
+                            self._clear_screenshots_selection_visual()
+                        return True
+            if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
+                return True
+
         return super().eventFilter(source, event)
 
     def _escape_targets_library(self, source) -> bool:
         """True when Esc should clear Clips Manager / Rendered selection."""
         libs = []
-        for name in ("grid_clips", "grid_rendered", "table_rendered"):
+        for name in ("grid_clips", "grid_rendered", "table_rendered", "grid_screenshots"):
             w = getattr(self, name, None)
             if w is not None:
                 libs.append(w)
