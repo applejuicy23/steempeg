@@ -27,7 +27,12 @@ from PySide6.QtWidgets import (
 
 from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
-from steempeg.core.clip_identity import is_nested_same_session
+from steempeg.core.clip_identity import (
+    is_nested_same_session,
+    pick_best_session_folder,
+    session_duplicate_paths_to_drop,
+    steam_session_key,
+)
 from steempeg.core.clip_thumbnails import (
     clip_poster_cache_path_nostat,
     resolve_clip_thumbnail,
@@ -2575,6 +2580,8 @@ class LibraryMixin:
 
         grid.blockSignals(False)
         grid.setUpdatesEnabled(True)
+        if hasattr(self, "sync_clip_card_edge_roles"):
+            QTimer.singleShot(0, self.sync_clip_card_edge_roles)
 
     def _library_filter_row_matches(self, row: int, saved: dict) -> bool:
         """Whether table row ``row`` should stay visible under ``saved_filter_state``."""
@@ -2768,6 +2775,74 @@ class LibraryMixin:
         self._append_grid_card_for_row(row_position)
         return row_position
 
+    def _remove_library_clip_paths_from_ui(self, paths) -> int:
+        """Drop listed clip folders from the table/grid/rows — disk untouched.
+
+        Used when a better Steam session sibling appears (CLIP replaces FG/BG).
+        Returns how many rows were removed.
+        """
+        norms = {os.path.normpath(p) for p in (paths or []) if p}
+        if not norms or not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
+            return 0
+
+        table = self.ui.table_clips
+        rows_to_remove: list[int] = []
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            path = item.data(Qt.UserRole)
+            if path and os.path.normpath(str(path)) in norms:
+                rows_to_remove.append(row)
+        if not rows_to_remove:
+            return 0
+
+        rows = getattr(self, "_library_clip_rows", None)
+        if rows is not None:
+            self._library_clip_rows = [
+                r
+                for r in rows
+                if os.path.normpath(r.full_path) not in norms
+            ]
+
+        table.setUpdatesEnabled(False)
+        try:
+            for row in reversed(rows_to_remove):
+                table.removeRow(row)
+        finally:
+            table.setUpdatesEnabled(True)
+
+        if hasattr(self, "build_netflix_grid"):
+            self.build_netflix_grid()
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        return len(rows_to_remove)
+
+    def _purge_inferior_session_siblings(self) -> int:
+        """Collapse clip_/bg_/fg_ duplicates already listed in the library UI."""
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is None:
+            return 0
+        paths: list[str] = []
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            path = item.data(Qt.UserRole)
+            if path:
+                paths.append(str(path))
+        dropped = session_duplicate_paths_to_drop(paths)
+        if not dropped:
+            return 0
+        removed = self._remove_library_clip_paths_from_ui(dropped)
+        if removed:
+            logging.info(
+                "Library: removed %d inferior Steam session sibling(s) (FG/BG under CLIP)",
+                removed,
+            )
+            self._persist_clips_library_snapshot()
+        return removed
+
     def _clip_card_footer_text(self, title: str, date_raw: str, duration: str) -> str:
         """Grid footer: ``date\\ntime • duration`` (omit empty / placeholder duration)."""
         if title.strip().lower() == "unknown":
@@ -2857,11 +2932,7 @@ class LibraryMixin:
 
         queue_index = None
         queue_color = None
-        if (
-            getattr(self, "_portable_shell", False)
-            and clip_path
-            and hasattr(self, "render_queue")
-        ):
+        if clip_path and hasattr(self, "render_queue"):
             job = self.render_queue.find_by_clip_path(clip_path)
             if job is not None:
                 from steempeg.render.queue import STATUS_COLORS
@@ -3027,9 +3098,11 @@ class LibraryMixin:
             logging.exception("header datetime refresh failed")
 
     def refresh_portable_clip_queue_badges(self) -> None:
-        """Update queue # overlays on Choose-a-clip cards without rebuilding the grid."""
-        if not getattr(self, "_portable_shell", False):
-            return
+        """Update queue # overlays on clip grid cards (desktop + portable)."""
+        self.refresh_clip_queue_badges()
+
+    def refresh_clip_queue_badges(self) -> None:
+        """Update queue # overlays without rebuilding the grid."""
         grid = getattr(self, "grid_clips", None)
         if grid is None or not hasattr(self, "render_queue"):
             return
@@ -3055,6 +3128,47 @@ class LibraryMixin:
                     int(job.queue_index),
                     STATUS_COLORS.get(job.status, "#ffcc00"),
                 )
+
+    def _clip_grid_column_count(self) -> int:
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return 1
+        viewport_w = max(1, grid.viewport().width())
+        spacing = max(0, int(grid.spacing()))
+        # ClipCard cell is ~260 wide (sizeHint).
+        cell = 260
+        return max(1, (viewport_w + spacing) // (cell + spacing))
+
+    def sync_clip_card_edge_roles(self) -> None:
+        """Square the shelf edges: top row flat-top, bottom row flat-bottom."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        from steempeg.ui.library.grid_view import ClipCard
+
+        visible: list = []
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            card = grid.itemWidget(item)
+            if isinstance(card, ClipCard):
+                visible.append(card)
+        if not visible:
+            return
+        cols = self._clip_grid_column_count()
+        last_row = (len(visible) - 1) // cols
+        for idx, card in enumerate(visible):
+            row = idx // cols
+            if last_row == 0:
+                role = "both"  # single visual row: flush with panel top + bottom
+            elif row == 0:
+                role = "top"
+            elif row == last_row:
+                role = "bottom"
+            else:
+                role = "mid"
+            card.set_edge_role(role)
 
     def _sync_library_scan_interaction_lock(self, *, busy: bool) -> None:
         """Roskomnadzor mode: while clips are loading, freeze Queue + Clips Manager."""
@@ -3224,6 +3338,29 @@ class LibraryMixin:
         try:
             for _ in range(n):
                 row, index, total = pending.pop(0)
+                if getattr(self, "_scan_append_new_only", False):
+                    # Drop FG/BG already listed for this Steam session before CLIP lands.
+                    key = steam_session_key(os.path.basename(row.full_path))
+                    if key:
+                        losers: list[str] = []
+                        for existing in getattr(self, "_library_clip_rows", None) or []:
+                            if steam_session_key(
+                                os.path.basename(existing.full_path)
+                            ) != key:
+                                continue
+                            if os.path.normpath(existing.full_path) == os.path.normpath(
+                                row.full_path
+                            ):
+                                continue
+                            best = pick_best_session_folder(
+                                [existing.full_path, row.full_path]
+                            )
+                            if best and os.path.normpath(best) == os.path.normpath(
+                                row.full_path
+                            ):
+                                losers.append(existing.full_path)
+                        if losers:
+                            self._remove_library_clip_paths_from_ui(losers)
                 self._insert_scanned_clip_row(row)
                 last_row = row
         finally:
@@ -3325,6 +3462,9 @@ class LibraryMixin:
                 self.fast_sync_grid()
 
         quiet_append = bool(getattr(self, "_scan_append_new_only", False))
+        if quiet_append:
+            # CLIP often appears after FG for the same Steam session — drop the loser.
+            self._purge_inferior_session_siblings()
         if not quiet_append and not snapshot_restore:
             self._backfill_missing_game_icons()
             self._schedule_clip_poster_backfill()
@@ -3507,6 +3647,8 @@ class LibraryMixin:
         table.horizontalHeader().setSectionsClickable(False)
         if hasattr(self, "fast_sync_grid"):
             self.fast_sync_grid()
+        # Snapshot may still hold FG+CLIP pairs from older quiet appends.
+        self._purge_inferior_session_siblings()
         self._persist_clips_library_snapshot()
 
         self._scan_snapshot_restore = False
@@ -3827,6 +3969,7 @@ class LibraryMixin:
             self._append_grid_card_for_row(row)
 
         self.sync_grid_from_table_selection()
+        QTimer.singleShot(0, self.sync_clip_card_edge_roles)
         QTimer.singleShot(0, self._sync_library_scrollbars)
 
     def _filter_popup_floor_y(self, menu_y: int) -> int:
