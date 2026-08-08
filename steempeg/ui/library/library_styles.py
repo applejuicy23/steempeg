@@ -118,6 +118,11 @@ def sync_library_scrollbars(host, *, force_hide: bool = False) -> None:
     hide = force_hide or scanning
     for view in _library_scroll_views(host):
         sync_library_vertical_scrollbar(view, force_hide=hide)
+    if hasattr(host, "sync_clip_card_edge_roles"):
+        try:
+            host.sync_clip_card_edge_roles()
+        except Exception:
+            pass
 
 
 class LibraryScrollSyncFilter(QObject):
