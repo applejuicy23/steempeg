@@ -4416,6 +4416,17 @@ def main():
             _force_native_window_icon(window.ui, icon_path)
             enable_frameless(window.ui)
 
+        # Finish density / library restore / Skip paint WHILE STILL HIDDEN.
+        # Showing first painted an empty "0 Clips" shell that then jumped —
+        # and FRAMECHANGED settle looked like the half-done window closing.
+        window._sync_startup_layout()
+        try:
+            from PySide6.QtCore import QEventLoop
+
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        except Exception:
+            QApplication.processEvents()
+
         if sys.platform == "win32":
             # Maximize on the *first* show. Showing the inset normal state first
             # and maximizing right after gives Windows no state change to record,
@@ -4434,9 +4445,9 @@ def main():
                 wh.requestActivate()
         except Exception:
             pass
-        # Density / splitters first — then pump events so the first visible
-        # paint is already at comfort size, not the compact __init__ chrome.
-        window._sync_startup_layout()
+        # Light re-assert only — heavy restore already ran pre-show.
+        window._ui_density = None
+        window._apply_startup_splitter_sizes()
         QApplication.processEvents()
         if ui_shell == UI_SHELL_PORTABLE:
             # Library restore (500ms) must not fight theatre — re-assert after it.
@@ -4490,17 +4501,12 @@ def main():
             )
 
         def _apply_custom_shell_native():
-            from steempeg.ui.window_chrome import (
-                enable_frameless,
-                ensure_startup_maximized,
-            )
+            from steempeg.ui.window_chrome import ensure_startup_maximized
+
             _force_native_window_icon(window.ui, icon_path)
-            enable_frameless(window.ui)
-            # FRAMECHANGED after maximize can drop WS maximized back to the
-            # inset pre-size — put it back before the user notices.
+            # Frameless already applied pre-show; only re-assert maximize if
+            # FRAMECHANGED dropped it — avoid a hide/show flash.
             ensure_startup_maximized(window.ui)
-            # Frameless / DWM refresh can drop the taskbar icon cache after an
-            # in-place update — re-push WM_SETICON once the chrome is settled.
             _force_native_window_icon(window.ui, icon_path)
             tb = getattr(window.ui, "title_bar", None)
             if tb is not None:
