@@ -52,6 +52,7 @@ from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillW
 from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
 from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.ui.library.grid_view import ClipCard
+from steempeg.ui.library.screenshot_photo import ScreenshotPhoto
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
 from steempeg.ui.message_dialog import (
@@ -387,7 +388,7 @@ class RenderedLibraryMixin:
             self._sync_rendered_grid_card_visuals()
 
     def library_has_item_selection(self) -> bool:
-        """True when Clips or Rendered has one or more selected rows/cards."""
+        """True when Clips / Rendered / Screenshots has one or more selected cards."""
         grid = getattr(self, "grid_clips", None)
         if grid is not None and grid.selectedItems():
             return True
@@ -404,6 +405,9 @@ class RenderedLibraryMixin:
             sm = rtable.selectionModel()
             if sm is not None and sm.hasSelection():
                 return True
+        sgrid = getattr(self, "grid_screenshots", None)
+        if sgrid is not None and sgrid.selectedItems():
+            return True
         return False
 
     def clear_library_item_selection(self) -> bool:
@@ -414,6 +418,8 @@ class RenderedLibraryMixin:
             self._clear_clips_selection_visual()
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
+        if hasattr(self, "_clear_screenshots_selection_visual"):
+            self._clear_screenshots_selection_visual()
         return True
 
     def _restore_library_tab_selection(self, tab: str) -> None:
@@ -1205,18 +1211,41 @@ class RenderedLibraryMixin:
         self.grid_screenshots = QListWidget()
         self.grid_screenshots.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid_screenshots.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.grid_screenshots.setSpacing(12)
+        self.grid_screenshots.setSpacing(14)
         self.grid_screenshots.setUniformItemSizes(True)
-        self.grid_screenshots.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # Single select — photos open on click; Ctrl multi not needed here.
+        # ExtendedSelection + IconMode rubber-band was the ghost drag behind tiles.
+        self.grid_screenshots.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.grid_screenshots.setSelectionRectVisible(False)
         self.grid_screenshots.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_screenshots.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_screenshots.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_screenshots.setMovement(QListWidget.Movement.Static)
-        self.grid_screenshots.setStyleSheet(LIBRARY_GRID_STYLE)
-        self.grid_screenshots.setIconSize(QSize(160, 90))
+        self.grid_screenshots.setDragEnabled(False)
+        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
+        # Transparent cells — ScreenshotPhoto draws the framed image itself.
+        self.grid_screenshots.setStyleSheet(
+            """
+            QListWidget { background: transparent; border: none; outline: none; }
+            QListWidget::item {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            }
+            QListWidget::item:selected { background: transparent; }
+            QListWidget::item:focus { outline: none; }
+            """
+            + LIBRARY_SCROLLBAR_VERTICAL
+        )
         self.grid_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.grid_screenshots.itemDoubleClicked.connect(self._on_screenshot_item_activated)
-        self.grid_screenshots.itemSelectionChanged.connect(self._update_library_count_label)
+        self.grid_screenshots.itemSelectionChanged.connect(self._on_screenshots_grid_selection_changed)
+        self.grid_screenshots.viewport().installEventFilter(self)
+        self.grid_screenshots.installEventFilter(self)
+        self._screenshots_grid_anchor_index = -1
+        self._screenshots_grid_select_in_progress = False
+        self._last_opened_screenshot_path = ""
 
         lay.addWidget(self.grid_screenshots)
         if hasattr(self, "library_stack"):
@@ -1230,6 +1259,204 @@ class RenderedLibraryMixin:
         grid.clearSelection()
         grid.setCurrentItem(None)
         grid.blockSignals(False)
+        self._sync_screenshot_photo_visuals()
+
+    def _attach_screenshot_photo(
+        self,
+        item: QListWidgetItem,
+        path: str,
+        thumb_path: str = "",
+        *,
+        title: str = "",
+        mtime: float = 0.0,
+    ) -> None:
+        label = (title or "").strip() or os.path.splitext(os.path.basename(path))[0]
+        subtitle = ""
+        if mtime:
+            try:
+                from datetime import datetime
+
+                dt = datetime.fromtimestamp(float(mtime))
+                subtitle = f"{format_clip_date(dt)}  {format_clip_time(dt)}"
+            except (OSError, OverflowError, ValueError, TypeError):
+                subtitle = ""
+        photo = ScreenshotPhoto(
+            thumb_path,
+            title=label,
+            subtitle=subtitle,
+            on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
+                grid_item, ev, force_single=True
+            ),
+            on_right_click=lambda ev, grid_item=item: self._handle_screenshot_photo_context_menu(
+                grid_item, ev
+            ),
+            on_activate=lambda p=path: self._on_screenshot_open(p),
+        )
+        self.grid_screenshots.setItemWidget(item, photo)
+        opened = os.path.normpath(path) == os.path.normpath(
+            getattr(self, "_last_opened_screenshot_path", "") or ""
+        )
+        photo.set_opened(opened)
+
+    def _sync_screenshot_photo_visuals(self) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        selected = grid.selectedItems()
+        opened_norm = os.path.normpath(getattr(self, "_last_opened_screenshot_path", "") or "")
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            photo = grid.itemWidget(item)
+            if not isinstance(photo, ScreenshotPhoto):
+                continue
+            photo.set_selected(item in selected)
+            path = item.data(Qt.ItemDataRole.UserRole) or ""
+            photo.set_opened(bool(path) and os.path.normpath(str(path)) == opened_norm)
+
+    def _on_screenshots_grid_selection_changed(self) -> None:
+        if getattr(self, "_screenshots_grid_select_in_progress", False):
+            return
+        self._sync_screenshot_photo_visuals()
+        self._update_library_count_label()
+
+    def _screenshot_grid_select_item(
+        self, item, event=None, *, force_single: bool = False
+    ) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or item is None:
+            return
+        mods = (
+            self._event_modifiers(event)
+            if hasattr(self, "_event_modifiers")
+            else Qt.KeyboardModifier.NoModifier
+        )
+        if force_single:
+            mods = Qt.KeyboardModifier.NoModifier
+
+        multi_mods = getattr(
+            self,
+            "_MULTI_SELECT_MODIFIERS",
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier,
+        )
+        toggle_mods = getattr(
+            self,
+            "_TOGGLE_SELECT_MODIFIERS",
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+        )
+        idx = (
+            self._list_widget_item_index(grid, item)
+            if hasattr(self, "_list_widget_item_index")
+            else grid.row(item)
+        )
+
+        self._screenshots_grid_select_in_progress = True
+        try:
+            grid.blockSignals(True)
+            if mods & toggle_mods:
+                item.setSelected(not item.isSelected())
+            elif mods & Qt.KeyboardModifier.ShiftModifier:
+                anchor_idx = getattr(self, "_screenshots_grid_anchor_index", -1)
+                if anchor_idx < 0:
+                    anchor_idx = idx
+                lo, hi = sorted((anchor_idx, idx))
+                grid.clearSelection()
+                for i in range(lo, hi + 1):
+                    row_item = grid.item(i)
+                    if row_item and not row_item.isHidden():
+                        row_item.setSelected(True)
+            else:
+                grid.clearSelection()
+                item.setSelected(True)
+
+            if not (mods & multi_mods):
+                self._screenshots_grid_anchor_index = idx
+
+            grid.blockSignals(False)
+        finally:
+            self._screenshots_grid_select_in_progress = False
+
+        self._sync_screenshot_photo_visuals()
+        self._update_library_count_label()
+
+    def _handle_screenshot_photo_context_menu(self, item, event) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or item is None:
+            return
+        viewport_pos = grid.viewport().mapFromGlobal(event.globalPosition().toPoint())
+        self.show_screenshots_grid_context_menu(viewport_pos)
+
+    def _context_menu_screenshot_paths(self, pos) -> list[str]:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return []
+        hit = grid.itemAt(pos)
+        selected = list(grid.selectedItems())
+        if hit is not None and hit in selected and len(selected) > 1:
+            items = selected
+        elif hit is not None:
+            items = [hit]
+        else:
+            items = selected
+        paths: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            path = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not path:
+                continue
+            norm = os.path.normpath(str(path))
+            if norm in seen or not os.path.isfile(str(path)):
+                continue
+            seen.add(norm)
+            paths.append(str(path))
+        return paths
+
+    def show_screenshots_grid_context_menu(self, pos) -> None:
+        paths = self._context_menu_screenshot_paths(pos)
+        if not paths:
+            return
+        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+
+        menu = QMenu(self.grid_screenshots)
+        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        action_open = menu.addAction("📂 Open")
+        action_folder = menu.addAction("📁 Open folder")
+        if len(paths) == 1:
+            path = paths[0]
+            action_open.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open(p)
+            )
+            action_folder.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open_folder(p)
+            )
+        else:
+            action_open.setEnabled(False)
+            action_folder.setEnabled(False)
+        menu.exec(self.grid_screenshots.viewport().mapToGlobal(pos))
+
+    def _on_screenshot_open(self, path: str) -> None:
+        if not path or not os.path.isfile(path):
+            return
+        self._last_opened_screenshot_path = os.path.normpath(path)
+        self._sync_screenshot_photo_visuals()
+        if hasattr(self, "_open_file_with_default_app"):
+            self._open_file_with_default_app(path)
+        else:
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]
+            except Exception as exc:
+                logging.warning("Could not open screenshot %s: %s", path, exc)
+
+    def _on_screenshot_open_folder(self, path: str) -> None:
+        from steempeg.infra.paths import reveal_in_file_manager
+
+        try:
+            reveal_in_file_manager(path)
+        except Exception as exc:
+            logging.warning("Could not reveal screenshot %s: %s", path, exc)
 
     def choose_records_folder(self) -> None:
         """Change the export / Records folder from the Rendered tab footer."""
@@ -1334,12 +1561,12 @@ class RenderedLibraryMixin:
                     candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
                     if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
                         thumb = candidate
-                        self._apply_screenshot_thumb(item, thumb)
                     else:
                         missing_thumbs.append((path, mtime))
                 else:
                     missing_thumbs.append((path, mtime))
                 self.grid_screenshots.addItem(item)
+                self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
                 snapshot.append(
                     {"full_path": path, "mtime": mtime, "game_name": game}
                 )
@@ -1368,12 +1595,16 @@ class RenderedLibraryMixin:
         item.setData(_SHOT_MTIME_ROLE, float(mtime))
         item.setData(_SHOT_GAME_ROLE, game)
         item.setToolTip(path)
-        item.setSizeHint(QSize(176, 130))
-        item.setText(os.path.basename(path))
+        item.setSizeHint(QSize(176, 150))
         return item
 
     def _apply_screenshot_thumb(self, item: QListWidgetItem, thumb_path: str) -> None:
         if not item or not thumb_path:
+            return
+        grid = getattr(self, "grid_screenshots", None)
+        photo = grid.itemWidget(item) if grid is not None else None
+        if isinstance(photo, ScreenshotPhoto):
+            photo.set_thumbnail(thumb_path)
             return
         pix = QPixmap(thumb_path)
         if pix.isNull():
@@ -1466,13 +1697,15 @@ class RenderedLibraryMixin:
                     mtime = 0.0
                 game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
                 item = self._make_screenshot_item(path, mtime, game)
+                thumb = ""
                 if cache_dir:
                     candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
                     if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                        self._apply_screenshot_thumb(item, candidate)
+                        thumb = candidate
                     else:
                         missing_thumbs.append((path, mtime))
                 self.grid_screenshots.addItem(item)
+                self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
         finally:
             self.grid_screenshots.setUpdatesEnabled(True)
 
@@ -1502,48 +1735,50 @@ class RenderedLibraryMixin:
         if grid is None or not hasattr(self, "combo_sort"):
             return
         idx = self.combo_sort.currentIndex()
-        items = [grid.takeItem(0) for _ in range(grid.count())]
-
-        def game_key(item: QListWidgetItem) -> str:
-            return (item.data(_SHOT_GAME_ROLE) or item.text() or "").lower()
-
-        def date_key(item: QListWidgetItem) -> float:
-            cached = item.data(_SHOT_MTIME_ROLE)
-            if cached is not None:
-                try:
-                    return float(cached)
-                except (TypeError, ValueError):
-                    pass
-            path = item.data(Qt.ItemDataRole.UserRole)
+        # Capture card payloads before takeItem drops the widgets.
+        payload: list[tuple[QListWidgetItem, str, float, str, str]] = []
+        while grid.count():
+            item = grid.takeItem(0)
+            if item is None:
+                continue
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            game = str(item.data(_SHOT_GAME_ROLE) or "")
             try:
-                return os.path.getmtime(path) if path else 0.0
-            except OSError:
-                return 0.0
+                mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+            except (TypeError, ValueError):
+                mtime = 0.0
+            thumb = ""
+            cache_dir = getattr(self, "cache_dir", None) or ""
+            if cache_dir and path:
+                candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
+                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                    thumb = candidate
+            payload.append((item, path, mtime, game, thumb))
+
+        def game_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> str:
+            _item, _path, _mtime, game, _thumb = entry
+            return (game or "").lower()
+
+        def date_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> float:
+            return float(entry[2] or 0.0)
 
         if idx in (1, 2):
-            items.sort(key=game_key, reverse=(idx == 2))
+            payload.sort(key=game_key, reverse=(idx == 2))
         elif idx == 7:
-            items.sort(key=date_key)
-        elif idx in (0, 8):
-            # Default + Newest First
-            items.sort(key=date_key, reverse=True)
+            payload.sort(key=date_key)
         else:
-            items.sort(key=date_key, reverse=True)
+            # Default + Newest First (and other date-ish indices)
+            payload.sort(key=date_key, reverse=True)
 
-        for item in items:
+        for item, path, mtime, game, thumb in payload:
             grid.addItem(item)
+            self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
+        self._sync_screenshot_photo_visuals()
 
     def _on_screenshot_item_activated(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if not path or not os.path.isfile(path):
-            return
-        if hasattr(self, "_open_file_with_default_app"):
-            self._open_file_with_default_app(path)
-        else:
-            try:
-                os.startfile(path)  # type: ignore[attr-defined]
-            except Exception as exc:
-                logging.warning("Could not open screenshot %s: %s", path, exc)
+        if path:
+            self._on_screenshot_open(str(path))
 
     def _seed_rendered_icons_cache(self) -> dict[str, str]:
         """Reuse game icons already fetched during the Clips Manager scan."""
