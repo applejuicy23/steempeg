@@ -3617,6 +3617,17 @@ class RenderMixin:
         self._sync_portable_queue_header_controls()
 
     def _sync_portable_queue_header_controls(self) -> None:
+        # Queue # circles on ClipCards — desktop + portable (not portable-only).
+        if hasattr(self, "refresh_clip_queue_badges"):
+            try:
+                self.refresh_clip_queue_badges()
+            except Exception:
+                pass
+        elif hasattr(self, "refresh_portable_clip_queue_badges"):
+            try:
+                self.refresh_portable_clip_queue_badges()
+            except Exception:
+                pass
         if not getattr(self, "_portable_shell", False):
             return
         try:
@@ -3632,11 +3643,6 @@ class RenderMixin:
             sync_portable_render_button(self)
         except Exception:
             pass
-        if hasattr(self, "refresh_portable_clip_queue_badges"):
-            try:
-                self.refresh_portable_clip_queue_badges()
-            except Exception:
-                pass
 
     def _apply_header_from_job(self, job):
         if not job or not hasattr(self, "custom_text_label"):
