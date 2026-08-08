@@ -13,6 +13,7 @@ from steempeg.core.clip_identity import (
     dedupe_steam_session_folders,
     folder_has_video_chunks,
     is_nested_same_session,
+    pick_best_session_folder,
     steam_session_key,
 )
 from steempeg.core.dash import health, repair
@@ -502,6 +503,8 @@ def run_library_scan(
 
     ``known_paths`` — when set, only emit clips whose path is not already known
     (Skip: quiet append of newly appeared folders after snapshot restore).
+    Also skips inferior clip_/bg_/fg_ siblings of a known session, and still
+    emits a better sibling (e.g. CLIP replacing an already-listed FG).
     """
     on_discovered(0)
     if from_cache:
@@ -513,7 +516,32 @@ def run_library_scan(
 
     if known_paths is not None:
         known = {os.path.normpath(p) for p in known_paths}
-        candidates = [p for p in candidates if os.path.normpath(p) not in known]
+        known_by_session: Dict[str, str] = {}
+        for path in known:
+            key = steam_session_key(os.path.basename(path))
+            if not key:
+                continue
+            existing = known_by_session.get(key)
+            if existing is None:
+                known_by_session[key] = path
+            else:
+                best = pick_best_session_folder([existing, path])
+                if best:
+                    known_by_session[key] = os.path.normpath(best)
+
+        filtered: List[str] = []
+        for path in candidates:
+            norm = os.path.normpath(path)
+            if norm in known:
+                continue
+            key = steam_session_key(os.path.basename(path))
+            if key and key in known_by_session:
+                best = pick_best_session_folder([known_by_session[key], path])
+                if not best or os.path.normpath(best) != norm:
+                    # Known library entry already wins this session — skip.
+                    continue
+            filtered.append(path)
+        candidates = filtered
 
     total = len(candidates)
     on_discovered(total)
