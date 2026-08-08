@@ -15,6 +15,11 @@ from steempeg.infra import cache as json_cache
 CACHE_FILENAME = "screenshots_library_cache.json"
 CACHE_VERSION = 1
 THUMB_DIR = "screenshot_thumbs"
+# ~2× the on-screen photo well so HiDPI + Smooth scale stay sharp.
+THUMB_MAX_W = 384
+THUMB_MAX_H = 216
+THUMB_JPEG_QUALITY = 92
+THUMB_GEN_VERSION = 2
 
 
 def screenshots_library_cache_path(cache_dir: str | None) -> str:
@@ -23,7 +28,11 @@ def screenshots_library_cache_path(cache_dir: str | None) -> str:
 
 def _thumb_key(file_path: str, mtime: float) -> str:
     norm = os.path.normcase(os.path.normpath(file_path))
-    return hashlib.sha256(f"{norm}|{float(mtime):.6f}".encode("utf-8")).hexdigest()[:20]
+    return hashlib.sha256(
+        f"{norm}|{float(mtime):.6f}|{THUMB_MAX_W}x{THUMB_MAX_H}|v{THUMB_GEN_VERSION}".encode(
+            "utf-8"
+        )
+    ).hexdigest()[:20]
 
 
 def screenshot_thumb_path(cache_dir: str, file_path: str, mtime: float) -> str:
