@@ -55,6 +55,8 @@ class ClipCard(qtw.QWidget):
         self.thumb_label = qtw.QLabel(self)
         self.thumb_label.setFixedSize(254, 144)
         self.thumb_label.setStyleSheet("background-color: #1a1a1a; border-radius: 0px;")
+        # top | mid | bottom | both — shelf corners vs panel edges
+        self._edge_role = "mid"
 
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
@@ -127,6 +129,7 @@ class ClipCard(qtw.QWidget):
         self.set_queue_badge(queue_index, queue_color)
 
         text_widget = qtw.QWidget()
+        self._footer_widget = text_widget
         text_widget.setStyleSheet("""
             QWidget {
                 background-color: #383838;
@@ -193,13 +196,61 @@ class ClipCard(qtw.QWidget):
         self._load_overlay.hide()
 
         self._border_overlay.raise_()
+        self._apply_edge_radii()
+
+    def set_edge_role(self, role: str) -> None:
+        """Shelf corners: top row square-top, bottom row square-bottom, mid fully round."""
+        role = (role or "mid").lower()
+        if role not in ("top", "mid", "bottom", "both"):
+            role = "mid"
+        if getattr(self, "_edge_role", None) == role:
+            return
+        self._edge_role = role
+        self._apply_edge_radii()
+        self._apply_selection_style()
+
+    def _corner_radii(self) -> tuple[int, int, int, int]:
+        """Return (tl, tr, br, bl) pixel radii for the card chrome."""
+        role = getattr(self, "_edge_role", "mid")
+        r = 12
+        if role == "both":
+            return 0, 0, 0, 0
+        if role == "top":
+            return 0, 0, r, r
+        if role == "bottom":
+            return r, r, 0, 0
+        return r, r, r, r
+
+    def _apply_edge_radii(self) -> None:
+        tl, tr, br, bl = self._corner_radii()
+        # Thumb only rounds its top; footer owns the bottom curve.
+        self.thumb_label.setStyleSheet(
+            f"background-color: #1a1a1a;"
+            f"border-top-left-radius: {tl}px;"
+            f"border-top-right-radius: {tr}px;"
+            f"border-bottom-left-radius: 0px;"
+            f"border-bottom-right-radius: 0px;"
+        )
+        footer = getattr(self, "_footer_widget", None)
+        if footer is not None:
+            # Footer radius tracks bottom corners; keep a soft 9px when rounded.
+            fbl = 9 if bl else 0
+            fbr = 9 if br else 0
+            footer.setStyleSheet(
+                f"QWidget {{"
+                f"background-color: #383838; border: none;"
+                f"border-top-left-radius: 0px; border-top-right-radius: 0px;"
+                f"border-bottom-left-radius: {fbl}px;"
+                f"border-bottom-right-radius: {fbr}px;"
+                f"}}"
+            )
 
     def set_queue_badge(
         self,
         queue_index: Optional[int] = None,
         queue_color: Optional[str] = None,
     ) -> None:
-        """Show/hide the portable queue # overlay (bottom-left; game icon stays top-left)."""
+        """Show/hide the queue # overlay (bottom-left; game icon stays top-left)."""
         badge = getattr(self, "queue_index_badge", None)
         icon = getattr(self, "icon_label", None)
         if badge is None:
@@ -312,14 +363,15 @@ class ClipCard(qtw.QWidget):
             border = "2px solid #7a6aa8"
         else:
             border = "2px solid #444444"
+        tl, tr, br, bl = self._corner_radii()
         self._border_overlay.setStyleSheet(f"""
             QFrame {{
                 background: transparent;
                 border: {border};
-                border-top-left-radius: 0px;
-                border-top-right-radius: 0px;
-                border-bottom-left-radius: 12px;
-                border-bottom-right-radius: 12px;
+                border-top-left-radius: {tl}px;
+                border-top-right-radius: {tr}px;
+                border-bottom-right-radius: {br}px;
+                border-bottom-left-radius: {bl}px;
             }}
         """)
 
