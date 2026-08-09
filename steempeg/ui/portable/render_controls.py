@@ -335,7 +335,7 @@ class PortableRenderControlStrip(QFrame):
             self.btn_cancel.setEnabled(False)
             self.btn_pause.setText("Pause")
             if pending > 0:
-                self.btn_start.setText("🚩 Start Queue")
+                self.btn_start.setText(f"🚩 Start Queue ({pending})")
             else:
                 self.btn_start.setText("🚩 Start")
 
