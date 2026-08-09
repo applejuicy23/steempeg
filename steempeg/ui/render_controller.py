@@ -768,6 +768,15 @@ class RenderMixin:
         if getattr(self, "_rendered_scan_active", False) and scan_phase is None and state == "ready":
             return
 
+        # Queue owns the idle Ready cluster: numbered coloured badge, not plain green.
+        if (
+            scan_phase is None
+            and state in ("ready", "success")
+            and not getattr(self, "_is_rendering", False)
+            and self._sync_dash_queue_status_chrome()
+        ):
+            return
+
         colors = {
             "ready": "#4CAF50",
             "rendering": "#a871ff",
@@ -779,6 +788,17 @@ class RenderMixin:
             "cancelled": "#ff4444",
         }
         color = colors.get(state, "#a871ff")
+        queue_index = None
+        if self._queue_is_active():
+            job = self._queue_context_job()
+            if job is not None:
+                queue_index = int(getattr(job, "queue_index", 0) or 0) or None
+                if state in ("rendering", "busy") and job.status == JobStatus.RENDERING:
+                    color = STATUS_COLORS[JobStatus.RENDERING]
+                elif state == "error":
+                    color = STATUS_COLORS[JobStatus.ERROR]
+                elif state == "paused":
+                    color = colors["paused"]
         preserve_progress = state in ("cancelling", "cancelled", "paused")
 
         display_text = str(text)
@@ -792,12 +812,10 @@ class RenderMixin:
         if state == "rendering" and not display_text:
             display_text = "Rendering"
 
-        if hasattr(self, 'status_dot'):
-            dot_px = self.status_dot.width() or 12
-            radius = max(3, dot_px // 2)
-            self.status_dot.setStyleSheet(
-                f"background-color: {color}; border-radius: {radius}px;"
-            )
+        if queue_index and self._queue_is_active():
+            self._paint_status_dot_queue_badge(queue_index, color)
+        else:
+            self._paint_status_dot_plain(color)
 
         status_label = self.ui.label_status
         dense = getattr(self, "_ui_density", None)
@@ -879,6 +897,80 @@ class RenderMixin:
 
         self._sync_portable_render_strip(full_text, state, percent)
 
+    def _paint_status_dot_plain(self, color: str) -> None:
+        dot = getattr(self, "status_dot", None)
+        if dot is None:
+            return
+        dense = getattr(self, "_ui_density", None)
+        sz = 8 if dense is not None and getattr(dense, "compact", False) else 12
+        dot.setFixedSize(sz, sz)
+        dot.setText("")
+        radius = max(3, sz // 2)
+        dot.setStyleSheet(f"background-color: {color}; border-radius: {radius}px;")
+        self._status_indicator_color = color
+
+    def _paint_status_dot_queue_badge(self, index: int, color: str) -> None:
+        """Numbered circle — yellow queue / orange render / red error / green done."""
+        dot = getattr(self, "status_dot", None)
+        if dot is None:
+            return
+        dense = getattr(self, "_ui_density", None)
+        sz = 16 if dense is not None and getattr(dense, "compact", False) else 18
+        font = 9 if sz <= 16 else 10
+        dot.setFixedSize(sz, sz)
+        dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dot.setText(str(max(1, int(index))))
+        radius = sz // 2
+        # Dark digit on bright badge colours (yellow/orange/green); light on red.
+        ink = "#ffffff" if color.lower() in ("#ff4444", "#ff0000") else "#1a1a1a"
+        dot.setStyleSheet(
+            f"background-color: {color}; color: {ink}; border-radius: {radius}px; "
+            f"font-size: {font}px; font-weight: 800; "
+            f"font-family: 'Segoe UI', Arial, sans-serif;"
+        )
+        self._status_indicator_color = color
+
+    def _sync_dash_queue_status_chrome(self) -> bool:
+        """Drive Ready cluster from queue context job. True = queue owns the chrome."""
+        if getattr(self, "_portable_shell", False):
+            return False
+        if not hasattr(self.ui, "label_status"):
+            return False
+        if not self._queue_is_active():
+            return False
+        job = self._queue_context_job()
+        if job is None:
+            return False
+
+        color = STATUS_COLORS.get(job.status, STATUS_COLORS[JobStatus.QUEUED])
+        index = int(getattr(job, "queue_index", 0) or 0) or 1
+        if job.status == JobStatus.QUEUED:
+            label = "Ready"
+        else:
+            label = STATUS_HEADER_LABELS.get(job.status, "Ready")
+
+        self._paint_status_dot_queue_badge(index, color)
+        status_label = self.ui.label_status
+        dense = getattr(self, "_ui_density", None)
+        status_font = int(getattr(dense, "dash_font", 14) or 14)
+        status_label.setStyleSheet(
+            f"background: transparent; border: none; font-size: {status_font}px; "
+            f"font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;"
+        )
+        full = label
+        shown = self._elide_status_label_text(status_label, full)
+        status_label.setText(shown)
+        status_label.setToolTip(full if shown != full else f"#{index} · {full}")
+        if hasattr(self.ui, "progress_render") and not getattr(self, "_is_rendering", False):
+            bar = self.ui.progress_render
+            if hasattr(bar, "set_progress"):
+                bar.set_progress(0.0)
+                if hasattr(bar, "set_state"):
+                    bar.set_state("ready")
+        if hasattr(self, "label_pct") and not getattr(self, "_is_rendering", False):
+            self.label_pct.setText("0%")
+        return True
+
     def _sync_portable_render_strip(
         self,
         text: str | None = None,
@@ -918,6 +1010,80 @@ class RenderMixin:
     def _queue_is_active(self) -> bool:
         """True when the render queue has jobs (queue drives batch render)."""
         return bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+
+    def _queue_context_job(self):
+        """Job that owns player-header identity while the queue is non-empty.
+
+        Priority: active render → selected queue card → next pending → first listed
+        (so completed jobs still listed keep a stable context — v44 P0).
+        """
+        if not self._queue_is_active():
+            return None
+        active = getattr(self, "_active_render_job", None)
+        if active is not None:
+            live = self.render_queue.get(getattr(active, "id", ""))
+            if live is not None:
+                return live
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        if selected_id:
+            job = self.render_queue.get(selected_id)
+            if job is not None:
+                return job
+        pending = self.render_queue.next_queued()
+        if pending is not None:
+            return pending
+        jobs = list(getattr(self.render_queue, "jobs", None) or [])
+        return jobs[0] if jobs else None
+
+    def _sync_player_header_to_queue_context(self) -> bool:
+        """Drive header from the queue context job. False = no queue context."""
+        job = self._queue_context_job()
+        if job is None:
+            return False
+        self._apply_header_from_job(job)
+        self._sync_dash_queue_status_chrome()
+        return True
+
+    def _restore_header_from_library_selection(self) -> None:
+        """After the queue clears — fall back to Clips / Rendered selection."""
+        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+            table = getattr(self, "table_rendered", None)
+            if table is not None and table.currentRow() >= 0 and hasattr(
+                self, "update_rendered_selection"
+            ):
+                self.update_rendered_selection()
+                return
+        if not hasattr(self.ui, "table_clips"):
+            return
+        row = self.ui.table_clips.currentRow()
+        if row >= 0:
+            self._apply_header_from_table_row(row)
+            return
+        preview = getattr(self, "_preview_clip_path", None)
+        if not preview:
+            return
+        norm = os.path.normpath(preview)
+        for r in range(self.ui.table_clips.rowCount()):
+            item = self.ui.table_clips.item(r, 0)
+            if item and os.path.normpath(item.data(Qt.UserRole) or "") == norm:
+                self._apply_header_from_table_row(r)
+                return
+        # Preview may be a rendered export after the queue drained.
+        if hasattr(self, "_resolved_rendered_meta") and os.path.isfile(norm):
+            if hasattr(self, "update_rendered_selection") and getattr(
+                self, "table_rendered", None
+            ) is not None:
+                # Best-effort: header from path meta even if table row isn't current.
+                display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
+                    norm, os.path.basename(norm)
+                )
+                if hasattr(self, "custom_text_label"):
+                    from steempeg.ui.player_header_layout import set_player_header_game_text
+
+                    extra = ["Unknown"] if is_unknown else []
+                    set_player_header_game_text(self, display_title, extra=extra)
+                if icon_path and hasattr(self, "_set_player_header_game_icon"):
+                    self._set_player_header_game_icon(icon_path=icon_path)
 
     def _queue_controls_preview(self) -> bool:
         """Alias kept for library/grid hooks."""
@@ -1051,7 +1217,7 @@ class RenderMixin:
         apply_square_icon(self.custom_icon_label, shaped, 24)
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
-        """Preview from Clips Manager while queue is active; sync queue highlight if clip is queued."""
+        """Preview from Clips Manager while queue is active; header stays queue-first."""
         self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
         if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
@@ -1064,7 +1230,6 @@ class RenderMixin:
         self._rendered_media_path = None
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
-        self._apply_header_from_table_row(selected_row)
 
         queue_job = self.render_queue.find_by_clip_path(clip_path)
         if queue_job:
@@ -1076,6 +1241,8 @@ class RenderMixin:
         self._selected_queue_job_id = None
         self._populate_quality_options_for_clip(clip_path)
         self._apply_export_session_state(trim_restore, silent=True)
+        # Preview this card, but keep title/icon on the queue context job.
+        self._sync_player_header_to_queue_context()
 
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
@@ -1330,12 +1497,12 @@ class RenderMixin:
             btn.setIcon(start_render_icon(icon_sz))
             btn.setIconSize(QSize(icon_sz, icon_sz))
             if pending > 0:
-                btn.setText(" Render Queue")
+                btn.setText(f" Render Queue ({pending})")
             else:
                 btn.setText(" START RENDER")
         else:
             if pending > 0:
-                btn.setText("🚩 Render Queue")
+                btn.setText(f"🚩 Render Queue ({pending})")
             else:
                 btn.setText("🚩 START RENDER")
         # Any label refresh must not leave a pending queue with a dead Start button.
@@ -1345,6 +1512,87 @@ class RenderMixin:
             from steempeg.ui.portable import sync_portable_render_button
 
             sync_portable_render_button(self)
+        else:
+            self._sync_desktop_player_render_button()
+
+    def _ensure_desktop_player_render_button(self, parent=None) -> None:
+        """Portable-style Render pill beside Trim (desktop only)."""
+        if getattr(self, "_portable_shell", False):
+            return
+        existing = getattr(self, "btn_player_render", None)
+        if existing is not None:
+            try:
+                existing.objectName()
+                return
+            except RuntimeError:
+                pass
+        from PySide6.QtWidgets import QPushButton
+
+        from steempeg.ui.design_tokens import with_tooltip_style
+
+        style = with_tooltip_style(
+            "QPushButton {"
+            "background-color: #2e6b32; color: #ffffff;"
+            "border: 2px solid #3e8e41; border-radius: 15px;"
+            "padding: 0 12px; font-weight: bold;"
+            "}"
+            "QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }"
+            "QPushButton:pressed { background-color: #235226; }"
+            "QPushButton:disabled { background-color: #222222; color: #555555; "
+            "border: 2px solid #2d2d2d; }"
+        )
+        btn = QPushButton(parent)
+        btn.setObjectName("desktopPlayerRender")
+        btn.setText("🚩 Render")
+        btn.setStyleSheet(style)
+        btn.setFixedHeight(30)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip("Export settings")
+        trim = getattr(self, "btn_trim", None)
+        if trim is not None:
+            btn.setFont(trim.font())
+        btn.clicked.connect(self.focus_export_settings_panel)
+        self.btn_player_render = btn
+        self._sync_desktop_player_render_button()
+
+    def _sync_desktop_player_render_button(self) -> None:
+        btn = getattr(self, "btn_player_render", None)
+        if btn is None or getattr(self, "_portable_shell", False):
+            return
+        pending = self._queue_pending_count()
+        has_clip = False
+        resolve = getattr(self, "_resolve_export_clip_path", None)
+        if callable(resolve):
+            try:
+                has_clip = bool(resolve())
+            except Exception:
+                has_clip = False
+        if pending > 0 and has_clip:
+            btn.setText(f"🚩 Queue ({pending})")
+        else:
+            btn.setText("🚩 Render")
+        btn.setEnabled(True)
+
+    def focus_export_settings_panel(self) -> None:
+        """Open Export Settings — Portable sheet, or neo Export tab on desktop."""
+        if getattr(self, "_portable_shell", False):
+            try:
+                from steempeg.ui.portable.chrome import open_portable_render_settings
+
+                open_portable_render_settings(self)
+            except Exception:
+                logging.exception("Open portable render settings failed")
+            return
+        from steempeg.ui.settings_prefs import RENDER_TAB_EXPORT, apply_default_render_tab
+
+        apply_default_render_tab(self, RENDER_TAB_EXPORT)
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is not None:
+            neo.show()
+            neo.raise_()
+        scroll = getattr(self, "right_scroll", None)
+        if scroll is not None:
+            scroll.ensureVisible(0, 0)
 
     def _apply_desktop_dash_render_icons(self) -> None:
         """White glyphs on desktop Start / Pause / Cancel (portable keeps emoji labels)."""
@@ -2701,8 +2949,12 @@ class RenderMixin:
                 )
                 apply_square_icon(self.bottom_icon_label, shaped, 24)
 
-            # We are updating the TOP panel of the player!
-            if hasattr(self, 'custom_text_label') and hasattr(self, 'custom_icon_label'):
+            # Player header follows queue context while jobs remain (v44 P0).
+            if (
+                hasattr(self, 'custom_text_label')
+                and hasattr(self, 'custom_icon_label')
+                and not self._queue_is_active()
+            ):
                 self._set_player_header_game_icon(icon_path=target_icon)
                 
 
@@ -3035,6 +3287,8 @@ class RenderMixin:
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
             self._persist_render_queue()
+            self._sync_player_header_to_queue_context()
+            self.update_playback_badge()
             sidebar = getattr(self, "_portable_queue_sidebar", None)
             if sidebar is not None and hasattr(sidebar, "refresh"):
                 sidebar.refresh()
@@ -3118,6 +3372,8 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
+        self._sync_player_header_to_queue_context()
+        self.update_playback_badge()
         sidebar = getattr(self, "_portable_queue_sidebar", None)
         if sidebar is not None and hasattr(sidebar, "refresh"):
             sidebar.refresh()
@@ -3482,11 +3738,13 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
+        self._restore_header_from_library_selection()
         self.update_playback_badge()
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
         if not getattr(self, "_is_rendering", False):
             self._reset_export_ui_after_queue_cleared()
+            self.update_status_indicator("Ready", "ready")
 
     def _reset_export_ui_after_queue_cleared(self) -> None:
         """Drop stale export toggles/preset once the queue drains."""
@@ -3721,6 +3979,9 @@ class RenderMixin:
                 self.render_queue.jobs,
                 selected_id,
             )
+        self._update_start_button_label()
+        if not getattr(self, "_is_rendering", False):
+            self._sync_dash_queue_status_chrome()
         sidebar = getattr(self, "_portable_queue_sidebar", None)
         if sidebar is not None:
             try:
@@ -3842,6 +4103,7 @@ class RenderMixin:
             return
         self._batch_current += 1
         self._selected_queue_job_id = job.id
+        self._apply_header_from_job(job)
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         job.refresh_output_path()
@@ -4075,6 +4337,7 @@ class RenderMixin:
             self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
         self.refresh_render_queue_panel()
+        self._sync_player_header_to_queue_context()
         self.update_playback_badge()
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
