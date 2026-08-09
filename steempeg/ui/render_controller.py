@@ -3768,15 +3768,15 @@ class RenderMixin:
                 self._queue_user_collapsed = False
             # Re-open when shut unless the user explicitly dragged it closed.
             # (Theatre collapse does not set the flag, so exit restores the dock.)
+            # Scrap ≤48 counts as shut — closed panes often sit at PANE_FREED (1).
             should_open = (
-                sizes[1] <= 0
+                sizes[1] <= 48
                 and not bool(getattr(self, "_queue_user_collapsed", False))
                 and not bool(getattr(self, "_splitter_dragging", False))
             )
             if should_open and hasattr(self, "_open_queue_in_right_splitter"):
                 self._open_queue_in_right_splitter()
         else:
-            self.render_queue_panel.setMinimumWidth(0)
             self.render_queue_panel.show()
             if bool(getattr(self, "_queue_user_collapsed", False)) or (
                 had_jobs and sizes[1] > 0

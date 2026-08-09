@@ -3649,7 +3649,6 @@ class LibraryMixin:
             self.fast_sync_grid()
         # Snapshot may still hold FG+CLIP pairs from older quiet appends.
         self._purge_inferior_session_siblings()
-        self._persist_clips_library_snapshot()
 
         self._scan_snapshot_restore = False
         want_append = bool(getattr(self, "_snapshot_append_new_after", False))
@@ -3662,12 +3661,18 @@ class LibraryMixin:
             self, "preload_render_history"
         ):
             self._startup_library_scan_active = False
-            self.preload_render_history(announce=True)
+            # Quiet — Skip already shows Ready; announcing "Loading render history…"
+            # made startup feel like another 1–3s prepare after the window opened.
+            self.preload_render_history(announce=False)
         elif hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
         logging.info("Skip: painted %d clips from session snapshot", len(clips))
+
+        # Snapshot rewrite is not needed before first paint — defer off the
+        # critical path (same for duration / poster top-ups below).
+        QTimer.singleShot(1500, self._persist_clips_library_snapshot)
 
         # Background only — UI already Ready.
         QTimer.singleShot(400, self._schedule_clip_duration_backfill)

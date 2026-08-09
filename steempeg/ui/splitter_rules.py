@@ -173,22 +173,21 @@ class SplitterRulesMixin:
         self._player_column_kissed = len(sizes) >= 2 and int(sizes[0]) <= PANE_FREED
 
     def sync_queue_minimum(self) -> None:
-        """Match the collapsed-pane minimums to the right column's live sizes.
+        """Match pane minimums to open vs shut — Clips-style floor when open.
 
-        Collapsed panes still feed the nested splitter's minimumSizeHint, so a
-        closed queue keeps holding ~480px that the player column can never use.
-        Every path that reopens a pane clears its minimum itself.
+        Closed queue must stay at ``PANE_FREED`` or content hint reserves ~480px.
+        Open queue gets an explicit layout min so Qt cannot squash past it
+        (labels/buttons alone will happily crush to nothing).
         """
         if not self._splitter_rules_active():
             return
         sizes = self.right_h_splitter.sizes()
         if len(sizes) < 2:
             return
-        # Compare against the sentinel, not zero: Qt hands a collapsed pane that
-        # exact minimum back, so a strict test reads "shut" as "open" and drops
-        # the minimums that were holding the kiss together.
+        # Scrap counts as shut so a remnant cannot keep the layout floor latched.
         self._free_collapsed_minimums(
-            int(sizes[0]) <= PANE_FREED, int(sizes[1]) <= PANE_FREED
+            int(sizes[0]) <= PANE_FREED,
+            int(sizes[1]) <= PANE_SCRAP_WIDTH,
         )
 
     def _splitter_drag_moved(self, side: str, global_x: int, grab_offset: int) -> bool:
@@ -350,7 +349,8 @@ class SplitterRulesMixin:
             return ""
         if int(sizes[0]) <= PANE_FREED:
             return FROM_KISS
-        return REOPEN_QUEUE if int(sizes[1]) <= PANE_FREED else ""
+        # Scrap counts as shut so reopen snaps to layout floor (not 1→N unroll).
+        return REOPEN_QUEUE if int(sizes[1]) <= PANE_SCRAP_WIDTH else ""
 
     def _drag_right_from_kiss(self, global_x: int, grab_offset: int) -> bool:
         """Player column collapsed: reopen it, or shut the queue and travel."""
@@ -446,9 +446,18 @@ class SplitterRulesMixin:
         """Narrowest the queue renders at — its own content minimum."""
         return max(int(self.render_queue_panel.minimumSizeHint().width()), 1)
 
+    def _queue_layout_floor(self) -> int:
+        """Hard open floor from layout_defaults (same role as Clips left min)."""
+        from steempeg.ui.layout_defaults import queue_panel_min_width
+
+        win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
+        if win_w <= 0:
+            return 380
+        return max(80, int(queue_panel_min_width(win_w, widget=getattr(self, "ui", None))))
+
     def _snap_queue_width(self, wanted: int, room: int) -> int:
-        """Shut, or at least minimally open — the queue has no in-between."""
-        floor = min(self._queue_pane_floor(), room)
+        """Shut, or at least the layout min — never creep via content hint (~1px)."""
+        floor = min(self._queue_layout_floor(), room)
         if wanted < floor * CLIPS_SNAP_SHUT:
             return 0
         return min(max(int(wanted), floor), room)
@@ -471,10 +480,13 @@ class SplitterRulesMixin:
         main.setSizes([max(sum(sizes) - handle, 0), handle])
 
     def _free_collapsed_minimums(self, player_shut: bool, queue_shut: bool) -> None:
-        """Let collapsed panes stop reserving room. Only an explicit minimum
-        above zero can undercut a content floor — qSmartMinSize ignores zero."""
+        """Collapsed → ``PANE_FREED``; open queue → layout floor (blocks squash)."""
         self.ui.right_panel.setMinimumWidth(PANE_FREED if player_shut else 0)
-        self.render_queue_panel.setMinimumWidth(PANE_FREED if queue_shut else 0)
+        if queue_shut:
+            self.render_queue_panel.setMinimumWidth(PANE_FREED)
+        else:
+            # Explicit min like Clips Manager — zero lets the list crush itself.
+            self.render_queue_panel.setMinimumWidth(self._queue_layout_floor())
         # Both panes gone: the right column is nothing but its own handle. Without
         # this the outer splitter re-inflates it and the kiss springs back open.
         shut_width = self._right_handle_width() if (player_shut and queue_shut) else 0

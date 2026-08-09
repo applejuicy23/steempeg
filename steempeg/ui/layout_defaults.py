@@ -37,10 +37,11 @@ DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT = [480, 220]
 # [player area, render queue] when queue is empty (second value = 0)
 DEFAULT_RIGHT_H_SPLITTER_SIZES = [1200, 0]
 
-# Render Queue panel width when the queue is non-empty (list row: thumb + text + ✕)
-MIN_QUEUE_PANEL_WIDTH = 420
-MIN_QUEUE_PANEL_WIDTH_COMPACT = 280
-DEFAULT_QUEUE_PANEL_WIDTH = 420
+# Render Queue panel width when the queue is non-empty (list row: thumb + text + ✕).
+# Wide enough that toolbar "Clear" and list titles are not crushed.
+MIN_QUEUE_PANEL_WIDTH = 380
+MIN_QUEUE_PANEL_WIDTH_COMPACT = 320
+DEFAULT_QUEUE_PANEL_WIDTH = 380
 
 # "grid" or "list"
 DEFAULT_LIBRARY_VIEW = "grid"

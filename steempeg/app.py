@@ -3287,8 +3287,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         )
 
         mode = load_startup_library_scan(settings)
-        # Skip paints from JSON only — no need to wait for maximize settle.
-        delay_ms = 0
 
         def _start():
             # Clips first; Rendered is deferred until clips finishes.
@@ -3338,7 +3336,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if hasattr(self, "restore_screenshots_from_session_cache"):
                 self.restore_screenshots_from_session_cache()
 
-        QTimer.singleShot(delay_ms, _start)
+        # Skip: paint synchronously while the window is still hidden so the first
+        # frame is already Ready (no post-show "Loading render history…").
+        # Quick/Full: defer one tick so maximize geometry can settle first.
+        if mode == SCAN_CACHE:
+            _start()
+        else:
+            QTimer.singleShot(0, _start)
 
     def on_main_window_resized(self):
         """Keep panel minimums + chrome density in sync with window width."""
@@ -3375,12 +3379,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
             self.ui.left_panel.setMinimumWidth(left_min)
-        panel = getattr(self, "render_queue_panel", None)
-        if panel is not None:
-            # Nested queue must stay minWidth 0. A hard min propagates through
-            # right_h_splitter into main_splitter and shoves Clips Manager /
-            # grows the window when the pane is opened on a mid-width shell.
-            panel.setMinimumWidth(0)
+        # Queue min: Clips-style floor when open, PANE_FREED when shut — never a
+        # blind 0 (that let the list/toolbar squash past MIN_QUEUE_*).
+        if hasattr(self, "sync_queue_minimum"):
+            self.sync_queue_minimum()
 
         # Clamp splitter sizes to new mins without resetting to comfort defaults.
         self._clamp_splitters_to_mins(left_min=left_min)
@@ -3452,7 +3454,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         queue_w = int(sizes[1])
         if total <= 0:
             return
-        panel.setMinimumWidth(0)
 
         # Queue dragged shut → fully close.
         if queue_w <= 0 or queue_w < 48:
@@ -3526,7 +3527,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     v_split.setSizes(restore_v_splitter_sizes(total))
 
     def _open_queue_in_right_splitter(self) -> None:
-        """Open the queue pane using the splitter's real width only (no minWidth)."""
+        """Open the queue pane to its layout floor / saved width."""
         from steempeg.ui.layout_defaults import (
             PLAYER_COLUMN_FLOOR,
             queue_panel_open_width,
@@ -3536,13 +3537,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         panel = getattr(self, "render_queue_panel", None)
         if rhs is None or panel is None:
             return
-        panel.setMinimumWidth(0)
         sizes = rhs.sizes()
         # Prefer the widget's live width — stale size sums (e.g. [1200, 0]) lie
         # when the shell is mid-compact and the right column is much narrower.
         total = max(int(rhs.width() or 0), int(sum(sizes) if sizes else 0), 1)
         win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
-        ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else 280
+        ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else 340
         saved = self.get_layout_setting("queue_panel_width", None)
         queue_w = ideal
         if saved is not None:
@@ -3557,6 +3557,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         queue_w = max(80, min(int(queue_w), max_q))
         rhs.setSizes([total - queue_w, queue_w])
+        # Clips-style floor while open (cleared again if the pane is shut).
+        if hasattr(self, "sync_queue_minimum"):
+            self.sync_queue_minimum()
 
     def _player_chrome_icon_size(self, dense=None) -> int:
         """Theater / fullscreen / trim chip glyph size — identical for all of them.
@@ -4446,7 +4449,8 @@ def main():
         except Exception:
             pass
         # Light re-assert only — heavy restore already ran pre-show.
-        window._ui_density = None
+        # Do NOT clear ``_ui_density`` here: that forced a full chrome rebuild
+        # after the window was already visible (1–3s of "still preparing").
         window._apply_startup_splitter_sizes()
         QApplication.processEvents()
         if ui_shell == UI_SHELL_PORTABLE:
