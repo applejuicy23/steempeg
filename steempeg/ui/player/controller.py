@@ -1310,11 +1310,9 @@ class PlayerMixin:
 
     def _get_immersive_esc_hint(self):
         if getattr(self, '_immersive_esc_hint', None) is None:
-            from steempeg.ui.ui_density import COMFORT
-
-            # Match Refresh button typeface (Segoe UI bold + footer_font);
-            # pill radius so it reads as a chip, not a square Tool tip.
-            font_px = int(COMFORT.footer_font)
+            # Pill chip: translucent so Windows actually paints border-radius;
+            # a notch larger than footer chrome so it reads in fullscreen.
+            font_px = 15
             hint = QLabel("Press ESC to exit full screen")
             hint.setWindowFlags(
                 Qt.WindowType.Tool
@@ -1322,12 +1320,13 @@ class PlayerMixin:
                 | Qt.WindowType.WindowStaysOnTopHint
             )
             hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+            hint.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             hint.setStyleSheet(
                 "QLabel {"
-                " background-color: rgba(15, 15, 15, 210);"
+                " background-color: rgba(15, 15, 15, 220);"
                 " color: #eeeeee;"
-                " padding: 10px 22px;"
-                " border-radius: 18px;"
+                " padding: 12px 28px;"
+                " border-radius: 22px;"
                 f" font-size: {font_px}px;"
                 " font-weight: bold;"
                 " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
