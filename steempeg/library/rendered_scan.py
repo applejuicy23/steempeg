@@ -127,15 +127,17 @@ def scan_single_rendered_file(
         game_name = _resolve_game_name(str(app_id), game_names_cache) or source.get("game_name") or ""
     elif source.get("game_name"):
         game_name = source["game_name"]
+    game_name = str(game_name or "").strip()
 
     if app_id and game_name:
         title = game_name if is_default_rendered_basename(stem, str(app_id)) else stem
     else:
         title = game_name or stem
 
-    is_unknown = not bool(app_id)
+    # Known when we have a real game name (sidecar / Steam cache) — not only app_id.
     if app_id and not game_name:
-        game_name = _resolve_game_name(str(app_id), game_names_cache) or ""
+        game_name = (_resolve_game_name(str(app_id), game_names_cache) or "").strip()
+    is_unknown = not bool(game_name)
 
     dt = datetime.fromtimestamp(mtime)
     type_label = _rendered_type_label(ext)
