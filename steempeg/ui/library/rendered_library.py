@@ -2276,15 +2276,17 @@ class RenderedLibraryMixin:
             game_name = self.get_game_name(str(app_id)) or source.get("game_name") or ""
         elif source.get("game_name"):
             game_name = source["game_name"]
+        game_name = str(game_name or "").strip()
 
         if app_id and game_name:
             title = game_name if is_default_rendered_basename(stem, str(app_id)) else stem
         else:
             title = game_name or stem
 
-        is_unknown = not bool(app_id)
+        # Sidecar/filename may carry game_name without app_id — still not «Unknown».
         if app_id and not game_name and hasattr(self, "get_game_name"):
-            game_name = self.get_game_name(str(app_id)) or ""
+            game_name = (self.get_game_name(str(app_id)) or "").strip()
+        is_unknown = not bool(game_name)
 
         thumb_path = ""
         ext = os.path.splitext(file_path)[1].lower()
@@ -2649,17 +2651,20 @@ class RenderedLibraryMixin:
         size_str = self.table_rendered.item(row, 3).text() if self.table_rendered.item(row, 3) else ""
 
         self._preview_clip_path = file_path
+        self._rendered_media_path = file_path
+        queue_owns_header = hasattr(self, "_queue_is_active") and self._queue_is_active()
         if hasattr(self, "_clear_queue_selection"):
             self._clear_queue_selection()
         else:
             self._selected_queue_job_id = None
-        self._rendered_media_path = file_path
 
         display_title, icon_path, _thumb, is_unknown, _game_key = self._resolved_rendered_meta(
             file_path, os.path.basename(file_path)
         )
 
-        if hasattr(self, "custom_text_label"):
+        if queue_owns_header and hasattr(self, "_sync_player_header_to_queue_context"):
+            self._sync_player_header_to_queue_context()
+        elif hasattr(self, "custom_text_label"):
             from steempeg.ui.player_header_layout import set_player_header_game_text
 
             extra: list[str] = []
@@ -2682,7 +2687,7 @@ class RenderedLibraryMixin:
                 time=time_part,
                 extra=extra,
             )
-        if hasattr(self, "custom_icon_label"):
+        if not queue_owns_header and hasattr(self, "custom_icon_label"):
             from steempeg.ui.icon_utils import apply_square_icon
 
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
