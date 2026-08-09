@@ -19,6 +19,81 @@ def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
     return shaped_game_icon_pixmap(source, size, ICON_SHAPE_CIRCLE)
 
 
+def _asymmetric_round_rect(
+    w: float, h: float, tl: float, tr: float, br: float, bl: float
+) -> qtg.QPainterPath:
+    """Clockwise path with independent corner radii (CSS-style tl/tr/br/bl)."""
+    path = qtg.QPainterPath()
+    if w <= 0 or h <= 0:
+        return path
+    tl = max(0.0, min(float(tl), w / 2.0, h / 2.0))
+    tr = max(0.0, min(float(tr), w / 2.0, h / 2.0))
+    br = max(0.0, min(float(br), w / 2.0, h / 2.0))
+    bl = max(0.0, min(float(bl), w / 2.0, h / 2.0))
+    path.moveTo(tl, 0.0)
+    path.lineTo(w - tr, 0.0)
+    if tr > 0:
+        path.arcTo(w - 2.0 * tr, 0.0, 2.0 * tr, 2.0 * tr, 90.0, -90.0)
+    else:
+        path.lineTo(w, 0.0)
+    path.lineTo(w, h - br)
+    if br > 0:
+        path.arcTo(w - 2.0 * br, h - 2.0 * br, 2.0 * br, 2.0 * br, 0.0, -90.0)
+    else:
+        path.lineTo(w, h)
+    path.lineTo(bl, h)
+    if bl > 0:
+        path.arcTo(0.0, h - 2.0 * bl, 2.0 * bl, 2.0 * bl, 270.0, -90.0)
+    else:
+        path.lineTo(0.0, h)
+    path.lineTo(0.0, tl)
+    if tl > 0:
+        path.arcTo(0.0, 0.0, 2.0 * tl, 2.0 * tl, 180.0, -90.0)
+    else:
+        path.lineTo(0.0, 0.0)
+    path.closeSubpath()
+    return path
+
+
+def _cover_crop_pixmap(source: qtg.QPixmap, w: int, h: int) -> qtg.QPixmap:
+    if source.isNull():
+        return source
+    if source.width() == w and source.height() == h:
+        return source
+    x = max(0, (source.width() - w) // 2)
+    y = max(0, (source.height() - h) // 2)
+    return source.copy(x, y, w, h)
+
+
+def _clip_pixmap_to_corners(
+    source: qtg.QPixmap,
+    tl: float,
+    tr: float,
+    br: float,
+    bl: float,
+    *,
+    w: int = 254,
+    h: int = 144,
+) -> qtg.QPixmap:
+    """QLabel ignores stylesheet border-radius on pixmaps — bake the clip."""
+    if source.isNull():
+        return source
+    cropped = _cover_crop_pixmap(source, w, h)
+    if tl <= 0 and tr <= 0 and br <= 0 and bl <= 0:
+        return cropped
+    out = qtg.QPixmap(w, h)
+    out.fill(qtc.Qt.GlobalColor.transparent)
+    path = _asymmetric_round_rect(float(w), float(h), tl, tr, br, bl)
+    painter = qtg.QPainter(out)
+    painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(qtg.QPainter.RenderHint.SmoothPixmapTransform, True)
+    painter.setClipPath(path)
+    painter.fillPath(path, qtg.QColor("#1a1a1a"))
+    painter.drawPixmap(0, 0, cropped)
+    painter.end()
+    return out
+
+
 class ClipCard(qtw.QWidget):
     def __init__(
         self,
@@ -54,9 +129,12 @@ class ClipCard(qtw.QWidget):
 
         self.thumb_label = qtw.QLabel(self)
         self.thumb_label.setFixedSize(254, 144)
-        self.thumb_label.setStyleSheet("background-color: #1a1a1a; border-radius: 0px;")
+        self.thumb_label.setAttribute(qtc.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Transparent so baked corner alpha shows the panel behind, not a square fill.
+        self.thumb_label.setStyleSheet("background-color: transparent; border: none;")
         # top | mid | bottom | both — shelf corners vs panel edges
         self._edge_role = "mid"
+        self._thumb_raw: Optional[qtg.QPixmap] = None
 
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
@@ -66,7 +144,7 @@ class ClipCard(qtw.QWidget):
                     qtc.Qt.KeepAspectRatioByExpanding,
                     qtc.Qt.SmoothTransformation,
                 )
-                self.thumb_label.setPixmap(scaled_thumb)
+                self._thumb_raw = scaled_thumb
 
         self.icon_label = qtw.QLabel(self.thumb_label)
         self.icon_label.setFixedSize(24, 24)
@@ -224,12 +302,9 @@ class ClipCard(qtw.QWidget):
     def _apply_edge_radii(self) -> None:
         tl, tr, br, bl = self._corner_radii()
         # Thumb only rounds its top; footer owns the bottom curve.
+        # Stylesheet radius does NOT clip QLabel pixmaps — bake corners below.
         self.thumb_label.setStyleSheet(
-            f"background-color: #1a1a1a;"
-            f"border-top-left-radius: {tl}px;"
-            f"border-top-right-radius: {tr}px;"
-            f"border-bottom-left-radius: 0px;"
-            f"border-bottom-right-radius: 0px;"
+            "background-color: transparent; border: none;"
         )
         footer = getattr(self, "_footer_widget", None)
         if footer is not None:
@@ -244,6 +319,27 @@ class ClipCard(qtw.QWidget):
                 f"border-bottom-right-radius: {fbr}px;"
                 f"}}"
             )
+        self._refresh_clipped_thumb()
+
+    def _refresh_clipped_thumb(self) -> None:
+        """Re-bake thumbnail with current top corner radii."""
+        raw = getattr(self, "_thumb_raw", None)
+        if raw is None or raw.isNull():
+            # Empty well still needs a rounded dark plate.
+            tl, tr, _br, _bl = self._corner_radii()
+            plate = qtg.QPixmap(254, 144)
+            plate.fill(qtc.Qt.GlobalColor.transparent)
+            path = _asymmetric_round_rect(254.0, 144.0, float(tl), float(tr), 0.0, 0.0)
+            painter = qtg.QPainter(plate)
+            painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
+            painter.fillPath(path, qtg.QColor("#1a1a1a"))
+            painter.end()
+            self.thumb_label.setPixmap(plate)
+            return
+        tl, tr, _br, _bl = self._corner_radii()
+        self.thumb_label.setPixmap(
+            _clip_pixmap_to_corners(raw, float(tl), float(tr), 0.0, 0.0)
+        )
 
     def set_queue_badge(
         self,
@@ -342,7 +438,8 @@ class ClipCard(qtw.QWidget):
                     qtc.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     qtc.Qt.TransformationMode.SmoothTransformation,
                 )
-                self.thumb_label.setPixmap(scaled_thumb)
+                self._thumb_raw = scaled_thumb
+                self._refresh_clipped_thumb()
                 self._dim_no_preview = False
                 self._sync_unavailable_dim()
 
