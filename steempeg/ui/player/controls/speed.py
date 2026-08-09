@@ -8,11 +8,14 @@ import os
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QLabel, QPushButton, QSlider, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets import SmartSliderFilter
+from steempeg.ui.widgets.gradient_slider import LEVEL_SLIDER_WIDTH, LevelGradientSlider
+
+_SPEED_EXPAND_W = 48 + LEVEL_SLIDER_WIDTH + 8 + 45  # 193
 
 _ROUND_BTN_STYLE = """
     QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
@@ -84,27 +87,19 @@ class SpeedControlWidget(QWidget):
         self.btn_icon.setIconSize(QSize(36, 16))
         self.btn_icon.clicked.connect(self.toggle_speed)
 
-        self.slider = QSlider(Qt.Horizontal, self)
+        self.slider = LevelGradientSlider(Qt.Horizontal, self)
         self.slider.setRange(1, 50)
         self.slider.setValue(10)
-        self.slider.setFixedSize(80, 30)
+        self.slider.setFixedSize(LEVEL_SLIDER_WIDTH, 30)
         self.slider.move(48, 5)
         self.slider.setCursor(Qt.PointingHandCursor)
 
         self.smart_filter = SmartSliderFilter(self.slider)
         self.slider.installEventFilter(self.smart_filter)
 
-        line_path = get_resource_path("linevolume.png").replace("\\", "/")
-        self.slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{ height: 4px; border-image: url("{line_path}"); background: rgba(255, 255, 255, 50); border-radius: 2px; }}
-            QSlider::sub-page:horizontal {{ background: #b498e3; border-radius: 2px; }}
-            QSlider::handle:horizontal {{ background: #b498e3; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
-            QSlider::handle:horizontal:hover {{ transform: scale(1.2); background: #cbb5f2; }}
-        """)
-
         self.lbl_percent = QLabel("x1.0", self)
         self.lbl_percent.setFixedSize(45, 20)
-        self.lbl_percent.move(136, 10)
+        self.lbl_percent.move(48 + LEVEL_SLIDER_WIDTH + 8, 10)
         self.lbl_percent.setFont(_drag_value_font())
         self.lbl_percent.setStyleSheet(
             f"color: white; font-family: {tok.FONT_APP}; font-weight: bold; background: transparent;"
@@ -193,9 +188,9 @@ class SpeedControlWidget(QWidget):
         self.slider.show()
         self.lbl_percent.show()
         self.anim.setStartValue(self.width())
-        self.anim.setEndValue(185)
+        self.anim.setEndValue(_SPEED_EXPAND_W)
         self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(185)
+        self.anim_max.setEndValue(_SPEED_EXPAND_W)
         self.anim.start()
         self.anim_max.start()
         super().enterEvent(event)

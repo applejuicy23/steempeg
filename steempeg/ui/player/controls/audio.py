@@ -8,11 +8,15 @@ import os
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import QLabel, QPushButton, QSlider, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets import SmartSliderFilter
+from steempeg.ui.widgets.gradient_slider import LEVEL_SLIDER_WIDTH, LevelGradientSlider
+
+# Mute (48) + level strip + gap + percent label — room for the unclipped knob.
+_VOLUME_EXPAND_W = 48 + LEVEL_SLIDER_WIDTH + 8 + 45  # 193
 
 _ROUND_BTN_STYLE = """
     QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
@@ -74,33 +78,24 @@ class VolumeControlWidget(QWidget):
 
         self.btn_icon.clicked.connect(self.toggle_mute)
 
-        # 2. The Volume Slider - Starts at X=48
-        self.slider = QSlider(Qt.Horizontal, self)
+        # 2. The Volume Slider - Starts at X=48 (green→yellow→red level track)
+        self.slider = LevelGradientSlider(Qt.Horizontal, self)
         self.slider.setRange(0, 100)
         self.slider.setValue(100)
         
-        # INCREASE HITBOX (Height 30 instead of 20)
-        self.slider.setFixedSize(80, 30)
-        # RAISE SLIGHTLY (Y=5 instead of 10)
-        self.slider.move(48, 5) 
-        self.slider.setCursor(Qt.PointingHandCursor) 
-        
+        # Hitbox wider than the groove so the 100% knob is not clipped.
+        self.slider.setFixedSize(LEVEL_SLIDER_WIDTH, 30)
+        self.slider.move(48, 5)
+        self.slider.setCursor(Qt.PointingHandCursor)
+
         # Enabling Smart Click
         self.smart_filter = SmartSliderFilter(self.slider)
         self.slider.installEventFilter(self.smart_filter)
-        
-        line_path = get_resource_path("linevolume.png").replace("\\", "/")
-        self.slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{ height: 4px; border-image: url("{line_path}"); background: rgba(255, 255, 255, 50); border-radius: 2px; }}
-            QSlider::sub-page:horizontal {{ background: #b498e3; border-radius: 2px; }}
-            QSlider::handle:horizontal {{ background: #b498e3; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
-            QSlider::handle:horizontal:hover {{ transform: scale(1.2); background: #cbb5f2; }}
-        """)
 
-        # 3. Percentage Text 
+        # 3. Percentage Text
         self.lbl_percent = QLabel("100%", self)
         self.lbl_percent.setFixedSize(45, 20)
-        self.lbl_percent.move(136, 10)
+        self.lbl_percent.move(48 + LEVEL_SLIDER_WIDTH + 8, 10)
         self.lbl_percent.setFont(_drag_value_font())
         self.lbl_percent.setStyleSheet(
             f"color: white; font-family: {tok.FONT_APP}; font-weight: bold; background: transparent;"
@@ -172,9 +167,9 @@ class VolumeControlWidget(QWidget):
         self.lbl_percent.show()
         
         self.anim.setStartValue(self.width())
-        self.anim.setEndValue(185) 
+        self.anim.setEndValue(_VOLUME_EXPAND_W)
         self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(185)
+        self.anim_max.setEndValue(_VOLUME_EXPAND_W)
         
         self.anim.start()
         self.anim_max.start()
