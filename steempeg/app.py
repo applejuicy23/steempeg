@@ -2250,6 +2250,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 rw.addWidget(self.btn_screenshot, alignment=Qt.AlignVCenter) 
                 rw.addWidget(self.trim_tools_pill, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.btn_trim, alignment=Qt.AlignVCenter)
+                # Desktop Render CTA — same slot as Portable (between Trim and theatre pill).
+                self._ensure_desktop_player_render_button(right_wrap)
+                if getattr(self, "btn_player_render", None) is not None:
+                    rw.addWidget(self.btn_player_render, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.pill_container, alignment=Qt.AlignVCenter)
 
                 # Remember original layout index for seamless restoring
@@ -2476,7 +2480,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
                     self._update_start_button_label()
-                    self.refresh_render_queue_panel(sync_splitter=False)
+                    # Persisted jobs should open on launch — not wait for a clip click.
+                    self._queue_user_collapsed = False
+                    self.refresh_render_queue_panel(sync_splitter=True)
 
                 # Shared Desktop/Portable panel snapshot (render_export_settings).
                 try:
@@ -3266,7 +3272,28 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self, "_library_ui_persist_ready"):
             QTimer.singleShot(250, lambda: setattr(self, "_library_ui_persist_ready", True))
         self.refresh_render_queue_panel(sync_splitter=True)
+        self._ensure_startup_queue_open()
         self._start_startup_scans_after_restore()
+
+    def _ensure_startup_queue_open(self) -> None:
+        """Open Render Queue when jobs exist — re-apply after geometry settles.
+
+        Early open against a fake splitter total stretches to ~half the column
+        once the window maximizes; always re-apply the saved pixel width here.
+        """
+        if getattr(self, "_portable_shell", False):
+            return
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            return
+        jobs = getattr(self, "render_queue", None)
+        if jobs is None or len(jobs) == 0:
+            return
+        self._queue_user_collapsed = False
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            panel.show()
+        if hasattr(self, "_open_queue_in_right_splitter"):
+            self._open_queue_in_right_splitter()
 
     def _start_startup_scans_after_restore(self) -> None:
         """Kick off initial library scans once the shell is stable."""
@@ -3476,6 +3503,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Player scrap between Clips handle and Queue handle → complete the kiss.
         if 0 < player_w < 48:
             rhs.setSizes([0, max(int(total), 1)])
+        else:
+            # Remember the open width the user just left (always, not only on quit).
+            live_q = int(rhs.sizes()[1]) if len(rhs.sizes()) >= 2 else queue_w
+            if live_q > 48:
+                self.save_layout_setting("queue_panel_width", live_q)
         self.sync_queue_minimum()
 
     def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
@@ -3527,9 +3559,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     v_split.setSizes(restore_v_splitter_sizes(total))
 
     def _open_queue_in_right_splitter(self) -> None:
-        """Open the queue pane to its layout floor / saved width."""
+        """Open the queue pane to the last saved width (else layout default)."""
         from steempeg.ui.layout_defaults import (
             PLAYER_COLUMN_FLOOR,
+            queue_panel_min_width,
             queue_panel_open_width,
         )
 
@@ -3538,29 +3571,36 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if rhs is None or panel is None:
             return
         sizes = rhs.sizes()
-        # Prefer the widget's live width — stale size sums (e.g. [1200, 0]) lie
-        # when the shell is mid-compact and the right column is much narrower.
-        total = max(int(rhs.width() or 0), int(sum(sizes) if sizes else 0), 1)
+        # Prefer live width once the shell has geometry; fall back to size sum.
+        live = int(rhs.width() or 0)
+        summed = int(sum(sizes) if sizes else 0)
+        total = max(live, summed, 1)
         win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
-        ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else 340
+        ideal = queue_panel_open_width(win_w, total_splitter=total) if win_w else 380
+        min_q = queue_panel_min_width(win_w, widget=getattr(self, "ui", None)) if win_w else 320
         saved = self.get_layout_setting("queue_panel_width", None)
         queue_w = ideal
         if saved is not None:
             try:
-                queue_w = int(saved)
+                saved_w = int(saved)
             except (TypeError, ValueError):
-                queue_w = ideal
-            queue_w = min(max(queue_w, 0), ideal) if ideal > 0 else queue_w
+                saved_w = 0
+            # Restore last open width — do not clamp down to the default ideal
+            # (that made every launch ignore a wider drag from last session).
+            if saved_w > 48:
+                queue_w = max(min_q, saved_w)
         max_q = max(0, total - PLAYER_COLUMN_FLOOR)
         if max_q < 80:
             # Not enough room inside the right column — do not steal from Clips.
             return
-        queue_w = max(80, min(int(queue_w), max_q))
+        queue_w = max(min_q, min(int(queue_w), max_q))
         rhs.setSizes([total - queue_w, queue_w])
         # Clips-style floor while open (cleared again if the pane is shut).
         if hasattr(self, "sync_queue_minimum"):
             self.sync_queue_minimum()
-
+        # Persist the width we actually applied (after max_q clamp).
+        if queue_w > 48:
+            self.save_layout_setting("queue_panel_width", int(queue_w))
     def _player_chrome_icon_size(self, dense=None) -> int:
         """Theater / fullscreen / trim chip glyph size — identical for all of them.
 
@@ -4000,6 +4040,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 btn.setStyleSheet(
                     template.format(font=font, radius=radius, pad=pad)
                 )
+        if hasattr(self, "_sync_dash_queue_status_chrome"):
+            self._sync_dash_queue_status_chrome()
 
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import (
@@ -4452,7 +4494,11 @@ def main():
         # Do NOT clear ``_ui_density`` here: that forced a full chrome rebuild
         # after the window was already visible (1–3s of "still preparing").
         window._apply_startup_splitter_sizes()
+        window._ensure_startup_queue_open()
         QApplication.processEvents()
+        # Geometry after maximize can still settle one tick later.
+        QTimer.singleShot(0, window._ensure_startup_queue_open)
+        QTimer.singleShot(50, window._ensure_startup_queue_open)
         if ui_shell == UI_SHELL_PORTABLE:
             # Library restore (500ms) must not fight theatre — re-assert after it.
             window.apply_portable_theatre_shell()
