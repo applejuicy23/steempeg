@@ -173,6 +173,9 @@ def ensure_portable_chrome(app) -> None:
             w.show()
     if hasattr(app, "btn_portable_render"):
         app.btn_portable_render.show()
+    desk_render = getattr(app, "btn_player_render", None)
+    if desk_render is not None:
+        desk_render.hide()
     # Legacy gear — hide if an older session created it.
     gear = getattr(app, "btn_portable_render_settings", None)
     if gear is not None:
@@ -242,6 +245,14 @@ def hide_portable_chrome(app) -> None:
         btn = getattr(app, name, None)
         if btn is not None:
             btn.hide()
+    desk_render = getattr(app, "btn_player_render", None)
+    if desk_render is not None:
+        desk_render.show()
+        if hasattr(app, "_sync_desktop_player_render_button"):
+            try:
+                app._sync_desktop_player_render_button()
+            except Exception:
+                pass
     dispose_portable_sheets(app)
     if hasattr(app, "refresh_player_header_layout"):
         try:
