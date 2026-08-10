@@ -734,10 +734,32 @@ class TimelineCanvas(QWidget):
         self.duration_ms = max(0, int(duration_ms))
 
     def set_vlc_time(self, vlc_ms, is_playing):
-        self.is_playing = is_playing
-        if self.drag_state == 'playhead': return
-        if vlc_ms != self.target_ms:
-            self.target_ms = float(vlc_ms)
+        was_playing = self.is_playing
+        self.is_playing = bool(is_playing)
+        if self.drag_state == 'playhead':
+            return
+        vlc_ms = float(vlc_ms)
+        speed = max(float(self.playback_speed) or 1.0, 1e-6)
+
+        if was_playing and not self.is_playing:
+            # Pause: freeze where wall-clock extrapolation left the playhead.
+            # Do not snap back to the last decoded-frame PTS (stale for seconds at 1 FPS).
+            self.target_ms = float(self.visual_ms)
+            self.vlc_last_update_time = time.time()
+        elif not was_playing and self.is_playing:
+            # Resume: keep continuity by backdating the sample clock by the lead
+            # we had already shown past mpv's last frame PTS.
+            lead_ms = max(0.0, float(self.visual_ms) - vlc_ms)
+            self.target_ms = vlc_ms
+            self.vlc_last_update_time = time.time() - (lead_ms / 1000.0) / speed
+        elif self.is_playing and vlc_ms != self.target_ms:
+            # New mpv sample while playing — re-anchor; extrapolation fills gaps.
+            self.target_ms = vlc_ms
+            self.vlc_last_update_time = time.time()
+        elif not self.is_playing and abs(vlc_ms - self.target_ms) > 500:
+            # Seek / external jump while paused (ignore flat low-FPS PTS repeats).
+            self.target_ms = vlc_ms
+            self.visual_ms = vlc_ms
             self.vlc_last_update_time = time.time()
 
     def enable_trim_mode(self):
@@ -775,10 +797,11 @@ class TimelineCanvas(QWidget):
 
         # --- STANDARD ENGINE LOGIC (When zoom is finished) ---
         if self.is_playing:
-            self.visual_ms += delta_ms * self.playback_speed
-            drift = self.target_ms - self.visual_ms
-            if abs(drift) > 1000: self.visual_ms = self.target_ms 
-            else: self.visual_ms += drift * 0.1 
+            # Extrapolate from the last authoritative mpv sample with wall clock.
+            # Soft-correcting toward a flat time-pos (1 FPS ≈ 1s steps) pulled the
+            # playhead back every tick, then lunged when the next frame arrived.
+            elapsed_ms = (now - self.vlc_last_update_time) * 1000.0 * self.playback_speed
+            self.visual_ms = self.target_ms + elapsed_ms
         else:
             drift = self.target_ms - self.visual_ms
             if abs(drift) < 2.0 or (
@@ -1510,7 +1533,8 @@ class TimelineCanvas(QWidget):
         # Use the SAME padded mapping as x_to_ms/ms_to_x, otherwise the playhead is
         # drawn off from where the cursor clicked (up to ±pad px, worst at the edges).
         self.visual_ms = max(0.0, min(self.x_to_ms(mouse_x), float(self.duration_ms)))
-        self.target_ms = self.visual_ms 
+        self.target_ms = self.visual_ms
+        self.vlc_last_update_time = time.time()
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
         self._refresh_overview_playhead_marker()
@@ -1518,7 +1542,8 @@ class TimelineCanvas(QWidget):
     def force_jump(self, new_position_ms):
         if self.duration_ms <= 0: return
         self.visual_ms = max(0.0, min(float(new_position_ms), float(self.duration_ms)))
-        self.target_ms = self.visual_ms 
+        self.target_ms = self.visual_ms
+        self.vlc_last_update_time = time.time()
         self.user_seek_lock_time = time.time() + 0.15 
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
