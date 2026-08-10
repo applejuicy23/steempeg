@@ -64,10 +64,16 @@ class UpdaterMixin:
         logging.info("--- UPDATER: Opening Update Center ---")
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
         spin = getattr(tb, "btn_check_updates", None) if tb is not None else None
+        # Prefer live render status over the update-check busy strip.
+        rendering = bool(getattr(self, "_is_rendering", False))
         try:
             if spin is not None and hasattr(spin, "set_busy"):
                 spin.set_busy(True)
-            self.set_status("Checking for updates...")
+            if not rendering:
+                # Plain purple busy dot (no queue index) while the label shows
+                # "Checking for updates..." — same suppress pattern as library Loading.
+                self._update_check_busy = True
+                self.set_status("Checking for updates...")
             self._open_update_center()
         except Exception as e:
             logging.error(f"UPDATER: Critical exception: {e}")
@@ -77,7 +83,9 @@ class UpdaterMixin:
                 spin.set_busy(False)
             if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
                 tb.clear_shell_tool_hover()
-            self.set_status("Ready")
+            if not rendering:
+                self._update_check_busy = False
+                self.set_status("Ready")
             logging.info("--- UPDATER: check_for_updates finished ---")
 
     def schedule_silent_update_check(self, delay_ms: int = 2500) -> None:
