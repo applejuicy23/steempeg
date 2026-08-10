@@ -173,9 +173,6 @@ def ensure_portable_chrome(app) -> None:
             w.show()
     if hasattr(app, "btn_portable_render"):
         app.btn_portable_render.show()
-    desk_render = getattr(app, "btn_player_render", None)
-    if desk_render is not None:
-        desk_render.hide()
     # Legacy gear — hide if an older session created it.
     gear = getattr(app, "btn_portable_render_settings", None)
     if gear is not None:
@@ -245,14 +242,6 @@ def hide_portable_chrome(app) -> None:
         btn = getattr(app, name, None)
         if btn is not None:
             btn.hide()
-    desk_render = getattr(app, "btn_player_render", None)
-    if desk_render is not None:
-        desk_render.show()
-        if hasattr(app, "_sync_desktop_player_render_button"):
-            try:
-                app._sync_desktop_player_render_button()
-            except Exception:
-                pass
     dispose_portable_sheets(app)
     if hasattr(app, "refresh_player_header_layout"):
         try:
@@ -261,12 +250,33 @@ def hide_portable_chrome(app) -> None:
             pass
 
 
-def _style_add_clip_button(btn: QPushButton) -> None:
-    btn.setIcon(add_clip_icon(_ADD_CLIP_ICON))
-    btn.setIconSize(QSize(_ADD_CLIP_ICON, _ADD_CLIP_ICON))
+def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
+    from steempeg.ui.ui_density import COMFORT
+
+    d = dense if dense is not None else COMFORT
+    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
+    font = max(11, int(getattr(d, "header_font", 13) or 13))
+    pad = str(getattr(d, "header_status_pad", "3px 10px 3px 8px") or "3px 10px 3px 8px")
+    icon_px = max(14, int(getattr(d, "header_chip_icon", 16) or 16))
+    style = with_tooltip_style(
+        "QPushButton {"
+        f"background-color: rgba(142, 124, 195, 0.22);"
+        f"color: {_ADD_CLIP_TEXT};"
+        f"border: 2px solid {_ADD_CLIP_COLOR};"
+        "border-radius: 8px;"
+        "font-weight: bold;"
+        f"font-size: {font}px;"
+        f"padding: {pad};"
+        "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        "}"
+        "QPushButton:hover { background-color: rgba(142, 124, 195, 0.35); }"
+        "QPushButton:pressed { background-color: rgba(142, 124, 195, 0.48); }"
+    )
+    btn.setIcon(add_clip_icon(icon_px))
+    btn.setIconSize(QSize(icon_px, icon_px))
     btn.setText(" Choose a Clip")
-    btn.setStyleSheet(_ADD_CLIP_STYLE)
-    btn.setFixedHeight(30)
+    btn.setStyleSheet(style)
+    btn.setFixedHeight(chip)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Open Clips Manager")
 
@@ -275,6 +285,10 @@ def _ensure_add_clip_button(app) -> None:
     header = getattr(app, "player_header_frame", None)
     if header is None or header.layout() is None:
         return
+
+    from steempeg.ui.player_header_layout import player_header_density
+
+    dense = player_header_density(app)
 
     lay: QHBoxLayout = header.layout()
     # Insert after the title cluster (icon+name+info), before the trailing
@@ -316,7 +330,7 @@ def _ensure_add_clip_button(app) -> None:
             app.btn_portable_add_clip = None
             btn = None
     if btn is not None:
-        _style_add_clip_button(btn)
+        _style_add_clip_button(btn, dense=dense)
         try:
             btn.clicked.disconnect()
         except (TypeError, RuntimeError):
@@ -328,7 +342,7 @@ def _ensure_add_clip_button(app) -> None:
             divider.setObjectName("portableAddClipDivider")
             divider.setFrameShape(QFrame.Shape.VLine)
             divider.setFixedWidth(1)
-            divider.setFixedHeight(22)
+            divider.setFixedHeight(max(18, int(dense.header_chip) - 8))
             divider.setStyleSheet(
                 "color: #555555; background-color: #555555; margin: 4px 2px;"
             )
@@ -351,13 +365,13 @@ def _ensure_add_clip_button(app) -> None:
     divider.setObjectName("portableAddClipDivider")
     divider.setFrameShape(QFrame.Shape.VLine)
     divider.setFixedWidth(1)
-    divider.setFixedHeight(22)
+    divider.setFixedHeight(max(18, int(dense.header_chip) - 8))
     divider.setStyleSheet("color: #555555; background-color: #555555; margin: 4px 2px;")
     app.portable_add_clip_divider = divider
 
     btn = QPushButton()
     btn.setObjectName("portableAddClip")
-    _style_add_clip_button(btn)
+    _style_add_clip_button(btn, dense=dense)
     btn.clicked.connect(lambda: open_portable_clip_picker(app))
     app.btn_portable_add_clip = btn
 
