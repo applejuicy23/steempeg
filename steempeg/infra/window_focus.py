@@ -1,7 +1,9 @@
-"""Bring an already-running Steempeg window to the foreground (Windows).
+"""Bring Steempeg windows to the foreground (Windows).
 
-Used by the ``steempeg:`` toast protocol / ``--raise-existing`` so a notification
-click restores the app instead of opening a second instance.
+Used by:
+- ``steempeg:`` toast protocol / ``--raise-existing`` (restore running instance)
+- Desktop startup (``force_widget_foreground``) so the main window is not
+  buried under the launcher under Windows focus-stealing rules
 """
 from __future__ import annotations
 
@@ -14,6 +16,11 @@ _log = logging.getLogger(__name__)
 _GW_OWNER = 4
 _SW_RESTORE = 9
 _SW_SHOW = 5
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_SHOWWINDOW = 0x0040
 
 
 def _pid_from_instance_lock() -> int | None:
@@ -96,6 +103,19 @@ def _pick_main_hwnd(hwnds: list[int]) -> int | None:
     return scored[0][1]
 
 
+def _topmost_flash(hwnd: int) -> None:
+    """Brief TOPMOST → NOTOPMOST so Windows allows SetForegroundWindow.
+
+    Does not leave the window always-on-top.
+    """
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW
+    user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags)
+    user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+
+
 def _force_foreground(hwnd: int) -> None:
     import ctypes
     from ctypes import wintypes
@@ -132,11 +152,38 @@ def _force_foreground(hwnd: int) -> None:
             user32.SetFocus(hwnd)
         except Exception:
             pass
+        # Focus-stealing rules often ignore SetForegroundWindow alone when
+        # launched from another app (terminal, Steam, Explorer sibling). A
+        # momentary topmost flash is the reliable workaround.
+        if user32.GetForegroundWindow() != hwnd:
+            _topmost_flash(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
     finally:
         if attached_target:
             user32.AttachThreadInput(tid_cur, tid_target, False)
         if attached_fore:
             user32.AttachThreadInput(tid_cur, tid_fore, False)
+
+
+def force_widget_foreground(widget) -> bool:
+    """Bring a Qt top-level widget forward on Windows (startup / show).
+
+    No-op on non-Windows. Uses the same Win32 path as toast ``--raise-existing``.
+    Never leaves the window permanently always-on-top.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        _force_foreground(hwnd)
+        _log.info("force_widget_foreground: focused hwnd=%s", hwnd)
+        return True
+    except Exception as exc:
+        _log.debug("force_widget_foreground failed: %s", exc)
+        return False
 
 
 def raise_steempeg_window() -> bool:
