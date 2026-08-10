@@ -34,6 +34,19 @@ _RENDER_TAB_TO_INDEX: dict[str, int] = {
     RENDER_TAB_PRESETS: 4,
 }
 
+# ----- Desktop render chrome (docked neo vs Portable-like settings window) -----
+
+KEY_DESKTOP_RENDER_LAYOUT = "desktop_render_layout"
+
+DESKTOP_RENDER_ITS_A_DESKTOP = "its_a_desktop"
+DESKTOP_RENDER_LIKE_A_PORTABLE = "like_a_portable"
+DEFAULT_DESKTOP_RENDER_LAYOUT = DESKTOP_RENDER_ITS_A_DESKTOP
+
+DESKTOP_RENDER_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
+    (DESKTOP_RENDER_ITS_A_DESKTOP, "It's a Desktop"),
+    (DESKTOP_RENDER_LIKE_A_PORTABLE, "Like a Portable"),
+)
+
 # ----- Permanent export folder -----
 
 KEY_PERMANENT_EXPORT_FOLDER = "permanent_export_folder"
@@ -97,6 +110,25 @@ def render_tab_index(value: object | None) -> int:
 def load_default_render_tab(settings: dict | None) -> str:
     raw = (settings or {}).get(KEY_DEFAULT_RENDER_TAB, DEFAULT_RENDER_TAB)
     return normalize_render_tab(raw)
+
+
+def normalize_desktop_render_layout(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "its_a_desktop": DESKTOP_RENDER_ITS_A_DESKTOP,
+        "desktop": DESKTOP_RENDER_ITS_A_DESKTOP,
+        "classic": DESKTOP_RENDER_ITS_A_DESKTOP,
+        "like_a_portable": DESKTOP_RENDER_LIKE_A_PORTABLE,
+        "portable": DESKTOP_RENDER_LIKE_A_PORTABLE,
+        "portable_like": DESKTOP_RENDER_LIKE_A_PORTABLE,
+    }
+    return aliases.get(text, DEFAULT_DESKTOP_RENDER_LAYOUT)
+
+
+def load_desktop_render_layout(settings: dict | None = None) -> str:
+    return normalize_desktop_render_layout(
+        (settings or {}).get(KEY_DESKTOP_RENDER_LAYOUT, DEFAULT_DESKTOP_RENDER_LAYOUT)
+    )
 
 
 def apply_default_render_tab(app, tab: object | None = None) -> int:
