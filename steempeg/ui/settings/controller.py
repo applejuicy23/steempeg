@@ -30,12 +30,19 @@ class SettingsMixin:
         from steempeg.ui.layout_defaults import REMEMBER_LAYOUT_BETWEEN_SESSIONS
         return REMEMBER_LAYOUT_BETWEEN_SESSIONS
 
+    # Always persist these even when REMEMBER_LAYOUT_BETWEEN_SESSIONS is False.
+    # (Queue width + Desktop player↔settings vertical dock.)
+    _ALWAYS_REMEMBER_LAYOUT_KEYS = frozenset(
+        {"queue_panel_width", "main_v_splitter_sizes"}
+    )
+
     def get_layout_setting(self, key: str, default):
-        # Queue width is always remembered — full layout recall stays behind the flag.
-        if key == "queue_panel_width" or self._layout_remember_enabled():
+        # Queue / Desktop v-dock are always remembered — full layout recall stays
+        # behind the REMEMBER_LAYOUT_BETWEEN_SESSIONS flag.
+        if key in self._ALWAYS_REMEMBER_LAYOUT_KEYS or self._layout_remember_enabled():
             return self.load_user_settings().get(key, default)
         return default
 
     def save_layout_setting(self, key: str, value) -> None:
-        if key == "queue_panel_width" or self._layout_remember_enabled():
+        if key in self._ALWAYS_REMEMBER_LAYOUT_KEYS or self._layout_remember_enabled():
             self.save_user_settings(key, value)
