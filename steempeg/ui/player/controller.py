@@ -14,7 +14,7 @@ import sys
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QEventLoop, Qt, QPropertyAnimation, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QPropertyAnimation, QTimer
 from PySide6.QtGui import QCursor, QIcon, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QApplication,
@@ -58,6 +58,61 @@ _FS_TRACE = os.environ.get("STEEMPEG_FS_TRACE") == "1"
 def _fstrace(msg, *args):
     if _FS_TRACE:
         logging.info("[fstrace] %.3f " + msg, time.perf_counter(), *args)
+
+
+class _ScreenshotToastClickAwayFilter(QObject):
+    """Dismiss the screenshot Tool toast on click-away / shell move / focus loss.
+
+    The toast is a separate always-on-top-free ``Qt.Tool`` window (same family as
+    the buffering pill), so it does not auto-close like ``Qt.Popup``. Filter
+    clicks outside it and shell geometry/focus changes without eating the event.
+    """
+
+    def __init__(self, host):
+        super().__init__(host.ui if getattr(host, "ui", None) is not None else None)
+        self._host = host
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        host = self._host
+        toast = getattr(host, "_screenshot_toast", None)
+        if toast is None:
+            return False
+        try:
+            visible = toast.isVisible()
+        except RuntimeError:
+            return False
+        if not visible:
+            return False
+
+        et = event.type()
+        ui = getattr(host, "ui", None)
+
+        if et == QEvent.Type.MouseButtonPress:
+            if isinstance(obj, QWidget) and (obj is toast or toast.isAncestorOf(obj)):
+                return False
+            host._hide_screenshot_toast()
+            return False
+
+        if et == QEvent.Type.ApplicationDeactivate:
+            host._hide_screenshot_toast()
+            return False
+
+        if et in (
+            QEvent.Type.WindowDeactivate,
+            QEvent.Type.Hide,
+            QEvent.Type.Close,
+            QEvent.Type.WindowStateChange,
+        ):
+            if ui is not None and obj is ui:
+                host._hide_screenshot_toast()
+            return False
+
+        if et in (QEvent.Type.Move, QEvent.Type.Resize) and ui is not None and obj is ui:
+            # Absolute-positioned Tool window; dragging/resizing leaves a ghost.
+            host._hide_screenshot_toast()
+            return False
+
+        return False
 
 
 class PlayerMixin:
@@ -447,16 +502,18 @@ class PlayerMixin:
         if hasattr(self, 'custom_icon_label'):
             from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
             from steempeg.ui.icon_utils import apply_square_icon
+            from steempeg.ui.player_header_layout import player_header_icon_px
 
             unknown = get_resource_path("unknown_icon.png")
+            icon_px = player_header_icon_px(self)
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             src = QPixmap(unknown)
             shaped = (
-                shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                shaped_game_icon_pixmap(src, icon_px, ICON_SHAPE_CIRCLE)
                 if not src.isNull()
                 else None
             )
-            apply_square_icon(self.custom_icon_label, shaped, 24)
+            apply_square_icon(self.custom_icon_label, shaped, icon_px)
         # Forget the previewed clip / queue selection so the top-right badge
         # ("Preview" / "In queue (N)") clears instead of lingering after close.
         self._preview_clip_path = None
@@ -468,6 +525,9 @@ class PlayerMixin:
             self.update_playback_badge()
         if hasattr(self, 'update_clip_health_button'):
             self.update_clip_health_button()
+        # Drop export dock when Screenshots (or rendered preview) no longer has a raw clip.
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
 
         # GLOBAL WIPE OF ALL SETTINGS TABS (UI WIPE)
         # clean the Source Info tab
@@ -1310,23 +1370,25 @@ class PlayerMixin:
 
     def _get_immersive_esc_hint(self):
         if getattr(self, '_immersive_esc_hint', None) is None:
-            # Pill chip: translucent so Windows actually paints border-radius;
-            # a notch larger than footer chrome so it reads in fullscreen.
+            # Dark pill like the FS HUD strip. Do NOT use WA_TranslucentBackground —
+            # on Windows that drops QLabel stylesheet fills (text-only ghost).
+            # Rounded corners via setMask, same pattern as align_fullscreen_hud.
             font_px = 15
             hint = QLabel("Press ESC to exit full screen")
             hint.setWindowFlags(
                 Qt.WindowType.Tool
                 | Qt.WindowType.FramelessWindowHint
                 | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.NoDropShadowWindowHint
             )
             hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            hint.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             hint.setStyleSheet(
                 "QLabel {"
-                " background-color: rgba(15, 15, 15, 220);"
+                " background-color: #1e1e1e;"
                 " color: #eeeeee;"
                 " padding: 12px 28px;"
-                " border-radius: 22px;"
+                " border: none;"
                 f" font-size: {font_px}px;"
                 " font-weight: bold;"
                 " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
@@ -1346,8 +1408,12 @@ class PlayerMixin:
             return
         screen_geo = self._immersive_screen_geometry()
         hint.adjustSize()
+        w, h = hint.width(), hint.height()
+        path = QPainterPath()
+        path.addRoundedRect(0.0, 0.0, float(w), float(h), 16.0, 16.0)
+        hint.setMask(QRegion(path.toFillPolygon().toPolygon()))
         hint.move(
-            screen_geo.x() + max(0, (screen_geo.width() - hint.width()) // 2),
+            screen_geo.x() + max(0, (screen_geo.width() - w) // 2),
             screen_geo.y() + 36,
         )
 
@@ -1817,12 +1883,7 @@ class PlayerMixin:
             overlay.hide_loading()
         self._playback_loading_active = False
         self._playback_recover_at = None
-        toast = getattr(self, "_screenshot_toast", None)
-        if toast is not None:
-            toast.hide()
-        timer = getattr(self, "_screenshot_toast_timer", None)
-        if timer is not None:
-            timer.stop()
+        self._hide_screenshot_toast()
 
     def _main_shell_is_minimized(self) -> bool:
         ui = getattr(self, "ui", None)
@@ -2730,6 +2791,9 @@ class PlayerMixin:
 
         self._opening_clip_path = clip_path
         self._preview_clip_path = clip_path
+        # Raw clip is active now — re-show dash/settings even if Screenshots tab hid them.
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         self.set_clip_open_loading(
             clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
         )
@@ -3328,6 +3392,7 @@ class PlayerMixin:
                     if canvas is not None:
                         canvas.visual_ms = float(duration_ms)
                         canvas.target_ms = float(duration_ms)
+                        canvas.vlc_last_update_time = time.time()
             else:
                 self._eof_rewind_pending = 0
                 self._restart_from_eof = False
@@ -3704,6 +3769,51 @@ class PlayerMixin:
         except OSError as exc:
             logging.error("Failed to open file %s: %s", path, exc)
 
+    def _hide_screenshot_toast(self) -> None:
+        """Hide the screenshot toast and drop its click-away filter."""
+        timer = getattr(self, "_screenshot_toast_timer", None)
+        if timer is not None:
+            timer.stop()
+        toast = getattr(self, "_screenshot_toast", None)
+        if toast is not None:
+            try:
+                toast.hide()
+            except RuntimeError:
+                pass
+        self._uninstall_screenshot_toast_clickaway()
+
+    def _install_screenshot_toast_clickaway(self) -> None:
+        if getattr(self, "_screenshot_toast_clickaway_installed", False):
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        filt = getattr(self, "_screenshot_toast_clickaway", None)
+        if filt is None:
+            filt = _ScreenshotToastClickAwayFilter(self)
+            self._screenshot_toast_clickaway = filt
+        app.installEventFilter(filt)
+        ui = getattr(self, "ui", None)
+        if ui is not None:
+            ui.installEventFilter(filt)
+        self._screenshot_toast_clickaway_installed = True
+
+    def _uninstall_screenshot_toast_clickaway(self) -> None:
+        if not getattr(self, "_screenshot_toast_clickaway_installed", False):
+            return
+        filt = getattr(self, "_screenshot_toast_clickaway", None)
+        app = QApplication.instance()
+        if filt is not None:
+            if app is not None:
+                app.removeEventFilter(filt)
+            ui = getattr(self, "ui", None)
+            if ui is not None:
+                try:
+                    ui.removeEventFilter(filt)
+                except RuntimeError:
+                    pass
+        self._screenshot_toast_clickaway_installed = False
+
     def _show_screenshot_toast(self, directory, *, screenshot_path=None):
         """Flash a small 'Screenshot saved in <dir>' toast with copy/open actions."""
         if self._main_shell_is_minimized():
@@ -3715,6 +3825,8 @@ class PlayerMixin:
             toast = QWidget(self.ui)
             toast.setObjectName("screenshotToastHost")
             # Tool (not ToolTip) without stays-on-top — stays under Clips Manager sheets.
+            # Not Qt.Popup: we keep WA_ShowWithoutActivating so copy/open don't steal focus;
+            # click-away is handled by _ScreenshotToastClickAwayFilter instead.
             toast.setWindowFlags(
                 Qt.Tool | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
             )
@@ -3759,7 +3871,7 @@ class PlayerMixin:
             self._screenshot_toast_open_btn = open_btn
             self._screenshot_toast_timer = QTimer(toast)
             self._screenshot_toast_timer.setSingleShot(True)
-            self._screenshot_toast_timer.timeout.connect(toast.hide)
+            self._screenshot_toast_timer.timeout.connect(self._hide_screenshot_toast)
             copy_btn.clicked.connect(self._copy_screenshot_dir)
             open_btn.clicked.connect(self._open_screenshot_dir)
 
@@ -3785,6 +3897,7 @@ class PlayerMixin:
         toast.move(max(0, x), max(0, y))
         toast.show()
         toast.raise_()
+        self._install_screenshot_toast_clickaway()
         self._screenshot_toast_timer.start(5000)
 
     def _copy_screenshot_dir(self):
