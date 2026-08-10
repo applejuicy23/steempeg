@@ -430,6 +430,9 @@ class RenderedLibraryMixin:
                 self._highlight_rendered_path(path)
             else:
                 self._clear_rendered_selection_visual()
+        elif tab == "screenshots":
+            # Screenshots grid selection is independent; do not re-paint Clips.
+            return
         else:
             path = getattr(self, "_saved_clips_selection_path", "")
             if path:
@@ -675,27 +678,80 @@ class RenderedLibraryMixin:
                 m.left(), m.top(), m.right(), 10 if show_bottom else 0
             )
 
-        if hasattr(self, "bottom_v_wrap"):
-            self.bottom_v_wrap.setVisible(show_bottom)
-        if hasattr(self, "main_v_splitter") and not (
-            getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False)
-        ):
-            sizes = self.main_v_splitter.sizes()
-            total = sum(sizes) if sum(sizes) > 0 else self.main_v_splitter.height()
-            total = max(int(total), 1)
-            if show_bottom:
-                # Only restore when leaving Rendered preview (dock was mode-hidden),
-                # NOT on every sync while the user collapsed the v-splitter by hand.
-                if (
-                    prev_show is False
-                    and len(sizes) >= 2
-                    and sizes[1] <= 0
-                ):
-                    from steempeg.ui.layout_defaults import restore_v_splitter_sizes
+        immersive = getattr(self, "is_theater", False) or getattr(
+            self, "is_fullscreen", False
+        )
+        portable_like = False
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                portable_like = bool(self._desktop_render_layout_is_portable_like())
+            except Exception:
+                portable_like = False
 
-                    self.main_v_splitter.setSizes(restore_v_splitter_sizes(total))
-            else:
-                self.main_v_splitter.setSizes([total, 0])
+        # Snapshot a usable dock height before mode-hide. Suppress HideWatcher so its
+        # Hide/Show setSizes cannot race Like a Portable glue / our restore.
+        hw = getattr(self, "hide_watcher", None)
+        if (
+            not show_bottom
+            and prev_show is not False
+            and hasattr(self, "main_v_splitter")
+            and not immersive
+        ):
+            try:
+                cur = list(self.main_v_splitter.sizes())
+            except RuntimeError:
+                cur = []
+            if len(cur) >= 2 and cur[1] > 0:
+                self._render_dock_saved_sizes = cur
+
+        if hw is not None and hasattr(hw, "set_suppressed"):
+            hw.set_suppressed(True)
+        try:
+            if hasattr(self, "bottom_v_wrap"):
+                self.bottom_v_wrap.setVisible(show_bottom)
+            if hasattr(self, "main_v_splitter") and not immersive:
+                sizes = self.main_v_splitter.sizes()
+                total = sum(sizes) if sum(sizes) > 0 else self.main_v_splitter.height()
+                total = max(int(total), 1)
+                if show_bottom:
+                    # Only restore when leaving a mode-hide (Screenshots / rendered
+                    # preview), NOT on every sync while the user collapsed by hand.
+                    if (
+                        prev_show is False
+                        and len(sizes) >= 2
+                        and sizes[1] <= 0
+                    ):
+                        saved = getattr(self, "_render_dock_saved_sizes", None)
+                        if portable_like and hasattr(
+                            self, "_glue_portable_like_dash_open"
+                        ):
+                            self._portable_like_dash_closed = False
+                            self._glue_portable_like_dash_open()
+                        elif (
+                            saved
+                            and len(saved) >= 2
+                            and saved[1] > 0
+                        ):
+                            self.main_v_splitter.setSizes(saved)
+                        elif hasattr(self, "_apply_desktop_main_v_splitter_sizes"):
+                            self._apply_desktop_main_v_splitter_sizes()
+                        else:
+                            from steempeg.ui.layout_defaults import (
+                                restore_v_splitter_sizes,
+                            )
+
+                            self.main_v_splitter.setSizes(
+                                restore_v_splitter_sizes(total)
+                            )
+                        self._render_dock_saved_sizes = None
+                else:
+                    self.main_v_splitter.setSizes([total, 0])
+        finally:
+            if hw is not None and hasattr(hw, "set_suppressed"):
+                hw.set_suppressed(
+                    bool(portable_like)
+                    or bool(getattr(self, "_portable_shell", False))
+                )
 
     def _is_previewing_rendered_media(self) -> bool:
         if getattr(self, "_rendered_media_path", None):
@@ -704,6 +760,26 @@ class RenderedLibraryMixin:
         if path and os.path.isfile(path):
             ext = os.path.splitext(path)[1].lower()
             return ext in RENDERED_ALL_EXTS
+        return False
+
+    def _has_active_raw_clip(self) -> bool:
+        """True when a Clips Manager Steam clip (folder / .mpd) is the active preview.
+
+        Screenshots tab clears the Clips grid highlight but keeps the player on the
+        loaded clip — export chrome must stay available in that case.
+        """
+        if getattr(self, "_rendered_media_path", None):
+            return False
+        path = getattr(self, "_preview_clip_path", None)
+        if not path:
+            return False
+        try:
+            if os.path.isdir(path):
+                return True
+            if os.path.isfile(path) and path.lower().endswith(".mpd"):
+                return True
+        except OSError:
+            return False
         return False
 
     def _render_dock_kept_alive(self) -> bool:
@@ -725,7 +801,10 @@ class RenderedLibraryMixin:
             return False
         if self._render_dock_kept_alive():
             return True
-        # Screenshots tab has nothing to export — hide the dock.
+        # Loaded Clips Manager .mpd keeps dash + settings even on Screenshots tab.
+        if self._has_active_raw_clip():
+            return True
+        # Screenshots-only (no raw clip): nothing to export — hide the dock.
         if getattr(self, "_library_panel_mode", "clips") == "screenshots":
             return False
         # Idle Rendered Videos / finished-export preview: hide settings + controls.
@@ -2689,7 +2768,9 @@ class RenderedLibraryMixin:
             )
         if not queue_owns_header and hasattr(self, "custom_icon_label"):
             from steempeg.ui.icon_utils import apply_square_icon
+            from steempeg.ui.player_header_layout import player_header_icon_px
 
+            icon_px = player_header_icon_px(self)
             self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
             if icon_path and os.path.isfile(icon_path):
                 from PySide6.QtGui import QPixmap
@@ -2697,8 +2778,8 @@ class RenderedLibraryMixin:
 
                 self.current_game_icon = icon_path
                 src = QPixmap(icon_path)
-                shaped = shaped_game_icon_pixmap(src, 24) if not src.isNull() else None
-                apply_square_icon(self.custom_icon_label, shaped, 24)
+                shaped = shaped_game_icon_pixmap(src, icon_px) if not src.isNull() else None
+                apply_square_icon(self.custom_icon_label, shaped, icon_px)
             elif is_unknown:
                 from steempeg.infra.paths import get_resource_path
                 from PySide6.QtGui import QPixmap
@@ -2709,16 +2790,16 @@ class RenderedLibraryMixin:
                 if os.path.isfile(unknown):
                     src = QPixmap(unknown)
                     shaped = (
-                        shaped_game_icon_pixmap(src, 24, ICON_SHAPE_CIRCLE)
+                        shaped_game_icon_pixmap(src, icon_px, ICON_SHAPE_CIRCLE)
                         if not src.isNull()
                         else None
                     )
-                    apply_square_icon(self.custom_icon_label, shaped, 24)
+                    apply_square_icon(self.custom_icon_label, shaped, icon_px)
                 else:
-                    apply_square_icon(self.custom_icon_label, None, 24)
+                    apply_square_icon(self.custom_icon_label, None, icon_px)
             else:
                 self.current_game_icon = ""
-                apply_square_icon(self.custom_icon_label, None, 24)
+                apply_square_icon(self.custom_icon_label, None, icon_px)
 
         if hasattr(self, "btn_clip_health"):
             if hasattr(self, "update_clip_health_button"):
