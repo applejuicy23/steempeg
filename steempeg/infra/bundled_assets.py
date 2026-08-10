@@ -104,6 +104,11 @@ _BASE_ASSETS = (
     "linux.png",
     "steamdeck.png",
     "update.png",
+    "sourceinfo.png",
+    "videosettings.png",
+    "audiosettings.png",
+    "exportsettings.png",
+    "presetsettings.png",
 )
 
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
