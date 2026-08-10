@@ -768,6 +768,8 @@ class RenderMixin:
             return
         if getattr(self, "_rendered_scan_active", False) and scan_phase is None and state == "ready":
             return
+        if getattr(self, "_update_check_busy", False) and scan_phase is None and state == "ready":
+            return
 
         # Queue owns the idle Ready cluster: numbered coloured badge, not plain green.
         if (
@@ -815,14 +817,16 @@ class RenderMixin:
         if state == "rendering" and not display_text:
             display_text = "Rendering"
 
-        # Library Loading/search: plain purple busy dot — never the queue index
-        # digit, even when Render Queue mode still owns the left summary strip.
-        library_scanning = (
+        # Library Loading/search + update-check busy: plain purple busy dot —
+        # never the queue index digit, even when Render Queue owns the strip.
+        # (Render progress itself uses state=rendering and keeps the badge.)
+        suppress_queue_badge = (
             scan_phase is not None
             or getattr(self, "_clips_scan_active", False)
             or getattr(self, "_rendered_scan_active", False)
+            or getattr(self, "_update_check_busy", False)
         )
-        if queue_index and self._queue_is_active() and not library_scanning:
+        if queue_index and self._queue_is_active() and not suppress_queue_badge:
             self._paint_status_dot_queue_badge(queue_index, color)
         else:
             self._paint_status_dot_plain(color)
@@ -950,9 +954,11 @@ class RenderMixin:
             return False
         if not hasattr(self.ui, "label_status"):
             return False
-        # Do not stamp a numbered queue badge over Loading N/M / search status.
-        if getattr(self, "_clips_scan_active", False) or getattr(
-            self, "_rendered_scan_active", False
+        # Do not stamp a numbered queue badge over Loading N/M / search / update-check.
+        if (
+            getattr(self, "_clips_scan_active", False)
+            or getattr(self, "_rendered_scan_active", False)
+            or getattr(self, "_update_check_busy", False)
         ):
             return False
         if not self._queue_is_active():
