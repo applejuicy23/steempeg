@@ -1340,6 +1340,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
                 "QPushButton::menu-indicator {{ image: none; }}"
             )
+            self._dash_btn_style_render_settings = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
+                "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
+                "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #8e7cc3; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+            )
 
             def _fmt_dash_btn(template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px") -> str:
                 return template.format(font=font, radius=radius, pad=pad)
@@ -1440,9 +1448,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
                         self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
-                        apply_square_icon(self.custom_icon_label, unknown_pix, 24)
-                        from steempeg.ui.player_header_layout import set_player_header_game_text
+                        from steempeg.ui.player_header_layout import (
+                            player_header_icon_px,
+                            set_player_header_game_text,
+                        )
 
+                        hdr_px = player_header_icon_px(self)
+                        hdr_pix = shaped_game_icon_pixmap(
+                            QPixmap(unknown), hdr_px, ICON_SHAPE_CIRCLE
+                        )
+                        apply_square_icon(self.custom_icon_label, hdr_pix, hdr_px)
                         set_player_header_game_text(
                             self,
                             "Select a clip to preview...",
@@ -1528,7 +1543,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             btn_row.setSpacing(12)
             self._dash_btn_row = btn_row
             
-            # Strict Sequence
+            # Strict Sequence — Start, optional Render Settings (Like a Portable), Pause…
             buttons_queue = ['btn_start', 'btn_pause', 'btn_cancel', 'btn_logs']
             
             for btn_name in buttons_queue:
@@ -1545,6 +1560,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
                     
                     btn_row.addWidget(btn)
+                    if btn_name == "btn_start" and not getattr(self, "_portable_shell", False):
+                        self._ensure_dash_render_settings_button()
+                        settings_btn = getattr(self, "btn_render_settings", None)
+                        if settings_btn is not None:
+                            btn_row.addWidget(settings_btn)
 
             dash_layout.addLayout(btn_row)
 
@@ -1557,6 +1577,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
+            if hasattr(self, "apply_desktop_render_layout"):
+                self.apply_desktop_render_layout()
 
         except Exception as e:
             print(f"Error building ultimate monolithic dashboard: {e}")
@@ -1683,12 +1705,32 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 border-radius: 6px;
             }
         """)
+        from steempeg.ui.ui_density import COMFORT as _HDR_COMFORT
+
+        # Fixed height = filled header (chips + pads); empty placeholder must match.
+        _hdr_min_h = max(
+            int(_HDR_COMFORT.header_chip) + 2 * int(_HDR_COMFORT.header_pad_v),
+            int(_HDR_COMFORT.header_min_h),
+            int(_HDR_COMFORT.header_icon) + 2 * int(_HDR_COMFORT.header_pad_v),
+        )
+        self.player_header_frame.setFixedHeight(_hdr_min_h)
+        self.player_header_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         header_layout = QHBoxLayout(self.player_header_frame)
-        header_layout.setContentsMargins(10, 8, 10, 8)
-        header_layout.setSpacing(10)
+        header_layout.setContentsMargins(
+            int(_HDR_COMFORT.header_pad_h),
+            int(_HDR_COMFORT.header_pad_v),
+            int(_HDR_COMFORT.header_pad_h),
+            int(_HDR_COMFORT.header_pad_v),
+        )
+        header_layout.setSpacing(max(6, int(_HDR_COMFORT.header_pad_h)))
 
         self.player_header_title = QWidget()
         self.player_header_title.setObjectName("playerHeaderTitle")
+        self.player_header_title.setMinimumHeight(
+            max(int(_HDR_COMFORT.header_icon), int(_HDR_COMFORT.header_chip))
+        )
         title_row = QHBoxLayout(self.player_header_title)
         title_row.setContentsMargins(0, 0, 0, 0)
         title_row.setSpacing(8)
@@ -1698,28 +1740,29 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
         from steempeg.ui.icon_utils import apply_square_icon
 
+        _hdr_icon = int(_HDR_COMFORT.header_icon)
         apply_square_icon(
             self.custom_icon_label,
             shaped_game_icon_pixmap(
-                QPixmap(get_resource_path("unknown_icon.png")), 24, ICON_SHAPE_CIRCLE
+                QPixmap(get_resource_path("unknown_icon.png")), _hdr_icon, ICON_SHAPE_CIRCLE
             ),
-            24,
+            _hdr_icon,
         )
 
         self.custom_text_label = QLabel("Select a clip to preview...")
         self.custom_text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.custom_text_label.setTextFormat(Qt.TextFormat.RichText)
         self.custom_text_label.setStyleSheet(
-            "color: white; font-size: 13px; font-weight: 700;"
+            f"color: white; font-size: {int(_HDR_COMFORT.header_font)}px; font-weight: 700;"
             "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
             "background: transparent; border: none;"
         )
 
         from steempeg.ui.icon_assets import playinfo_icons
 
-        # Match title-bar About/Settings: 16px glyph in a 22px circular hover hitbox.
-        _INFO_HIT = 22
-        _INFO_ICON = 16
+        # Match title-bar About/Settings: glyph in a circular hover hitbox.
+        _INFO_HIT = max(20, int(_HDR_COMFORT.header_chip) - 8)
+        _INFO_ICON = max(14, int(_HDR_COMFORT.header_chip_icon))
         _INFO_HIT_R = _INFO_HIT // 2
         self._player_header_info_icon_idle, self._player_header_info_icon_hot = playinfo_icons(
             _INFO_ICON
@@ -1846,8 +1889,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
 
-        _HEADER_ACTION_CHIP = 30
-        _HEADER_ACTION_ICON = 16
+        _HEADER_ACTION_CHIP = int(_HDR_COMFORT.header_chip)
+        _HEADER_ACTION_ICON = int(_HDR_COMFORT.header_chip_icon)
         _HEADER_CHIP = (
             "border-radius: 8px;"
             "padding: 0px;"
@@ -2250,10 +2293,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 rw.addWidget(self.btn_screenshot, alignment=Qt.AlignVCenter) 
                 rw.addWidget(self.trim_tools_pill, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.btn_trim, alignment=Qt.AlignVCenter)
-                # Desktop Render CTA — same slot as Portable (between Trim and theatre pill).
-                self._ensure_desktop_player_render_button(right_wrap)
-                if getattr(self, "btn_player_render", None) is not None:
-                    rw.addWidget(self.btn_player_render, alignment=Qt.AlignVCenter)
                 rw.addWidget(self.pill_container, alignment=Qt.AlignVCenter)
 
                 # Remember original layout index for seamless restoring
@@ -2319,25 +2358,37 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                 self.main_v_splitter = QSplitter(Qt.Vertical)
 
+                from steempeg.ui.layout_defaults import (
+                    DESKTOP_BOTTOM_PANE_SPACING,
+                    MAIN_V_SPLIT_BOTTOM_PAD,
+                    MAIN_V_SPLIT_TOP_PAD,
+                )
+
                 # 3. Top Box (Player and Buttons)
                 self.top_v_wrap = QWidget()
                 top_v_layout = QVBoxLayout(self.top_v_wrap)
-                # Add a 10px margin at the bottom (before the splitter)
-                top_v_layout.setContentsMargins(0, 0, 0, 10) 
+                # Breath before the splitter handle (not a thick dark band).
+                top_v_layout.setContentsMargins(0, 0, 0, MAIN_V_SPLIT_TOP_PAD)
                 top_v_layout.setSpacing(right_layout.spacing())
 
                 # 4. Bottom Box (Tabs and Status)
                 self.bottom_v_wrap = QWidget()
                 bottom_v_layout = QVBoxLayout(self.bottom_v_wrap)
-                # Add a 10px margin at the top (after the splitter)
-                bottom_v_layout.setContentsMargins(0, 10, 0, 0) 
-                bottom_v_layout.setSpacing(right_layout.spacing())
+                bottom_v_layout.setContentsMargins(0, MAIN_V_SPLIT_BOTTOM_PAD, 0, 0)
+                # Neo ↔ dash gap (tighter than right_panel's generic 8).
+                bottom_v_layout.setSpacing(DESKTOP_BOTTOM_PANE_SPACING)
 
                 # 5. Carefully arrange the components into two boxes.
                 put_in_bottom = False
                 for item in all_items:
-                    #Now the splitter looks for both the tabs and our new wrapper.
-                    if item.widget() == getattr(self.ui, 'settings_tabs', None) or item.widget() == getattr(self, 'neo_wrapper', None):
+                    # Neo / tabs / dash — dash alone must count too (Like a Portable
+                    # may have already parked neo before this vacuum runs).
+                    w = item.widget()
+                    if w is not None and w in (
+                        getattr(self.ui, "settings_tabs", None),
+                        getattr(self, "neo_wrapper", None),
+                        getattr(self, "render_dashboard", None),
+                    ):
                         put_in_bottom = True
                     
                     target_layout = bottom_v_layout if put_in_bottom else top_v_layout
@@ -2350,8 +2401,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 from PySide6.QtWidgets import QSizePolicy
                 from PySide6.QtCore import QObject, QEvent
                 # 1. FIX PLAYER BUTTONS STRETCHING:
-                # Force the video container to absorb 100% of extra vertical space.
-                top_v_layout.setStretchFactor(self.ui.video_container, 1)
+                # video_container lives inside video_wrapper — stretch the wrapper or
+                # leftover top-pane height pools under the timeline as a dark band.
+                vw = getattr(self, "video_wrapper", None)
+                if vw is not None:
+                    vw.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                    )
+                    top_v_layout.setStretchFactor(vw, 1)
+                else:
+                    top_v_layout.setStretchFactor(self.ui.video_container, 1)
 
                 # 2. FIX STATUS BAR EXPANDING:
                 # Prevent the bottom status bar from becoming huge when tabs hide.
@@ -2387,6 +2446,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.main_v_splitter.setSizes(
                     default_main_v_splitter_sizes(_avail_w, _avail_h)
                 )
+                self.main_v_splitter.splitterMoved.connect(
+                    self._on_main_v_splitter_moved
+                )
+                # Like a Portable: park neo + glue dash now that the v-splitter exists.
+                if hasattr(self, "apply_desktop_render_layout"):
+                    self.apply_desktop_render_layout()
                 # Beautiful modern splitter handle
                 
                 self.main_v_splitter.setStyleSheet("""
@@ -3266,6 +3331,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         """Re-apply splitter sizes once the maximized window has real geometry."""
         self._ui_density = None  # force chrome density for the real window size
         self._apply_startup_splitter_sizes()
+        if hasattr(self, "apply_desktop_render_layout"):
+            self.apply_desktop_render_layout()
         if hasattr(self, "_restore_library_ui_state"):
             self._restore_library_ui_state()
             QTimer.singleShot(500, self._restore_library_ui_state)
@@ -3452,6 +3519,116 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         """Debounce kiss-snap when Clips pushes into the player column."""
         self._on_right_h_splitter_moved()
 
+    def _on_main_v_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        """Debounce-persist Desktop player↔settings dock height (not Like a Portable glue)."""
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                if self._desktop_render_layout_is_portable_like():
+                    return
+            except Exception:
+                pass
+        timer = getattr(self, "_main_v_persist_timer", None)
+        if timer is None:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self.ui if hasattr(self, "ui") else None)
+            timer.setSingleShot(True)
+            timer.setInterval(150)
+            timer.timeout.connect(self._persist_desktop_main_v_splitter_sizes)
+            self._main_v_persist_timer = timer
+        timer.start()
+
+    def _desktop_v_splitter_sizes_are_persistable(self, sizes) -> bool:
+        """True when sizes look like a real Desktop neo dock, not dash-only glue."""
+        if not sizes or len(sizes) < 2:
+            return False
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            return False
+        if getattr(self, "_portable_shell", False):
+            return False
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                if self._desktop_render_layout_is_portable_like():
+                    return False
+            except Exception:
+                pass
+        bottom = int(sizes[1])
+        if bottom <= 80:
+            return False
+        dash_h = 120
+        if hasattr(self, "_dash_only_bottom_height"):
+            try:
+                dash_h = max(int(self._dash_only_bottom_height()), 1)
+            except Exception:
+                dash_h = 120
+        # Glue / near-glue must not overwrite the Desktop preference.
+        if bottom <= dash_h + 48:
+            return False
+        return True
+
+    def _persist_desktop_main_v_splitter_sizes(self, sizes=None) -> None:
+        """Save It's a Desktop v-dock sizes; ignore Portable-like glue heights."""
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None or not hasattr(self, "save_layout_setting"):
+            return
+        live = list(sizes) if sizes is not None else list(v_split.sizes())
+        if not self._desktop_v_splitter_sizes_are_persistable(live):
+            return
+        self.save_layout_setting(
+            "main_v_splitter_sizes", [int(live[0]), int(live[1])]
+        )
+
+    def _apply_desktop_main_v_splitter_sizes(self) -> None:
+        """Restore saved Desktop v-dock (or a tall default) onto main_v_splitter."""
+        from steempeg.ui.layout_defaults import (
+            default_main_v_splitter_sizes,
+            scale_main_v_splitter_sizes,
+        )
+
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                if self._desktop_render_layout_is_portable_like():
+                    return
+            except Exception:
+                pass
+        ui = getattr(self, "ui", None)
+        avail_w = int((ui.width() if ui is not None else 0) or 0)
+        avail_h = int((ui.height() if ui is not None else 0) or 0)
+        default_v = default_main_v_splitter_sizes(avail_w, avail_h, widget=ui)
+        saved = default_v
+        if hasattr(self, "get_layout_setting"):
+            try:
+                saved = self.get_layout_setting("main_v_splitter_sizes", default_v)
+            except Exception:
+                saved = default_v
+        total = sum(v_split.sizes()) if sum(v_split.sizes()) > 0 else int(v_split.height() or 0)
+        total = max(int(total), 1)
+        v_split.setSizes(
+            scale_main_v_splitter_sizes(saved, total, window_height=avail_h or total)
+        )
+
+    def _desktop_v_splitter_looks_minimal(self) -> bool:
+        """True when the bottom dock is crushed / dash-height (not a real neo pane)."""
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return False
+        sizes = v_split.sizes()
+        if not sizes or len(sizes) < 2:
+            return True
+        bottom = int(sizes[1])
+        if bottom <= 0:
+            return True
+        dash_h = 120
+        if hasattr(self, "_dash_only_bottom_height"):
+            try:
+                dash_h = max(int(self._dash_only_bottom_height()), 1)
+            except Exception:
+                dash_h = 120
+        return bottom <= dash_h + 48
+
     def _on_right_h_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
         """Debounced snap: collapse queue / player scraps after drag ends."""
         timer = getattr(self, "_right_h_snap_timer", None)
@@ -3543,18 +3720,33 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         v_split = getattr(self, "main_v_splitter", None)
         if v_split is not None:
-            from steempeg.ui.layout_defaults import restore_v_splitter_sizes
+            from steempeg.ui.layout_defaults import (
+                main_v_splitter_max_bottom,
+                restore_v_splitter_sizes,
+            )
 
             h = int(self.ui.height() or 0)
             sizes = v_split.sizes()
             total = sum(sizes) if sum(sizes) > 0 else v_split.height()
-            if h > 0 and total > 0 and len(sizes) >= 2 and sizes[1] > 0:
-                max_bottom = max(180, int(h * 0.35))
+            portable_like = False
+            if hasattr(self, "_desktop_render_layout_is_portable_like"):
+                try:
+                    portable_like = bool(self._desktop_render_layout_is_portable_like())
+                except Exception:
+                    portable_like = False
+            if (
+                not portable_like
+                and h > 0
+                and total > 0
+                and len(sizes) >= 2
+                and sizes[1] > 0
+            ):
+                max_bottom = main_v_splitter_max_bottom(h)
                 if sizes[1] > max_bottom:
                     bottom = max_bottom
                     top = max(total - bottom, 200)
                     v_split.setSizes([top, bottom])
-                elif sizes[1] < 120 and sizes[1] > 0:
+                elif sizes[1] < 160 and sizes[1] > 0:
                     # Extremely crushed bottom — nudge toward a sane restore ratio.
                     v_split.setSizes(restore_v_splitter_sizes(total))
 
@@ -3847,6 +4039,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if btn is not None:
                 btn.setMinimumSize(w, h)
 
+        # Player header title cluster / status / action chips (was fixed 24/8/30).
+        try:
+            from steempeg.ui.player_header_layout import apply_player_header_density
+
+            apply_player_header_density(self, dense)
+        except Exception:
+            pass
+
         chip = dense.chrome_chip
         chip_r = chip // 2
         # Same face for theater + fullscreen + trim chips. Scale with the chip
@@ -4040,8 +4240,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 btn.setStyleSheet(
                     template.format(font=font, radius=radius, pad=pad)
                 )
+        settings_btn = getattr(self, "btn_render_settings", None)
+        settings_style = getattr(self, "_dash_btn_style_render_settings", None)
+        if settings_btn is not None and settings_style:
+            settings_btn.setFixedHeight(dense.dash_btn_h)
+            settings_btn.setStyleSheet(
+                settings_style.format(font=font, radius=radius, pad=pad)
+            )
         if hasattr(self, "_sync_dash_queue_status_chrome"):
             self._sync_dash_queue_status_chrome()
+        if hasattr(self, "apply_desktop_render_layout"):
+            self.apply_desktop_render_layout()
 
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import (
@@ -4069,14 +4278,48 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._apply_responsive_layout_mins()
         v_splitter = getattr(self, "main_v_splitter", None)
         if v_splitter is not None:
-            default_v = default_main_v_splitter_sizes(avail_w, avail_h, widget=self.ui)
-            v_sizes = self.get_layout_setting("main_v_splitter_sizes", default_v)
-            # Cap remembered bottom pane on short screens.
-            if avail_h > 0 and len(v_sizes) >= 2:
-                max_bottom = max(180, int(avail_h * 0.35))
-                if v_sizes[1] > max_bottom:
-                    v_sizes = [max(avail_h - max_bottom, 200), max_bottom]
-            v_splitter.setSizes(v_sizes)
+            portable_like = False
+            if hasattr(self, "_desktop_render_layout_is_portable_like"):
+                try:
+                    portable_like = bool(self._desktop_render_layout_is_portable_like())
+                except Exception:
+                    portable_like = False
+            if portable_like and hasattr(self, "_sync_portable_like_dock_chrome"):
+                # Don't restore a tall neo dock height — glue dash height instead.
+                self._sync_portable_like_dock_chrome()
+            else:
+                from steempeg.ui.layout_defaults import (
+                    main_v_splitter_max_bottom,
+                    scale_main_v_splitter_sizes,
+                )
+
+                default_v = default_main_v_splitter_sizes(
+                    avail_w, avail_h, widget=self.ui
+                )
+                v_sizes = self.get_layout_setting("main_v_splitter_sizes", default_v)
+                total = (
+                    sum(v_splitter.sizes())
+                    if sum(v_splitter.sizes()) > 0
+                    else int(v_splitter.height() or avail_h or 0)
+                )
+                total = max(int(total), 1)
+                # Prefer remembered proportions; fall back to tall defaults.
+                if (
+                    not v_sizes
+                    or len(v_sizes) < 2
+                    or int(v_sizes[1]) <= 80
+                ):
+                    v_sizes = default_v
+                scaled = scale_main_v_splitter_sizes(
+                    v_sizes, total, window_height=avail_h or total
+                )
+                # Extra guard: never cold-start at a near-dash stub height.
+                max_bottom = main_v_splitter_max_bottom(avail_h or total)
+                if scaled[1] < 200:
+                    bottom = min(max(int(default_v[1]), 260), max_bottom)
+                    bottom = min(bottom, max(total - 200, 1))
+                    scaled = [total - bottom, bottom]
+                v_splitter.setSizes(scaled)
 
     def _setup_bitrate_labels(self):
         # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
@@ -4482,22 +4725,39 @@ def main():
             # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
             window.ui.show()
             logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
-        window.ui.raise_()
-        window.ui.activateWindow()
-        try:
-            wh = window.ui.windowHandle()
-            if wh is not None:
-                wh.requestActivate()
-        except Exception:
-            pass
+
+        def _bring_main_to_front():
+            # Qt alone is often ignored under Windows focus-stealing rules when
+            # launched from another process. Win32 path is a no-op on Linux.
+            window.ui.raise_()
+            window.ui.activateWindow()
+            try:
+                wh = window.ui.windowHandle()
+                if wh is not None:
+                    wh.requestActivate()
+            except Exception:
+                pass
+            try:
+                from steempeg.infra.window_focus import force_widget_foreground
+
+                force_widget_foreground(window.ui)
+            except Exception:
+                logging.debug("startup bring-to-front failed", exc_info=True)
+
+        _bring_main_to_front()
         # Light re-assert only — heavy restore already ran pre-show.
         # Do NOT clear ``_ui_density`` here: that forced a full chrome rebuild
         # after the window was already visible (1–3s of "still preparing").
         window._apply_startup_splitter_sizes()
+        if hasattr(window, "apply_desktop_render_layout"):
+            window.apply_desktop_render_layout()
         window._ensure_startup_queue_open()
         QApplication.processEvents()
-        # Geometry after maximize can still settle one tick later.
+        # Geometry after maximize can still settle one tick later — re-claim
+        # foreground after first paint (launcher / terminal may still hold focus).
+        _bring_main_to_front()
         QTimer.singleShot(0, window._ensure_startup_queue_open)
+        QTimer.singleShot(0, _bring_main_to_front)
         QTimer.singleShot(50, window._ensure_startup_queue_open)
         if ui_shell == UI_SHELL_PORTABLE:
             # Library restore (500ms) must not fight theatre — re-assert after it.
