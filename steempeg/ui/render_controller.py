@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -87,6 +87,7 @@ from steempeg.render.queue import (
     load_queue_from_file,
     save_queue_to_file,
 )
+from steempeg.render.queue_display import format_job_preset
 from steempeg.render.queue_history import (
     _utc_now_iso,
     append_batch,
@@ -790,7 +791,9 @@ class RenderMixin:
         color = colors.get(state, "#a871ff")
         queue_index = None
         if self._queue_is_active():
-            job = self._queue_context_job()
+            # Badge tracks the status-strip job (queue head / active render), not
+            # an arbitrary library preview that may disagree with the number.
+            job = self._status_strip_context_job()
             if job is not None:
                 queue_index = int(getattr(job, "queue_index", 0) or 0) or None
                 if state in ("rendering", "busy") and job.status == JobStatus.RENDERING:
@@ -812,7 +815,14 @@ class RenderMixin:
         if state == "rendering" and not display_text:
             display_text = "Rendering"
 
-        if queue_index and self._queue_is_active():
+        # Library Loading/search: plain purple busy dot — never the queue index
+        # digit, even when Render Queue mode still owns the left summary strip.
+        library_scanning = (
+            scan_phase is not None
+            or getattr(self, "_clips_scan_active", False)
+            or getattr(self, "_rendered_scan_active", False)
+        )
+        if queue_index and self._queue_is_active() and not library_scanning:
             self._paint_status_dot_queue_badge(queue_index, color)
         else:
             self._paint_status_dot_plain(color)
@@ -915,8 +925,9 @@ class RenderMixin:
         if dot is None:
             return
         dense = getattr(self, "_ui_density", None)
-        sz = 16 if dense is not None and getattr(dense, "compact", False) else 18
-        font = 9 if sz <= 16 else 10
+        # Slightly larger than the plain status dot so the queue index digit stays readable.
+        sz = 22 if dense is not None and getattr(dense, "compact", False) else 24
+        font = 12 if sz <= 22 else 13
         dot.setFixedSize(sz, sz)
         dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
         dot.setText(str(max(1, int(index))))
@@ -931,16 +942,26 @@ class RenderMixin:
         self._status_indicator_color = color
 
     def _sync_dash_queue_status_chrome(self) -> bool:
-        """Drive Ready cluster from queue context job. True = queue owns the chrome."""
+        """Drive Ready cluster + left summary from the status-strip job.
+
+        True = queue owns the chrome (badge number and game line agree).
+        """
         if getattr(self, "_portable_shell", False):
             return False
         if not hasattr(self.ui, "label_status"):
             return False
+        # Do not stamp a numbered queue badge over Loading N/M / search status.
+        if getattr(self, "_clips_scan_active", False) or getattr(
+            self, "_rendered_scan_active", False
+        ):
+            return False
         if not self._queue_is_active():
             return False
-        job = self._queue_context_job()
+        job = self._status_strip_context_job()
         if job is None:
             return False
+
+        self._apply_status_strip_summary(job)
 
         color = STATUS_COLORS.get(job.status, STATUS_COLORS[JobStatus.QUEUED])
         index = int(getattr(job, "queue_index", 0) or 0) or 1
@@ -1034,6 +1055,64 @@ class RenderMixin:
             return pending
         jobs = list(getattr(self.render_queue, "jobs", None) or [])
         return jobs[0] if jobs else None
+
+    def _status_strip_context_job(self):
+        """Job that owns the footer status strip (name/stats + numbered badge).
+
+        Unlike the player-header context, idle/filling queue always follows the
+        first pending job (queue head). Library preview or a selected card that
+        is not the head must not disagree with the badge number.
+        """
+        if not self._queue_is_active():
+            return None
+        active = getattr(self, "_active_render_job", None)
+        if active is not None:
+            live = self.render_queue.get(getattr(active, "id", ""))
+            if live is not None:
+                return live
+        pending = self.render_queue.next_queued()
+        if pending is not None:
+            return pending
+        # Finished / inactive queue still listed — selection may update context.
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        if selected_id:
+            job = self.render_queue.get(selected_id)
+            if job is not None:
+                return job
+        jobs = list(getattr(self.render_queue, "jobs", None) or [])
+        return jobs[0] if jobs else None
+
+    def _apply_status_strip_summary(self, job) -> None:
+        """Left dash line (icon + game · preset) for the status-strip job."""
+        if job is None or not hasattr(self, "bottom_text_label"):
+            return
+        game_name = (getattr(job, "game_name", "") or "").strip() or "Steam Clip"
+        preset = format_job_preset(job.settings) if getattr(job, "settings", None) else "—"
+        self.bottom_text_label.setText(f"{game_name}  •  {preset}")
+
+        target_icon = (getattr(job, "game_icon_path", "") or "").strip()
+        unknown_icon_path = get_resource_path("unknown_icon.png")
+        if not target_icon or not os.path.exists(target_icon):
+            target_icon = unknown_icon_path
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
+        is_unknown_icon = os.path.basename(target_icon).lower() == "unknown_icon.png"
+        header_shape = ICON_SHAPE_CIRCLE if is_unknown_icon else None
+        if hasattr(self, "_set_bottom_summary_icon"):
+            self._set_bottom_summary_icon(target_icon)
+            return
+        if not hasattr(self, "bottom_icon_label"):
+            return
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        self.bottom_icon_label.setStyleSheet("background: transparent; border: none;")
+        bottom_pix = QPixmap(target_icon)
+        shaped = (
+            shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
+            if not bottom_pix.isNull()
+            else None
+        )
+        apply_square_icon(self.bottom_icon_label, shaped, 24)
 
     def _sync_player_header_to_queue_context(self) -> bool:
         """Drive header from the queue context job. False = no queue context."""
@@ -1209,12 +1288,14 @@ class RenderMixin:
         self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
         src = QPixmap(path)
         from steempeg.ui.icon_utils import apply_square_icon
+        from steempeg.ui.player_header_layout import player_header_icon_px
 
+        icon_px = player_header_icon_px(self)
         shaped = None
         if not src.isNull():
             shape = ICON_SHAPE_CIRCLE if is_unknown else None
-            shaped = shaped_game_icon_pixmap(src, 24, shape)
-        apply_square_icon(self.custom_icon_label, shaped, 24)
+            shaped = shaped_game_icon_pixmap(src, icon_px, shape)
+        apply_square_icon(self.custom_icon_label, shaped, icon_px)
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
         """Preview from Clips Manager while queue is active; header stays queue-first."""
@@ -1513,68 +1594,614 @@ class RenderMixin:
 
             sync_portable_render_button(self)
         else:
-            self._sync_desktop_player_render_button()
+            self._sync_dash_render_settings_button()
 
-    def _ensure_desktop_player_render_button(self, parent=None) -> None:
-        """Portable-style Render pill beside Trim (desktop only)."""
-        if getattr(self, "_portable_shell", False):
-            return
-        existing = getattr(self, "btn_player_render", None)
-        if existing is not None:
+    def _ensure_dash_render_settings_button(self) -> None:
+        """Purple «Render Settings» next to Start — Like a Portable mode only."""
+        if getattr(self, "btn_render_settings", None) is not None:
             try:
-                existing.objectName()
+                self.btn_render_settings.objectName()
                 return
             except RuntimeError:
                 pass
-        from PySide6.QtWidgets import QPushButton
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QPushButton, QSizePolicy
 
-        from steempeg.ui.design_tokens import with_tooltip_style
+        from steempeg.ui.icon_assets import preview_settings_icon
 
-        style = with_tooltip_style(
-            "QPushButton {"
-            "background-color: #2e6b32; color: #ffffff;"
-            "border: 2px solid #3e8e41; border-radius: 15px;"
-            "padding: 0 12px; font-weight: bold;"
-            "}"
-            "QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }"
-            "QPushButton:pressed { background-color: #235226; }"
-            "QPushButton:disabled { background-color: #222222; color: #555555; "
-            "border: 2px solid #2d2d2d; }"
-        )
-        btn = QPushButton(parent)
-        btn.setObjectName("desktopPlayerRender")
-        btn.setText("🚩 Render")
-        btn.setStyleSheet(style)
-        btn.setFixedHeight(30)
+        style = getattr(self, "_dash_btn_style_render_settings", None)
+        if not style:
+            style = (
+                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
+                "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
+                "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
+                "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #8e7cc3; }}"
+                "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+            )
+            self._dash_btn_style_render_settings = style
+
+        def _fmt(template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px") -> str:
+            return template.format(font=font, radius=radius, pad=pad)
+
+        btn = QPushButton()
+        btn.setObjectName("btn_render_settings")
+        btn.setText(" Render Settings")
+        btn.setIcon(preview_settings_icon(16))
+        btn.setIconSize(QSize(16, 16))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip("Export settings")
-        trim = getattr(self, "btn_trim", None)
-        if trim is not None:
-            btn.setFont(trim.font())
-        btn.clicked.connect(self.focus_export_settings_panel)
-        self.btn_player_render = btn
-        self._sync_desktop_player_render_button()
+        btn.setToolTip("Open render settings in a floating window (click again to close)")
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setMinimumHeight(36)
+        btn.setStyleSheet(_fmt(style))
+        btn.clicked.connect(self.toggle_desktop_render_settings)
+        self.btn_render_settings = btn
+        self._sync_dash_render_settings_button()
 
-    def _sync_desktop_player_render_button(self) -> None:
-        btn = getattr(self, "btn_player_render", None)
-        if btn is None or getattr(self, "_portable_shell", False):
+    def _sync_dash_render_settings_button(self) -> None:
+        btn = getattr(self, "btn_render_settings", None)
+        if btn is None:
             return
-        pending = self._queue_pending_count()
-        has_clip = False
-        resolve = getattr(self, "_resolve_export_clip_path", None)
-        if callable(resolve):
-            try:
-                has_clip = bool(resolve())
-            except Exception:
-                has_clip = False
-        if pending > 0 and has_clip:
-            btn.setText(f"🚩 Queue ({pending})")
+        show = self._desktop_render_layout_is_portable_like()
+        btn.setVisible(show)
+        open_dlg = getattr(self, "_desktop_render_settings_dlg", None)
+        try:
+            is_open = open_dlg is not None and open_dlg.isVisible() and not open_dlg.isMinimized()
+        except RuntimeError:
+            is_open = False
+        if is_open:
+            btn.setText(" Close Settings")
         else:
-            btn.setText("🚩 Render")
-        btn.setEnabled(True)
+            btn.setText(" Render Settings")
+
+    def _desktop_render_layout_is_portable_like(self) -> bool:
+        if getattr(self, "_portable_shell", False):
+            return False
+        from steempeg.ui.settings_prefs import (
+            DESKTOP_RENDER_LIKE_A_PORTABLE,
+            load_desktop_render_layout,
+        )
+
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        return load_desktop_render_layout(settings) == DESKTOP_RENDER_LIKE_A_PORTABLE
+
+    def apply_desktop_render_layout(self) -> None:
+        """Apply Settings → It's a Desktop / Like a Portable (live, no restart)."""
+        # Legacy Trim-adjacent Render CTA — always off (replaced by dash button).
+        legacy = getattr(self, "btn_player_render", None)
+        if legacy is not None:
+            try:
+                legacy.hide()
+            except RuntimeError:
+                pass
+        portable_like = self._desktop_render_layout_is_portable_like()
+        bottom = getattr(self, "bottom_v_wrap", None)
+        neo = getattr(self, "neo_wrapper", None)
+        garage = getattr(self, "_neo_chrome_garage", None)
+        bottom_still_glued = False
+        if bottom is not None:
+            try:
+                bottom_still_glued = int(bottom.maximumHeight()) < 100000
+            except RuntimeError:
+                bottom_still_glued = False
+        neo_parked = bool(
+            getattr(self, "_neo_dock_home", None)
+            or (neo is not None and garage is not None and neo.parentWidget() is garage)
+        )
+        leaving_portable = not portable_like and (
+            bool(getattr(self, "_desktop_layout_was_portable_like", False))
+            or bottom_still_glued
+            or neo_parked
+        )
+        if not portable_like:
+            from steempeg.ui.desktop_render_settings import close_desktop_render_settings
+
+            close_desktop_render_settings(self)
+        # Before chrome mutates the splitter: remember a tall Desktop dock so
+        # Like a Portable glue cannot overwrite settings.json.
+        if portable_like and not getattr(self, "_desktop_layout_was_portable_like", False):
+            self._snapshot_desktop_v_splitter_before_portable_like()
+        self._desktop_layout_was_portable_like = bool(portable_like)
+        self._sync_dash_render_settings_button()
+        self._sync_portable_like_dock_chrome(
+            restore_v_sizes=leaving_portable or portable_like
+        )
+        if portable_like:
+            # Second pass after layout settles — keep user close, else glue open.
+            QTimer.singleShot(0, self._settle_portable_like_dash)
+        elif leaving_portable:
+            # Second pass: neo stretch + splitter sizes after reparent/show.
+            QTimer.singleShot(0, self._settle_desktop_dock_layout)
+        elif hasattr(self, "_desktop_v_splitter_looks_minimal") and hasattr(
+            self, "_apply_desktop_main_v_splitter_sizes"
+        ):
+            # Cold Desktop start / density pass: don't leave a dash-height stub.
+            if self._desktop_v_splitter_looks_minimal():
+                self._apply_desktop_main_v_splitter_sizes()
+
+    def _settle_portable_like_dash(self) -> None:
+        if not self._desktop_render_layout_is_portable_like():
+            return
+        if getattr(self, "_portable_like_dash_closed", False):
+            self._apply_portable_like_dash_closed(True)
+        else:
+            self._glue_portable_like_dash_open()
+
+    def _settle_desktop_dock_layout(self) -> None:
+        """Re-apply Desktop dock geometry after Portable→Desktop reparent settles."""
+        if self._desktop_render_layout_is_portable_like():
+            return
+        self._sync_portable_like_dock_chrome(restore_v_sizes=True)
+
+    def _snapshot_desktop_v_splitter_before_portable_like(self) -> None:
+        """Keep Desktop dock sizes in memory before glue shrinks the pane.
+
+        Disk is only written by the Desktop drag/close path — never from this
+        snapshot — so a cold start into Like a Portable cannot clobber a saved
+        Desktop preference with construction defaults.
+        """
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return
+        live = list(v_split.sizes())
+        if len(live) < 2:
+            return
+        dash_h = max(int(self._dash_only_bottom_height()), 1)
+        if int(live[1]) <= dash_h + 48:
+            return
+        if not getattr(self, "_pre_portable_like_v_sizes", None):
+            self._pre_portable_like_v_sizes = live
+
+    def _floating_render_settings_holds_neo(self) -> bool:
+        dlg = getattr(self, "_desktop_render_settings_dlg", None)
+        if dlg is not None:
+            try:
+                if bool(dlg.isVisible() or dlg.isMinimized()):
+                    return True
+            except RuntimeError:
+                pass
+        # Belt-and-suspenders: neo already reparented while dlg ref lagged.
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is None:
+            return False
+        from steempeg.ui.desktop_render_settings import DesktopRenderSettingsDialog
+
+        w = neo.parentWidget()
+        while w is not None:
+            if isinstance(w, DesktopRenderSettingsDialog):
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _dash_only_bottom_height(self) -> int:
+        """Exact height for the glued render-control strip (no black padding)."""
+        from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
+
+        margin_top = int(MAIN_V_SPLIT_BOTTOM_PAD)
+        dash = getattr(self, "render_dashboard", None)
+        if dash is None:
+            return margin_top + 120
+        # Prefer real height once laid out; fall back to sizeHint.
+        h = int(dash.height() or 0)
+        if h < 80:
+            h = int(dash.sizeHint().height() or 0)
+        if h < 80:
+            h = int(dash.minimumSizeHint().height() or 0)
+        if h < 80:
+            h = 120
+        return margin_top + h
+
+    def _ensure_neo_chrome_garage(self):
+        """Off-layout host so neo cannot leave a void in bottom_v_wrap."""
+        g = getattr(self, "_neo_chrome_garage", None)
+        if g is not None:
+            try:
+                g.objectName()
+                return g
+            except RuntimeError:
+                pass
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        host = getattr(self, "ui", None)
+        g = QWidget(host)
+        g.setObjectName("neoChromeGarage")
+        g.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        g.hide()
+        g.setFixedSize(0, 0)
+        lay = QVBoxLayout(g)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self._neo_chrome_garage = g
+        return g
+
+    def _ensure_dash_in_bottom_wrap(self) -> None:
+        """Keep the render dash in bottom_v_wrap (early neo-park can strand it in top)."""
+        dash = getattr(self, "render_dashboard", None)
+        bottom = getattr(self, "bottom_v_wrap", None)
+        if dash is None or bottom is None:
+            return
+        if dash.parentWidget() is bottom:
+            return
+        prev = dash.parentWidget()
+        prev_lay = prev.layout() if prev is not None else None
+        if prev_lay is not None:
+            prev_lay.removeWidget(dash)
+        lay = bottom.layout()
+        if lay is not None:
+            lay.addWidget(dash)
+            lay.setStretchFactor(dash, 0)
+
+    def _park_neo_away_from_dock(self) -> None:
+        """Pull neo out of the vertical splitter so the dash can glue to the bottom."""
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is None or self._floating_render_settings_holds_neo():
+            return
+        # Shell still assembling — leave neo in the right-panel tree so the
+        # v-splitter routes neo + dash into bottom_v_wrap together.
+        if getattr(self, "main_v_splitter", None) is None:
+            neo.hide()
+            return
+        garage = self._ensure_neo_chrome_garage()
+        if neo.parentWidget() is garage:
+            neo.hide()
+            return
+        from steempeg.ui.portable.sheets import _borrow_widget
+
+        if not getattr(self, "_neo_dock_home", None):
+            self._neo_dock_home = _borrow_widget(neo)
+        else:
+            parent = neo.parentWidget()
+            lay = parent.layout() if parent is not None else None
+            if lay is not None:
+                lay.removeWidget(neo)
+            neo.setParent(None)
+        garage.layout().addWidget(neo)
+        neo.hide()
+
+    def _restore_neo_to_dock_layout(self) -> None:
+        """Put neo back into bottom_v_wrap above the dash (It's a Desktop)."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is None or self._floating_render_settings_holds_neo():
+            return
+        bottom = getattr(self, "bottom_v_wrap", None)
+        if bottom is None or bottom.layout() is None:
+            return
+        lay = bottom.layout()
+        dash = getattr(self, "render_dashboard", None)
+
+        # Detach from garage / stale parent — always re-dock into bottom_v_wrap.
+        parent = neo.parentWidget()
+        if parent is not None:
+            prev_lay = parent.layout()
+            if prev_lay is not None:
+                prev_lay.removeWidget(neo)
+            neo.setParent(None)
+
+        insert_at = 0
+        if dash is not None:
+            for i in range(lay.count()):
+                item = lay.itemAt(i)
+                if item is not None and item.widget() is dash:
+                    insert_at = i
+                    break
+        lay.insertWidget(insert_at, neo)
+        self._neo_dock_home = None
+
+        neo.setMaximumHeight(16777215)
+        neo.setMinimumHeight(0)
+        neo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        neo.show()
+        lay.setStretchFactor(neo, 1)
+        if dash is not None:
+            lay.setStretchFactor(dash, 0)
+            # Ensure dash stays the footer strip under neo.
+            if dash.parentWidget() is not bottom:
+                self._ensure_dash_in_bottom_wrap()
+            else:
+                # Keep dash after neo even if insert shifted indices.
+                dash_idx = -1
+                neo_idx = -1
+                for i in range(lay.count()):
+                    item = lay.itemAt(i)
+                    w = item.widget() if item is not None else None
+                    if w is neo:
+                        neo_idx = i
+                    elif w is dash:
+                        dash_idx = i
+                if neo_idx >= 0 and dash_idx >= 0 and dash_idx < neo_idx:
+                    lay.removeWidget(dash)
+                    lay.addWidget(dash)
+                    lay.setStretchFactor(dash, 0)
+
+    def _unlock_portable_like_dash_for_drag(self) -> None:
+        """Lift glued min/max so the v-splitter handle can actually move."""
+        bottom = getattr(self, "bottom_v_wrap", None)
+        if bottom is None:
+            return
+        dash_h = max(int(self._dash_only_bottom_height()), 1)
+        bottom.setMinimumHeight(0)
+        # Cap at dash height — reopenable, but no air gap above the strip.
+        bottom.setMaximumHeight(dash_h)
+
+    def _apply_portable_like_dash_closed(self, closed: bool) -> None:
+        """Binary dock: open = exact dash height; closed = 0 but still drag-openable."""
+        v_split = getattr(self, "main_v_splitter", None)
+        bottom = getattr(self, "bottom_v_wrap", None)
+        if v_split is None:
+            return
+        sizes = v_split.sizes()
+        total = sum(sizes) if sizes and sum(sizes) > 0 else max(int(v_split.height() or 0), 1)
+        dash_h = max(int(self._dash_only_bottom_height()), 1)
+        self._portable_like_dash_closed = bool(closed)
+        self._portable_like_snap_lock = True
+        try:
+            if closed:
+                if bottom is not None:
+                    # Never maxHeight=0 — that glued the pane shut permanently.
+                    bottom.setMinimumHeight(0)
+                    bottom.setMaximumHeight(dash_h)
+                v_split.setSizes([total, 0])
+            else:
+                if bottom is not None:
+                    bottom.setMinimumHeight(dash_h)
+                    bottom.setMaximumHeight(dash_h)
+                v_split.setSizes([max(total - dash_h, 1), dash_h])
+        finally:
+            self._portable_like_snap_lock = False
+
+    def _portable_like_snap_after_drag(self) -> None:
+        """End a handle drag (release or debounce) and binary-snap the dash."""
+        self._portable_like_dash_dragging = False
+        timer = getattr(self, "_portable_like_snap_timer", None)
+        if timer is not None:
+            timer.stop()
+        if getattr(self, "_portable_like_snap_lock", False):
+            return
+        if not self._desktop_render_layout_is_portable_like():
+            return
+        self._snap_portable_like_v_splitter()
+
+    def _ensure_portable_like_splitter_guard(self) -> None:
+        if getattr(self, "_portable_like_splitter_guard_connected", False):
+            return
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return
+        v_split.splitterMoved.connect(self._on_portable_like_v_splitter_moved)
+
+        host = self
+
+        class _HandleGuard(QObject):
+            def eventFilter(self, obj, event):  # noqa: ANN001
+                if not host._desktop_render_layout_is_portable_like():
+                    return False
+                et = event.type()
+                if et == QEvent.Type.MouseButtonPress:
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        host._portable_like_dash_dragging = True
+                        host._unlock_portable_like_dash_for_drag()
+                elif et == QEvent.Type.MouseButtonRelease:
+                    if event.button() == Qt.MouseButton.LeftButton:
+                        host._portable_like_snap_after_drag()
+                return False
+
+        guard = _HandleGuard(v_split)
+        self._portable_like_handle_guard = guard
+        if v_split.count() >= 2:
+            handle = v_split.handle(1)
+            if handle is not None:
+                handle.installEventFilter(guard)
+        self._portable_like_splitter_guard_connected = True
+
+    def _on_portable_like_v_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
+        if not self._desktop_render_layout_is_portable_like():
+            return
+        if getattr(self, "_portable_like_snap_lock", False):
+            return
+        # While dragging: leave sizes alone; snap on mouse release (debounced fallback).
+        if getattr(self, "_portable_like_dash_dragging", False):
+            timer = getattr(self, "_portable_like_snap_timer", None)
+            if timer is None:
+                parent = getattr(self, "main_v_splitter", None)
+                timer = QTimer(parent)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._portable_like_snap_after_drag)
+                self._portable_like_snap_timer = timer
+            timer.start(120)
+            return
+        # Non-drag size change (programmatic / edge cases) — snap immediately.
+        self._unlock_portable_like_dash_for_drag()
+        self._snap_portable_like_v_splitter()
+
+    def _glue_portable_like_dash_open(self) -> None:
+        """Force bottom pane to exact dash height (no threshold / no air gap)."""
+        self._apply_portable_like_dash_closed(False)
+
+    def _snap_portable_like_v_splitter(self) -> None:
+        """Open = exact dash height glued down; drag small → close (0). Nothing else."""
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return
+        sizes = v_split.sizes()
+        if len(sizes) < 2:
+            return
+        dash_h = max(int(self._dash_only_bottom_height()), 1)
+        threshold = max(28, dash_h // 2)
+        was_closed = bool(getattr(self, "_portable_like_dash_closed", False))
+        # From shut: any real upward drag opens (don't require half height mid-gesture).
+        if was_closed:
+            closed = sizes[1] <= 8
+        else:
+            closed = sizes[1] < threshold
+        self._apply_portable_like_dash_closed(closed)
+
+    def _sync_portable_like_dock_chrome(self, *, restore_v_sizes: bool = True) -> None:
+        """Like a Portable: dash glued to bottom; splitter only opens/closes it."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        neo = getattr(self, "neo_wrapper", None)
+        bottom = getattr(self, "bottom_v_wrap", None)
+        v_split = getattr(self, "main_v_splitter", None)
+        portable_like = self._desktop_render_layout_is_portable_like()
+        floating = self._floating_render_settings_holds_neo()
+
+        hw = getattr(self, "hide_watcher", None)
+        if hw is not None and hasattr(hw, "set_suppressed"):
+            # Suppress while we reparent / setSizes — neo.show() must not race
+            # HideWatcher. Portable-like and portable shell keep it suppressed.
+            hw.set_suppressed(True)
+
+        # Button visibility can sync before the v-splitter exists; dock geometry waits.
+        if v_split is None:
+            if portable_like and not floating:
+                if neo is not None:
+                    neo.hide()
+            if hw is not None and hasattr(hw, "set_suppressed"):
+                hw.set_suppressed(
+                    bool(portable_like)
+                    or bool(getattr(self, "_portable_shell", False))
+                )
+            return
+
+        if not portable_like:
+            from steempeg.ui.layout_defaults import (
+                DESKTOP_BOTTOM_PANE_SPACING,
+                MAIN_V_SPLIT_BOTTOM_PAD,
+            )
+
+            # Unlock glue BEFORE re-docking neo so stretch can fill the pane.
+            if bottom is not None:
+                bottom.setMaximumHeight(16777215)
+                bottom.setMinimumHeight(0)
+                bottom.setSizePolicy(
+                    QSizePolicy.Policy.Preferred,
+                    QSizePolicy.Policy.Preferred,
+                )
+                lay = bottom.layout()
+                if lay is not None:
+                    lay.setContentsMargins(0, MAIN_V_SPLIT_BOTTOM_PAD, 0, 0)
+                    lay.setSpacing(DESKTOP_BOTTOM_PANE_SPACING)
+            self._ensure_dash_in_bottom_wrap()
+            self._restore_neo_to_dock_layout()
+            dash = getattr(self, "render_dashboard", None)
+            if dash is not None:
+                dash.setSizePolicy(
+                    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+                )
+            if v_split.count() >= 2:
+                handle = v_split.handle(1)
+                if handle is not None:
+                    handle.setEnabled(True)
+                    handle.show()
+            v_split.setStretchFactor(0, 1)
+            v_split.setStretchFactor(1, 1)
+            if restore_v_sizes:
+                saved = getattr(self, "_pre_portable_like_v_sizes", None)
+                if saved and len(saved) >= 2 and saved[1] > 80:
+                    total = (
+                        sum(v_split.sizes())
+                        if sum(v_split.sizes()) > 0
+                        else max(int(v_split.height() or 0), 1)
+                    )
+                    from steempeg.ui.layout_defaults import (
+                        scale_main_v_splitter_sizes,
+                    )
+
+                    ui = getattr(self, "ui", None)
+                    avail_h = int((ui.height() if ui is not None else 0) or 0)
+                    v_split.setSizes(
+                        scale_main_v_splitter_sizes(
+                            saved, total, window_height=avail_h or total
+                        )
+                    )
+                    self._pre_portable_like_v_sizes = None
+                elif not floating and hasattr(
+                    self, "_apply_desktop_main_v_splitter_sizes"
+                ):
+                    self._apply_desktop_main_v_splitter_sizes()
+                elif not floating:
+                    from steempeg.ui.layout_defaults import (
+                        restore_v_splitter_sizes,
+                    )
+
+                    v_split.setSizes(
+                        restore_v_splitter_sizes(v_split.height())
+                    )
+            self._portable_like_dash_closed = False
+            if hw is not None and hasattr(hw, "set_suppressed"):
+                hw.set_suppressed(bool(getattr(self, "_portable_shell", False)))
+            return
+
+        # --- Like a Portable ---
+        self._ensure_portable_like_splitter_guard()
+        if not floating:
+            self._park_neo_away_from_dock()
+        self._ensure_dash_in_bottom_wrap()
+
+        dash = getattr(self, "render_dashboard", None)
+        if dash is not None:
+            dash.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        if bottom is not None:
+            from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
+
+            # No stretch void above the dash inside the bottom pane.
+            lay = bottom.layout()
+            if lay is not None:
+                if getattr(self, "_pre_portable_like_bottom_spacing", None) is None:
+                    self._pre_portable_like_bottom_spacing = int(lay.spacing())
+                lay.setContentsMargins(0, MAIN_V_SPLIT_BOTTOM_PAD, 0, 0)
+                lay.setSpacing(0)
+                # Drop leftover spacers that used to sit under neo.
+                for i in range(lay.count() - 1, -1, -1):
+                    item = lay.itemAt(i)
+                    if item is None:
+                        continue
+                    if item.spacerItem() is not None:
+                        lay.removeItem(item)
+                    w = item.widget()
+                    if w is not None and w is not dash and w is not neo:
+                        # Keep unknown siblings, but don't let them stretch.
+                        lay.setStretchFactor(w, 0)
+                if dash is not None:
+                    lay.setStretchFactor(dash, 0)
+            bottom.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        sizes = v_split.sizes()
+        if not getattr(self, "_pre_portable_like_v_sizes", None):
+            if sizes and len(sizes) >= 2 and sizes[1] > self._dash_only_bottom_height() + 40:
+                self._pre_portable_like_v_sizes = list(sizes)
+        v_split.setStretchFactor(0, 1)
+        v_split.setStretchFactor(1, 0)
+        if v_split.count() >= 2:
+            handle = v_split.handle(1)
+            if handle is not None:
+                handle.setEnabled(True)
+                handle.show()
+        # Respect a user close; otherwise glue open at dash height (never leave air).
+        if getattr(self, "_portable_like_dash_closed", False):
+            self._apply_portable_like_dash_closed(True)
+        else:
+            self._glue_portable_like_dash_open()
+
+    def toggle_desktop_render_settings(self) -> None:
+        from steempeg.ui.desktop_render_settings import toggle_desktop_render_settings
+
+        toggle_desktop_render_settings(self)
+        self._sync_dash_render_settings_button()
+        self._sync_portable_like_dock_chrome()
 
     def focus_export_settings_panel(self) -> None:
-        """Open Export Settings — Portable sheet, or neo Export tab on desktop."""
+        """Open Export Settings — Portable sheet, floating window, or neo Export tab."""
         if getattr(self, "_portable_shell", False):
             try:
                 from steempeg.ui.portable.chrome import open_portable_render_settings
@@ -1582,6 +2209,9 @@ class RenderMixin:
                 open_portable_render_settings(self)
             except Exception:
                 logging.exception("Open portable render settings failed")
+            return
+        if self._desktop_render_layout_is_portable_like():
+            self.toggle_desktop_render_settings()
             return
         from steempeg.ui.settings_prefs import RENDER_TAB_EXPORT, apply_default_render_tab
 
@@ -2881,24 +3511,32 @@ class RenderMixin:
         if hasattr(self.ui, 'btn_start') and not getattr(self, '_is_rendering', False):
             self._sync_start_render_enabled(combo_valid=combo_valid)
 
-        # 6. Short Summary ABOVE Ready 
+        # 6. Short Summary ABOVE Ready
+        # Queue mode: footer strip follows the status-strip job (queue head /
+        # active render), never an arbitrary library preview that isn't #1.
+        strip_job = self._status_strip_context_job() if self._queue_is_active() else None
         q_word = quality.split()[0] if quality.split() else "Unknown"
-        
+
         game_name = "Steam Clip"
         target_icon = getattr(self, 'current_game_icon', '')
-        preview_path = self._active_preview_clip_path()
-        if preview_path and hasattr(self.ui, "table_clips"):
-            for row in range(self.ui.table_clips.rowCount()):
-                item = self.ui.table_clips.item(row, 0)
-                if not item:
-                    continue
-                row_path = item.data(Qt.UserRole)
-                if row_path and os.path.normpath(row_path) == os.path.normpath(preview_path):
-                    game_name = item.text().strip()
-                    break
-        elif hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
-            game_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).text().strip()
-            target_icon = getattr(self, 'current_game_icon', '')
+        if strip_job is not None:
+            game_name = (strip_job.game_name or "").strip() or game_name
+            if strip_job.game_icon_path:
+                target_icon = strip_job.game_icon_path
+        else:
+            preview_path = self._active_preview_clip_path()
+            if preview_path and hasattr(self.ui, "table_clips"):
+                for row in range(self.ui.table_clips.rowCount()):
+                    item = self.ui.table_clips.item(row, 0)
+                    if not item:
+                        continue
+                    row_path = item.data(Qt.UserRole)
+                    if row_path and os.path.normpath(row_path) == os.path.normpath(preview_path):
+                        game_name = item.text().strip()
+                        break
+            elif hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
+                game_name = self.ui.table_clips.item(self.ui.table_clips.currentRow(), 0).text().strip()
+                target_icon = getattr(self, 'current_game_icon', '')
 
         unknown_icon_path = get_resource_path("unknown_icon.png")
         logo_path = get_resource_path("logo.png")
@@ -2908,7 +3546,9 @@ class RenderMixin:
         if place_icon == unknown_icon_path or not os.path.exists(place_icon):
             place_icon = logo_path if os.path.exists(logo_path) else unknown_icon_path
 
-        if audio_only:
+        if strip_job is not None:
+            text_part = f"{game_name}  •  {format_job_preset(strip_job.settings)}"
+        elif audio_only:
             text_part = f"{game_name}  •  AUDIO ONLY: {audio_format} {audio_bitrate_clean}"
         elif mute_audio:
             text_part = (
@@ -2920,34 +3560,37 @@ class RenderMixin:
                 f"{game_name}  •  {q_word}, {fps_display}  •  "
                 f"{video_bitrate_display}  •  {codec}"
             )
-            
+
         # GIVE ORDER TO OUR NEW CSS WIDGETS
         if hasattr(self, 'bottom_text_label'):
-            self.bottom_text_label.setText(text_part)
-            from steempeg.ui.icon_shape import (
-                ICON_SHAPE_CIRCLE,
-                shaped_game_icon_pixmap,
-            )
-
-            is_unknown_icon = (
-                os.path.basename(target_icon).lower() == "unknown_icon.png"
-            )
-            header_shape = ICON_SHAPE_CIRCLE if is_unknown_icon else None
-            if hasattr(self, "_set_bottom_summary_icon"):
-                self._set_bottom_summary_icon(target_icon)
-            elif hasattr(self, "bottom_icon_label"):
-                from steempeg.ui.icon_utils import apply_square_icon
-
-                self.bottom_icon_label.setStyleSheet(
-                    "background: transparent; border: none;"
+            if strip_job is not None:
+                self._apply_status_strip_summary(strip_job)
+            else:
+                self.bottom_text_label.setText(text_part)
+                from steempeg.ui.icon_shape import (
+                    ICON_SHAPE_CIRCLE,
+                    shaped_game_icon_pixmap,
                 )
-                bottom_pix = QPixmap(target_icon)
-                shaped = (
-                    shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
-                    if not bottom_pix.isNull()
-                    else None
+
+                is_unknown_icon = (
+                    os.path.basename(target_icon).lower() == "unknown_icon.png"
                 )
-                apply_square_icon(self.bottom_icon_label, shaped, 24)
+                header_shape = ICON_SHAPE_CIRCLE if is_unknown_icon else None
+                if hasattr(self, "_set_bottom_summary_icon"):
+                    self._set_bottom_summary_icon(target_icon)
+                elif hasattr(self, "bottom_icon_label"):
+                    from steempeg.ui.icon_utils import apply_square_icon
+
+                    self.bottom_icon_label.setStyleSheet(
+                        "background: transparent; border: none;"
+                    )
+                    bottom_pix = QPixmap(target_icon)
+                    shaped = (
+                        shaped_game_icon_pixmap(bottom_pix, 24, header_shape)
+                        if not bottom_pix.isNull()
+                        else None
+                    )
+                    apply_square_icon(self.bottom_icon_label, shaped, 24)
 
             # Player header follows queue context while jobs remain (v44 P0).
             if (
@@ -2956,10 +3599,10 @@ class RenderMixin:
                 and not self._queue_is_active()
             ):
                 self._set_player_header_game_icon(icon_path=target_icon)
-                
 
             # CONNECTING THE MAIN BOSS: Updating the CENTRAL plug!
             if hasattr(self, 'place_logo') and hasattr(self, 'place_text'):
+                from steempeg.ui.icon_shape import shaped_game_icon_pixmap
                 from steempeg.ui.icon_utils import apply_square_icon
 
                 # Pixmap only (no stylesheet image) so the game icon scales with the
@@ -2977,7 +3620,7 @@ class RenderMixin:
                 self.place_text.setStyleSheet(
                     "color: #a0a0a0; font-size: 15px; font-weight: bold; margin-top: 15px;"
                 )
-            
+
         if not getattr(self, '_is_rendering', False):
             self.update_status_indicator("Ready", "ready")
 
@@ -3844,28 +4487,32 @@ class RenderMixin:
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
         label = text.strip()
         low = label.lower()
+        icon_px = int(getattr(self, "_player_header_status_icon", 18) or 18)
+        pad = getattr(self, "_player_header_status_pad", None) or "4px 12px 4px 10px"
+        font_px = int(getattr(self, "_player_header_status_font", 13) or 13)
+        min_h = int(getattr(self, "_player_header_status_min_h", 30) or 30)
         if low.startswith("in queue"):
             # Match desktop health chip height (was squashed at 16px + 2px pad).
-            badge.setIcon(queue_chip_icon(18, color=color))
-            badge.setIconSize(QSize(18, 18))
+            badge.setIcon(queue_chip_icon(icon_px, color=color))
+            badge.setIconSize(QSize(icon_px, icon_px))
             badge.setText(f" {label}")
         elif low == "preview":
-            badge.setIcon(preview_badge_icon(18, color=color))
-            badge.setIconSize(QSize(18, 18))
+            badge.setIcon(preview_badge_icon(icon_px, color=color))
+            badge.setIconSize(QSize(icon_px, icon_px))
             badge.setText(f" {label}")
         else:
             badge.setIcon(QIcon())
             badge.setText(label)
-        badge.setMinimumHeight(30)
+        badge.setMinimumHeight(min_h)
         badge.setStyleSheet(
             f"QPushButton {{"
             f"color: {color};"
             f"background-color: rgba({r}, {g}, {b}, 0.18);"
             f"border: 2px solid {color};"
             f"border-radius: 8px;"
-            f"padding: 4px 12px 4px 10px;"
+            f"padding: {pad};"
             f"font-weight: bold;"
-            f"font-size: 13px;"
+            f"font-size: {font_px}px;"
             f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
             f"}}"
         )
@@ -3923,12 +4570,14 @@ class RenderMixin:
             if path and os.path.exists(path):
                 from steempeg.ui.icon_shape import shaped_game_icon_pixmap
                 from steempeg.ui.icon_utils import apply_square_icon
+                from steempeg.ui.player_header_layout import player_header_icon_px
 
                 if icon_path and os.path.exists(icon_path):
                     self.current_game_icon = icon_path
+                icon_px = player_header_icon_px(self)
                 src = QPixmap(path)
-                shaped = shaped_game_icon_pixmap(src, 24) if not src.isNull() else None
-                apply_square_icon(self.custom_icon_label, shaped, 24)
+                shaped = shaped_game_icon_pixmap(src, icon_px) if not src.isNull() else None
+                apply_square_icon(self.custom_icon_label, shaped, icon_px)
 
     def _sync_queue_job_render_status(self, job, success, error_msg, output_file: str = ""):
         """Update the *specific* queue job (by id) — clip_path is not unique when duplicates exist."""
@@ -4229,14 +4878,16 @@ class RenderMixin:
             label = f"Rendering ({self._batch_current}/{self._batch_total})"
         else:
             label = "Initializing..."
-        self.update_status_indicator(label, "rendering")
-        logging.info("--- RENDER STARTED ---")
-
+        # Bind strip context before the Ready cluster paints so name + badge agree.
         self._is_rendering = True
         self._active_render_job = job
         # Mark this job only — find_by_clip_path would hit an earlier duplicate of the same clip.
         live = self.render_queue.get(getattr(job, "id", "")) or job
         live.status = JobStatus.RENDERING
+        self._apply_status_strip_summary(live)
+        self.update_status_indicator(label, "rendering")
+        logging.info("--- RENDER STARTED ---")
+
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         if hasattr(self, "_sync_library_mode_chrome"):
