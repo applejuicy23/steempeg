@@ -466,6 +466,22 @@ class LifecycleMixin:
             sizes = self.right_h_splitter.sizes()
             if len(sizes) >= 2 and sizes[1] > 0:
                 self.save_layout_setting("queue_panel_width", sizes[1])
+        # Desktop player↔settings dock — never write Like a Portable glue heights.
+        if hasattr(self, "main_v_splitter"):
+            portable_like = False
+            if hasattr(self, "_desktop_render_layout_is_portable_like"):
+                try:
+                    portable_like = bool(self._desktop_render_layout_is_portable_like())
+                except Exception:
+                    portable_like = False
+            if portable_like:
+                pre = getattr(self, "_pre_portable_like_v_sizes", None)
+                if pre and len(pre) >= 2 and int(pre[1]) > 80:
+                    self.save_layout_setting(
+                        "main_v_splitter_sizes", [int(pre[0]), int(pre[1])]
+                    )
+            elif hasattr(self, "_persist_desktop_main_v_splitter_sizes"):
+                self._persist_desktop_main_v_splitter_sizes()
 
         event.accept()
 
