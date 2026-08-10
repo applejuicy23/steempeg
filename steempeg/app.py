@@ -884,7 +884,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 QPushButton {
                     background-color: transparent; color: #a0a0a0;
                     border: 2px solid transparent; border-radius: 14px;
-                    padding: 10px 15px; text-align: left; font-size: 14px; font-weight: 700;
+                    padding: 10px 12px 10px 14px; text-align: left; font-size: 14px; font-weight: 700;
                 }
                 QPushButton:hover { background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }
                 QPushButton:checked { background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }
@@ -892,14 +892,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self._neo_nav_pill_style_template = True
             
             self.neo_nav_buttons = []
-            custom_names = [
-                "ℹ️  Source Info",
-                "🎬  Video Settings",
-                "🎵  Audio Settings",
-                "🚀  Export Settings",
-                "📦  Presets",
-            ]
-            
+            from steempeg.ui.icon_assets import neo_nav_tab_icon
+            from steempeg.ui.ui_density import NEO_NAV_COMFORT
+
             # Presets tab must exist before neo buttons are counted.
             from steempeg.ui.render_panel import ensure_presets_tab
 
@@ -908,13 +903,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 f"QWidget#tab_presets {{ background-color: {_neo_settings}; border: none; }}"
             )
 
+            _neo_icon_sz = 16
+            _neo_icon_gap = 8
             for i in range(self.ui.settings_tabs.count()):
-                text = custom_names[i] if i < len(custom_names) else self.ui.settings_tabs.tabText(i)
+                text = NEO_NAV_COMFORT[i] if i < len(NEO_NAV_COMFORT) else self.ui.settings_tabs.tabText(i)
                 btn = QPushButton(text)
                 btn.setCheckable(True)
                 btn.setAutoExclusive(True)
                 btn.setCursor(Qt.PointingHandCursor)
                 btn.setStyleSheet(pill_style)
+                btn.setIcon(neo_nav_tab_icon(i, _neo_icon_sz, trailing_gap=_neo_icon_gap))
+                btn.setIconSize(QSize(_neo_icon_sz + _neo_icon_gap, _neo_icon_sz))
                 btn.clicked.connect(lambda checked, idx=i: self.ui.settings_tabs.setCurrentIndex(idx))
                 sidebar_layout.addWidget(btn)
                 self.neo_nav_buttons.append(btn)
@@ -4015,6 +4014,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 neo_lay.setSpacing(int(round(6 + (10 - 6) * dense.scale)))
         nav_names = NEO_NAV_COMPACT if dense.compact else NEO_NAV_COMFORT
         # Portable sheet keeps comfort pill chrome — only the rail width is trimmed.
+        # padding uses T R B L so left pad clears the icon from the tab edge;
+        # icon→text gap comes from neo_nav_icon_gap (transparent pad on the glyph).
         pill = f"""
             QPushButton {{
                 background-color: transparent; color: #a0a0a0;
@@ -4025,9 +4026,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             QPushButton:hover {{ background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }}
             QPushButton:checked {{ background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }}
         """
+        from steempeg.ui.icon_assets import neo_nav_tab_icon
+
+        icon_sz = max(10, int(getattr(dense, "neo_nav_icon", 16) or 16))
+        icon_gap = max(0, int(getattr(dense, "neo_nav_icon_gap", 8) or 0))
+        icon_qsize = QSize(icon_sz + icon_gap, icon_sz)
         for i, btn in enumerate(getattr(self, "neo_nav_buttons", []) or []):
             if i < len(nav_names):
                 btn.setText(nav_names[i])
+            btn.setIcon(neo_nav_tab_icon(i, icon_sz, trailing_gap=icon_gap))
+            btn.setIconSize(icon_qsize)
             btn.setStyleSheet(pill)
 
         # --- Player transport ---
