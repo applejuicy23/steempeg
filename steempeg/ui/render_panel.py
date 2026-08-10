@@ -441,6 +441,35 @@ def _page_title(text):
     return title
 
 
+def _page_title_icon_label(icon_index: int, size: int = 16) -> QLabel:
+    """Monochrome neo glyph beside a content page title (colorized assets later)."""
+    from steempeg.ui.icon_assets import neo_page_title_icon
+
+    icon_lbl = QLabel()
+    icon_lbl.setObjectName("settingsPageTitleIcon")
+    icon_lbl.setProperty("neo_icon_index", int(icon_index))
+    icon_lbl.setFixedSize(size, size)
+    icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    icon_lbl.setStyleSheet("background: transparent; border: none;")
+    pix = neo_page_title_icon(icon_index, size).pixmap(size, size)
+    if not pix.isNull():
+        icon_lbl.setPixmap(pix)
+    return icon_lbl
+
+
+def _page_title_row(text: str, icon_index: int, *, icon_size: int = 16) -> QWidget:
+    """Content panel header: white glyph + bold title (also on neo sidebar tabs)."""
+    row = QWidget()
+    row.setObjectName("settingsPageTitleRow")
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    lay.addWidget(_page_title_icon_label(icon_index, icon_size), 0, Qt.AlignmentFlag.AlignVCenter)
+    lay.addWidget(_page_title(text), 0, Qt.AlignmentFlag.AlignVCenter)
+    lay.addStretch(1)
+    return row
+
+
 def _content_width_wrap(inner: QWidget) -> QWidget:
     """Clamp a block to the settings-tab content column (Source Info right edge)."""
     wrap = QWidget()
@@ -670,7 +699,7 @@ def restyle_video_page(ui):
     root = QVBoxLayout(page)
     root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
-    root.addWidget(_page_title("Video Settings"))
+    root.addWidget(_page_title_row("Video Settings", 1))
 
     grid = QGridLayout()
     grid.setHorizontalSpacing(16)
@@ -718,7 +747,7 @@ def restyle_audio_page(ui):
     root = QVBoxLayout(page)
     root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
-    root.addWidget(_page_title("Audio Settings"))
+    root.addWidget(_page_title_row("Audio Settings", 2))
 
     grid = QGridLayout()
     grid.setHorizontalSpacing(16)
@@ -784,7 +813,7 @@ def restyle_source_page(ui):
     root = QVBoxLayout(page)
     root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(10)
-    root.addWidget(_page_title("Source Info"))
+    root.addWidget(_page_title_row("Source Info", 0))
 
     # Match the stat-block grid width below (3 * 210 + 2 * 8 spacing) so the source
     # rows line up with the cards instead of sprawling to the panel edge.
@@ -843,7 +872,7 @@ def restyle_export_page(ui):
     root = QVBoxLayout(page)
     root.setContentsMargins(*_settings_page_margins())
     root.setSpacing(12)
-    root.addWidget(_page_title("Export Settings"))
+    root.addWidget(_page_title_row("Export Settings", 3))
 
     card = QFrame()
     card.setObjectName("summaryCard")
@@ -1063,6 +1092,20 @@ def apply_settings_panel_density(ui, dense) -> None:
             f"background: transparent; {_FONT}"
         )
 
+    from steempeg.ui.icon_assets import neo_page_title_icon
+
+    icon_sz = max(10, int(getattr(dense, "neo_nav_icon", 16) or 16))
+    for icon_lbl in root.findChildren(QLabel, "settingsPageTitleIcon"):
+        idx = icon_lbl.property("neo_icon_index")
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+        icon_lbl.setFixedSize(icon_sz, icon_sz)
+        pix = neo_page_title_icon(idx, icon_sz).pixmap(icon_sz, icon_sz)
+        if not pix.isNull():
+            icon_lbl.setPixmap(pix)
+
     summary = getattr(ui, "label_detailed_summary", None)
     if summary is not None and hasattr(summary, "apply_density"):
         summary.apply_density(dense)
@@ -1234,6 +1277,7 @@ def restyle_presets_page(ui, app) -> None:
     title_row = QHBoxLayout()
     title_row.setContentsMargins(0, 0, 0, 0)
     title_row.setSpacing(8)
+    title_row.addWidget(_page_title_icon_label(4), 0, Qt.AlignmentFlag.AlignVCenter)
     title_row.addWidget(_page_title("Create new preset"), 0, Qt.AlignmentFlag.AlignVCenter)
     info_btn = QPushButton()
     info_btn.setObjectName("preset_help_info")
