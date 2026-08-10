@@ -31,8 +31,14 @@ DEFAULT_MAIN_SPLITTER_SIZES = [MIN_LEFT_PANEL_WIDTH_COMFORT, 100000]
 DEFAULT_MAIN_SPLITTER_SIZES_COMPACT = [MIN_LEFT_PANEL_WIDTH_COMPACT, 100000]
 
 # [player area, bottom tabs] vertical split inside the right column
-DEFAULT_MAIN_V_SPLITTER_SIZES = [750, 450]
-DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT = [480, 220]
+# Comfort bottom tall enough for neo + dash without feeling collapsed.
+DEFAULT_MAIN_V_SPLITTER_SIZES = [720, 480]
+DEFAULT_MAIN_V_SPLITTER_SIZES_COMPACT = [460, 260]
+
+# Soft ceiling for the Desktop settings dock (player ↔ neo/dash).
+MAIN_V_SPLITTER_MAX_BOTTOM_RATIO = 0.38
+# HideWatcher / crushed-pane fallback target (~taller than the old 0.28).
+MAIN_V_SPLITTER_RESTORE_BOTTOM_RATIO = 0.36
 
 # [player area, render queue] when queue is empty (second value = 0)
 DEFAULT_RIGHT_H_SPLITTER_SIZES = [1200, 0]
@@ -59,6 +65,12 @@ QUEUE_SPLITTER_GUTTER = 10
 LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
 RENDER_QUEUE_BOTTOM_INSET = 0
+
+# Vertical splitter (player ↔ neo/dash) — keep in sync with app.py + render_controller.
+# Was 10+10; that read as a thick dark band under the timeline. Stay tight but not glued.
+MAIN_V_SPLIT_TOP_PAD = 4  # top_v_wrap bottom margin (below player footer)
+MAIN_V_SPLIT_BOTTOM_PAD = 4  # bottom_v_wrap top margin (above neo / dash)
+DESKTOP_BOTTOM_PANE_SPACING = 6  # neo ↔ Start/Pause/Cancel dash (Desktop only)
 
 # Source Info stat grid width — right edge of settings-tab content ("red line").
 SETTINGS_STAT_COL_W = 210
@@ -228,6 +240,14 @@ def queue_panel_open_width(
     return max(0, int(queue_w))
 
 
+def main_v_splitter_max_bottom(window_height: int) -> int:
+    """Pixel ceiling for the Desktop bottom dock on the given window height."""
+    h = int(window_height or 0)
+    if h <= 0:
+        return 480
+    return max(220, int(h * MAIN_V_SPLITTER_MAX_BOTTOM_RATIO))
+
+
 def default_main_v_splitter_sizes(
     window_width: int = 0,
     window_height: int = 0,
@@ -251,16 +271,35 @@ def default_main_v_splitter_sizes(
     )
     h = int(window_height or 0)
     if h > 0:
-        max_bottom = max(180, int(h * 0.35))
+        max_bottom = main_v_splitter_max_bottom(h)
         if bottom > max_bottom:
             bottom = max_bottom
             top = max(h - bottom, 200)
     return [top, bottom]
 
 
+def scale_main_v_splitter_sizes(
+    sizes,
+    splitter_height: int,
+    *,
+    window_height: int = 0,
+) -> list[int]:
+    """Map remembered [top, bottom] onto the live splitter height."""
+    total = max(int(splitter_height or 0), 1)
+    if not sizes or len(sizes) < 2:
+        return restore_v_splitter_sizes(total)
+    prev_total = max(sum(int(x) for x in sizes[:2]), 1)
+    bottom = max(180, int(total * (int(sizes[1]) / prev_total)))
+    cap_h = int(window_height or 0) or total
+    bottom = min(bottom, main_v_splitter_max_bottom(cap_h))
+    bottom = min(bottom, max(total - 200, 1))
+    return [total - bottom, bottom]
+
+
 def restore_v_splitter_sizes(splitter_height: int) -> list[int]:
     """Fallback when HideWatcher has no saved sizes — density-aware, not [750,250]."""
     total = max(int(splitter_height or 0), 1)
-    bottom = min(max(int(total * 0.28), 180), int(total * 0.35))
+    ratio = MAIN_V_SPLITTER_RESTORE_BOTTOM_RATIO
+    bottom = min(max(int(total * ratio), 220), main_v_splitter_max_bottom(total))
     bottom = min(bottom, max(total - 200, 1))
     return [total - bottom, bottom]
