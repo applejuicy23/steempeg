@@ -41,6 +41,7 @@ class _DialogTitleBar(QWidget):
         title: str,
         bar_color: str,
         show_minimize: bool = False,
+        show_maximize: bool = False,
         bar_icon: str | None = None,
         parent=None,
     ):
@@ -96,6 +97,17 @@ class _DialogTitleBar(QWidget):
         else:
             self.btn_minimize = None
 
+        if show_maximize:
+            self.btn_maximize = _TrafficLight(
+                tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "maximize"
+            )
+            self.btn_maximize.setToolTip("Maximize")
+            self.btn_maximize.clicked.connect(self._toggle_maximize)
+            root.addWidget(self.btn_maximize, 0, Qt.AlignmentFlag.AlignVCenter)
+            root.addSpacing(12)
+        else:
+            self.btn_maximize = None
+
         self.btn_close = _TrafficLight(tok.TRAFFIC_CLOSE, tok.TRAFFIC_CLOSE_HOVER, "close")
         self.btn_close.clicked.connect(self.close_requested.emit)
         root.addWidget(self.btn_close, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -115,6 +127,21 @@ class _DialogTitleBar(QWidget):
             }}
             """
         )
+
+    def _toggle_maximize(self) -> None:
+        dlg = self._dialog
+        if dlg.isMaximized():
+            dlg.showNormal()
+            if self.btn_maximize is not None:
+                self.btn_maximize.setToolTip("Maximize")
+                self.btn_maximize._glyph = "maximize"
+                self.btn_maximize.update()
+        else:
+            dlg.showMaximized()
+            if self.btn_maximize is not None:
+                self.btn_maximize.setToolTip("Restore")
+                self.btn_maximize._glyph = "restore"
+                self.btn_maximize.update()
 
     # --- Drag the frameless dialog by its title bar -----------------------
     def mousePressEvent(self, event):
@@ -194,6 +221,7 @@ class SteempegDialog(QDialog):
         bg_color: str | None = None,
         content_margins: tuple[int, int, int, int] = (16, 16, 16, 16),
         show_minimize: bool = False,
+        show_maximize: bool = False,
         suppress_map: bool = False,
         bar_icon: str | None = None,
     ):
@@ -241,6 +269,7 @@ class SteempegDialog(QDialog):
             title=title,
             bar_color=bar_color,
             show_minimize=show_minimize,
+            show_maximize=show_maximize,
             bar_icon=bar_icon,
         )
         self._title_bar.close_requested.connect(self.reject)

@@ -76,6 +76,16 @@ class UiDensity:
     play_h: int
     chrome_chip: int  # theater / fullscreen / marker / etc.
 
+    # Player header (title cluster + status/action chips)
+    header_icon: int
+    header_font: int
+    header_pad_h: int
+    header_pad_v: int
+    header_chip: int  # preview settings / close
+    header_chip_icon: int
+    header_min_h: int
+    header_status_pad: str  # Healthy / Preview chip CSS padding
+
     # Render status dashboard
     dash_margin_h: int
     dash_margin_v: int
@@ -147,6 +157,15 @@ COMFORT = UiDensity(
     play_w=80,
     play_h=48,
     chrome_chip=40,
+    # Pre-density-bump desktop strip (icon 24 / font 13 / pads 10×8 / chip 30).
+    header_icon=24,
+    header_font=13,
+    header_pad_h=10,
+    header_pad_v=8,
+    header_chip=30,
+    header_chip_icon=16,
+    header_min_h=46,
+    header_status_pad="3px 10px 3px 8px",
     dash_margin_h=18,
     dash_margin_v=16,
     dash_spacing=12,
@@ -202,6 +221,14 @@ COMPACT = UiDensity(
     play_w=58,
     play_h=36,
     chrome_chip=28,
+    header_icon=20,
+    header_font=11,
+    header_pad_h=6,
+    header_pad_v=4,
+    header_chip=26,
+    header_chip_icon=14,
+    header_min_h=34,
+    header_status_pad="2px 8px 2px 6px",
     dash_margin_h=4,
     dash_margin_v=4,
     dash_spacing=3,
