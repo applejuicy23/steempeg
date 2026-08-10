@@ -71,6 +71,7 @@ from steempeg.ui.settings_prefs import (
     KEY_CONFIRM_BEFORE_DELETE,
     KEY_DATE_FORMAT,
     KEY_DEFAULT_RENDER_TAB,
+    KEY_DESKTOP_RENDER_LAYOUT,
     KEY_DISPLAY_TIMEZONE,
     KEY_FFMPEG_LOG_LEVEL,
     KEY_HWDEC_PREVIEW,
@@ -85,6 +86,7 @@ from steempeg.ui.settings_prefs import (
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
     MEDIA_CACHE_LIMIT_LABELS,
+    DESKTOP_RENDER_LAYOUT_LABELS,
     RENDER_TAB_LABELS,
     STARTUP_SCAN_LABELS,
     TZ_SYSTEM,
@@ -101,6 +103,7 @@ from steempeg.ui.settings_prefs import (
     load_confirm_before_delete,
     load_date_format,
     load_default_render_tab,
+    load_desktop_render_layout,
     load_display_timezone,
     load_ffmpeg_log_level,
     load_hwdec_preview,
@@ -112,6 +115,7 @@ from steempeg.ui.settings_prefs import (
     load_test_new_fullscreen,
     normalize_clock_format,
     normalize_date_format,
+    normalize_desktop_render_layout,
     normalize_display_timezone,
     normalize_export_folder,
     normalize_hwdec_preview,
@@ -312,6 +316,28 @@ class SettingsDialog(SteempegDialog):
             self._hint(
                 "Landing tab when the Render panel / neo-nav opens. "
                 "Default is Video Settings. Save switches the open panel."
+            )
+        )
+
+        layout_row = QHBoxLayout()
+        layout_row.setSpacing(8)
+        layout_lbl = QLabel("Desktop layout")
+        layout_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_desktop_render = QComboBox()
+        self._combo_desktop_render.setStyleSheet(_COMBO)
+        for value, label in DESKTOP_RENDER_LAYOUT_LABELS:
+            self._combo_desktop_render.addItem(label, value)
+        cur_layout = load_desktop_render_layout(settings)
+        lidx = self._combo_desktop_render.findData(cur_layout)
+        self._combo_desktop_render.setCurrentIndex(max(0, lidx))
+        layout_row.addWidget(layout_lbl)
+        layout_row.addWidget(self._combo_desktop_render, 1)
+        g.addLayout(layout_row)
+        g.addWidget(
+            self._hint(
+                "It's a Desktop — classic docked Render panel. "
+                "Like a Portable — purple Render Settings beside Start opens a "
+                "floating settings window (minimize / maximize; click again to close)."
             )
         )
 
@@ -1122,6 +1148,13 @@ class SettingsDialog(SteempegDialog):
         self._save_setting(KEY_DEFAULT_RENDER_TAB, render_tab)
         self._committed_render_tab = render_tab
         apply_default_render_tab(self._app, render_tab)
+
+        desktop_layout = normalize_desktop_render_layout(
+            self._combo_desktop_render.currentData()
+        )
+        self._save_setting(KEY_DESKTOP_RENDER_LAYOUT, desktop_layout)
+        if hasattr(self._app, "apply_desktop_render_layout"):
+            self._app.apply_desktop_render_layout()
 
         self._save_setting(
             KEY_NOTIFY_ON_RENDER_COMPLETE, self._chk_notify.isChecked()
