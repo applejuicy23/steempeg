@@ -9,10 +9,13 @@ Default is ``steam_like`` (matches Soft / Steam-like game icons).
 """
 from __future__ import annotations
 
+import os
 import re
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
+
+from steempeg.ui.ui_density import COMFORT, UiDensity
 
 KEY_PLAYER_HEADER_LAYOUT = "player_header_layout"
 
@@ -46,6 +49,22 @@ def normalize_header_layout(value: object | None) -> str:
 
 def get_header_layout() -> str:
     return _current_layout
+
+
+def player_header_density(app) -> UiDensity:
+    """Active density for the player header (falls back to comfort)."""
+    dense = getattr(app, "_ui_density_player", None) or getattr(app, "_ui_density", None)
+    return dense if dense is not None else COMFORT
+
+
+def player_header_icon_px(app) -> int:
+    """Game-icon box size for the title cluster."""
+    return max(16, int(getattr(player_header_density(app), "header_icon", 24) or 24))
+
+
+def player_header_font_px(app) -> int:
+    return max(11, int(getattr(player_header_density(app), "header_font", 13) or 13))
+
 
 
 def set_header_layout(layout: object | None) -> str:
@@ -154,13 +173,16 @@ def format_player_header_html(
     duration: str = "",
     extra_parts: list[str] | tuple[str, ...] | None = None,
     layout: str | None = None,
+    font_px: int | None = None,
 ) -> str:
     """Build rich text for ``custom_text_label`` based on the active layout mode."""
     mode = normalize_header_layout(layout if layout is not None else _current_layout)
     title_plain = (title or "").strip() or "—"
-    # ``<b>`` is more reliable than CSS font-weight in Qt rich text.
+    fs = max(11, int(font_px or COMFORT.header_font))
+    # ``<b>`` + inline font-size: Qt rich text often ignores QLabel stylesheet size.
     title_html = (
-        f"<b style='color:#ffffff; vertical-align:middle;'>{_esc(title_plain)}</b>"
+        f"<b style='color:#ffffff; font-size:{fs}px; vertical-align:middle;'>"
+        f"{_esc(title_plain)}</b>"
     )
 
     if mode == HEADER_LAYOUT_STEAM_LIKE:
@@ -197,16 +219,10 @@ def format_player_header_html(
 
     # Classic SteempegUI: bold gray meta (same weight as the game title).
     # ``Game • 11 May 2026 at 02:28 PM · 3m 36s``
-    title_sep = (
-        f"<b style='color:#888888; vertical-align:middle;'>{_TITLE_SEP}</b>"
-    )
-    meta_sep = (
-        f"<b style='color:#888888; vertical-align:middle;'>{_META_SEP}</b>"
-    )
-    meta_bits = [
-        f"<b style='color:#888888; vertical-align:middle;'>{_esc(m)}</b>"
-        for m in meta
-    ]
+    meta_style = f"color:#888888; font-size:{fs}px; vertical-align:middle;"
+    title_sep = f"<b style='{meta_style}'>{_TITLE_SEP}</b>"
+    meta_sep = f"<b style='{meta_style}'>{_META_SEP}</b>"
+    meta_bits = [f"<b style='{meta_style}'>{_esc(m)}</b>" for m in meta]
     return title_html + title_sep + meta_sep.join(meta_bits)
 
 
@@ -733,6 +749,7 @@ def refresh_player_header_text(app) -> None:
     label = getattr(app, "custom_text_label", None)
     if not meta or label is None:
         return
+    font_px = player_header_font_px(app)
     if meta.get("placeholder"):
         label.setText(str(meta.get("title") or "Select a clip to preview..."))
         return
@@ -743,6 +760,7 @@ def refresh_player_header_text(app) -> None:
             time=str(meta.get("time") or ""),
             duration=str(meta.get("duration") or ""),
             extra_parts=list(meta.get("extra") or ()),
+            font_px=font_px,
         )
     )
 
@@ -800,6 +818,7 @@ def set_player_header_game_text(
                 time=time,
                 duration=duration,
                 extra_parts=extra,
+                font_px=player_header_font_px(app),
             )
         )
     if hasattr(app, "refresh_player_header_info"):
@@ -807,3 +826,180 @@ def set_player_header_game_text(
             app.refresh_player_header_info()
         except Exception:
             pass
+
+
+def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
+    """Scale player-header chrome (icon, title, chips, pad) with UI density.
+
+    Comfort defaults match the classic fixed strip (icon 24 / font 13 / pads
+    10×8 / chip 30). Empty placeholder uses the same ``setFixedHeight`` as a
+    filled clip so the bar does not jump thinner when no clip is selected.
+    """
+    if dense is None:
+        dense = player_header_density(app)
+    header = getattr(app, "player_header_frame", None)
+    if not _widget_alive(header):
+        return
+
+    pad_h = max(6, int(dense.header_pad_h))
+    pad_v = max(4, int(dense.header_pad_v))
+    icon_px = max(16, int(dense.header_icon))
+    font_px = max(11, int(dense.header_font))
+    chip = max(24, int(dense.header_chip))
+    chip_icon = max(12, int(dense.header_chip_icon))
+    # Always the filled-state height (icon/chips + pads). Empty placeholder must
+    # not shrink when status/actions/info are hidden — Fixed sizeHint otherwise
+    # collapses to icon+label only and looks thinner than a selected clip.
+    min_h = max(chip + 2 * pad_v, int(dense.header_min_h), icon_px + 2 * pad_v)
+    content_h = max(icon_px, chip)
+
+    lay = header.layout()
+    if lay is not None:
+        lay.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+        lay.setSpacing(max(6, pad_h))
+
+    header.setFixedHeight(min_h)
+    header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    title = getattr(app, "player_header_title", None)
+    if _widget_alive(title):
+        title.setMinimumHeight(content_h)
+
+    label = getattr(app, "custom_text_label", None)
+    if _widget_alive(label):
+        label.setStyleSheet(
+            f"color: white; font-size: {font_px}px; font-weight: 700;"
+            "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            "background: transparent; border: none;"
+        )
+
+    # Reshape the live game / unknown icon to the density box.
+    icon_lbl = getattr(app, "custom_icon_label", None)
+    if _widget_alive(icon_lbl):
+        try:
+            from PySide6.QtGui import QPixmap
+
+            from steempeg.infra.paths import get_resource_path
+            from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+            from steempeg.ui.icon_utils import apply_square_icon
+
+            path = ""
+            if hasattr(app, "_resolve_header_game_icon_path"):
+                try:
+                    path = app._resolve_header_game_icon_path() or ""
+                except Exception:
+                    path = ""
+            if not path:
+                path = getattr(app, "current_game_icon", "") or ""
+            unknown = get_resource_path("unknown_icon.png")
+            if not path or not os.path.isfile(path):
+                path = unknown
+            is_unknown = (
+                os.path.basename(path).lower() == "unknown_icon.png" if path else True
+            )
+            src = QPixmap(path) if path else QPixmap()
+            shape = ICON_SHAPE_CIRCLE if is_unknown else None
+            shaped = (
+                shaped_game_icon_pixmap(src, icon_px, shape)
+                if not src.isNull()
+                else None
+            )
+            icon_lbl.setStyleSheet("background: transparent; border: none;")
+            apply_square_icon(icon_lbl, shaped, icon_px)
+        except Exception:
+            pass
+
+    # Clip-info hitbox — classic comfort was 22×22 with a 16px glyph.
+    info = getattr(app, "btn_player_header_info", None)
+    if _widget_alive(info):
+        from steempeg.ui.design_tokens import with_tooltip_style
+        from steempeg.ui.icon_assets import playinfo_icons
+
+        hit = max(18, chip - 8)
+        glyph = max(12, min(chip_icon, hit - 4))
+        idle, hot = playinfo_icons(glyph)
+        app._player_header_info_icon_idle = idle
+        app._player_header_info_icon_hot = hot
+        info.setFixedSize(hit, hit)
+        info.setIcon(idle if not info.underMouse() else hot)
+        info.setIconSize(QSize(glyph, glyph))
+        r = hit // 2
+        info.setStyleSheet(
+            with_tooltip_style(
+                "QPushButton#playerHeaderInfo {"
+                "background: transparent; border: none; padding: 0px; margin: 0px;"
+                "text-align: center;}"
+                "QPushButton#playerHeaderInfo:hover {"
+                f"background-color: rgba(255, 255, 255, 0.08); border-radius: {r}px;}}"
+                "QPushButton#playerHeaderInfo:pressed {"
+                f"background-color: rgba(255, 255, 255, 0.12); border-radius: {r}px;}}"
+                "QPushButton#playerHeaderInfo:disabled { background-color: transparent; }"
+            )
+        )
+
+    from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
+
+    chip_qss_tail = (
+        "border-radius: 8px; padding: 0px;"
+        "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+    )
+    preview = getattr(app, "btn_preview_settings", None)
+    if _widget_alive(preview):
+        preview.setFixedSize(chip, chip)
+        preview.setIcon(preview_settings_icon(chip_icon))
+        preview.setIconSize(QSize(chip_icon, chip_icon))
+        preview.setStyleSheet(
+            "QPushButton {"
+            "background-color: rgba(74, 159, 216, 0.18); color: #4a9fd8;"
+            "border: 2px solid #4a9fd8;"
+            + chip_qss_tail
+            + "}"
+            "QPushButton:hover { background-color: rgba(74, 159, 216, 0.32); }"
+            "QPushButton:pressed { background-color: rgba(74, 159, 216, 0.45); }"
+        )
+    close_btn = getattr(app, "btn_close_clip", None)
+    if _widget_alive(close_btn):
+        close_btn.setFixedSize(chip, chip)
+        close_btn.setIcon(close_clip_icon(chip_icon))
+        close_btn.setIconSize(QSize(chip_icon, chip_icon))
+        close_btn.setStyleSheet(
+            "QPushButton {"
+            "background-color: rgba(224, 85, 85, 0.18); color: #e05555;"
+            "border: 2px solid #e05555;"
+            + chip_qss_tail
+            + "}"
+            "QPushButton:hover { background-color: rgba(224, 85, 85, 0.32); }"
+            "QPushButton:pressed { background-color: rgba(224, 85, 85, 0.45); }"
+        )
+
+    divider = getattr(app, "player_header_divider", None)
+    if _widget_alive(divider):
+        divider.setFixedHeight(max(18, chip - 8))
+
+    # Portable "| Choose a Clip" cluster — keep chip height with the header.
+    choose = getattr(app, "btn_portable_add_clip", None)
+    if _widget_alive(choose) and hasattr(choose, "setFixedHeight"):
+        choose.setFixedHeight(chip)
+    pipe = getattr(app, "portable_add_clip_divider", None)
+    if _widget_alive(pipe) and hasattr(pipe, "setFixedHeight"):
+        pipe.setFixedHeight(max(18, chip - 8))
+
+    # Status chips (Healthy / Preview) pick up pad + min height on next refresh;
+    # store so callers can read without importing density.
+    app._player_header_status_pad = str(dense.header_status_pad)
+    app._player_header_status_min_h = chip
+    app._player_header_status_font = font_px
+    app._player_header_status_icon = max(14, chip_icon)
+
+    refresh_player_header_text(app)
+    if hasattr(app, "update_clip_health_button"):
+        try:
+            app.update_clip_health_button()
+        except Exception:
+            pass
+    if hasattr(app, "update_playback_badge"):
+        try:
+            app.update_playback_badge()
+        except Exception:
+            pass
+    sync_centered_title_width(app)
