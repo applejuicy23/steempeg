@@ -1157,10 +1157,15 @@ class LibraryMixin:
     def _apply_clip_health_button_style(self, report) -> None:
         color = report.color
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        pad = getattr(self, "_player_header_status_pad", None) or "4px 12px 4px 10px"
+        font_px = int(getattr(self, "_player_header_status_font", 13) or 13)
+        icon_px = int(getattr(self, "_player_header_status_icon", 18) or 18)
+        min_h = int(getattr(self, "_player_header_status_min_h", 30) or 30)
         self.btn_clip_health.setToolTip(report.summary())
-        self.btn_clip_health.setIcon(health_icon(report.level, 18))
-        self.btn_clip_health.setIconSize(QSize(18, 18))
+        self.btn_clip_health.setIcon(health_icon(report.level, icon_px))
+        self.btn_clip_health.setIconSize(QSize(icon_px, icon_px))
         self.btn_clip_health.setText(f" {report.label}")
+        self.btn_clip_health.setMinimumHeight(min_h)
         self.btn_clip_health.setStyleSheet(
             f"QPushButton {{"
             f"background-color: rgba({r}, {g}, {b}, 0.22);"
@@ -1168,8 +1173,8 @@ class LibraryMixin:
             f"border: 2px solid {color};"
             f"border-radius: 8px;"
             f"font-weight: bold;"
-            f"font-size: 13px;"
-            f"padding: 2px 10px 2px 8px;"
+            f"font-size: {font_px}px;"
+            f"padding: {pad};"
             f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
             f"}}"
             f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
@@ -4452,9 +4457,11 @@ class LibraryMixin:
         shape = ICON_SHAPE_CIRCLE if is_unknown else None
 
         from steempeg.ui.icon_utils import apply_square_icon
+        from steempeg.ui.player_header_layout import player_header_icon_px
 
+        header_icon_px = player_header_icon_px(self)
         for attr, size in (
-            ("custom_icon_label", 24),
+            ("custom_icon_label", header_icon_px),
             ("bottom_icon_label", 24),
         ):
             label = getattr(self, attr, None)
