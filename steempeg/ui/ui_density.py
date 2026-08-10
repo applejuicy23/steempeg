@@ -50,10 +50,12 @@ class UiDensity:
     footer_radius: int
     footer_add_w: int
 
-    # Neo settings sidebar
+    # Neo settings sidebar + content page-title glyph size
     neo_sidebar_w: int
     neo_nav_font: int
-    neo_nav_pad: str
+    neo_nav_pad: str  # T R B L (left = space before icon)
+    neo_nav_icon: int  # sidebar + page-header glyph (16 comfort / 12 compact)
+    neo_nav_icon_gap: int  # transparent pad after sidebar icon (icon→text)
 
     # Queue
     queue_empty_w: int
@@ -140,7 +142,10 @@ COMFORT = UiDensity(
     footer_add_w=40,
     neo_sidebar_w=220,
     neo_nav_font=14,
-    neo_nav_pad="10px 15px",
+    # T R B L — left pad breathes from tab edge; right keeps label off the border.
+    neo_nav_pad="10px 12px 10px 14px",
+    neo_nav_icon=16,
+    neo_nav_icon_gap=8,
     queue_empty_w=300,
     queue_thumb_w=128,
     queue_thumb_h=76,
@@ -203,7 +208,9 @@ COMPACT = UiDensity(
     footer_add_w=26,
     neo_sidebar_w=118,
     neo_nav_font=10,
-    neo_nav_pad="3px 5px",
+    neo_nav_pad="4px 4px 4px 8px",
+    neo_nav_icon=12,
+    neo_nav_icon_gap=5,
     queue_empty_w=220,
     queue_thumb_w=80,
     queue_thumb_h=46,
@@ -254,18 +261,18 @@ TAB_LABELS_COMPACT = {
 }
 
 NEO_NAV_COMFORT = [
-    "ℹ️  Source Info",
-    "🎬  Video Settings",
-    "🎵  Audio Settings",
-    "🚀  Export Settings",
-    "📦  Presets",
+    "Source Info",
+    "Video Settings",
+    "Audio Settings",
+    "Export Settings",
+    "Presets",
 ]
 NEO_NAV_COMPACT = [
-    "ℹ️  Source",
-    "🎬  Video",
-    "🎵  Audio",
-    "🚀  Export",
-    "📦  Presets",
+    "Source",
+    "Video",
+    "Audio",
+    "Export",
+    "Presets",
 ]
 
 
