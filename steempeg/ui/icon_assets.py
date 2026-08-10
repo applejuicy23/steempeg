@@ -377,6 +377,62 @@ def logs_info_icon(size: int = 16) -> QIcon:
     return _dash_button_glyph_icon("logsinfo.png", size)
 
 
+# Neo settings sidebar + content page-header glyphs (BW white-on-black masters).
+# Colorized assets can drop in later without API change — keep filenames stable.
+NEO_NAV_ICON_FILES: tuple[str, ...] = (
+    "sourceinfo.png",
+    "videosettings.png",
+    "audiosettings.png",
+    "exportsettings.png",
+    "presetsettings.png",
+)
+
+
+def _glyph_icon_with_trailing_gap(name: str, size: int, trailing_gap: int) -> QIcon:
+    """Dash-style white glyph; optional transparent pad on the right (icon→text gap)."""
+    base = _dash_button_glyph_icon(name, size)
+    gap = max(0, int(trailing_gap))
+    if gap <= 0 or base.isNull():
+        return base
+    # Enabled + disabled faces so gray-out still matches dash buttons.
+    out = QIcon()
+    for mode, color in (
+        (QIcon.Mode.Normal, "#ffffff"),
+        (QIcon.Mode.Active, "#ffffff"),
+        (QIcon.Mode.Selected, "#ffffff"),
+        (QIcon.Mode.Disabled, "#555555"),
+    ):
+        glyph = _glyph_pixmap_from_bw(name, size, color=color)
+        if glyph.isNull():
+            continue
+        canvas = QPixmap(size + gap, size)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        painter.drawPixmap(0, 0, glyph)
+        painter.end()
+        out.addPixmap(canvas, mode, QIcon.State.Off)
+    return out if not out.isNull() else base
+
+
+def neo_nav_tab_icon(index: int, size: int = 16, *, trailing_gap: int = 0) -> QIcon:
+    """White glyph for neo sidebar tab ``index`` (Source…Presets).
+
+    ``trailing_gap`` adds transparent pixels after the glyph so QPushButton
+    icon→label spacing isn't cramped (Qt stylesheets don't expose that gap).
+    """
+    if index < 0 or index >= len(NEO_NAV_ICON_FILES):
+        return QIcon()
+    name = NEO_NAV_ICON_FILES[index]
+    if trailing_gap > 0:
+        return _glyph_icon_with_trailing_gap(name, size, trailing_gap)
+    return _dash_button_glyph_icon(name, size)
+
+
+def neo_page_title_icon(index: int, size: int = 16) -> QIcon:
+    """White glyph for neo content page header ``index`` (no trailing gap)."""
+    return neo_nav_tab_icon(index, size)
+
+
 def preview_badge_icon(size: int = 16, *, color: str = "#ffffff") -> QIcon:
     """Desktop player-header Preview chip glyph (``play2.png``)."""
     return _icon_from_pixmap(_glyph_pixmap_from_bw("play2.png", size, color=color))
