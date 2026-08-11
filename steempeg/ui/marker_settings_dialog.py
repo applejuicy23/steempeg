@@ -499,14 +499,19 @@ class MarkerSettingsDialog(SteempegDialog):
         lay.setSpacing(10)
 
         if not self._clip_rows:
-            empty = QLabel(
-                "No configurable markers on this clip — or no clip is open.\n"
-                "Open a CS2 recording in the player and open Marker settings again."
+            empty = QLabel("List is empty")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setStyleSheet(
+                f"color: {tok.TEXT_MUTED}; font-size: 13px; background: transparent; "
+                f"font-family: {tok.FONT_APP};"
             )
-            empty.setWordWrap(True)
-            empty.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, "#e8c87a"))
-            lay.addWidget(empty)
+            hint = QLabel("Nothing to select")
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hint.setStyleSheet(_HINT)
             lay.addStretch(1)
+            lay.addWidget(empty)
+            lay.addWidget(hint)
+            lay.addStretch(2)
             return _scroll_page(page)
 
         lay.addWidget(
