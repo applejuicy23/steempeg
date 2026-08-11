@@ -58,7 +58,15 @@ from steempeg.infra.paths import (
     open_path_with_default_app,
     open_text_file,
 )
-from steempeg.ui.icon_assets import warning_pixmap
+from steempeg.ui.icon_assets import (
+    LOADING_WAVE_PHASE_STEP,
+    LOADING_WAVE_TICK_MS,
+    UPDATE_ARROWS_DEG_PER_TICK,
+    UPDATE_ARROWS_TICK_MS,
+    loading_wave_frame,
+    update_arrows_spin_frame,
+    warning_pixmap,
+)
 from steempeg.render import bitrate
 from steempeg.render.output_formats import (
     AUDIO_FORMATS,
@@ -817,16 +825,23 @@ class RenderMixin:
         if state == "rendering" and not display_text:
             display_text = "Rendering"
 
-        # Library Loading/search + update-check busy: plain purple busy dot —
-        # never the queue index digit, even when Render Queue owns the strip.
+        # Library Loading/search: three-dot purple wave — never the queue index
+        # digit, even when Render Queue owns the strip.
+        # Update-check busy: spinning purple update arrows (badge-sized).
         # (Render progress itself uses state=rendering and keeps the badge.)
-        suppress_queue_badge = (
+        library_scan_busy = (
             scan_phase is not None
             or getattr(self, "_clips_scan_active", False)
             or getattr(self, "_rendered_scan_active", False)
-            or getattr(self, "_update_check_busy", False)
         )
-        if queue_index and self._queue_is_active() and not suppress_queue_badge:
+        suppress_queue_badge = (
+            library_scan_busy or getattr(self, "_update_check_busy", False)
+        )
+        if getattr(self, "_update_check_busy", False):
+            self._paint_status_dot_update_spin(color)
+        elif library_scan_busy:
+            self._paint_status_dot_loading_wave(color)
+        elif queue_index and self._queue_is_active() and not suppress_queue_badge:
             self._paint_status_dot_queue_badge(queue_index, color)
         else:
             self._paint_status_dot_plain(color)
@@ -911,12 +926,194 @@ class RenderMixin:
 
         self._sync_portable_render_strip(full_text, state, percent)
 
-    def _paint_status_dot_plain(self, color: str) -> None:
-        dot = getattr(self, "status_dot", None)
+    def _status_dot_widget(self):
+        """Visible status chrome dot — portable strip when shell is active."""
+        if getattr(self, "_portable_shell", False):
+            strip = getattr(self, "_portable_render_strip", None)
+            strip_dot = getattr(strip, "status_dot", None) if strip is not None else None
+            if strip_dot is not None:
+                return strip_dot
+        return getattr(self, "status_dot", None)
+
+    def _stop_status_dot_update_spin(self) -> None:
+        """Stop update-check arrows and clear pixmap from the status dot."""
+        timer = getattr(self, "_status_update_spin_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._status_update_spin_angle = 0.0
+        self._status_update_spin_active = False
+        dots = [getattr(self, "status_dot", None)]
+        strip = getattr(self, "_portable_render_strip", None)
+        if strip is not None:
+            dots.append(getattr(strip, "status_dot", None))
+        for dot in dots:
+            if dot is None:
+                continue
+            try:
+                dot.setPixmap(QPixmap())
+            except RuntimeError:
+                pass
+
+    def _stop_status_dot_loading_wave(self) -> None:
+        """Stop library-loading wave dots and clear pixmap from the status chrome."""
+        timer = getattr(self, "_status_loading_wave_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._status_loading_wave_phase = 0.0
+        self._status_loading_wave_active = False
+        dots = [getattr(self, "status_dot", None)]
+        strip = getattr(self, "_portable_render_strip", None)
+        if strip is not None:
+            dots.append(getattr(strip, "status_dot", None))
+        for dot in dots:
+            if dot is None:
+                continue
+            try:
+                dot.setPixmap(QPixmap())
+            except RuntimeError:
+                pass
+
+    def _paint_status_dot_update_spin(self, color: str) -> None:
+        """Spinning purple update.png — same asset/cadence as portable Updates."""
+        if getattr(self, "_status_loading_wave_active", False):
+            self._stop_status_dot_loading_wave()
+        dot = self._status_dot_widget()
         if dot is None:
             return
         dense = getattr(self, "_ui_density", None)
+        # Match Ready queue number badge circle (comfort 24 / compact 22).
+        sz = 22 if dense is not None and getattr(dense, "compact", False) else 24
+        glyph = max(14, sz - 4)
+        self._status_indicator_color = color
+        self._status_update_spin_color = color
+        self._status_update_spin_size = sz
+        self._status_update_spin_glyph = glyph
+        self._status_update_spin_active = True
+        if not hasattr(self, "_status_update_spin_angle"):
+            self._status_update_spin_angle = 0.0
+
+        dot.setFixedSize(sz, sz)
+        dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dot.setText("")
+        dot.setStyleSheet("background: transparent; border: none;")
+
+        timer = getattr(self, "_status_update_spin_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(UPDATE_ARROWS_TICK_MS)
+            timer.timeout.connect(self._on_status_update_spin_tick)
+            self._status_update_spin_timer = timer
+        self._refresh_status_update_spin_frame()
+        if not timer.isActive():
+            timer.start()
+
+    def _on_status_update_spin_tick(self) -> None:
+        if not getattr(self, "_status_update_spin_active", False):
+            self._stop_status_dot_update_spin()
+            return
+        if not getattr(self, "_update_check_busy", False):
+            self._stop_status_dot_update_spin()
+            return
+        self._status_update_spin_angle = (
+            float(getattr(self, "_status_update_spin_angle", 0.0))
+            + UPDATE_ARROWS_DEG_PER_TICK
+        ) % 360.0
+        self._refresh_status_update_spin_frame()
+
+    def _refresh_status_update_spin_frame(self) -> None:
+        dot = self._status_dot_widget()
+        if dot is None:
+            return
+        color = getattr(self, "_status_update_spin_color", "#a871ff")
+        sz = int(getattr(self, "_status_update_spin_size", 24) or 24)
+        glyph = int(getattr(self, "_status_update_spin_glyph", max(14, sz - 4)) or sz)
+        angle = float(getattr(self, "_status_update_spin_angle", 0.0))
+        frame = update_arrows_spin_frame(color, sz, angle, glyph_size=glyph)
+        try:
+            dot.setPixmap(frame)
+        except RuntimeError:
+            self._stop_status_dot_update_spin()
+
+    def _paint_status_dot_loading_wave(self, color: str) -> None:
+        """Three purple dots bouncing in a wave — library Loading / search busy."""
+        if getattr(self, "_status_update_spin_active", False):
+            self._stop_status_dot_update_spin()
+        dot = self._status_dot_widget()
+        if dot is None:
+            return
+        dense = getattr(self, "_ui_density", None)
+        # Same height as queue badge / update-spin; slightly wider for three dots.
+        h = 22 if dense is not None and getattr(dense, "compact", False) else 24
+        w = 28 if h <= 22 else 32
+        self._status_indicator_color = color
+        self._status_loading_wave_color = color
+        self._status_loading_wave_size = (w, h)
+        self._status_loading_wave_active = True
+        if not hasattr(self, "_status_loading_wave_phase"):
+            self._status_loading_wave_phase = 0.0
+
+        dot.setFixedSize(w, h)
+        dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dot.setText("")
+        dot.setStyleSheet("background: transparent; border: none;")
+
+        timer = getattr(self, "_status_loading_wave_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(LOADING_WAVE_TICK_MS)
+            timer.timeout.connect(self._on_status_loading_wave_tick)
+            self._status_loading_wave_timer = timer
+        self._refresh_status_loading_wave_frame()
+        if not timer.isActive():
+            timer.start()
+
+    def _on_status_loading_wave_tick(self) -> None:
+        # Stop only via paint restore paths (plain / queue badge / update-spin).
+        # Do not key off scan flags here — brief gaps (clips done → rendered
+        # search) would kill the wave while status text is still Loading/search.
+        if not getattr(self, "_status_loading_wave_active", False):
+            self._stop_status_dot_loading_wave()
+            return
+        self._status_loading_wave_phase = (
+            float(getattr(self, "_status_loading_wave_phase", 0.0))
+            + LOADING_WAVE_PHASE_STEP
+        )
+        self._refresh_status_loading_wave_frame()
+
+    def _refresh_status_loading_wave_frame(self) -> None:
+        dot = self._status_dot_widget()
+        if dot is None:
+            return
+        color = getattr(self, "_status_loading_wave_color", "#a871ff")
+        size = getattr(self, "_status_loading_wave_size", (32, 24))
+        try:
+            w, h = int(size[0]), int(size[1])
+        except (TypeError, ValueError, IndexError):
+            w, h = 32, 24
+        phase = float(getattr(self, "_status_loading_wave_phase", 0.0))
+        frame = loading_wave_frame(color, w, h, phase)
+        try:
+            dot.setPixmap(frame)
+        except RuntimeError:
+            self._stop_status_dot_loading_wave()
+
+    def _paint_status_dot_plain(self, color: str) -> None:
+        self._stop_status_dot_update_spin()
+        self._stop_status_dot_loading_wave()
+        dot = self._status_dot_widget()
+        if dot is None:
+            return
+        try:
+            dot.setPixmap(QPixmap())
+        except (RuntimeError, Exception):
+            pass
+        dense = getattr(self, "_ui_density", None)
         sz = 8 if dense is not None and getattr(dense, "compact", False) else 12
+        # Portable strip uses a fixed 12px plain dot for visual parity with dash.
+        if getattr(self, "_portable_shell", False) and getattr(
+            self, "_portable_render_strip", None
+        ) is not None:
+            sz = 12
         dot.setFixedSize(sz, sz)
         dot.setText("")
         radius = max(3, sz // 2)
@@ -925,9 +1122,15 @@ class RenderMixin:
 
     def _paint_status_dot_queue_badge(self, index: int, color: str) -> None:
         """Numbered circle — yellow queue / orange render / red error / green done."""
-        dot = getattr(self, "status_dot", None)
+        self._stop_status_dot_update_spin()
+        self._stop_status_dot_loading_wave()
+        dot = self._status_dot_widget()
         if dot is None:
             return
+        try:
+            dot.setPixmap(QPixmap())
+        except (RuntimeError, Exception):
+            pass
         dense = getattr(self, "_ui_density", None)
         # Slightly larger than the plain status dot so the queue index digit stays readable.
         sz = 22 if dense is not None and getattr(dense, "compact", False) else 24
@@ -949,11 +1152,8 @@ class RenderMixin:
         """Drive Ready cluster + left summary from the status-strip job.
 
         True = queue owns the chrome (badge number and game line agree).
+        Applies to Desktop dash and Portable Render strip (queue-first rules).
         """
-        if getattr(self, "_portable_shell", False):
-            return False
-        if not hasattr(self.ui, "label_status"):
-            return False
         # Do not stamp a numbered queue badge over Loading N/M / search / update-check.
         if (
             getattr(self, "_clips_scan_active", False)
@@ -977,17 +1177,44 @@ class RenderMixin:
             label = STATUS_HEADER_LABELS.get(job.status, "Ready")
 
         self._paint_status_dot_queue_badge(index, color)
-        status_label = self.ui.label_status
-        dense = getattr(self, "_ui_density", None)
-        status_font = int(getattr(dense, "dash_font", 14) or 14)
-        status_label.setStyleSheet(
-            f"background: transparent; border: none; font-size: {status_font}px; "
-            f"font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;"
-        )
-        full = label
-        shown = self._elide_status_label_text(status_label, full)
-        status_label.setText(shown)
-        status_label.setToolTip(full if shown != full else f"#{index} · {full}")
+
+        tip = f"#{index} · {label}"
+        status_label = getattr(self.ui, "label_status", None)
+        if status_label is not None:
+            dense = getattr(self, "_ui_density", None)
+            status_font = int(getattr(dense, "dash_font", 14) or 14)
+            status_label.setStyleSheet(
+                f"background: transparent; border: none; font-size: {status_font}px; "
+                f"font-weight: bold; color: {color}; font-family: Segoe UI, Arial, sans-serif;"
+            )
+            full = label
+            shown = self._elide_status_label_text(status_label, full)
+            status_label.setText(shown)
+            status_label.setToolTip(full if shown != full else tip)
+
+        # Portable sheet strip mirrors the same queue-first Ready cluster.
+        strip = getattr(self, "_portable_render_strip", None)
+        if strip is not None:
+            try:
+                if hasattr(strip, "status_label") and strip.status_label is not None:
+                    strip.status_label.setText(label)
+                    strip.status_label.setStyleSheet(
+                        f"color: {color}; font-size: 14px; font-weight: bold; "
+                        f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                    )
+                    strip.status_label.setToolTip(tip)
+                if hasattr(strip, "sync_game_header"):
+                    strip.sync_game_header()
+                if hasattr(strip, "sync_from_app"):
+                    strip.sync_from_app()
+                if hasattr(strip, "progress") and not getattr(self, "_is_rendering", False):
+                    strip.progress.set_progress(0.0)
+                    strip.progress.set_state("ready")
+                if hasattr(strip, "pct_label") and not getattr(self, "_is_rendering", False):
+                    strip.pct_label.setText("0%")
+            except RuntimeError:
+                self._portable_render_strip = None
+
         if hasattr(self.ui, "progress_render") and not getattr(self, "_is_rendering", False):
             bar = self.ui.progress_render
             if hasattr(bar, "set_progress"):
@@ -1764,25 +1991,78 @@ class RenderMixin:
             self._pre_portable_like_v_sizes = live
 
     def _floating_render_settings_holds_neo(self) -> bool:
+        """True when Desktop floating settings or Portable Render sheet owns neo.
+
+        Must NOT require dialog visibility. ``DesktopRenderSettingsDialog.__init__``
+        registers itself then calls dock chrome sync *before* ``show()`` — an
+        ``isVisible()`` gate re-parks neo into the chrome garage and leaves the
+        settings host empty black (Desktop Like a Portable + Portable sheet).
+        """
+        neo = getattr(self, "neo_wrapper", None)
+
         dlg = getattr(self, "_desktop_render_settings_dlg", None)
         if dlg is not None:
             try:
-                if bool(dlg.isVisible() or dlg.isMinimized()):
+                dlg.objectName()  # alive
+                return True
+            except RuntimeError:
+                if getattr(self, "_desktop_render_settings_dlg", None) is dlg:
+                    self._desktop_render_settings_dlg = None
+
+        sheet = getattr(self, "_portable_render_sheet_dlg", None)
+        if sheet is not None:
+            try:
+                sheet.objectName()
+                # Warm / open sheet claims neo for its right column (stub or live).
+                if getattr(sheet, "_neo", None) is not None or getattr(
+                    self, "_portable_render_settings_open", False
+                ):
                     return True
             except RuntimeError:
-                pass
-        # Belt-and-suspenders: neo already reparented while dlg ref lagged.
-        neo = getattr(self, "neo_wrapper", None)
+                if getattr(self, "_portable_render_sheet_dlg", None) is sheet:
+                    self._portable_render_sheet_dlg = None
+
         if neo is None:
             return False
         from steempeg.ui.desktop_render_settings import DesktopRenderSettingsDialog
+        from steempeg.ui.portable.sheets import PortableRenderSettingsDialog
 
         w = neo.parentWidget()
         while w is not None:
-            if isinstance(w, DesktopRenderSettingsDialog):
+            if isinstance(w, (DesktopRenderSettingsDialog, PortableRenderSettingsDialog)):
                 return True
             w = w.parentWidget()
         return False
+
+    def _neo_is_parked_in_chrome_garage(self) -> bool:
+        neo = getattr(self, "neo_wrapper", None)
+        garage = getattr(self, "_neo_chrome_garage", None)
+        if neo is None or garage is None:
+            return False
+        try:
+            return neo.parentWidget() is garage
+        except RuntimeError:
+            return False
+
+    def _ensure_docked_neo_visible_for_context(self) -> None:
+        """Classic Desktop: don't leave a tall empty dock when neo is parked.
+
+        Like a Portable keeps neo in the floating window / garage by design.
+        Classic Desktop must re-dock neo whenever the bottom chrome is meant to
+        show settings (clip, queue, or empty stub — never a black void).
+        """
+        if getattr(self, "_portable_shell", False):
+            return
+        if self._desktop_render_layout_is_portable_like():
+            return
+        if self._floating_render_settings_holds_neo():
+            return
+        if not (
+            self._neo_is_parked_in_chrome_garage()
+            or getattr(self, "_neo_dock_home", None)
+        ):
+            return
+        self._restore_neo_to_dock_layout()
 
     def _dash_only_bottom_height(self) -> int:
         """Exact height for the glued render-control strip (no black padding)."""
@@ -2145,6 +2425,12 @@ class RenderMixin:
             self._portable_like_dash_closed = False
             if hw is not None and hasattr(hw, "set_suppressed"):
                 hw.set_suppressed(bool(getattr(self, "_portable_shell", False)))
+            # Safety: classic Desktop must never keep neo parked after a layout pass.
+            if hasattr(self, "_ensure_docked_neo_visible_for_context"):
+                try:
+                    self._ensure_docked_neo_visible_for_context()
+                except Exception:
+                    pass
             return
 
         # --- Like a Portable ---
@@ -4251,6 +4537,14 @@ class RenderMixin:
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
+        # Queue selection must refresh Ready badge + neo binding chrome.
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "_ensure_docked_neo_visible_for_context"):
+            try:
+                self._ensure_docked_neo_visible_for_context()
+            except Exception:
+                pass
 
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""
@@ -4422,6 +4716,24 @@ class RenderMixin:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
 
+    def _focused_queue_job_for_badge(self, clip_path=None):
+        """Queue job for the In-queue header chip (selected card, else clip match).
+
+        N in ``In queue (N)`` is this job's 1-based ``queue_index``, not pending
+        count. Footer Ready+#N stays queue-head via ``_status_strip_context_job``.
+        """
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        if selected_id:
+            job = self.render_queue.get(selected_id)
+            if job is not None:
+                if not clip_path:
+                    return job
+                if os.path.normpath(job.clip_path) == os.path.normpath(clip_path):
+                    return job
+        if clip_path:
+            return self._queue_job_for_clip(clip_path)
+        return None
+
     def _playback_badge_for_context(self):
         clip_path = self._current_header_clip_path()
         if not clip_path:
@@ -4431,7 +4743,7 @@ class RenderMixin:
         if hasattr(self, "get_clip_health_report"):
             if self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD:
                 if hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path):
-                    job = self._queue_job_for_clip(clip_path)
+                    job = self._focused_queue_job_for_badge(clip_path)
                     if job:
                         if job.status == JobStatus.QUEUED:
                             return (
@@ -4446,7 +4758,7 @@ class RenderMixin:
             if active and os.path.normpath(active.clip_path) == os.path.normpath(clip_path):
                 return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
 
-        job = self._queue_job_for_clip(clip_path)
+        job = self._focused_queue_job_for_badge(clip_path)
 
         if job:
             if job.status == JobStatus.COMPLETED:
