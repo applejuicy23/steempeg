@@ -59,10 +59,7 @@ LIBRARY_TABLE_STYLE = """
 LIBRARY_GRID_STYLE = """
     QListWidget { background: transparent; border: none; outline: none; }
     QListWidget::item {
-        border-top-left-radius: 0px;
-        border-top-right-radius: 0px;
-        border-bottom-left-radius: 12px;
-        border-bottom-right-radius: 12px;
+        border-radius: 0px;
         border: none;
         background-color: #2d2d2d;
         padding: 0px;
