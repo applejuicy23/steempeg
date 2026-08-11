@@ -277,6 +277,9 @@ def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
     btn.setText(" Choose a Clip")
     btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
+    from PySide6.QtWidgets import QSizePolicy
+
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Open Clips Manager")
 
@@ -420,9 +423,14 @@ _IN_QUEUE_STYLE = with_tooltip_style(
 )
 
 
-def _style_add_to_queue_button(btn: QPushButton) -> None:
-    from steempeg.ui.icon_assets import bold_plus_icon
+def _style_add_to_queue_button(btn: QPushButton, *, dense=None) -> None:
+    from PySide6.QtWidgets import QSizePolicy
 
+    from steempeg.ui.icon_assets import bold_plus_icon
+    from steempeg.ui.ui_density import COMFORT
+
+    d = dense if dense is not None else COMFORT
+    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
     # Glyph is ~10px; keep iconSize tight so side padding matches Choose a Clip
     # (an 18px empty box was reading as fat left/right margins).
     icon_sz = 12
@@ -430,20 +438,31 @@ def _style_add_to_queue_button(btn: QPushButton) -> None:
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(" Queue")
     btn.setStyleSheet(_ADD_QUEUE_STYLE)
-    btn.setFixedHeight(30)
+    btn.setFixedHeight(chip)
+    btn.setMinimumWidth(0)
+    btn.setMaximumWidth(16777215)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Add the current clip to the render queue")
 
 
-def _style_in_queue_button(btn: QPushButton, text: str) -> None:
-    from steempeg.ui.icon_assets import queue_chip_icon
+def _style_in_queue_button(btn: QPushButton, text: str, *, dense=None) -> None:
+    from PySide6.QtWidgets import QSizePolicy
 
+    from steempeg.ui.icon_assets import queue_chip_icon
+    from steempeg.ui.ui_density import COMFORT
+
+    d = dense if dense is not None else COMFORT
+    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
     icon_sz = 16
     btn.setIcon(queue_chip_icon(icon_sz))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(f" {text}")
     btn.setStyleSheet(_IN_QUEUE_STYLE)
-    btn.setFixedHeight(30)
+    btn.setFixedHeight(chip)
+    btn.setMinimumWidth(0)
+    btn.setMaximumWidth(16777215)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Open queue and render settings")
 
@@ -464,6 +483,10 @@ def _ensure_queue_header_controls(app) -> None:
         return
     lay: QHBoxLayout = status.layout()
     badge = getattr(app, "label_playback_badge", None)
+
+    from steempeg.ui.player_header_layout import player_header_density
+
+    dense = player_header_density(app)
 
     # Legacy separate gear — hide forever; In queue chip replaces it.
     legacy_gear = getattr(app, "btn_portable_queue_gear", None)
@@ -491,7 +514,7 @@ def _ensure_queue_header_controls(app) -> None:
             lay.insertWidget(insert_at, add_btn)
         else:
             lay.addWidget(add_btn)
-    _style_add_to_queue_button(add_btn)
+    _style_add_to_queue_button(add_btn, dense=dense)
 
     in_btn = getattr(app, "btn_portable_in_queue", None)
     if in_btn is not None:
@@ -516,7 +539,7 @@ def _ensure_queue_header_controls(app) -> None:
                 lay.insertWidget(insert_at, in_btn)
             else:
                 lay.addWidget(in_btn)
-    _style_in_queue_button(in_btn, "Queue")
+    _style_in_queue_button(in_btn, "Queue", dense=dense)
 
     if hasattr(app, "update_playback_badge"):
         try:
@@ -621,6 +644,9 @@ def sync_portable_queue_header(app) -> None:
 
     if add_btn is not None:
         if show_add:
+            from steempeg.ui.player_header_layout import player_header_density
+
+            _style_add_to_queue_button(add_btn, dense=player_header_density(app))
             add_btn.setEnabled(can_add)
             add_btn.show()
         else:
@@ -628,7 +654,11 @@ def sync_portable_queue_header(app) -> None:
 
     if in_btn is not None:
         if show_queue_chip:
-            _style_in_queue_button(in_btn, queue_chip_text)
+            from steempeg.ui.player_header_layout import player_header_density
+
+            _style_in_queue_button(
+                in_btn, queue_chip_text, dense=player_header_density(app)
+            )
             in_btn.show()
             if badge is not None and (
                 show_add
@@ -673,6 +703,8 @@ def _ensure_library_scan_badge(app, lay: QHBoxLayout) -> None:
 
 def _style_portable_render_button(btn: QPushButton, *, pending: int = 0, has_clip: bool = False) -> None:
     """Pill like Trim; flag emoji for now. Queue label only when a clip is open."""
+    from PySide6.QtWidgets import QSizePolicy
+
     btn.setIcon(QIcon())
     if pending > 0 and has_clip:
         btn.setText(f"🚩 Queue ({pending})")
@@ -680,6 +712,7 @@ def _style_portable_render_button(btn: QPushButton, *, pending: int = 0, has_cli
         btn.setText("🚩 Render")
     btn.setStyleSheet(_RENDER_STYLE)
     btn.setFixedHeight(30)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Render settings and progress")
 
