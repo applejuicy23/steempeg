@@ -1865,7 +1865,7 @@ class RenderMixin:
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolTip("Open render settings in a floating window (click again to close)")
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setMinimumHeight(36)
+        btn.setFixedHeight(36)
         btn.setStyleSheet(_fmt(style))
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
@@ -1997,14 +1997,34 @@ class RenderMixin:
         registers itself then calls dock chrome sync *before* ``show()`` — an
         ``isVisible()`` gate re-parks neo into the chrome garage and leaves the
         settings host empty black (Desktop Like a Portable + Portable sheet).
+
+        Stale closed-dialog refs must NOT count: that blocked classic Desktop
+        neo reclaim and left a tall black void above the dash on clip select.
         """
         neo = getattr(self, "neo_wrapper", None)
+        from steempeg.ui.desktop_render_settings import DesktopRenderSettingsDialog
+        from steempeg.ui.portable.sheets import PortableRenderSettingsDialog
 
+        # Authoritative: neo already lives under a settings host.
+        if neo is not None:
+            try:
+                w = neo.parentWidget()
+            except RuntimeError:
+                w = None
+            while w is not None:
+                if isinstance(
+                    w, (DesktopRenderSettingsDialog, PortableRenderSettingsDialog)
+                ):
+                    return True
+                w = w.parentWidget()
+
+        # Mid-init / open: dialog registered and not yet returned neo.
         dlg = getattr(self, "_desktop_render_settings_dlg", None)
         if dlg is not None:
             try:
-                dlg.objectName()  # alive
-                return True
+                dlg.objectName()
+                if not getattr(dlg, "_returned", False):
+                    return True
             except RuntimeError:
                 if getattr(self, "_desktop_render_settings_dlg", None) is dlg:
                     self._desktop_render_settings_dlg = None
@@ -2022,16 +2042,6 @@ class RenderMixin:
                 if getattr(self, "_portable_render_sheet_dlg", None) is sheet:
                     self._portable_render_sheet_dlg = None
 
-        if neo is None:
-            return False
-        from steempeg.ui.desktop_render_settings import DesktopRenderSettingsDialog
-        from steempeg.ui.portable.sheets import PortableRenderSettingsDialog
-
-        w = neo.parentWidget()
-        while w is not None:
-            if isinstance(w, (DesktopRenderSettingsDialog, PortableRenderSettingsDialog)):
-                return True
-            w = w.parentWidget()
         return False
 
     def _neo_is_parked_in_chrome_garage(self) -> bool:
@@ -2065,22 +2075,63 @@ class RenderMixin:
         self._restore_neo_to_dock_layout()
 
     def _dash_only_bottom_height(self) -> int:
-        """Exact height for the glued render-control strip (no black padding)."""
+        """Exact height for the glued render-control strip (no black padding).
+
+        Never trust an inflated live ``dash.height()`` — after neo is parked the
+        dash can briefly fill a tall bottom pane (Preferred policy). Gluing that
+        height locks a void between the splitter and the control strip.
+        """
         from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
 
         margin_top = int(MAIN_V_SPLIT_BOTTOM_PAD)
         dash = getattr(self, "render_dashboard", None)
         if dash is None:
             return margin_top + 120
-        # Prefer real height once laid out; fall back to sizeHint.
-        h = int(dash.height() or 0)
-        if h < 80:
-            h = int(dash.sizeHint().height() or 0)
-        if h < 80:
-            h = int(dash.minimumSizeHint().height() or 0)
-        if h < 80:
-            h = 120
+        hint = int(dash.sizeHint().height() or 0)
+        if hint < 80:
+            hint = int(dash.minimumSizeHint().height() or 0)
+        if hint < 80:
+            hint = 120
+        live = int(dash.height() or 0)
+        # Accept live height only when it matches content (not a stretched pane).
+        if 80 <= live <= hint + 24:
+            h = live
+        else:
+            h = hint
         return margin_top + h
+
+    def _pin_dash_queue_header_buttons(self) -> None:
+        """Keep Start / Render Settings / Pause / Cancel / Logs from stretching tall.
+
+        Horizontal Expanding is intentional (equal-width row). Vertical must stay
+        Fixed + fixed height so a tall bottom pane cannot blow the buttons up.
+        """
+        from PySide6.QtWidgets import QSizePolicy
+
+        dense = getattr(self, "_ui_density", None)
+        btn_h = int(getattr(dense, "dash_btn_h", 36) or 36)
+        names = ("btn_start", "btn_pause", "btn_cancel", "btn_logs")
+        ui = getattr(self, "ui", None)
+        for name in names:
+            btn = getattr(ui, name, None) if ui is not None else None
+            if btn is None:
+                continue
+            try:
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+                )
+                btn.setFixedHeight(btn_h)
+            except RuntimeError:
+                pass
+        settings_btn = getattr(self, "btn_render_settings", None)
+        if settings_btn is not None:
+            try:
+                settings_btn.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+                )
+                settings_btn.setFixedHeight(btn_h)
+            except RuntimeError:
+                pass
 
     def _ensure_neo_chrome_garage(self):
         """Off-layout host so neo cannot leave a void in bottom_v_wrap."""
@@ -2383,6 +2434,7 @@ class RenderMixin:
                 dash.setSizePolicy(
                     QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
                 )
+                self._pin_dash_queue_header_buttons()
             if v_split.count() >= 2:
                 handle = v_split.handle(1)
                 if handle is not None:
@@ -2442,6 +2494,9 @@ class RenderMixin:
         dash = getattr(self, "render_dashboard", None)
         if dash is not None:
             dash.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            dash.setMinimumHeight(0)
+            dash.setMaximumHeight(16777215)
+            self._pin_dash_queue_header_buttons()
 
         if bottom is not None:
             from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
@@ -4822,6 +4877,8 @@ class RenderMixin:
             badge.setIcon(QIcon())
             badge.setText(label)
         badge.setMinimumHeight(min_h)
+        badge.setMinimumWidth(0)
+        badge.setMaximumWidth(16777215)
         badge.setStyleSheet(
             f"QPushButton {{"
             f"color: {color};"
