@@ -335,8 +335,8 @@ class SettingsDialog(SteempegDialog):
         g.addLayout(layout_row)
         g.addWidget(
             self._hint(
-                "It's a Desktop — classic docked Render panel. "
-                "Like a Portable — purple Render Settings beside Start opens a "
+                "It's a Desktop, classic docked Render panel. "
+                "Like a Portable, purple Render Settings beside Start opens a "
                 "floating settings window (minimize / maximize; click again to close)."
             )
         )
@@ -718,7 +718,7 @@ class SettingsDialog(SteempegDialog):
         advanced, a = _tab_page()
         a.addWidget(self._section("Fullscreen"))
         self._chk_test_new_fullscreen = SteempegCheckBox(
-            "TEST NEW FULLSCREEN — no grey flash on enter/exit",
+            "TEST NEW FULLSCREEN, no grey flash on enter/exit",
             font_size=13,
             label_bold=True,
             label_color="#ffffff",
@@ -726,7 +726,7 @@ class SettingsDialog(SteempegDialog):
         self._chk_test_new_fullscreen.setChecked(load_test_new_fullscreen(settings))
         a.addWidget(self._chk_test_new_fullscreen)
         loud_hint = QLabel(
-            "If the old grey screen before enter/exit bothers you — turn this on. "
+            "If the old grey screen before enter/exit bothers you, turn this on. "
             "Skips the transition cover (same as STEEMPEG_FS_COVER=0). "
             "May briefly show a black edge on exit."
         )
