@@ -1166,6 +1166,8 @@ class LibraryMixin:
         self.btn_clip_health.setIconSize(QSize(icon_px, icon_px))
         self.btn_clip_health.setText(f" {report.label}")
         self.btn_clip_health.setMinimumHeight(min_h)
+        self.btn_clip_health.setMinimumWidth(0)
+        self.btn_clip_health.setMaximumWidth(16777215)
         self.btn_clip_health.setStyleSheet(
             f"QPushButton {{"
             f"background-color: rgba({r}, {g}, {b}, 0.22);"
@@ -3135,7 +3137,9 @@ class LibraryMixin:
                 )
 
     def _clip_grid_column_count(self) -> int:
-        grid = getattr(self, "grid_clips", None)
+        return self._clip_grid_column_count_for(getattr(self, "grid_clips", None))
+
+    def _clip_grid_column_count_for(self, grid) -> int:
         if grid is None:
             return 1
         viewport_w = max(1, grid.viewport().width())
@@ -3145,35 +3149,70 @@ class LibraryMixin:
         return max(1, (viewport_w + spacing) // (cell + spacing))
 
     def sync_clip_card_edge_roles(self) -> None:
-        """Square the shelf edges: top row flat-top, bottom row flat-bottom."""
-        grid = getattr(self, "grid_clips", None)
-        if grid is None:
-            return
+        """SteempegUI: square shelf flush on top/bottom rows (Clips + Rendered)."""
+        from steempeg.ui.clip_card_style import (
+            CARD_STYLE_STEEMPEG_UI,
+            get_clip_card_style,
+        )
         from steempeg.ui.library.grid_view import ClipCard
 
-        visible: list = []
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is None or item.isHidden():
+        shelf = get_clip_card_style() == CARD_STYLE_STEEMPEG_UI
+
+        for grid_name in ("grid_clips", "grid_rendered"):
+            grid = getattr(self, grid_name, None)
+            if grid is None:
                 continue
-            card = grid.itemWidget(item)
-            if isinstance(card, ClipCard):
-                visible.append(card)
-        if not visible:
-            return
-        cols = self._clip_grid_column_count()
-        last_row = (len(visible) - 1) // cols
-        for idx, card in enumerate(visible):
-            row = idx // cols
-            if last_row == 0:
-                role = "both"  # single visual row: flush with panel top + bottom
-            elif row == 0:
-                role = "top"
-            elif row == last_row:
-                role = "bottom"
-            else:
-                role = "mid"
-            card.set_edge_role(role)
+            visible: list = []
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None or item.isHidden():
+                    continue
+                card = grid.itemWidget(item)
+                if isinstance(card, ClipCard):
+                    visible.append(card)
+            if not visible:
+                continue
+            if not shelf:
+                # Square / Round ignore shelf roles — keep mid so a later
+                # SteempegUI switch re-applies cleanly.
+                for card in visible:
+                    card.set_edge_role("mid")
+                continue
+            cols = self._clip_grid_column_count_for(grid)
+            last_row = (len(visible) - 1) // cols
+            for idx, card in enumerate(visible):
+                row = idx // cols
+                if last_row == 0:
+                    role = "both"
+                elif row == 0:
+                    role = "top"
+                elif row == last_row:
+                    role = "bottom"
+                else:
+                    role = "mid"
+                card.set_edge_role(role)
+
+    def refresh_clip_card_styles(self, style: str | None = None) -> str:
+        """Apply SteempegUI / Square / Round chrome across Clips + Rendered grids."""
+        from steempeg.ui.clip_card_style import get_clip_card_style, set_clip_card_style
+        from steempeg.ui.library.grid_view import ClipCard
+
+        if style is not None:
+            set_clip_card_style(style)
+        applied = get_clip_card_style()
+        for grid_name in ("grid_clips", "grid_rendered"):
+            grid = getattr(self, grid_name, None)
+            if grid is None:
+                continue
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                card = grid.itemWidget(item)
+                if isinstance(card, ClipCard):
+                    card.reapply_card_style()
+        self.sync_clip_card_edge_roles()
+        return applied
 
     def _sync_library_scan_interaction_lock(self, *, busy: bool) -> None:
         """Roskomnadzor mode: while clips are loading, freeze Queue + Clips Manager."""
