@@ -37,6 +37,8 @@ from steempeg.ui.icon_utils import (
 from steempeg.services.release_catalog import COLOR_VERSION_NEW
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import (
+    UPDATE_ARROWS_DEG_PER_TICK,
+    UPDATE_ARROWS_TICK_MS,
     title_bar_info_icons,
     title_bar_settings_icons,
     title_bar_update_pixmap,
@@ -239,8 +241,8 @@ class _TitleBarUpdateButton(QPushButton):
     ``paintEvent``.
     """
 
-    _TICK_MS = 16
-    _DEG_PER_TICK = 7.5  # clockwise (top moves left→right)
+    _TICK_MS = UPDATE_ARROWS_TICK_MS
+    _DEG_PER_TICK = UPDATE_ARROWS_DEG_PER_TICK
 
     def __init__(self, *, hit_px: int, icon_px: int, parent=None):
         super().__init__(parent)
