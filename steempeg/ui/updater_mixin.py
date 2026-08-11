@@ -70,8 +70,8 @@ class UpdaterMixin:
             if spin is not None and hasattr(spin, "set_busy"):
                 spin.set_busy(True)
             if not rendering:
-                # Plain purple busy dot (no queue index) while the label shows
-                # "Checking for updates..." — same suppress pattern as library Loading.
+                # Spinning purple update arrows (badge-sized) while the label
+                # shows "Checking for updates..." — suppress queue badge like Loading.
                 self._update_check_busy = True
                 self.set_status("Checking for updates...")
             self._open_update_center()
