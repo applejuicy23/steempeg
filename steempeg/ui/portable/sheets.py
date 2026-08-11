@@ -479,6 +479,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(10)
 
+        # Keep a handle so prepare_for_show can reclaim neo if dock chrome stole it.
+        self._neo_host_layout = right
+
         if self._neo is None:
             from PySide6.QtWidgets import QLabel
 
@@ -561,6 +564,40 @@ class PortableRenderSettingsDialog(SteempegDialog):
             garage = self.parentWidget()
             self._park_as_embedded_widget(garage)
 
+    def _reclaim_neo_into_sheet(self) -> None:
+        """Re-embed neo if dock / Like-a-Portable chrome parked it in the garage."""
+        neo = self._neo or getattr(self._app, "neo_wrapper", None)
+        host = getattr(self, "_neo_host_layout", None)
+        if neo is None or host is None:
+            return
+        self._neo = neo
+        try:
+            if self.isAncestorOf(neo):
+                return
+        except RuntimeError:
+            return
+        parent = neo.parentWidget()
+        if parent is not None:
+            lay = parent.layout()
+            if lay is not None:
+                lay.removeWidget(neo)
+            else:
+                neo.setParent(None)
+        neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Insert above the control strip when present.
+        strip = getattr(self, "_strip", None)
+        insert_at = host.count()
+        if strip is not None:
+            for i in range(host.count()):
+                item = host.itemAt(i)
+                if item is not None and item.widget() is strip:
+                    insert_at = i
+                    break
+        host.insertWidget(insert_at, neo, 1)
+        # Dock chrome may have snapshotted this sheet as neo's "home" — drop it.
+        if getattr(self._app, "_neo_dock_home", None):
+            self._app._neo_dock_home = None
+
     def prepare_for_show(self) -> None:
         """Re-arm a warm sheet before exec (no reparent)."""
         host = getattr(self._app, "ui", None)
@@ -578,6 +615,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self.setFixedSize(w, h)
         if hasattr(self._queue, "apply_rail_width"):
             self._queue.apply_rail_width(compact=compact, width=queue_w)
+        self._reclaim_neo_into_sheet()
         if self._neo is not None:
             self._neo.show()
             tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
@@ -590,6 +628,8 @@ class PortableRenderSettingsDialog(SteempegDialog):
                 wdg = getattr(self._app, name, None)
                 if wdg is not None:
                     wdg.show()
+            if getattr(self, "_sheet_compact", True):
+                apply_portable_neo_chrome(self._app)
         if hasattr(self._app, "refresh_export_presets_list"):
             try:
                 self._app.refresh_export_presets_list()
@@ -599,6 +639,14 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._queue.refresh()
         if hasattr(self._strip, "sync_from_app"):
             self._strip.sync_from_app()
+        # Queue-first Ready badge + summary (not plain green / "Select a clip…").
+        if hasattr(self._app, "update_status_indicator"):
+            try:
+                self._app.update_status_indicator("Ready", "ready")
+            except Exception:
+                pass
+        if hasattr(self._strip, "sync_game_header"):
+            self._strip.sync_game_header()
         if hasattr(self._app, "fit_settings_tab_to_page"):
             QTimer.singleShot(0, self._app.fit_settings_tab_to_page)
         if hasattr(self, "reset_title_bar_chrome"):
