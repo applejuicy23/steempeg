@@ -753,6 +753,14 @@ class RenderedLibraryMixin:
                     or bool(getattr(self, "_portable_shell", False))
                 )
 
+        # Classic Desktop: if neo was left in the Like-a-Portable garage, the
+        # bottom dock shows a tall empty black void above the dash — reclaim it.
+        if show_bottom and hasattr(self, "_ensure_docked_neo_visible_for_context"):
+            try:
+                self._ensure_docked_neo_visible_for_context()
+            except Exception:
+                pass
+
     def _is_previewing_rendered_media(self) -> bool:
         if getattr(self, "_rendered_media_path", None):
             return True
