@@ -132,7 +132,7 @@ class ClipCard(qtw.QWidget):
         self.thumb_label.setAttribute(qtc.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         # Transparent so baked corner alpha shows the panel behind, not a square fill.
         self.thumb_label.setStyleSheet("background-color: transparent; border: none;")
-        # top | mid | bottom | both — shelf corners vs panel edges
+        # top | mid | bottom | both — Round style only: shelf flush vs panel edges
         self._edge_role = "mid"
         self._thumb_raw: Optional[qtg.QPixmap] = None
 
@@ -212,10 +212,10 @@ class ClipCard(qtw.QWidget):
             QWidget {
                 background-color: #383838;
                 border: none;
-                border-top-left-radius: 0px;
-                border-top-right-radius: 0px;
-                border-bottom-left-radius: 9px;
-                border-bottom-right-radius: 9px;
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
             }
         """)
 
@@ -277,44 +277,84 @@ class ClipCard(qtw.QWidget):
         self._apply_edge_radii()
 
     def set_edge_role(self, role: str) -> None:
-        """Shelf corners: top row square-top, bottom row square-bottom, mid fully round."""
+        """Shelf flush for SteempegUI: top/bottom rows square against the panel."""
         role = (role or "mid").lower()
         if role not in ("top", "mid", "bottom", "both"):
             role = "mid"
         if getattr(self, "_edge_role", None) == role:
             return
         self._edge_role = role
+        self.reapply_card_style()
+
+    def reapply_card_style(self) -> None:
+        """Re-bake chrome after Settings → Visual clip-card style changes."""
         self._apply_edge_radii()
         self._apply_selection_style()
 
-    def _corner_radii(self) -> tuple[int, int, int, int]:
-        """Return (tl, tr, br, bl) pixel radii for the card chrome."""
+    def _radius_plan(self) -> dict[str, tuple[int, int, int, int]]:
+        """Return border / thumb / footer (tl, tr, br, bl) for the active style."""
+        from steempeg.ui.clip_card_style import (
+            CARD_STYLE_ROUND,
+            CARD_STYLE_SQUARE,
+            CARD_STYLE_STEEMPEG_UI,
+            FOOTER_SOFT_RADIUS,
+            OUTER_RADIUS,
+            get_clip_card_style,
+        )
+
+        style = get_clip_card_style()
+        r = int(OUTER_RADIUS)
+        fr = int(FOOTER_SOFT_RADIUS)
+
+        if style == CARD_STYLE_SQUARE:
+            # Square top, round bottom — every card (no shelf variation).
+            return {
+                "border": (0, 0, r, r),
+                "thumb": (0, 0, 0, 0),
+                "footer": (0, 0, fr, fr),
+            }
+
+        if style == CARD_STYLE_ROUND:
+            # Fully round outer corners everywhere.
+            return {
+                "border": (r, r, r, r),
+                "thumb": (r, r, 0, 0),
+                "footer": (0, 0, fr, fr),
+            }
+
+        # STEEMPEG_UI — shelf / row edge roles (flush against panel).
         role = getattr(self, "_edge_role", "mid")
-        r = 12
+        tl = tr = br = bl = r
         if role == "both":
-            return 0, 0, 0, 0
-        if role == "top":
-            return 0, 0, r, r
-        if role == "bottom":
-            return r, r, 0, 0
-        return r, r, r, r
+            tl = tr = br = bl = 0
+        elif role == "top":
+            tl = tr = 0
+        elif role == "bottom":
+            br = bl = 0
+        return {
+            "border": (tl, tr, br, bl),
+            "thumb": (tl, tr, 0, 0),
+            "footer": (0, 0, fr if bl else 0, fr if br else 0),
+        }
+
+    def _corner_radii(self) -> tuple[int, int, int, int]:
+        """Return (tl, tr, br, bl) for the selection / hover border overlay."""
+        return self._radius_plan()["border"]
 
     def _apply_edge_radii(self) -> None:
-        tl, tr, br, bl = self._corner_radii()
-        # Thumb only rounds its top; footer owns the bottom curve.
+        plan = self._radius_plan()
+        ttl, ttr, tbr, tbl = plan["thumb"]
+        ftl, ftr, fbr, fbl = plan["footer"]
         # Stylesheet radius does NOT clip QLabel pixmaps — bake corners below.
         self.thumb_label.setStyleSheet(
             "background-color: transparent; border: none;"
         )
         footer = getattr(self, "_footer_widget", None)
         if footer is not None:
-            # Footer radius tracks bottom corners; keep a soft 9px when rounded.
-            fbl = 9 if bl else 0
-            fbr = 9 if br else 0
             footer.setStyleSheet(
                 f"QWidget {{"
                 f"background-color: #383838; border: none;"
-                f"border-top-left-radius: 0px; border-top-right-radius: 0px;"
+                f"border-top-left-radius: {ftl}px; border-top-right-radius: {ftr}px;"
                 f"border-bottom-left-radius: {fbl}px;"
                 f"border-bottom-right-radius: {fbr}px;"
                 f"}}"
@@ -322,23 +362,26 @@ class ClipCard(qtw.QWidget):
         self._refresh_clipped_thumb()
 
     def _refresh_clipped_thumb(self) -> None:
-        """Re-bake thumbnail with current top corner radii."""
+        """Re-bake thumbnail with current corner radii for the active ClipCard style."""
+        ttl, ttr, tbr, tbl = self._radius_plan()["thumb"]
         raw = getattr(self, "_thumb_raw", None)
         if raw is None or raw.isNull():
-            # Empty well still needs a rounded dark plate.
-            tl, tr, _br, _bl = self._corner_radii()
+            # Empty well still needs a dark plate matching the style.
             plate = qtg.QPixmap(254, 144)
             plate.fill(qtc.Qt.GlobalColor.transparent)
-            path = _asymmetric_round_rect(254.0, 144.0, float(tl), float(tr), 0.0, 0.0)
+            path = _asymmetric_round_rect(
+                254.0, 144.0, float(ttl), float(ttr), float(tbr), float(tbl)
+            )
             painter = qtg.QPainter(plate)
             painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
             painter.fillPath(path, qtg.QColor("#1a1a1a"))
             painter.end()
             self.thumb_label.setPixmap(plate)
             return
-        tl, tr, _br, _bl = self._corner_radii()
         self.thumb_label.setPixmap(
-            _clip_pixmap_to_corners(raw, float(tl), float(tr), 0.0, 0.0)
+            _clip_pixmap_to_corners(
+                raw, float(ttl), float(ttr), float(tbr), float(tbl)
+            )
         )
 
     def set_queue_badge(
