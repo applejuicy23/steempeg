@@ -219,6 +219,11 @@ def title_bar_settings_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     return idle, hot
 
 
+# Same cadence as portable title-bar Updates button (_TitleBarUpdateButton).
+UPDATE_ARROWS_TICK_MS = 16
+UPDATE_ARROWS_DEG_PER_TICK = 7.5  # clockwise (top moves left→right)
+
+
 def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
     """Tinted update.png for the portable title-bar Updates spinner.
 
@@ -233,6 +238,98 @@ def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     idle = _icon_from_pixmap(title_bar_update_pixmap("#b8b8b8", size))
     hot = _icon_from_pixmap(title_bar_update_pixmap("#e8e8e8", size))
     return idle, hot
+
+
+def update_arrows_spin_frame(
+    color: str | QColor,
+    size: int,
+    angle: float,
+    *,
+    glyph_size: int | None = None,
+) -> QPixmap:
+    """Transparent square with purple-tinted ``update.png`` rotated by ``angle``.
+
+    Orbit math matches the portable title-bar Updates button ``paintEvent``.
+    """
+    from PySide6.QtCore import QPointF
+
+    sz = max(1, int(size))
+    g = max(1, int(glyph_size if glyph_size is not None else sz))
+    pix = title_bar_update_pixmap(color, g)
+    out = QPixmap(sz, sz)
+    out.fill(Qt.GlobalColor.transparent)
+    if pix.isNull():
+        return out
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    cx = sz * 0.5
+    cy = sz * 0.5
+    dpr = max(float(pix.devicePixelRatio()), 1.0)
+    logical_w = pix.width() / dpr
+    logical_h = pix.height() / dpr
+    painter.translate(cx, cy)
+    painter.rotate(float(angle) % 360.0)
+    painter.drawPixmap(QPointF(-logical_w * 0.5, -logical_h * 0.5), pix)
+    painter.end()
+    return out
+
+
+# Library Loading / search busy chrome — Gemini-style staggered bounce dots.
+LOADING_WAVE_TICK_MS = 80
+LOADING_WAVE_PHASE_STEP = 0.38  # rad/tick → ~1.3s full cycle
+LOADING_WAVE_DOT_COUNT = 3
+
+
+def loading_wave_frame(
+    color: str | QColor,
+    width: int,
+    height: int,
+    phase: float,
+) -> QPixmap:
+    """Transparent badge with three purple dots in a staggered Y/opacity wave."""
+    import math
+
+    from PySide6.QtGui import QBrush, QPen
+
+    w = max(1, int(width))
+    h = max(1, int(height))
+    out = QPixmap(w, h)
+    out.fill(Qt.GlobalColor.transparent)
+    base = QColor(color) if not isinstance(color, QColor) else QColor(color)
+    if not base.isValid():
+        base = QColor("#a871ff")
+
+    # Fit three dots in the badge; leave vertical room for bounce.
+    radius = max(2.0, min(w / (LOADING_WAVE_DOT_COUNT * 2.6), h * 0.22))
+    gap = radius * 0.9
+    span = LOADING_WAVE_DOT_COUNT * (radius * 2) + (LOADING_WAVE_DOT_COUNT - 1) * gap
+    start_x = (w - span) * 0.5 + radius
+    cy = h * 0.55
+    amp = max(1.5, h * 0.18)
+    stagger = (2.0 * math.pi) / LOADING_WAVE_DOT_COUNT
+
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(Qt.PenStyle.NoPen))
+    for i in range(LOADING_WAVE_DOT_COUNT):
+        t = float(phase) + i * stagger
+        # Half-sine bounce (up only) — Gemini-like pulse.
+        lift = max(0.0, math.sin(t))
+        opacity = 0.28 + 0.72 * lift
+        fill = QColor(base)
+        fill.setAlphaF(max(0.0, min(1.0, opacity)))
+        painter.setBrush(QBrush(fill))
+        x = start_x + i * (radius * 2 + gap)
+        y = cy - amp * lift
+        painter.drawEllipse(
+            int(round(x - radius)),
+            int(round(y - radius)),
+            int(round(radius * 2)),
+            int(round(radius * 2)),
+        )
+    painter.end()
+    return out
 
 
 def tinted_pixmap(name: str, color: str | QColor, size: int = 16) -> QPixmap:
