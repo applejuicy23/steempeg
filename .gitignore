@@ -65,5 +65,9 @@ Steempeg_v*.zip
 # --- Local release-note drafts (paste into GitHub Releases by hand) ---
 docs/release-notes*.md
 
+# --- Local dump of GitHub Releases / tags (scripts/dump_github_changelogs.py) ---
+docs/github_changelogs_dump.txt
+github_changelogs_dump.txt
+
 # --- Local investigation notes ---
 mpvfullscreenguide.md
