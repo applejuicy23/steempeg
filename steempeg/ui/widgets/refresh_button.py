@@ -96,14 +96,20 @@ class RefreshButton(QWidget):
 
         layout.addWidget(self.main_btn, 1)
         layout.addWidget(self.menu_btn)
+
+        # Intent flag — do not use menu_btn.isVisible() in apply_density: that is
+        # false while any ancestor is unmapped/hidden (startup / footer park /
+        # Choose a Clip borrow), and would permanently hide the ▾ half.
+        self._menu_visible = True
         self.apply_density(COMFORT)
 
     def set_menu_visible(self, visible: bool) -> None:
         """Show/hide the ▾ half. Prefer keeping it visible — hide stretches main oddly."""
-        self.menu_btn.setVisible(bool(visible))
+        self._menu_visible = bool(visible)
+        self.menu_btn.setVisible(self._menu_visible)
         # When ▾ is gone, round the main button on both sides (same idea as Folder +).
         r = getattr(self, "_density", COMFORT).footer_radius
-        if visible:
+        if self._menu_visible:
             self.main_btn.setStyleSheet("")
         else:
             self.main_btn.setStyleSheet(
@@ -118,6 +124,5 @@ class RefreshButton(QWidget):
     def apply_density(self, dense: UiDensity) -> None:
         self._density = dense
         self.setStyleSheet(_refresh_style(dense))
-        # Re-apply radius if menu is currently hidden.
-        if not self.menu_btn.isVisible():
-            self.set_menu_visible(False)
+        # Re-apply radius from intent (not isVisible — see __init__ note).
+        self.set_menu_visible(getattr(self, "_menu_visible", True))
