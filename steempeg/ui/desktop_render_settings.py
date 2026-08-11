@@ -84,6 +84,48 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 app._sync_portable_like_dock_chrome()
             except Exception:
                 pass
+        # Belt-and-suspenders: if chrome sync still yanked neo (legacy visibility
+        # gate), put it back so this window is never empty black.
+        self._reclaim_neo_into_dialog()
+
+    def _reclaim_neo_into_dialog(self) -> None:
+        neo = self._neo or getattr(self._app, "neo_wrapper", None)
+        if neo is None:
+            return
+        self._neo = neo
+        try:
+            if self.isAncestorOf(neo):
+                neo.show()
+                return
+        except RuntimeError:
+            return
+        parent = neo.parentWidget()
+        if parent is not None:
+            lay = parent.layout()
+            if lay is not None:
+                lay.removeWidget(neo)
+            else:
+                neo.setParent(None)
+        neo.setMaximumHeight(16777215)
+        neo.setMinimumHeight(0)
+        neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.content_layout.addWidget(neo, 1)
+        neo.show()
+        if getattr(self._app, "_neo_dock_home", None):
+            self._app._neo_dock_home = None
+        for name in ("_neo_sidebar", "right_scroll"):
+            w = getattr(self._app, name, None)
+            if w is not None:
+                try:
+                    w.show()
+                except RuntimeError:
+                    pass
+        tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
+        if tabs is not None:
+            try:
+                tabs.show()
+            except RuntimeError:
+                pass
 
     def close_and_return(self) -> None:
         self._return_neo()
@@ -199,6 +241,8 @@ def toggle_desktop_render_settings(app) -> None:
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
+    if hasattr(dlg, "_reclaim_neo_into_dialog"):
+        dlg._reclaim_neo_into_dialog()
     if hasattr(app, "_sync_dash_render_settings_button"):
         try:
             app._sync_dash_render_settings_button()
@@ -207,6 +251,13 @@ def toggle_desktop_render_settings(app) -> None:
     if hasattr(app, "_sync_portable_like_dock_chrome"):
         try:
             app._sync_portable_like_dock_chrome()
+        except Exception:
+            pass
+    if hasattr(dlg, "_reclaim_neo_into_dialog"):
+        dlg._reclaim_neo_into_dialog()
+    if hasattr(app, "update_status_indicator"):
+        try:
+            app.update_status_indicator("Ready", "ready")
         except Exception:
             pass
 
