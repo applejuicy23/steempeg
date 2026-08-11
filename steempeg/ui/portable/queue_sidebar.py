@@ -596,6 +596,7 @@ class PortableQueueSidebar(QWidget):
         self._btn_clear.setToolTip("Clear the render queue")
         self._btn_clear.setStyleSheet(_BTN_CLEAR)
         self._btn_clear.setFixedHeight(hist_h)
+        self._btn_clear.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         clear_icon = get_resource_path("clear.png")
         if clear_icon and os.path.isfile(clear_icon):
             self._btn_clear.setIcon(QIcon(clear_icon))
@@ -608,6 +609,8 @@ class PortableQueueSidebar(QWidget):
         self._btn_add.setObjectName("portableQueueAdd")
         self._btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_add.setStyleSheet(_BTN_ADD)
+        self._btn_add.setFixedHeight(hist_h)
+        self._btn_add.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._btn_add.setToolTip("Add the current clip to the queue")
         self._btn_add.clicked.connect(self._on_add_current)
         head_lay.addWidget(self._btn_add, 0, Qt.AlignmentFlag.AlignVCenter)
