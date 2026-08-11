@@ -560,8 +560,16 @@ def sync_portable_queue_header(app) -> None:
     elif not idle and preview:
         path = os.path.normpath(str(preview))
 
+    # Prefer the selected queue card (browse position) over find-by-path so the
+    # In queue (N) chip tracks which job is focused — not total pending count.
     job = None
-    if path and hasattr(app, "_queue_job_for_clip"):
+    selected_id = getattr(app, "_selected_queue_job_id", None)
+    if selected_id and hasattr(app, "render_queue"):
+        try:
+            job = app.render_queue.get(selected_id)
+        except Exception:
+            job = None
+    if job is None and path and hasattr(app, "_queue_job_for_clip"):
         try:
             job = app._queue_job_for_clip(path)
         except Exception:
@@ -587,7 +595,10 @@ def sync_portable_queue_header(app) -> None:
         st = job.status
         if st == JobStatus.QUEUED:
             show_queue_chip = True
-            queue_chip_text = f"In queue ({pending if pending > 0 else job.queue_index})"
+            # N = this job's 1-based queue position (matches desktop header chip).
+            # Idle presence uses Queue (pending) below — not this label.
+            index = int(getattr(job, "queue_index", 0) or 0) or 1
+            queue_chip_text = f"In queue ({index})"
         elif st == JobStatus.RENDERING:
             show_queue_chip = True
             queue_chip_text = "Rendering"
