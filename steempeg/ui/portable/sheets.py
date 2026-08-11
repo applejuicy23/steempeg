@@ -689,7 +689,15 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self.reset_title_bar_chrome()
         self.raise_()
         self.activateWindow()
-        # Clip pick may have changed preview / queue context.
+        # Clip pick may have changed preview / queue context — and dock chrome
+        # can briefly steal neo; reclaim so the sheet never shows a black void.
+        if hasattr(self, "_reclaim_neo_into_sheet"):
+            self._reclaim_neo_into_sheet()
+            if self._neo is not None:
+                try:
+                    self._neo.show()
+                except RuntimeError:
+                    pass
         if hasattr(self._queue, "refresh"):
             self._queue.refresh()
         if hasattr(self._strip, "sync_from_app"):
@@ -959,6 +967,9 @@ class PortableClipPickerDialog(SteempegDialog):
         folder.setMaximumWidth(320)
         refresh.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         refresh.setMaximumWidth(160)
+        # Density passes while the footer was parked can leave ▾ hidden; restore.
+        if hasattr(refresh, "set_menu_visible"):
+            refresh.set_menu_visible(True)
 
         # View and its Grid/List toggle already lead the row. Mount the borrowed
         # folder controls immediately after them so the count stays after Refresh:
