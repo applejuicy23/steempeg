@@ -341,10 +341,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.game_icons_cache = {} # This is where we store downloaded images in memory
         try:
             from steempeg.ui.icon_shape import load_icon_shape_from_settings
+            from steempeg.ui.clip_card_style import (
+                KEY_CLIP_CARD_STYLE,
+                KEY_CLIP_CARD_STYLE_REV,
+                load_clip_card_style_from_settings,
+                migrate_clip_card_style_in_settings,
+            )
             from steempeg.ui.player_header_layout import load_header_layout_from_settings
 
             _settings0 = self.load_user_settings() or {}
             load_icon_shape_from_settings(_settings0)
+            if migrate_clip_card_style_in_settings(_settings0):
+                if KEY_CLIP_CARD_STYLE in _settings0:
+                    self.save_user_settings(
+                        KEY_CLIP_CARD_STYLE, _settings0[KEY_CLIP_CARD_STYLE]
+                    )
+                self.save_user_settings(
+                    KEY_CLIP_CARD_STYLE_REV, _settings0[KEY_CLIP_CARD_STYLE_REV]
+                )
+            load_clip_card_style_from_settings(_settings0)
             load_header_layout_from_settings(_settings0)
             from steempeg.ui.settings_prefs import (
                 KEY_PERMANENT_EXPORT_FOLDER,
@@ -4271,6 +4286,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             )
         if hasattr(self, "_sync_dash_queue_status_chrome"):
             self._sync_dash_queue_status_chrome()
+        if hasattr(self, "_pin_dash_queue_header_buttons"):
+            self._pin_dash_queue_header_buttons()
         if hasattr(self, "apply_desktop_render_layout"):
             self.apply_desktop_render_layout()
 
