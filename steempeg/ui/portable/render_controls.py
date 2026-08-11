@@ -1,7 +1,10 @@
 """Compact portable render control strip — progress + Start / Pause / Cancel / Logs."""
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -212,15 +215,28 @@ class PortableRenderControlStrip(QFrame):
         self.sync_from_app()
 
     def sync_game_header(self) -> None:
-        """Compact game icon + name from the desktop summary / player header."""
+        """Compact game icon + name — queue-first when Render Queue has jobs."""
         app = self._app
         name = ""
+        icon_path = ""
 
-        bottom_text = getattr(app, "bottom_text_label", None)
-        if bottom_text is not None:
-            raw = (bottom_text.text() or "").strip()
-            if raw and not raw.lower().startswith("select a clip"):
-                name = raw.split("  •  ")[0].strip() or raw
+        # Prefer the status-strip / queue-context job (not a stale library preview).
+        job = None
+        if hasattr(app, "_queue_is_active") and app._queue_is_active():
+            if hasattr(app, "_status_strip_context_job"):
+                job = app._status_strip_context_job()
+            elif hasattr(app, "_queue_context_job"):
+                job = app._queue_context_job()
+        if job is not None:
+            name = (getattr(job, "game_name", "") or "").strip()
+            icon_path = (getattr(job, "game_icon_path", "") or "").strip()
+
+        if not name:
+            bottom_text = getattr(app, "bottom_text_label", None)
+            if bottom_text is not None:
+                raw = (bottom_text.text() or "").strip()
+                if raw and not raw.lower().startswith("select a clip"):
+                    name = raw.split("  •  ")[0].strip() or raw
 
         if not name:
             custom_text = getattr(app, "custom_text_label", None)
@@ -255,6 +271,18 @@ class PortableRenderControlStrip(QFrame):
 
         self.game_label.setText(name)
         self.game_label.setToolTip(name)
+        if icon_path:
+            try:
+                if os.path.isfile(icon_path):
+                    self.game_icon.setStyleSheet("background: transparent; border: none;")
+                    apply_square_icon(
+                        self.game_icon,
+                        shaped_game_icon_pixmap(QPixmap(icon_path), _GAME_ICON, None),
+                        _GAME_ICON,
+                    )
+                    return
+            except OSError:
+                pass
         # Prefer live header/bottom pixmaps (square-safe). Never use CSS ``image:``.
         for attr in ("custom_icon_label", "bottom_icon_label"):
             src_lbl = getattr(app, attr, None)
@@ -266,6 +294,12 @@ class PortableRenderControlStrip(QFrame):
         _set_unknown_icon()
 
     def _set_dot_color(self, color: str) -> None:
+        self.status_dot.setFixedSize(_DOT_SIZE, _DOT_SIZE)
+        self.status_dot.setText("")
+        try:
+            self.status_dot.setPixmap(QPixmap())
+        except Exception:
+            pass
         r = max(3, _DOT_SIZE // 2)
         self.status_dot.setStyleSheet(
             f"background-color: {color}; border-radius: {r}px;"
@@ -281,7 +315,39 @@ class PortableRenderControlStrip(QFrame):
             f"color: {color}; font-size: 14px; font-weight: bold; {_FONT}"
         )
         self.status_label.setToolTip(display)
-        self._set_dot_color(color)
+        # Update-check owns spinning arrows; library scan owns the wave dots.
+        # Queue-first Ready uses the numbered badge — don't flatten to a plain dot.
+        app = self._app
+        if getattr(app, "_update_check_busy", False):
+            if hasattr(app, "_paint_status_dot_update_spin"):
+                app._paint_status_dot_update_spin(color)
+        elif (
+            getattr(app, "_clips_scan_active", False)
+            or getattr(app, "_rendered_scan_active", False)
+        ) and hasattr(app, "_paint_status_dot_loading_wave"):
+            app._paint_status_dot_loading_wave(color)
+        elif (
+            state in ("ready", "success")
+            and not getattr(app, "_is_rendering", False)
+            and hasattr(app, "_sync_dash_queue_status_chrome")
+            and app._sync_dash_queue_status_chrome()
+        ):
+            pass  # badge + labels already applied
+        else:
+            # Keep queue badge during render progress when queue owns the strip.
+            queue_index = None
+            if hasattr(app, "_queue_is_active") and app._queue_is_active():
+                job = (
+                    app._status_strip_context_job()
+                    if hasattr(app, "_status_strip_context_job")
+                    else None
+                )
+                if job is not None:
+                    queue_index = int(getattr(job, "queue_index", 0) or 0) or None
+            if queue_index and hasattr(app, "_paint_status_dot_queue_badge"):
+                app._paint_status_dot_queue_badge(queue_index, color)
+            else:
+                self._set_dot_color(color)
 
         if state == "success":
             percent = 100.0
