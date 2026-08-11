@@ -66,7 +66,6 @@ def player_header_font_px(app) -> int:
     return max(11, int(getattr(player_header_density(app), "header_font", 13) or 13))
 
 
-
 def set_header_layout(layout: object | None) -> str:
     global _current_layout
     _current_layout = normalize_header_layout(layout)
@@ -980,9 +979,25 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     choose = getattr(app, "btn_portable_add_clip", None)
     if _widget_alive(choose) and hasattr(choose, "setFixedHeight"):
         choose.setFixedHeight(chip)
+        choose.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     pipe = getattr(app, "portable_add_clip_divider", None)
     if _widget_alive(pipe) and hasattr(pipe, "setFixedHeight"):
         pipe.setFixedHeight(max(18, chip - 8))
+
+    # + Queue / In queue — Fixed height only (content width; no reserved slot).
+    for name in ("btn_portable_add_to_queue", "btn_portable_in_queue"):
+        qbtn = getattr(app, name, None)
+        if _widget_alive(qbtn):
+            qbtn.setFixedHeight(chip)
+            qbtn.setMinimumWidth(0)
+            qbtn.setMaximumWidth(16777215)
+            qbtn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    status_host = getattr(app, "player_header_status", None)
+    if _widget_alive(status_host):
+        status_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
 
     # Status chips (Healthy / Preview) pick up pad + min height on next refresh;
     # store so callers can read without importing density.
