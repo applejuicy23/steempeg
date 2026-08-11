@@ -29,6 +29,17 @@ from steempeg.ui.icon_shape import (
     normalize_icon_shape,
     set_icon_shape,
 )
+from steempeg.ui.clip_card_style import (
+    CARD_STYLE_DEFAULT,
+    CARD_STYLE_LABELS,
+    CLIP_CARD_STYLE_REV_CURRENT,
+    KEY_CLIP_CARD_STYLE,
+    KEY_CLIP_CARD_STYLE_REV,
+    get_clip_card_style,
+    migrate_clip_card_style_in_settings,
+    normalize_clip_card_style,
+    set_clip_card_style,
+)
 from steempeg.ui.player_header_layout import (
     HEADER_LAYOUT_DEFAULT,
     HEADER_LAYOUT_LABELS,
@@ -421,6 +432,41 @@ class SettingsDialog(SteempegDialog):
         self._icon_shape_preview_timer.setInterval(200)
         self._icon_shape_preview_timer.timeout.connect(self._apply_icon_shape_preview)
         self._combo_icon_shape.currentIndexChanged.connect(self._preview_icon_shape)
+
+        v.addWidget(self._section("Library cards"))
+        card_row = QHBoxLayout()
+        card_row.setSpacing(8)
+        card_lbl = QLabel("ClipCard style")
+        card_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_clip_card_style = QComboBox()
+        self._combo_clip_card_style.setStyleSheet(_COMBO)
+        for value, label in CARD_STYLE_LABELS:
+            self._combo_clip_card_style.addItem(label, value)
+        migrate_clip_card_style_in_settings(settings)
+        cur_card = normalize_clip_card_style(
+            settings.get(KEY_CLIP_CARD_STYLE, get_clip_card_style())
+        )
+        self._committed_clip_card_style = cur_card
+        csidx = self._combo_clip_card_style.findData(cur_card)
+        self._combo_clip_card_style.setCurrentIndex(max(0, csidx))
+        card_row.addWidget(card_lbl)
+        card_row.addWidget(self._combo_clip_card_style, 1)
+        v.addLayout(card_row)
+        v.addWidget(
+            self._hint(
+                "SteempegUI (default: shelf — flat top on first row, flat bottom on last; "
+                "middle rows fully round) · Square (square top, round bottom on every card) · "
+                "Round (round top and bottom everywhere). "
+                "Applies to Clips Manager, Rendered videos, and Choose a Clip. "
+                "Combo previews live; Save persists. Cancel restores "
+                "the last saved style."
+            )
+        )
+        self._clip_card_style_preview_timer = QTimer(self)
+        self._clip_card_style_preview_timer.setSingleShot(True)
+        self._clip_card_style_preview_timer.setInterval(200)
+        self._clip_card_style_preview_timer.timeout.connect(self._apply_clip_card_style_preview)
+        self._combo_clip_card_style.currentIndexChanged.connect(self._preview_clip_card_style)
 
         v.addWidget(self._section("Player header"))
         header_row = QHBoxLayout()
@@ -1066,6 +1112,26 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Icon shape refresh failed for %s", shape)
 
+    def _preview_clip_card_style(self, *_args) -> None:
+        self._clip_card_style_preview_timer.start()
+
+    def _apply_clip_card_style_preview(self) -> None:
+        import logging
+
+        style = normalize_clip_card_style(self._combo_clip_card_style.currentData())
+        set_clip_card_style(style)
+        logging.info("ClipCard style preview → %s", style)
+        self._refresh_clip_card_styles(style)
+
+    def _refresh_clip_card_styles(self, style: str) -> None:
+        if hasattr(self._app, "refresh_clip_card_styles"):
+            try:
+                self._app.refresh_clip_card_styles(style)
+            except Exception:
+                import logging
+
+                logging.exception("ClipCard style refresh failed for %s", style)
+
     def _preview_header_layout(self, *_args) -> None:
         self._header_layout_preview_timer.start()
 
@@ -1103,6 +1169,23 @@ class SettingsDialog(SteempegDialog):
         logging.info("Icon shape cancelled → restored %s", committed)
         self._refresh_icon_shapes(committed)
 
+    def _restore_clip_card_style_on_cancel(self) -> None:
+        """Undo live ClipCard style preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_clip_card_style_preview_timer", None) is not None:
+            self._clip_card_style_preview_timer.stop()
+        committed = normalize_clip_card_style(
+            getattr(self, "_committed_clip_card_style", CARD_STYLE_DEFAULT)
+        )
+        live = get_clip_card_style()
+        combo = normalize_clip_card_style(self._combo_clip_card_style.currentData())
+        if live == committed and combo == committed:
+            return
+        set_clip_card_style(committed)
+        logging.info("ClipCard style cancelled → restored %s", committed)
+        self._refresh_clip_card_styles(committed)
+
     def _restore_header_layout_on_cancel(self) -> None:
         """Undo live header-layout preview that was never Saved."""
         import logging
@@ -1122,6 +1205,7 @@ class SettingsDialog(SteempegDialog):
 
     def reject(self) -> None:
         self._restore_icon_shape_on_cancel()
+        self._restore_clip_card_style_on_cancel()
         self._restore_header_layout_on_cancel()
         super().reject()
 
@@ -1177,6 +1261,16 @@ class SettingsDialog(SteempegDialog):
         self._committed_icon_shape = shape
         logging.info("Icon shape applied → %s (settings.json)", shape)
         self._refresh_icon_shapes(shape)
+
+        if getattr(self, "_clip_card_style_preview_timer", None) is not None:
+            self._clip_card_style_preview_timer.stop()
+        card_style = normalize_clip_card_style(self._combo_clip_card_style.currentData())
+        self._save_setting(KEY_CLIP_CARD_STYLE, card_style)
+        self._save_setting(KEY_CLIP_CARD_STYLE_REV, CLIP_CARD_STYLE_REV_CURRENT)
+        set_clip_card_style(card_style)
+        self._committed_clip_card_style = card_style
+        logging.info("ClipCard style applied → %s (settings.json)", card_style)
+        self._refresh_clip_card_styles(card_style)
 
         if getattr(self, "_header_layout_preview_timer", None) is not None:
             self._header_layout_preview_timer.stop()
