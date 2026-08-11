@@ -761,6 +761,25 @@ class RenderedLibraryMixin:
             except Exception:
                 pass
 
+        # Like a Portable: clip select / mode sync can leave a tall bottom pane
+        # (inflated dash height or unlocked glue). Re-pin buttons and re-glue.
+        if (
+            show_bottom
+            and portable_like
+            and not immersive
+            and not getattr(self, "_portable_like_dash_closed", False)
+        ):
+            if hasattr(self, "_pin_dash_queue_header_buttons"):
+                try:
+                    self._pin_dash_queue_header_buttons()
+                except Exception:
+                    pass
+            if hasattr(self, "_glue_portable_like_dash_open"):
+                try:
+                    self._glue_portable_like_dash_open()
+                except Exception:
+                    pass
+
     def _is_previewing_rendered_media(self) -> bool:
         if getattr(self, "_rendered_media_path", None):
             return True
@@ -2390,6 +2409,8 @@ class RenderedLibraryMixin:
         for row in range(self.table_rendered.rowCount()):
             self._append_rendered_grid_card_for_row(row)
         self._sync_rendered_grid_from_table()
+        if hasattr(self, "sync_clip_card_edge_roles"):
+            QTimer.singleShot(0, self.sync_clip_card_edge_roles)
 
     def _sync_rendered_grid_card_visuals(self) -> None:
         """Paint selection border on every selected rendered row."""
