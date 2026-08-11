@@ -314,7 +314,7 @@ def notify_export_folder_fallback(
             logging.exception("Export-folder fallback dialog failed")
     if hasattr(app, "set_status"):
         try:
-            app.set_status("Export folder unavailable — using default rendered_videos")
+            app.set_status("Export folder unavailable, using default rendered_videos")
         except Exception:
             pass
 
@@ -451,9 +451,9 @@ DEFAULT_DATE_FORMAT = DATE_FMT_SYSTEM
 
 DATE_FORMAT_LABELS: tuple[tuple[str, str], ...] = (
     (DATE_FMT_SYSTEM, "System locale (e.g. 11 May 2026)"),
-    (DATE_FMT_US, "US — 12/03/01"),
-    (DATE_FMT_EU, "EU — 29.12.2001"),
-    (DATE_FMT_ISO, "ISO — 2000/12/22"),
+    (DATE_FMT_US, "US, 12/03/01"),
+    (DATE_FMT_EU, "EU, 29.12.2001"),
+    (DATE_FMT_ISO, "ISO, 2000/12/22"),
 )
 
 CLOCK_AUTO = "auto"
@@ -583,9 +583,9 @@ SCAN_CACHE = "cache"
 DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_QUICK
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
-    (SCAN_QUICK, "Quick — folders + cached health"),
-    (SCAN_FULL, "Full — folders + ffprobe health"),
-    (SCAN_CACHE, "Skip — instant last session"),
+    (SCAN_QUICK, "Quick, folders + cached health"),
+    (SCAN_FULL, "Full, folders + ffprobe health"),
+    (SCAN_CACHE, "Skip, instant last session"),
 )
 
 
