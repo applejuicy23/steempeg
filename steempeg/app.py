@@ -4223,11 +4223,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             icon.setFixedSize(icon_sz, icon_sz)
         dot = getattr(self, "status_dot", None)
         if dot is not None:
-            dot_sz = 8 if dense.compact else 12
-            dot.setFixedSize(dot_sz, dot_sz)
-            dot.setStyleSheet(
-                f"background-color: {status_color}; border-radius: {dot_sz // 2}px;"
-            )
+            if getattr(self, "_update_check_busy", False) and hasattr(
+                self, "_paint_status_dot_update_spin"
+            ):
+                self._paint_status_dot_update_spin(
+                    getattr(self, "_status_indicator_color", "#a871ff")
+                )
+            elif (
+                getattr(self, "_clips_scan_active", False)
+                or getattr(self, "_rendered_scan_active", False)
+            ) and hasattr(self, "_paint_status_dot_loading_wave"):
+                self._paint_status_dot_loading_wave(
+                    getattr(self, "_status_indicator_color", "#a871ff")
+                )
+            else:
+                dot_sz = 8 if dense.compact else 12
+                dot.setFixedSize(dot_sz, dot_sz)
+                dot.setStyleSheet(
+                    f"background-color: {status_color}; border-radius: {dot_sz // 2}px;"
+                )
 
         pad = "1px 8px" if dense.compact else "6px 14px"
         radius = max(8, dense.dash_btn_h // 2)
