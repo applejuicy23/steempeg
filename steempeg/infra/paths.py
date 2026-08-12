@@ -2,7 +2,9 @@
 
 No Qt in here.
 """
+import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -82,24 +84,98 @@ def display_path(path: str) -> str:
     return path
 
 
-def _spawn_detached(cmd: list[str]) -> None:
+def _linux_desktop_env() -> dict[str, str]:
+    """Best-effort session env for ``xdg-open`` / ``kde-open`` on Linux.
+
+    Steempeg is sometimes launched without ``DBUS_SESSION_BUS_ADDRESS`` or
+    ``XDG_RUNTIME_DIR`` (Steam shortcut, terminal, distrobox). KDE helpers need
+    those even when Qt itself already connected to the display.
+    """
+    env = os.environ.copy()
+    try:
+        uid = os.getuid()
+    except AttributeError:
+        return env
+
+    runtime = (env.get("XDG_RUNTIME_DIR") or "").strip()
+    if not runtime or not os.path.isdir(runtime):
+        candidate = f"/run/user/{uid}"
+        if os.path.isdir(candidate):
+            env["XDG_RUNTIME_DIR"] = candidate
+            runtime = candidate
+
+    if runtime and not (env.get("DBUS_SESSION_BUS_ADDRESS") or "").strip():
+        bus = os.path.join(runtime, "bus")
+        if os.path.exists(bus):
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+
+    return env
+
+
+def _linux_open_commands(path: str) -> list[list[str]]:
+    """Ordered desktop open helpers for ``path`` (Linux only)."""
+    norm = path
+    desktop = (
+        os.environ.get("XDG_CURRENT_DESKTOP")
+        or os.environ.get("XDG_SESSION_DESKTOP")
+        or os.environ.get("DESKTOP_SESSION")
+        or ""
+    ).lower()
+    kde = "kde" in desktop or "plasma" in desktop
+
+    ordered: list[str] = []
+    if kde:
+        ordered.extend(["kde-open5", "kde-open"])
+    ordered.append("xdg-open")
+    if not kde:
+        ordered.extend(["kde-open5", "kde-open"])
+    ordered.append("gio")
+
+    cmds: list[list[str]] = []
+    seen: set[str] = set()
+    for name in ordered:
+        if name in seen:
+            continue
+        seen.add(name)
+        if name == "gio":
+            if shutil.which("gio") is not None:
+                cmds.append(["gio", "open", norm])
+        elif shutil.which(name) is not None:
+            cmds.append([name, norm])
+    return cmds
+
+
+def _spawn_detached(
+    cmd: list[str],
+    *,
+    new_session: bool | None = None,
+    env: dict[str, str] | None = None,
+) -> None:
     """Start ``cmd`` without blocking the Qt UI thread.
 
     Linux ``xdg-open`` / some file managers wait until the helper exits if launched
     via ``subprocess.run``, which freezes Steempeg after «Open file» / Play video.
+
+    For desktop open/reveal helpers, keep ``new_session=False`` so the child stays
+    on the user's DBus/display session (KDE's ``kde-open`` aborts when detached).
     """
     kwargs: dict = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "stdin": subprocess.DEVNULL,
+        "close_fds": True,
     }
-    if sys.platform != "win32":
-        kwargs["start_new_session"] = True
-    else:
+    if env is not None:
+        kwargs["env"] = env
+    if sys.platform == "win32":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — don't wait on the child.
         kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x00000008) | getattr(
             subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
         )
+    elif new_session if new_session is not None else False:
+        # Opt-in only (updates / long-lived helpers). Default False on Linux so
+        # xdg-open keeps session bus + DISPLAY.
+        kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)
 
 
@@ -107,15 +183,33 @@ def open_path_with_default_app(path: str) -> None:
     """Open a file or folder with the OS default handler."""
     if not path:
         return
-    norm = os.path.normpath(path)
+    norm = os.path.abspath(os.path.normpath(path))
     if not os.path.exists(norm):
+        logging.warning("Cannot open — path does not exist: %s", norm)
         return
     if sys.platform == "win32":
         os.startfile(norm)  # noqa: S606
     elif sys.platform == "darwin":
         _spawn_detached(["open", norm])
     else:
-        _spawn_detached(["xdg-open", norm])
+        env = _linux_desktop_env()
+        last_exc: Exception | None = None
+        for cmd in _linux_open_commands(norm):
+            try:
+                _spawn_detached(cmd, new_session=False, env=env)
+                logging.debug("Opened %s via %s", norm, cmd[0])
+                return
+            except OSError as exc:
+                last_exc = exc
+                logging.debug("Open helper %s failed for %s: %s", cmd[0], norm, exc)
+                continue
+        logging.warning(
+            "Could not open %s — no desktop helper succeeded (%s)",
+            norm,
+            last_exc or "no helpers installed",
+        )
+        if last_exc is not None:
+            raise last_exc
 
 
 def open_text_file(path: str) -> None:
@@ -194,17 +288,24 @@ def reveal_in_file_manager(path: str) -> None:
         elif sys.platform == "darwin":
             _spawn_detached(["open", "-R", norm])
         else:
-            for cmd in (
+            env = _linux_desktop_env()
+            # Only spawn helpers that exist — Popen "success" on a missing binary
+            # raises, but a present binary that can't talk to the session used to
+            # look like success after start_new_session detached from DBus.
+            candidates = (
+                ["dolphin", "--select", norm],
                 ["nautilus", "--select", norm],
                 ["nemo", "--select", norm],
-                ["dolphin", "--select", norm],
                 ["thunar", "--select", norm],
                 ["pcmanfm", "--select", norm],
-            ):
+            )
+            for cmd in candidates:
+                if shutil.which(cmd[0]) is None:
+                    continue
                 try:
-                    _spawn_detached(cmd)
+                    _spawn_detached(cmd, new_session=False, env=env)
                     return
-                except FileNotFoundError:
+                except OSError:
                     continue
             open_in_file_manager(os.path.dirname(norm) if os.path.isfile(norm) else norm)
         return

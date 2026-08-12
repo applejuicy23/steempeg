@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.infra.paths import get_resource_path, reveal_in_file_manager
+from steempeg.infra.paths import (
+    get_resource_path,
+    open_path_with_default_app,
+    reveal_in_file_manager,
+)
 from steempeg.services import marker_prefs as mprefs
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_utils import apply_square_icon
@@ -1170,7 +1174,7 @@ class MarkerSettingsDialog(SteempegDialog):
     def _open_selected_screenshot(self) -> None:
         path = getattr(self, "_shot_file_path", None)
         if path and os.path.isfile(path):
-            reveal_in_file_manager(path)
+            open_path_with_default_app(path)
 
     def _open_selected_screenshot_folder(self) -> None:
         path = getattr(self, "_shot_file_path", None)

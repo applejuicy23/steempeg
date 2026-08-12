@@ -142,8 +142,10 @@ class PlayerMixin:
     def _ensure_linux_mpv_vo(self) -> bool:
         """Create libmpv on Linux at first play (never at app startup).
 
-        Prefer ``wid`` embed + xv/x11 (works on Bazzite/NVIDIA with Homebrew Mesa).
-        ``vo=gpu`` via brew EGL falls to llvmpipe and often paints black.
+        Prefer ``wid`` embed + ``vo=gpu`` with ``gpu-context=x11egl`` when the
+        loaded libmpv talks to a real GPU (system NVIDIA/Mesa). Homebrew-linked
+        libmpv pulls brew Mesa → llvmpipe / black embed, so fall back to ``x11``
+        then ``xv`` there. ``vo=xv`` is last resort — mpv itself warns it looks bad.
         Set ``STEEMPEG_MPV_EXTERNAL=1`` to force a separate mpv window instead.
         """
         if sys.platform == "win32":
@@ -165,32 +167,51 @@ class PlayerMixin:
         log_path = getattr(self, "current_mpv_log_file", None) or ""
         external = os.environ.get("STEEMPEG_MPV_EXTERNAL", "0") == "1"
 
-        def _brew_mesa() -> bool:
-            for lib in (
-                "/home/linuxbrew/.linuxbrew/lib/libmpv.so",
-                os.path.expanduser("~/.linuxbrew/lib/libmpv.so"),
+        def _active_libmpv_path() -> str | None:
+            cand = (os.environ.get("MPV_LIBRARY_PATH") or "").strip()
+            if cand and os.path.isfile(cand):
+                return os.path.realpath(cand)
+            try:
+                from steempeg.infra.libmpv_bootstrap import find_bundled_libmpv
+
+                bundled = find_bundled_libmpv()
+                if bundled:
+                    return bundled
+            except Exception:
+                pass
+            for path in (
+                "/usr/lib64/libmpv.so.2",
+                "/usr/lib/libmpv.so.2",
+                "/usr/lib/x86_64-linux-gnu/libmpv.so.2",
             ):
-                if not os.path.isfile(lib):
-                    continue
-                try:
-                    import subprocess
+                if os.path.isfile(path):
+                    return os.path.realpath(path)
+            return None
 
-                    out = subprocess.check_output(
-                        ["ldd", lib], text=True, stderr=subprocess.DEVNULL
-                    )
-                except (OSError, subprocess.CalledProcessError):
-                    return "linuxbrew" in lib
-                return "linuxbrew" in out and "libEGL" in out
-            return False
+        def _lib_uses_brew_mesa(lib: str | None) -> bool:
+            """True when *lib* resolves EGL/gallium via Homebrew (llvmpipe on NVIDIA)."""
+            if not lib:
+                return False
+            try:
+                out = subprocess.check_output(
+                    ["ldd", lib], text=True, stderr=subprocess.DEVNULL
+                )
+            except (OSError, subprocess.CalledProcessError):
+                return "linuxbrew" in lib
+            return "linuxbrew" in out and (
+                "libEGL" in out or "libgallium" in out or "mesa" in out.lower()
+            )
 
+        brew_mesa = _lib_uses_brew_mesa(_active_libmpv_path())
         if env_vo:
             vo_attempts = [env_vo]
         elif soft:
             vo_attempts = ["x11", "xv", "gpu", "null"]
-        elif _brew_mesa():
-            vo_attempts = ["xv", "x11", "gpu"]
+        elif brew_mesa:
+            # gpu → brew Mesa llvmpipe (black / melted CPU). Prefer x11 (cleaner) over xv.
+            vo_attempts = ["x11", "xv"]
         else:
-            vo_attempts = ["gpu", "xv", "x11"]
+            vo_attempts = ["gpu", "x11", "xv"]
 
         if getattr(self, "player", None) is None:
             wid = None
@@ -217,12 +238,16 @@ class PlayerMixin:
 
             for mode in modes:
                 for vo in vo_attempts:
+                    # Legacy VOs + hwdec often paint garbage on XWayland; keep sw decode.
+                    hwdec = current_hwdec_preview()
+                    if vo in ("xv", "x11") and hwdec != "no":
+                        hwdec = "no"
                     opts = {
                         "panscan": 1.0,
                         "keepaspect": "no" if mode == "embed" else "yes",
                         "keep_open": "yes",
                         "loglevel": current_mpv_loglevel(),
-                        "hwdec": current_hwdec_preview(),
+                        "hwdec": hwdec,
                         "ao": ao,
                         "osc": "no",
                         "input_default_bindings": "no",
@@ -230,6 +255,12 @@ class PlayerMixin:
                         "load_scripts": "no",
                         "vo": vo,
                     }
+                    # wid= embed under XWayland: force x11egl so gpu does not pick
+                    # a Wayland context that paints beside the Qt window.
+                    if vo == "gpu":
+                        opts["gpu_context"] = (
+                            os.environ.get("STEEMPEG_GPU_CONTEXT") or "x11egl"
+                        ).strip() or "x11egl"
                     if log_path:
                         opts["log_file"] = log_path
                     if mode == "embed":
@@ -239,7 +270,13 @@ class PlayerMixin:
                         opts["title"] = "Steempeg Player"
                     try:
                         self.player = _mpv.MPV(**opts)
-                        logging.info("Linux mpv created: vo=%s mode=%s", vo, mode)
+                        logging.info(
+                            "Linux mpv created: vo=%s mode=%s hwdec=%s brew_mesa=%s",
+                            vo,
+                            mode,
+                            hwdec,
+                            brew_mesa,
+                        )
                         last_exc = None
                         break
                     except Exception as exc:
@@ -1320,7 +1357,18 @@ class PlayerMixin:
             # restore to the old (small) normalGeometry which, with transitions disabled,
             # overrides the setGeometry done in enter_immersive_chrome. Applying it here
             # (after Qt processed the state change) makes the fullscreen size stick.
-            self.ui.setGeometry(self._immersive_screen_geometry())
+            # Linux: also re-assert WindowFullScreen — setGeometry alone is clamped to
+            # the KDE/GNOME work area (panel strip left uncovered).
+            geo = self._immersive_screen_geometry()
+            self.ui.setGeometry(geo)
+            if sys.platform != "win32":
+                try:
+                    if not (self.ui.windowState() & Qt.WindowState.WindowFullScreen):
+                        self.ui.showFullScreen()
+                    else:
+                        self.ui.setGeometry(geo)
+                except Exception:
+                    pass
             # Place the embed once, now that the fullscreen geometry is final.
             self._freeze_mpv_surface(False)
             self.ui.raise_()
@@ -3764,10 +3812,16 @@ class PlayerMixin:
     def _open_file_with_default_app(path: str) -> None:
         from steempeg.infra.paths import open_path_with_default_app
 
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
         try:
-            open_path_with_default_app(path)
+            # Linux: subprocess helpers with restored session env — not
+            # QDesktopServices.openUrl(), which often returns True without opening
+            # when DBus/XDG_RUNTIME_DIR are missing (Steam launch, Bazzite/KDE).
+            open_path_with_default_app(abs_path)
         except OSError as exc:
-            logging.error("Failed to open file %s: %s", path, exc)
+            logging.error("Failed to open file %s: %s", abs_path, exc)
 
     def _hide_screenshot_toast(self) -> None:
         """Hide the screenshot toast and drop its click-away filter."""

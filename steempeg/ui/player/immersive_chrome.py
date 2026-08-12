@@ -207,9 +207,12 @@ def enter_immersive_chrome(window, screen_geometry):
         return
 
     window._immersive_saved_flags = window.windowFlags()
+    # Linux/KDE: plain setGeometry(full monitor) is clamped to the work area
+    # (panel/taskbar stays uncovered) unless the window is in true fullscreen
+    # state. Frameless + showFullScreen asks the compositor for edge-to-edge.
     window.setWindowFlags(window.windowFlags() | Qt.WindowType.FramelessWindowHint)
     window.setGeometry(screen_geometry)
-    window.show()
+    window.showFullScreen()
     window._immersive_chrome_mode = 'qt'
 
 
@@ -258,11 +261,22 @@ def exit_immersive_chrome(window):
 
     if mode == 'qt':
         saved_flags = getattr(window, '_immersive_saved_flags', None)
+        # Leave Qt fullscreen before restoring flags/geometry, otherwise the WM
+        # keeps the fullscreen layer and ignores the windowed restore rect.
+        try:
+            if window.windowState() & Qt.WindowState.WindowFullScreen:
+                window.setWindowState(
+                    window.windowState() & ~Qt.WindowState.WindowFullScreen
+                )
+        except Exception:
+            pass
         if saved_flags is not None:
             window.setWindowFlags(saved_flags)
         if was_maximized:
             if saved_geometry is not None and saved_geometry.isValid():
                 window.setGeometry(saved_geometry)
+            # Linux skips showMaximized at startup (NVIDIA/XWayland freeze risk);
+            # immersive exit still restores maximized when we entered from that state.
             window.showMaximized()
         else:
             window.show()
