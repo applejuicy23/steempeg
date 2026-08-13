@@ -437,6 +437,49 @@ def stamp_last_update_check(app, *, ts: float | None = None) -> None:
     app.save_user_settings(KEY_LAST_UPDATE_CHECK_TS, float(time.time() if ts is None else ts))
 
 
+# ----- Update Center: Keep when updating -----
+
+KEY_UPDATE_KEEP_WHEN = "update_keep_when_updating"
+
+UPDATE_KEEP_VIDEOS = "videos"
+UPDATE_KEEP_SETTINGS = "settings"
+UPDATE_KEEP_RENDER_HISTORY = "render_history"
+UPDATE_KEEP_PRESETS = "presets"
+
+DEFAULT_UPDATE_KEEP_WHEN: dict[str, bool] = {
+    UPDATE_KEEP_VIDEOS: True,
+    UPDATE_KEEP_SETTINGS: True,
+    UPDATE_KEEP_RENDER_HISTORY: True,
+    UPDATE_KEEP_PRESETS: True,
+}
+
+
+def normalize_update_keep_when(value: object | None) -> dict[str, bool]:
+    """Normalize Keep when updating checkbox prefs (defaults all on)."""
+    out = dict(DEFAULT_UPDATE_KEEP_WHEN)
+    if not isinstance(value, dict):
+        return out
+    for key in DEFAULT_UPDATE_KEEP_WHEN:
+        if key in value:
+            out[key] = bool(value.get(key))
+    return out
+
+
+def load_update_keep_when(settings: dict | None) -> dict[str, bool]:
+    return normalize_update_keep_when(
+        (settings or {}).get(KEY_UPDATE_KEEP_WHEN)
+    )
+
+
+def save_update_keep_when(app, prefs: dict[str, bool] | None) -> None:
+    if not hasattr(app, "save_user_settings"):
+        return
+    app.save_user_settings(
+        KEY_UPDATE_KEEP_WHEN,
+        normalize_update_keep_when(prefs),
+    )
+
+
 # ----- Date / time / timezone display -----
 
 KEY_DATE_FORMAT = "date_format"
