@@ -99,7 +99,7 @@ def _library_scroll_views(host) -> list[QAbstractItemView]:
     ui = getattr(host, "ui", None)
     if ui is not None and hasattr(ui, "table_clips"):
         views.append(ui.table_clips)
-    for name in ("grid_clips", "table_rendered", "grid_rendered"):
+    for name in ("grid_clips", "table_rendered", "grid_rendered", "grid_screenshots"):
         widget = getattr(host, name, None)
         if widget is not None:
             views.append(widget)
