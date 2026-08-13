@@ -3416,9 +3416,22 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     )
                 restored_shots = False
                 if hasattr(self, "restore_screenshots_from_session_cache"):
-                    restored_shots = bool(
-                        self.restore_screenshots_from_session_cache()
-                    )
+                    # Defer past showMaximized — sync paint of a unified Steam
+                    # shelf (thousands of cards) blocked the window for minutes.
+                    def _restore_shots():
+                        nonlocal restored_shots
+                        restored_shots = bool(
+                            self.restore_screenshots_from_session_cache()
+                        )
+                        if (
+                            not restored_clips
+                            and restored_shots
+                            and hasattr(self, "update_status_indicator")
+                            and not getattr(self, "_startup_library_scan_active", False)
+                        ):
+                            self.update_status_indicator("Ready", "ready")
+
+                    QTimer.singleShot(300, _restore_shots)
                 # Clips restore clears startup + Ready itself when it succeeds.
                 if not restored_clips:
                     self._startup_library_scan_active = False
@@ -3440,9 +3453,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.scan_clips(fast=(mode != SCAN_FULL))
             elif hasattr(self, "scan_rendered_outputs"):
                 self.scan_rendered_outputs()
-            # Screenshots: seed from last session while clips/rendered scan runs.
+            # Screenshots: after show + processEvents settle (not singleShot(0)).
             if hasattr(self, "restore_screenshots_from_session_cache"):
-                self.restore_screenshots_from_session_cache()
+                QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
 
         # Skip: paint synchronously while the window is still hidden so the first
         # frame is already Ready (no post-show "Loading render history…").
@@ -4750,7 +4763,11 @@ def main():
         try:
             from PySide6.QtCore import QEventLoop
 
-            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            # Bound the pump — unbounded processEvents can drain screenshot/thumb
+            # timers for minutes before the window ever reaches "shown".
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
+            )
         except Exception:
             QApplication.processEvents()
 
@@ -4791,7 +4808,14 @@ def main():
         if hasattr(window, "apply_desktop_render_layout"):
             window.apply_desktop_render_layout()
         window._ensure_startup_queue_open()
-        QApplication.processEvents()
+        try:
+            from PySide6.QtCore import QEventLoop
+
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
+            )
+        except Exception:
+            QApplication.processEvents()
         # Geometry after maximize can still settle one tick later — re-claim
         # foreground after first paint (launcher / terminal may still hold focus).
         _bring_main_to_front()
