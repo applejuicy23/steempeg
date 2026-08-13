@@ -36,6 +36,75 @@ def steam_screenshots_dir(
     return os.path.join(root, "userdata", str(steam_id), "760", "remote", str(app_id), "screenshots")
 
 
+_STEAM_SHOT_EXTS = {".jpg", ".jpeg", ".png"}
+_APP_ID_DIR_RE = re.compile(r"^\d+$")
+
+
+def iter_steam_library_screenshots(
+    *,
+    steam_path: str | None = None,
+) -> List[dict]:
+    """Walk Steam userdata screenshots for the unified Screenshots shelf.
+
+    Yields dicts: ``path``, ``mtime``, ``steam_id``, ``app_id``.
+    Skips ``thumbnails`` subfolders. No network / game-name resolution.
+    """
+    root = os.path.normpath(steam_path or get_steam_path())
+    userdata = os.path.join(root, "userdata")
+    if not os.path.isdir(userdata):
+        return []
+
+    out: list[dict] = []
+    try:
+        steam_ids = os.listdir(userdata)
+    except OSError:
+        return []
+
+    for steam_id in steam_ids:
+        if not _STEAM_ID_RE.match(steam_id):
+            continue
+        remote = os.path.join(userdata, steam_id, "760", "remote")
+        if not os.path.isdir(remote):
+            continue
+        try:
+            app_dirs = os.listdir(remote)
+        except OSError:
+            continue
+        for app_id in app_dirs:
+            if not _APP_ID_DIR_RE.match(app_id):
+                continue
+            folder = os.path.join(remote, app_id, "screenshots")
+            if not os.path.isdir(folder):
+                continue
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                continue
+            for name in names:
+                # Steam keeps a thumbnails/ sibling — only take top-level images.
+                if name.lower() == "thumbnails":
+                    continue
+                path = os.path.join(folder, name)
+                if not os.path.isfile(path):
+                    continue
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in _STEAM_SHOT_EXTS:
+                    continue
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    mtime = 0.0
+                out.append(
+                    {
+                        "path": os.path.normpath(path),
+                        "mtime": float(mtime),
+                        "steam_id": steam_id,
+                        "app_id": app_id,
+                    }
+                )
+    return out
+
+
 def resolve_steam_id_for_clip(clip_path: str, library_roots: list[str] | None = None) -> str | None:
     """Best-effort Steam user id for a clip under Game Recording folders."""
     if clip_path:
