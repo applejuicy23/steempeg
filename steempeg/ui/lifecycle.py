@@ -274,18 +274,38 @@ class LifecycleMixin:
                 return True
 
         # Screenshots — photo tiles own click/open; kill IconMode rubber-band ghost.
+        # Placeholders (no ScreenshotPhoto yet) need click handling here.
         if hasattr(self, "grid_screenshots") and source == self.grid_screenshots.viewport():
+            if event.type() == QEvent.Type.Resize:
+                if hasattr(self, "_schedule_screenshots_viewport_refresh"):
+                    self._schedule_screenshots_viewport_refresh(50)
+                return False
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
+                    item = self.grid_screenshots.itemAt(event.position().toPoint())
+                    if item is not None and self.grid_screenshots.itemWidget(item) is None:
+                        if hasattr(self, "_materialize_screenshot_item"):
+                            self._materialize_screenshot_item(item)
                     if hasattr(self, "show_screenshots_grid_context_menu"):
                         self.show_screenshots_grid_context_menu(event.position().toPoint())
                     return True
                 if event.button() == Qt.LeftButton:
-                    # Empty space click: clear selection only (tiles handle their own LMB).
                     item = self.grid_screenshots.itemAt(event.position().toPoint())
                     if item is None:
                         if hasattr(self, "_clear_screenshots_selection_visual"):
                             self._clear_screenshots_selection_visual()
+                        return True
+                    if self.grid_screenshots.itemWidget(item) is None:
+                        # Bare placeholder: materialize, select, open (matches photo click).
+                        if hasattr(self, "_materialize_screenshot_item"):
+                            self._materialize_screenshot_item(item)
+                        if hasattr(self, "_screenshot_grid_select_item"):
+                            self._screenshot_grid_select_item(
+                                item, event, force_single=True
+                            )
+                        path = item.data(Qt.ItemDataRole.UserRole) or ""
+                        if path and hasattr(self, "_on_screenshot_open"):
+                            self._on_screenshot_open(str(path))
                         return True
             if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
                 return True
