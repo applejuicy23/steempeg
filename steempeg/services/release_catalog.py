@@ -378,8 +378,15 @@ def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
     """Single short line under release notes when a version is selected."""
     if entry.install_tier == InstallTier.NO_ZIP and entry.block_reason:
         return entry.block_reason
+    if entry.install_tier == InstallTier.BROKEN and entry.block_reason:
+        return entry.block_reason
     if entry.version_float <= 11.0:
-        return "Early Development. Bare .exe only. Cannot install in-app."
+        return (
+            "Early Development. Bare .exe only. Cannot install in-app. "
+            "Minimum for in-app update is v12.1 (still risky)."
+        )
+    if entry.version_float < MIN_INSTALL_VERSION - 0.001:
+        return "Too old for in-app install. Minimum is v12.1, and even that era is risky."
     if entry.version_float >= current_version - 0.001:
         return None
     if versions_equal(entry.version_float, RECOMMENDED_INSTALL_VERSION):
@@ -387,7 +394,7 @@ def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
     if versions_equal(entry.version_float, 12.1):
         return "Last early zip build. No longer supported. Not recommended to download."
     if MIN_INSTALL_VERSION < entry.version_float < RECOMMENDED_INSTALL_VERSION:
-        return "Early zip updater era. Install may be unstable."
+        return "Risky VLC-era build (v12.1 to v16). Install may be unstable."
     if entry.version_float >= RECOMMENDED_INSTALL_VERSION:
         return GENERIC_DOWNGRADE_NOTICE
     if entry.version_float < MIN_INSTALL_VERSION:
@@ -479,9 +486,9 @@ def jump_warnings(from_version: float, to_version: float) -> list[str]:
         if low < threshold <= high:
             warnings.append(message)
     if high < RECOMMENDED_INSTALL_VERSION and low >= MIN_INSTALL_VERSION:
-        warnings.append("Target is before v16 — early updater era; higher crash/incompatibility risk.")
+        warnings.append("Target is before v16: early updater era; higher crash/incompatibility risk.")
     if low < MIN_INSTALL_VERSION:
-        warnings.append("Crossing into pre-v12.1 territory — manual .exe era, not in-app install.")
+        warnings.append("Crossing into pre-v12.1 territory: manual .exe era, not in-app install.")
     return warnings
 
 
