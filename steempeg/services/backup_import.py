@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 from dataclasses import dataclass
+from typing import Mapping
 
 _log = logging.getLogger(__name__)
 
@@ -14,6 +15,12 @@ IMPORT_FOLDER_NAMES: tuple[str, ...] = (
     "Screenshots",
     "cache",
 )
+
+# Keep when updating → folder-level import map (best-effort first slice).
+# Settings / render history / presets live under cache/ or settings.json;
+# full selective migrate is TODO (file-level merge).
+_KEEP_VIDEO_FOLDERS: tuple[str, ...] = ("rendered_videos", "Screenshots")
+_KEEP_CACHE_FOLDER: str = "cache"
 
 
 @dataclass(frozen=True)
@@ -54,13 +61,44 @@ def _copy_tree_skip_existing(src: str, dst: str) -> tuple[int, int, list[str]]:
     return copied, skipped, errors
 
 
+def folders_for_keep_prefs(keep: Mapping[str, bool] | None) -> tuple[str, ...]:
+    """Map Update Center Keep when updating prefs to import folder names.
+
+    Videos → rendered_videos + Screenshots.
+    Settings / Render history / Presets → whole ``cache`` (best-effort; file-level TODO).
+    """
+    if keep is None:
+        return IMPORT_FOLDER_NAMES
+    folders: list[str] = []
+    if keep.get("videos", True):
+        folders.extend(_KEEP_VIDEO_FOLDERS)
+    # cache holds settings.json, render_queue.json, export-related prefs, etc.
+    if (
+        keep.get("settings", True)
+        or keep.get("render_history", True)
+        or keep.get("presets", True)
+    ):
+        folders.append(_KEEP_CACHE_FOLDER)
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in folders:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return tuple(out)
+
+
 def import_user_data_from_backup(
     backup_path: str,
     install_root: str,
     *,
-    folders: tuple[str, ...] = IMPORT_FOLDER_NAMES,
+    folders: tuple[str, ...] | None = None,
+    keep: Mapping[str, bool] | None = None,
 ) -> BackupImportResult:
     """Merge selected folders from a backup into the live install (skip existing)."""
+    if folders is None:
+        folders = folders_for_keep_prefs(keep) if keep is not None else IMPORT_FOLDER_NAMES
     if not backup_path or not os.path.isdir(backup_path):
         return BackupImportResult(0, 0, (), ("Backup folder not found.",))
     if not install_root or not os.path.isdir(install_root):
