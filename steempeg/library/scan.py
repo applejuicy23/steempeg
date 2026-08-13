@@ -12,7 +12,8 @@ from steempeg.core import games
 from steempeg.core.clip_identity import (
     dedupe_steam_session_folders,
     folder_has_video_chunks,
-    is_nested_same_session,
+    is_steam_package_internal_child,
+    nested_steam_session_keys,
     pick_best_session_folder,
     steam_session_key,
 )
@@ -146,17 +147,25 @@ def collect_clip_roots(base_folder: str) -> Set[str]:
         if os.path.basename(parent).lower() == "gamerecordings":
             base_folder = parent
 
+    base_name = os.path.basename(base_folder).lower()
+    base_is_steam_package = base_name.startswith(("clip_", "bg_", "fg_"))
+
     roots: Set[str] = set()
     for sub in ("clips", "video"):
         sub_path = os.path.join(base_folder, sub)
         if os.path.exists(sub_path):
             for item in os.listdir(sub_path):
                 full = os.path.join(sub_path, item)
-                if os.path.isdir(full):
-                    roots.add(full)
+                if not os.path.isdir(full):
+                    continue
+                # clip_…/video/fg_… is package payload, not a second library card.
+                if base_is_steam_package and is_steam_package_internal_child(
+                    base_name, item.lower()
+                ):
+                    continue
+                roots.add(full)
 
     if looks_like_single_clip_folder(base_folder):
-        base_name = os.path.basename(base_folder).lower()
         if base_name not in ("gamerecordings", "clips", "video"):
             if not is_steam_clip_container_folder(base_folder):
                 roots.add(base_folder)
@@ -165,8 +174,7 @@ def collect_clip_roots(base_folder: str) -> Set[str]:
             full = os.path.join(base_folder, item)
             if not os.path.isdir(full) or not item.lower().startswith(("clip_", "bg_", "fg_")):
                 continue
-            base_name = os.path.basename(base_folder).lower()
-            if base_name.startswith(("clip_", "bg_", "fg_")) and is_nested_same_session(
+            if base_is_steam_package and is_steam_package_internal_child(
                 base_name, item.lower()
             ):
                 continue
@@ -517,17 +525,24 @@ def run_library_scan(
     if known_paths is not None:
         known = {os.path.normpath(p) for p in known_paths}
         known_by_session: Dict[str, str] = {}
+
+        def _remember_session(key: str, path: str) -> None:
+            existing = known_by_session.get(key)
+            if existing is None:
+                known_by_session[key] = path
+                return
+            best = pick_best_session_folder([existing, path])
+            if best:
+                known_by_session[key] = os.path.normpath(best)
+
         for path in known:
             key = steam_session_key(os.path.basename(path))
             if not key:
                 continue
-            existing = known_by_session.get(key)
-            if existing is None:
-                known_by_session[key] = path
-            else:
-                best = pick_best_session_folder([existing, path])
-                if best:
-                    known_by_session[key] = os.path.normpath(best)
+            _remember_session(key, path)
+            # CLIP packages claim nested FG/BG stamps so Skip won't re-add them.
+            for nested_key in nested_steam_session_keys(path):
+                _remember_session(nested_key, path)
 
         filtered: List[str] = []
         for path in candidates:
