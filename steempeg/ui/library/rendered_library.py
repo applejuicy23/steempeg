@@ -80,7 +80,14 @@ _SCREENSHOT_HIDDEN_SORT = (
 )
 _SHOT_GAME_ROLE = Qt.ItemDataRole.UserRole + 1
 _SHOT_MTIME_ROLE = Qt.ItemDataRole.UserRole + 2
+_SHOT_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 3  # "steam" | "steempeg"
+_SHOT_APP_ID_ROLE = Qt.ItemDataRole.UserRole + 4
+_SHOT_THUMB_ROLE = Qt.ItemDataRole.UserRole + 5  # cached thumb path (may be unset)
 _SCREENSHOT_NAME_RE = re.compile(r"^(.+?)_\d+ms_\d{8}_\d{6}$", re.IGNORECASE)
+# Viewport lazy load: overscan past the visible rect, debounce after scroll stops.
+_SHOT_VIEWPORT_OVERSCAN_PX = 220
+_SHOT_SCROLL_IDLE_MS = 120
+_SHOT_MAX_LIVE_WIDGETS = 96
 
 _LIBRARY_TAB_INACTIVE = """
     QPushButton {
@@ -168,6 +175,7 @@ class RenderedLibraryMixin:
         self._library_tabs: dict[str, LibraryTabWidget] = {}
         self._rendered_filter_types: set[str] | None = None
         self._rendered_filter_games: set[str] | None = None
+        self._screenshots_filter_games: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
         self._saved_clips_selection_path = ""
@@ -188,6 +196,10 @@ class RenderedLibraryMixin:
         # Last sort index actually applied to each panel's data (skip rebuild on tab switch).
         self._sort_applied_by_panel: dict[str, int] = {}
         self._library_rendered_rows: list[ScannedRenderedFile] = []
+        # Screenshots viewport lazy-load (placeholders until visible).
+        self._screenshots_scroll_active = False
+        self._screenshots_viewport_timer: QTimer | None = None
+        self._screenshot_live_paths: set[str] = set()
 
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         from steempeg.ui.ui_density import COMFORT, tab_label
@@ -552,12 +564,18 @@ class RenderedLibraryMixin:
             self._clear_clips_selection_visual()
             self._clear_rendered_selection_visual()
             self._ensure_screenshots_widgets()
-            self.refresh_screenshots_library(force=False)
+            # Startup restore opens this tab before session-cache paint; a full
+            # Steam+Steempeg refresh here freezes the UI for minutes (8k+ cards).
+            if not getattr(self, "_restoring_library_state", False):
+                self.refresh_screenshots_library(force=False)
+            else:
+                self._schedule_screenshots_viewport_refresh(50)
         else:
             self._clear_rendered_selection_visual()
             self._clear_screenshots_selection_visual()
             if hasattr(self, "grid_clips"):
                 self.set_view_mode(self._clips_view_mode)
+        self._sync_library_view_toggle_for_mode()
         self._sync_sort_combo_for_panel()
         if old_mode != mode:
             self._restore_sort_for_panel(mode)
@@ -1352,6 +1370,16 @@ class RenderedLibraryMixin:
         self._screenshots_grid_anchor_index = -1
         self._screenshots_grid_select_in_progress = False
         self._last_opened_screenshot_path = ""
+        self._screenshot_live_paths = set()
+        self._screenshots_scroll_active = False
+        idle = QTimer(self.grid_screenshots)
+        idle.setSingleShot(True)
+        idle.setInterval(_SHOT_SCROLL_IDLE_MS)
+        idle.timeout.connect(self._screenshots_on_scroll_idle)
+        self._screenshots_viewport_timer = idle
+        bar = self.grid_screenshots.verticalScrollBar()
+        if bar is not None:
+            bar.valueChanged.connect(self._on_screenshots_scroll)
 
         lay.addWidget(self.grid_screenshots)
         if hasattr(self, "library_stack"):
@@ -1375,19 +1403,23 @@ class RenderedLibraryMixin:
         *,
         title: str = "",
         mtime: float = 0.0,
-    ) -> None:
+        source: str = "steempeg",
+    ) -> ScreenshotPhoto:
         label = (title or "").strip() or os.path.splitext(os.path.basename(path))[0]
-        subtitle = ""
+        source_key = (source or "steempeg").strip().lower()
+        source_label = "Steam" if source_key == "steam" else "Steempeg"
+        subtitle = source_label
         if mtime:
             try:
                 from datetime import datetime
 
                 dt = datetime.fromtimestamp(float(mtime))
-                subtitle = f"{format_clip_date(dt)}  {format_clip_time(dt)}"
+                when = f"{format_clip_date(dt)}  {format_clip_time(dt)}"
+                subtitle = f"{source_label} · {when}"
             except (OSError, OverflowError, ValueError, TypeError):
-                subtitle = ""
+                subtitle = source_label
         photo = ScreenshotPhoto(
-            thumb_path,
+            "",
             title=label,
             subtitle=subtitle,
             on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
@@ -1403,6 +1435,326 @@ class RenderedLibraryMixin:
             getattr(self, "_last_opened_screenshot_path", "") or ""
         )
         photo.set_opened(opened)
+        if thumb_path:
+            photo.set_thumbnail(thumb_path)
+        elif item.data(_SHOT_THUMB_ROLE):
+            photo.set_thumbnail(str(item.data(_SHOT_THUMB_ROLE)))
+        key = self._screenshot_path_key(path)
+        live = getattr(self, "_screenshot_live_paths", None)
+        if not isinstance(live, set):
+            live = set()
+            self._screenshot_live_paths = live
+        live.add(key)
+        return photo
+
+    def _dematerialize_screenshot_item(self, item: QListWidgetItem) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or item is None:
+            return
+        photo = grid.itemWidget(item)
+        if photo is None:
+            return
+        path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        grid.removeItemWidget(item)
+        photo.deleteLater()
+        if path:
+            live = getattr(self, "_screenshot_live_paths", None)
+            if isinstance(live, set):
+                live.discard(self._screenshot_path_key(path))
+
+    def _materialize_screenshot_item(
+        self, item: QListWidgetItem, *, load_thumb: bool = True
+    ) -> ScreenshotPhoto | None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or item is None:
+            return None
+        existing = grid.itemWidget(item)
+        if isinstance(existing, ScreenshotPhoto):
+            return existing
+        path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not path:
+            return None
+        try:
+            mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+        except (TypeError, ValueError):
+            mtime = 0.0
+        game = str(item.data(_SHOT_GAME_ROLE) or "") or _parse_screenshot_game_name(path)
+        source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+        thumb = str(item.data(_SHOT_THUMB_ROLE) or "")
+        photo = self._attach_screenshot_photo(
+            item, path, thumb, title=game, mtime=mtime, source=source
+        )
+        if load_thumb and not thumb:
+            self._queue_screenshot_thumb_for_item(item)
+        return photo
+
+    def _screenshot_path_key(self, path: str) -> str:
+        return os.path.normcase(os.path.normpath(str(path or "")))
+
+    def _rebuild_screenshot_path_index(self) -> None:
+        index: dict[str, QListWidgetItem] = {}
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is not None:
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                path = item.data(Qt.ItemDataRole.UserRole) or ""
+                if path:
+                    index[self._screenshot_path_key(str(path))] = item
+        self._screenshot_items_by_path = index
+
+    def _on_screenshots_scroll(self, *_args) -> None:
+        """While scrolling: pause thumb work; after idle: load visible tiles only."""
+        self._screenshots_scroll_active = True
+        # Don't flood decode work mid-fling.
+        self._pending_cached_screenshot_thumbs = []
+        self._screenshot_thumb_chunk_scheduled = False
+        worker = getattr(self, "_screenshot_thumb_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+        timer = getattr(self, "_screenshots_viewport_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def _screenshots_on_scroll_idle(self) -> None:
+        self._screenshots_scroll_active = False
+        self._screenshots_refresh_viewport()
+
+    def _schedule_screenshots_viewport_refresh(self, delay_ms: int = 0) -> None:
+        timer = getattr(self, "_screenshots_viewport_timer", None)
+        if timer is None:
+            QTimer.singleShot(max(0, int(delay_ms)), self._screenshots_refresh_viewport)
+            return
+        if delay_ms <= 0:
+            timer.start(1)
+        else:
+            timer.start(int(delay_ms))
+
+    def _screenshots_visible_items(self) -> list[QListWidgetItem]:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return []
+        vp = grid.viewport()
+        if vp is None:
+            return []
+        area = vp.rect().adjusted(
+            0, -_SHOT_VIEWPORT_OVERSCAN_PX, 0, _SHOT_VIEWPORT_OVERSCAN_PX
+        )
+        out: list[QListWidgetItem] = []
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            idx = grid.indexFromItem(item)
+            if not idx.isValid():
+                continue
+            if area.intersects(grid.visualRect(idx)):
+                out.append(item)
+        return out
+
+    def _screenshots_refresh_viewport(self) -> None:
+        """Materialize visible (+overscan) tiles; drop far widgets; load their thumbs."""
+        if getattr(self, "_screenshots_scroll_active", False):
+            return
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        if getattr(self, "_library_panel_mode", "") != "screenshots":
+            # Still allow refresh when restoring into an open tab; otherwise skip.
+            if not grid.isVisible():
+                return
+
+        # IconMode needs a layout pass before visualRect is trustworthy.
+        try:
+            grid.doItemsLayout()
+        except Exception:
+            pass
+
+        visible = self._screenshots_visible_items()
+        keep_keys: set[str] = set()
+        for item in visible:
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            if path:
+                keep_keys.add(self._screenshot_path_key(path))
+            self._materialize_screenshot_item(item, load_thumb=False)
+
+        # Dematerialize widgets outside the window (cap live QWidget count).
+        live = getattr(self, "_screenshot_live_paths", None)
+        if isinstance(live, set) and live:
+            index = getattr(self, "_screenshot_items_by_path", None)
+            if not isinstance(index, dict):
+                self._rebuild_screenshot_path_index()
+                index = getattr(self, "_screenshot_items_by_path", {}) or {}
+            for key in list(live):
+                if key in keep_keys:
+                    continue
+                item = index.get(key)
+                if item is not None and not item.isSelected():
+                    self._dematerialize_screenshot_item(item)
+
+        # Soft cap: if somehow too many live, drop oldest non-visible.
+        live = getattr(self, "_screenshot_live_paths", None)
+        if isinstance(live, set) and len(live) > _SHOT_MAX_LIVE_WIDGETS:
+            index = getattr(self, "_screenshot_items_by_path", {}) or {}
+            for key in list(live):
+                if len(live) <= _SHOT_MAX_LIVE_WIDGETS:
+                    break
+                if key in keep_keys:
+                    continue
+                item = index.get(key)
+                if item is not None:
+                    self._dematerialize_screenshot_item(item)
+
+        self._sync_screenshot_photo_visuals()
+        self._load_thumbs_for_visible_screenshots(visible)
+
+    def _queue_screenshot_thumb_for_item(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not path:
+            return
+        existing = str(item.data(_SHOT_THUMB_ROLE) or "")
+        if existing and os.path.isfile(existing):
+            self._apply_screenshot_thumb(item, existing)
+            return
+        cache_dir = getattr(self, "cache_dir", None) or ""
+        if not cache_dir:
+            return
+        try:
+            mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+        except (TypeError, ValueError):
+            mtime = 0.0
+        candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            item.setData(_SHOT_THUMB_ROLE, candidate)
+            self._schedule_cached_screenshot_thumbs([(path, candidate)])
+        else:
+            pending_miss = getattr(self, "_viewport_thumb_missing", None)
+            if not isinstance(pending_miss, list):
+                pending_miss = []
+                self._viewport_thumb_missing = pending_miss
+            pending_miss.append((path, mtime))
+
+    def _load_thumbs_for_visible_screenshots(
+        self, items: list[QListWidgetItem] | None = None
+    ) -> None:
+        if getattr(self, "_screenshots_scroll_active", False):
+            return
+        if items is None:
+            items = self._screenshots_visible_items()
+        self._viewport_thumb_missing = []
+        for item in items:
+            self._queue_screenshot_thumb_for_item(item)
+        missing = list(getattr(self, "_viewport_thumb_missing", None) or [])
+        self._viewport_thumb_missing = []
+        if missing:
+            # Replace any full-shelf backfill with viewport-only work.
+            self._schedule_screenshot_thumb_backfill(missing)
+
+    def _schedule_cached_screenshot_thumbs(
+        self, entries: list[tuple[str, str]]
+    ) -> None:
+        """Apply already-on-disk thumbs in small UI chunks (viewport paths only)."""
+        if not entries or getattr(self, "_screenshots_scroll_active", False):
+            return
+        pending = getattr(self, "_pending_cached_screenshot_thumbs", None)
+        if not isinstance(pending, list):
+            pending = []
+        pending.extend(entries)
+        self._pending_cached_screenshot_thumbs = pending
+        if getattr(self, "_screenshot_thumb_chunk_scheduled", False):
+            return
+        self._screenshot_thumb_chunk_scheduled = True
+        QTimer.singleShot(16, self._apply_cached_screenshot_thumbs_chunk)
+
+    def _apply_cached_screenshot_thumbs_chunk(self) -> None:
+        if getattr(self, "_screenshots_scroll_active", False):
+            self._pending_cached_screenshot_thumbs = []
+            self._screenshot_thumb_chunk_scheduled = False
+            return
+        pending = getattr(self, "_pending_cached_screenshot_thumbs", None) or []
+        if not pending:
+            self._screenshot_thumb_chunk_scheduled = False
+            return
+        chunk = pending[:64]
+        del pending[:64]
+        self._pending_cached_screenshot_thumbs = pending
+        for file_path, thumb_path in chunk:
+            self._apply_screenshot_thumb_by_path(file_path, thumb_path)
+        if pending:
+            QTimer.singleShot(16, self._apply_cached_screenshot_thumbs_chunk)
+        else:
+            self._screenshot_thumb_chunk_scheduled = False
+
+    def _apply_screenshot_thumb_by_path(self, file_path: str, thumb_path: str) -> None:
+        if not file_path or not thumb_path:
+            return
+        index = getattr(self, "_screenshot_items_by_path", None)
+        if not isinstance(index, dict):
+            self._rebuild_screenshot_path_index()
+            index = getattr(self, "_screenshot_items_by_path", {}) or {}
+        item = index.get(self._screenshot_path_key(file_path))
+        if item is not None:
+            item.setData(_SHOT_THUMB_ROLE, thumb_path)
+            self._apply_screenshot_thumb(item, thumb_path)
+
+    def _screenshot_game_name_for_app_id(self, app_id: str) -> str:
+        """Resolve display name from cache only (no network on UI thread)."""
+        aid = str(app_id or "").strip()
+        if not aid:
+            return "Unknown"
+        cache = getattr(self, "game_names_cache", None) or {}
+        name = cache.get(aid)
+        if name:
+            return str(name).strip() or f"App {aid}"
+        return f"App {aid}"
+
+    def _collect_steempeg_screenshot_rows(self, folder: str) -> list[dict]:
+        rows: list[dict] = []
+        if not folder or not os.path.isdir(folder):
+            return rows
+        try:
+            names = os.listdir(folder)
+        except OSError as exc:
+            logging.warning("Screenshots scan failed for %s: %s", folder, exc)
+            return rows
+        for name in names:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in _SCREENSHOT_EXTS:
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                mtime = 0.0
+            game = _parse_screenshot_game_name(path)
+            rows.append(
+                {
+                    "full_path": os.path.normpath(path),
+                    "mtime": float(mtime),
+                    "game_name": game,
+                    "source": "steempeg",
+                    "app_id": "",
+                }
+            )
+        return rows
+
+    def _collect_steam_screenshot_rows(self) -> list[dict]:
+        """Deprecated sync helper — prefer ``_start_steam_screenshots_scan``."""
+        # Kept for rare debug call sites; do not use on the UI startup path.
+        rows: list[dict] = []
+        try:
+            from steempeg.core.steam_screenshots import iter_steam_library_screenshots
+
+            entries = iter_steam_library_screenshots()
+        except Exception as exc:
+            logging.warning("Steam screenshots scan failed: %s", exc)
+            return rows
+        return self._steam_entries_to_rows(entries)
 
     def _sync_screenshot_photo_visuals(self) -> None:
         grid = getattr(self, "grid_screenshots", None)
@@ -1410,8 +1762,14 @@ class RenderedLibraryMixin:
             return
         selected = grid.selectedItems()
         opened_norm = os.path.normpath(getattr(self, "_last_opened_screenshot_path", "") or "")
-        for i in range(grid.count()):
-            item = grid.item(i)
+        # Only live (materialized) tiles — placeholders have no widget.
+        live = getattr(self, "_screenshot_live_paths", None)
+        index = getattr(self, "_screenshot_items_by_path", None)
+        if isinstance(live, set) and isinstance(index, dict) and live:
+            items_iter = (index.get(k) for k in live)
+        else:
+            items_iter = (grid.item(i) for i in range(grid.count()))
+        for item in items_iter:
             if item is None:
                 continue
             photo = grid.itemWidget(item)
@@ -1620,86 +1978,286 @@ class RenderedLibraryMixin:
         self._sync_library_footer_for_mode()
 
     def refresh_screenshots_library(self, *, force: bool = True) -> None:
-        """Rescan the Screenshots folder into the grid (does not touch Clips).
+        """Rescan Screenshots: Steempeg folder now, Steam userdata in background.
 
-        Paint is cheap: only probe local thumb cache on the UI thread. Full PNG
-        decode / thumb write runs on ``ScreenshotThumbBackfillWorker``.
+        Never walks Steam on the UI thread — that blocked launch for 8k+ shots.
+        Grid gets light placeholders; ``ScreenshotPhoto`` + thumbs only for the
+        visible viewport (scroll-driven).
         """
         self._ensure_screenshots_widgets()
         folder = self._screenshots_folder_path()
         if not force and getattr(self, "_screenshots_scanned_folder", None) == folder:
             if self.grid_screenshots.count() > 0:
+                self._apply_screenshots_filters()
                 self._update_library_count_label()
+                self._schedule_screenshots_viewport_refresh(0)
                 return
 
+        self._stop_steam_screenshots_scan()
         self._stop_screenshot_thumb_backfill()
+        self._pending_cached_screenshot_thumbs = []
+        self._screenshot_thumb_chunk_scheduled = False
+        self._screenshot_live_paths = set()
+        self._screenshots_viewport_primed = False
         self.grid_screenshots.clear()
-        files: list[tuple[str, float]] = []
-        if folder and os.path.isdir(folder):
-            try:
-                for name in os.listdir(folder):
-                    path = os.path.join(folder, name)
-                    if not os.path.isfile(path):
-                        continue
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext not in _SCREENSHOT_EXTS:
-                        continue
-                    try:
-                        mtime = os.path.getmtime(path)
-                    except OSError:
-                        mtime = 0.0
-                    files.append((path, mtime))
-            except OSError as exc:
-                logging.warning("Screenshots scan failed for %s: %s", folder, exc)
+        self._screenshot_items_by_path = {}
+        self._screenshot_seen_paths = set()
 
-        files.sort(key=lambda t: t[1], reverse=True)
-        cache_dir = getattr(self, "cache_dir", None) or ""
-        snapshot: list[dict] = []
-        missing_thumbs: list[tuple[str, float]] = []
-
-        self.grid_screenshots.setUpdatesEnabled(False)
-        try:
-            for path, mtime in files:
-                game = _parse_screenshot_game_name(path)
-                item = self._make_screenshot_item(path, mtime, game)
-                thumb = ""
-                if cache_dir:
-                    candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
-                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                        thumb = candidate
-                    else:
-                        missing_thumbs.append((path, mtime))
-                else:
-                    missing_thumbs.append((path, mtime))
-                self.grid_screenshots.addItem(item)
-                self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
-                snapshot.append(
-                    {"full_path": path, "mtime": mtime, "game_name": game}
-                )
-        finally:
-            self.grid_screenshots.setUpdatesEnabled(True)
+        steempeg_rows = self._collect_steempeg_screenshot_rows(folder)
+        steempeg_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
+        self._paint_screenshot_rows(steempeg_rows, rebuild_index=True)
 
         self._screenshots_scanned_folder = folder
-        self._persist_screenshots_library_snapshot(folder, snapshot)
-        if getattr(self, "_library_panel_mode", "") == "screenshots":
-            self.apply_screenshots_sorting()
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        if hasattr(self, "combo_sort"):
+            self._sort_applied_by_panel["screenshots"] = int(self.combo_sort.currentIndex())
+        self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
+        n_local = len(steempeg_rows)
         if hasattr(self, "set_status"):
-            n = len(files)
-            self.set_status(f"Screenshots: {n} file{'s' if n != 1 else ''}")
-        if missing_thumbs and cache_dir:
-            QTimer.singleShot(
-                50,
-                lambda: self._schedule_screenshot_thumb_backfill(missing_thumbs),
+            self.set_status(
+                f"Screenshots: {n_local} Steempeg · scanning Steam…"
             )
+        if steempeg_rows:
+            self._screenshots_viewport_primed = True
+            self._schedule_screenshots_viewport_refresh(0)
+        else:
+            self._screenshots_viewport_primed = False
+        self._start_steam_screenshots_scan()
+
+    def _paint_screenshot_rows(
+        self, rows: list[dict], *, rebuild_index: bool = False
+    ) -> None:
+        """Append light QListWidget placeholders (no ScreenshotPhoto / QPixmap)."""
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or not rows:
+            if rebuild_index:
+                self._rebuild_screenshot_path_index()
+            return
+        seen = getattr(self, "_screenshot_seen_paths", None)
+        if not isinstance(seen, set):
+            seen = set()
+            self._screenshot_seen_paths = seen
+        index = getattr(self, "_screenshot_items_by_path", None)
+        if not isinstance(index, dict):
+            index = {}
+            self._screenshot_items_by_path = index
+
+        grid.setUpdatesEnabled(False)
+        try:
+            for row in rows:
+                path = str(row.get("full_path") or "")
+                if not path:
+                    continue
+                key = self._screenshot_path_key(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    mtime = float(row.get("mtime") or 0.0)
+                except (TypeError, ValueError):
+                    mtime = 0.0
+                game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
+                source = str(row.get("source") or "steempeg")
+                app_id = str(row.get("app_id") or "")
+                item = self._make_screenshot_item(
+                    path, mtime, game, source=source, app_id=app_id
+                )
+                grid.addItem(item)
+                index[key] = item
+        finally:
+            grid.setUpdatesEnabled(True)
+        if rebuild_index:
+            self._rebuild_screenshot_path_index()
+
+    def _stop_steam_screenshots_scan(self) -> None:
+        worker = getattr(self, "_steam_screenshots_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(2000)
+        self._steam_screenshots_worker = None
+        self._pending_steam_screenshot_rows = []
+        self._steam_screenshot_chunk_scheduled = False
+
+    def _start_steam_screenshots_scan(self) -> None:
+        self._stop_steam_screenshots_scan()
+        from steempeg.ui.library.steam_screenshots_scan import SteamScreenshotsScanWorker
+
+        worker = SteamScreenshotsScanWorker(parent=getattr(self, "ui", None))
+        self._steam_screenshots_worker = worker
+        worker.batch_ready.connect(self._on_steam_screenshots_batch)
+        worker.scan_failed.connect(self._on_steam_screenshots_scan_failed)
+        worker.finished_ok.connect(self._on_steam_screenshots_scan_finished)
+        worker.start()
+
+    def _steam_entries_to_rows(self, entries: list[dict]) -> list[dict]:
+        rows: list[dict] = []
+        for entry in entries:
+            path = str(entry.get("path") or entry.get("full_path") or "")
+            if not path:
+                continue
+            app_id = str(entry.get("app_id") or "")
+            game = str(entry.get("game_name") or "") or self._screenshot_game_name_for_app_id(
+                app_id
+            )
+            try:
+                mtime = float(entry.get("mtime") or 0.0)
+            except (TypeError, ValueError):
+                mtime = 0.0
+            rows.append(
+                {
+                    "full_path": os.path.normpath(path),
+                    "mtime": mtime,
+                    "game_name": game,
+                    "source": "steam",
+                    "app_id": app_id,
+                }
+            )
+        return rows
+
+    def _on_steam_screenshots_batch(self, entries: list) -> None:
+        if not isinstance(entries, list) or not entries:
+            return
+        rows = self._steam_entries_to_rows(entries)
+        pending = getattr(self, "_pending_steam_screenshot_rows", None)
+        if not isinstance(pending, list):
+            pending = []
+            self._pending_steam_screenshot_rows = pending
+        pending.extend(rows)
+        if not getattr(self, "_steam_screenshot_chunk_scheduled", False):
+            self._steam_screenshot_chunk_scheduled = True
+            QTimer.singleShot(16, self._flush_steam_screenshot_chunk)
+
+    def _flush_steam_screenshot_chunk(self) -> None:
+        pending = getattr(self, "_pending_steam_screenshot_rows", None) or []
+        if not pending:
+            self._steam_screenshot_chunk_scheduled = False
+            # Cache-restore path (no live worker): persist once Steam cards are in.
+            if getattr(self, "_steam_screenshots_worker", None) is None:
+                QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
+            return
+        chunk = pending[:120]
+        del pending[:120]
+        self._pending_steam_screenshot_rows = pending
+        self._paint_screenshot_rows(chunk, rebuild_index=False)
+        # Don't refresh_viewport here — that would reset the idle timer every batch
+        # and starve visible tiles until all 8k placeholders land.
+        self._apply_screenshots_filters(refresh_viewport=False)
+        self._update_library_count_label()
+        if getattr(self, "_library_panel_mode", "") == "screenshots" and hasattr(
+            self, "set_status"
+        ):
+            n = self.grid_screenshots.count() if self.grid_screenshots is not None else 0
+            self.set_status(f"Screenshots: {n} · loading Steam…")
+        # First batch: fill what the user can already see. Later batches only
+        # extend the scroll range (placeholders); no rematerialize storm.
+        if not getattr(self, "_screenshots_viewport_primed", False):
+            self._screenshots_viewport_primed = True
+            self._schedule_screenshots_viewport_refresh(0)
+        if pending:
+            QTimer.singleShot(16, self._flush_steam_screenshot_chunk)
+        else:
+            self._steam_screenshot_chunk_scheduled = False
+            if getattr(self, "_steam_screenshots_worker", None) is None:
+                QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
+            else:
+                self._schedule_screenshots_viewport_refresh(50)
+
+    def _on_steam_screenshots_scan_failed(self, message: str) -> None:
+        logging.warning("Steam screenshots scan failed: %s", message)
+        if hasattr(self, "set_status"):
+            n = self.grid_screenshots.count() if getattr(self, "grid_screenshots", None) else 0
+            self.set_status(f"Screenshots: {n} (Steam scan failed)")
+
+    def _on_steam_screenshots_scan_finished(self, total: int) -> None:
+        self._steam_screenshots_worker = None
+        # Let in-flight UI chunks drain, then persist + final status.
+        QTimer.singleShot(50, lambda n=int(total or 0): self._finish_steam_screenshots_merge(n))
+
+    def _finish_steam_screenshots_merge(self, steam_total: int) -> None:
+        if getattr(self, "_steam_screenshot_chunk_scheduled", False) or (
+            getattr(self, "_pending_steam_screenshot_rows", None) or []
+        ):
+            QTimer.singleShot(
+                50, lambda n=steam_total: self._finish_steam_screenshots_merge(n)
+            )
+            return
+        if getattr(self, "_steam_screenshots_finish_busy", False):
+            return
+        self._steam_screenshots_finish_busy = True
+        try:
+            self._rebuild_screenshot_path_index()
+            folder = self._screenshots_folder_path()
+            self._screenshots_scanned_folder = folder
+            snapshot = self._collect_screenshot_grid_snapshot()
+            self._persist_screenshots_library_snapshot(folder, snapshot)
+            steem_n = sum(
+                1
+                for row in snapshot
+                if str(row.get("source") or "").lower() != "steam"
+            )
+            steam_n = len(snapshot) - steem_n
+            if hasattr(self, "set_status"):
+                self.set_status(
+                    f"Screenshots: {len(snapshot)} file"
+                    f"{'s' if len(snapshot) != 1 else ''}"
+                    f" ({steem_n} Steempeg · {steam_n} Steam)"
+                )
+            logging.info(
+                "Screenshots refresh done: total=%d steempeg=%d steam_emitted=%d",
+                len(snapshot),
+                steem_n,
+                steam_total,
+            )
+            self._schedule_screenshots_viewport_refresh(50)
+        finally:
+            self._steam_screenshots_finish_busy = False
+
+    def _collect_screenshot_grid_snapshot(self) -> list[dict]:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return []
+        out: list[dict] = []
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            if not path:
+                continue
+            try:
+                mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+            except (TypeError, ValueError):
+                mtime = 0.0
+            out.append(
+                {
+                    "full_path": path,
+                    "mtime": mtime,
+                    "game_name": str(item.data(_SHOT_GAME_ROLE) or ""),
+                    "source": str(item.data(_SHOT_SOURCE_ROLE) or "steempeg"),
+                    "app_id": str(item.data(_SHOT_APP_ID_ROLE) or ""),
+                }
+            )
+        return out
 
     def _make_screenshot_item(
-        self, path: str, mtime: float, game: str
+        self,
+        path: str,
+        mtime: float,
+        game: str,
+        *,
+        source: str = "steempeg",
+        app_id: str = "",
     ) -> QListWidgetItem:
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setData(_SHOT_MTIME_ROLE, float(mtime))
         item.setData(_SHOT_GAME_ROLE, game)
+        item.setData(_SHOT_SOURCE_ROLE, (source or "steempeg").strip().lower() or "steempeg")
+        item.setData(_SHOT_APP_ID_ROLE, str(app_id or ""))
         item.setToolTip(path)
         item.setSizeHint(QSize(176, 150))
         return item
@@ -1707,15 +2265,13 @@ class RenderedLibraryMixin:
     def _apply_screenshot_thumb(self, item: QListWidgetItem, thumb_path: str) -> None:
         if not item or not thumb_path:
             return
+        item.setData(_SHOT_THUMB_ROLE, thumb_path)
         grid = getattr(self, "grid_screenshots", None)
         photo = grid.itemWidget(item) if grid is not None else None
         if isinstance(photo, ScreenshotPhoto):
             photo.set_thumbnail(thumb_path)
             return
-        pix = QPixmap(thumb_path)
-        if pix.isNull():
-            return
-        item.setIcon(QIcon(pix))
+        # Placeholder still — thumb waits until the tile is materialized.
 
     def _persist_screenshots_library_snapshot(
         self, folder: str, files: list[dict]
@@ -1729,13 +2285,17 @@ class RenderedLibraryMixin:
         except Exception:
             logging.exception("Failed to save screenshots library snapshot")
 
-    def _stop_screenshot_thumb_backfill(self) -> None:
+    def _stop_screenshot_thumb_backfill(self, *, wait_ms: int = 3000) -> None:
         worker = getattr(self, "_screenshot_thumb_worker", None)
         if worker is None:
             return
         if worker.isRunning():
             worker.requestInterruption()
-            worker.wait(3000)
+            if wait_ms > 0:
+                worker.wait(int(wait_ms))
+        if worker.isRunning():
+            # Still busy — leave the handle; finished_batch clears it.
+            return
         self._screenshot_thumb_worker = None
 
     def _schedule_screenshot_thumb_backfill(
@@ -1744,38 +2304,64 @@ class RenderedLibraryMixin:
         cache_dir = getattr(self, "cache_dir", None)
         if not cache_dir or not entries:
             return
-        self._stop_screenshot_thumb_backfill()
+        if getattr(self, "_screenshots_scroll_active", False):
+            # Scroll in progress — retry after idle debounce fires viewport refresh.
+            return
+        # Dedupe + keep only paths that still matter (visible / about to show).
+        seen: set[str] = set()
+        trimmed: list[tuple[str, float]] = []
+        for path, mtime in entries:
+            key = self._screenshot_path_key(path)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            trimmed.append((path, mtime))
+        if not trimmed:
+            return
+        worker = getattr(self, "_screenshot_thumb_worker", None)
+        if worker is not None and worker.isRunning():
+            # Don't block the UI waiting on JPEG work — queue for when it exits.
+            worker.requestInterruption()
+            self._pending_viewport_backfill = trimmed
+            return
+        self._screenshot_thumb_worker = None
         from steempeg.ui.library.screenshot_thumb_backfill import (
             ScreenshotThumbBackfillWorker,
         )
 
-        worker = ScreenshotThumbBackfillWorker(
-            entries, cache_dir, parent=getattr(self, "ui", None)
+        new_worker = ScreenshotThumbBackfillWorker(
+            trimmed, cache_dir, parent=getattr(self, "ui", None)
         )
-        self._screenshot_thumb_worker = worker
-        worker.thumb_ready.connect(self._on_screenshot_thumb_ready)
-        worker.finished_batch.connect(self._on_screenshot_thumb_backfill_finished)
-        worker.start()
+        self._screenshot_thumb_worker = new_worker
+        new_worker.thumb_ready.connect(self._on_screenshot_thumb_ready)
+        new_worker.finished_batch.connect(self._on_screenshot_thumb_backfill_finished)
+        new_worker.start()
 
     def _on_screenshot_thumb_ready(self, file_path: str, thumb_path: str) -> None:
-        grid = getattr(self, "grid_screenshots", None)
-        if grid is None or not file_path or not thumb_path:
+        if getattr(self, "_screenshots_scroll_active", False):
+            # Stash path on the item for when scrolling stops; skip pixmap decode.
+            index = getattr(self, "_screenshot_items_by_path", None)
+            if isinstance(index, dict):
+                item = index.get(self._screenshot_path_key(file_path))
+                if item is not None:
+                    item.setData(_SHOT_THUMB_ROLE, thumb_path)
             return
-        norm = os.path.normpath(file_path)
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is None:
-                continue
-            path = item.data(Qt.ItemDataRole.UserRole)
-            if path and os.path.normpath(str(path)) == norm:
-                self._apply_screenshot_thumb(item, thumb_path)
-                break
+        self._apply_screenshot_thumb_by_path(file_path, thumb_path)
 
     def _on_screenshot_thumb_backfill_finished(self) -> None:
         self._screenshot_thumb_worker = None
+        pending = getattr(self, "_pending_viewport_backfill", None)
+        if pending:
+            self._pending_viewport_backfill = None
+            if not getattr(self, "_screenshots_scroll_active", False):
+                self._schedule_screenshot_thumb_backfill(list(pending))
 
     def restore_screenshots_from_session_cache(self) -> bool:
-        """Skip startup: paint last Screenshots session JSON — no folder walk."""
+        """Skip startup: paint last Screenshots session JSON — no folder walk.
+
+        Steempeg rows paint immediately; Steam rows from the snapshot append in
+        UI chunks so 8k+ cards never hitch the first frame.
+        """
         folder = self._screenshots_folder_path()
         rows = files_from_screenshots_library_cache(
             getattr(self, "cache_dir", None),
@@ -1785,55 +2371,56 @@ class RenderedLibraryMixin:
             return False
 
         self._ensure_screenshots_widgets()
+        self._stop_steam_screenshots_scan()
         self._stop_screenshot_thumb_backfill()
+        self._pending_cached_screenshot_thumbs = []
+        self._screenshot_thumb_chunk_scheduled = False
+        self._screenshot_live_paths = set()
+        self._screenshots_viewport_primed = False
         self.grid_screenshots.clear()
+        self._screenshot_items_by_path = {}
+        self._screenshot_seen_paths = set()
 
-        cache_dir = getattr(self, "cache_dir", None) or ""
-        missing_thumbs: list[tuple[str, float]] = []
+        steempeg_rows: list[dict] = []
+        steam_rows: list[dict] = []
+        for row in rows:
+            source = str(row.get("source") or "steempeg").strip().lower()
+            if source == "steam":
+                steam_rows.append(row)
+            else:
+                steempeg_rows.append(row)
 
-        self.grid_screenshots.setUpdatesEnabled(False)
-        try:
-            for row in rows:
-                path = str(row.get("full_path") or "")
-                if not path:
-                    continue
-                try:
-                    mtime = float(row.get("mtime") or 0.0)
-                except (TypeError, ValueError):
-                    mtime = 0.0
-                game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
-                item = self._make_screenshot_item(path, mtime, game)
-                thumb = ""
-                if cache_dir:
-                    candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
-                    if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                        thumb = candidate
-                    else:
-                        missing_thumbs.append((path, mtime))
-                self.grid_screenshots.addItem(item)
-                self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
-        finally:
-            self.grid_screenshots.setUpdatesEnabled(True)
+        steempeg_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
+        steam_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
+        self._paint_screenshot_rows(steempeg_rows, rebuild_index=True)
 
-        self._screenshots_scanned_folder = folder
+        self._screenshots_scanned_folder = folder if steam_rows else None
         if not hasattr(self, "_sort_applied_by_panel"):
             self._sort_applied_by_panel = {}
         if hasattr(self, "combo_sort"):
             self._sort_applied_by_panel["screenshots"] = int(
                 self.combo_sort.currentIndex()
             )
-        if getattr(self, "_library_panel_mode", "") == "screenshots":
-            self.apply_screenshots_sorting()
+        self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
         logging.info(
-            "Skip: painted %d screenshots from session snapshot", len(rows)
+            "Skip: painted %d Steempeg screenshots from session snapshot"
+            " (%d Steam queued)",
+            len(steempeg_rows),
+            len(steam_rows),
         )
-        if missing_thumbs and cache_dir:
-            # Quiet — may touch screenshot files later; UI already painted.
-            QTimer.singleShot(
-                800,
-                lambda: self._schedule_screenshot_thumb_backfill(missing_thumbs),
-            )
+        if steempeg_rows:
+            self._screenshots_viewport_primed = True
+            self._schedule_screenshots_viewport_refresh(0)
+        else:
+            self._screenshots_viewport_primed = False
+        if steam_rows:
+            self._pending_steam_screenshot_rows = list(steam_rows)
+            self._steam_screenshot_chunk_scheduled = True
+            # After show settles — chunked placeholder append, viewport fills tiles.
+            QTimer.singleShot(100, self._flush_steam_screenshot_chunk)
+        elif not steempeg_rows:
+            return False
         return True
 
     def apply_screenshots_sorting(self):
@@ -1841,7 +2428,13 @@ class RenderedLibraryMixin:
         if grid is None or not hasattr(self, "combo_sort"):
             return
         idx = self.combo_sort.currentIndex()
-        # Capture card payloads before takeItem drops the widgets.
+        # Drop live widgets first (while items are still in the grid).
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is not None:
+                self._dematerialize_screenshot_item(item)
+        self._screenshot_live_paths = set()
+
         payload: list[tuple[QListWidgetItem, str, float, str, str]] = []
         while grid.count():
             item = grid.takeItem(0)
@@ -1849,21 +2442,15 @@ class RenderedLibraryMixin:
                 continue
             path = str(item.data(Qt.ItemDataRole.UserRole) or "")
             game = str(item.data(_SHOT_GAME_ROLE) or "")
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
             try:
                 mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
             except (TypeError, ValueError):
                 mtime = 0.0
-            thumb = ""
-            cache_dir = getattr(self, "cache_dir", None) or ""
-            if cache_dir and path:
-                candidate = screenshot_thumb_path_nostat(cache_dir, path, mtime)
-                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
-                    thumb = candidate
-            payload.append((item, path, mtime, game, thumb))
+            payload.append((item, path, mtime, game, source))
 
         def game_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> str:
-            _item, _path, _mtime, game, _thumb = entry
-            return (game or "").lower()
+            return (entry[3] or "").lower()
 
         def date_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> float:
             return float(entry[2] or 0.0)
@@ -1876,10 +2463,71 @@ class RenderedLibraryMixin:
             # Default + Newest First (and other date-ish indices)
             payload.sort(key=date_key, reverse=True)
 
-        for item, path, mtime, game, thumb in payload:
-            grid.addItem(item)
-            self._attach_screenshot_photo(item, path, thumb, title=game, mtime=mtime)
-        self._sync_screenshot_photo_visuals()
+        grid.setUpdatesEnabled(False)
+        try:
+            for item, _path, _mtime, _game, _source in payload:
+                grid.addItem(item)
+        finally:
+            grid.setUpdatesEnabled(True)
+        self._rebuild_screenshot_path_index()
+        self._screenshot_seen_paths = set(
+            (getattr(self, "_screenshot_items_by_path", None) or {}).keys()
+        )
+        self._apply_screenshots_filters()
+        self._schedule_screenshots_viewport_refresh(0)
+
+    def _row_hidden_by_screenshots_filters(self, game_name: str) -> bool:
+        games = getattr(self, "_screenshots_filter_games", None)
+        if games is None:
+            return False
+        return (game_name or "Unknown") not in games
+
+    def _apply_screenshots_filters(self, *, refresh_viewport: bool = True) -> None:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            game = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
+            item.setHidden(self._row_hidden_by_screenshots_filters(game))
+        self._update_library_count_label()
+        if refresh_viewport:
+            self._schedule_screenshots_viewport_refresh(16)
+
+    def show_screenshots_filter_menu(self):
+        from steempeg.ui.library.screenshots_filters import ScreenshotsFilterMenu
+
+        if hasattr(self, "screenshots_filter_menu") and self.screenshots_filter_menu:
+            self.screenshots_filter_menu.deleteLater()
+
+        self.screenshots_filter_menu = ScreenshotsFilterMenu(self.ui)
+        self.screenshots_filter_menu.gather_statistics(self)
+        dense = (
+            self._filter_menu_density()
+            if hasattr(self, "_filter_menu_density")
+            else getattr(self, "_ui_density", None)
+        )
+        if dense is not None and hasattr(self.screenshots_filter_menu, "apply_density"):
+            self.screenshots_filter_menu.apply_density(dense)
+        self._position_screenshots_filter_menu()
+        self.screenshots_filter_menu.show()
+        QTimer.singleShot(0, self._position_screenshots_filter_menu)
+
+    def _position_screenshots_filter_menu(self):
+        menu = getattr(self, "screenshots_filter_menu", None)
+        if not menu or not hasattr(self, "btn_filter_pill"):
+            return
+        button_bottom_left = self.btn_filter_pill.mapToGlobal(
+            QPoint(0, self.btn_filter_pill.height())
+        )
+        x_shift = menu.width() - self.btn_filter_pill.width()
+        menu_y = button_bottom_left.y() + 5
+        menu.move(button_bottom_left.x() - x_shift + 10, menu_y)
+
+        floor_y = self._filter_popup_floor_y(menu_y) if hasattr(self, "_filter_popup_floor_y") else menu_y + 400
+        menu.set_content_max_height(max(160, floor_y - menu_y - 8))
 
     def _on_screenshot_item_activated(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -2464,8 +3112,16 @@ class RenderedLibraryMixin:
 
         if mode == "screenshots":
             grid = getattr(self, "grid_screenshots", None)
-            n = grid.count() if grid is not None else 0
-            self.lbl_clip_count.setText(f"• {n} Shots")
+            if grid is None:
+                self.lbl_clip_count.setText("• 0 Shots")
+                return
+            n = grid.count()
+            visible = sum(
+                1
+                for i in range(n)
+                if (item := grid.item(i)) is not None and not item.isHidden()
+            )
+            self.lbl_clip_count.setText(f"• {visible} Shots")
             return
 
         if not hasattr(self.ui, "table_clips"):
@@ -3051,6 +3707,10 @@ class RenderedLibraryMixin:
     # --- Hooks that branch when the rendered panel is active ---
 
     def set_view_mode(self, mode):
+        if getattr(self, "_library_panel_mode", "clips") == "screenshots":
+            # Screenshots is Grid-only (Emily 13 Aug) — ignore List.
+            self._sync_library_view_toggle_for_mode()
+            return
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             self._rendered_view_mode = mode
             self._apply_rendered_view_mode()
@@ -3060,6 +3720,32 @@ class RenderedLibraryMixin:
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.set_view_mode(self, mode)
         self._persist_library_ui_state()
+
+    def _sync_library_view_toggle_for_mode(self) -> None:
+        """Screenshots: hide List (Grid-only). Clips/Rendered: restore both."""
+        mode = getattr(self, "_library_panel_mode", "clips")
+        list_btn = getattr(self, "btn_view_list", None)
+        grid_btn = getattr(self, "btn_view_grid", None)
+        if list_btn is None or grid_btn is None:
+            return
+        if mode == "screenshots":
+            list_btn.hide()
+            grid_btn.show()
+            grid_btn.setStyleSheet(self.toggle_style_active)
+            list_btn.setStyleSheet(self.toggle_style_inactive)
+            return
+        list_btn.show()
+        grid_btn.show()
+        if mode == "rendered":
+            self._apply_rendered_view_mode()
+        else:
+            current = getattr(self, "_clips_view_mode", "grid")
+            if current == "list":
+                list_btn.setStyleSheet(self.toggle_style_active)
+                grid_btn.setStyleSheet(self.toggle_style_inactive)
+            else:
+                grid_btn.setStyleSheet(self.toggle_style_active)
+                list_btn.setStyleSheet(self.toggle_style_inactive)
 
     def apply_sorting(self):
         self._remember_current_panel_sort()
@@ -3092,7 +3778,7 @@ class RenderedLibraryMixin:
             self.show_rendered_filter_menu()
             return
         if mode == "screenshots":
-            # Screenshots tab: no filter sheet yet (v43 spike).
+            self.show_screenshots_filter_menu()
             return
         from steempeg.ui.library.controller import LibraryMixin
         LibraryMixin.show_filter_menu(self)
