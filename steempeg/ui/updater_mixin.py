@@ -160,6 +160,13 @@ class UpdaterMixin:
         exe_dir = get_install_root()
         backups = find_local_backups(exe_dir)
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        keep_prefs = None
+        try:
+            from steempeg.ui.settings_prefs import load_update_keep_when
+
+            keep_prefs = load_update_keep_when(self.load_user_settings() or {})
+        except Exception:
+            logging.exception("UPDATER: failed loading keep prefs")
 
         while True:
             dlg = UpdateCenterDialog(
@@ -167,6 +174,8 @@ class UpdaterMixin:
                 parent=self.ui,
                 bar_color=theme["title_bar"],
                 bg_color=theme["app_bg"],
+                settings_host=self,
+                keep_prefs=keep_prefs,
             )
             dlg.install_requested.connect(self._install_release_entry)
             dlg.restore_requested.connect(self._restore_local_backup)
@@ -220,6 +229,18 @@ class UpdaterMixin:
 
         keep_backup = dlg.choice == UpdateConfirmChoice.UPDATE_KEEP_BACKUP
 
+        from steempeg.ui.settings_prefs import load_update_keep_when
+
+        try:
+            keep = load_update_keep_when(self.load_user_settings() or {})
+        except Exception:
+            keep = {
+                "videos": True,
+                "settings": True,
+                "render_history": True,
+                "presets": True,
+            }
+
         job = UpdateJob(
             url=entry.zip_url,
             asset_name=entry.zip_name,
@@ -230,6 +251,10 @@ class UpdaterMixin:
             chrome_theme=getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME),
             expected_size=entry.zip_size,
             expected_sha256=entry.zip_sha256,
+            keep_videos=bool(keep.get("videos", True)),
+            keep_settings=bool(keep.get("settings", True)),
+            keep_render_history=bool(keep.get("render_history", True)),
+            keep_presets=bool(keep.get("presets", True)),
         )
         spawn_update_handler(job)
         QApplication.quit()
@@ -311,6 +336,7 @@ class UpdaterMixin:
         """Merge rendered_videos / Screenshots / cache from a backup into the live install."""
         from steempeg.services.backup_import import import_user_data_from_backup
         from steempeg.ui.message_dialog import steempeg_information
+        from steempeg.ui.settings_prefs import load_update_keep_when
 
         if not backup_path or not os.path.isdir(backup_path):
             steempeg_warning(
@@ -320,7 +346,13 @@ class UpdaterMixin:
             )
             return
 
-        result = import_user_data_from_backup(backup_path, get_install_root())
+        try:
+            keep = load_update_keep_when(self.load_user_settings() or {})
+        except Exception:
+            keep = None
+        result = import_user_data_from_backup(
+            backup_path, get_install_root(), keep=keep
+        )
         folders = ", ".join(result.folders_touched) or "none"
         msg = (
             f"Copied {result.copied_files} file(s), "
@@ -329,8 +361,9 @@ class UpdaterMixin:
         )
         if result.copied_files == 0 and result.skipped_existing == 0:
             msg = (
-                "Nothing to import — that backup has no rendered_videos, "
-                "Screenshots, or cache (they may already be in the live install)."
+                "Nothing to import. That backup has no matching videos, "
+                "Screenshots, or cache for the selected Keep when updating options "
+                "(they may already be in the live install)."
             )
         if result.errors:
             msg += f"\n\n{len(result.errors)} error(s)."
