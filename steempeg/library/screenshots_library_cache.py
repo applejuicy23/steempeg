@@ -2,6 +2,8 @@
 
 UI snapshot only — Skip restores rows as-is; Refresh does a real folder walk.
 Thumbs live under ``cache/screenshot_thumbs/`` so paint never decodes full PNGs.
+
+v2: unified Steam + Steempeg shelf (``source``, ``app_id`` on rows).
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from typing import Any
 from steempeg.infra import cache as json_cache
 
 CACHE_FILENAME = "screenshots_library_cache.json"
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 THUMB_DIR = "screenshot_thumbs"
 # ~2× the on-screen photo well so HiDPI + Smooth scale stay sharp.
 THUMB_MAX_W = 384
@@ -59,6 +61,7 @@ def save_screenshots_library_cache(
         "version": CACHE_VERSION,
         "saved_at": time.time(),
         "folder": os.path.normpath(folder) if folder else "",
+        "unified": True,
         "files": list(files),
     }
     json_cache.write_json(screenshots_library_cache_path(cache_dir), payload)
@@ -83,11 +86,16 @@ def files_from_screenshots_library_cache(
     payload = json_cache.read_json(path, default={})
     if not isinstance(payload, dict):
         return []
-    if folder:
+
+    version = int(payload.get("version") or 1)
+    unified = bool(payload.get("unified")) or version >= 2
+    # Legacy v1 caches were Steempeg-folder-only — require folder match.
+    if not unified and folder:
         cached_folder = os.path.normcase(os.path.normpath(str(payload.get("folder") or "")))
         want = os.path.normcase(os.path.normpath(folder))
         if cached_folder and want and cached_folder != want:
             return []
+
     raw = payload.get("files")
     if not isinstance(raw, list):
         return []
@@ -102,11 +110,16 @@ def files_from_screenshots_library_cache(
             mtime = float(entry.get("mtime") or 0.0)
         except (TypeError, ValueError):
             mtime = 0.0
+        source = str(entry.get("source") or "steempeg").strip().lower() or "steempeg"
+        if source not in ("steam", "steempeg"):
+            source = "steempeg"
         out.append(
             {
                 "full_path": os.path.normpath(file_path),
                 "mtime": mtime,
                 "game_name": str(entry.get("game_name") or ""),
+                "source": source,
+                "app_id": str(entry.get("app_id") or ""),
             }
         )
     return out
