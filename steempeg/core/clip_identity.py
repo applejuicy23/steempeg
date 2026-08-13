@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 _PREFIX_RANK = {"clip": 0, "bg": 1, "fg": 2}
 
@@ -38,6 +38,47 @@ def is_nested_same_session(parent_name: str, child_name: str) -> bool:
     parent_key = steam_session_key(parent_name)
     child_key = steam_session_key(child_name)
     return bool(parent_key and child_key and parent_key == child_key)
+
+
+def is_steam_package_internal_child(parent_name: str, child_name: str) -> bool:
+    """True when ``child`` is a Steam session folder nested inside another.
+
+    Steam clip packages keep the source recording under ``clip_…/video/fg_…``.
+    The outer CLIP stamp is when the clip was saved; the inner FG stamp is the
+    original recording — they often differ, so session-key equality is too strict.
+    """
+    if not parse_steam_folder_name(parent_name):
+        return False
+    return parse_steam_folder_name(child_name) is not None
+
+
+def nested_steam_session_keys(folder_path: str) -> List[str]:
+    """Session keys of clip_/bg_/fg_ folders under ``video/`` or ``clips/``.
+
+    Used to link a saved CLIP package to its source FG/BG (and any top-level copy).
+    """
+    if not folder_path or not os.path.isdir(folder_path):
+        return []
+    keys: List[str] = []
+    seen: set[str] = set()
+    for sub in ("video", "clips"):
+        sub_path = os.path.join(folder_path, sub)
+        if not os.path.isdir(sub_path):
+            continue
+        try:
+            entries = os.listdir(sub_path)
+        except OSError:
+            continue
+        for item in entries:
+            key = steam_session_key(item)
+            if not key or key in seen:
+                continue
+            full = os.path.join(sub_path, item)
+            if not os.path.isdir(full):
+                continue
+            seen.add(key)
+            keys.append(key)
+    return keys
 
 
 def folder_has_video_chunks(folder_path: str) -> bool:
@@ -86,8 +127,48 @@ def pick_best_session_folder(candidates: Iterable[str]) -> Optional[str]:
     return best_path
 
 
+def _merge_session_groups_via_clip_packages(
+    steam_groups: Dict[str, List[str]],
+    folder_paths: List[str],
+) -> Dict[str, List[str]]:
+    """Union session keys when a CLIP/BG/FG package nests another session folder.
+
+    Example: ``clip_…_224607`` contains ``video/fg_…_224328`` while Steam also
+    keeps ``video/fg_…_224328`` at the library root — same recording, two stamps.
+    """
+    parent: Dict[str, str] = {key: key for key in steam_groups}
+
+    def find(key: str) -> str:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for path in folder_paths:
+        own = steam_session_key(os.path.basename(path))
+        if not own or own not in steam_groups:
+            continue
+        for nested_key in nested_steam_session_keys(path):
+            if nested_key not in steam_groups:
+                continue
+            union(own, nested_key)
+
+    merged: Dict[str, List[str]] = {}
+    for key, group in steam_groups.items():
+        merged.setdefault(find(key), []).extend(group)
+    return merged
+
+
 def dedupe_steam_session_folders(folder_paths: List[str]) -> Tuple[List[str], int]:
-    """Collapse clip_/bg_/fg_ siblings (same app+timestamp) to a single best folder.
+    """Collapse clip_/bg_/fg_ siblings to a single best folder.
+
+    Groups by app+timestamp, then merges groups when a Steam package folder
+    nests another session (CLIP saved from an FG often uses a newer stamp).
 
     Returns (deduped_paths, ignored_duplicate_count). Non-Steam folders pass through.
     """
@@ -100,6 +181,8 @@ def dedupe_steam_session_folders(folder_paths: List[str]) -> Tuple[List[str], in
             passthrough.append(path)
             continue
         steam_groups.setdefault(key, []).append(path)
+
+    steam_groups = _merge_session_groups_via_clip_packages(steam_groups, folder_paths)
 
     deduped: list[str] = list(passthrough)
     ignored = 0
