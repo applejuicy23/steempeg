@@ -7,7 +7,7 @@ import re
 import webbrowser
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject, QTimer
-from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextImageFormat
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QTextCursor, QTextDocument, QTextImageFormat
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWidgets import (
     QComboBox,
@@ -33,7 +33,9 @@ from steempeg.services.release_catalog import (
     FetchError,
     InstallTier,
     LocalBackup,
+    MIN_INSTALL_VERSION,
     RateLimitInfo,
+    RECOMMENDED_INSTALL_VERSION,
     ReleaseEntry,
     default_selected_release,
     fetch_releases,
@@ -85,21 +87,90 @@ _ROW_CHILD = """
         border-radius: 6px;
     }
 """
+# Risk banding (locked IA): below v12.1 red · v12.1 to v16 orange · newer normal.
+_ROW_ANCIENT = """
+    QFrame#versionRow {
+        background-color: #3a2226;
+        border: 1px solid #5a3038;
+        border-radius: 8px;
+    }
+"""
+_ROW_ANCIENT_SELECTED = """
+    QFrame#versionRow {
+        background-color: #4a2a32;
+        border: 1px solid #6b5a8e;
+        border-radius: 8px;
+    }
+"""
+_ROW_ANCIENT_CHILD = """
+    QFrame#versionRow {
+        background-color: #322022;
+        border: 1px solid #4a2830;
+        border-radius: 6px;
+    }
+"""
+_ROW_RISKY = """
+    QFrame#versionRow {
+        background-color: #3a2e22;
+        border: 1px solid #5a4a28;
+        border-radius: 8px;
+    }
+"""
+_ROW_RISKY_SELECTED = """
+    QFrame#versionRow {
+        background-color: #4a3a28;
+        border: 1px solid #6b5a8e;
+        border-radius: 8px;
+    }
+"""
+_ROW_RISKY_CHILD = """
+    QFrame#versionRow {
+        background-color: #322818;
+        border: 1px solid #4a3a20;
+        border-radius: 6px;
+    }
+"""
+
+
+def _risk_band(version_float: float) -> str:
+    """Return ``ancient`` / ``risky`` / ``normal`` for list-row chrome."""
+    if version_float < MIN_INSTALL_VERSION - 0.001:
+        return "ancient"
+    if version_float < RECOMMENDED_INSTALL_VERSION - 0.001:
+        return "risky"
+    return "normal"
+
+
+def _row_stylesheet(*, band: str, selected: bool, indent: bool) -> str:
+    if selected:
+        if band == "ancient":
+            return _ROW_ANCIENT_SELECTED
+        if band == "risky":
+            return _ROW_RISKY_SELECTED
+        return _ROW_SELECTED
+    if band == "ancient":
+        return _ROW_ANCIENT_CHILD if indent else _ROW_ANCIENT
+    if band == "risky":
+        return _ROW_RISKY_CHILD if indent else _ROW_RISKY
+    return _ROW_CHILD if indent else _ROW_NORMAL
 
 _SCROLL_STYLE = f"""
     {tok.dialog_scroll_stylesheet(tok.BG_SHELL)}
     QWidget#releaseListHost {{ background-color: {tok.BG_SHELL}; }}
 """
 
-_NOTES_STYLE = """
-    QTextEdit {
+_NOTES_STYLE = f"""
+    QTextEdit {{
         background-color: #1a1a1a;
         border: 1px solid #3d3d3d;
         border-radius: 8px;
-        color: #bbb;
-        font-size: 11px;
-        padding: 8px;
-    }
+        color: {tok.TEXT_PRIMARY};
+        font-family: {tok.FONT_APP};
+        font-size: 13px;
+        padding: 14px 16px;
+        selection-background-color: #4a3d66;
+        selection-color: #f0ecff;
+    }}
 """
 
 _BTN_PRIMARY = """
@@ -120,6 +191,25 @@ _BTN_SECONDARY = """
     QPushButton:hover { background-color: #444; color: #fff; }
     QPushButton:disabled { background-color: #2a2a2a; color: #666; border-color: #444; }
 """
+
+# Transparent pad after footer CTA glyphs (Qt QSS has no icon→label spacing;
+# same approach as neo_nav_icon_gap). Modest nudge — not a redesign.
+_FOOTER_ICON_GAP = 4
+
+
+def _footer_cta_icon(pix: QPixmap, size: int = 14, gap: int = _FOOTER_ICON_GAP) -> tuple[QIcon, QSize]:
+    """Icon with trailing transparent pad so the label isn't glued to the glyph."""
+    gap = max(0, int(gap))
+    if pix.isNull():
+        return QIcon(), QSize(size, size)
+    if gap <= 0:
+        return QIcon(pix), QSize(size, size)
+    canvas = QPixmap(size + gap, size)
+    canvas.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas)
+    painter.drawPixmap(0, 0, pix)
+    painter.end()
+    return QIcon(canvas), QSize(size + gap, size)
 
 _ICON_BTN = """
     QPushButton {
@@ -153,17 +243,16 @@ _NOTICE_DANGER = (
 def _update_center_dialog_size(parent=None) -> tuple[tuple[int, int], tuple[int, int]]:
     """Min and default (w, h) for Update Center.
 
-    Content-heavy (list + notes + warning + ack + buttons). Keep enough height
-    that warning plates aren't crushed, but never taller than the main window's
-    ``minimumHeight()`` (when parent is the shell) and never more than ~85% of
-    the screen work area. Overflow scrolls inside notes / version list.
+    Wide two-column shell (version rail + detail). Extra height leaves room for
+    the notes heading subtitle and footer icon buttons; list and notes scroll.
+    Cap height to the main window floor / ~85% of work area.
     """
     from PySide6.QtWidgets import QApplication
     from steempeg.ui.layout_defaults import shell_layout_scale
 
-    # Comfort baseline — roomier than the old squashed 560×640, under main min (~800).
-    min_w, min_h = 580, 640
-    def_w, def_h = 620, 720
+    # Wide two-column baseline; taller so notes keep breathing room.
+    min_w, min_h = 860, 620
+    def_w, def_h = 960, 700
 
     host = parent
     win_w = 0
@@ -184,9 +273,8 @@ def _update_center_dialog_size(parent=None) -> tuple[tuple[int, int], tuple[int,
     t = shell_layout_scale(win_w, widget=host) if win_w > 0 else 1.0
     cramped = t < 0.85 or (win_h > 0 and win_h < 900)
     if cramped:
-        # Mild bump for notes + early-zip warning; list stays capped/scrollable.
-        min_w, min_h = 600, 660
-        def_w, def_h = 640, 740
+        min_w, min_h = 780, 580
+        def_w, def_h = 860, 660
 
     parent_min_h = 0
     if parent is not None and hasattr(parent, "minimumHeight"):
@@ -206,7 +294,6 @@ def _update_center_dialog_size(parent=None) -> tuple[tuple[int, int], tuple[int,
     if screen is not None:
         avail = screen.availableGeometry()
         max_w = max(420, avail.width() - 48)
-        # Hard caps: main-window floor and ~85% of work area (notes/list scroll).
         max_h = max(480, int(avail.height() * 0.85))
         if parent_min_h > 0:
             max_h = min(max_h, parent_min_h)
@@ -324,15 +411,35 @@ def _prepare_notes_markdown(body: str) -> str:
 
 
 def _notes_document_style() -> str:
+    # GitHub-release feel: readable body, clear section heads, airy lists.
+    # FONT_APP matches Steempeg chrome (Segoe/Noto), not Cascadia.
     return f"""
-        body {{ color: {tok.TEXT_PRIMARY}; font-family: {tok.FONT_UI}; font-size: 11px; }}
-        h1, h2, h3, h4 {{ color: {tok.TEXT_TITLE}; margin: 10px 0 4px 0; font-size: 12px; }}
+        body {{
+            color: {tok.TEXT_PRIMARY};
+            font-family: {tok.FONT_APP};
+            font-size: 13px;
+            line-height: 1.45;
+        }}
+        h1, h2, h3, h4 {{
+            color: {tok.TEXT_TITLE};
+            font-family: {tok.FONT_APP};
+            font-weight: bold;
+            margin: 16px 0 8px 0;
+        }}
+        h1 {{ font-size: 16px; }}
+        h2 {{ font-size: 15px; }}
+        h3 {{ font-size: 14px; }}
+        h4 {{ font-size: 13px; }}
         strong {{ color: {tok.TEXT_TITLE}; font-weight: 600; }}
-        li {{ margin: 3px 0; }}
-        ul, ol {{ margin: 4px 0 8px 16px; }}
-        p {{ margin: 4px 0; }}
+        p {{ margin: 0 0 10px 0; }}
+        li {{ margin: 5px 0; }}
+        ul, ol {{ margin: 4px 0 12px 20px; }}
         a {{ color: {tok.ACCENT_PRIMARY}; text-decoration: none; }}
-        code {{ color: {tok.TEXT_MUTED}; background: transparent; }}
+        code {{
+            color: #c8b8e8;
+            background: #2a2a2a;
+            font-family: {tok.FONT_APP};
+        }}
         """
 
 
@@ -480,9 +587,12 @@ class _VersionRow(QFrame):
         self._installed = installed
         self._latest = latest
         self._expand_handler = expand_handler
+        self._band = _risk_band(entry.version_float)
         self.setObjectName("versionRow")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(_ROW_CHILD if indent else _ROW_NORMAL)
+        self.setStyleSheet(
+            _row_stylesheet(band=self._band, selected=False, indent=bool(indent))
+        )
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(8 + indent * 14, 6, 8, 6)
@@ -493,6 +603,8 @@ class _VersionRow(QFrame):
         logo_sz = 18 if not indent else 16
         logo = QLabel()
         apply_square_icon(logo, _logo_pixmap(logo_sz), logo_sz)
+        # Match platform badges: without this, selected-row QSS paints an opaque square behind the logo.
+        logo.setStyleSheet("background: transparent;")
         outer.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         label = entry.tag_name or f"v{entry.version_str}"
@@ -556,10 +668,13 @@ class _VersionRow(QFrame):
             self._expand_btn.setIcon(load_icon(asset, 16))
 
     def set_selected(self, selected: bool) -> None:
-        if selected:
-            self.setStyleSheet(_ROW_SELECTED)
-        else:
-            self.setStyleSheet(_ROW_CHILD if self._indent else _ROW_NORMAL)
+        self.setStyleSheet(
+            _row_stylesheet(
+                band=self._band,
+                selected=selected,
+                indent=bool(self._indent),
+            )
+        )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -661,6 +776,8 @@ class UpdateCenterDialog(SteempegDialog):
         parent=None,
         bar_color: str | None = None,
         bg_color: str | None = None,
+        settings_host=None,
+        keep_prefs: dict[str, bool] | None = None,
     ):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
 
@@ -670,6 +787,7 @@ class UpdateCenterDialog(SteempegDialog):
         self.resize(rw, rh)
         self._releases: list[ReleaseEntry] = []
         self._local_backups = local_backups
+        self._settings_host = settings_host
         self._fetch_thread: _ReleaseFetchThread | None = None
         self._selected: ReleaseEntry | None = None
         self._latest_version = APP_VERSION_FLOAT
@@ -677,10 +795,25 @@ class UpdateCenterDialog(SteempegDialog):
         self._group_widgets: list[_PatchGroupWidget] = []
         self._notes_image_loader: _ReleaseNotesImageLoader | None = None
         self._refreshing_catalog = False
+        self._initial_keep_prefs = keep_prefs
 
         self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
 
         root = self.content_layout
+        columns = QHBoxLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(16)
+        root.addLayout(columns, 1)
+
+        # ----- Left rail: title · versions · Backup -----
+        left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(8)
+        left_wrap = QWidget()
+        left_wrap.setMinimumWidth(280)
+        left_wrap.setMaximumWidth(360)
+        left_wrap.setLayout(left)
+        columns.addWidget(left_wrap, 0)
 
         title_row = QHBoxLayout()
         title_row.setContentsMargins(0, 0, 0, 0)
@@ -699,15 +832,19 @@ class UpdateCenterDialog(SteempegDialog):
         title.setStyleSheet(tok.STYLE_PANEL_TITLE)
         title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
-        root.addLayout(title_row)
+        left.addLayout(title_row)
 
-        version_line = QLabel(f"Current version is v{APP_VERSION_STR}")
-        version_line.setStyleSheet(tok.STYLE_PANEL_SUBTITLE)
-        root.addWidget(version_line)
+        blurb = QLabel(
+            f"You are on v{APP_VERSION_STR}. Pick a release to read notes "
+            "and update, or restore a local backup."
+        )
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet(tok.STYLE_PANEL_SUBTITLE)
+        left.addWidget(blurb)
 
         self._status_label = QLabel("Loading releases…")
         self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
-        root.addWidget(self._status_label)
+        left.addWidget(self._status_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -722,82 +859,40 @@ class UpdateCenterDialog(SteempegDialog):
         self._list_layout.setSpacing(4)
         self._list_layout.addStretch()
         scroll.setWidget(self._list_host)
-        # Cap the list so notes + warning plates keep room on short heights;
-        # versions still scroll inside this pane.
-        scroll.setMinimumHeight(120)
-        scroll.setMaximumHeight(200)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        root.addWidget(scroll, 0)
+        scroll.setMinimumHeight(160)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        left.addWidget(scroll, 1)
 
-        notes_block = QVBoxLayout()
-        notes_block.setContentsMargins(0, 4, 0, 0)
-        notes_block.setSpacing(6)
-        notes_label = QLabel("Release notes")
-        notes_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
-        notes_block.addWidget(notes_label)
-
-        self._notes = QTextEdit()
-        self._notes.setReadOnly(True)
-        self._notes.setMinimumHeight(160)
-        self._notes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._notes.setPlaceholderText("Select a version.")
-        notes_block.addWidget(self._notes, 1)
-        # Notes alone own stretch — notice is a sibling on root (stretch=0) so a
-        # word-wrapped QLabel sizeHint can never devour the changelog pane.
-        root.addLayout(notes_block, 1)
-
-        self._notice_label = QLabel()
-        self._notice_label.setWordWrap(True)
-        self._notice_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._notice_label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        backup_frame = QFrame()
+        backup_frame.setObjectName("updateBackupFrame")
+        backup_frame.setStyleSheet(
+            """
+            QFrame#updateBackupFrame {
+                background-color: #262626;
+                border: 1px solid #3d3d3d;
+                border-radius: 8px;
+            }
+            """
         )
-        self._notice_label.setStyleSheet(_NOTICE_WARN)
-        # Fixed vertically: layout must not use height-for-width / Preferred growth.
-        notice_policy = QSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        notice_policy.setHeightForWidth(False)
-        self._notice_label.setSizePolicy(notice_policy)
-        self._notice_label.setFixedHeight(0)
-        self._notice_label.hide()
-        root.addWidget(self._notice_label, 0)
+        backup_lay = QVBoxLayout(backup_frame)
+        backup_lay.setContentsMargins(12, 10, 12, 10)
+        backup_lay.setSpacing(8)
 
-        self._marker_label = QLabel()
-        self._marker_label.setWordWrap(True)
-        self._marker_label.setStyleSheet(
-            f"color: {tok.ACCENT_PRIMARY}; font-family: {tok.FONT_UI}; "
-            "font-size: 11px; font-weight: 600; background: transparent;"
-        )
-        self._marker_label.hide()
-        root.addWidget(self._marker_label)
+        backup_title = QLabel("Backup")
+        backup_title.setStyleSheet(tok.STYLE_PANEL_HEADING)
+        backup_lay.addWidget(backup_title)
 
-        self._ack_frame = QFrame()
-        self._ack_frame.setObjectName("updateAckFrame")
-        ack_layout = QHBoxLayout(self._ack_frame)
-        ack_layout.setContentsMargins(10, 8, 10, 8)
-        self._ack_check = SteempegCheckBox(
-            "I understand settings, queue, and rendered sidecars may not match the target version.",
-        )
-        self._ack_check.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
-        self._ack_check.stateChanged.connect(self._refresh_actions)
-        ack_layout.addWidget(self._ack_check, 1)
-        self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
-        self._ack_frame.hide()
-        root.addWidget(self._ack_frame)
-
-        if len(local_backups) > 1:
-            backup_row = QHBoxLayout()
-            backup_label = QLabel("Local backup")
-            backup_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
-            backup_row.addWidget(backup_label)
-            self._backup_combo = QComboBox()
-            for backup in local_backups:
-                self._backup_combo.addItem(f"v{backup.version_str} ({backup.folder_name})", backup)
-            # Match video-settings combo chrome, but keep the compact Local backup footprint.
-            self._backup_combo.setStyleSheet(settings_panel_stylesheet("""
+        if local_backups:
+            if len(local_backups) > 1:
+                self._backup_combo = QComboBox()
+                for backup in local_backups:
+                    self._backup_combo.addItem(
+                        f"v{backup.version_str} ({backup.folder_name})",
+                        backup,
+                    )
+                self._backup_combo.setStyleSheet(
+                    settings_panel_stylesheet(
+                        """
                 QComboBox {
                     border-radius: 6px;
                     padding: 4px 8px;
@@ -814,38 +909,163 @@ class UpdateCenterDialog(SteempegDialog):
                     min-height: 22px;
                     padding: 4px 8px;
                 }
-            """))
-            backup_row.addWidget(self._backup_combo, 1)
-            root.addLayout(backup_row)
+            """
+                    )
+                )
+                self._backup_combo.currentIndexChanged.connect(self._refresh_restore_button)
+                backup_lay.addWidget(self._backup_combo)
+                self._backup_version_label = None
+            else:
+                self._backup_combo = None
+                self._backup_version_label = QLabel(f"v{local_backups[0].version_str}")
+                self._backup_version_label.setStyleSheet(
+                    f"color: {tok.TEXT_PRIMARY}; font-size: 12px; font-weight: 600; "
+                    "background: transparent;"
+                )
+                backup_lay.addWidget(self._backup_version_label)
         else:
             self._backup_combo = None
+            self._backup_version_label = QLabel("No local backup")
+            self._backup_version_label.setStyleSheet(
+                f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent;"
+            )
+            backup_lay.addWidget(self._backup_version_label)
+
+        self._btn_restore = QPushButton("Restore")
+        self._btn_restore.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_restore.setStyleSheet(_BTN_SECONDARY)
+        self._btn_restore.setEnabled(bool(local_backups))
+        self._btn_restore.clicked.connect(self._on_restore_clicked)
+        backup_lay.addWidget(self._btn_restore)
+        left.addWidget(backup_frame, 0)
+        self._refresh_restore_button()
+
+        # ----- Right pane: What's new · Keep when updating · ack · footer -----
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(8)
+        right_wrap = QWidget()
+        right_wrap.setLayout(right)
+        columns.addWidget(right_wrap, 1)
+
+        self._notes_label = QLabel("What's new")
+        self._notes_label.setStyleSheet(tok.STYLE_PANEL_HEADING)
+        right.addWidget(self._notes_label)
+
+        self._notes_subtitle = QLabel("Changelog for the selected version.")
+        self._notes_subtitle.setWordWrap(True)
+        self._notes_subtitle.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
+            "font-size: 11px; background: transparent;"
+        )
+        right.addWidget(self._notes_subtitle)
+
+        self._notes = QTextEdit()
+        self._notes.setReadOnly(True)
+        self._notes.setMinimumHeight(180)
+        self._notes.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._notes.setPlaceholderText("Select a version.")
+        right.addWidget(self._notes, 1)
+
+        self._notice_label = QLabel()
+        self._notice_label.setWordWrap(True)
+        self._notice_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._notice_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self._notice_label.setStyleSheet(_NOTICE_WARN)
+        notice_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        notice_policy.setHeightForWidth(False)
+        self._notice_label.setSizePolicy(notice_policy)
+        self._notice_label.setFixedHeight(0)
+        self._notice_label.hide()
+        right.addWidget(self._notice_label, 0)
+
+        self._marker_label = QLabel()
+        self._marker_label.setWordWrap(True)
+        self._marker_label.setStyleSheet(
+            f"color: {tok.ACCENT_PRIMARY}; font-family: {tok.FONT_UI}; "
+            "font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        self._marker_label.hide()
+        right.addWidget(self._marker_label)
+
+        keep_title = QLabel("Keep when updating")
+        keep_title.setStyleSheet(
+            f"color: {tok.TEXT_TITLE}; font-size: 12px; font-weight: 600; "
+            "background: transparent;"
+        )
+        right.addWidget(keep_title)
+
+        keep_row = QHBoxLayout()
+        keep_row.setContentsMargins(0, 0, 0, 0)
+        keep_row.setSpacing(14)
+        keep_prefs = self._load_keep_prefs()
+        self._keep_checks: dict[str, SteempegCheckBox] = {}
+        for key, label in (
+            ("videos", "Videos"),
+            ("settings", "Settings"),
+            ("render_history", "Render history"),
+            ("presets", "Presets"),
+        ):
+            check = SteempegCheckBox(label, accent_label=False, label_color=tok.TEXT_PRIMARY)
+            check.setChecked(bool(keep_prefs.get(key, True)))
+            check.stateChanged.connect(self._on_keep_prefs_changed)
+            self._keep_checks[key] = check
+            keep_row.addWidget(check)
+        keep_row.addStretch(1)
+        right.addLayout(keep_row)
+
+        self._ack_frame = QFrame()
+        self._ack_frame.setObjectName("updateAckFrame")
+        ack_layout = QHBoxLayout(self._ack_frame)
+        ack_layout.setContentsMargins(10, 8, 10, 8)
+        self._ack_check = SteempegCheckBox(
+            "I understand settings, queue, and rendered sidecars may not match the target version.",
+        )
+        self._ack_check.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+        self._ack_check.stateChanged.connect(self._refresh_actions)
+        ack_layout.addWidget(self._ack_check, 1)
+        self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
+        self._ack_frame.hide()
+        right.addWidget(self._ack_frame)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
-        self._btn_install = QPushButton("Install selected")
+        self._btn_install = QPushButton("Update")
         self._btn_install.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_install.setStyleSheet(_BTN_PRIMARY)
+        upd_pix = title_bar_update_pixmap("#f0ecff", 14)
+        if upd_pix.isNull():
+            upd_pix = load_pixmap("update.png", 14)
+        upd_icon, upd_sz = _footer_cta_icon(upd_pix, 14)
+        self._btn_install.setIcon(upd_icon)
+        self._btn_install.setIconSize(upd_sz)
         self._btn_install.setEnabled(False)
         self._btn_install.clicked.connect(self._on_install_clicked)
         actions.addWidget(self._btn_install)
 
-        self._btn_github = QPushButton("Open on GitHub")
+        self._btn_github = QPushButton("View on GitHub")
         self._btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_github.setStyleSheet(_BTN_SECONDARY)
+        gh_icon, gh_sz = _footer_cta_icon(load_pixmap("github.jpg", 14), 14)
+        self._btn_github.setIcon(gh_icon)
+        self._btn_github.setIconSize(gh_sz)
         self._btn_github.setEnabled(False)
         self._btn_github.clicked.connect(self._on_github_clicked)
         actions.addWidget(self._btn_github)
 
-        self._btn_restore = QPushButton("Restore local backup")
-        self._btn_restore.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_restore.setStyleSheet(_BTN_SECONDARY)
-        self._btn_restore.setVisible(bool(local_backups))
-        self._btn_restore.clicked.connect(self._on_restore_clicked)
-        actions.addWidget(self._btn_restore)
-
         actions.addStretch()
-        root.addLayout(actions)
+        right.addLayout(actions)
 
         self._start_fetch()
 
@@ -959,7 +1179,7 @@ class UpdateCenterDialog(SteempegDialog):
     def _on_fetch_error(self, message: str):
         self._refreshing_catalog = False
         if self._releases:
-            self._status_label.setText("Could not refresh — showing cached releases.")
+            self._status_label.setText("Could not refresh. Showing cached releases.")
             self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
             return
         self._status_label.setText(message)
@@ -968,10 +1188,10 @@ class UpdateCenterDialog(SteempegDialog):
     def _on_fetch_rate_limited(self, info: RateLimitInfo):
         self._refreshing_catalog = False
         if self._releases:
-            self._status_label.setText("Rate limited — showing cached releases.")
+            self._status_label.setText("Rate limited. Showing cached releases.")
             self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
             return
-        self._status_label.setText("GitHub API rate limit exceeded — waiting to retry…")
+        self._status_label.setText("GitHub API rate limit exceeded. Waiting to retry…")
         self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
         # Emit before reject so the parent can capture RateLimitInfo while still connected.
         self.rate_limited.emit(info)
@@ -987,13 +1207,23 @@ class UpdateCenterDialog(SteempegDialog):
                 widget.set_selected(widget._entry.version_float == entry.version_float)
             else:
                 widget.set_selected_entry(entry)
+        ver = (entry.version_str or "").strip() or "?"
+        self._notes_label.setText(f"What's new in v{ver}")
         self._notes_image_loader = _render_release_notes(self._notes, entry.body, self)
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
         if notice:
             text = f"⚠️ {notice}"
             self._notice_label.setText(text)
-            if entry.version_float <= 11.0:
+            danger = (
+                entry.version_float < MIN_INSTALL_VERSION - 0.001
+                or entry.install_tier in (InstallTier.BROKEN, InstallTier.MANUAL)
+                or (
+                    entry.install_tier == InstallTier.NO_ZIP
+                    and bool(entry.block_reason)
+                )
+            )
+            if danger:
                 self._notice_label.setStyleSheet(_NOTICE_DANGER)
             else:
                 self._notice_label.setStyleSheet(_NOTICE_WARN)
@@ -1032,7 +1262,7 @@ class UpdateCenterDialog(SteempegDialog):
             text,
         )
         needed = max(int(bounds.height()) + pad, fm.height() + pad)
-        needed = min(needed, 96)  # one/two-line banner only
+        needed = min(needed, 120)  # allow 2-3 lines for platform / policy notices
         if label.height() != needed:
             label.setFixedHeight(needed)
 
@@ -1041,6 +1271,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._btn_github.setEnabled(entry is not None)
 
         if not entry:
+            self._btn_install.setText("Update")
             self._btn_install.setEnabled(False)
             self._ack_frame.hide()
             return
@@ -1063,28 +1294,70 @@ class UpdateCenterDialog(SteempegDialog):
         elif entry.installable:
             if is_current:
                 self._btn_install.setText("Current version")
-            elif entry.version_float > APP_VERSION_FLOAT:
-                if versions_equal(entry.version_float, self._latest_version):
-                    self._btn_install.setText(f"⚙️ Update to v{entry.version_str}")
-                else:
-                    self._btn_install.setText(f"Upgrade to v{entry.version_str}")
             else:
-                self._btn_install.setText(f"Downgrade to v{entry.version_str}")
+                # Locked CTA: Update (version is clear from the selected rail row).
+                self._btn_install.setText("Update")
         elif entry.install_tier == InstallTier.MANUAL:
-            self._btn_install.setText("Manual .exe only")
+            self._btn_install.setText("Cannot install")
         elif entry.install_tier == InstallTier.NO_ZIP:
             if not entry.available_platforms:
                 self._btn_install.setText("Not ready yet")
             elif entry.block_reason:
-                # e.g. "No Linux build for this version (available: Windows)."
                 short = entry.block_reason.split(" (", 1)[0].rstrip(".")
                 self._btn_install.setText(short)
             else:
-                self._btn_install.setText("No build for this OS")
+                self._btn_install.setText("Cannot install here")
         else:
-            self._btn_install.setText("Open on GitHub")
+            self._btn_install.setText("Cannot install")
 
         self._btn_install.setEnabled(can_install)
+
+    def _load_keep_prefs(self) -> dict[str, bool]:
+        from steempeg.ui.settings_prefs import (
+            DEFAULT_UPDATE_KEEP_WHEN,
+            load_update_keep_when,
+            normalize_update_keep_when,
+        )
+
+        if isinstance(self._initial_keep_prefs, dict):
+            return normalize_update_keep_when(self._initial_keep_prefs)
+        host = self._settings_host
+        try:
+            if host is not None and hasattr(host, "load_user_settings"):
+                return load_update_keep_when(host.load_user_settings() or {})
+        except Exception:
+            logging.exception("UPDATE_CENTER: failed loading keep prefs")
+        return dict(DEFAULT_UPDATE_KEEP_WHEN)
+
+    def keep_when_updating(self) -> dict[str, bool]:
+        """Current Keep when updating checkbox state."""
+        from steempeg.ui.settings_prefs import DEFAULT_UPDATE_KEEP_WHEN
+
+        out = dict(DEFAULT_UPDATE_KEEP_WHEN)
+        for key, check in getattr(self, "_keep_checks", {}).items():
+            out[key] = bool(check.isChecked())
+        return out
+
+    def _on_keep_prefs_changed(self, *_args) -> None:
+        from steempeg.ui.settings_prefs import save_update_keep_when
+
+        prefs = self.keep_when_updating()
+        host = self._settings_host
+        if host is None or not hasattr(host, "save_user_settings"):
+            return
+        try:
+            save_update_keep_when(host, prefs)
+        except Exception:
+            logging.exception("UPDATE_CENTER: failed saving keep prefs")
+
+    def _refresh_restore_button(self) -> None:
+        backup = self._selected_backup()
+        if backup is None:
+            self._btn_restore.setText("Restore")
+            self._btn_restore.setEnabled(False)
+            return
+        self._btn_restore.setText(f"Restore v{backup.version_str}")
+        self._btn_restore.setEnabled(True)
 
     def _on_install_clicked(self):
         entry = self._selected
@@ -1093,6 +1366,8 @@ class UpdateCenterDialog(SteempegDialog):
         if not entry.installable:
             webbrowser.open(entry.html_url)
             return
+        # Persist keep prefs once more before handoff.
+        self._on_keep_prefs_changed()
         self.install_requested.emit(entry)
         # Do NOT accept() here — the confirm dialog runs inside the install slot.
         # Closing Update Center before/after a cancelled confirm left a stuck
