@@ -215,6 +215,15 @@ class ScreenshotPhoto(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
+        # Whole-card press: scale the entire tile (not only the image well).
+        scale = float(self._scale)
+        if abs(scale - 1.0) > 0.001:
+            cx = _W / 2.0
+            cy = _H / 2.0
+            p.translate(cx, cy)
+            p.scale(scale, scale)
+            p.translate(-cx, -cy)
+
         # Inset so a 3px ClipCard-style ring never clips.
         outer = QRectF(1.5, 1.5, _W - 3.0, _H - 3.0)
         card = QPainterPath()
@@ -232,18 +241,14 @@ class ScreenshotPhoto(QWidget):
         p.setClipPath(img_path.intersected(card))
         p.fillRect(img, _IMG_BG)
         if not self._pix.isNull():
-            cw = img.width() * self._scale
-            ch = img.height() * self._scale
-            cx = img.center().x() - cw / 2
-            cy = img.center().y() - ch / 2
             target = self._pix.scaled(
-                max(1, int(round(cw))),
-                max(1, int(round(ch))),
+                max(1, int(round(img.width()))),
+                max(1, int(round(img.height()))),
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            x = int(round(cx + (cw - target.width()) / 2))
-            y = int(round(cy + (ch - target.height()) / 2))
+            x = int(round(img.left() + (img.width() - target.width()) / 2))
+            y = int(round(img.top() + (img.height() - target.height()) / 2))
             p.drawPixmap(x, y, target)
         p.restore()
 
