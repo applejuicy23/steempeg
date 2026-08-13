@@ -19,6 +19,13 @@ class UpdateJob:
     chrome_theme: str = "exp2"
     expected_size: int | None = None
     expected_sha256: str | None = None
+    # Keep when updating (Update Center). Install already preserves
+    # rendered_videos / Screenshots / cache; these flags are hooks for
+    # selective migrate / post-update import. TODO: selective wipe when unchecked.
+    keep_videos: bool = True
+    keep_settings: bool = True
+    keep_render_history: bool = True
+    keep_presets: bool = True
 
     @property
     def backup_folder_name(self) -> str:
