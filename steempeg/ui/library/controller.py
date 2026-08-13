@@ -28,10 +28,8 @@ from PySide6.QtWidgets import (
 from steempeg.ui.icon_assets import health_icon
 from steempeg.core import games
 from steempeg.core.clip_identity import (
-    is_nested_same_session,
-    pick_best_session_folder,
+    is_steam_package_internal_child,
     session_duplicate_paths_to_drop,
-    steam_session_key,
 )
 from steempeg.core.clip_thumbnails import (
     clip_poster_cache_path_nostat,
@@ -2515,17 +2513,24 @@ class LibraryMixin:
             if os.path.basename(parent).lower() == "gamerecordings":
                 base_folder = parent
 
+        base_name = os.path.basename(base_folder).lower()
+        base_is_steam_package = base_name.startswith(("clip_", "bg_", "fg_"))
+
         roots = set()
         for sub in ("clips", "video"):
             sub_path = os.path.join(base_folder, sub)
             if os.path.exists(sub_path):
                 for item in os.listdir(sub_path):
                     full = os.path.join(sub_path, item)
-                    if os.path.isdir(full):
-                        roots.add(full)
+                    if not os.path.isdir(full):
+                        continue
+                    if base_is_steam_package and is_steam_package_internal_child(
+                        base_name, item.lower()
+                    ):
+                        continue
+                    roots.add(full)
 
         if self._looks_like_single_clip_folder(base_folder):
-            base_name = os.path.basename(base_folder).lower()
             if base_name not in ("gamerecordings", "clips", "video"):
                 if not self._is_steam_clip_container_folder(base_folder):
                     roots.add(base_folder)
@@ -2534,8 +2539,7 @@ class LibraryMixin:
                 full = os.path.join(base_folder, item)
                 if not os.path.isdir(full) or not item.lower().startswith(("clip_", "bg_", "fg_")):
                     continue
-                base_name = os.path.basename(base_folder).lower()
-                if base_name.startswith(("clip_", "bg_", "fg_")) and is_nested_same_session(
+                if base_is_steam_package and is_steam_package_internal_child(
                     base_name, item.lower()
                 ):
                     continue
@@ -3383,28 +3387,20 @@ class LibraryMixin:
             for _ in range(n):
                 row, index, total = pending.pop(0)
                 if getattr(self, "_scan_append_new_only", False):
-                    # Drop FG/BG already listed for this Steam session before CLIP lands.
-                    key = steam_session_key(os.path.basename(row.full_path))
-                    if key:
-                        losers: list[str] = []
-                        for existing in getattr(self, "_library_clip_rows", None) or []:
-                            if steam_session_key(
-                                os.path.basename(existing.full_path)
-                            ) != key:
-                                continue
-                            if os.path.normpath(existing.full_path) == os.path.normpath(
-                                row.full_path
-                            ):
-                                continue
-                            best = pick_best_session_folder(
-                                [existing.full_path, row.full_path]
-                            )
-                            if best and os.path.normpath(best) == os.path.normpath(
-                                row.full_path
-                            ):
-                                losers.append(existing.full_path)
-                        if losers:
-                            self._remove_library_clip_paths_from_ui(losers)
+                    # Drop FG/BG already listed for this Steam session before CLIP lands
+                    # (including CLIP packages whose nested FG stamp differs).
+                    existing_rows = getattr(self, "_library_clip_rows", None) or []
+                    existing_paths = [str(r.full_path) for r in existing_rows]
+                    dropped = session_duplicate_paths_to_drop(
+                        existing_paths + [row.full_path]
+                    )
+                    losers = [
+                        p
+                        for p in dropped
+                        if os.path.normpath(p) != os.path.normpath(row.full_path)
+                    ]
+                    if losers:
+                        self._remove_library_clip_paths_from_ui(losers)
                 self._insert_scanned_clip_row(row)
                 last_row = row
         finally:
