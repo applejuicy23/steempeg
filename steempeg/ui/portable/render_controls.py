@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.infra.paths import get_resource_path
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
 _FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
@@ -54,6 +55,22 @@ _DASH_CANCEL = (
     "border: 2px solid #a82e2e; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #a82e2e; border: 2px solid #cc3939; }}"
     "QPushButton:pressed {{ background-color: #661a1a; border: 2px solid #a82e2e; }}"
+    "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+)
+_DASH_LEAVE = (
+    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "font-size: {font}px; font-weight: bold; background-color: #383838; color: #e0e0e0; "
+    "border: 2px solid #4a4a4a; border-radius: {radius}px; padding: {pad}; }}"
+    "QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}"
+    "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}"
+    "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+)
+_DASH_RESUME = (
+    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
+    "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
+    "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
+    "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}"
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_LOGS = (
@@ -190,6 +207,22 @@ class PortableRenderControlStrip(QFrame):
         self.btn_start.setStyleSheet(_fmt_dash(_DASH_START))
         self.btn_start.clicked.connect(self._on_start)
 
+        # Leave / Resume — sits beside Start / Start Queue (N); purple while deferred.
+        self.btn_leave = QPushButton(" Leave")
+        self.btn_leave.setObjectName("portableQueueLeaveResume")
+        self.btn_leave.setStyleSheet(_fmt_dash(_DASH_LEAVE))
+        self.btn_leave.setToolTip(
+            "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
+        )
+        leave_icon = get_resource_path("exit.png")
+        if leave_icon and os.path.isfile(leave_icon):
+            self.btn_leave.setIcon(QIcon(leave_icon))
+            self.btn_leave.setIconSize(QSize(16, 16))
+        self.btn_leave.clicked.connect(self._on_leave_resume)
+        self.btn_leave.hide()
+        # Alias for older sync helpers that still look for btn_resume.
+        self.btn_resume = self.btn_leave
+
         self.btn_pause = QPushButton("Pause")
         self.btn_pause.setStyleSheet(_fmt_dash(_DASH_PAUSE))
         self.btn_pause.setEnabled(False)
@@ -204,7 +237,13 @@ class PortableRenderControlStrip(QFrame):
         self.btn_logs.setStyleSheet(_fmt_dash(_DASH_LOGS))
         self.btn_logs.clicked.connect(self._on_logs)
 
-        for btn in (self.btn_start, self.btn_pause, self.btn_cancel, self.btn_logs):
+        for btn in (
+            self.btn_start,
+            self.btn_leave,
+            self.btn_pause,
+            self.btn_cancel,
+            self.btn_logs,
+        ):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(34)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -385,6 +424,7 @@ class PortableRenderControlStrip(QFrame):
 
         start_desktop = getattr(getattr(app, "ui", None), "btn_start", None)
         start_on = bool(start_desktop is not None and start_desktop.isEnabled())
+        deferred = bool(getattr(app, "_queue_scheme_deferred", False))
 
         if rendering:
             self.btn_start.setEnabled(False)
@@ -396,14 +436,90 @@ class PortableRenderControlStrip(QFrame):
             else:
                 self.btn_pause.setText("Pause")
         else:
-            self.btn_start.setEnabled(start_on or has_clip or pending > 0)
+            self.btn_start.setEnabled(
+                start_on or has_clip or (pending > 0 and not deferred)
+            )
             self.btn_pause.setEnabled(False)
             self.btn_cancel.setEnabled(False)
             self.btn_pause.setText("Pause")
-            if pending > 0:
+            if pending > 0 and not deferred:
                 self.btn_start.setText(f"🚩 Start Queue ({pending})")
             else:
                 self.btn_start.setText("🚩 Start")
+        has_jobs = False
+        if hasattr(app, "render_queue"):
+            try:
+                has_jobs = len(app.render_queue) > 0
+            except Exception:
+                has_jobs = pending > 0
+        busy = rendering or bool(getattr(app, "_queue_batch_active", False))
+        self.sync_queue_leave_resume(
+            deferred=deferred and has_jobs,
+            has_jobs=has_jobs,
+            busy=busy,
+        )
+
+    def set_queue_resume_visible(self, visible: bool) -> None:
+        """Compat shim — prefer ``sync_queue_leave_resume``."""
+        if not visible:
+            btn = getattr(self, "btn_leave", None) or getattr(self, "btn_resume", None)
+            if btn is not None:
+                btn.hide()
+                btn.setEnabled(False)
+            return
+        app = self._app
+        has_jobs = False
+        if hasattr(app, "render_queue"):
+            try:
+                has_jobs = len(app.render_queue) > 0
+            except Exception:
+                has_jobs = False
+        deferred = bool(getattr(app, "_queue_scheme_deferred", False)) and has_jobs
+        busy = bool(
+            getattr(app, "_is_rendering", False)
+            or getattr(app, "_queue_batch_active", False)
+        )
+        self.sync_queue_leave_resume(
+            deferred=deferred, has_jobs=has_jobs, busy=busy
+        )
+
+    def sync_queue_leave_resume(
+        self, *, deferred: bool, has_jobs: bool, busy: bool
+    ) -> None:
+        btn = getattr(self, "btn_leave", None) or getattr(self, "btn_resume", None)
+        if btn is None:
+            return
+        show = bool(has_jobs)
+        btn.setVisible(show)
+        btn.setEnabled(show and not bool(busy))
+        if not show:
+            return
+        if deferred:
+            btn.setText(" Resume")
+            btn.setToolTip("Return to queue mode with the same jobs and order")
+            btn.setStyleSheet(_fmt_dash(_DASH_RESUME))
+            resume_icon = get_resource_path("resume.png")
+            if resume_icon and os.path.isfile(resume_icon):
+                btn.setIcon(QIcon(resume_icon))
+                btn.setIconSize(QSize(16, 16))
+        else:
+            btn.setText(" Leave")
+            btn.setToolTip(
+                "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
+            )
+            btn.setStyleSheet(_fmt_dash(_DASH_LEAVE))
+            leave_icon = get_resource_path("exit.png")
+            if leave_icon and os.path.isfile(leave_icon):
+                btn.setIcon(QIcon(leave_icon))
+                btn.setIconSize(QSize(16, 16))
+
+    def _on_leave_resume(self) -> None:
+        if hasattr(self._app, "toggle_render_queue_scheme"):
+            self._app.toggle_render_queue_scheme()
+        self.sync_from_app()
+
+    def _on_resume(self) -> None:
+        self._on_leave_resume()
 
     def _on_start(self) -> None:
         from steempeg.ui.portable.sheets import persist_render_settings
