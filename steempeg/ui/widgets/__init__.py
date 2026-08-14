@@ -6,6 +6,11 @@ from steempeg.ui.widgets.filter_pill_button import FilterPillButton
 from steempeg.ui.widgets.flow_layout import FlowLayout
 from steempeg.ui.widgets.smart_slider_filter import SmartSliderFilter
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.widgets.view_mode_toggle import (
+    ViewModeChrome,
+    format_library_count,
+    format_view_count,
+)
 
 __all__ = [
     "AnimatedRenderBar",
@@ -15,4 +20,7 @@ __all__ = [
     "FlowLayout",
     "SmartSliderFilter",
     "SteempegCheckBox",
+    "ViewModeChrome",
+    "format_library_count",
+    "format_view_count",
 ]

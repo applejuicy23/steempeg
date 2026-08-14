@@ -361,8 +361,11 @@ def chrome_equal(a: UiDensity | None, b: UiDensity | None) -> bool:
 
 
 # Sensible pill radii — Qt Style Sheets often fail/ignore absurd values like 999px.
-_TOGGLE_BTN_R_COMFORT = 12
+# 16 lets comfort Grid/List be a true capsule (half of ~28px segment), matching RQ.
+_TOGGLE_BTN_R_COMFORT = 16
 _TOOLBAR_PILL_R_COMFORT = 20
+VIEW_TOGGLE_TRACK_NAME = "viewToggleTrack"
+VIEW_TOGGLE_SEG_NAME = "viewModeSeg"
 
 
 def _toggle_pad_v(dense: UiDensity) -> int:
@@ -370,9 +373,18 @@ def _toggle_pad_v(dense: UiDensity) -> int:
     return parts[0] if parts else 4
 
 
+def toggle_segment_min_height(dense: UiDensity) -> int:
+    """Total Grid/List segment height (widget box, including padding).
+
+    Render Queue language: comfort ≈ 12px type + 6px vertical pad + 4px chrome.
+    Set in Python (not QSS min-height) so padding is not double-counted.
+    """
+    return dense.toggle_font + _toggle_pad_v(dense) * 2 + 4
+
+
 def toggle_segment_radius(dense: UiDensity) -> int:
-    """Half of the approximate Grid/List segment height → capsule ends."""
-    h = dense.toggle_font + _toggle_pad_v(dense) * 2 + 2
+    """Half of the Grid/List segment height → capsule ends (RQ pill, not a rounded rect)."""
+    h = toggle_segment_min_height(dense)
     return max(8, min(_TOGGLE_BTN_R_COMFORT, h // 2))
 
 
@@ -388,26 +400,35 @@ def toolbar_pill_radius(dense: UiDensity | None = None) -> int:
 
 
 def view_toggle_track_style(dense: UiDensity | None = None) -> str:
-    """Dark track behind Grid/List."""
+    """Dark track behind Grid/List. Object-name selector so parent QFrame sheets cannot square it."""
     d = dense if dense is not None else COMFORT
     r = toggle_track_radius(d)
+    h = toggle_segment_min_height(d) + 4  # 2px layout margins on each side
     return (
-        f"QFrame {{ background-color: #141414; border-radius: {r}px; border: none; }}"
+        f"QFrame#{VIEW_TOGGLE_TRACK_NAME} {{"
+        f" background-color: #141414; border-radius: {r}px; border: none;"
+        f" min-height: {h}px;"
+        f"}}"
     )
 
 
 def view_toggle_button_styles(dense: UiDensity) -> tuple[str, str]:
-    """Active / inactive Grid·List segment styles."""
+    """Active / inactive Grid·List segment styles (RQ padding / type / capsule radius)."""
     r = toggle_segment_radius(dense)
+    font = dense.toggle_font
+    pad = dense.toggle_pad
+    # Named selector beats ancestor QPushButton rules (footer/filter) that square Clips.
     active = (
-        f"background-color: #5138e6; color: white; border-radius: {r}px; "
-        f"font-weight: bold; font-size: {dense.toggle_font}px; "
-        f"padding: {dense.toggle_pad}; border: none;"
+        f"QPushButton#{VIEW_TOGGLE_SEG_NAME} {{"
+        f" background-color: #5138e6; color: #ffffff; border-radius: {r}px;"
+        f" font-weight: bold; font-size: {font}px; padding: {pad}; border: none;"
+        f"}}"
     )
     inactive = (
-        f"background-color: transparent; color: #888888; border-radius: {r}px; "
-        f"font-weight: bold; font-size: {dense.toggle_font}px; "
-        f"padding: {dense.toggle_pad}; border: none;"
+        f"QPushButton#{VIEW_TOGGLE_SEG_NAME} {{"
+        f" background-color: transparent; color: #888888; border-radius: {r}px;"
+        f" font-weight: bold; font-size: {font}px; padding: {pad}; border: none;"
+        f"}}"
     )
     return active, inactive
 
