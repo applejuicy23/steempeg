@@ -8,6 +8,7 @@ from PySide6.QtCore import QRectF, Qt, QSize, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.design_tokens import with_tooltip_style
 from steempeg.ui.icon_assets import add_clip_icon
 from steempeg.ui.player.controls.adaptive_trim_tools import (
@@ -39,7 +40,7 @@ _ADD_CLIP_STYLE = with_tooltip_style(
     "font-weight: bold;"
     "font-size: 13px;"
     "padding: 2px 10px 2px 8px;"
-    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+    f"font-family: {tok.FONT_APP};"
     "}"
     "QPushButton:hover { background-color: rgba(142, 124, 195, 0.35); }"
     "QPushButton:pressed { background-color: rgba(142, 124, 195, 0.48); }"
@@ -254,7 +255,7 @@ def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
-    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
+    chip = max(22, int(getattr(d, "header_chip", 30) or 30))
     font = max(11, int(getattr(d, "header_font", 13) or 13))
     pad = str(getattr(d, "header_status_pad", "3px 10px 3px 8px") or "3px 10px 3px 8px")
     icon_px = max(14, int(getattr(d, "header_chip_icon", 16) or 16))
@@ -267,7 +268,7 @@ def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
         "font-weight: bold;"
         f"font-size: {font}px;"
         f"padding: {pad};"
-        "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        f"font-family: {tok.FONT_APP};"
         "}"
         "QPushButton:hover { background-color: rgba(142, 124, 195, 0.35); }"
         "QPushButton:pressed { background-color: rgba(142, 124, 195, 0.48); }"
@@ -386,41 +387,6 @@ def _ensure_add_clip_button(app) -> None:
 # + Queue = white CTA (clip not queued yet); In queue stays yellow (QUEUED status).
 _ADD_QUEUE_COLOR = "#ffffff"
 _IN_QUEUE_COLOR = "#ffcc00"
-# Painted plus + " Queue" — same padding rhythm as Choose a Clip.
-_ADD_QUEUE_STYLE = with_tooltip_style(
-    "QPushButton {"
-    f"background-color: rgba(255, 255, 255, 0.12);"
-    f"color: {_ADD_QUEUE_COLOR};"
-    f"border: 2px solid {_ADD_QUEUE_COLOR};"
-    "border-radius: 8px;"
-    "font-weight: bold;"
-    "font-size: 13px;"
-    "padding: 2px 10px 2px 8px;"
-    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-    "}"
-    "QPushButton:hover { background-color: rgba(255, 255, 255, 0.22); }"
-    "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.32); }"
-    "QPushButton:disabled {"
-    "background-color: rgba(80, 80, 80, 0.25);"
-    "color: #777777;"
-    "border-color: #555555;"
-    "}"
-)
-
-_IN_QUEUE_STYLE = with_tooltip_style(
-    "QPushButton {"
-    f"background-color: rgba(255, 204, 0, 0.18);"
-    f"color: {_IN_QUEUE_COLOR};"
-    f"border: 2px solid {_IN_QUEUE_COLOR};"
-    "border-radius: 8px;"
-    "font-weight: bold;"
-    "font-size: 13px;"
-    "padding: 2px 10px 2px 8px;"
-    "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-    "}"
-    "QPushButton:hover { background-color: rgba(255, 204, 0, 0.32); }"
-    "QPushButton:pressed { background-color: rgba(255, 204, 0, 0.45); }"
-)
 
 
 def _style_add_to_queue_button(btn: QPushButton, *, dense=None) -> None:
@@ -430,14 +396,35 @@ def _style_add_to_queue_button(btn: QPushButton, *, dense=None) -> None:
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
-    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
+    chip = max(22, int(getattr(d, "header_chip", 30) or 30))
+    font = max(11, int(getattr(d, "header_font", 13) or 13))
+    pad = str(getattr(d, "header_status_pad", "3px 10px 3px 8px") or "3px 10px 3px 8px")
     # Glyph is ~10px; keep iconSize tight so side padding matches Choose a Clip
     # (an 18px empty box was reading as fat left/right margins).
     icon_sz = 12
+    style = with_tooltip_style(
+        "QPushButton {"
+        f"background-color: rgba(255, 255, 255, 0.12);"
+        f"color: {_ADD_QUEUE_COLOR};"
+        f"border: 2px solid {_ADD_QUEUE_COLOR};"
+        "border-radius: 8px;"
+        "font-weight: bold;"
+        f"font-size: {font}px;"
+        f"padding: {pad};"
+        f"font-family: {tok.FONT_APP};"
+        "}"
+        "QPushButton:hover { background-color: rgba(255, 255, 255, 0.22); }"
+        "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.32); }"
+        "QPushButton:disabled {"
+        "background-color: rgba(80, 80, 80, 0.25);"
+        "color: #777777;"
+        "border-color: #555555;"
+        "}"
+    )
     btn.setIcon(bold_plus_icon(icon_sz, _ADD_QUEUE_COLOR))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(" Queue")
-    btn.setStyleSheet(_ADD_QUEUE_STYLE)
+    btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
     btn.setMinimumWidth(0)
     btn.setMaximumWidth(16777215)
@@ -453,18 +440,63 @@ def _style_in_queue_button(btn: QPushButton, text: str, *, dense=None) -> None:
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
-    chip = max(26, int(getattr(d, "header_chip", 30) or 30))
-    icon_sz = 16
+    chip = max(22, int(getattr(d, "header_chip", 30) or 30))
+    font = max(11, int(getattr(d, "header_font", 13) or 13))
+    pad = str(getattr(d, "header_status_pad", "3px 10px 3px 8px") or "3px 10px 3px 8px")
+    icon_sz = max(12, int(getattr(d, "header_chip_icon", 16) or 16))
+    style = with_tooltip_style(
+        "QPushButton {"
+        f"background-color: rgba(255, 204, 0, 0.18);"
+        f"color: {_IN_QUEUE_COLOR};"
+        f"border: 2px solid {_IN_QUEUE_COLOR};"
+        "border-radius: 8px;"
+        "font-weight: bold;"
+        f"font-size: {font}px;"
+        f"padding: {pad};"
+        f"font-family: {tok.FONT_APP};"
+        "}"
+        "QPushButton:hover { background-color: rgba(255, 204, 0, 0.32); }"
+        "QPushButton:pressed { background-color: rgba(255, 204, 0, 0.45); }"
+    )
     btn.setIcon(queue_chip_icon(icon_sz))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(f" {text}")
-    btn.setStyleSheet(_IN_QUEUE_STYLE)
+    btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
     btn.setMinimumWidth(0)
     btn.setMaximumWidth(16777215)
     btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     btn.setToolTip("Open queue and render settings")
+
+
+def refresh_portable_header_size(app) -> None:
+    """Re-apply Choose a Clip / queue chip metrics after header Size S/M/L change."""
+    from steempeg.ui.player_header_layout import player_header_density
+
+    dense = player_header_density(app)
+    choose = getattr(app, "btn_portable_add_clip", None)
+    if choose is not None:
+        try:
+            choose.objectName()
+            _style_add_clip_button(choose, dense=dense)
+        except RuntimeError:
+            pass
+    add_btn = getattr(app, "btn_portable_add_to_queue", None)
+    if add_btn is not None:
+        try:
+            add_btn.objectName()
+            _style_add_to_queue_button(add_btn, dense=dense)
+        except RuntimeError:
+            pass
+    in_btn = getattr(app, "btn_portable_in_queue", None)
+    if in_btn is not None:
+        try:
+            in_btn.objectName()
+            label = in_btn.text().strip() or "Queue"
+            _style_in_queue_button(in_btn, label, dense=dense)
+        except RuntimeError:
+            pass
 
 
 def _on_portable_add_to_queue(app) -> None:
