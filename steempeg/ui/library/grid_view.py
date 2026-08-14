@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 import PySide6.QtCore as qtc
 import PySide6.QtGui as qtg
@@ -10,6 +10,8 @@ import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
+
+_QUEUE_BADGE_CYCLE_MS = 1000
 
 
 def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
@@ -204,6 +206,9 @@ class ClipCard(qtw.QWidget):
         self.queue_index_badge.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
         self.queue_index_badge.move(6, 144 - 32)
         self.queue_index_badge.hide()
+        self._queue_badge_entries: list[tuple[int, str]] = []
+        self._queue_badge_cycle_i = 0
+        self._queue_badge_timer: Optional[qtc.QTimer] = None
         self.set_queue_badge(queue_index, queue_color)
 
         text_widget = qtw.QWidget()
@@ -388,8 +393,14 @@ class ClipCard(qtw.QWidget):
         self,
         queue_index: Optional[int] = None,
         queue_color: Optional[str] = None,
+        *,
+        membership: Optional[Sequence[tuple[int, Optional[str]]]] = None,
     ) -> None:
-        """Show/hide the queue # overlay (bottom-left; game icon stays top-left)."""
+        """Show/hide the queue # overlay (bottom-left; game icon stays top-left).
+
+        When ``membership`` has more than one entry (same clip queued N times),
+        the digit cycles ~1/s through each job's ``queue_index`` (and status colour).
+        """
         badge = getattr(self, "queue_index_badge", None)
         icon = getattr(self, "icon_label", None)
         if badge is None:
@@ -397,18 +408,87 @@ class ClipCard(qtw.QWidget):
         # Game avatar always stays in the top-left corner.
         if icon is not None:
             icon.move(8, 8)
-        if queue_index is None or int(queue_index) <= 0:
+
+        entries: list[tuple[int, str]] = []
+        if membership is not None:
+            for raw_idx, raw_color in membership:
+                try:
+                    idx = int(raw_idx)
+                except (TypeError, ValueError):
+                    continue
+                if idx <= 0:
+                    continue
+                entries.append((idx, (raw_color or "#ffcc00")))
+        elif queue_index is not None:
+            try:
+                idx = int(queue_index)
+            except (TypeError, ValueError):
+                idx = 0
+            if idx > 0:
+                entries.append((idx, queue_color or "#ffcc00"))
+
+        if not entries:
+            self._stop_queue_badge_cycle()
+            self._queue_badge_entries = []
             badge.hide()
+            return
+
+        prev = getattr(self, "_queue_badge_entries", None) or []
+        same_indices = [e[0] for e in prev] == [e[0] for e in entries]
+        self._queue_badge_entries = entries
+        if not same_indices:
+            self._queue_badge_cycle_i = 0
+
+        self._paint_queue_badge_frame()
+        if len(entries) > 1:
+            self._ensure_queue_badge_cycle()
+        else:
+            self._stop_queue_badge_cycle()
+
+    def _paint_queue_badge_frame(self) -> None:
+        badge = getattr(self, "queue_index_badge", None)
+        entries = getattr(self, "_queue_badge_entries", None) or []
+        if badge is None or not entries:
             return
         from steempeg.ui.queue_card_shared import status_dot_style
 
-        color = queue_color or "#ffcc00"
-        badge.setText(str(int(queue_index)))
+        i = int(getattr(self, "_queue_badge_cycle_i", 0) or 0) % len(entries)
+        idx, color = entries[i]
+        badge.setText(str(idx))
         badge.setStyleSheet(status_dot_style(color, size=26))
         # Bottom-left of the thumbnail, clear of the FG/CLIP tag on the right.
         badge.move(6, 144 - 32)
         badge.show()
         badge.raise_()
+
+    def _ensure_queue_badge_cycle(self) -> None:
+        timer = getattr(self, "_queue_badge_timer", None)
+        if timer is None:
+            timer = qtc.QTimer(self)
+            timer.setInterval(_QUEUE_BADGE_CYCLE_MS)
+            timer.timeout.connect(self._on_queue_badge_cycle_tick)
+            self._queue_badge_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_queue_badge_cycle(self) -> None:
+        timer = getattr(self, "_queue_badge_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._queue_badge_cycle_i = 0
+
+    def _on_queue_badge_cycle_tick(self) -> None:
+        entries = getattr(self, "_queue_badge_entries", None) or []
+        if len(entries) <= 1:
+            self._stop_queue_badge_cycle()
+            return
+        self._queue_badge_cycle_i = (
+            int(getattr(self, "_queue_badge_cycle_i", 0) or 0) + 1
+        ) % len(entries)
+        try:
+            self._paint_queue_badge_frame()
+        except RuntimeError:
+            self._stop_queue_badge_cycle()
 
     def set_loading(self, loading: bool, *, percent: int | None = None) -> None:
         """Show a spinner on the thumbnail while this clip opens in the player."""

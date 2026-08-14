@@ -2948,15 +2948,16 @@ class LibraryMixin:
         item.setData(Qt.UserRole, row)
         item.setData(Qt.UserRole + 1, clip_path)
 
-        queue_index = None
-        queue_color = None
+        queue_membership = None
         if clip_path and hasattr(self, "render_queue"):
-            job = self.render_queue.find_by_clip_path(clip_path)
-            if job is not None:
+            jobs = self.render_queue.find_all_by_clip_path(clip_path)
+            if jobs:
                 from steempeg.render.queue import STATUS_COLORS
 
-                queue_index = int(job.queue_index)
-                queue_color = STATUS_COLORS.get(job.status, "#ffcc00")
+                queue_membership = [
+                    (int(j.queue_index), STATUS_COLORS.get(j.status, "#ffcc00"))
+                    for j in jobs
+                ]
 
         card = ClipCard(
             title.strip(),
@@ -2967,11 +2968,11 @@ class LibraryMixin:
             row,
             health_color=health_color,
             round_icon=is_unknown_clip,
-            queue_index=queue_index,
-            queue_color=queue_color,
             on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
             on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
         )
+        if queue_membership:
+            card.set_queue_badge(membership=queue_membership)
         is_dead = False
         if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
             level = title_item.data(_CLIP_HEALTH_ROLE)
@@ -3138,13 +3139,15 @@ class LibraryMixin:
             if not clip_path:
                 card.set_queue_badge(None)
                 continue
-            job = self.render_queue.find_by_clip_path(clip_path)
-            if job is None:
+            jobs = self.render_queue.find_all_by_clip_path(clip_path)
+            if not jobs:
                 card.set_queue_badge(None)
             else:
                 card.set_queue_badge(
-                    int(job.queue_index),
-                    STATUS_COLORS.get(job.status, "#ffcc00"),
+                    membership=[
+                        (int(j.queue_index), STATUS_COLORS.get(j.status, "#ffcc00"))
+                        for j in jobs
+                    ]
                 )
 
     def _clip_grid_column_count(self) -> int:
@@ -4697,8 +4700,6 @@ class LibraryMixin:
         if mode == "list":
             self.grid_clips.hide()
             self.ui.table_clips.show()
-            self.btn_view_list.setStyleSheet(self.toggle_style_active)
-            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
         else:
             self.ui.table_clips.hide()
             self.grid_clips.show()
@@ -4706,10 +4707,17 @@ class LibraryMixin:
             # HARD GEOMETRY RECALCULATION (Pictures won't fly away anymore!)
             self.grid_clips.doItemsLayout()
 
-            self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
-            self.btn_view_grid.setStyleSheet(self.toggle_style_active)
-
             if self.grid_clips.selectedItems():
                 self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])
+
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            chrome.set_mode(mode, emit=False)
+        elif mode == "list":
+            self.btn_view_list.setStyleSheet(self.toggle_style_active)
+            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+        else:
+            self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
+            self.btn_view_grid.setStyleSheet(self.toggle_style_active)
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
