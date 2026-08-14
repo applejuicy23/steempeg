@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.ui.icon_assets import health_icon
+from steempeg.ui import design_tokens as tok
 from steempeg.core import games
 from steempeg.core.clip_identity import (
     is_steam_package_internal_child,
@@ -543,6 +544,7 @@ class LibraryMixin:
             "_health_recheck_worker",
             "_steam_icons_worker",
             "_steam_names_worker",
+            "_screenshot_names_worker",
         ):
             worker = getattr(self, attr, None)
             if worker is not None and worker.isRunning():
@@ -641,6 +643,11 @@ class LibraryMixin:
 
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
+        if hasattr(self, "apply_screenshot_game_names"):
+            try:
+                self.apply_screenshot_game_names(names)
+            except Exception:
+                logging.debug("Screenshot name apply after Steam refresh failed", exc_info=True)
         updated = int(payload.get("updated") or 0)
         total = int(payload.get("total") or 0)
         msg = f"Refreshed {updated} of {total} game name(s) from Steam."
@@ -1175,7 +1182,7 @@ class LibraryMixin:
             f"font-weight: bold;"
             f"font-size: {font_px}px;"
             f"padding: {pad};"
-            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
+            f"font-family: {tok.FONT_APP};"
             f"}}"
             f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.35); }}"
         )
@@ -3539,6 +3546,13 @@ class LibraryMixin:
         self._maybe_start_deferred_rendered_scan()
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
+        if (
+            getattr(self, "_library_panel_mode", "") == "screenshots"
+            and hasattr(self, "_schedule_screenshots_grid_reflow")
+        ):
+            # Scan unlock / scrollbar policy settle can leave IconMode at 2 cols.
+            QTimer.singleShot(0, lambda: self._schedule_screenshots_grid_reflow(0))
+            QTimer.singleShot(80, lambda: self._schedule_screenshots_grid_reflow(0))
 
         if snapshot_restore and want_append:
             # Quiet top-up long after paint — must not compete with first frame.
@@ -4280,6 +4294,12 @@ class LibraryMixin:
         # 1. Cache first
         if app_id in self.game_names_cache:
             return self.game_names_cache[app_id]
+        # 1b. Local Steam appmanifest (installed libraries)
+        local = games.find_local_steam_game_name(app_id)
+        if local:
+            self.game_names_cache[app_id] = local
+            self.save_json_cache()
+            return local
         if not allow_fetch:
             return f"Unknown Game ({app_id})"
         # 2. Otherwise, ask Steam once and remember

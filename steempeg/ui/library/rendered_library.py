@@ -37,7 +37,7 @@ from steempeg.core.rendered_media import (
     parse_app_id_from_name,
     save_markers_sidecar,
 )
-from steempeg.infra.locale_time import format_clip_date, format_clip_time
+from steempeg.infra.locale_time import to_display_datetime
 from steempeg.library.rendered_scan import ScannedRenderedFile
 from steempeg.library.rendered_library_cache import (
     files_from_rendered_library_cache,
@@ -52,7 +52,12 @@ from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillW
 from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
 from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.ui.library.grid_view import ClipCard
-from steempeg.ui.library.screenshot_photo import ScreenshotPhoto
+from steempeg.ui.library.screenshot_photo import (
+    SCREENSHOT_PHOTO_H,
+    SCREENSHOT_PHOTO_SIZE,
+    SCREENSHOT_PHOTO_W,
+    ScreenshotPhoto,
+)
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
 from steempeg.ui.message_dialog import (
@@ -570,6 +575,10 @@ class RenderedLibraryMixin:
                 self.refresh_screenshots_library(force=False)
             else:
                 self._schedule_screenshots_viewport_refresh(50)
+            # IconMode wrap can stay at 2 cols after hide/show unless we reflow
+            # after the stack page has a real width.
+            self._schedule_screenshots_grid_reflow(0)
+            self._schedule_screenshots_grid_reflow(50)
         else:
             self._clear_rendered_selection_visual()
             self._clear_screenshots_selection_visual()
@@ -797,6 +806,16 @@ class RenderedLibraryMixin:
                     self._glue_portable_like_dash_open()
                 except Exception:
                     pass
+
+        # Clip select / Screenshots dock hide-show churns geometry; IconMode wrap
+        # must recalculate against the settled library width (empty right gap).
+        if (
+            getattr(self, "_library_panel_mode", "") == "screenshots"
+            and prev_show is not None
+            and prev_show != show_bottom
+        ):
+            self._schedule_screenshots_grid_reflow(0)
+            self._schedule_screenshots_grid_reflow(80)
 
     def _is_previewing_rendered_media(self) -> bool:
         if getattr(self, "_rendered_media_path", None):
@@ -1335,11 +1354,12 @@ class RenderedLibraryMixin:
         self.grid_screenshots = QListWidget()
         self.grid_screenshots.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid_screenshots.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.grid_screenshots.setWrapping(True)
         self.grid_screenshots.setSpacing(14)
         self.grid_screenshots.setUniformItemSizes(True)
-        # Single select — photos open on click; Ctrl multi not needed here.
-        # ExtendedSelection + IconMode rubber-band was the ghost drag behind tiles.
-        self.grid_screenshots.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Extended multi-select for paint-drag; keep rubber-band ghost off
+        # (SelectionRectVisible False + viewport MouseMove swallow in lifecycle).
+        self.grid_screenshots.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid_screenshots.setSelectionRectVisible(False)
         self.grid_screenshots.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_screenshots.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1363,6 +1383,8 @@ class RenderedLibraryMixin:
             """
             + LIBRARY_SCROLLBAR_VERTICAL
         )
+        # Start hidden; sync_screenshots_vertical_scrollbar switches to AlwaysOn
+        # once content overflows (stable wrap width — no AsNeeded 3→2 sticky).
         self.grid_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.grid_screenshots.itemSelectionChanged.connect(self._on_screenshots_grid_selection_changed)
         self.grid_screenshots.viewport().installEventFilter(self)
@@ -1404,6 +1426,7 @@ class RenderedLibraryMixin:
         title: str = "",
         mtime: float = 0.0,
         source: str = "steempeg",
+        app_id: str = "",
     ) -> ScreenshotPhoto:
         label = (title or "").strip() or os.path.splitext(os.path.basename(path))[0]
         source_key = (source or "steempeg").strip().lower()
@@ -1413,15 +1436,19 @@ class RenderedLibraryMixin:
             try:
                 from datetime import datetime
 
-                dt = datetime.fromtimestamp(float(mtime))
-                when = f"{format_clip_date(dt)}  {format_clip_time(dt)}"
+                # Compact card footer: date only (no time), short month — logo +
+                # "Steam · 13 August 2026  14:30" was eliding into "…".
+                dt = to_display_datetime(datetime.fromtimestamp(float(mtime)))
+                when = dt.strftime("%d %b %Y")
                 subtitle = f"{source_label} · {when}"
             except (OSError, OverflowError, ValueError, TypeError):
                 subtitle = source_label
+        icon_path = self._screenshot_icon_path_for_app_id(app_id) if app_id else ""
         photo = ScreenshotPhoto(
             "",
             title=label,
             subtitle=subtitle,
+            game_icon_path=icon_path,
             on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
                 grid_item, ev, force_single=True
             ),
@@ -1429,6 +1456,7 @@ class RenderedLibraryMixin:
                 grid_item, ev
             ),
             on_activate=lambda p=path: self._on_screenshot_open(p),
+            on_drag_over=lambda gp: self._screenshot_paint_select_at(gp),
         )
         self.grid_screenshots.setItemWidget(item, photo)
         opened = os.path.normpath(path) == os.path.normpath(
@@ -1457,6 +1485,9 @@ class RenderedLibraryMixin:
         path = str(item.data(Qt.ItemDataRole.UserRole) or "")
         grid.removeItemWidget(item)
         photo.deleteLater()
+        # Keep UniformItemSizes / IconMode wrap on the photo cell, not a stale
+        # widget footprint after removeItemWidget.
+        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
         if path:
             live = getattr(self, "_screenshot_live_paths", None)
             if isinstance(live, set):
@@ -1480,9 +1511,17 @@ class RenderedLibraryMixin:
             mtime = 0.0
         game = str(item.data(_SHOT_GAME_ROLE) or "") or _parse_screenshot_game_name(path)
         source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+        app_id = str(item.data(_SHOT_APP_ID_ROLE) or "")
         thumb = str(item.data(_SHOT_THUMB_ROLE) or "")
+        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
         photo = self._attach_screenshot_photo(
-            item, path, thumb, title=game, mtime=mtime, source=source
+            item,
+            path,
+            thumb,
+            title=game,
+            mtime=mtime,
+            source=source,
+            app_id=app_id,
         )
         if load_thumb and not thumb:
             self._queue_screenshot_thumb_for_item(item)
@@ -1490,6 +1529,61 @@ class RenderedLibraryMixin:
 
     def _screenshot_path_key(self, path: str) -> str:
         return os.path.normcase(os.path.normpath(str(path or "")))
+
+    def _schedule_screenshots_grid_reflow(self, delay_ms: int = 0) -> None:
+        """Debounce IconMode wrap against the current viewport width."""
+        timer = getattr(self, "_screenshots_reflow_timer", None)
+        if timer is None:
+            grid = getattr(self, "grid_screenshots", None)
+            timer = QTimer(grid if grid is not None else self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._reflow_screenshots_grid)
+            self._screenshots_reflow_timer = timer
+        timer.start(max(0, int(delay_ms)))
+
+    def _reflow_screenshots_grid(self) -> None:
+        """Force Screenshots IconMode to re-wrap columns for the live width.
+
+        After tab hide/show, splitter widen/narrow, clip-select chrome, or
+        scrollbar policy settle, QListWidget Adjust can keep a stale wrap
+        (empty right gap, or failing to grow 3→4 when the pane gets wider).
+        """
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        if getattr(self, "_library_panel_mode", "") != "screenshots" and not grid.isVisible():
+            return
+
+        from steempeg.ui.library.library_styles import sync_screenshots_vertical_scrollbar
+
+        # Reserve scrollbar gutter before measuring wrap width (AlwaysOn when needed).
+        sync_screenshots_vertical_scrollbar(grid)
+
+        bar = grid.verticalScrollBar()
+        scroll_val = int(bar.value()) if bar is not None else 0
+
+        spacing = max(0, int(grid.spacing()))
+        # Explicit cell size + wrapping toggle invalidates Qt's IconMode cache
+        # more reliably than spacing nudge alone when width *increases*.
+        grid.setGridSize(QSize(SCREENSHOT_PHOTO_W + spacing, SCREENSHOT_PHOTO_H + spacing))
+        grid.setWrapping(False)
+        grid.setWrapping(True)
+        grid.setResizeMode(QListWidget.ResizeMode.Adjust)
+        # Spacing nudge still helps after zero-delta geometry restore.
+        grid.setSpacing(spacing + 1)
+        grid.setSpacing(spacing)
+        try:
+            grid.doItemsLayout()
+        except Exception:
+            pass
+
+        # Column count may change overflow → keep AlwaysOn/Off in sync.
+        sync_screenshots_vertical_scrollbar(grid)
+        if bar is not None:
+            bar.setValue(scroll_val)
+
+        if hasattr(self, "_schedule_screenshots_viewport_refresh"):
+            self._schedule_screenshots_viewport_refresh(0)
 
     def _rebuild_screenshot_path_index(self) -> None:
         index: dict[str, QListWidgetItem] = {}
@@ -1701,16 +1795,77 @@ class RenderedLibraryMixin:
             self._apply_screenshot_thumb(item, thumb_path)
 
     def _screenshot_game_name_for_app_id(self, app_id: str) -> str:
-        """Resolve display name from cache only (no network on UI thread)."""
+        """Resolve display name: games.json → local appmanifest → ``App {id}``.
+
+        No network on the UI thread — Steam API backfill runs async after scan.
+        """
+        from steempeg.core import games as games_mod
+
         aid = str(app_id or "").strip()
         if not aid:
             return "Unknown"
-        cache = getattr(self, "game_names_cache", None) or {}
+        cache = getattr(self, "game_names_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self.game_names_cache = cache
         name = cache.get(aid)
-        if name:
-            return str(name).strip() or f"App {aid}"
+        if name and not games_mod.is_unresolved_game_name(name, aid):
+            return str(name).strip()
+        local = games_mod.find_local_steam_game_name(aid)
+        if local:
+            cache[aid] = local
+            # Persist later with scan/backfill finish — avoid write storms while painting.
+            return local
         return f"App {aid}"
 
+    def _screenshot_icon_path_for_app_id(self, app_id: str) -> str:
+        """Local game logo path only (cache jpg or Steam librarycache). No download."""
+        aid = str(app_id or "").strip()
+        if not aid:
+            return ""
+        memo = getattr(self, "_screenshot_icon_path_memo", None)
+        if not isinstance(memo, dict):
+            memo = {}
+            self._screenshot_icon_path_memo = memo
+        if aid in memo:
+            return memo[aid]
+
+        cache_dir = getattr(self, "cache_dir", None) or ""
+        if cache_dir:
+            cache_icon = os.path.join(cache_dir, f"{aid}.jpg")
+            if os.path.isfile(cache_icon) and os.path.getsize(cache_icon) > 100:
+                memo[aid] = cache_icon
+                return cache_icon
+
+        try:
+            from steempeg.core import games as games_mod
+
+            local = games_mod.find_local_steam_icon(aid)
+        except Exception:
+            local = None
+        if local and os.path.isfile(local):
+            if cache_dir:
+                dest = os.path.join(cache_dir, f"{aid}.jpg")
+                try:
+                    if not os.path.isfile(dest) or os.path.getsize(dest) <= 100:
+                        import shutil
+
+                        shutil.copy2(local, dest)
+                    if os.path.isfile(dest) and os.path.getsize(dest) > 100:
+                        memo[aid] = dest
+                        return dest
+                except OSError:
+                    pass
+            memo[aid] = local
+            return local
+
+        memo[aid] = ""
+        return ""
+
+    def _is_screenshot_placeholder_name(self, name: str, app_id: str = "") -> bool:
+        from steempeg.core import games as games_mod
+
+        return games_mod.is_unresolved_game_name(name, app_id)
     def _collect_steempeg_screenshot_rows(self, folder: str) -> list[dict]:
         rows: list[dict] = []
         if not folder or not os.path.isdir(folder):
@@ -1783,6 +1938,42 @@ class RenderedLibraryMixin:
         if getattr(self, "_screenshots_grid_select_in_progress", False):
             return
         self._sync_screenshot_photo_visuals()
+        self._update_library_count_label()
+
+    def _screenshot_paint_select_at(self, global_pos: QPoint) -> None:
+        """Add-select the card under the cursor (paint / rubber-band style)."""
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        vp = grid.viewport()
+        if vp is None:
+            return
+        local = vp.mapFromGlobal(global_pos)
+        if not vp.rect().contains(local):
+            return
+        item = grid.itemAt(local)
+        if item is None or item.isHidden():
+            return
+        if grid.itemWidget(item) is None and hasattr(self, "_materialize_screenshot_item"):
+            self._materialize_screenshot_item(item)
+        if item.isSelected():
+            # Still refresh chrome if we just materialized a selected placeholder.
+            photo = grid.itemWidget(item)
+            if isinstance(photo, ScreenshotPhoto):
+                photo.set_selected(True)
+            return
+
+        self._screenshots_grid_select_in_progress = True
+        try:
+            grid.blockSignals(True)
+            item.setSelected(True)
+            grid.blockSignals(False)
+        finally:
+            self._screenshots_grid_select_in_progress = False
+
+        photo = grid.itemWidget(item)
+        if isinstance(photo, ScreenshotPhoto):
+            photo.set_selected(True)
         self._update_library_count_label()
 
     def _screenshot_grid_select_item(
@@ -1995,6 +2186,7 @@ class RenderedLibraryMixin:
 
         self._stop_steam_screenshots_scan()
         self._stop_screenshot_thumb_backfill()
+        self._stop_screenshot_game_name_backfill()
         self._pending_cached_screenshot_thumbs = []
         self._screenshot_thumb_chunk_scheduled = False
         self._screenshot_live_paths = set()
@@ -2022,6 +2214,7 @@ class RenderedLibraryMixin:
         if steempeg_rows:
             self._screenshots_viewport_primed = True
             self._schedule_screenshots_viewport_refresh(0)
+            self._schedule_screenshots_grid_reflow(0)
         else:
             self._screenshots_viewport_primed = False
         self._start_steam_screenshots_scan()
@@ -2061,6 +2254,10 @@ class RenderedLibraryMixin:
                 game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
                 source = str(row.get("source") or "steempeg")
                 app_id = str(row.get("app_id") or "")
+                if app_id and (
+                    not game or self._is_screenshot_placeholder_name(game, app_id)
+                ):
+                    game = self._screenshot_game_name_for_app_id(app_id)
                 item = self._make_screenshot_item(
                     path, mtime, game, source=source, app_id=app_id
                 )
@@ -2086,7 +2283,10 @@ class RenderedLibraryMixin:
         self._stop_steam_screenshots_scan()
         from steempeg.ui.library.steam_screenshots_scan import SteamScreenshotsScanWorker
 
-        worker = SteamScreenshotsScanWorker(parent=getattr(self, "ui", None))
+        worker = SteamScreenshotsScanWorker(
+            game_names_cache=getattr(self, "game_names_cache", None) or {},
+            parent=getattr(self, "ui", None),
+        )
         self._steam_screenshots_worker = worker
         worker.batch_ready.connect(self._on_steam_screenshots_batch)
         worker.scan_failed.connect(self._on_steam_screenshots_scan_failed)
@@ -2100,9 +2300,15 @@ class RenderedLibraryMixin:
             if not path:
                 continue
             app_id = str(entry.get("app_id") or "")
-            game = str(entry.get("game_name") or "") or self._screenshot_game_name_for_app_id(
-                app_id
-            )
+            raw_game = str(entry.get("game_name") or "").strip()
+            if app_id and (
+                not raw_game or self._is_screenshot_placeholder_name(raw_game, app_id)
+            ):
+                game = self._screenshot_game_name_for_app_id(app_id)
+            else:
+                game = raw_game or (
+                    self._screenshot_game_name_for_app_id(app_id) if app_id else "Unknown"
+                )
             try:
                 mtime = float(entry.get("mtime") or 0.0)
             except (TypeError, ValueError):
@@ -2173,6 +2379,28 @@ class RenderedLibraryMixin:
             self.set_status(f"Screenshots: {n} (Steam scan failed)")
 
     def _on_steam_screenshots_scan_finished(self, total: int) -> None:
+        worker = getattr(self, "_steam_screenshots_worker", None)
+        if worker is not None:
+            try:
+                for app_id, name in (worker.game_names_cache or {}).items():
+                    aid = str(app_id)
+                    if not aid or not name:
+                        continue
+                    if self._is_screenshot_placeholder_name(str(name), aid):
+                        continue
+                    cache = getattr(self, "game_names_cache", None)
+                    if not isinstance(cache, dict):
+                        cache = {}
+                        self.game_names_cache = cache
+                    if cache.get(aid) != name:
+                        cache[aid] = str(name)
+                if hasattr(self, "save_json_cache"):
+                    try:
+                        self.save_json_cache()
+                    except Exception:
+                        pass
+            except Exception:
+                logging.debug("Steam screenshot name merge failed", exc_info=True)
         self._steam_screenshots_worker = None
         # Let in-flight UI chunks drain, then persist + final status.
         QTimer.singleShot(50, lambda n=int(total or 0): self._finish_steam_screenshots_merge(n))
@@ -2213,6 +2441,8 @@ class RenderedLibraryMixin:
                 steam_total,
             )
             self._schedule_screenshots_viewport_refresh(50)
+            self._schedule_screenshots_grid_reflow(50)
+            self._schedule_screenshot_game_name_backfill()
         finally:
             self._steam_screenshots_finish_busy = False
 
@@ -2259,7 +2489,7 @@ class RenderedLibraryMixin:
         item.setData(_SHOT_SOURCE_ROLE, (source or "steempeg").strip().lower() or "steempeg")
         item.setData(_SHOT_APP_ID_ROLE, str(app_id or ""))
         item.setToolTip(path)
-        item.setSizeHint(QSize(176, 150))
+        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
         return item
 
     def _apply_screenshot_thumb(self, item: QListWidgetItem, thumb_path: str) -> None:
@@ -2373,6 +2603,7 @@ class RenderedLibraryMixin:
         self._ensure_screenshots_widgets()
         self._stop_steam_screenshots_scan()
         self._stop_screenshot_thumb_backfill()
+        self._stop_screenshot_game_name_backfill()
         self._pending_cached_screenshot_thumbs = []
         self._screenshot_thumb_chunk_scheduled = False
         self._screenshot_live_paths = set()
@@ -2412,6 +2643,7 @@ class RenderedLibraryMixin:
         if steempeg_rows:
             self._screenshots_viewport_primed = True
             self._schedule_screenshots_viewport_refresh(0)
+            self._schedule_screenshots_grid_reflow(0)
         else:
             self._screenshots_viewport_primed = False
         if steam_rows:
@@ -2421,7 +2653,154 @@ class RenderedLibraryMixin:
             QTimer.singleShot(100, self._flush_steam_screenshot_chunk)
         elif not steempeg_rows:
             return False
+        else:
+            # Steempeg-only snapshot: still try to resolve any Steam leftovers later.
+            QTimer.singleShot(200, self._schedule_screenshot_game_name_backfill)
         return True
+
+    def _collect_unresolved_screenshot_app_ids(self) -> list[str]:
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return []
+        missing: set[str] = set()
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+            if not app_id:
+                continue
+            game = str(item.data(_SHOT_GAME_ROLE) or "").strip()
+            if self._is_screenshot_placeholder_name(game, app_id):
+                missing.add(app_id)
+        return sorted(missing)
+
+    def _stop_screenshot_game_name_backfill(self) -> None:
+        worker = getattr(self, "_screenshot_names_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(1500)
+        self._screenshot_names_worker = None
+
+    def _schedule_screenshot_game_name_backfill(self) -> None:
+        """Quiet Steam API fill for screenshot app ids missing from games.json."""
+        if getattr(self, "_library_panel_mode", "") not in ("screenshots", "clips", "rendered"):
+            # Still OK to run when screenshots tab exists after restore.
+            pass
+        worker = getattr(self, "_screenshot_names_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        # Don't fight a manual Clips "Refresh game names" job.
+        other = getattr(self, "_steam_names_worker", None)
+        if other is not None and other.isRunning():
+            QTimer.singleShot(1500, self._schedule_screenshot_game_name_backfill)
+            return
+
+        app_ids = self._collect_unresolved_screenshot_app_ids()
+        if not app_ids:
+            return
+
+        from steempeg.ui.library.refresh_workers import SteamNamesRefreshWorker
+
+        worker = SteamNamesRefreshWorker(app_ids, parent=getattr(self, "ui", None))
+        self._screenshot_names_worker = worker
+        worker.finished_names.connect(self._on_screenshot_game_names_finished)
+        worker.failed.connect(self._on_screenshot_game_names_failed)
+        if hasattr(self, "set_status") and getattr(self, "_library_panel_mode", "") == "screenshots":
+            self.set_status(
+                f"Screenshots: resolving {len(app_ids)} game name"
+                f"{'s' if len(app_ids) != 1 else ''}…"
+            )
+        worker.start()
+
+    def _on_screenshot_game_names_failed(self, message: str) -> None:
+        self._screenshot_names_worker = None
+        logging.warning("Screenshot game-name backfill failed: %s", message)
+
+    def _on_screenshot_game_names_finished(self, payload: dict) -> None:
+        self._screenshot_names_worker = None
+        names = (payload or {}).get("names") or {}
+        if not names:
+            return
+        cache = getattr(self, "game_names_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self.game_names_cache = cache
+        for app_id, name in names.items():
+            aid = str(app_id)
+            label = str(name or "").strip()
+            if not aid or not label:
+                continue
+            cache[aid] = label
+        if hasattr(self, "save_json_cache"):
+            try:
+                self.save_json_cache()
+            except Exception:
+                pass
+        updated = self.apply_screenshot_game_names(names)
+        if updated and hasattr(self, "set_status") and getattr(
+            self, "_library_panel_mode", ""
+        ) == "screenshots":
+            self.set_status(f"Screenshots: updated {updated} game name(s)")
+
+    def apply_screenshot_game_names(self, names: dict) -> int:
+        """Apply app_id→name map to screenshot cards + filter selection. Returns rows touched."""
+        if not names:
+            return 0
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return 0
+        normalized = {
+            str(aid): str(name).strip()
+            for aid, name in names.items()
+            if str(aid).strip() and str(name or "").strip()
+        }
+        if not normalized:
+            return 0
+
+        filters = getattr(self, "_screenshots_filter_games", None)
+        touched = 0
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+            new_name = normalized.get(app_id)
+            if not new_name:
+                continue
+            old_name = str(item.data(_SHOT_GAME_ROLE) or "").strip()
+            if old_name == new_name:
+                # Still refresh live icon if we now have a cache logo.
+                photo = grid.itemWidget(item)
+                if isinstance(photo, ScreenshotPhoto):
+                    icon = self._screenshot_icon_path_for_app_id(app_id)
+                    if icon:
+                        photo.set_game_icon(icon)
+                continue
+            item.setData(_SHOT_GAME_ROLE, new_name)
+            touched += 1
+            if isinstance(filters, set) and old_name in filters:
+                filters.discard(old_name)
+                filters.add(new_name)
+            photo = grid.itemWidget(item)
+            if isinstance(photo, ScreenshotPhoto):
+                photo.set_title(new_name)
+                icon = self._screenshot_icon_path_for_app_id(app_id)
+                if icon:
+                    photo.set_game_icon(icon)
+
+        if touched:
+            self._apply_screenshots_filters(refresh_viewport=False)
+            menu = getattr(self, "screenshots_filter_menu", None)
+            if menu is not None and menu.isVisible() and hasattr(menu, "gather_statistics"):
+                menu.gather_statistics(self)
+            folder = self._screenshots_folder_path()
+            snapshot = self._collect_screenshot_grid_snapshot()
+            self._persist_screenshots_library_snapshot(folder, snapshot)
+            self._update_library_count_label()
+        return touched
 
     def apply_screenshots_sorting(self):
         grid = getattr(self, "grid_screenshots", None)
