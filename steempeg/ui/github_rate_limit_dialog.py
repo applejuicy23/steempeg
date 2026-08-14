@@ -26,6 +26,7 @@ class GitHubRateLimitDialog(SteempegDialog):
         rate_limit: RateLimitInfo,
         parent=None,
         *,
+        has_cached_releases: bool = False,
         bar_color: str | None = None,
         bg_color: str | None = None,
     ):
@@ -36,6 +37,7 @@ class GitHubRateLimitDialog(SteempegDialog):
         self._started_at = int(time.time())
         self._wait_seconds = max(1, rate_limit.seconds_remaining)
         self._timer_completed = False
+        self._has_cached_releases = has_cached_releases
 
         root = self.content_layout
 
@@ -45,9 +47,16 @@ class GitHubRateLimitDialog(SteempegDialog):
         )
         root.addWidget(heading)
 
+        if has_cached_releases:
+            follow_up = (
+                "Update Center is showing cached releases, which may be stale. "
+                "Close this window to keep browsing, or wait for the limit to reset."
+            )
+        else:
+            follow_up = "Steempeg will reopen Update Center when the limit resets."
         body = QLabel(
             f"You used all <b>{rate_limit.limit}</b> unauthenticated GitHub API requests for this hour. "
-            "Steempeg will reopen Update Center when the limit resets."
+            f"{follow_up}"
         )
         body.setWordWrap(True)
         body.setTextFormat(Qt.TextFormat.RichText)
@@ -100,5 +109,8 @@ class GitHubRateLimitDialog(SteempegDialog):
             self._timer_completed = True
             self._tick.stop()
             self._bar.set_progress(100.0)
-            self._remaining_label.setText("API unlocked — reopening Update Center…")
+            if self._has_cached_releases:
+                self._remaining_label.setText("API unlocked — close to refresh release list.")
+            else:
+                self._remaining_label.setText("API unlocked — reopening Update Center…")
             QTimer.singleShot(350, self.accept)

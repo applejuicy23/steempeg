@@ -4855,6 +4855,7 @@ class RenderMixin:
         from PySide6.QtCore import QSize
         from PySide6.QtGui import QIcon
 
+        from steempeg.ui import design_tokens as tok
         from steempeg.ui.icon_assets import preview_badge_icon, queue_chip_icon
 
         r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
@@ -4888,7 +4889,7 @@ class RenderMixin:
             f"padding: {pad};"
             f"font-weight: bold;"
             f"font-size: {font_px}px;"
-            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
+            f"font-family: {tok.FONT_APP};"
             f"}}"
         )
         badge.show()
