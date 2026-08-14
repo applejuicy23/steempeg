@@ -53,10 +53,9 @@ from steempeg.ui.ui_density import (
     UiDensity,
     tab_label,
     toolbar_mega_pill_style,
-    view_toggle_button_styles,
-    view_toggle_track_style,
 )
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
+from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
 
 _LIST_TITLE_ICON = 28
 
@@ -656,12 +655,6 @@ class RenderQueuePanel(QWidget):
         self._tool_layout.setSpacing(8)
         tool_layout = self._tool_layout
 
-        self._count_label = QLabel("(0)")
-        self._count_label.setStyleSheet(
-            f"color: #888888; font-weight: bold; font-size: 13px; border: none;"
-            f" background: transparent; {_FONT}"
-        )
-
         # Clear — styled like the Clips Manager sort combo (rounded #383838 field).
         self._btn_clear = QPushButton("  Clear")
         self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -711,40 +704,26 @@ class RenderQueuePanel(QWidget):
         actions_layout.addWidget(self._btn_history)
         actions_layout.addWidget(self._btn_clear)
 
-        lbl_view = QLabel("View")
-        self._lbl_view = lbl_view
-        lbl_view.setStyleSheet(
-            f"color: #777777; font-weight: bold; font-size: 13px; border: none;"
-            f" background: transparent; {_FONT}"
+        # View · Grid/List · (N) — shared chrome with Clips / Rendered / Screenshots
+        self._view_chrome = ViewModeChrome(
+            toolbar,
+            initial_mode=self._view_mode,
+            dense=COMFORT,
         )
+        self._lbl_view = self._view_chrome.lbl_view
+        self._view_toggle_pill = self._view_chrome.toggle_pill
+        self._btn_view_grid = self._view_chrome.btn_view_grid
+        self._btn_view_list = self._view_chrome.btn_view_list
+        self._count_label = self._view_chrome.lbl_count
+        self._toggle_style_active = self._view_chrome.toggle_style_active
+        self._toggle_style_inactive = self._view_chrome.toggle_style_inactive
+        self._view_chrome.mode_changed.connect(self._set_view_mode)
+        self._view_chrome.add_to_layout(tool_layout)
 
-        self._view_toggle_pill = QFrame()
-        self._view_toggle_pill.setStyleSheet(view_toggle_track_style(COMFORT))
-        toggle_layout = QHBoxLayout(self._view_toggle_pill)
-        toggle_layout.setContentsMargins(2, 2, 2, 2)
-        toggle_layout.setSpacing(0)
-
-        self._btn_view_grid = QPushButton("Grid")
-        self._btn_view_list = QPushButton("List")
-        for btn in (self._btn_view_grid, self._btn_view_list):
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFlat(True)
-        self._toggle_style_active, self._toggle_style_inactive = view_toggle_button_styles(COMFORT)
-        self._btn_view_list.clicked.connect(lambda: self._set_view_mode("list"))
-        self._btn_view_grid.clicked.connect(lambda: self._set_view_mode("grid"))
-
-        toggle_layout.addWidget(self._btn_view_grid)
-        toggle_layout.addWidget(self._btn_view_list)
-
-        tool_layout.addWidget(lbl_view)
-        tool_layout.addWidget(self._view_toggle_pill)
-        tool_layout.addWidget(self._count_label)
         tool_layout.addStretch()
         tool_layout.addWidget(actions_group)
         toolbar_row.addWidget(toolbar)
         outer.addLayout(toolbar_row)
-
-        self._sync_view_toggle_buttons()
 
         self._list_container = QFrame()
         self._list_container.setObjectName("queueListContainer")
@@ -879,11 +858,19 @@ class RenderQueuePanel(QWidget):
         if mode not in ("list", "grid") or mode == self._view_mode:
             return
         self._view_mode = mode
-        self._sync_view_toggle_buttons()
+        chrome = getattr(self, "_view_chrome", None)
+        if chrome is not None:
+            chrome.set_mode(mode, emit=False)
+        else:
+            self._sync_view_toggle_buttons()
         self.view_mode_changed.emit(mode)
         self._rebuild_cards()
 
     def _sync_view_toggle_buttons(self) -> None:
+        chrome = getattr(self, "_view_chrome", None)
+        if chrome is not None:
+            chrome.set_mode(self._view_mode, emit=False)
+            return
         active = getattr(self, "_toggle_style_active", None) or _QUEUE_TOGGLE_ACTIVE
         inactive = getattr(self, "_toggle_style_inactive", None) or _QUEUE_TOGGLE_INACTIVE
         if self._view_mode == "list":
@@ -945,17 +932,12 @@ class RenderQueuePanel(QWidget):
         self._tab.apply_density(dense)
         self._tool_layout.setContentsMargins(dense.queue_tool_pad_h, 4, dense.queue_tool_pad_h, 4)
         self._tool_layout.setSpacing(6 if dense.compact else 8)
-        if self._lbl_view is not None:
-            self._lbl_view.setVisible(not dense.compact)
-            self._lbl_view.setStyleSheet(
-                f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
-                f" border: none; background: transparent; {_FONT}"
-            )
-        toggle_active, toggle_inactive = view_toggle_button_styles(dense)
-        # Keep current selection styling via sync helper after stylesheet swap.
-        self._toggle_style_active = toggle_active
-        self._toggle_style_inactive = toggle_inactive
-        self._view_toggle_pill.setStyleSheet(view_toggle_track_style(dense))
+        chrome = getattr(self, "_view_chrome", None)
+        if chrome is not None:
+            chrome.set_mode(self._view_mode, emit=False)
+            chrome.apply_density(dense)
+            self._toggle_style_active = chrome.toggle_style_active
+            self._toggle_style_inactive = chrome.toggle_style_inactive
         if hasattr(self, "_toolbar") and self._toolbar is not None:
             self._toolbar.setStyleSheet(
                 toolbar_mega_pill_style(dense, object_name="queueToolbar")
@@ -995,7 +977,8 @@ class RenderQueuePanel(QWidget):
             self._outer_layout.setContentsMargins(
                 _SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET
             )
-        self._sync_view_toggle_buttons()
+        if chrome is None:
+            self._sync_view_toggle_buttons()
         if (
             prev.queue_thumb_w != dense.queue_thumb_w
             or prev.queue_thumb_h != dense.queue_thumb_h
@@ -1093,7 +1076,11 @@ class RenderQueuePanel(QWidget):
 
     def refresh(self, jobs: list[RenderJob], selected_id: str | None = None) -> None:
         self._selected_id = selected_id
-        self._count_label.setText(f"({len(jobs)})")
+        chrome = getattr(self, "_view_chrome", None)
+        if chrome is not None:
+            chrome.set_count(len(jobs))
+        else:
+            self._count_label.setText(f"({len(jobs)})")
         self._btn_clear.setEnabled(len(jobs) > 0)
         self._jobs = list(jobs)
 
