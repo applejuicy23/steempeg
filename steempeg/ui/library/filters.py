@@ -28,6 +28,7 @@ from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display
 from steempeg.core.dash.health import ClipHealth
 from steempeg.core.steam_paths import steam_id_from_clips_folder
 from steempeg.ui.icon_assets import health_icon
+from steempeg.ui.library.filter_pill_paint import PillPaintDragMixin
 from steempeg.ui.widgets import BlockCombo, FlowLayout
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
@@ -162,7 +163,7 @@ class TimeGroup(QWidget):
 
 
 
-class FilterMenu(QWidget):
+class FilterMenu(PillPaintDragMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
@@ -190,12 +191,6 @@ class FilterMenu(QWidget):
         layout.setSpacing(8)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self._drag_active = False
-        self._drag_layout = None
-        self._drag_btn = None
-        # Remembers each type's checked state across rebuilds, so a type that
-        # disappears (its game was deselected) returns with the SAME state it had,
-        # instead of being force-checked or force-cleared.
         self._type_checked_memory = {}
 
         # --- 1. SUPER HELPER: CREATE CATEGORY MEGA-CAPSULES ---
@@ -295,7 +290,6 @@ class FilterMenu(QWidget):
         self.games_layout = FlowLayout()
         self.games_container.setLayout(self.games_layout)
         self.games_container.setMouseTracking(True)
-        self.games_container.installEventFilter(self)
 
         self._games_scroll = QScrollArea()
         self._games_scroll.setWidgetResizable(True)
@@ -319,7 +313,6 @@ class FilterMenu(QWidget):
         self.types_layout = FlowLayout()
         self.types_container.setLayout(self.types_layout)
         self.types_container.setMouseTracking(True)
-        self.types_container.installEventFilter(self)
         self._type_capsule = create_category_capsule("📂 Type:", self.types_container)
 
         # --- HEALTH (post-29.1; sits with Type/Date in column 2) ---
@@ -327,7 +320,6 @@ class FilterMenu(QWidget):
         self.health_layout = FlowLayout()
         self.health_container.setLayout(self.health_layout)
         self.health_container.setMouseTracking(True)
-        self.health_container.installEventFilter(self)
         self._health_capsule = create_category_capsule("💚 Health:", self.health_container)
 
         self._HEALTH_PILL_TEXT = {
@@ -348,6 +340,7 @@ class FilterMenu(QWidget):
             btn.clicked.connect(self.update_live_count)
             if level == ClipHealth.CURED:
                 btn.hide()
+            self._wire_pill_paint_button(btn)
             self.health_layout.addWidget(btn)
 
         # --- FOLDERS (library roots — fills column 2 with Type/Health) ---
@@ -355,9 +348,22 @@ class FilterMenu(QWidget):
         self.folders_layout = FlowLayout()
         self.folders_container.setLayout(self.folders_layout)
         self.folders_container.setMouseTracking(True)
-        self.folders_container.installEventFilter(self)
         self._folders_capsule = create_category_capsule("📁 Folders:", self.folders_container)
         self._folder_checked_memory = {}
+
+        self._init_pill_paint_drag()
+        self._register_pill_paint_zone(
+            self.games_container, self.games_layout, self._on_games_paint_changed
+        )
+        self._register_pill_paint_zone(
+            self.types_container, self.types_layout, self._on_types_paint_changed
+        )
+        self._register_pill_paint_zone(
+            self.health_container, self.health_layout, self.update_live_count
+        )
+        self._register_pill_paint_zone(
+            self.folders_container, self.folders_layout, self._on_folders_paint_changed
+        )
 
         # --- 3. SMART INPUTS STYLE (Clean, small pills + Rounded Spinners) ---
         temp_dir = tempfile.gettempdir()
@@ -1311,75 +1317,22 @@ class FilterMenu(QWidget):
         finally:
             self.setUpdatesEnabled(True)
 
-    _MOUSE_EVENTS = (
-        QEvent.Type.MouseButtonPress,
-        QEvent.Type.MouseMove,
-        QEvent.Type.MouseButtonRelease,
-    )
-
     def eventFilter(self, source, event):
-        et = event.type()
-        games_c = getattr(self, 'games_container', None)
-        types_c = getattr(self, 'types_container', None)
-        health_c = getattr(self, 'health_container', None)
-        folders_c = getattr(self, 'folders_container', None)
-        pill_hosts = (games_c, types_c, health_c, folders_c)
-        if source in pill_hosts and source is not None and et in self._MOUSE_EVENTS:
-            if source is games_c:
-                layout = self.games_layout
-            elif source is types_c:
-                layout = self.types_layout
-            elif source is health_c:
-                layout = self.health_layout
-            else:
-                layout = self.folders_layout
-            pos = event.position().toPoint()
-            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                btn = self._pill_at(layout, pos)
-                if btn and not btn.isChecked():
-                    self._is_gathering = True
-                    btn.setChecked(True)
-                    self._is_gathering = False
-                    self._drag_active = True
-                    self._drag_layout = layout
-                    self._drag_btn = btn
-                    if layout is self.games_layout:
-                        self._refresh_cascade_after_games()
-                    elif layout is self.types_layout:
-                        self._refresh_cascade_after_types()
-                    elif layout is self.folders_layout:
-                        self._sync_folder_memory()
-                    self.update_live_count()
-                    return True
-            elif et == QEvent.Type.MouseMove and self._drag_active and event.buttons() & Qt.MouseButton.LeftButton:
-                btn = self._pill_at(self._drag_layout, pos)
-                if btn and not btn.isChecked():
-                    self._is_gathering = True
-                    btn.setChecked(True)
-                    self._is_gathering = False
-                    if self._drag_layout is self.games_layout:
-                        self._refresh_cascade_after_games()
-                    elif self._drag_layout is self.types_layout:
-                        self._refresh_cascade_after_types()
-                    elif self._drag_layout is self.folders_layout:
-                        self._sync_folder_memory()
-                    self.update_live_count()
-            elif et == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
-                handled = self._drag_btn is not None
-                self._drag_active = False
-                self._drag_layout = None
-                self._drag_btn = None
-                if handled:
-                    return True
+        if self._try_handle_pill_paint_filter(source, event):
+            return True
         return super().eventFilter(source, event)
 
-    @staticmethod
-    def _pill_at(layout, pos):
-        for i in range(layout.count()):
-            w = layout.itemAt(i).widget()
-            if w and w.geometry().contains(pos):
-                return w
-        return None
+    def _on_games_paint_changed(self):
+        self._refresh_cascade_after_games()
+        self.update_live_count()
+
+    def _on_types_paint_changed(self):
+        self._refresh_cascade_after_types()
+        self.update_live_count()
+
+    def _on_folders_paint_changed(self):
+        self._sync_folder_memory()
+        self.update_live_count()
 
     @staticmethod
     def _sec_to_qtime(seconds):
@@ -1520,6 +1473,7 @@ class FilterMenu(QWidget):
         # Capture the live pill states first, then rebuild from remembered states.
         self._sync_type_memory()
 
+        self._drop_pill_layout_buttons(self.types_layout)
         while self.types_layout.count():
             item = self.types_layout.takeAt(0)
             if item.widget():
@@ -1537,6 +1491,7 @@ class FilterMenu(QWidget):
             btn.setProperty("raw_name", t_name)
             btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(self._on_type_toggled)
+            self._wire_pill_paint_button(btn)
             self.types_layout.addWidget(btn)
 
     def _sync_folder_memory(self):
@@ -1547,6 +1502,7 @@ class FilterMenu(QWidget):
 
     def _rebuild_folder_buttons(self, available_roots, saved_state=None):
         self._sync_folder_memory()
+        self._drop_pill_layout_buttons(self.folders_layout)
         while self.folders_layout.count():
             item = self.folders_layout.takeAt(0)
             if item.widget():
@@ -1580,6 +1536,7 @@ class FilterMenu(QWidget):
             btn.setToolTip(root)
             btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(self._on_folder_toggled)
+            self._wire_pill_paint_button(btn)
             self.folders_layout.addWidget(btn)
 
     def _configured_library_roots(self):
@@ -1736,6 +1693,7 @@ class FilterMenu(QWidget):
 
         full_stats = self._compute_stats()
 
+        self._drop_pill_layout_buttons(self.games_layout)
         while self.games_layout.count():
             item = self.games_layout.takeAt(0)
             if item.widget():
@@ -1754,6 +1712,7 @@ class FilterMenu(QWidget):
             btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_name", name)
             btn.clicked.connect(self._on_game_toggled)
+            self._wire_pill_paint_button(btn)
             self.games_layout.addWidget(btn)
 
         # Seed the type memory: only honor a non-empty saved list on an active filter.

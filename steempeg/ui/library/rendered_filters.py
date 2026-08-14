@@ -10,10 +10,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.ui.library.filter_pill_paint import PillPaintDragMixin
 from steempeg.ui.widgets import FlowLayout
 
 
-class RenderedFilterMenu(QWidget):
+class RenderedFilterMenu(PillPaintDragMixin, QWidget):
     """Rendered filter — Games sits like Type (no scroll padding)."""
 
     def __init__(self, parent=None):
@@ -89,6 +90,14 @@ class RenderedFilterMenu(QWidget):
         self.types_container.setLayout(self.types_layout)
         layout.addWidget(create_category_capsule("📂 Type:", self.types_container), 0)
 
+        self._init_pill_paint_drag()
+        self._register_pill_paint_zone(
+            self.games_container, self.games_layout, self._update_apply_label
+        )
+        self._register_pill_paint_zone(
+            self.types_container, self.types_layout, self._update_apply_label
+        )
+
         bottom_layout = QHBoxLayout()
         bottom_layout.setContentsMargins(0, 10, 0, 0)
 
@@ -130,6 +139,11 @@ class RenderedFilterMenu(QWidget):
         self._outer_layout = main_layout
         self._inner_layout = layout
         self._bottom_layout = bottom_layout
+
+    def eventFilter(self, source, event):  # noqa: N802
+        if self._try_handle_pill_paint_filter(source, event):
+            return True
+        return super().eventFilter(source, event)
 
     def apply_density(self, dense) -> None:
         """Shrink popup chrome for Deck / ultra-narrow windows."""
@@ -295,6 +309,7 @@ class RenderedFilterMenu(QWidget):
                 if tlabel:
                     unique_types.add(str(tlabel))
 
+        self._drop_pill_layout_buttons(self.games_layout)
         while self.games_layout.count():
             item = self.games_layout.takeAt(0)
             if item.widget():
@@ -314,9 +329,11 @@ class RenderedFilterMenu(QWidget):
             btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_name", name)
             btn.clicked.connect(self._update_apply_label)
+            self._wire_pill_paint_button(btn)
             self.games_layout.addWidget(btn)
             self._game_buttons[name] = btn
 
+        self._drop_pill_layout_buttons(self.types_layout)
         while self.types_layout.count():
             item = self.types_layout.takeAt(0)
             if item.widget():
@@ -335,6 +352,7 @@ class RenderedFilterMenu(QWidget):
             btn.setStyleSheet(self._PILL_BTN_STYLE)
             btn.setProperty("raw_type", type_label)
             btn.clicked.connect(self._update_apply_label)
+            self._wire_pill_paint_button(btn)
             self.types_layout.addWidget(btn)
             self._type_buttons[type_label] = btn
 
