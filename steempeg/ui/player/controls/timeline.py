@@ -36,6 +36,10 @@ from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec, MAX_BATCH_SEC
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
+from steempeg.ui.timeline_strip_size import (
+    TimelineStripMetrics,
+    metrics_for_current,
+)
 
 
 def _paint_timeline_marker_pixmap(
@@ -70,15 +74,17 @@ def _paint_timeline_marker_pixmap(
 
 class TimelineCanvas(QWidget):
     """ The inner canvas of the timeline (the one that stretches when you zoom) """
+    # Class defaults = Large (pre-pref baseline). Instance attrs follow Settings S/M/L.
     _RULER_GAP = 4
-    _MAJOR_TICK_H = 11      # +1 vs previous 10 — slightly taller major ticks
-    _MINOR_TICK_H = 5      # +1 vs previous 4
-    _RULER_FONT_PT = 9     # +1 vs previous 8pt
-    # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440.
+    _MAJOR_TICK_H = 11
+    _MINOR_TICK_H = 5
+    _RULER_FONT_PT = 9
+    _BOTTOM_PAD = 8
+    # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440 (= Large).
     _TRACK_H = 13.0
     # Leave room above the strip for timeline pins (20px logical).
     _TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
-    _CANVAS_H = int(_TRACK_Y + _TRACK_H + _RULER_GAP + _MAJOR_TICK_H + 8)
+    _CANVAS_H = int(_TRACK_Y + _TRACK_H + _RULER_GAP + _MAJOR_TICK_H + _BOTTOM_PAD)
 
     pause_requested = Signal()        
     seek_requested = Signal(int)      
@@ -92,7 +98,6 @@ class TimelineCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(self._CANVAS_H)
         self.duration_ms = 0
         self.setMouseTracking(True)
         
@@ -129,53 +134,19 @@ class TimelineCanvas(QWidget):
         self.trim_body_color = QColor(255, 204, 0, 80) 
         self.trim_handle_color = QColor(255, 204, 0) 
 
-        
+        self.has_custom_scroller = False
+        self.master_scroller_w = 4.0
+        self.master_head_h = 0.0
+        self._scroller_src_h = None
+        self._scroller_src_b = None
+        self._scroller_src_p = None
         h = QImage(get_resource_path("scrollerhead2.png"))
         b = QImage(get_resource_path("scrollerbody.png"))
         p = QImage(get_resource_path("scrolleback.png"))
-        
         if not (h.isNull() or b.isNull() or p.isNull()):
-            # Readable playhead on the 13px track. Steam-thin (8×6 head / 2px stem)
-            # was nearly invisible; keep the pre-thin sizes that read clearly.
-            # Even head_w + even body_w keeps the stem pixel-centered.
-            head_w = 10
-            body_w = 6
-            h_s = h.scaledToWidth(head_w, Qt.SmoothTransformation)
-            b_s = b.scaledToWidth(body_w, Qt.SmoothTransformation)
-            p_s = p.scaledToWidth(body_w, Qt.SmoothTransformation)
-            
-            self.master_head_h = float(h_s.height())
-            
-            # Stem spans the purple track (+ a hair taller than the bar).
-            track_h = int(self._TRACK_H)
-            total_h = h_s.height() + track_h + p_s.height()
-            body_x = (head_w - body_w) // 2
-            
-            # Create an absolutely empty, transparent canvas for our monolith.
-            master = QImage(head_w, total_h, QImage.Format_ARGB32)
-            master.fill(Qt.transparent)
-            
-            mp = QPainter(master)
-            mp.setRenderHint(QPainter.Antialiasing, True)
-            mp.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            
-            # 1. Draw the torso exactly in the center. Overlap by 1px to avoid gaps.
-            body_rect = QRect(body_x, h_s.height() - 1, body_w, track_h + 2)
-            brush = QBrush(b_s)
-            mp.setBrushOrigin(body_rect.topLeft())
-            mp.fillRect(body_rect, brush)
-            
-            # 2. Stamp the Head and the Bottom on top.
-            mp.drawImage(0, 0, h_s)
-            mp.drawImage(body_x, h_s.height() + track_h, p_s)
-            mp.end()
-            
-            self.master_scroller_img = master
-            self.master_scroller_w = float(head_w)
-            self.has_custom_scroller = True
-        else:
-            self.has_custom_scroller = False
-            self.master_scroller_w = 4.0
+            self._scroller_src_h = h
+            self._scroller_src_b = b
+            self._scroller_src_p = p
 
         self.hover_x = -1.0
         self.is_hovering = False
@@ -230,7 +201,8 @@ class TimelineCanvas(QWidget):
         )
         self.text_tooltip.hide()
 
-        self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
+        # Strip + ruler from Settings S/M/L (Large = class defaults above).
+        self.apply_strip_metrics(metrics_for_current())
         
         # We use your get_resource_path function so that the icons are always found!
         self.icon_paths = {
@@ -265,6 +237,71 @@ class TimelineCanvas(QWidget):
             '9': get_resource_path("nine.png")
         }
 
+    def apply_strip_metrics(self, metrics: TimelineStripMetrics) -> None:
+        """Apply S/M/L strip + ruler metrics (pins keep the same headroom)."""
+        self._TRACK_H = float(metrics.track_h)
+        self._MAJOR_TICK_H = int(metrics.major_tick_h)
+        self._MINOR_TICK_H = int(metrics.minor_tick_h)
+        self._RULER_FONT_PT = int(metrics.ruler_font_pt)
+        self._RULER_GAP = int(metrics.ruler_gap)
+        self._BOTTOM_PAD = int(metrics.bottom_pad)
+        self._TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
+        self._CANVAS_H = int(
+            self._TRACK_Y
+            + self._TRACK_H
+            + self._RULER_GAP
+            + self._MAJOR_TICK_H
+            + self._BOTTOM_PAD
+        )
+        self.setMinimumHeight(self._CANVAS_H)
+        self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
+        self._rebuild_playhead_scroller()
+        self.update()
+
+    def _rebuild_playhead_scroller(self) -> None:
+        """Rebuild the playhead stem so it matches the current track height."""
+        h = getattr(self, "_scroller_src_h", None)
+        b = getattr(self, "_scroller_src_b", None)
+        p = getattr(self, "_scroller_src_p", None)
+        if h is None or b is None or p is None:
+            self.has_custom_scroller = False
+            self.master_scroller_w = 4.0
+            self.master_head_h = 0.0
+            return
+
+        # Readable playhead on the seek track. Steam-thin (8×6 head / 2px stem)
+        # was nearly invisible; keep the pre-thin sizes that read clearly.
+        # Even head_w + even body_w keeps the stem pixel-centered.
+        head_w = 10
+        body_w = 6
+        h_s = h.scaledToWidth(head_w, Qt.SmoothTransformation)
+        b_s = b.scaledToWidth(body_w, Qt.SmoothTransformation)
+        p_s = p.scaledToWidth(body_w, Qt.SmoothTransformation)
+
+        self.master_head_h = float(h_s.height())
+        track_h = int(self._TRACK_H)
+        total_h = h_s.height() + track_h + p_s.height()
+        body_x = (head_w - body_w) // 2
+
+        master = QImage(head_w, total_h, QImage.Format_ARGB32)
+        master.fill(Qt.transparent)
+
+        mp = QPainter(master)
+        mp.setRenderHint(QPainter.Antialiasing, True)
+        mp.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        body_rect = QRect(body_x, h_s.height() - 1, body_w, track_h + 2)
+        brush = QBrush(b_s)
+        mp.setBrushOrigin(body_rect.topLeft())
+        mp.fillRect(body_rect, brush)
+
+        mp.drawImage(0, 0, h_s)
+        mp.drawImage(body_x, h_s.height() + track_h, p_s)
+        mp.end()
+
+        self.master_scroller_img = master
+        self.master_scroller_w = float(head_w)
+        self.has_custom_scroller = True
 
     def load_steempeg_markers_only(self, *, clip_path=None, cache_dir=None, json_path=None):
         """Bind a clip folder and load Steempeg-owned markers when Steam JSON is missing.
@@ -1722,19 +1759,51 @@ class CustomTimelineWidget(QScrollArea):
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
 
-        canvas_h = TimelineCanvas._CANVAS_H
-        top_gap = 0    # Gap from divisions to strip (your distance to scales)
-        bar_h = 13 # Height of the scrollbar itself
-        bottom_gap = 5    # Gap from the bottom of the strip to the button panel (your distance to the buttons)
-
-        # We calculate the total height of the container automatically:
-        total_h = canvas_h + top_gap + bar_h + bottom_gap
-        #Add 6px to the overall height of the container to compensate for the padding-top.
-        self.setFixedHeight(total_h + 6) 
-        
-
+        self._timeline_top_gap = 0    # Gap from divisions to strip
+        self._timeline_bar_h = 13    # Height of the scrollbar itself
+        self._timeline_bottom_gap = 5  # Gap from the bottom of the strip to the button panel
+        self._recompute_container_height()
 
         # Customize styles: the f-line will insert your gaps directly into the style sheet!
+        self._apply_timeline_chrome_stylesheet()
+        # Own stylesheet on the bar so parent QSS cannot repaint over the stick.
+        overview.setStyleSheet(self._overview_bar_stylesheet())
+        self.zoom_level = 1.0
+        self.update_scrollbar_visibility()
+
+    def _recompute_container_height(self) -> None:
+        canvas_h = int(getattr(self.canvas, "_CANVAS_H", TimelineCanvas._CANVAS_H))
+        top_gap = int(getattr(self, "_timeline_top_gap", 0))
+        bar_h = int(getattr(self, "_timeline_bar_h", 13))
+        bottom_gap = int(getattr(self, "_timeline_bottom_gap", 5))
+        total_h = canvas_h + top_gap + bar_h + bottom_gap
+        # Add 6px to the overall height of the container to compensate for the padding-top.
+        self.setFixedHeight(total_h + 6)
+
+    def _overview_bar_stylesheet(self) -> str:
+        top_gap = int(getattr(self, "_timeline_top_gap", 0))
+        bar_h = int(getattr(self, "_timeline_bar_h", 13))
+        bottom_gap = int(getattr(self, "_timeline_bottom_gap", 5))
+        return f"""
+            QScrollBar:horizontal {{
+                height: {bar_h}px;
+                background: transparent;
+                border: none;
+                margin: {top_gap}px 4px {bottom_gap}px 4px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: transparent;
+                min-width: 30px;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+        """
+
+    def _apply_timeline_chrome_stylesheet(self) -> None:
+        top_gap = int(getattr(self, "_timeline_top_gap", 0))
+        bar_h = int(getattr(self, "_timeline_bar_h", 13))
+        bottom_gap = int(getattr(self, "_timeline_bottom_gap", 5))
         self.setStyleSheet(f"""
             QScrollArea {{ 
                 border: none; 
@@ -1761,24 +1830,31 @@ class CustomTimelineWidget(QScrollArea):
                 width: 0px;
             }}
         """)
-        # Own stylesheet on the bar so parent QSS cannot repaint over the stick.
-        overview.setStyleSheet(f"""
-            QScrollBar:horizontal {{
-                height: {bar_h}px;
-                background: transparent;
-                border: none;
-                margin: {top_gap}px 4px {bottom_gap}px 4px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: transparent;
-                min-width: 30px;
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-        """)
-        self.zoom_level = 1.0
+
+    def apply_strip_size(self, size: object | None = None) -> None:
+        """Live-apply Settings S/M/L to the scrubber strip + ruler."""
+        from steempeg.ui.timeline_strip_size import (
+            get_timeline_strip_size,
+            metrics_for,
+            set_timeline_strip_size,
+        )
+
+        if size is not None:
+            set_timeline_strip_size(size)
+        metrics = metrics_for(get_timeline_strip_size())
+        self.canvas.apply_strip_metrics(metrics)
+        self._recompute_container_height()
+        self._apply_timeline_chrome_stylesheet()
+        overview = self.horizontalScrollBar()
+        if overview is not None:
+            overview.setStyleSheet(self._overview_bar_stylesheet())
+        self.canvas.resize(max(1, self.canvas.width()), self.canvas._CANVAS_H)
+        self.updateGeometry()
         self.update_scrollbar_visibility()
+        if hasattr(overview, "refresh_caret"):
+            overview.refresh_caret()
+        elif overview is not None and overview.isVisible():
+            overview.update()
 
     def set_zoom_state(self, zoom_level: float, scroll_x: int = 0) -> None:
         """Restore timeline zoom/scroll without wheel interaction (per-clip session)."""

@@ -902,9 +902,10 @@ class PlayerMixin:
             self._discard_dead_linux_mpv()
                 
     def set_vlc_volume(self, value):
-        """ Passes the volume value to MPV with a perceptual logarithmic curve for human hearing """
+        """Pass volume to MPV with a perceptual curve (slider may exceed 100% when boost is on)."""
         if hasattr(self, 'player') and self.player:
             if value > 0:
+                # Unity at 100%; >100% soft-amps (e.g. 200% → ~141 mpv volume).
                 perceived_volume = (value / 100.0) ** 0.5 * 100.0
             else:
                 perceived_volume = 0.0
@@ -913,7 +914,7 @@ class PlayerMixin:
     def set_vlc_speed(self, value):
         """ Passes the speed value to MPV (MPV handles pitch correction automatically) """
         if hasattr(self, 'player') and self.player:
-            # Convert 5..30 back to 0.5..3.0
+            # Slider units are tenths (10 = 1.0x); ceiling may be 50 / 80 / 100.
             speed_float = value / 10.0
             self.player.speed = speed_float
             # Keep the timeline's playhead interpolation in sync with the real rate,
