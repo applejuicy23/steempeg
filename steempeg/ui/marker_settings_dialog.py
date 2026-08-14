@@ -1,4 +1,4 @@
-"""Marker settings — CS2 / Classes / On clip tabs."""
+"""Marker settings — On clip / CS2 / Classes tabs."""
 from __future__ import annotations
 
 import os
@@ -356,10 +356,10 @@ class MarkerSettingsDialog(SteempegDialog):
 
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(_TABS)
+        self._tabs.addTab(self._build_markers_tab(), "On clip")
         if self._is_cs2_clip:
             self._tabs.addTab(self._build_cs2_tab(), "CS2")
         self._tabs.addTab(self._build_classes_tab(), "Classes")
-        self._tabs.addTab(self._build_markers_tab(), "On clip")
         root.addWidget(self._tabs, 1)
 
         foot = QHBoxLayout()
