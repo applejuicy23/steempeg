@@ -250,6 +250,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._selected_queue_job_id = None
         self._loading_queue_job = False
         self._queue_batch_active = False
+        self._queue_scheme_deferred = False
+        self._queue_resume_job_id = None
         self.render_thread = None
         self._preview_clip_path = None
         self._clip_session_memory = {}
@@ -604,60 +606,35 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             from steempeg.ui.ui_density import (
                 COMFORT as _DENSITY_COMFORT,
                 toolbar_mega_pill_style,
-                view_toggle_button_styles,
-                view_toggle_track_style,
             )
+            from steempeg.ui.layout_defaults import DEFAULT_LIBRARY_VIEW
+            from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
+
             mega_top_pill.setStyleSheet(
                 toolbar_mega_pill_style(_DENSITY_COMFORT, object_name="libraryToolbarPill")
             )
 
-            # 2. Making the Text White
-            lbl_view = qtw.QLabel("View")
-            lbl_view.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-
-            # 3. Create a List button (inactive) with white text.
-            _active0, _inactive0 = view_toggle_button_styles(_DENSITY_COMFORT)
-            self.toggle_style_inactive = _inactive0
-
-            # 4. Making the Clip Counter White
-            self.lbl_clip_count = qtw.QLabel("• 0 Clips")
-            self.lbl_clip_count.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-            
             top_pill_layout = qtw.QHBoxLayout(mega_top_pill)
-            top_pill_layout.setContentsMargins(16, 6, 16, 6) # Capsule Internal Padding
-            top_pill_layout.setSpacing(14)
+            top_pill_layout.setContentsMargins(16, 6, 16, 6)  # Capsule Internal Padding
+            # Match Render Queue View-plug spacing (View · track · count).
+            top_pill_layout.setSpacing(8)
             self._top_pill_layout = top_pill_layout
 
-            # "View" Text
-            lbl_view = qtw.QLabel("View")
-            self._lbl_view = lbl_view
-            lbl_view.setStyleSheet("color: #777777; font-weight: bold; font-size: 13px;")
-
-            # Grid / List Toggle
-            self.toggle_pill = qtw.QFrame()
-            self.toggle_pill.setStyleSheet(view_toggle_track_style())
-            pill_layout = qtw.QHBoxLayout(self.toggle_pill)
-            pill_layout.setContentsMargins(2, 2, 2, 2)
-            pill_layout.setSpacing(0)
-
-            self.btn_view_grid = qtw.QPushButton("Grid")
-            self.btn_view_list = qtw.QPushButton("List")
-            
-            self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(
-                _DENSITY_COMFORT
+            # View · Grid/List · • N Clips — RQ pill on the toggle; library count wording
+            self.view_mode_chrome = ViewModeChrome(
+                mega_top_pill,
+                initial_mode=DEFAULT_LIBRARY_VIEW,
+                dense=_DENSITY_COMFORT,
+                initial_count="• 0 Clips",
             )
-
-            self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
-            self.btn_view_grid.setStyleSheet(self.toggle_style_active)
-            self.btn_view_list.setCursor(qtc.Qt.PointingHandCursor)
-            self.btn_view_grid.setCursor(qtc.Qt.PointingHandCursor)
-
-            pill_layout.addWidget(self.btn_view_grid)
-            pill_layout.addWidget(self.btn_view_list)
-
-            # Counter
-            self.lbl_clip_count = qtw.QLabel("• 0 Clips")
-            self.lbl_clip_count.setStyleSheet("color: #777777; font-weight: bold; font-size: 13px;")
+            self._lbl_view = self.view_mode_chrome.lbl_view
+            self.toggle_pill = self.view_mode_chrome.toggle_pill
+            self.btn_view_grid = self.view_mode_chrome.btn_view_grid
+            self.btn_view_list = self.view_mode_chrome.btn_view_list
+            self.lbl_clip_count = self.view_mode_chrome.lbl_count
+            self.toggle_style_active = self.view_mode_chrome.toggle_style_active
+            self.toggle_style_inactive = self.view_mode_chrome.toggle_style_inactive
+            self.view_mode_chrome.add_to_layout(top_pill_layout)
 
             # BREATHABLE FILTER PAD
             self.btn_filter_pill = FilterPillButton()
@@ -666,11 +643,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.filter_menu = FilterMenu(self.ui)
             self.btn_filter_pill.clicked.connect(self.show_filter_menu)
             
-            # Lbuild the island
-            top_pill_layout.addWidget(lbl_view)
-            top_pill_layout.addWidget(self.toggle_pill)
-            top_pill_layout.addWidget(self.lbl_clip_count)
-
             top_pill_layout.addWidget(self.btn_filter_pill)
 
             top_bar_layout.addWidget(mega_top_pill)
@@ -766,11 +738,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 else: 
                     original_parent_layout.addLayout(self.left_master_layout)
 
-            # 6. ✨ DYNAMIC TOGGLES UwU ✨
-            from steempeg.ui.layout_defaults import DEFAULT_LIBRARY_VIEW
-
-            self.btn_view_list.clicked.connect(lambda: self.set_view_mode("list"))
-            self.btn_view_grid.clicked.connect(lambda: self.set_view_mode("grid"))
+            # 6. View mode — chrome already owns Grid/List clicks
+            self.view_mode_chrome.mode_changed.connect(self.set_view_mode)
             self.set_view_mode(DEFAULT_LIBRARY_VIEW)
 
         # --- UI INJECTION: SORTING PANEL (NEXT TO FILTER BUTTON) ---
@@ -1244,11 +1213,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
-                min-height: 24px; 
+                min-height: 24px;
+                outline: none;
             }
             QPushButton:hover { background-color: #404040; border: 2px solid #6b5a8e; }
             QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
             QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
+            QPushButton:focus, QPushButton:default {
+                background-color: #383838; color: #ffffff; border: 2px solid #444444; outline: none;
+            }
             QPushButton::menu-indicator { image: none; }
         """
 
@@ -1306,16 +1279,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
         # 5. Color the buttons and add cursors
         if btn_about:
-            btn_about.setStyleSheet(unified_table_style)
-            btn_about.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn_about.setCursor(Qt.PointingHandCursor)
+            self._apply_library_footer_button(btn_about, unified_table_style)
         if btn_update:
-            btn_update.setStyleSheet(unified_table_style)
-            btn_update.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            btn_update.setCursor(Qt.PointingHandCursor)
-        btn_settings.setStyleSheet(unified_table_style)
-        btn_settings.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        btn_settings.setCursor(Qt.PointingHandCursor)
+            self._apply_library_footer_button(btn_update, unified_table_style)
+        self._apply_library_footer_button(btn_settings, unified_table_style)
             
         # 6. LAY OUT THE BUTTONS BY FLOORS (About · Updates · Settings)
         top_row.addWidget(self.folder_picker, 7)
@@ -3830,6 +3797,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.sync_queue_minimum()
             return
 
+        was_deferred = bool(getattr(self, "_queue_scheme_deferred", False))
         self._queue_user_collapsed = False
         # Player scrap between Clips handle and Queue handle → complete the kiss.
         if 0 < player_w < 48:
@@ -3840,6 +3808,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if live_q > 48:
                 self.save_layout_setting("queue_panel_width", live_q)
         self.sync_queue_minimum()
+        # Dragging the queue open while Left is Resume (no jump-to-first-clip).
+        if was_deferred and hasattr(self, "resume_render_queue_scheme"):
+            self.resume_render_queue_scheme()
 
     def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
         """Keep Clips floor only — never re-inflate a kissed-away player column."""
@@ -3996,6 +3967,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._apply_player_density(dense)
         self._apply_queue_density(dense)
 
+    def _apply_library_footer_button(self, btn, style: str) -> None:
+        """About / Check for updates / Settings — no QDialog default/focus ring."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        btn.setStyleSheet(style)
+        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
     def _apply_library_density(self, dense):
         """Clips Manager + footer chrome from the left pane's density."""
         from steempeg.ui.ui_density import (
@@ -4035,43 +4017,64 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             pill_lay.setContentsMargins(
                 dense.toolbar_pad_h, dense.toolbar_pad_v, dense.toolbar_pad_h, dense.toolbar_pad_v
             )
-            pill_lay.setSpacing(dense.toolbar_spacing)
+            # Match Render Queue View-plug spacing (View · track · count).
+            pill_lay.setSpacing(6 if dense.compact else 8)
         for attr in ("_lbl_view", "_lbl_sorting"):
             lbl = getattr(self, attr, None)
             if lbl is not None:
                 lbl.setVisible(not dense.compact)
-                lbl.setStyleSheet(
-                    f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
-                )
-        count = getattr(self, "lbl_clip_count", None)
-        if count is not None:
-            count.setStyleSheet(
-                f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
-            )
-        from steempeg.ui.ui_density import (
-            toolbar_mega_pill_style,
-            view_toggle_button_styles,
-            view_toggle_track_style,
-        )
+                if attr == "_lbl_sorting":
+                    lbl.setStyleSheet(
+                        f"color: #777777; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
+                    )
+        from steempeg.ui.ui_density import toolbar_mega_pill_style
 
         lib_pill = getattr(self, "library_toolbar_pill", None)
         if lib_pill is not None:
             lib_pill.setStyleSheet(
                 toolbar_mega_pill_style(dense, object_name="libraryToolbarPill")
             )
-        toggle_track = getattr(self, "toggle_pill", None)
-        if toggle_track is not None:
-            toggle_track.setStyleSheet(view_toggle_track_style(dense))
-        self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(dense)
-        # Re-apply current view toggle styles
-        mode = getattr(self, "_clips_view_mode", None) or getattr(self, "current_view_mode", "grid")
-        if hasattr(self, "btn_view_grid") and hasattr(self, "btn_view_list"):
-            if mode == "list":
-                self.btn_view_list.setStyleSheet(self.toggle_style_active)
-                self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
-            else:
-                self.btn_view_grid.setStyleSheet(self.toggle_style_active)
-                self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            # Keep chrome mode in sync with the active panel before restyle.
+            mode = getattr(self, "_clips_view_mode", None) or getattr(
+                self, "current_view_mode", "grid"
+            )
+            panel = getattr(self, "_library_panel_mode", "clips")
+            if panel == "rendered":
+                mode = getattr(self, "_rendered_view_mode", "grid")
+            elif panel == "screenshots":
+                mode = "grid"
+            chrome.set_mode(mode, emit=False)
+            chrome.set_grid_only(panel == "screenshots")
+            chrome.apply_density(dense)
+            self.toggle_style_active = chrome.toggle_style_active
+            self.toggle_style_inactive = chrome.toggle_style_inactive
+        else:
+            count = getattr(self, "lbl_clip_count", None)
+            if count is not None:
+                count.setStyleSheet(
+                    f"color: #888888; font-weight: bold; font-size: {dense.toolbar_label_font}px;"
+                )
+            from steempeg.ui.ui_density import (
+                view_toggle_button_styles,
+                view_toggle_track_style,
+            )
+
+            toggle_track = getattr(self, "toggle_pill", None)
+            if toggle_track is not None:
+                toggle_track.setStyleSheet(view_toggle_track_style(dense))
+            self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(dense)
+            mode = getattr(self, "_clips_view_mode", None) or getattr(
+                self, "current_view_mode", "grid"
+            )
+            if hasattr(self, "btn_view_grid") and hasattr(self, "btn_view_list"):
+                if mode == "list":
+                    self.btn_view_list.setStyleSheet(self.toggle_style_active)
+                    self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+                else:
+                    self.btn_view_grid.setStyleSheet(self.toggle_style_active)
+                    self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
 
         filt = getattr(self, "btn_filter_pill", None)
         if filt is not None and hasattr(filt, "apply_density"):
@@ -4107,11 +4110,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 background-color: #383838; color: #ffffff; border: 2px solid #444444;
                 border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
                 font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
-                min-height: {dense.footer_min_h}px;
+                min-height: {dense.footer_min_h}px; outline: none;
             }}
             QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
             QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
             QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}
+            QPushButton:focus, QPushButton:default {{
+                background-color: #383838; color: #ffffff; border: 2px solid #444444; outline: none;
+            }}
             QPushButton::menu-indicator {{ image: none; }}
         """
         self._footer_unified_style = footer_style
@@ -4119,15 +4125,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         btn_update = getattr(self.ui, "btn_update_check", None)
         btn_settings = getattr(self.ui, "btn_settings", None)
         if btn_about is not None:
-            btn_about.setStyleSheet(footer_style)
+            self._apply_library_footer_button(btn_about, footer_style)
         if btn_update is not None:
-            btn_update.setStyleSheet(footer_style)
+            self._apply_library_footer_button(btn_update, footer_style)
             btn_update.setText(updates_button_label(dense))
             btn_update.setToolTip("Check for updates")
         if btn_settings is not None:
             from steempeg.ui.ui_density import settings_button_label
 
-            btn_settings.setStyleSheet(footer_style)
+            self._apply_library_footer_button(btn_settings, footer_style)
             btn_settings.setText(settings_button_label(dense))
             btn_settings.setToolTip("Settings")
         picker = getattr(self, "folder_picker", None)
@@ -4424,6 +4430,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             settings_btn.setStyleSheet(
                 settings_style.format(font=font, radius=radius, pad=pad)
             )
+        leave_btn = getattr(self, "_btn_queue_leave_resume", None)
+        if leave_btn is not None:
+            try:
+                leave_btn.setFixedHeight(dense.dash_btn_h)
+            except RuntimeError:
+                self._btn_queue_leave_resume = None
+        if hasattr(self, "_sync_queue_scheme_chrome"):
+            self._sync_queue_scheme_chrome()
         if hasattr(self, "_sync_dash_queue_status_chrome"):
             self._sync_dash_queue_status_chrome()
         if hasattr(self, "_pin_dash_queue_header_buttons"):
