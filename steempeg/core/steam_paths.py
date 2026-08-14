@@ -165,3 +165,44 @@ def default_clips_dialog_path(clips_folders=None, steam_path=None):
     if os.path.isdir(steam_root):
         return steam_root
     return os.path.expanduser("~")
+
+
+_LIBRARY_PATH_RE = re.compile(r'"path"\s+"([^"]+)"')
+
+
+def discover_steam_library_roots(steam_path=None) -> list[str]:
+    """Steam library folders that may hold ``steamapps/appmanifest_*.acf``.
+
+    Always includes the Steam install ``steamapps`` parent. Extra roots come from
+    ``libraryfolders.vdf`` when present. Missing / unmounted drives are skipped.
+    """
+    steam_root = os.path.normpath(steam_path or get_steam_path())
+    roots: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str | None) -> None:
+        if not path:
+            return
+        # VDF escapes Windows paths as C:\\\\Games\\\\SteamLibrary
+        cleaned = os.path.normpath(path.replace("\\\\", "\\"))
+        key = os.path.normcase(cleaned)
+        if key in seen:
+            return
+        if not os.path.isdir(cleaned):
+            return
+        seen.add(key)
+        roots.append(cleaned)
+
+    add(steam_root)
+
+    vdf = os.path.join(steam_root, "steamapps", "libraryfolders.vdf")
+    if os.path.isfile(vdf):
+        try:
+            with open(vdf, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read()
+        except OSError:
+            text = ""
+        for match in _LIBRARY_PATH_RE.finditer(text):
+            add(match.group(1))
+
+    return roots
