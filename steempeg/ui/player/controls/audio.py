@@ -12,11 +12,19 @@ from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.player_boost import (
+    VOLUME_CEILING_DEFAULT,
+    get_volume_boost_ceiling,
+)
 from steempeg.ui.widgets import SmartSliderFilter
-from steempeg.ui.widgets.gradient_slider import LEVEL_SLIDER_WIDTH, LevelGradientSlider
-
-# Mute (48) + level strip + gap + percent label — room for the unclipped knob.
-_VOLUME_EXPAND_W = 48 + LEVEL_SLIDER_WIDTH + 8 + 45  # 193
+from steempeg.ui.widgets.gradient_slider import (
+    LEVEL_LABEL_GAP,
+    LEVEL_LABEL_W,
+    LEVEL_SLIDER_WIDTH,
+    LevelGradientSlider,
+    level_expand_width,
+    level_slider_x,
+)
 
 _ROUND_BTN_STYLE = """
     QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
@@ -78,14 +86,12 @@ class VolumeControlWidget(QWidget):
 
         self.btn_icon.clicked.connect(self.toggle_mute)
 
-        # 2. The Volume Slider - Starts at X=48 (green→yellow→red level track)
+        # 2. The Volume Slider — groove sits LEVEL_SLIDER_GAP past the mute circle
+        # (widget X is inset by handle radius so the 0%/100% knob is not clipped).
         self.slider = LevelGradientSlider(Qt.Horizontal, self)
-        self.slider.setRange(0, 100)
+        self.slider.setRange(0, VOLUME_CEILING_DEFAULT)
         self.slider.setValue(100)
-        
-        # Hitbox wider than the groove so the 100% knob is not clipped.
         self.slider.setFixedSize(LEVEL_SLIDER_WIDTH, 30)
-        self.slider.move(48, 5)
         self.slider.setCursor(Qt.PointingHandCursor)
 
         # Enabling Smart Click
@@ -94,13 +100,14 @@ class VolumeControlWidget(QWidget):
 
         # 3. Percentage Text
         self.lbl_percent = QLabel("100%", self)
-        self.lbl_percent.setFixedSize(45, 20)
-        self.lbl_percent.move(48 + LEVEL_SLIDER_WIDTH + 8, 10)
+        self.lbl_percent.setFixedSize(LEVEL_LABEL_W, 20)
         self.lbl_percent.setFont(_drag_value_font())
         self.lbl_percent.setStyleSheet(
             f"color: white; font-family: {tok.FONT_APP}; font-weight: bold; background: transparent;"
         )
         self.lbl_percent.setAlignment(Qt.AlignCenter)
+
+        self._layout_strip(40)
 
         self.slider.hide()
         self.lbl_percent.hide()
@@ -118,16 +125,39 @@ class VolumeControlWidget(QWidget):
 
         self.slider.sliderReleased.connect(self.on_slider_released)
 
+        self.apply_volume_ceiling(get_volume_boost_ceiling())
+
     def toggle_mute(self):
         """ Handles the button click to mute or restore volume """
         if self.is_muted or self.slider.value() == 0:
             # Unmute: Restore to previous volume (default to 100 if it was 0)
             restore_val = self.previous_volume if self.previous_volume > 0 else 100
+            if restore_val > self.slider.maximum():
+                restore_val = self.slider.maximum()
             self.slider.setValue(restore_val)
         else:
             # Mute: Save current volume and drop to 0
             self.previous_volume = self.slider.value()
             self.slider.setValue(0)
+
+    def apply_volume_ceiling(self, ceiling: int | None = None) -> int:
+        """Resize the slider max (100 / 150 / 200). Clamps value + mute memory."""
+        try:
+            ceiling = int(ceiling) if ceiling is not None else get_volume_boost_ceiling()
+        except (TypeError, ValueError):
+            ceiling = VOLUME_CEILING_DEFAULT
+        ceiling = max(VOLUME_CEILING_DEFAULT, ceiling)
+        cur = int(self.slider.value())
+        self.slider.setMaximum(ceiling)
+        # Unity tick + hot boost zone only when ceiling is above 100%.
+        self.slider.set_unity_value(100 if ceiling > 100 else None)
+        if cur > ceiling:
+            self.slider.setValue(ceiling)
+        if self.previous_volume > ceiling:
+            self.previous_volume = ceiling
+        # Refresh label / icon for the (possibly clamped) value.
+        self.update_text(self.slider.value())
+        return ceiling
 
     def update_text(self, val):
         """ Updates the text AND dynamically swaps the icon based on the slider value """
@@ -139,10 +169,14 @@ class VolumeControlWidget(QWidget):
             else: self.btn_icon.setText("🔇")
             self.is_muted = True
         else:
-            if val < 33:
+            # Stage icons across the current ceiling so boost ranges still feel graded.
+            hi = max(1, int(self.slider.maximum()) or VOLUME_CEILING_DEFAULT)
+            t1 = max(1, hi // 3)
+            t2 = max(t1 + 1, (2 * hi) // 3)
+            if val < t1:
                 target_icon = self.icon_vol1
                 fallback_txt = "🔈"
-            elif val <= 66:
+            elif val <= t2:
                 target_icon = self.icon_vol2
                 fallback_txt = "🔉"
             else:
@@ -166,10 +200,11 @@ class VolumeControlWidget(QWidget):
         self.slider.show()
         self.lbl_percent.show()
         
+        expand = getattr(self, "_expand_w", level_expand_width(40))
         self.anim.setStartValue(self.width())
-        self.anim.setEndValue(_VOLUME_EXPAND_W)
+        self.anim.setEndValue(expand)
         self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(_VOLUME_EXPAND_W)
+        self.anim_max.setEndValue(expand)
         
         self.anim.start()
         self.anim_max.start()
@@ -232,6 +267,14 @@ class VolumeControlWidget(QWidget):
             self.slider.hide()
             self.lbl_percent.hide()
 
+    def _layout_strip(self, btn_size: int) -> None:
+        """Place strip + percent so the groove hugs the mute circle like old builds."""
+        sx = level_slider_x(btn_size)
+        sy = max(0, (btn_size - 30) // 2)
+        self.slider.move(sx, sy)
+        self.lbl_percent.move(sx + LEVEL_SLIDER_WIDTH + LEVEL_LABEL_GAP, max(0, (btn_size - 20) // 2))
+        self._expand_w = level_expand_width(btn_size)
+
     def apply_density(self, dense) -> None:
         """Scale round mute button with chrome density (keep circular radius)."""
         sz = int(getattr(dense, "chrome_chip", 40) or 40)
@@ -243,3 +286,4 @@ class VolumeControlWidget(QWidget):
         icon = max(16, sz - 16)
         self.btn_icon.setIconSize(QSize(icon, icon))
         self._collapsed_w = collapsed
+        self._layout_strip(sz)

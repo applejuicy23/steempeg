@@ -12,10 +12,20 @@ from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.player_boost import (
+    SPEED_CEILING_DEFAULT,
+    SPEED_UNITY_VALUE,
+    get_speed_boost_ceiling,
+)
 from steempeg.ui.widgets import SmartSliderFilter
-from steempeg.ui.widgets.gradient_slider import LEVEL_SLIDER_WIDTH, LevelGradientSlider
-
-_SPEED_EXPAND_W = 48 + LEVEL_SLIDER_WIDTH + 8 + 45  # 193
+from steempeg.ui.widgets.gradient_slider import (
+    LEVEL_LABEL_GAP,
+    LEVEL_LABEL_W,
+    LEVEL_SLIDER_WIDTH,
+    LevelGradientSlider,
+    level_expand_width,
+    level_slider_x,
+)
 
 _ROUND_BTN_STYLE = """
     QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
@@ -88,23 +98,23 @@ class SpeedControlWidget(QWidget):
         self.btn_icon.clicked.connect(self.toggle_speed)
 
         self.slider = LevelGradientSlider(Qt.Horizontal, self)
-        self.slider.setRange(1, 50)
+        self.slider.setRange(1, SPEED_CEILING_DEFAULT)
         self.slider.setValue(10)
         self.slider.setFixedSize(LEVEL_SLIDER_WIDTH, 30)
-        self.slider.move(48, 5)
         self.slider.setCursor(Qt.PointingHandCursor)
 
         self.smart_filter = SmartSliderFilter(self.slider)
         self.slider.installEventFilter(self.smart_filter)
 
         self.lbl_percent = QLabel("x1.0", self)
-        self.lbl_percent.setFixedSize(45, 20)
-        self.lbl_percent.move(48 + LEVEL_SLIDER_WIDTH + 8, 10)
+        self.lbl_percent.setFixedSize(LEVEL_LABEL_W, 20)
         self.lbl_percent.setFont(_drag_value_font())
         self.lbl_percent.setStyleSheet(
             f"color: white; font-family: {tok.FONT_APP}; font-weight: bold; background: transparent;"
         )
         self.lbl_percent.setAlignment(Qt.AlignCenter)
+
+        self._layout_strip(40)
 
         self.slider.hide()
         self.lbl_percent.hide()
@@ -120,11 +130,34 @@ class SpeedControlWidget(QWidget):
         self.slider.valueChanged.connect(self.update_text)
         self.slider.sliderReleased.connect(self.on_slider_released)
 
-        self.update_text(10)
+        self.apply_speed_ceiling(get_speed_boost_ceiling())
+        self.update_text(self.slider.value())
+
+    def apply_speed_ceiling(self, ceiling: int | None = None) -> int:
+        """Resize the slider max (5.0x / 8.0x / 10.0x in tenths). Clamps value."""
+        try:
+            ceiling = int(ceiling) if ceiling is not None else get_speed_boost_ceiling()
+        except (TypeError, ValueError):
+            ceiling = SPEED_CEILING_DEFAULT
+        ceiling = max(SPEED_CEILING_DEFAULT, ceiling)
+        cur = int(self.slider.value())
+        self.slider.setMaximum(ceiling)
+        # Tick at today's 5.0x hinge when the ceiling is boosted past it.
+        self.slider.set_unity_value(
+            SPEED_UNITY_VALUE if ceiling > SPEED_UNITY_VALUE else None
+        )
+        if cur > ceiling:
+            self.slider.setValue(ceiling)
+        if self.previous_speed > ceiling:
+            self.previous_speed = ceiling
+        self.update_text(self.slider.value())
+        return ceiling
 
     def toggle_speed(self):
         if self.slider.value() == 10:
             restore_val = self.previous_speed if self.previous_speed != 10 else 20
+            if restore_val > self.slider.maximum():
+                restore_val = self.slider.maximum()
             self.slider.setValue(restore_val)
         else:
             self.previous_speed = self.slider.value()
@@ -187,10 +220,11 @@ class SpeedControlWidget(QWidget):
         self.anim_max.stop()
         self.slider.show()
         self.lbl_percent.show()
+        expand = getattr(self, "_expand_w", level_expand_width(40))
         self.anim.setStartValue(self.width())
-        self.anim.setEndValue(_SPEED_EXPAND_W)
+        self.anim.setEndValue(expand)
         self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(_SPEED_EXPAND_W)
+        self.anim_max.setEndValue(expand)
         self.anim.start()
         self.anim_max.start()
         super().enterEvent(event)
@@ -234,6 +268,14 @@ class SpeedControlWidget(QWidget):
             self.slider.hide()
             self.lbl_percent.hide()
 
+    def _layout_strip(self, btn_size: int) -> None:
+        """Place strip + label so the groove hugs the speed circle like old builds."""
+        sx = level_slider_x(btn_size)
+        sy = max(0, (btn_size - 30) // 2)
+        self.slider.move(sx, sy)
+        self.lbl_percent.move(sx + LEVEL_SLIDER_WIDTH + LEVEL_LABEL_GAP, max(0, (btn_size - 20) // 2))
+        self._expand_w = level_expand_width(btn_size)
+
     def apply_density(self, dense) -> None:
         """Scale round speed button with chrome density (keep circular radius)."""
         sz = int(getattr(dense, "chrome_chip", 40) or 40)
@@ -244,3 +286,4 @@ class SpeedControlWidget(QWidget):
         self.btn_icon.setStyleSheet(_round_btn_style(sz))
         self.btn_icon.setIconSize(QSize(max(28, sz - 4), max(12, sz // 2 - 4)))
         self._collapsed_w = collapsed
+        self._layout_strip(sz)
