@@ -44,12 +44,18 @@ _W = 168
 _IMG_H = 94
 _FOOTER_H = 48
 _H = _IMG_H + _FOOTER_H
+# Public cell size for QListWidget sizeHints (must match setFixedSize).
+SCREENSHOT_PHOTO_W = _W
+SCREENSHOT_PHOTO_H = _H
+SCREENSHOT_PHOTO_SIZE = QSize(_W, _H)
 _RADIUS = 10.0
 _PAD_X = 12
 _PAD_TOP = 8
 _PAD_BOTTOM = 8
 _TITLE_GAP = 3
 _DRAG_SLOP = 6
+_ICON_PX = 16
+_ICON_GAP = 5
 
 
 class ScreenshotPhoto(QWidget):
@@ -61,18 +67,22 @@ class ScreenshotPhoto(QWidget):
         *,
         title: str = "",
         subtitle: str = "",
+        game_icon_path: str = "",
         on_left_click: Optional[Callable[[QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[QMouseEvent], None]] = None,
         on_activate: Optional[Callable[[], None]] = None,
+        on_drag_over: Optional[Callable[[QPoint], None]] = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self._on_left_click = on_left_click
         self._on_right_click = on_right_click
         self._on_activate = on_activate
+        self._on_drag_over = on_drag_over
         self._title = (title or "").strip()
         self._subtitle = (subtitle or "").strip()
         self._pix = QPixmap()
+        self._icon = QPixmap()
         self._hovered = False
         self._pressed = False
         self._selected = False
@@ -87,6 +97,8 @@ class ScreenshotPhoto(QWidget):
         self.setMouseTracking(True)
         if thumb_path:
             self.set_thumbnail(thumb_path)
+        if game_icon_path:
+            self.set_game_icon(game_icon_path)
 
     def set_title(self, title: str) -> None:
         text = (title or "").strip()
@@ -112,6 +124,34 @@ class ScreenshotPhoto(QWidget):
         self._pix = QPixmap()
         self.update()
 
+    def set_game_icon(self, icon_path: str) -> None:
+        """Optional ClipCard-style game logo in the footer (local path only)."""
+        if icon_path and os.path.isfile(icon_path):
+            try:
+                from steempeg.ui.icon_shape import shaped_game_icon_pixmap
+
+                src = QPixmap(icon_path)
+                if not src.isNull():
+                    shaped = shaped_game_icon_pixmap(src, _ICON_PX)
+                    if shaped is not None and not shaped.isNull():
+                        self._icon = shaped
+                        self.update()
+                        return
+            except Exception:
+                pix = QPixmap(icon_path)
+                if not pix.isNull():
+                    self._icon = pix.scaled(
+                        _ICON_PX,
+                        _ICON_PX,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    self.update()
+                    return
+        if not self._icon.isNull():
+            self._icon = QPixmap()
+            self.update()
+
     def set_selected(self, selected: bool) -> None:
         if self._selected == selected:
             return
@@ -131,7 +171,9 @@ class ScreenshotPhoto(QWidget):
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         self._hovered = False
-        if self._pressed:
+        # With grabMouse (paint-drag / press-scale), leaving the tile must not
+        # cancel the press — release still arrives on this widget.
+        if self._pressed and self.mouseGrabber() is not self:
             self._finish_press(activate=False)
         self.update()
         super().leaveEvent(event)
@@ -142,22 +184,33 @@ class ScreenshotPhoto(QWidget):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            self._pressed = True
-            self._dragged = False
-            self._press_pos = event.position().toPoint()
-            self._animate_to(0.94)
-            self.grabMouse()
+            self._begin_press(event.position().toPoint())
             if self._on_left_click:
                 self._on_left_click(event)
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def begin_external_press(self, global_pos: QPoint) -> None:
+        """Continue an LMB press that started on a lazy placeholder (viewport)."""
+        self._begin_press(self.mapFromGlobal(global_pos))
+
+    def _begin_press(self, local_pos: QPoint) -> None:
+        self._pressed = True
+        self._dragged = False
+        self._press_pos = QPoint(local_pos)
+        self._animate_to(0.94)
+        self.grabMouse()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._pressed and self._press_pos is not None:
             delta = event.position().toPoint() - self._press_pos
             if abs(delta.x()) > _DRAG_SLOP or abs(delta.y()) > _DRAG_SLOP:
                 self._dragged = True
+                # Paint-select: while LMB is held, select every card under the cursor
+                # (mouse is grabbed, so other cards never see enter events).
+                if self._on_drag_over is not None:
+                    self._on_drag_over(event.globalPosition().toPoint())
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -274,9 +327,19 @@ class ScreenshotPhoto(QWidget):
         text_left = int(foot.left()) + _PAD_X
         text_width = int(foot.width()) - _PAD_X * 2
         title_top = int(foot.top()) + _PAD_TOP
+        title_left = text_left
+        title_width = text_width
+
+        if not self._icon.isNull():
+            icon_y = title_top + max(0, (fm_title.height() - _ICON_PX) // 2)
+            p.drawPixmap(text_left, icon_y, self._icon)
+            title_left = text_left + _ICON_PX + _ICON_GAP
+            title_width = max(24, text_width - _ICON_PX - _ICON_GAP)
 
         if self._subtitle:
-            title_rect = QRect(text_left, title_top, text_width, fm_title.height())
+            # Meta uses full footer text width (under the logo) so the date is
+            # not squeezed by the icon; game name elides first if needed.
+            title_rect = QRect(title_left, title_top, title_width, fm_title.height())
             meta_rect = QRect(
                 text_left,
                 title_rect.bottom() + _TITLE_GAP,
@@ -292,7 +355,7 @@ class ScreenshotPhoto(QWidget):
             p.drawText(
                 title_rect,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, text_width),
+                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
             )
             p.setFont(meta_font)
             p.setPen(_META_FG)
@@ -303,9 +366,9 @@ class ScreenshotPhoto(QWidget):
             )
         else:
             title_rect = QRect(
-                text_left,
+                title_left,
                 title_top,
-                text_width,
+                title_width,
                 int(foot.height()) - _PAD_TOP - _PAD_BOTTOM,
             )
             p.setFont(title_font)
@@ -313,7 +376,7 @@ class ScreenshotPhoto(QWidget):
             p.drawText(
                 title_rect,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, text_width),
+                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
             )
 
         # --- ClipCard border overlay ---
