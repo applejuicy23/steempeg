@@ -322,6 +322,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.health_container.setMouseTracking(True)
         self._health_capsule = create_category_capsule("💚 Health:", self.health_container)
 
+        self._init_pill_paint_drag()
+
         self._HEALTH_PILL_TEXT = {
             ClipHealth.HEALTHY: "Healthy",
             ClipHealth.DEGRADED: "Issues",
@@ -351,7 +353,6 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self._folders_capsule = create_category_capsule("📁 Folders:", self.folders_container)
         self._folder_checked_memory = {}
 
-        self._init_pill_paint_drag()
         self._register_pill_paint_zone(
             self.games_container, self.games_layout, self._on_games_paint_changed
         )
