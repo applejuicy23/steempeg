@@ -275,10 +275,29 @@ class LifecycleMixin:
 
         # Screenshots — photo tiles own click/open; kill IconMode rubber-band ghost.
         # Placeholders (no ScreenshotPhoto yet) need click handling here.
-        if hasattr(self, "grid_screenshots") and source == self.grid_screenshots.viewport():
-            if event.type() == QEvent.Type.Resize:
-                if hasattr(self, "_schedule_screenshots_viewport_refresh"):
+        if hasattr(self, "grid_screenshots") and source in (
+            self.grid_screenshots,
+            self.grid_screenshots.viewport(),
+        ):
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                if hasattr(self, "_schedule_screenshots_grid_reflow"):
+                    # Widen: reflow ASAP so 3→4 columns land. Narrow/show: debounce
+                    # past intermediate chrome widths (avoids sticky 2-col gap).
+                    delay = 0 if event.type() == QEvent.Type.Show else 80
+                    if event.type() == QEvent.Type.Resize:
+                        vp = self.grid_screenshots.viewport()
+                        w = int(vp.width()) if vp is not None else 0
+                        prev = int(getattr(self, "_screenshots_last_reflow_w", 0) or 0)
+                        self._screenshots_last_reflow_w = w
+                        if w > prev:
+                            delay = 0
+                    self._schedule_screenshots_grid_reflow(delay)
+                    if event.type() == QEvent.Type.Show:
+                        self._schedule_screenshots_grid_reflow(50)
+                elif hasattr(self, "_schedule_screenshots_viewport_refresh"):
                     self._schedule_screenshots_viewport_refresh(50)
+                return False
+            if source != self.grid_screenshots.viewport():
                 return False
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
@@ -296,16 +315,23 @@ class LifecycleMixin:
                             self._clear_screenshots_selection_visual()
                         return True
                     if self.grid_screenshots.itemWidget(item) is None:
-                        # Bare placeholder: materialize, select, open (matches photo click).
+                        # Bare placeholder: materialize, select, then hand the press to
+                        # the new photo so paint-drag + release-open match live tiles.
                         if hasattr(self, "_materialize_screenshot_item"):
                             self._materialize_screenshot_item(item)
                         if hasattr(self, "_screenshot_grid_select_item"):
                             self._screenshot_grid_select_item(
                                 item, event, force_single=True
                             )
-                        path = item.data(Qt.ItemDataRole.UserRole) or ""
-                        if path and hasattr(self, "_on_screenshot_open"):
-                            self._on_screenshot_open(str(path))
+                        photo = self.grid_screenshots.itemWidget(item)
+                        if photo is not None and hasattr(photo, "begin_external_press"):
+                            photo.begin_external_press(
+                                event.globalPosition().toPoint()
+                            )
+                        else:
+                            path = item.data(Qt.ItemDataRole.UserRole) or ""
+                            if path and hasattr(self, "_on_screenshot_open"):
+                                self._on_screenshot_open(str(path))
                         return True
             if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
                 return True

@@ -348,6 +348,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 migrate_clip_card_style_in_settings,
             )
             from steempeg.ui.player_header_layout import load_header_layout_from_settings
+            from steempeg.ui.player_header_size import (
+                KEY_PLAYER_HEADER_SIZE,
+                KEY_PLAYER_HEADER_SIZE_REV,
+                load_player_header_size_from_settings,
+                migrate_player_header_size_in_settings,
+            )
+            from steempeg.ui.timeline_strip_size import (
+                KEY_TIMELINE_STRIP_SIZE,
+                KEY_TIMELINE_STRIP_SIZE_REV,
+                load_timeline_strip_size_from_settings,
+                migrate_timeline_strip_size_in_settings,
+            )
+            from steempeg.ui.player_boost import load_player_boost_from_settings
 
             _settings0 = self.load_user_settings() or {}
             load_icon_shape_from_settings(_settings0)
@@ -361,6 +374,27 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
             load_clip_card_style_from_settings(_settings0)
             load_header_layout_from_settings(_settings0)
+            if migrate_player_header_size_in_settings(_settings0):
+                if KEY_PLAYER_HEADER_SIZE in _settings0:
+                    self.save_user_settings(
+                        KEY_PLAYER_HEADER_SIZE, _settings0[KEY_PLAYER_HEADER_SIZE]
+                    )
+                self.save_user_settings(
+                    KEY_PLAYER_HEADER_SIZE_REV,
+                    _settings0[KEY_PLAYER_HEADER_SIZE_REV],
+                )
+            load_player_header_size_from_settings(_settings0)
+            if migrate_timeline_strip_size_in_settings(_settings0):
+                if KEY_TIMELINE_STRIP_SIZE in _settings0:
+                    self.save_user_settings(
+                        KEY_TIMELINE_STRIP_SIZE, _settings0[KEY_TIMELINE_STRIP_SIZE]
+                    )
+                self.save_user_settings(
+                    KEY_TIMELINE_STRIP_SIZE_REV,
+                    _settings0[KEY_TIMELINE_STRIP_SIZE_REV],
+                )
+            load_timeline_strip_size_from_settings(_settings0)
+            load_player_boost_from_settings(_settings0)
             from steempeg.ui.settings_prefs import (
                 KEY_PERMANENT_EXPORT_FOLDER,
                 apply_export_folder,
@@ -1766,9 +1800,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.custom_text_label = QLabel("Select a clip to preview...")
         self.custom_text_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.custom_text_label.setTextFormat(Qt.TextFormat.RichText)
+        from steempeg.ui import design_tokens as _hdr_tok
+        from steempeg.ui.player_header_layout import player_header_title_qfont
+
+        _hdr_font_px = int(_HDR_COMFORT.header_font)
+        self.custom_text_label.setFont(player_header_title_qfont(_hdr_font_px))
         self.custom_text_label.setStyleSheet(
-            f"color: white; font-size: {int(_HDR_COMFORT.header_font)}px; font-weight: 700;"
-            "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            f"color: white; font-size: {_hdr_font_px}px; font-weight: 700;"
+            f"font-family: {_hdr_tok.FONT_APP};"
             "background: transparent; border: none;"
         )
 
@@ -3265,6 +3304,94 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         apply_player_header_layout(self)
         refresh_player_header_text(self)
         self.refresh_player_header_info()
+
+    def refresh_player_header_size(self, size: str | None = None) -> str:
+        """Apply Settings → Visual player header S/M/L without restart."""
+        from steempeg.ui.player_header_layout import apply_player_header_density
+        from steempeg.ui.player_header_size import (
+            get_player_header_size,
+            set_player_header_size,
+        )
+
+        if size is not None:
+            set_player_header_size(size)
+        applied = get_player_header_size()
+        dense = getattr(self, "_ui_density_player", None) or getattr(
+            self, "_ui_density", None
+        )
+        try:
+            apply_player_header_density(self, dense)
+        except Exception:
+            logging.exception("Player header size apply failed for %s", applied)
+        # Portable queue chips re-read sized density for height / icon.
+        try:
+            from steempeg.ui.portable import chrome as portable_chrome
+
+            if getattr(self, "btn_portable_add_clip", None) is not None:
+                portable_chrome.refresh_portable_header_size(self)
+        except Exception:
+            pass
+        return applied
+
+    def refresh_timeline_strip_size(self, size: str | None = None) -> str:
+        """Apply Settings → Visual timeline strip S/M/L without restart."""
+        from steempeg.ui.timeline_strip_size import (
+            get_timeline_strip_size,
+            set_timeline_strip_size,
+        )
+
+        if size is not None:
+            set_timeline_strip_size(size)
+        applied = get_timeline_strip_size()
+        timeline = getattr(self, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "apply_strip_size"):
+            try:
+                timeline.apply_strip_size(applied)
+            except Exception:
+                logging.exception("Timeline strip size apply failed for %s", applied)
+        return applied
+
+    def refresh_player_boost_ceilings(
+        self,
+        volume: int | None = None,
+        speed: int | None = None,
+    ) -> tuple[int, int]:
+        """Apply Settings → Visual volume/speed boost ceilings without restart."""
+        from steempeg.ui.player_boost import (
+            get_speed_boost_ceiling,
+            get_volume_boost_ceiling,
+            set_speed_boost_ceiling,
+            set_volume_boost_ceiling,
+        )
+
+        if volume is not None:
+            set_volume_boost_ceiling(volume)
+        if speed is not None:
+            set_speed_boost_ceiling(speed)
+        applied_vol = get_volume_boost_ceiling()
+        applied_spd = get_speed_boost_ceiling()
+        vol = getattr(self, "volume_control", None)
+        if vol is not None and hasattr(vol, "apply_volume_ceiling"):
+            try:
+                vol.apply_volume_ceiling(applied_vol)
+                # Re-push to mpv so a live ceiling change (or clamp) takes effect.
+                if hasattr(self, "set_vlc_volume"):
+                    self.set_vlc_volume(vol.slider.value())
+            except Exception:
+                logging.exception(
+                    "Volume boost ceiling apply failed for %s", applied_vol
+                )
+        spd = getattr(self, "speed_control", None)
+        if spd is not None and hasattr(spd, "apply_speed_ceiling"):
+            try:
+                spd.apply_speed_ceiling(applied_spd)
+                if hasattr(self, "set_vlc_speed"):
+                    self.set_vlc_speed(spd.slider.value())
+            except Exception:
+                logging.exception(
+                    "Speed boost ceiling apply failed for %s", applied_spd
+                )
+        return applied_vol, applied_spd
 
     def _current_app_bg(self) -> str:
         """Background color for the current chrome theme."""
