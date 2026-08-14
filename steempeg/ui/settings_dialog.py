@@ -48,6 +48,42 @@ from steempeg.ui.player_header_layout import (
     normalize_header_layout,
     set_header_layout,
 )
+from steempeg.ui.player_header_size import (
+    KEY_PLAYER_HEADER_SIZE,
+    KEY_PLAYER_HEADER_SIZE_REV,
+    PLAYER_HEADER_DEFAULT,
+    PLAYER_HEADER_SIZE_LABELS,
+    PLAYER_HEADER_SIZE_REV_CURRENT,
+    get_player_header_size,
+    migrate_player_header_size_in_settings,
+    normalize_player_header_size,
+    set_player_header_size,
+)
+from steempeg.ui.player_boost import (
+    KEY_SPEED_BOOST_CEILING,
+    KEY_VOLUME_BOOST_CEILING,
+    SPEED_CEILING_DEFAULT,
+    SPEED_CEILING_LABELS,
+    VOLUME_CEILING_DEFAULT,
+    VOLUME_CEILING_LABELS,
+    get_speed_boost_ceiling,
+    get_volume_boost_ceiling,
+    normalize_speed_boost_ceiling,
+    normalize_volume_boost_ceiling,
+    set_speed_boost_ceiling,
+    set_volume_boost_ceiling,
+)
+from steempeg.ui.timeline_strip_size import (
+    KEY_TIMELINE_STRIP_SIZE,
+    KEY_TIMELINE_STRIP_SIZE_REV,
+    TIMELINE_STRIP_DEFAULT,
+    TIMELINE_STRIP_LABELS,
+    TIMELINE_STRIP_SIZE_REV_CURRENT,
+    get_timeline_strip_size,
+    migrate_timeline_strip_size_in_settings,
+    normalize_timeline_strip_size,
+    set_timeline_strip_size,
+)
 from steempeg.ui.message_dialog import (
     _BTN_PRIMARY,
     _BTN_SECONDARY,
@@ -499,6 +535,126 @@ class SettingsDialog(SteempegDialog):
         self._header_layout_preview_timer.setInterval(200)
         self._header_layout_preview_timer.timeout.connect(self._apply_header_layout_preview)
         self._combo_header_layout.currentIndexChanged.connect(self._preview_header_layout)
+
+        header_size_row = QHBoxLayout()
+        header_size_row.setSpacing(8)
+        header_size_lbl = QLabel("Size")
+        header_size_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_header_size = QComboBox()
+        self._combo_header_size.setStyleSheet(_COMBO)
+        for value, label in PLAYER_HEADER_SIZE_LABELS:
+            self._combo_header_size.addItem(label, value)
+        migrate_player_header_size_in_settings(settings)
+        cur_header_size = normalize_player_header_size(
+            settings.get(KEY_PLAYER_HEADER_SIZE, get_player_header_size())
+        )
+        self._committed_header_size = cur_header_size
+        hsidx = self._combo_header_size.findData(cur_header_size)
+        self._combo_header_size.setCurrentIndex(max(0, hsidx))
+        header_size_row.addWidget(header_size_lbl)
+        header_size_row.addWidget(self._combo_header_size, 1)
+        v.addLayout(header_size_row)
+        v.addWidget(
+            self._hint(
+                "Mostly height, padding, and chips of the upper player header "
+                "(game title / Select a clip chrome, status chips, queue badges); "
+                "same typeface at all sizes (mild size only). "
+                "Small / Medium / Large. "
+                "Large matches the previous default height. "
+                "Works with window density; empty and filled stay the same height. "
+                "Combo previews live; Save persists. Cancel restores "
+                "the last saved size."
+            )
+        )
+        self._header_size_preview_timer = QTimer(self)
+        self._header_size_preview_timer.setSingleShot(True)
+        self._header_size_preview_timer.setInterval(200)
+        self._header_size_preview_timer.timeout.connect(self._apply_header_size_preview)
+        self._combo_header_size.currentIndexChanged.connect(self._preview_header_size)
+
+        v.addWidget(self._section("Player timeline"))
+        strip_row = QHBoxLayout()
+        strip_row.setSpacing(8)
+        strip_lbl = QLabel("Strip size")
+        strip_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_timeline_strip = QComboBox()
+        self._combo_timeline_strip.setStyleSheet(_COMBO)
+        for value, label in TIMELINE_STRIP_LABELS:
+            self._combo_timeline_strip.addItem(label, value)
+        migrate_timeline_strip_size_in_settings(settings)
+        cur_strip = normalize_timeline_strip_size(
+            settings.get(KEY_TIMELINE_STRIP_SIZE, get_timeline_strip_size())
+        )
+        self._committed_timeline_strip = cur_strip
+        tsidx = self._combo_timeline_strip.findData(cur_strip)
+        self._combo_timeline_strip.setCurrentIndex(max(0, tsidx))
+        strip_row.addWidget(strip_lbl)
+        strip_row.addWidget(self._combo_timeline_strip, 1)
+        v.addLayout(strip_row)
+        v.addWidget(
+            self._hint(
+                "Height of the scrubber strip and time ruler under the player. "
+                "Small / Medium / Large. Large matches the previous default height. "
+                "Combo previews live; Save persists. Cancel restores "
+                "the last saved size."
+            )
+        )
+        self._timeline_strip_preview_timer = QTimer(self)
+        self._timeline_strip_preview_timer.setSingleShot(True)
+        self._timeline_strip_preview_timer.setInterval(200)
+        self._timeline_strip_preview_timer.timeout.connect(self._apply_timeline_strip_preview)
+        self._combo_timeline_strip.currentIndexChanged.connect(self._preview_timeline_strip)
+
+        v.addWidget(self._section("Player controls"))
+        vol_row = QHBoxLayout()
+        vol_row.setSpacing(8)
+        vol_lbl = QLabel("Volume ceiling")
+        vol_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_volume_ceiling = QComboBox()
+        self._combo_volume_ceiling.setStyleSheet(_COMBO)
+        for value, label in VOLUME_CEILING_LABELS:
+            self._combo_volume_ceiling.addItem(label, value)
+        cur_vol = normalize_volume_boost_ceiling(
+            settings.get(KEY_VOLUME_BOOST_CEILING, get_volume_boost_ceiling())
+        )
+        self._committed_volume_ceiling = cur_vol
+        vidx = self._combo_volume_ceiling.findData(cur_vol)
+        self._combo_volume_ceiling.setCurrentIndex(max(0, vidx))
+        vol_row.addWidget(vol_lbl)
+        vol_row.addWidget(self._combo_volume_ceiling, 1)
+        v.addLayout(vol_row)
+
+        spd_row = QHBoxLayout()
+        spd_row.setSpacing(8)
+        spd_lbl = QLabel("Speed ceiling")
+        spd_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_speed_ceiling = QComboBox()
+        self._combo_speed_ceiling.setStyleSheet(_COMBO)
+        for value, label in SPEED_CEILING_LABELS:
+            self._combo_speed_ceiling.addItem(label, value)
+        cur_spd = normalize_speed_boost_ceiling(
+            settings.get(KEY_SPEED_BOOST_CEILING, get_speed_boost_ceiling())
+        )
+        self._committed_speed_ceiling = cur_spd
+        sidx = self._combo_speed_ceiling.findData(cur_spd)
+        self._combo_speed_ceiling.setCurrentIndex(max(0, sidx))
+        spd_row.addWidget(spd_lbl)
+        spd_row.addWidget(self._combo_speed_ceiling, 1)
+        v.addLayout(spd_row)
+        v.addWidget(
+            self._hint(
+                "Optional boost above the normal player caps. "
+                "Volume default is 100% (unity); choose 150% or 200% to soft-amp louder. "
+                "Speed default is 5.0x; choose 8.0x or 10.0x to extend the slider. "
+                "Combo previews live; Save persists. Cancel restores the last saved ceilings."
+            )
+        )
+        self._player_boost_preview_timer = QTimer(self)
+        self._player_boost_preview_timer.setSingleShot(True)
+        self._player_boost_preview_timer.setInterval(200)
+        self._player_boost_preview_timer.timeout.connect(self._apply_player_boost_preview)
+        self._combo_volume_ceiling.currentIndexChanged.connect(self._preview_player_boost)
+        self._combo_speed_ceiling.currentIndexChanged.connect(self._preview_player_boost)
 
         v.addWidget(self._section("Date & time"))
         date_row = QHBoxLayout()
@@ -1152,6 +1308,70 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Player header layout refresh failed for %s", layout)
 
+    def _preview_header_size(self, *_args) -> None:
+        self._header_size_preview_timer.start()
+
+    def _apply_header_size_preview(self) -> None:
+        import logging
+
+        size = normalize_player_header_size(self._combo_header_size.currentData())
+        set_player_header_size(size)
+        logging.info("Player header size preview → %s", size)
+        self._refresh_header_size(size)
+
+    def _refresh_header_size(self, size: str) -> None:
+        if hasattr(self._app, "refresh_player_header_size"):
+            try:
+                self._app.refresh_player_header_size(size)
+            except Exception:
+                import logging
+
+                logging.exception("Player header size refresh failed for %s", size)
+
+    def _preview_timeline_strip(self, *_args) -> None:
+        self._timeline_strip_preview_timer.start()
+
+    def _apply_timeline_strip_preview(self) -> None:
+        import logging
+
+        size = normalize_timeline_strip_size(self._combo_timeline_strip.currentData())
+        set_timeline_strip_size(size)
+        logging.info("Timeline strip size preview → %s", size)
+        self._refresh_timeline_strip(size)
+
+    def _refresh_timeline_strip(self, size: str) -> None:
+        if hasattr(self._app, "refresh_timeline_strip_size"):
+            try:
+                self._app.refresh_timeline_strip_size(size)
+            except Exception:
+                import logging
+
+                logging.exception("Timeline strip size refresh failed for %s", size)
+
+    def _preview_player_boost(self, *_args) -> None:
+        self._player_boost_preview_timer.start()
+
+    def _apply_player_boost_preview(self) -> None:
+        import logging
+
+        vol = normalize_volume_boost_ceiling(self._combo_volume_ceiling.currentData())
+        spd = normalize_speed_boost_ceiling(self._combo_speed_ceiling.currentData())
+        set_volume_boost_ceiling(vol)
+        set_speed_boost_ceiling(spd)
+        logging.info("Player boost preview → volume %s%% / speed %s", vol, spd)
+        self._refresh_player_boost(vol, spd)
+
+    def _refresh_player_boost(self, volume: int, speed: int) -> None:
+        if hasattr(self._app, "refresh_player_boost_ceilings"):
+            try:
+                self._app.refresh_player_boost_ceilings(volume, speed)
+            except Exception:
+                import logging
+
+                logging.exception(
+                    "Player boost refresh failed for volume=%s speed=%s", volume, speed
+                )
+
     def _restore_icon_shape_on_cancel(self) -> None:
         """Undo live preview mutations that were never Saved."""
         import logging
@@ -1203,10 +1423,83 @@ class SettingsDialog(SteempegDialog):
         logging.info("Player header layout cancelled → restored %s", committed)
         self._refresh_header_layout(committed)
 
+    def _restore_header_size_on_cancel(self) -> None:
+        """Undo live player header size preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_header_size_preview_timer", None) is not None:
+            self._header_size_preview_timer.stop()
+        committed = normalize_player_header_size(
+            getattr(self, "_committed_header_size", PLAYER_HEADER_DEFAULT)
+        )
+        live = get_player_header_size()
+        combo = normalize_player_header_size(self._combo_header_size.currentData())
+        if live == committed and combo == committed:
+            return
+        set_player_header_size(committed)
+        logging.info("Player header size cancelled → restored %s", committed)
+        self._refresh_header_size(committed)
+
+    def _restore_timeline_strip_on_cancel(self) -> None:
+        """Undo live timeline strip size preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_timeline_strip_preview_timer", None) is not None:
+            self._timeline_strip_preview_timer.stop()
+        committed = normalize_timeline_strip_size(
+            getattr(self, "_committed_timeline_strip", TIMELINE_STRIP_DEFAULT)
+        )
+        live = get_timeline_strip_size()
+        combo = normalize_timeline_strip_size(self._combo_timeline_strip.currentData())
+        if live == committed and combo == committed:
+            return
+        set_timeline_strip_size(committed)
+        logging.info("Timeline strip size cancelled → restored %s", committed)
+        self._refresh_timeline_strip(committed)
+
+    def _restore_player_boost_on_cancel(self) -> None:
+        """Undo live volume/speed ceiling preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_player_boost_preview_timer", None) is not None:
+            self._player_boost_preview_timer.stop()
+        committed_vol = normalize_volume_boost_ceiling(
+            getattr(self, "_committed_volume_ceiling", VOLUME_CEILING_DEFAULT)
+        )
+        committed_spd = normalize_speed_boost_ceiling(
+            getattr(self, "_committed_speed_ceiling", SPEED_CEILING_DEFAULT)
+        )
+        live_vol = get_volume_boost_ceiling()
+        live_spd = get_speed_boost_ceiling()
+        combo_vol = normalize_volume_boost_ceiling(
+            self._combo_volume_ceiling.currentData()
+        )
+        combo_spd = normalize_speed_boost_ceiling(
+            self._combo_speed_ceiling.currentData()
+        )
+        if (
+            live_vol == committed_vol
+            and live_spd == committed_spd
+            and combo_vol == committed_vol
+            and combo_spd == committed_spd
+        ):
+            return
+        set_volume_boost_ceiling(committed_vol)
+        set_speed_boost_ceiling(committed_spd)
+        logging.info(
+            "Player boost cancelled → restored volume %s%% / speed %s",
+            committed_vol,
+            committed_spd,
+        )
+        self._refresh_player_boost(committed_vol, committed_spd)
+
     def reject(self) -> None:
         self._restore_icon_shape_on_cancel()
         self._restore_clip_card_style_on_cancel()
         self._restore_header_layout_on_cancel()
+        self._restore_header_size_on_cancel()
+        self._restore_timeline_strip_on_cancel()
+        self._restore_player_boost_on_cancel()
         super().reject()
 
     def _persist_settings(self) -> None:
@@ -1280,6 +1573,47 @@ class SettingsDialog(SteempegDialog):
         self._committed_header_layout = header_layout
         logging.info("Player header layout applied → %s (settings.json)", header_layout)
         self._refresh_header_layout(header_layout)
+
+        if getattr(self, "_header_size_preview_timer", None) is not None:
+            self._header_size_preview_timer.stop()
+        header_size = normalize_player_header_size(self._combo_header_size.currentData())
+        self._save_setting(KEY_PLAYER_HEADER_SIZE, header_size)
+        self._save_setting(KEY_PLAYER_HEADER_SIZE_REV, PLAYER_HEADER_SIZE_REV_CURRENT)
+        set_player_header_size(header_size)
+        self._committed_header_size = header_size
+        logging.info("Player header size applied → %s (settings.json)", header_size)
+        self._refresh_header_size(header_size)
+
+        if getattr(self, "_timeline_strip_preview_timer", None) is not None:
+            self._timeline_strip_preview_timer.stop()
+        strip_size = normalize_timeline_strip_size(self._combo_timeline_strip.currentData())
+        self._save_setting(KEY_TIMELINE_STRIP_SIZE, strip_size)
+        self._save_setting(KEY_TIMELINE_STRIP_SIZE_REV, TIMELINE_STRIP_SIZE_REV_CURRENT)
+        set_timeline_strip_size(strip_size)
+        self._committed_timeline_strip = strip_size
+        logging.info("Timeline strip size applied → %s (settings.json)", strip_size)
+        self._refresh_timeline_strip(strip_size)
+
+        if getattr(self, "_player_boost_preview_timer", None) is not None:
+            self._player_boost_preview_timer.stop()
+        vol_ceiling = normalize_volume_boost_ceiling(
+            self._combo_volume_ceiling.currentData()
+        )
+        spd_ceiling = normalize_speed_boost_ceiling(
+            self._combo_speed_ceiling.currentData()
+        )
+        self._save_setting(KEY_VOLUME_BOOST_CEILING, vol_ceiling)
+        self._save_setting(KEY_SPEED_BOOST_CEILING, spd_ceiling)
+        set_volume_boost_ceiling(vol_ceiling)
+        set_speed_boost_ceiling(spd_ceiling)
+        self._committed_volume_ceiling = vol_ceiling
+        self._committed_speed_ceiling = spd_ceiling
+        logging.info(
+            "Player boost applied → volume %s%% / speed %s (settings.json)",
+            vol_ceiling,
+            spd_ceiling,
+        )
+        self._refresh_player_boost(vol_ceiling, spd_ceiling)
 
         date_fmt = normalize_date_format(self._combo_date_format.currentData())
         clock_fmt = normalize_clock_format(self._combo_clock_format.currentData())
