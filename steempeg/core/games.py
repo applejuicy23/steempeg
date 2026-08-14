@@ -11,7 +11,7 @@ import shutil
 
 import requests
 
-from steempeg.core.steam_paths import get_steam_path
+from steempeg.core.steam_paths import discover_steam_library_roots, get_steam_path
 
 _APPDETAILS_URL = "https://store.steampowered.com/api/appdetails"
 _STEAMCMD_INFO_URL = "https://api.steamcmd.net/v1/info/{app_id}"
@@ -20,6 +20,7 @@ _BROWSER_HEADERS = {
                   "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
 }
 _ICON_HASH_RE = re.compile(r"^[a-fA-F0-9]{32,40}\.jpg$")
+_ACF_NAME_RE = re.compile(r'"name"\s+"([^"]+)"')
 # Overrides where scraping is unreliable.
 _ICON_OVERRIDES = {
     "730": "https://shared.fastly.steamstatic.com/community_assets/images/apps/730/8dbc71957312bbd3baea65848b545be9eae2a355.jpg",
@@ -31,6 +32,53 @@ _CDN_HOSTS = (
 )
 # App IDs that failed icon download this process — skip re-fetch for every clip.
 _FAILED_ICON_DOWNLOADS: set[str] = set()
+# Process-local memo for appmanifest lookups (None = miss).
+_LOCAL_NAME_MEMO: dict[str, str | None] = {}
+
+
+def is_unresolved_game_name(name: str | None, app_id: str | None = None) -> bool:
+    """True for placeholders like ``App 1517290`` / ``Unknown Game (id)``."""
+    text = str(name or "").strip()
+    if not text:
+        return True
+    if text.startswith("App "):
+        rest = text[4:].strip()
+        if rest.isdigit():
+            return True
+        if app_id and rest == str(app_id).strip():
+            return True
+    if text.startswith("Unknown Game ("):
+        return True
+    return False
+
+
+def find_local_steam_game_name(app_id, steam_path=None) -> str | None:
+    """Read the display name from a local ``appmanifest_<id>.acf``, if installed."""
+    app_id = str(app_id).strip()
+    if not app_id.isdigit():
+        return None
+    if app_id in _LOCAL_NAME_MEMO:
+        return _LOCAL_NAME_MEMO[app_id]
+
+    name: str | None = None
+    for root in discover_steam_library_roots(steam_path):
+        manifest = os.path.join(root, "steamapps", f"appmanifest_{app_id}.acf")
+        if not os.path.isfile(manifest):
+            continue
+        try:
+            with open(manifest, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read(8192)
+        except OSError:
+            continue
+        match = _ACF_NAME_RE.search(text)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                name = candidate
+                break
+
+    _LOCAL_NAME_MEMO[app_id] = name
+    return name
 
 
 def fetch_game_name(app_id, timeout=3):
@@ -45,6 +93,7 @@ def fetch_game_name(app_id, timeout=3):
     except (requests.RequestException, ValueError, KeyError):
         pass
     return None
+
 
 
 def find_local_steam_icon(app_id, steam_path=None) -> str | None:
