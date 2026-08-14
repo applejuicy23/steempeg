@@ -3462,7 +3462,17 @@ class RenderedLibraryMixin:
         if not hasattr(self, "lbl_clip_count"):
             return
 
+        from steempeg.ui.widgets.view_mode_toggle import format_library_count
+
         mode = getattr(self, "_library_panel_mode", "clips")
+        chrome = getattr(self, "view_mode_chrome", None)
+
+        def _set(value, noun: str):
+            text = format_library_count(value, noun)
+            if chrome is not None:
+                chrome.set_count(text)
+            else:
+                self.lbl_clip_count.setText(text)
 
         if mode == "rendered":
             if getattr(self, "_rendered_scan_active", False):
@@ -3470,29 +3480,27 @@ class RenderedLibraryMixin:
                     n = self.table_rendered.rowCount()
                     hidden = sum(1 for r in range(n) if self.table_rendered.isRowHidden(r))
                     visible = n - hidden
-                    self.lbl_clip_count.setText(
-                        f"• {visible} Files" if visible > 0 else "• … Files"
-                    )
+                    _set(visible if visible > 0 else "…", "Files")
                 else:
-                    self.lbl_clip_count.setText("• … Files")
+                    _set("…", "Files")
             elif getattr(self, "_clips_scan_active", False) or (
                 getattr(self, "_startup_library_scan_active", False)
                 and not getattr(self, "_rendered_scan_active", False)
             ):
-                self.lbl_clip_count.setText("• … Files")
+                _set("…", "Files")
             elif hasattr(self, "table_rendered"):
                 n = self.table_rendered.rowCount()
                 hidden = sum(1 for r in range(n) if self.table_rendered.isRowHidden(r))
                 visible = n - hidden
-                self.lbl_clip_count.setText(f"• {visible} Files")
+                _set(visible, "Files")
             else:
-                self.lbl_clip_count.setText("• 0 Files")
+                _set(0, "Files")
             return
 
         if mode == "screenshots":
             grid = getattr(self, "grid_screenshots", None)
             if grid is None:
-                self.lbl_clip_count.setText("• 0 Shots")
+                _set(0, "Shots")
                 return
             n = grid.count()
             visible = sum(
@@ -3500,7 +3508,7 @@ class RenderedLibraryMixin:
                 for i in range(n)
                 if (item := grid.item(i)) is not None and not item.isHidden()
             )
-            self.lbl_clip_count.setText(f"• {visible} Shots")
+            _set(visible, "Shots")
             return
 
         if not hasattr(self.ui, "table_clips"):
@@ -3510,23 +3518,27 @@ class RenderedLibraryMixin:
         # Honour row-hidden state from Apply Filters (same as Rendered files).
         visible = sum(1 for r in range(n) if not table.isRowHidden(r))
         if getattr(self, "_clips_scan_active", False):
-            self.lbl_clip_count.setText(
-                f"• {visible} Clips" if visible > 0 else "• … Clips"
-            )
+            _set(visible if visible > 0 else "…", "Clips")
         else:
-            self.lbl_clip_count.setText(f"• {visible} Clips")
+            _set(visible, "Clips")
 
     def _apply_rendered_view_mode(self):
         mode = getattr(self, "_rendered_view_mode", "grid")
         if mode == "list":
             self.grid_rendered.hide()
             self.table_rendered.show()
-            self.btn_view_list.setStyleSheet(self.toggle_style_active)
-            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
         else:
             self.table_rendered.hide()
             self.grid_rendered.show()
             self.grid_rendered.doItemsLayout()
+
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            chrome.set_mode(mode, emit=False)
+        elif mode == "list":
+            self.btn_view_list.setStyleSheet(self.toggle_style_active)
+            self.btn_view_grid.setStyleSheet(self.toggle_style_inactive)
+        else:
             self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
             self.btn_view_grid.setStyleSheet(self.toggle_style_active)
 
@@ -4101,8 +4113,20 @@ class RenderedLibraryMixin:
         self._persist_library_ui_state()
 
     def _sync_library_view_toggle_for_mode(self) -> None:
-        """Screenshots: hide List (Grid-only). Clips/Rendered: restore both."""
+        """Screenshots: Grid-only in the RQ track shell. Clips/Rendered: both segments."""
         mode = getattr(self, "_library_panel_mode", "clips")
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            chrome.set_grid_only(mode == "screenshots")
+            if mode == "screenshots":
+                chrome.set_mode("grid", emit=False)
+            elif mode == "rendered":
+                chrome.set_mode(getattr(self, "_rendered_view_mode", "grid"), emit=False)
+            else:
+                chrome.set_mode(getattr(self, "_clips_view_mode", "grid"), emit=False)
+            self.toggle_style_active = chrome.toggle_style_active
+            self.toggle_style_inactive = chrome.toggle_style_inactive
+            return
         list_btn = getattr(self, "btn_view_list", None)
         grid_btn = getattr(self, "btn_view_grid", None)
         if list_btn is None or grid_btn is None:
