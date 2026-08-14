@@ -13,11 +13,21 @@ import os
 import re
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
 KEY_PLAYER_HEADER_LAYOUT = "player_header_layout"
+
+# Same stack Large / construction use — pin in QSS, QFont, and rich-text HTML.
+# Qt rich text often ignores QLabel stylesheet ``font-family`` when spans set
+# ``font-size``; omitting family made Medium/Small fall back to a different face.
+_HEADER_TITLE_FONT_CSS = (
+    f"font-family: {tok.FONT_APP}; font-weight: 700;"
+)
+_HEADER_CHIP_FONT_CSS = f"font-family: {tok.FONT_APP};"
 
 HEADER_LAYOUT_STEEMPEG_UI = "steempeg_ui"
 HEADER_LAYOUT_STEAM_LIKE = "steam_like"
@@ -52,9 +62,19 @@ def get_header_layout() -> str:
 
 
 def player_header_density(app) -> UiDensity:
-    """Active density for the player header (falls back to comfort)."""
+    """Active density for the player header (falls back to comfort).
+
+    Composes window density with Settings → Visual → Player header → Size
+    (S/M/L). Callers that only need icon/font px should use the helpers below.
+    """
     dense = getattr(app, "_ui_density_player", None) or getattr(app, "_ui_density", None)
-    return dense if dense is not None else COMFORT
+    base = dense if dense is not None else COMFORT
+    try:
+        from steempeg.ui.player_header_size import apply_header_size_to_density
+
+        return apply_header_size_to_density(base)
+    except Exception:
+        return base
 
 
 def player_header_icon_px(app) -> int:
@@ -64,6 +84,18 @@ def player_header_icon_px(app) -> int:
 
 def player_header_font_px(app) -> int:
     return max(11, int(getattr(player_header_density(app), "header_font", 13) or 13))
+
+
+def player_header_title_qfont(font_px: int | None = None) -> QFont:
+    """Bold Segoe stack matching Large / construction — pixel size only varies."""
+    px = max(11, int(font_px or COMFORT.header_font))
+    font = QFont()
+    font.setFamilies(
+        ["Segoe UI", "Noto Sans", "Twemoji", "Noto Emoji", "DejaVu Sans", "Arial"]
+    )
+    font.setPixelSize(px)
+    font.setWeight(QFont.Weight.Bold)
+    return font
 
 
 def set_header_layout(layout: object | None) -> str:
@@ -178,11 +210,13 @@ def format_player_header_html(
     mode = normalize_header_layout(layout if layout is not None else _current_layout)
     title_plain = (title or "").strip() or "—"
     fs = max(11, int(font_px or COMFORT.header_font))
-    # ``<b>`` + inline font-size: Qt rich text often ignores QLabel stylesheet size.
-    title_html = (
-        f"<b style='color:#ffffff; font-size:{fs}px; vertical-align:middle;'>"
-        f"{_esc(title_plain)}</b>"
+    # Inline size + family: Qt rich text often ignores QLabel stylesheet fonts.
+    # Family must be in the span or Medium/Small can resolve a different face.
+    _title_style = (
+        f"color:#ffffff; font-size:{fs}px; {_HEADER_TITLE_FONT_CSS} "
+        "vertical-align:middle;"
     )
+    title_html = f'<span style="{_title_style}">{_esc(title_plain)}</span>'
 
     if mode == HEADER_LAYOUT_STEAM_LIKE:
         return title_html
@@ -216,12 +250,15 @@ def format_player_header_html(
     if not meta:
         return title_html
 
-    # Classic SteempegUI: bold gray meta (same weight as the game title).
+    # Classic SteempegUI: bold gray meta (same face/weight as the game title).
     # ``Game • 11 May 2026 at 02:28 PM · 3m 36s``
-    meta_style = f"color:#888888; font-size:{fs}px; vertical-align:middle;"
-    title_sep = f"<b style='{meta_style}'>{_TITLE_SEP}</b>"
-    meta_sep = f"<b style='{meta_style}'>{_META_SEP}</b>"
-    meta_bits = [f"<b style='{meta_style}'>{_esc(m)}</b>" for m in meta]
+    meta_style = (
+        f"color:#888888; font-size:{fs}px; {_HEADER_TITLE_FONT_CSS} "
+        "vertical-align:middle;"
+    )
+    title_sep = f'<span style="{meta_style}">{_TITLE_SEP}</span>'
+    meta_sep = f'<span style="{meta_style}">{_META_SEP}</span>'
+    meta_bits = [f'<span style="{meta_style}">{_esc(m)}</span>' for m in meta]
     return title_html + title_sep + meta_sep.join(meta_bits)
 
 
@@ -749,8 +786,15 @@ def refresh_player_header_text(app) -> None:
     if not meta or label is None:
         return
     font_px = player_header_font_px(app)
+    label.setFont(player_header_title_qfont(font_px))
     if meta.get("placeholder"):
-        label.setText(str(meta.get("title") or "Select a clip to preview..."))
+        # Same rich-text + family pin as a filled title (plain text diverged).
+        label.setText(
+            format_player_header_html(
+                str(meta.get("title") or "Select a clip to preview..."),
+                font_px=font_px,
+            )
+        )
         return
     label.setText(
         format_player_header_html(
@@ -807,8 +851,10 @@ def set_player_header_game_text(
     label = getattr(app, "custom_text_label", None)
     if label is None:
         return
+    font_px = player_header_font_px(app)
+    label.setFont(player_header_title_qfont(font_px))
     if placeholder:
-        label.setText(title)
+        label.setText(format_player_header_html(title, font_px=font_px))
     else:
         label.setText(
             format_player_header_html(
@@ -817,7 +863,7 @@ def set_player_header_game_text(
                 time=time,
                 duration=duration,
                 extra_parts=extra,
-                font_px=player_header_font_px(app),
+                font_px=font_px,
             )
         )
     if hasattr(app, "refresh_player_header_info"):
@@ -830,12 +876,21 @@ def set_player_header_game_text(
 def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     """Scale player-header chrome (icon, title, chips, pad) with UI density.
 
-    Comfort defaults match the classic fixed strip (icon 24 / font 13 / pads
-    10×8 / chip 30). Empty placeholder uses the same ``setFixedHeight`` as a
-    filled clip so the bar does not jump thinner when no clip is selected.
+    Comfort Large matches the classic fixed strip (icon 24 / font 13 / pads
+    10×8 / chip 30). Settings → Visual Size (S/M/L) scales those metrics on
+    top of window density. Empty placeholder uses the same ``setFixedHeight``
+    as a filled clip so the bar does not jump thinner when no clip is selected.
     """
     if dense is None:
         dense = player_header_density(app)
+    else:
+        # Callers pass raw window density — still apply the S/M/L size pref.
+        try:
+            from steempeg.ui.player_header_size import apply_header_size_to_density
+
+            dense = apply_header_size_to_density(dense)
+        except Exception:
+            pass
     header = getattr(app, "player_header_frame", None)
     if not _widget_alive(header):
         return
@@ -866,9 +921,10 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
 
     label = getattr(app, "custom_text_label", None)
     if _widget_alive(label):
+        # QFont pins the document default; stylesheet backs non-rich fallbacks.
+        label.setFont(player_header_title_qfont(font_px))
         label.setStyleSheet(
-            f"color: white; font-size: {font_px}px; font-weight: 700;"
-            "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            f"color: white; font-size: {font_px}px; {_HEADER_TITLE_FONT_CSS}"
             "background: transparent; border: none;"
         )
 
@@ -939,8 +995,7 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
 
     chip_qss_tail = (
-        "border-radius: 8px; padding: 0px;"
-        "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        f"border-radius: 8px; padding: 0px; {_HEADER_CHIP_FONT_CSS}"
     )
     preview = getattr(app, "btn_preview_settings", None)
     if _widget_alive(preview):
