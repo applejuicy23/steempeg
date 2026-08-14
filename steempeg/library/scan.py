@@ -364,6 +364,10 @@ def _resolve_game_name(
 ) -> str:
     if app_id in game_names_cache:
         return game_names_cache[app_id]
+    local = games.find_local_steam_game_name(app_id)
+    if local:
+        game_names_cache[app_id] = local
+        return local
     if not allow_network:
         return f"Unknown Game ({app_id})"
     name = games.fetch_game_name(app_id)
