@@ -7,7 +7,7 @@ import re
 import webbrowser
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QUrl, QObject, QTimer
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QTextCursor, QTextDocument, QTextImageFormat
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QShowEvent, QTextCursor, QTextDocument, QTextImageFormat
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 from PySide6.QtWidgets import (
     QComboBox,
@@ -767,7 +767,7 @@ class _ReleaseFetchThread(QThread):
 class UpdateCenterDialog(SteempegDialog):
     install_requested = Signal(object)
     restore_requested = Signal(object)
-    rate_limited = Signal(object)
+    rate_limited = Signal(object, bool)
 
     def __init__(
         self,
@@ -796,6 +796,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._notes_image_loader: _ReleaseNotesImageLoader | None = None
         self._refreshing_catalog = False
         self._initial_keep_prefs = keep_prefs
+        self._hold_hidden_until_catalog = not bool(load_releases_cache())
 
         self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
 
@@ -1069,6 +1070,22 @@ class UpdateCenterDialog(SteempegDialog):
 
         self._start_fetch()
 
+    def showEvent(self, event: QShowEvent) -> None:
+        if self._hold_hidden_until_catalog and not self._releases:
+            event.ignore()
+            self.hide()
+            return
+        super().showEvent(event)
+
+    def _reveal_catalog_shell(self) -> None:
+        if not self._hold_hidden_until_catalog:
+            return
+        self._hold_hidden_until_catalog = False
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
     def _start_fetch(self):
         QTimer.singleShot(0, self._show_cached_catalog)
         self._fetch_thread = _ReleaseFetchThread(self)
@@ -1083,12 +1100,14 @@ class UpdateCenterDialog(SteempegDialog):
             return
         self._refreshing_catalog = True
         self._on_releases_loaded(cached, from_cache=True)
+        self._reveal_catalog_shell()
         self._status_label.setText("Refreshing release list…")
         self._status_label.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px;")
 
     def _on_fetch_ok(self, releases: list):
         self._refreshing_catalog = False
         self._on_releases_loaded(releases, from_cache=False)
+        self._reveal_catalog_shell()
 
     def _clear_list(self):
         while self._list_layout.count() > 1:
@@ -1184,17 +1203,25 @@ class UpdateCenterDialog(SteempegDialog):
             return
         self._status_label.setText(message)
         self._status_label.setStyleSheet("color: #ff8a80; font-size: 11px;")
+        self._reveal_catalog_shell()
 
     def _on_fetch_rate_limited(self, info: RateLimitInfo):
         self._refreshing_catalog = False
-        if self._releases:
+        has_cached = bool(self._releases) or not self._hold_hidden_until_catalog
+        if has_cached:
+            if not self._releases:
+                cached = load_releases_cache()
+                if cached:
+                    self._on_releases_loaded(cached, from_cache=True)
+                    self._reveal_catalog_shell()
             self._status_label.setText("Rate limited. Showing cached releases.")
             self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
+            self.rate_limited.emit(info, True)
             return
-        self._status_label.setText("GitHub API rate limit exceeded. Waiting to retry…")
+        self._status_label.setText("GitHub API rate limit exceeded.")
         self._status_label.setStyleSheet("color: #e8b86d; font-size: 11px;")
-        # Emit before reject so the parent can capture RateLimitInfo while still connected.
-        self.rate_limited.emit(info)
+        # Emit before reject so the parent can show the limit dialog while still connected.
+        self.rate_limited.emit(info, False)
         QTimer.singleShot(0, self.reject)
 
     def _select_entry(self, entry: ReleaseEntry):

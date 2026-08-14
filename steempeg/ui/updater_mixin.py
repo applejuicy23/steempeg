@@ -180,25 +180,24 @@ class UpdaterMixin:
             dlg.install_requested.connect(self._install_release_entry)
             dlg.restore_requested.connect(self._restore_local_backup)
 
-            rate_limit_info = []
+            reopen_after_limit = False
 
-            def _capture_rate_limit(info):
-                rate_limit_info.append(info)
+            def _on_rate_limited(info, has_cached_releases):
+                nonlocal reopen_after_limit
+                limit_dlg = GitHubRateLimitDialog(
+                    info,
+                    parent=self.ui,
+                    has_cached_releases=has_cached_releases,
+                    bar_color=theme["title_bar"],
+                    bg_color=theme["app_bg"],
+                )
+                limit_dlg.exec()
+                reopen_after_limit = limit_dlg.timer_completed
 
-            dlg.rate_limited.connect(_capture_rate_limit)
+            dlg.rate_limited.connect(_on_rate_limited)
             dlg.exec()
 
-            if not rate_limit_info:
-                break
-
-            limit_dlg = GitHubRateLimitDialog(
-                rate_limit_info[0],
-                parent=self.ui,
-                bar_color=theme["title_bar"],
-                bg_color=theme["app_bg"],
-            )
-            limit_dlg.exec()
-            if not limit_dlg.timer_completed:
+            if not reopen_after_limit:
                 break
 
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
