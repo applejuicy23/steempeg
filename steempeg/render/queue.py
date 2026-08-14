@@ -216,11 +216,13 @@ class RenderQueue:
         return any(os.path.normpath(j.clip_path) == norm for j in self._jobs)
 
     def find_by_clip_path(self, clip_path: str) -> Optional[RenderJob]:
+        jobs = self.find_all_by_clip_path(clip_path)
+        return jobs[0] if jobs else None
+
+    def find_all_by_clip_path(self, clip_path: str) -> List[RenderJob]:
+        """All jobs for this clip folder (same path may be queued N times)."""
         norm = os.path.normpath(clip_path)
-        for job in self._jobs:
-            if os.path.normpath(job.clip_path) == norm:
-                return job
-        return None
+        return [j for j in self._jobs if os.path.normpath(j.clip_path) == norm]
 
     def index_of(self, job_id: str) -> int:
         for i, job in enumerate(self._jobs):
