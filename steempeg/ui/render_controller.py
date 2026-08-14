@@ -1262,8 +1262,14 @@ class RenderMixin:
             logging.warning("Could not open rendered file %s: %s", file_path, exc)
 
     def _queue_is_active(self) -> bool:
-        """True when the render queue has jobs (queue drives batch render)."""
-        return bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+        """True when the queue owns header / Render CTA (jobs exist, scheme not left)."""
+        if not (getattr(self, "render_queue", None) and len(self.render_queue) > 0):
+            return False
+        return not bool(getattr(self, "_queue_scheme_deferred", False))
+
+    def _queue_drives_start_cta(self) -> bool:
+        """True when Start should batch-render pending queue jobs."""
+        return self._queue_is_active() and self._queue_pending_count() > 0
 
     def _queue_context_job(self):
         """Job that owns player-header identity while the queue is non-empty.
@@ -1357,7 +1363,7 @@ class RenderMixin:
         return True
 
     def _restore_header_from_library_selection(self) -> None:
-        """After the queue clears — fall back to Clips / Rendered selection."""
+        """After the queue clears or Leave — fall back to Clips / Rendered selection."""
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             table = getattr(self, "table_rendered", None)
             if table is not None and table.currentRow() >= 0 and hasattr(
@@ -1799,7 +1805,7 @@ class RenderMixin:
     def _update_start_button_label(self) -> None:
         if not hasattr(self.ui, "btn_start"):
             return
-        pending = self._queue_pending_count()
+        pending = self._queue_pending_count() if self._queue_drives_start_cta() else 0
         btn = self.ui.btn_start
         # Desktop: white startrender glyph before the label.
         if not getattr(self, "_portable_shell", False):
@@ -1820,7 +1826,7 @@ class RenderMixin:
             else:
                 btn.setText("🚩 START RENDER")
         # Any label refresh must not leave a pending queue with a dead Start button.
-        if pending > 0 and not getattr(self, "_is_rendering", False):
+        if self._queue_drives_start_cta() and not getattr(self, "_is_rendering", False):
             btn.setEnabled(True)
         if getattr(self, "_portable_shell", False):
             from steempeg.ui.portable import sync_portable_render_button
@@ -1864,8 +1870,10 @@ class RenderMixin:
         btn.setIconSize(QSize(16, 16))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolTip("Open render settings in a floating window (click again to close)")
-        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
         btn.setFixedHeight(36)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn.setStyleSheet(_fmt(style))
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
@@ -2074,31 +2082,38 @@ class RenderMixin:
             return
         self._restore_neo_to_dock_layout()
 
-    def _dash_only_bottom_height(self) -> int:
-        """Exact height for the glued render-control strip (no black padding).
+    def _dash_content_height(self) -> int:
+        """Uncompressed render-dashboard height (density metrics, not live geometry).
 
-        Never trust an inflated live ``dash.height()`` — after neo is parked the
-        dash can briefly fill a tall bottom pane (Preferred policy). Gluing that
-        height locks a void between the splitter and the control strip.
+        Like a Portable glue used to accept any live ``dash.height()`` in
+        ``[80, hint+24]``. Mid-layout that locked a too-short pane and vertically
+        squashed Start / Render Settings / Pause / Cancel / Logs.
         """
-        from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
-
-        margin_top = int(MAIN_V_SPLIT_BOTTOM_PAD)
+        dense = getattr(self, "_ui_density", None)
+        btn_h = int(getattr(dense, "dash_btn_h", 36) or 36) if dense else 36
+        mv = int(getattr(dense, "dash_margin_v", 16) or 16) if dense else 16
+        sp = int(getattr(dense, "dash_spacing", 12) or 12) if dense else 12
+        # status row 24 + %/bar row (label taller than the 6px bar) + 2px card border
+        font = int(getattr(dense, "dash_font", 13) or 13) if dense else 13
+        pct_row = max(6, font + 6)
+        metric = (mv * 2) + (sp * 2) + 24 + pct_row + btn_h + 2
+        metric = max(metric, 120)
         dash = getattr(self, "render_dashboard", None)
         if dash is None:
-            return margin_top + 120
+            return metric
         hint = int(dash.sizeHint().height() or 0)
         if hint < 80:
             hint = int(dash.minimumSizeHint().height() or 0)
-        if hint < 80:
-            hint = 120
-        live = int(dash.height() or 0)
-        # Accept live height only when it matches content (not a stretched pane).
-        if 80 <= live <= hint + 24:
-            h = live
-        else:
-            h = hint
-        return margin_top + h
+        # Honour sizeHint when it is close to metrics; ignore stretch-inflated values.
+        if 80 <= hint <= metric + 48:
+            return max(hint, metric)
+        return metric
+
+    def _dash_only_bottom_height(self) -> int:
+        """Exact height for the glued render-control strip (no black padding)."""
+        from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
+
+        return int(MAIN_V_SPLIT_BOTTOM_PAD) + self._dash_content_height()
 
     def _pin_dash_queue_header_buttons(self) -> None:
         """Keep Start / Render Settings / Pause / Cancel / Logs from stretching tall.
@@ -2112,26 +2127,28 @@ class RenderMixin:
         btn_h = int(getattr(dense, "dash_btn_h", 36) or 36)
         names = ("btn_start", "btn_pause", "btn_cancel", "btn_logs")
         ui = getattr(self, "ui", None)
+        pinned = []
         for name in names:
             btn = getattr(ui, name, None) if ui is not None else None
-            if btn is None:
-                continue
+            if btn is not None:
+                pinned.append(btn)
+        settings_btn = getattr(self, "btn_render_settings", None)
+        if settings_btn is not None:
+            pinned.append(settings_btn)
+        leave_btn = getattr(self, "_btn_queue_leave_resume", None)
+        if leave_btn is not None:
+            pinned.append(leave_btn)
+        for btn in pinned:
             try:
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
                 )
                 btn.setFixedHeight(btn_h)
+                btn.setAutoDefault(False)
+                btn.setDefault(False)
             except RuntimeError:
-                pass
-        settings_btn = getattr(self, "btn_render_settings", None)
-        if settings_btn is not None:
-            try:
-                settings_btn.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-                )
-                settings_btn.setFixedHeight(btn_h)
-            except RuntimeError:
-                pass
+                if btn is leave_btn:
+                    self._btn_queue_leave_resume = None
 
     def _ensure_neo_chrome_garage(self):
         """Off-layout host so neo cannot leave a void in bottom_v_wrap."""
@@ -2494,8 +2511,9 @@ class RenderMixin:
         dash = getattr(self, "render_dashboard", None)
         if dash is not None:
             dash.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            dash.setMinimumHeight(0)
-            dash.setMaximumHeight(16777215)
+            content_h = max(int(self._dash_content_height()), 1)
+            dash.setMinimumHeight(content_h)
+            dash.setMaximumHeight(content_h)
             self._pin_dash_queue_header_buttons()
 
         if bottom is not None:
@@ -2621,14 +2639,13 @@ class RenderMixin:
         return int(self.render_queue.pending_count())
 
     def _sync_start_render_enabled(self, *, combo_valid: bool | None = None) -> None:
-        """Enable Start for a selected clip, or whenever the queue has pending jobs."""
+        """Enable Start for a selected clip, or for pending jobs while queue mode is on."""
         if not hasattr(self.ui, "btn_start"):
             return
         if getattr(self, "_is_rendering", False):
             self.ui.btn_start.setEnabled(False)
         else:
-            pending = self._queue_pending_count()
-            if pending > 0:
+            if self._queue_drives_start_cta():
                 enabled = True
             elif combo_valid is not None:
                 enabled = bool(combo_valid)
@@ -4565,6 +4582,10 @@ class RenderMixin:
         job = self.render_queue.get(job_id)
         if not job:
             return
+        if getattr(self, "_queue_scheme_deferred", False):
+            # Clicking a queued card re-enters the scheme with this job.
+            self._queue_scheme_deferred = False
+            self._queue_resume_job_id = None
         self._loading_queue_job = True
         try:
             self._flush_clip_session_state()
@@ -4696,6 +4717,235 @@ class RenderMixin:
             if sidebar is not None and hasattr(sidebar, "refresh"):
                 sidebar.refresh()
 
+    def toggle_render_queue_scheme(self) -> None:
+        """Leave queue-first chrome without Clear, or Resume the same list."""
+        if getattr(self, "_queue_scheme_deferred", False):
+            self.resume_render_queue_scheme()
+        else:
+            self.leave_render_queue_scheme()
+
+    def leave_render_queue_scheme(self) -> None:
+        """Drop queue-first chrome (header / Start) while keeping jobs and the queue UI."""
+        if getattr(self, "_queue_batch_active", False):
+            steempeg_warning(
+                self.ui,
+                "Render Queue",
+                "Stop the batch render before leaving queue mode.",
+            )
+            return
+        if getattr(self, "_is_rendering", False):
+            steempeg_warning(
+                self.ui,
+                "Render Queue",
+                "Wait for the current render to finish before leaving queue mode.",
+            )
+            return
+        if not getattr(self, "render_queue", None) or not len(self.render_queue):
+            return
+        self._queue_resume_job_id = None
+        self._queue_scheme_deferred = True
+        logging.info(
+            "Left render queue mode — %s job(s) kept",
+            len(self.render_queue),
+        )
+        self._clear_queue_selection()
+        self._restore_header_from_library_selection()
+        if hasattr(self, "update_final_setup"):
+            try:
+                self.update_final_setup()
+            except Exception:
+                logging.debug("update_final_setup after leave queue failed", exc_info=True)
+        self._sync_start_render_enabled()
+        if not getattr(self, "_is_rendering", False):
+            self.update_status_indicator("Ready", "ready")
+        self.update_playback_badge()
+        self.refresh_render_queue_panel()
+
+    def resume_render_queue_scheme(self) -> None:
+        """Re-enter queue mode with the same jobs — keep current preview/selection."""
+        if not getattr(self, "_queue_scheme_deferred", False):
+            return
+        if getattr(self, "_clips_scan_active", False):
+            if hasattr(self, "set_status"):
+                self.set_status("Library is still loading — Queue is locked.")
+            return
+        if not getattr(self, "render_queue", None) or not len(self.render_queue):
+            self._queue_scheme_deferred = False
+            self._queue_resume_job_id = None
+            self._sync_queue_scheme_chrome()
+            return
+        self._queue_scheme_deferred = False
+        self._queue_resume_job_id = None
+        logging.info(
+            "Resumed render queue mode — %s job(s)",
+            len(self.render_queue),
+        )
+        # Do not seek/select job #1 or any queue card.
+        self._sync_start_render_enabled()
+        self.update_playback_badge()
+        self.refresh_render_queue_panel()
+
+    def _sync_queue_scheme_chrome(self) -> None:
+        has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+        if not has_jobs:
+            self._queue_scheme_deferred = False
+            self._queue_resume_job_id = None
+        deferred = bool(getattr(self, "_queue_scheme_deferred", False)) and has_jobs
+        busy = bool(
+            getattr(self, "_is_rendering", False)
+            or getattr(self, "_queue_batch_active", False)
+        )
+        self._sync_host_queue_leave_resume(deferred=deferred, has_jobs=has_jobs, busy=busy)
+
+    def _sync_host_queue_leave_resume(
+        self, *, deferred: bool, has_jobs: bool, busy: bool
+    ) -> None:
+        """Leave/Resume beside Render Queue (N) / Start — purple while deferred."""
+        self._ensure_desktop_queue_leave_resume_button()
+        desk = getattr(self, "_btn_queue_leave_resume", None)
+        if desk is not None:
+            try:
+                show = bool(has_jobs)
+                desk.setVisible(show)
+                desk.setEnabled(show and not bool(busy))
+                if show:
+                    self._paint_desktop_queue_leave_resume(desk, deferred=bool(deferred))
+            except RuntimeError:
+                self._btn_queue_leave_resume = None
+        strip = getattr(self, "_portable_render_strip", None)
+        if strip is not None and hasattr(strip, "sync_queue_leave_resume"):
+            try:
+                strip.sync_queue_leave_resume(
+                    deferred=bool(deferred),
+                    has_jobs=bool(has_jobs),
+                    busy=bool(busy),
+                )
+            except RuntimeError:
+                self._portable_render_strip = None
+        elif strip is not None and hasattr(strip, "set_queue_resume_visible"):
+            try:
+                strip.set_queue_resume_visible(bool(has_jobs))
+            except RuntimeError:
+                self._portable_render_strip = None
+
+    def _paint_desktop_queue_leave_resume(self, btn, *, deferred: bool) -> None:
+        from PySide6.QtCore import QSize
+
+        from steempeg.ui.icon_assets import load_icon
+
+        dense = getattr(self, "_ui_density", None)
+        font = int(getattr(dense, "dash_font", 13) or 13)
+        btn_h = int(getattr(dense, "dash_btn_h", 36) or 36)
+        pad = "1px 8px" if getattr(dense, "compact", False) else "6px 14px"
+        radius = max(8, btn_h // 2)
+        icon_sz = 16
+        btn.setFixedHeight(btn_h)
+        btn.setIconSize(QSize(icon_sz, icon_sz))
+        if deferred:
+            btn.setText(" Resume")
+            btn.setToolTip("Return to queue mode with the same jobs and order")
+            btn.setIcon(load_icon("resume.png", icon_sz))
+            btn.setStyleSheet(
+                "QPushButton {"
+                f" background-color: #5a4b7a; color: #ffffff; border: 2px solid #8e7cc3;"
+                f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
+                " font-weight: bold;"
+                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                "}"
+                "QPushButton:hover { background-color: #6b5a8e; border: 2px solid #b29ae7; }"
+                "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"
+                "QPushButton:disabled {"
+                " background-color: #262626; color: #5a5a5a; border: 2px solid #333333;"
+                "}"
+            )
+        else:
+            btn.setText(" Leave")
+            btn.setToolTip(
+                "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
+            )
+            btn.setIcon(load_icon("exit.png", icon_sz))
+            btn.setStyleSheet(
+                "QPushButton {"
+                f" background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;"
+                f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
+                " font-weight: bold;"
+                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                "}"
+                "QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }"
+                "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"
+                "QPushButton:disabled {"
+                " background-color: #262626; color: #5a5a5a; border: 2px solid #333333;"
+                "}"
+            )
+
+    def _ensure_desktop_queue_leave_resume_button(self) -> None:
+        """Leave/Resume CTA on the desktop render dash beside Render Queue (N)."""
+        if getattr(self, "_portable_shell", False):
+            return
+        btn = getattr(self, "_btn_queue_leave_resume", None)
+        if btn is not None:
+            try:
+                btn.objectName()
+                return
+            except RuntimeError:
+                self._btn_queue_leave_resume = None
+        # Migrate older Resume-only host if still present.
+        legacy = getattr(self, "_btn_queue_resume_host", None)
+        if legacy is not None:
+            try:
+                legacy.hide()
+                legacy.deleteLater()
+            except RuntimeError:
+                pass
+            self._btn_queue_resume_host = None
+        row = getattr(self, "_dash_btn_row", None)
+        if row is None:
+            return
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QSizePolicy
+
+        from steempeg.ui.icon_assets import load_icon
+
+        btn = QPushButton(" Leave")
+        btn.setObjectName("desktopQueueLeaveResume")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip(
+            "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
+        )
+        btn.setIcon(load_icon("exit.png", 16))
+        btn.setIconSize(QSize(16, 16))
+        btn.setMinimumHeight(36)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setAutoDefault(False)
+        btn.setDefault(False)
+        self._paint_desktop_queue_leave_resume(btn, deferred=False)
+        btn.clicked.connect(self.toggle_render_queue_scheme)
+        btn.hide()
+        # Sit beside Start / Render Queue (N).
+        insert_at = 1
+        start = getattr(getattr(self, "ui", None), "btn_start", None)
+        if start is not None:
+            for i in range(row.count()):
+                item = row.itemAt(i)
+                if item is not None and item.widget() is start:
+                    insert_at = i + 1
+                    break
+        row.insertWidget(insert_at, btn)
+        self._btn_queue_leave_resume = btn
+
+    def _sync_host_queue_resume_buttons(self, *, deferred: bool, busy: bool) -> None:
+        """Compat shim for older call sites."""
+        has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+        self._sync_host_queue_leave_resume(
+            deferred=bool(deferred) and has_jobs,
+            has_jobs=has_jobs,
+            busy=busy,
+        )
+
+    def _ensure_desktop_queue_resume_button(self) -> None:
+        """Compat shim — creates the Leave/Resume dash control."""
+        self._ensure_desktop_queue_leave_resume_button()
+
     def clear_render_queue(self) -> None:
         if getattr(self, "_queue_batch_active", False):
             steempeg_warning(self.ui, "Render Queue", "Stop the batch render before clearing the queue.")
@@ -4733,6 +4983,8 @@ class RenderMixin:
 
     def _on_queue_became_empty(self) -> None:
         self._selected_queue_job_id = None
+        self._queue_scheme_deferred = False
+        self._queue_resume_job_id = None
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
@@ -5005,6 +5257,7 @@ class RenderMixin:
                 selected_id,
             )
         self._update_start_button_label()
+        self._sync_queue_scheme_chrome()
         if not getattr(self, "_is_rendering", False):
             self._sync_dash_queue_status_chrome()
         sidebar = getattr(self, "_portable_queue_sidebar", None)
@@ -5084,7 +5337,7 @@ class RenderMixin:
         if getattr(self, '_is_rendering', False):
             return
 
-        if self.render_queue.pending_count() > 0:
+        if self._queue_drives_start_cta():
             self.start_queue_batch_render()
             return
 
