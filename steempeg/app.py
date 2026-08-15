@@ -3798,7 +3798,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.sync_queue_minimum()
             return
 
-        was_deferred = bool(getattr(self, "_queue_scheme_deferred", False))
         self._queue_user_collapsed = False
         # Player scrap between Clips handle and Queue handle → complete the kiss.
         if 0 < player_w < 48:
@@ -3809,9 +3808,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if live_q > 48:
                 self.save_layout_setting("queue_panel_width", live_q)
         self.sync_queue_minimum()
-        # Dragging the queue open while Left is Resume (no jump-to-first-clip).
-        if was_deferred and hasattr(self, "resume_render_queue_scheme"):
-            self.resume_render_queue_scheme()
+        # Leave/Resume is explicit only (button or queue-card click) — never
+        # auto-Resume from resizing or reopening the right splitter.
 
     def _clamp_splitters_to_mins(self, *, left_min: int | None = None) -> None:
         """Keep Clips floor only — never re-inflate a kissed-away player column."""
