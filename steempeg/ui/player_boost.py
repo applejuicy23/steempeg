@@ -2,7 +2,7 @@
 
 Settings → Visual → Player controls. Defaults stay at today's caps
 (100% volume, 5.0x speed) so nobody gets a surprise boost; opt in via
-150% / 200% volume or 8.0x / 10.0x speed.
+150%–500% volume or 8.0x / 10.0x speed.
 """
 from __future__ import annotations
 
@@ -13,12 +13,18 @@ KEY_SPEED_BOOST_CEILING = "speed_boost_ceiling"
 VOLUME_CEILING_100 = 100
 VOLUME_CEILING_150 = 150
 VOLUME_CEILING_200 = 200
+VOLUME_CEILING_300 = 300
+VOLUME_CEILING_400 = 400
+VOLUME_CEILING_500 = 500
 VOLUME_CEILING_DEFAULT = VOLUME_CEILING_100
 
 VOLUME_CEILING_LABELS: tuple[tuple[int, str], ...] = (
     (VOLUME_CEILING_100, "100%"),
     (VOLUME_CEILING_150, "150%"),
     (VOLUME_CEILING_200, "200%"),
+    (VOLUME_CEILING_300, "300%"),
+    (VOLUME_CEILING_400, "400%"),
+    (VOLUME_CEILING_500, "500%"),
 )
 
 # Speed slider units (10 = 1.0x). Today's max is 50 = 5.0x.
@@ -57,6 +63,12 @@ def normalize_volume_boost_ceiling(value: object | None) -> int:
         return VOLUME_CEILING_150
     if 180 <= n <= 220:
         return VOLUME_CEILING_200
+    if 280 <= n <= 320:
+        return VOLUME_CEILING_300
+    if 380 <= n <= 420:
+        return VOLUME_CEILING_400
+    if 480 <= n <= 520:
+        return VOLUME_CEILING_500
     if n <= 100:
         return VOLUME_CEILING_100
     return VOLUME_CEILING_DEFAULT
