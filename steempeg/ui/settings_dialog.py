@@ -1091,6 +1091,11 @@ class SettingsDialog(SteempegDialog):
         actions.addWidget(btn_save)
         root.addLayout(actions)
 
+        # Wheel over closed combos/spins must scroll the tab, not change values.
+        from steempeg.ui.widgets.no_wheel_filter import install_no_wheel_value_filter
+
+        install_no_wheel_value_filter(self)
+
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
 
