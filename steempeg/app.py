@@ -527,8 +527,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.table_clips.setColumnWidth(2, 130) # Date
             self.ui.table_clips.setColumnWidth(3, 100) # Duration
             
-            self.ui.table_clips.itemSelectionChanged.connect(self.update_quality_options)
+            # Paint ClipCard / list selection first; defer slow clip open to next tick.
             self.ui.table_clips.itemSelectionChanged.connect(self.sync_grid_from_table_selection)
+            self.ui.table_clips.itemSelectionChanged.connect(self._schedule_clips_selection_preview)
             # Re-clicking the already-selected row does not fire selectionChanged —
             # still reopen so the card spinner / player switch has something to do.
             self.ui.table_clips.itemClicked.connect(self._on_clips_table_item_clicked)
