@@ -2728,8 +2728,20 @@ class PlayerMixin:
         percent: int | None = None,
     ) -> None:
         """Show spinner on the clip/queue banner that is opening into the player."""
-        self.clear_clip_open_loading()
         key = self._norm_clip_path_key(clip_path)
+        # Same clip already spinning (deferred preview painted early) — keep it.
+        if (
+            key
+            and key == self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
+        ):
+            if percent is not None and hasattr(self, "update_clip_open_loading_progress"):
+                self.update_clip_open_loading_progress(percent)
+            return
+
+        self.clear_clip_open_loading()
+        # clear_clip_open_loading nulls this — restore so in-flight open is trackable.
+        if clip_path:
+            self._opening_clip_path = clip_path
         if key:
             grid = getattr(self, "grid_clips", None)
             if grid is not None:
