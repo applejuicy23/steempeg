@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTabWidget,
     QVBoxLayout,
@@ -255,6 +257,13 @@ _TABS = """
 """
 
 
+_SETTINGS_DESIGN_W = 540
+_SETTINGS_DESIGN_H = 560
+# Keep the shell shorter than the Steempeg window / work area so it can center.
+_SETTINGS_HEIGHT_FRAC = 0.85
+_SETTINGS_MIN_H = 320
+
+
 def _tab_page() -> tuple[QWidget, QVBoxLayout]:
     page = QWidget()
     layout = QVBoxLayout(page)
@@ -263,20 +272,89 @@ def _tab_page() -> tuple[QWidget, QVBoxLayout]:
     return page, layout
 
 
+def _settings_max_height(parent) -> int:
+    """Cap Settings height to ~85% of the Steempeg window (or screen work area)."""
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    host = parent
+    if isinstance(parent, QWidget):
+        win = parent.window()
+        if win is not None:
+            host = win
+
+    host_h = 0
+    if host is not None and hasattr(host, "height"):
+        try:
+            host_h = int(host.height())
+        except Exception:
+            host_h = 0
+    if host_h <= 0:
+        aw = QApplication.activeWindow()
+        if aw is not None:
+            host_h = int(aw.height())
+            host = aw
+
+    max_h = int(host_h * _SETTINGS_HEIGHT_FRAC) if host_h > 0 else 0
+
+    screen = None
+    try:
+        if host is not None and hasattr(host, "screen"):
+            screen = host.screen()
+    except Exception:
+        screen = None
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    if screen is not None:
+        avail_h = int(screen.availableGeometry().height() * _SETTINGS_HEIGHT_FRAC)
+        max_h = min(max_h, avail_h) if max_h > 0 else avail_h
+
+    return max(_SETTINGS_MIN_H, max_h) if max_h > 0 else _SETTINGS_DESIGN_H
+
+
+class _SettingsTabScroll(QScrollArea):
+    """Per-tab scroll body — compact size hints so the dialog does not grow to content."""
+
+    def sizeHint(self) -> QSize:
+        return QSize(400, 280)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(200, 120)
+
+
+def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
+    """Wrap a settings tab page; lavender pill scrollbar matches the library."""
+    from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
+    bg = tok.BG_SHELL
+    inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    inner.setStyleSheet(f"background-color: {bg};")
+
+    scroll = _SettingsTabScroll()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    scroll.setMinimumHeight(0)
+    tok.apply_dialog_scroll_bg(scroll, bg)
+    scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
+    scroll.setWidget(inner)
+    return scroll
+
+
 class SettingsDialog(SteempegDialog):
     """App Settings — tabbed: General · Visual · Notifications · Performance · Support · Advanced."""
 
     def __init__(self, app, parent=None, **theme_kwargs):
+        parent_w = parent or getattr(app, "ui", None)
         if not theme_kwargs.get("bar_color"):
-            theme_kwargs = {**dialog_theme(parent or getattr(app, "ui", None)), **theme_kwargs}
-        super().__init__("Settings", parent or getattr(app, "ui", None), **theme_kwargs)
+            theme_kwargs = {**dialog_theme(parent_w), **theme_kwargs}
+        super().__init__("Settings", parent_w, **theme_kwargs)
         self._app = app
         self.setMinimumWidth(480)
-        from steempeg.ui.ui_density import scaled_dialog_size
-
-        # Compact default — content already has stretches; 560 left a USA-sized void.
-        w, h = scaled_dialog_size(540, 560, parent=parent or getattr(app, "ui", None))
-        self.resize(w, h)
+        self.setMinimumHeight(_SETTINGS_MIN_H)
+        self._apply_settings_geometry()
 
         settings = {}
         if hasattr(app, "load_user_settings"):
@@ -290,6 +368,7 @@ class SettingsDialog(SteempegDialog):
 
         tabs = QTabWidget()
         tabs.setStyleSheet(_TABS)
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(tabs, 1)
 
         # ----- General (Updates + Export + Render landing + Shell) -----
@@ -433,7 +512,7 @@ class SettingsDialog(SteempegDialog):
         )
         g.addLayout(restart_row)
         g.addStretch(1)
-        tabs.addTab(general, "General")
+        tabs.addTab(_scroll_settings_tab(general), "General")
 
         # ----- Visual -----
         visual, v = _tab_page()
@@ -644,7 +723,7 @@ class SettingsDialog(SteempegDialog):
         v.addWidget(
             self._hint(
                 "Optional boost above the normal player caps. "
-                "Volume default is 100% (unity); choose 150% or 200% to soft-amp louder. "
+                "Volume default is 100% (unity); choose 150%–500% to soft-amp louder. "
                 "Speed default is 5.0x; choose 8.0x or 10.0x to extend the slider. "
                 "Combo previews live; Save persists. Cancel restores the last saved ceilings."
             )
@@ -735,7 +814,7 @@ class SettingsDialog(SteempegDialog):
         )
 
         v.addStretch(1)
-        tabs.addTab(visual, "Visual")
+        tabs.addTab(_scroll_settings_tab(visual), "Visual")
 
         # ----- Notifications -----
         notify, n = _tab_page()
@@ -752,7 +831,7 @@ class SettingsDialog(SteempegDialog):
             )
         )
         n.addStretch(1)
-        tabs.addTab(notify, "Notifications")
+        tabs.addTab(_scroll_settings_tab(notify), "Notifications")
 
         # ----- Performance -----
         perf, p = _tab_page()
@@ -826,7 +905,7 @@ class SettingsDialog(SteempegDialog):
         )
 
         p.addStretch(1)
-        tabs.addTab(perf, "Performance")
+        tabs.addTab(_scroll_settings_tab(perf), "Performance")
 
         # ----- Support -----
         support, s = _tab_page()
@@ -914,7 +993,7 @@ class SettingsDialog(SteempegDialog):
         self._import_status.setStyleSheet(_HINT)
         s.addWidget(self._import_status)
         s.addStretch(1)
-        tabs.addTab(support, "Support")
+        tabs.addTab(_scroll_settings_tab(support), "Support")
 
         # ----- Advanced -----
         advanced, a = _tab_page()
@@ -995,7 +1074,7 @@ class SettingsDialog(SteempegDialog):
             )
         )
         a.addStretch(1)
-        tabs.addTab(advanced, "Advanced")
+        tabs.addTab(_scroll_settings_tab(advanced), "Advanced")
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -1011,6 +1090,79 @@ class SettingsDialog(SteempegDialog):
         actions.addWidget(btn_cancel)
         actions.addWidget(btn_save)
         root.addLayout(actions)
+
+        # Content can inflate sizeHint during build — re-cap before first map/center.
+        self._apply_settings_geometry()
+
+    def _apply_settings_geometry(self) -> None:
+        """Comfort design size, capped so the shell stays on-screen and centerable."""
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        parent = self.parentWidget()
+        w, h = scaled_dialog_size(
+            _SETTINGS_DESIGN_W, _SETTINGS_DESIGN_H, parent=parent
+        )
+        max_h = _settings_max_height(parent)
+        target_h = min(h, max_h)
+        self.setMaximumHeight(max_h)
+        self.setMinimumHeight(min(_SETTINGS_MIN_H, target_h))
+        self._map_w = w
+        self._map_h = target_h
+        self.resize(w, target_h)
+
+    def _prepare_geometry_before_map(self) -> None:
+        # Re-apply cap + exact parent center on every open (before DWM maps us).
+        self._apply_settings_geometry()
+        self.ensurePolished()
+        self._center_on_parent()
+
+    def _center_on_parent(self) -> None:
+        """Dead-center on the Steempeg main window using the capped map size."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        ref: QWidget | None = None
+        parent = self.parentWidget()
+        if isinstance(parent, QWidget) and parent.isVisible():
+            ref = parent.window() if parent.window() is not None else parent
+        if ref is None:
+            aw = QApplication.activeWindow()
+            if isinstance(aw, QWidget):
+                ref = aw
+
+        dw = max(int(getattr(self, "_map_w", 0) or self.width() or 1), 1)
+        dh = max(int(getattr(self, "_map_h", 0) or self.height() or 1), 1)
+
+        if ref is not None and ref.isVisible():
+            origin = ref.mapToGlobal(QPoint(0, 0))
+            rw, rh = max(ref.width(), 1), max(ref.height(), 1)
+            x = origin.x() + (rw - dw) // 2
+            y = origin.y() + (rh - dh) // 2
+            # If somehow still taller/wider than the host, pin to the host origin
+            # rather than drifting with negative half-deltas.
+            if dw > rw:
+                x = origin.x()
+            if dh > rh:
+                y = origin.y()
+        else:
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                return
+            avail = screen.availableGeometry()
+            x = avail.x() + (avail.width() - dw) // 2
+            y = avail.y() + (avail.height() - dh) // 2
+
+        screen = None
+        if ref is not None:
+            screen = QGuiApplication.screenAt(ref.mapToGlobal(ref.rect().center()))
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = max(avail.x(), min(x, avail.x() + max(0, avail.width() - dw)))
+            y = max(avail.y(), min(y, avail.y() + max(0, avail.height() - dh)))
+        self.move(x, y)
 
     @staticmethod
     def _section(text: str) -> QLabel:
