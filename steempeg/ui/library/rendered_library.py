@@ -187,6 +187,7 @@ class RenderedLibraryMixin:
         self._saved_rendered_selection_path = ""
         self._library_ui_restored = False
         self._library_ui_persist_ready = False
+        self._library_filters_hydrated = False
         self._rendered_scan_generation = 0
         self._defer_rendered_scan_until_clips_done = False
         self._clips_scan_active = False
@@ -999,6 +1000,7 @@ class RenderedLibraryMixin:
             "rendered_sort_index": int(sorts.get("rendered", 0)),
             "screenshots_sort_index": int(sorts.get("screenshots", 8)),
         }
+        payload.update(self._library_filter_memory_payload())
         try:
             cache.write_json(self._library_ui_path(), payload)
         except OSError as exc:
@@ -1010,7 +1012,69 @@ class RenderedLibraryMixin:
             payload["library_panel_mode"],
         )
 
+    def _library_filter_memory_payload(self) -> dict:
+        """Filter-memory keys for ``library_ui.json`` (omit = cleared / all-on)."""
+        from steempeg.ui.library import filter_persist as fpersist
+
+        payload: dict = {}
+        clips = fpersist.encode_clips_filters(getattr(self, "saved_filter_state", None))
+        if clips:
+            payload["clips_filters"] = clips
+        rendered = fpersist.encode_rendered_filters(
+            getattr(self, "_rendered_filter_games", None),
+            getattr(self, "_rendered_filter_types", None),
+        )
+        if rendered:
+            payload["rendered_filters"] = rendered
+        shots = fpersist.encode_screenshots_filters(
+            getattr(self, "_screenshots_filter_games", None)
+        )
+        if shots:
+            payload["screenshots_filters"] = shots
+        return payload
+
+    def _hydrate_library_filters_from_state(self, state: dict | None) -> None:
+        """Load filter memory into session attrs (before library paint / scan)."""
+        from steempeg.ui.library import filter_persist as fpersist
+
+        data = state if isinstance(state, dict) else {}
+        self.saved_filter_state = fpersist.decode_clips_filters(data.get("clips_filters"))
+        games, types = fpersist.decode_rendered_filters(data.get("rendered_filters"))
+        self._rendered_filter_games = games
+        self._rendered_filter_types = types
+        self._screenshots_filter_games = fpersist.decode_screenshots_filters(
+            data.get("screenshots_filters")
+        )
+
+    def _persist_library_filter_memory(self) -> None:
+        """Write filter memory without waiting for the full UI-persist gate.
+
+        Used after Apply / Clear so Clear wipes disk even during the short
+        startup window where tab/view restore still holds the gate closed.
+        """
+        if getattr(self, "_restoring_library_state", False):
+            return
+        if not hasattr(self, "save_user_settings"):
+            return
+        state = dict(self._load_library_ui_state() or {})
+        for key in ("clips_filters", "rendered_filters", "screenshots_filters"):
+            state.pop(key, None)
+        state.update(self._library_filter_memory_payload())
+        try:
+            cache.write_json(self._library_ui_path(), state)
+        except OSError as exc:
+            logging.warning("Could not save library filter memory: %s", exc)
+        self.save_user_settings("library_ui", state)
+
     def _restore_library_ui_state(self):
+        # Filter memory can hydrate before the tab host exists — Skip paint may
+        # race the first restore retry.
+        if not getattr(self, "_library_filters_hydrated", False):
+            early = self._load_library_ui_state()
+            if early:
+                self._hydrate_library_filters_from_state(early)
+                self._library_filters_hydrated = True
+
         if not hasattr(self, "library_stack") or not hasattr(self, "library_tabs_host"):
             QTimer.singleShot(50, self._restore_library_ui_state)
             return
