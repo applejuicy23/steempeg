@@ -407,6 +407,15 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
         for btn in self._type_buttons.values():
             btn.setChecked(True)
         self._update_apply_label()
+        if not self.app:
+            return
+        # Match Clips Clear: apply immediately and wipe persisted filter memory.
+        self.app._rendered_filter_games = None
+        self.app._rendered_filter_types = None
+        self.app._apply_rendered_filters()
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
+        self.hide()
 
     def _apply(self):
         if not self.app:
@@ -414,4 +423,6 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
         self.app._rendered_filter_games = self._selected_games()
         self.app._rendered_filter_types = self._selected_types()
         self.app._apply_rendered_filters()
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
         self.hide()
