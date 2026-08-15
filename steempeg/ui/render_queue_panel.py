@@ -32,6 +32,7 @@ from steempeg.ui.layout_defaults import (
     LIBRARY_TAB_TO_TOOLBAR_SPACING,
     RENDER_QUEUE_BOTTOM_INSET,
 )
+from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -100,15 +101,13 @@ _QUEUE_TOGGLE_INACTIVE = (
     "background-color: transparent; color: #888888; border-radius: 12px;"
     " font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
 )
+# Lavender pill matches Clips Manager (LIBRARY_SCROLLBAR_VERTICAL). Further
+# end-rounding (timeline-style) stays v46 — see ROADMAP § v46 scroller note.
 _SCROLL_STYLE = """
     QScrollArea { background: transparent; border: none; }
     QWidget#queueListHost { background: transparent; }
     QWidget#queueEmptyCenter { background: transparent; }
-    QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }
-    QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }
-    QScrollBar::handle:vertical:hover { background: #b29ae7; }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-"""
+""" + LIBRARY_SCROLLBAR_VERTICAL
 _EMPTY_PANEL_STYLE = (
     "QFrame#queueEmptyPanel {"
     " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
@@ -255,7 +254,8 @@ class QueueJobCard(QFrame):
                 continue
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        # Fixed vertical: keep natural row height; scroll instead of squash.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumWidth(0)
         self.setMinimumHeight(thumb_h + 12)
         self._thumb_wrap = thumb_wrap
@@ -571,7 +571,20 @@ class QueueJobCard(QFrame):
         menu.exec(event.globalPos())
 
 
-class QueueListHost(QWidget):
+class _QueueScrollContent(QWidget):
+    """Scroll-area body: min height tracks preferred height so cards are not squashed.
+
+    QScrollArea(widgetResizable=True) sizes its widget from ``minimumSizeHint``.
+    A VBox of Preferred/Minimum children reports a compressed minHint, so Qt
+    shrinks rows toward ``minimumHeight`` before the scrollbar grows. Matching
+    minHint to sizeHint keeps natural card height and scrolls instead.
+    """
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        return self.sizeHint()
+
+
+class QueueListHost(_QueueScrollContent):
     """Drop target for inserting at the end of the queue list."""
 
     dropped_at_end = Signal(str)
@@ -760,7 +773,8 @@ class RenderQueuePanel(QWidget):
         self._grid_layout.setAlignment(Qt.AlignRight | Qt.AlignTop)
         self._grid_outer.addWidget(self._grid_inner, 0, Qt.AlignTop)
 
-        self._content_stack = QWidget()
+        self._content_stack = _QueueScrollContent()
+        self._content_stack.setObjectName("queueScrollContent")
         self._content_stack_layout = QVBoxLayout(self._content_stack)
         self._content_stack_layout.setContentsMargins(0, 0, 0, 0)
         self._content_stack_layout.addWidget(self._list_host)
