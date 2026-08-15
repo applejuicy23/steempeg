@@ -6,7 +6,8 @@ Stored in ``settings.json`` under ``export_presets``:
 {
   "export_presets": {
     "Discord 720p": { "quality_text": "...", "container_format": "MP4", ... }
-  }
+  },
+  "export_preset_favourites": ["Discord 720p", "1440p Ultra"]
 }
 ```
 
@@ -15,12 +16,15 @@ preserved when applying a preset onto an existing queue job.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, replace
 from typing import Any, Callable
 
 from steempeg.render.queue import RenderJob, RenderJobSettings, settings_from_dict
 
 SETTINGS_KEY = "export_presets"
+FAVOURITES_KEY = "export_preset_favourites"
+MAX_FAVOURITES = 5
 
 # Not part of a reusable recipe — stay with the clip / job.
 _CLIP_SPECIFIC_KEYS = frozenset(
@@ -69,8 +73,95 @@ def load_presets_map(load_settings: Callable[[], dict]) -> dict[str, dict[str, A
     return out
 
 
-def list_preset_names(load_settings: Callable[[], dict]) -> list[str]:
-    return sorted(load_presets_map(load_settings).keys(), key=str.casefold)
+def load_favourite_names(load_settings: Callable[[], dict]) -> list[str]:
+    """Pinned names in pin order; unknown / empty entries dropped."""
+    presets = load_presets_map(load_settings)
+    raw = (load_settings() or {}).get(FAVOURITES_KEY) or []
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        key = _normalize_name(str(item))
+        if not key or key in seen or key not in presets:
+            continue
+        seen.add(key)
+        out.append(key)
+        if len(out) >= MAX_FAVOURITES:
+            break
+    return out
+
+
+def save_favourite_names(
+    names: list[str],
+    *,
+    load_settings: Callable[[], dict],
+    save_settings: Callable[[str, Any], None],
+) -> list[str]:
+    presets = load_presets_map(load_settings)
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        key = _normalize_name(name)
+        if not key or key in seen or key not in presets:
+            continue
+        seen.add(key)
+        cleaned.append(key)
+        if len(cleaned) >= MAX_FAVOURITES:
+            break
+    save_settings(FAVOURITES_KEY, cleaned)
+    return cleaned
+
+
+def is_favourite(name: str, load_settings: Callable[[], dict]) -> bool:
+    key = _normalize_name(name)
+    return bool(key) and key in load_favourite_names(load_settings)
+
+
+def toggle_favourite(
+    name: str,
+    *,
+    load_settings: Callable[[], dict],
+    save_settings: Callable[[str, Any], None],
+) -> bool:
+    """Pin / unpin. Returns True if the preset is favourited after the toggle."""
+    key = _normalize_name(name)
+    if not key:
+        raise ValueError("Preset name is empty")
+    presets = load_presets_map(load_settings)
+    if key not in presets:
+        raise KeyError(key)
+    favs = load_favourite_names(load_settings)
+    if key in favs:
+        favs = [n for n in favs if n != key]
+        save_favourite_names(favs, load_settings=load_settings, save_settings=save_settings)
+        return False
+    if len(favs) >= MAX_FAVOURITES:
+        # Drop the oldest pin so the new one can land at the front.
+        favs = favs[1:]
+    favs = [key] + [n for n in favs if n != key]
+    save_favourite_names(favs, load_settings=load_settings, save_settings=save_settings)
+    return True
+
+
+def list_preset_names(
+    load_settings: Callable[[], dict],
+    *,
+    search: str = "",
+    favourites_first: bool = True,
+) -> list[str]:
+    """Names for UI lists. Favourites (pin order) first, then A–Z."""
+    presets = load_presets_map(load_settings)
+    names = list(presets.keys())
+    needle = _normalize_name(search).casefold()
+    if needle:
+        names = [n for n in names if needle in n.casefold()]
+    if not favourites_first:
+        return sorted(names, key=str.casefold)
+    favs = [n for n in load_favourite_names(load_settings) if n in names]
+    fav_set = set(favs)
+    rest = sorted((n for n in names if n not in fav_set), key=str.casefold)
+    return favs + rest
 
 
 def get_preset_settings(
@@ -81,6 +172,109 @@ def get_preset_settings(
     if payload is None:
         return None
     return preset_dict_to_settings(payload)
+
+
+def _short_codec(codec_text: str) -> str:
+    codec = (codec_text or "").strip()
+    if not codec:
+        return ""
+    if "H.265" in codec or "HEVC" in codec.upper():
+        return "H.265"
+    if "H.264" in codec or "AVC" in codec.upper():
+        return "H.264"
+    if codec.startswith("AV1"):
+        return "AV1"
+    if codec.startswith("VP9"):
+        return "VP9"
+    return codec.split()[0]
+
+
+def _short_res(settings: RenderJobSettings) -> str:
+    quality = (settings.quality_text or "").strip()
+    if "Target File Size" in quality:
+        return "Target size"
+    if "Original" in quality and "Target" not in quality:
+        return "Original"
+    match = re.match(r"^(\d+p)", quality)
+    if match:
+        return match.group(1)
+    if settings.custom_target_height and settings.custom_target_height > 0:
+        return f"{settings.custom_target_height}p"
+    if quality:
+        return quality.split("(")[0].strip()
+    return ""
+
+
+def _short_video_bitrate(settings: RenderJobSettings) -> str:
+    quality = (settings.quality_text or "").strip()
+    bitrate = (settings.bitrate_text or "").strip()
+    if "Original" in quality and "Target" not in quality:
+        return "source"
+    if "Custom" in bitrate and settings.custom_vbitrate is not None:
+        s = f"{settings.custom_vbitrate:.1f}".rstrip("0").rstrip(".")
+        return f"{s} Mbps"
+    match = re.search(r"([\d.]+)\s*Mbps", bitrate)
+    if match:
+        return f"{match.group(1)} Mbps"
+    if "Target File Size" in quality and settings.custom_target_bitrate:
+        mbps = settings.custom_target_bitrate / 1000
+        s = f"{mbps:.1f}".rstrip("0").rstrip(".")
+        return f"{s} Mbps"
+    return ""
+
+
+def _short_audio(settings: RenderJobSettings) -> str:
+    if settings.mute_audio:
+        return "Muted"
+    fmt = (settings.audio_format or "").strip() or "AAC"
+    if settings.audio_only:
+        br = (settings.audio_bitrate_text or "").strip()
+        if br and fmt not in ("FLAC", "WAV", "Copy"):
+            match = re.search(r"(\d+)", br)
+            return f"{fmt} only · {match.group(1)}k" if match else f"{fmt} only"
+        return f"{fmt} only"
+    if fmt in ("FLAC", "WAV", "Copy"):
+        return fmt
+    br = (settings.audio_bitrate_text or "").strip()
+    match = re.search(r"(\d+)", br)
+    if match:
+        return f"{fmt} {match.group(1)}k"
+    return fmt
+
+
+def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -> str:
+    """Readable recipe line: container · codec · res · bitrate · audio."""
+    if isinstance(settings, dict):
+        settings = preset_dict_to_settings(settings)
+    if settings is None:
+        return "—"
+
+    if settings.audio_only:
+        container = (settings.container_format or "").strip() or "Audio"
+        return " · ".join(p for p in (container, _short_audio(settings)) if p)
+
+    parts: list[str] = []
+    container = (settings.container_format or "").strip()
+    if container:
+        parts.append(container)
+
+    codec = _short_codec(settings.codec_text) or _short_codec(settings.encoder_display)
+    if codec:
+        parts.append(codec)
+
+    res = _short_res(settings)
+    if res:
+        parts.append(res)
+
+    br = _short_video_bitrate(settings)
+    if br:
+        parts.append(br)
+
+    audio = _short_audio(settings)
+    if audio:
+        parts.append(audio)
+
+    return " · ".join(parts) if parts else "—"
 
 
 def save_preset(
@@ -111,6 +305,8 @@ def delete_preset(
         return False
     del presets[key]
     save_settings(SETTINGS_KEY, presets)
+    favs = [n for n in load_favourite_names(load_settings) if n != key]
+    save_favourite_names(favs, load_settings=load_settings, save_settings=save_settings)
     return True
 
 
@@ -133,7 +329,49 @@ def rename_preset(
     payload = presets.pop(old_key)
     presets[new_key] = payload
     save_settings(SETTINGS_KEY, presets)
+    raw_favs = (load_settings() or {}).get(FAVOURITES_KEY) or []
+    if isinstance(raw_favs, list) and any(
+        _normalize_name(str(item)) == old_key for item in raw_favs
+    ):
+        remapped = [
+            new_key if _normalize_name(str(item)) == old_key else str(item)
+            for item in raw_favs
+        ]
+        save_favourite_names(
+            remapped, load_settings=load_settings, save_settings=save_settings
+        )
     return new_key
+
+
+def duplicate_preset(
+    name: str,
+    *,
+    load_settings: Callable[[], dict],
+    save_settings: Callable[[str, Any], None],
+    new_name: str | None = None,
+) -> str:
+    """Copy a preset under a free name (``Name (copy)``, ``Name (copy 2)``, …)."""
+    key = _normalize_name(name)
+    presets = load_presets_map(load_settings)
+    if key not in presets:
+        raise KeyError(key)
+    payload = dict(presets[key])
+    if new_name:
+        candidate = _normalize_name(new_name)
+        if not candidate:
+            raise ValueError("Preset name is empty")
+        if candidate in presets:
+            raise FileExistsError(candidate)
+    else:
+        base = f"{key} (copy)"
+        candidate = base
+        n = 2
+        while candidate in presets:
+            candidate = f"{key} (copy {n})"
+            n += 1
+    presets[candidate] = payload
+    save_settings(SETTINGS_KEY, presets)
+    return candidate
 
 
 def apply_preset_to_job(job: RenderJob, preset: RenderJobSettings, *, preset_name: str = "") -> None:
