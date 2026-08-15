@@ -279,10 +279,20 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         for btn in self._game_buttons.values():
             btn.setChecked(True)
         self._update_apply_label()
+        if not self.app:
+            return
+        # Match Clips Clear: apply immediately and wipe persisted filter memory.
+        self.app._screenshots_filter_games = None
+        self.app._apply_screenshots_filters()
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
+        self.hide()
 
     def _apply(self):
         if not self.app:
             return
         self.app._screenshots_filter_games = self._selected_games()
         self.app._apply_screenshots_filters()
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
         self.hide()
