@@ -9,6 +9,7 @@ import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 _QUEUE_BADGE_CYCLE_MS = 1000
@@ -120,6 +121,13 @@ class ClipCard(qtw.QWidget):
         self._on_right_click = on_right_click
         self._selected = False
         self._hovered = False
+        self._pressed = False
+        self._press_scale = 1.0
+        self._press_anim: Optional[qtc.QVariantAnimation] = None
+        # Grab+paint press path (ScreenshotPhoto-style). QGraphicsEffect on a
+        # composite card never scaled the child labels/thumb visibly.
+        self._press_snapshot: Optional[qtg.QPixmap] = None
+        self._press_hidden_children: list[qtw.QWidget] = []
         self.setObjectName("ClipCard")
 
         # Cell 260, border 3px. That means the inside is exactly 254 by 184!
@@ -497,6 +505,8 @@ class ClipCard(qtw.QWidget):
         if overlay is None:
             return
         if self._loading:
+            # Snapshot press mode hides thumb_label — drop it so the spinner can paint.
+            self._yield_press_for_overlay()
             overlay.setGeometry(0, 0, self.thumb_label.width(), self.thumb_label.height())
             overlay.start(percent=percent)
             overlay.raise_()
@@ -573,6 +583,10 @@ class ClipCard(qtw.QWidget):
 
     def leaveEvent(self, event) -> None:
         self._hovered = False
+        # With grabMouse (press-scale), leaving the tile must not cancel the press —
+        # release still arrives on this widget (same as ScreenshotPhoto).
+        if self._pressed and self.mouseGrabber() is not self:
+            self._finish_press()
         self._apply_selection_style()
         super().leaveEvent(event)
 
@@ -600,8 +614,130 @@ class ClipCard(qtw.QWidget):
             self._on_right_click(event)
             event.accept()
             return
-        if event.button() == qtc.Qt.MouseButton.LeftButton and self._on_left_click is not None:
-            self._on_left_click(event)
+        if event.button() == qtc.Qt.MouseButton.LeftButton:
+            # Press anim must start before selection/load. Callers should keep
+            # _on_left_click light (schedule work); never open clips on this stack.
+            self._begin_press()
+            if self._on_left_click is not None:
+                self._on_left_click(event)
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: qtc.QMouseEvent) -> None:
+        if event.button() == qtc.Qt.MouseButton.LeftButton and self._pressed:
+            self._finish_press()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        snap = getattr(self, "_press_snapshot", None)
+        if snap is not None and not snap.isNull():
+            p = qtg.QPainter(self)
+            p.setRenderHint(qtg.QPainter.RenderHint.SmoothPixmapTransform, True)
+            scale = float(getattr(self, "_press_scale", 1.0))
+            # Same center-scale path as ScreenshotPhoto.paintEvent.
+            if abs(scale - 1.0) > 0.001:
+                cx = self.width() / 2.0
+                cy = self.height() / 2.0
+                p.translate(cx, cy)
+                p.scale(scale, scale)
+                p.translate(-cx, -cy)
+            p.drawPixmap(0, 0, snap)
+            p.end()
+            return
+        super().paintEvent(event)
+
+    def _begin_press_paint_mode(self) -> None:
+        """Snapshot the composite card, then paint the scale ourselves."""
+        if self._press_snapshot is not None and not self._press_snapshot.isNull():
+            return
+        self._press_snapshot = self.grab()
+        hidden: list[qtw.QWidget] = []
+        for child in self.children():
+            if isinstance(child, qtw.QWidget) and child.isVisible():
+                hidden.append(child)
+                child.setVisible(False)
+        self._press_hidden_children = hidden
+        self.update()
+
+    def _end_press_paint_mode(self) -> None:
+        self._press_snapshot = None
+        for child in self._press_hidden_children:
+            try:
+                child.setVisible(True)
+            except RuntimeError:
+                pass
+        self._press_hidden_children = []
+        self.update()
+
+    def _begin_press(self) -> None:
+        # Mirror ScreenshotPhoto: animate 1.0 → CARD_PRESS_SCALE (no snap / min-peek).
+        self._pressed = True
+        self._begin_press_paint_mode()
+        self._animate_press_to(float(CARD_PRESS_SCALE))
+        self.grabMouse()
+
+    def _finish_press(self) -> None:
+        if not self._pressed:
+            return
+        self._pressed = False
+        if self.mouseGrabber() is self:
+            self.releaseMouse()
+        self._animate_press_to(1.0)
+
+    def _yield_press_for_overlay(self) -> None:
+        """End snapshot press so ThumbLoadingOverlay (child of thumb) can show."""
+        was_pressed = bool(self._pressed)
+        self._pressed = False
+        if was_pressed and self.mouseGrabber() is self:
+            self.releaseMouse()
+        anim = getattr(self, "_press_anim", None)
+        if anim is not None:
+            anim.stop()
+            anim.deleteLater()
+            self._press_anim = None
+        self._press_scale = 1.0
+        if self._press_snapshot is not None:
+            self._end_press_paint_mode()
+        else:
+            self.update()
+
+    def _animate_press_to(self, target: float) -> None:
+        """Whole-card press scale — same timing/easing as ScreenshotPhoto._animate_to."""
+        anim = getattr(self, "_press_anim", None)
+        if anim is not None:
+            anim.stop()
+            anim.deleteLater()
+            self._press_anim = None
+        start = float(getattr(self, "_press_scale", 1.0))
+        target = float(target)
+        if abs(start - target) < 0.01:
+            self._press_scale = target
+            self.update()
+            if abs(target - 1.0) < 0.01 and not self._pressed:
+                self._end_press_paint_mode()
+            return
+        anim = qtc.QVariantAnimation(self)
+        anim.setStartValue(start)
+        anim.setEndValue(target)
+        anim.setDuration(int(CARD_PRESS_DURATION_MS))
+        anim.setEasingCurve(
+            qtc.QEasingCurve.Type.OutCubic
+            if target >= start
+            else qtc.QEasingCurve.Type.InCubic
+        )
+        anim.valueChanged.connect(self._on_press_scale)
+        anim.finished.connect(self._on_press_anim_finished)
+        self._press_anim = anim
+        anim.start()
+
+    def _on_press_scale(self, value) -> None:
+        self._press_scale = float(value)
+        self.update()
+
+    def _on_press_anim_finished(self) -> None:
+        self._press_anim = None
+        if abs(float(getattr(self, "_press_scale", 1.0)) - 1.0) < 0.01 and not self._pressed:
+            self._end_press_paint_mode()
