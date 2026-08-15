@@ -1207,7 +1207,11 @@ def apply_settings_panel_density(ui, dense) -> None:
     # Preset actions: same Save-as chrome metrics; keep purple / gray / red faces.
     _preset_faces = (
         ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
+        ("btn_preset_update", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
+        ("btn_preset_rename", "#383838", "#ffffff", "#444444", "#404040", "#6b5a8e", "#3a324a"),
+        ("btn_preset_duplicate", "#383838", "#ffffff", "#444444", "#404040", "#6b5a8e", "#3a324a"),
         ("btn_preset_apply", "#383838", "#ffffff", "#444444", "#404040", "#6b5a8e", "#3a324a"),
+        ("btn_preset_favourite", "#383838", "#ffffff", "#444444", "#404040", "#6b5a8e", "#3a324a"),
         ("btn_preset_delete", "#3a2222", "#ff8a8a", "#8b3a3a", "#522828", "#c44", "#2a1818"),
     )
     for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in _preset_faces:
@@ -1263,7 +1267,7 @@ def ensure_presets_tab(ui) -> QWidget:
 
 
 def restyle_presets_page(ui, app) -> None:
-    """Presets tab: save current Video/Audio/Export recipe under a name; manage list."""
+    """Presets tab v2: save / update / rename / favourite / search + recipe summary."""
     from steempeg.ui.design_tokens import with_tooltip_style
     from steempeg.ui.icon_assets import info_icon
 
@@ -1272,13 +1276,13 @@ def restyle_presets_page(ui, app) -> None:
 
     root = QVBoxLayout(page)
     root.setContentsMargins(*_settings_page_margins())
-    root.setSpacing(12)
+    root.setSpacing(10)
 
     title_row = QHBoxLayout()
     title_row.setContentsMargins(0, 0, 0, 0)
     title_row.setSpacing(8)
     title_row.addWidget(_page_title_icon_label(4), 0, Qt.AlignmentFlag.AlignVCenter)
-    title_row.addWidget(_page_title("Create new preset"), 0, Qt.AlignmentFlag.AlignVCenter)
+    title_row.addWidget(_page_title("Export presets"), 0, Qt.AlignmentFlag.AlignVCenter)
     info_btn = QPushButton()
     info_btn.setObjectName("preset_help_info")
     info_btn.setIcon(info_icon(14))
@@ -1288,8 +1292,9 @@ def restyle_presets_page(ui, app) -> None:
     info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
     info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     info_btn.setToolTip(
-        "Set Video, Audio, and Export first — then save the recipe here.\n"
-        "Apply a preset to the panel, or right-click a queue job → Apply preset."
+        "Set Video, Audio, and Export first — then Save as new or Update a selected preset.\n"
+        "Star a few favourites to pin them to the top. Double-click a row to Apply to panel.\n"
+        "Right-click a queue job → Apply preset for per-job recipes."
     )
     info_btn.setStyleSheet(
         with_tooltip_style(
@@ -1327,29 +1332,37 @@ def restyle_presets_page(ui, app) -> None:
 
     # Same chrome as Export "Save as…" (Segoe UI bold, fixed height, pad-x only);
     # keep purple / gray / red faces.
-    def _save_as_like_btn(label: str, *, bg: str, fg: str, border: str, hover_bg: str, hover_border: str, pressed_bg: str) -> QPushButton:
+    def _save_as_like_btn(
+        label: str,
+        *,
+        bg: str,
+        fg: str,
+        border: str,
+        hover_bg: str,
+        hover_border: str,
+        pressed_bg: str,
+    ) -> QPushButton:
         btn = QPushButton(label)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFixedHeight(36)
+        btn.setFixedHeight(34)
         btn.setStyleSheet(
             f"QPushButton {{ background-color: {bg}; color: {fg};"
             f" border: 2px solid {border}; border-radius: 12px;"
             f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-            f" font-weight: bold; font-size: 13px; padding: 0px 12px; }}"
+            f" font-weight: bold; font-size: 12px; padding: 0px 10px; }}"
             f" QPushButton:hover {{ background-color: {hover_bg}; border: 2px solid {hover_border}; }}"
             f" QPushButton:pressed {{ background-color: {pressed_bg}; border: 2px solid {hover_border}; }}"
+            f" QPushButton:disabled {{ color: #777777; border-color: #3a3a3a;"
+            f" background-color: #2a2a2a; }}"
         )
         fnt = btn.font()
         fnt.setFamily("Segoe UI")
         fnt.setBold(True)
-        fnt.setPixelSize(13)
+        fnt.setPixelSize(12)
         btn.setFont(fnt)
         return btn
 
-    btn_row = QHBoxLayout()
-    btn_row.setSpacing(8)
-    btn_save = _save_as_like_btn(
-        "Save current settings",
+    purple = dict(
         bg="#4a3d66",
         fg="#f0ecff",
         border="#6b5a8e",
@@ -1357,8 +1370,7 @@ def restyle_presets_page(ui, app) -> None:
         hover_border="#b29ae7",
         pressed_bg="#3a324a",
     )
-    btn_apply = _save_as_like_btn(
-        "Apply to panel",
+    gray = dict(
         bg="#383838",
         fg="#ffffff",
         border="#444444",
@@ -1366,8 +1378,7 @@ def restyle_presets_page(ui, app) -> None:
         hover_border="#6b5a8e",
         pressed_bg="#3a324a",
     )
-    btn_delete = _save_as_like_btn(
-        "Delete",
+    red = dict(
         bg="#3a2222",
         fg="#ff8a8a",
         border="#8b3a3a",
@@ -1375,28 +1386,121 @@ def restyle_presets_page(ui, app) -> None:
         hover_border="#c44",
         pressed_bg="#2a1818",
     )
+
+    btn_save = _save_as_like_btn("Save as new", **purple)
+    btn_update = _save_as_like_btn("Update", **purple)
+    btn_rename = _save_as_like_btn("Rename", **gray)
+    btn_duplicate = _save_as_like_btn("Duplicate", **gray)
+    btn_apply = _save_as_like_btn("Apply to panel", **gray)
+    btn_favourite = _save_as_like_btn("★ Favourite", **gray)
+    btn_delete = _save_as_like_btn("Delete", **red)
+    btn_update.setToolTip("Overwrite the selected preset with the current Video / Audio / Export panel.")
+    btn_rename.setToolTip("Rename the selected preset without changing its settings.")
+    btn_favourite.setToolTip("Pin up to 5 presets to the top of the list.")
+    btn_delete.setToolTip("Deletes the selected list row — not whatever is typed in the name field.")
+
     ui.btn_preset_save = btn_save
+    ui.btn_preset_update = btn_update
+    ui.btn_preset_rename = btn_rename
+    ui.btn_preset_duplicate = btn_duplicate
     ui.btn_preset_apply = btn_apply
+    ui.btn_preset_favourite = btn_favourite
     ui.btn_preset_delete = btn_delete
-    btn_row.addWidget(btn_save)
-    btn_row.addWidget(btn_apply)
-    btn_row.addWidget(btn_delete)
-    btn_row.addStretch()
-    root.addLayout(btn_row)
+
+    btn_row1 = QHBoxLayout()
+    btn_row1.setSpacing(6)
+    for b in (btn_save, btn_update, btn_rename, btn_duplicate):
+        btn_row1.addWidget(b)
+    btn_row1.addStretch()
+    root.addLayout(btn_row1)
+
+    btn_row2 = QHBoxLayout()
+    btn_row2.setSpacing(6)
+    for b in (btn_apply, btn_favourite, btn_delete):
+        btn_row2.addWidget(b)
+    btn_row2.addStretch()
+    root.addLayout(btn_row2)
+
+    detail_cap = QLabel("What's inside")
+    detail_cap.setStyleSheet(_FIELD_LABEL_QSS)
+    detail = QLabel("Select a preset to preview its recipe.")
+    detail.setObjectName("preset_detail_label")
+    detail.setWordWrap(True)
+    detail.setMinimumHeight(36)
+    detail.setStyleSheet(
+        "QLabel { background-color: #242424; color: #d0d0d0; border: 1px solid #3a3a3a;"
+        f" border-radius: 8px; padding: 8px 10px; font-size: 12px; {_FONT} }}"
+    )
+    ui.preset_detail_label = detail
+    detail_block = QWidget()
+    detail_lay = QVBoxLayout(detail_block)
+    detail_lay.setContentsMargins(0, 0, 0, 0)
+    detail_lay.setSpacing(4)
+    detail_lay.addWidget(detail_cap)
+    detail_lay.addWidget(detail)
+    root.addWidget(_content_width_wrap(detail_block))
+
+    fav_cap = QLabel("Favourites")
+    fav_cap.setStyleSheet(_FIELD_LABEL_QSS)
+    fav_row = QHBoxLayout()
+    fav_row.setContentsMargins(0, 0, 0, 0)
+    fav_row.setSpacing(6)
+    fav_host = QWidget()
+    fav_host.setObjectName("preset_favourites_host")
+    fav_host.setLayout(fav_row)
+    ui.preset_favourites_host = fav_host
+    ui.preset_favourites_layout = fav_row
+    fav_block = QWidget()
+    fav_block_lay = QVBoxLayout(fav_block)
+    fav_block_lay.setContentsMargins(0, 0, 0, 0)
+    fav_block_lay.setSpacing(4)
+    fav_block_lay.addWidget(fav_cap)
+    fav_block_lay.addWidget(fav_host)
+    ui.preset_favourites_block = fav_block
+    root.addWidget(_content_width_wrap(fav_block))
+
+    search_cap = QLabel("Search")
+    search_cap.setStyleSheet(_FIELD_LABEL_QSS)
+    search_edit = QLineEdit()
+    search_edit.setObjectName("preset_search_edit")
+    search_edit.setPlaceholderText("Filter by name…")
+    search_edit.setClearButtonEnabled(True)
+    search_edit.setStyleSheet(
+        "QLineEdit { background-color: #2a2a2a; color: #e8e8e8; border: 1px solid #444;"
+        " border-radius: 8px; padding: 6px 10px; font-weight: bold; }"
+        " QLineEdit:focus { border: 1px solid #8e7cc3; }"
+    )
+    ui.preset_search_edit = search_edit
+    search_block = QWidget()
+    search_lay = QVBoxLayout(search_block)
+    search_lay.setContentsMargins(0, 0, 0, 0)
+    search_lay.setSpacing(4)
+    search_lay.addWidget(search_cap)
+    search_lay.addWidget(search_edit)
+    root.addWidget(_content_width_wrap(search_block))
 
     list_cap = QLabel("Saved presets")
     list_cap.setStyleSheet(_FIELD_LABEL_QSS)
     root.addWidget(list_cap)
 
+    selected_cap = QLabel("")
+    selected_cap.setObjectName("preset_selected_label")
+    selected_cap.setStyleSheet(
+        f"color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; {_FONT}"
+    )
+    ui.preset_selected_label = selected_cap
+    root.addWidget(selected_cap)
+
     preset_list = QListWidget()
     preset_list.setObjectName("preset_list")
-    preset_list.setMinimumHeight(160)
+    preset_list.setMinimumHeight(140)
     preset_list.setStyleSheet(
         "QListWidget { background-color: #2a2a2a; border: 1px solid #3a3a3a;"
-        " border-radius: 10px; color: #e0e0e0; padding: 4px; }"
-        " QListWidget::item { padding: 8px 10px; border-radius: 6px; }"
-        " QListWidget::item:selected { background-color: #4a3d66; color: #ffffff; }"
-        " QListWidget::item:hover { background-color: #383838; }"
+        " border-radius: 10px; color: #e0e0e0; padding: 4px; outline: none; }"
+        " QListWidget::item { padding: 8px 10px; border-radius: 6px; margin: 1px 0px; }"
+        " QListWidget::item:selected { background-color: #4a3d66; color: #ffffff;"
+        " border: 1px solid #b29ae7; }"
+        " QListWidget::item:hover:!selected { background-color: #383838; }"
     )
     ui.preset_list = preset_list
     root.addWidget(_content_width_wrap(preset_list), 1)
@@ -1409,13 +1513,24 @@ def restyle_presets_page(ui, app) -> None:
     root.addWidget(status)
 
     btn_save.clicked.connect(lambda: getattr(app, "save_export_preset_from_ui", lambda: None)())
+    btn_update.clicked.connect(lambda: getattr(app, "update_export_preset_from_ui", lambda: None)())
+    btn_rename.clicked.connect(lambda: getattr(app, "rename_export_preset_from_ui", lambda: None)())
+    btn_duplicate.clicked.connect(
+        lambda: getattr(app, "duplicate_export_preset_from_ui", lambda: None)()
+    )
     btn_apply.clicked.connect(lambda: getattr(app, "apply_export_preset_to_panel", lambda: None)())
+    btn_favourite.clicked.connect(
+        lambda: getattr(app, "toggle_export_preset_favourite_from_ui", lambda: None)()
+    )
     btn_delete.clicked.connect(lambda: getattr(app, "delete_export_preset_from_ui", lambda: None)())
     preset_list.itemSelectionChanged.connect(
         lambda: getattr(app, "_on_export_preset_selection_changed", lambda: None)()
     )
     preset_list.itemDoubleClicked.connect(
         lambda *_: getattr(app, "apply_export_preset_to_panel", lambda: None)()
+    )
+    search_edit.textChanged.connect(
+        lambda *_: getattr(app, "refresh_export_presets_list", lambda: None)()
     )
 
     if hasattr(app, "refresh_export_presets_list"):

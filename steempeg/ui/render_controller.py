@@ -4385,56 +4385,208 @@ class RenderMixin:
         if sidebar is not None and hasattr(sidebar, "refresh"):
             sidebar.refresh()
 
-    # --- Custom export presets (v41) -----------------------------------------
+    # --- Custom export presets (v41 → v45 manager UX) ------------------------
+
+    def _export_preset_search_text(self) -> str:
+        edit = getattr(self.ui, "preset_search_edit", None)
+        if edit is None:
+            return ""
+        return (edit.text() or "").strip()
+
+    def _list_selected_export_preset_name(self) -> str:
+        """Name from the selected list row only (Delete / Update target)."""
+        from PySide6.QtCore import Qt
+
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is None or lst.currentItem() is None:
+            return ""
+        item = lst.currentItem()
+        raw = item.data(Qt.ItemDataRole.UserRole)
+        if raw:
+            return str(raw).strip()
+        # Fallback for plain text rows (strip favourite star prefix).
+        text = (item.text() or "").strip()
+        if text.startswith("★ "):
+            text = text[2:].strip()
+        return text
 
     def refresh_export_presets_list(self) -> None:
-        from steempeg.render.export_presets import list_preset_names
+        from PySide6.QtWidgets import QListWidgetItem
+
+        from steempeg.render.export_presets import (
+            format_preset_summary,
+            get_preset_settings,
+            list_preset_names,
+            load_favourite_names,
+        )
 
         lst = getattr(self.ui, "preset_list", None)
         if lst is None:
             return
-        selected = ""
-        cur = lst.currentItem()
-        if cur is not None:
-            selected = cur.text()
+        selected = self._list_selected_export_preset_name()
+        search = self._export_preset_search_text()
+        names = list_preset_names(self.load_user_settings, search=search)
+        favs = load_favourite_names(self.load_user_settings)
+        fav_set = set(favs)
+
         lst.blockSignals(True)
         lst.clear()
-        for name in list_preset_names(self.load_user_settings):
-            lst.addItem(name)
+        for name in names:
+            label = f"★ {name}" if name in fav_set else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            tip = format_preset_summary(get_preset_settings(name, self.load_user_settings))
+            item.setToolTip(tip)
+            lst.addItem(item)
         lst.blockSignals(False)
+
         if selected:
-            matches = lst.findItems(selected, Qt.MatchFlag.MatchExactly)
-            if matches:
-                lst.setCurrentItem(matches[0])
+            for i in range(lst.count()):
+                it = lst.item(i)
+                if it is not None and it.data(Qt.ItemDataRole.UserRole) == selected:
+                    lst.setCurrentItem(it)
+                    break
+
+        self._refresh_export_preset_favourite_chips(favs)
+        self._sync_export_preset_selection_chrome()
+
+    def _refresh_export_preset_favourite_chips(self, favs: list[str] | None = None) -> None:
+        from steempeg.render.export_presets import load_favourite_names
+
+        lay = getattr(self.ui, "preset_favourites_layout", None)
+        if lay is None:
+            return
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if favs is None:
+            favs = load_favourite_names(self.load_user_settings)
+        if not favs:
+            empty = QLabel("Star a preset to pin it here.")
+            empty.setStyleSheet(
+                "color: #777777; background: transparent; font-size: 11px;"
+                " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            )
+            lay.addWidget(empty)
+            lay.addStretch(1)
+            return
+        for name in favs:
+            chip = QPushButton(f"★ {name}")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setFixedHeight(28)
+            chip.setStyleSheet(
+                "QPushButton { background-color: #3a324a; color: #f0ecff;"
+                " border: 1px solid #6b5a8e; border-radius: 10px;"
+                " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+                " font-weight: bold; font-size: 11px; padding: 0px 10px; }"
+                " QPushButton:hover { background-color: #4a3d66; border-color: #b29ae7; }"
+                " QPushButton:pressed { background-color: #2a2438; }"
+            )
+            chip.clicked.connect(
+                lambda checked=False, n=name: self._select_export_preset_by_name(n)
+            )
+            lay.addWidget(chip)
+        lay.addStretch(1)
+
+    def _select_export_preset_by_name(self, name: str) -> None:
+        from PySide6.QtCore import Qt
+
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is None:
+            return
+        for i in range(lst.count()):
+            it = lst.item(i)
+            if it is not None and it.data(Qt.ItemDataRole.UserRole) == name:
+                lst.setCurrentItem(it)
+                return
+        # Not in filtered list — clear search and retry.
+        search = getattr(self.ui, "preset_search_edit", None)
+        if search is not None and (search.text() or "").strip():
+            search.blockSignals(True)
+            search.clear()
+            search.blockSignals(False)
+            self.refresh_export_presets_list()
+            for i in range(lst.count()):
+                it = lst.item(i)
+                if it is not None and it.data(Qt.ItemDataRole.UserRole) == name:
+                    lst.setCurrentItem(it)
+                    break
+
+    def _sync_export_preset_selection_chrome(self) -> None:
+        from steempeg.render.export_presets import (
+            format_preset_summary,
+            get_preset_settings,
+            is_favourite,
+        )
+
+        name = self._list_selected_export_preset_name()
+        detail = getattr(self.ui, "preset_detail_label", None)
+        selected_lbl = getattr(self.ui, "preset_selected_label", None)
+        btn_delete = getattr(self.ui, "btn_preset_delete", None)
+        btn_update = getattr(self.ui, "btn_preset_update", None)
+        btn_rename = getattr(self.ui, "btn_preset_rename", None)
+        btn_duplicate = getattr(self.ui, "btn_preset_duplicate", None)
+        btn_apply = getattr(self.ui, "btn_preset_apply", None)
+        btn_fav = getattr(self.ui, "btn_preset_favourite", None)
+
+        has = bool(name)
+        for btn in (btn_delete, btn_update, btn_rename, btn_duplicate, btn_apply, btn_fav):
+            if btn is not None:
+                btn.setEnabled(has)
+
+        if selected_lbl is not None:
+            selected_lbl.setText(f"Selected: {name}" if has else "Selected: none — pick a row to Update / Delete")
+
+        if btn_delete is not None:
+            btn_delete.setText(f'Delete “{name}”' if has else "Delete")
+
+        if btn_fav is not None:
+            if has and is_favourite(name, self.load_user_settings):
+                btn_fav.setText("☆ Unfavourite")
+            else:
+                btn_fav.setText("★ Favourite")
+
+        if detail is not None:
+            if not has:
+                detail.setText("Select a preset to preview its recipe.")
+            else:
+                settings = get_preset_settings(name, self.load_user_settings)
+                detail.setText(format_preset_summary(settings))
 
     def _on_export_preset_selection_changed(self) -> None:
-        lst = getattr(self.ui, "preset_list", None)
         edit = getattr(self.ui, "preset_name_edit", None)
-        if lst is None or edit is None:
-            return
-        item = lst.currentItem()
-        if item is not None:
-            edit.setText(item.text())
+        name = self._list_selected_export_preset_name()
+        if edit is not None and name:
+            edit.setText(name)
+        self._sync_export_preset_selection_chrome()
 
     def _selected_export_preset_name(self) -> str:
+        """Name field first (Save as new), else selected list row."""
         edit = getattr(self.ui, "preset_name_edit", None)
         if edit is not None:
             typed = (edit.text() or "").strip()
             if typed:
                 return typed
-        lst = getattr(self.ui, "preset_list", None)
-        if lst is not None and lst.currentItem() is not None:
-            return (lst.currentItem().text() or "").strip()
-        return ""
+        return self._list_selected_export_preset_name()
 
     def _set_preset_status(self, text: str) -> None:
         label = getattr(self.ui, "preset_status_label", None)
         if label is not None:
             label.setText(text or "")
 
+    def _persist_render_settings_quiet(self) -> None:
+        try:
+            from steempeg.ui.portable.sheets import persist_render_settings
+
+            persist_render_settings(self)
+        except Exception:
+            pass
+
     def save_export_preset_from_ui(self) -> None:
-        from steempeg.render.export_presets import save_preset
-        from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
+        from steempeg.render.export_presets import load_presets_map, save_preset
+        from steempeg.ui.message_dialog import steempeg_information, steempeg_question, steempeg_warning
         from steempeg.ui.render_job_builder import snapshot_settings_from_ui
 
         name = self._selected_export_preset_name()
@@ -4445,6 +4597,14 @@ class RenderMixin:
                 "Enter a name for the preset first.",
             )
             return
+        existing = load_presets_map(self.load_user_settings)
+        if name in existing:
+            if not steempeg_question(
+                self.ui,
+                "Overwrite preset?",
+                f"“{name}” already exists. Overwrite it with the current panel settings?",
+            ):
+                return
         try:
             key = save_preset(
                 name,
@@ -4456,28 +4616,162 @@ class RenderMixin:
             steempeg_warning(self.ui, "Save preset", str(exc))
             return
         self.refresh_export_presets_list()
-        lst = getattr(self.ui, "preset_list", None)
-        if lst is not None:
-            matches = lst.findItems(key, Qt.MatchFlag.MatchExactly)
-            if matches:
-                lst.setCurrentItem(matches[0])
+        self._select_export_preset_by_name(key)
         self._set_preset_status(f"Saved preset “{key}”.")
         steempeg_information(self.ui, "Preset saved", f"Saved “{key}”.")
-        try:
-            from steempeg.ui.portable.sheets import persist_render_settings
+        self._persist_render_settings_quiet()
 
-            persist_render_settings(self)
-        except Exception:
-            pass
+    def update_export_preset_from_ui(self) -> None:
+        """Overwrite the selected list preset from the live panel (optional rename)."""
+        from steempeg.render.export_presets import rename_preset, save_preset
+        from steempeg.ui.message_dialog import steempeg_warning
+        from steempeg.ui.render_job_builder import snapshot_settings_from_ui
+
+        selected = self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Update preset",
+                "Select a saved preset in the list first.",
+            )
+            return
+        edit = getattr(self.ui, "preset_name_edit", None)
+        typed = (edit.text() or "").strip() if edit is not None else ""
+        target = typed or selected
+        try:
+            if target != selected:
+                target = rename_preset(
+                    selected,
+                    target,
+                    load_settings=self.load_user_settings,
+                    save_settings=self.save_user_settings,
+                )
+            key = save_preset(
+                target,
+                snapshot_settings_from_ui(self),
+                load_settings=self.load_user_settings,
+                save_settings=self.save_user_settings,
+            )
+        except FileExistsError:
+            steempeg_warning(
+                self.ui,
+                "Update preset",
+                f"A preset named “{target}” already exists.",
+            )
+            return
+        except (KeyError, ValueError) as exc:
+            steempeg_warning(self.ui, "Update preset", str(exc))
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        self._set_preset_status(f"Updated “{key}” from the current panel.")
+        self._persist_render_settings_quiet()
+
+    def rename_export_preset_from_ui(self) -> None:
+        from steempeg.render.export_presets import rename_preset
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        selected = self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Rename preset",
+                "Select a saved preset in the list first.",
+            )
+            return
+        edit = getattr(self.ui, "preset_name_edit", None)
+        new_name = (edit.text() or "").strip() if edit is not None else ""
+        if not new_name:
+            steempeg_warning(self.ui, "Rename preset", "Enter the new name first.")
+            return
+        if new_name == selected:
+            self._set_preset_status(f"“{selected}” already has that name.")
+            return
+        try:
+            key = rename_preset(
+                selected,
+                new_name,
+                load_settings=self.load_user_settings,
+                save_settings=self.save_user_settings,
+            )
+        except FileExistsError:
+            steempeg_warning(
+                self.ui,
+                "Rename preset",
+                f"A preset named “{new_name}” already exists.",
+            )
+            return
+        except (KeyError, ValueError) as exc:
+            steempeg_warning(self.ui, "Rename preset", str(exc))
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        self._set_preset_status(f"Renamed to “{key}”.")
+
+    def duplicate_export_preset_from_ui(self) -> None:
+        from steempeg.render.export_presets import duplicate_preset
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        selected = self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Duplicate preset",
+                "Select a saved preset in the list first.",
+            )
+            return
+        try:
+            key = duplicate_preset(
+                selected,
+                load_settings=self.load_user_settings,
+                save_settings=self.save_user_settings,
+            )
+        except (KeyError, ValueError, FileExistsError) as exc:
+            steempeg_warning(self.ui, "Duplicate preset", str(exc))
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
+        self._set_preset_status(f"Duplicated as “{key}”.")
+
+    def toggle_export_preset_favourite_from_ui(self) -> None:
+        from steempeg.render.export_presets import toggle_favourite
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        selected = self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Favourite preset",
+                "Select a saved preset in the list first.",
+            )
+            return
+        try:
+            pinned = toggle_favourite(
+                selected,
+                load_settings=self.load_user_settings,
+                save_settings=self.save_user_settings,
+            )
+        except (KeyError, ValueError) as exc:
+            steempeg_warning(self.ui, "Favourite preset", str(exc))
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(selected)
+        if pinned:
+            self._set_preset_status(f"Pinned “{selected}” to favourites.")
+        else:
+            self._set_preset_status(f"Removed “{selected}” from favourites.")
 
     def apply_export_preset_to_panel(self) -> None:
         from steempeg.render.export_presets import get_preset_settings
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
-        name = self._selected_export_preset_name()
+        name = self._list_selected_export_preset_name() or self._selected_export_preset_name()
         if not name:
-            steempeg_warning(self.ui, "Apply preset", "Select or type a preset name.")
+            steempeg_warning(self.ui, "Apply preset", "Select a preset in the list.")
             return
         settings = get_preset_settings(name, self.load_user_settings)
         if settings is None:
@@ -4490,25 +4784,24 @@ class RenderMixin:
         # One summary rebuild at the end — not once per combo signal.
         apply_job_settings_to_ui(self, settings, refresh_summary=True)
         self._set_preset_status(f"Applied “{name}” to the export panel.")
-        try:
-            from steempeg.ui.portable.sheets import persist_render_settings
-
-            persist_render_settings(self)
-        except Exception:
-            pass
+        self._persist_render_settings_quiet()
 
     def delete_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import delete_preset
         from steempeg.ui.message_dialog import steempeg_question, steempeg_warning
 
-        name = self._selected_export_preset_name()
+        name = self._list_selected_export_preset_name()
         if not name:
-            steempeg_warning(self.ui, "Delete preset", "Select a preset to delete.")
+            steempeg_warning(
+                self.ui,
+                "Delete preset",
+                "Select a preset in the list to delete.",
+            )
             return
         if not steempeg_question(
             self.ui,
             "Delete preset?",
-            f"Delete saved preset “{name}”?",
+            f"Delete saved preset “{name}”?\n\nThis cannot be undone.",
         ):
             return
         if not delete_preset(
