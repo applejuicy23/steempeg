@@ -141,7 +141,7 @@ class VolumeControlWidget(QWidget):
             self.slider.setValue(0)
 
     def apply_volume_ceiling(self, ceiling: int | None = None) -> int:
-        """Resize the slider max (100 / 150 / 200). Clamps value + mute memory."""
+        """Resize the slider max (100–500%). Clamps value + mute memory."""
         try:
             ceiling = int(ceiling) if ceiling is not None else get_volume_boost_ceiling()
         except (TypeError, ValueError):
