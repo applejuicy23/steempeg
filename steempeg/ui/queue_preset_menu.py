@@ -24,15 +24,23 @@ def resolve_steempeg_app(seed: Any) -> Any | None:
 
 def add_export_preset_menu_actions(menu: QMenu, seed: Any, job_id: str) -> None:
     """Insert Apply preset / Apply panel settings under Select in editor."""
-    from steempeg.render.export_presets import list_preset_names
+    from steempeg.render.export_presets import (
+        format_preset_summary,
+        get_preset_settings,
+        list_preset_names,
+        load_favourite_names,
+    )
 
     app = resolve_steempeg_app(seed)
     names: list[str] = []
+    fav_set: set[str] = set()
     if app is not None and hasattr(app, "load_user_settings"):
         try:
             names = list_preset_names(app.load_user_settings)
+            fav_set = set(load_favourite_names(app.load_user_settings))
         except Exception:
             names = []
+            fav_set = set()
 
     apply_menu = menu.addMenu("📦  Apply preset")
     if app is None:
@@ -43,7 +51,14 @@ def add_export_preset_menu_actions(menu: QMenu, seed: Any, job_id: str) -> None:
         empty.setEnabled(False)
     else:
         for name in names:
-            act = apply_menu.addAction(name)
+            label = f"★ {name}" if name in fav_set else name
+            act = apply_menu.addAction(label)
+            try:
+                tip = format_preset_summary(get_preset_settings(name, app.load_user_settings))
+                if tip:
+                    act.setToolTip(tip)
+            except Exception:
+                pass
             act.triggered.connect(
                 lambda checked=False, n=name, jid=job_id, a=app: a.apply_export_preset_to_queue_job(
                     jid, n
