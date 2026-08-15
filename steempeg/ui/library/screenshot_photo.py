@@ -29,6 +29,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
+
 # ClipCard accent family
 _ACCENT = QColor("#b29ae7")
 _ACCENT_HOVER = QColor("#7a6aa8")
@@ -199,7 +201,7 @@ class ScreenshotPhoto(QWidget):
         self._pressed = True
         self._dragged = False
         self._press_pos = QPoint(local_pos)
-        self._animate_to(0.94)
+        self._animate_to(float(CARD_PRESS_SCALE))
         self.grabMouse()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -245,7 +247,7 @@ class ScreenshotPhoto(QWidget):
         anim = QVariantAnimation(self)
         anim.setStartValue(start)
         anim.setEndValue(float(target))
-        anim.setDuration(75)
+        anim.setDuration(int(CARD_PRESS_DURATION_MS))
         anim.setEasingCurve(
             QEasingCurve.Type.OutCubic if target >= start else QEasingCurve.Type.InCubic
         )
