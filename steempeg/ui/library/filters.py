@@ -1828,7 +1828,23 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.update_live_count()
         # Clear used to only reset pills until Apply — grid stayed filtered with
         # a "cleared" popup. Apply immediately so memory + view match.
-        self.apply_filters()
+        # Wipe session + disk filter memory (do not re-save an "all on" active filter).
+        self.app.saved_filter_state = None
+        if hasattr(self.app, "reapply_saved_library_filters"):
+            self.app.reapply_saved_library_filters()
+        else:
+            table = self.app.ui.table_clips
+            table.setUpdatesEnabled(False)
+            for row in range(table.rowCount()):
+                table.setRowHidden(row, False)
+            table.setUpdatesEnabled(True)
+            if hasattr(self.app, "fast_sync_grid"):
+                self.app.fast_sync_grid()
+            if hasattr(self.app, "_update_library_count_label"):
+                self.app._update_library_count_label()
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
+        self.hide()
 
     def _resolved_duration_bounds(self):
         """Return min/max duration seconds, recovering from stale 0:00–0:00."""
@@ -1981,6 +1997,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         else:
             saved['games'] = []
         self.app.saved_filter_state = saved
+        if hasattr(self.app, "_persist_library_filter_memory"):
+            self.app._persist_library_filter_memory()
 
         visible_count = 0
         if not filter_active:
