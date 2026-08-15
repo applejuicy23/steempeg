@@ -26,11 +26,15 @@ from steempeg.render.queue_display import (
     format_job_trim,
 )
 from steempeg.ui.queue_card_shared import (
+    STATUS_BORDER_IDLE,
+    STATUS_CARD_BG,
+    STATUS_CARD_BG_SELECTED,
     _FONT,
     _QUEUE_MENU_STYLE,
     build_queue_thumb_strip,
     job_can_remove,
     set_game_icon_label,
+    status_border_for_job,
 )
 from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
 from steempeg.ui.ui_density import COMFORT
@@ -100,13 +104,8 @@ QFrame#portableQueueHeader, QFrame#portableQueueList {
 }
 """
 
-# Status outline only (no card fill by status) — pipeline colors.
-_BORDER_IDLE = "#555555"          # waiting further back
-_BORDER_READY = "#ffcc00"         # next to render (full yellow)
-_BORDER_NEXT = "#d4b84a"          # soft yellow while someone else renders
-_BORDER_RENDER = "#ff9800"        # actively rendering
-_BORDER_DONE = "#4CAF50"          # completed
-_BORDER_ERROR = "#ff4444"
+# Status outline only (no card fill by status) — pipeline colours live in
+# queue_card_shared.status_border_for_job.
 
 _REMOVE_BTN_STYLE = """
 QPushButton#portableQueueRemoveBtn {
@@ -211,34 +210,10 @@ def _queue_cache_dir(app) -> str:
     return getattr(app, "cache_dir", None) or os.path.join(get_save_directory(), "cache")
 
 
-def _status_border_for_job(job: RenderJob, jobs: list[RenderJob]) -> tuple[str, int]:
-    """Return (border_color, border_px) for the render pipeline outline.
-
-    Gray = further back · yellow = next ready · soft yellow = up next while
-    another job renders · orange = rendering · green = done.
-    """
-    st = getattr(job, "status", None)
-    if st == JobStatus.COMPLETED:
-        return _BORDER_DONE, 2
-    if st == JobStatus.ERROR:
-        return _BORDER_ERROR, 2
-    if st == JobStatus.RENDERING:
-        return _BORDER_RENDER, 2
-
-    # QUEUED (and anything unknown): place in the waiting line.
-    rendering = any(getattr(j, "status", None) == JobStatus.RENDERING for j in jobs)
-    queued = [j for j in jobs if getattr(j, "status", None) == JobStatus.QUEUED]
-    if queued and job.id == queued[0].id:
-        if rendering:
-            return _BORDER_NEXT, 2
-        return _BORDER_READY, 2
-    return _BORDER_IDLE, 1
-
-
 def _row_stylesheet(*, selected: bool, border: str, border_w: int) -> str:
-    bg = "#322a45" if selected else "#2a2a2a"
+    bg = STATUS_CARD_BG_SELECTED if selected else STATUS_CARD_BG
     # Hover keeps the status color visible (slightly brighter purple only on idle gray).
-    hover = "#7a6aa8" if border == _BORDER_IDLE and not selected else border
+    hover = "#7a6aa8" if border == STATUS_BORDER_IDLE and not selected else border
     return f"""
 QFrame#portableQueueRow {{
     background-color: {bg};
@@ -268,7 +243,7 @@ class _PortableQueueRow(QFrame):
         index: int,
         selected: bool,
         *,
-        border_color: str = _BORDER_IDLE,
+        border_color: str = STATUS_BORDER_IDLE,
         border_w: int = 1,
         cache_dir: str | None = None,
         parent=None,
@@ -768,7 +743,7 @@ class PortableQueueSidebar(QWidget):
 
         cache_dir = _queue_cache_dir(self._app)
         for pending_i, job in enumerate(jobs, start=1):
-            border, border_w = _status_border_for_job(job, jobs)
+            border, border_w = status_border_for_job(job, jobs)
             row = _PortableQueueRow(
                 job,
                 pending_i,

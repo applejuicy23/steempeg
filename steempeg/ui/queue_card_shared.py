@@ -17,6 +17,57 @@ _LIST_THUMB_H = 76
 _STATUS_DOT = 26
 _QUEUE_CHROME_INSET = 12  # match Clips Manager top_bar horizontal margins
 
+# Pipeline outline (portable + desktop list) — gray waiting · yellow ready · etc.
+STATUS_BORDER_IDLE = "#555555"
+STATUS_BORDER_READY = "#ffcc00"
+STATUS_BORDER_NEXT = "#d4b84a"
+STATUS_BORDER_RENDER = "#ff9800"
+STATUS_BORDER_DONE = "#4CAF50"
+STATUS_BORDER_ERROR = "#ff4444"
+
+# Flat card fill (portable). Desktop Ready keeps a soft yellow wash on top of this rule.
+STATUS_CARD_BG = "#2a2a2a"
+STATUS_CARD_BG_SELECTED = "#322a45"
+STATUS_CARD_BG_READY = "rgba(255, 204, 0, 0.10)"
+
+
+def status_border_for_job(job: RenderJob, jobs: list[RenderJob]) -> tuple[str, int]:
+    """Return (border_color, border_px) for the render pipeline outline.
+
+    Gray = further back · yellow = next ready · soft yellow = up next while
+    another job renders · orange = rendering · green = done · red = error.
+    """
+    st = getattr(job, "status", None)
+    if st == JobStatus.COMPLETED:
+        return STATUS_BORDER_DONE, 2
+    if st == JobStatus.ERROR:
+        return STATUS_BORDER_ERROR, 2
+    if st == JobStatus.RENDERING:
+        return STATUS_BORDER_RENDER, 2
+
+    rendering = any(getattr(j, "status", None) == JobStatus.RENDERING for j in jobs)
+    queued = [j for j in jobs if getattr(j, "status", None) == JobStatus.QUEUED]
+    if queued and job.id == queued[0].id:
+        if rendering:
+            return STATUS_BORDER_NEXT, 2
+        return STATUS_BORDER_READY, 2
+    return STATUS_BORDER_IDLE, 1
+
+
+def status_card_background(
+    job: RenderJob,
+    jobs: list[RenderJob],
+    *,
+    selected: bool = False,
+) -> str:
+    """Card fill: flat like portable, plus desktop Ready yellow tint."""
+    if selected:
+        return STATUS_CARD_BG_SELECTED
+    border, _ = status_border_for_job(job, jobs)
+    if border == STATUS_BORDER_READY:
+        return STATUS_CARD_BG_READY
+    return STATUS_CARD_BG
+
 _QUEUE_MENU_STYLE = """
     QMenu {
         background-color: #2d2d2d;

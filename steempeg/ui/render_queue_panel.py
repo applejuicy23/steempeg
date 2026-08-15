@@ -37,6 +37,7 @@ from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.queue_card_shared import (
+    STATUS_BORDER_IDLE,
     _FONT,
     _LIST_THUMB_H,
     _LIST_THUMB_W,
@@ -47,6 +48,8 @@ from steempeg.ui.queue_card_shared import (
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
     set_game_icon_label,
+    status_border_for_job,
+    status_card_background,
     status_dot_style as _status_dot_style,
 )
 from steempeg.ui.ui_density import (
@@ -114,11 +117,6 @@ _EMPTY_PANEL_STYLE = (
 )
 
 
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    h = hex_color.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-
-
 class QueueJobCard(QFrame):
     clicked = Signal(str)
     remove_requested = Signal(str)
@@ -131,14 +129,17 @@ class QueueJobCard(QFrame):
         cache_dir: str | None = None,
         parent=None,
         *,
+        jobs: list[RenderJob] | None = None,
         thumb_w: int = _LIST_THUMB_W,
         thumb_h: int = _LIST_THUMB_H,
     ):
         super().__init__(parent)
         self._cache_dir = cache_dir
         self.setObjectName("QueueJobCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._job = job
         self._job_id = job.id
+        self._jobs_snapshot = list(jobs) if jobs is not None else [job]
         self._drag_start = QPoint()
         self._selected = selected
         self._drop_highlight = False
@@ -316,10 +317,18 @@ class QueueJobCard(QFrame):
         else:
             self.setMinimumHeight(48 if level == 1 else 40)
 
-    def apply_job(self, job: RenderJob, *, selected: bool) -> None:
+    def apply_job(
+        self,
+        job: RenderJob,
+        *,
+        selected: bool,
+        jobs: list[RenderJob] | None = None,
+    ) -> None:
         """Update card visuals without rebuilding the widget."""
         self._job = job
         self._selected = selected
+        if jobs is not None:
+            self._jobs_snapshot = list(jobs)
         self._drop_highlight = False
         self._num_label.setText(str(job.queue_index))
         if hasattr(self, "_game_icon"):
@@ -410,19 +419,25 @@ class QueueJobCard(QFrame):
         self._num_label.setStyleSheet(_status_dot_style(color))
 
     def _apply_card_style(self) -> None:
-        color = STATUS_COLORS.get(self._job.status, "#ffcc00")
-        r, g, b = _hex_to_rgb(color)
+        # Portable: status outline only (no wash for waiting queued). Desktop keeps
+        # the Ready yellow fill; running/error/done use the same border colours.
+        status_border, status_w = status_border_for_job(self._job, self._jobs_snapshot)
+        bg = status_card_background(
+            self._job, self._jobs_snapshot, selected=self._selected
+        )
         if self._drop_highlight:
             border = "2px dashed #b29ae7"
         elif self._selected:
             border = "3px solid #b29ae7"
         elif self._hovered:
-            border = "2px solid #7a6aa8"
+            # Idle gray → purple hover; keep pipeline colour visible otherwise.
+            hover = "#7a6aa8" if status_border == STATUS_BORDER_IDLE else status_border
+            border = f"{max(status_w, 2)}px solid {hover}"
         else:
-            border = "2px solid #444444"
+            border = f"{status_w}px solid {status_border}"
         self.setStyleSheet(f"""
             QueueJobCard {{
-                background-color: rgba({r}, {g}, {b}, 0.10);
+                background-color: {bg};
                 border: {border};
                 border-radius: 12px;
             }}
@@ -934,6 +949,7 @@ class RenderQueuePanel(QWidget):
             job,
             selected=selected,
             cache_dir=cache_dir,
+            jobs=self._jobs,
             thumb_w=d.queue_thumb_w,
             thumb_h=d.queue_thumb_h,
         )
@@ -1114,7 +1130,10 @@ class RenderQueuePanel(QWidget):
         )
         if same_cards:
             for card, job in zip(self._card_widgets, jobs):
-                card.apply_job(job, selected=(job.id == selected_id))
+                if isinstance(card, QueueJobCard):
+                    card.apply_job(job, selected=(job.id == selected_id), jobs=jobs)
+                else:
+                    card.apply_job(job, selected=(job.id == selected_id))
             self._scroll_to_selected()
             return
 
