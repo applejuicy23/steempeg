@@ -202,6 +202,10 @@ def apply_app_tooltip_style(app=None) -> None:
 STYLE_HEADING = STYLE_PANEL_TITLE.replace("20px", "14px")
 STYLE_SUBHEADING = STYLE_PANEL_SUBTITLE
 
+# Whole-card press (ScreenshotPhoto / ClipCard) — scale about center while held.
+CARD_PRESS_SCALE = 0.94
+CARD_PRESS_DURATION_MS = 75
+
 # Layout
 TITLE_BAR_HEIGHT = 30
 
