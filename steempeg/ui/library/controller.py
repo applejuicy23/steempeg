@@ -1941,6 +1941,94 @@ class LibraryMixin:
                 table.setCurrentCell(rows[0], 0)
         table.blockSignals(False)
 
+    def _schedule_clips_selection_preview(self) -> None:
+        """Open/load the selected clip after press anim + selection chrome.
+
+        Clip open (XML / remux / MPV) is slow; it must not run on the mouse-press
+        stack or even on the same tick as selection chrome. Delay past
+        CARD_PRESS_DURATION_MS so the press scale can paint; a generation token
+        drops stale loads when the user spam-clicks.
+
+        Multi-select modifiers are checked here (not inside the deferred tick) so
+        releasing Ctrl/Shift before the timer fires cannot thrash the preview.
+        """
+        if QApplication.keyboardModifiers() & self._MULTI_SELECT_MODIFIERS:
+            self.update_playback_badge()
+            self._update_start_button_label()
+            return
+        self._clips_preview_gen = getattr(self, "_clips_preview_gen", 0) + 1
+        gen = self._clips_preview_gen
+        delay_ms = max(16, int(tok.CARD_PRESS_DURATION_MS))
+        QTimer.singleShot(delay_ms, lambda g=gen: self._run_clips_selection_preview(g))
+
+    def _show_pending_clip_open_loading(self) -> None:
+        """Card busy feedback just before deferred open work runs."""
+        if not hasattr(self, "set_clip_open_loading"):
+            return
+        if not hasattr(self.ui, "table_clips"):
+            return
+        row = self.ui.table_clips.currentRow()
+        if row < 0:
+            return
+        cell = self.ui.table_clips.item(row, 0)
+        if cell is None:
+            return
+        path = cell.data(Qt.UserRole)
+        if not path:
+            return
+        self.set_clip_open_loading(
+            path, job_id=getattr(self, "_selected_queue_job_id", None)
+        )
+        # Paint spinner before synchronous XML / remux / MPV work blocks the UI.
+        if hasattr(self, "grid_clips") and self.grid_clips is not None:
+            try:
+                self.grid_clips.viewport().repaint()
+            except RuntimeError:
+                pass
+
+    def _cancel_pending_clips_preview(self) -> None:
+        """Bump the open-generation token and clear any card open-spinner."""
+        self._clips_preview_gen = getattr(self, "_clips_preview_gen", 0) + 1
+        if hasattr(self, "clear_clip_open_loading"):
+            self.clear_clip_open_loading()
+
+    def _run_clips_selection_preview(self, gen: int) -> None:
+        """Latest scheduled clip open wins; ignore superseded spam-clicks."""
+        if gen != getattr(self, "_clips_preview_gen", 0):
+            return
+        # Spinner first (ends press-snapshot hide), then heavy open.
+        self._show_pending_clip_open_loading()
+        self.update_quality_options()
+
+    def _defer_grid_select_item(self, item, event=None) -> None:
+        """Schedule grid selection off the ClipCard mouse-press stack.
+
+        Press anim + first paint must finish returning before table sync /
+        purple ring / clip open. Capture modifiers now — keys may be released
+        before the timer fires.
+        """
+        mods = self._event_modifiers(event)
+        self._clips_card_select_gen = getattr(self, "_clips_card_select_gen", 0) + 1
+        # Invalidate any pending open immediately so spam-clicks don't start a
+        # stale load while the new selection is still queued.
+        self._cancel_pending_clips_preview()
+        gen = self._clips_card_select_gen
+        QTimer.singleShot(
+            0, lambda g=gen, it=item, m=mods: self._run_deferred_grid_select(g, it, m)
+        )
+
+    def _run_deferred_grid_select(self, gen: int, item, mods) -> None:
+        if gen != getattr(self, "_clips_card_select_gen", 0):
+            return
+        try:
+            if item is None or not hasattr(self, "grid_clips") or self.grid_clips is None:
+                return
+            # Drop stale callbacks after a library rebuild destroyed the item.
+            _ = item.data(Qt.UserRole)
+        except RuntimeError:
+            return
+        self._grid_select_item(item, mods=mods)
+
     def _publish_grid_selection(self, *, update_preview: bool = True) -> None:
         """Mirror grid selection into the table; reload preview only on plain LMB clicks."""
         if not self._clips_library_accepts_selection():
@@ -1955,14 +2043,21 @@ class LibraryMixin:
             self._sync_grid_card_visuals()
             return
         self.sync_table_from_grid_selection(keep_current_cell=not update_preview)
+        # Selection chrome first — do not wait on generate_and_play_preview.
         self._sync_grid_card_visuals()
-        if update_preview and hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
-            self.update_quality_options()
+        if hasattr(self, "grid_clips") and self.grid_clips is not None:
+            # Paint the purple ring before the delayed clip open starts.
+            self.grid_clips.viewport().repaint()
         row = self.ui.table_clips.currentRow()
         if row >= 0:
             cell = self.ui.table_clips.item(row, 0)
             if cell:
                 self._saved_clips_selection_path = cell.data(Qt.UserRole) or ""
+        if update_preview and hasattr(self.ui, 'table_clips') and self.ui.table_clips.currentRow() >= 0:
+            self._schedule_clips_selection_preview()
+        else:
+            # Multi-select / no preview — drop any pending open from a prior plain click.
+            self._cancel_pending_clips_preview()
 
     def _on_clips_table_item_clicked(self, item) -> None:
         """Re-click on the already-selected table row is a no-op (clip already open)."""
@@ -2023,12 +2118,15 @@ class LibraryMixin:
             )
             table.setCurrentIndex(index)
 
-    def _grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
+    def _grid_select_item(
+        self, item, event=None, *, force_single: bool = False, mods=None
+    ) -> None:
         """LMB selection for grid cards — setItemWidget breaks default Qt hit-testing."""
         if not self._clips_library_accepts_selection():
             return
         grid = self.grid_clips
-        mods = self._event_modifiers(event)
+        if mods is None:
+            mods = self._event_modifiers(event)
         if force_single:
             mods = Qt.NoModifier
 
@@ -2100,7 +2198,8 @@ class LibraryMixin:
             # (the purple outline stays); only clicking another card changes it.
             return True
 
-        self._grid_select_item(item, event)
+        # Same deferred path as ClipCard — never load on the press stack.
+        self._defer_grid_select_item(item, event)
         return True
 
     def show_grid_context_menu(self, pos):
@@ -2722,6 +2821,8 @@ class LibraryMixin:
         reset the player + settings panel, then rescan the folder from scratch. """
         # 1. Drop the remembered filter so the menu reopens at defaults and nothing stays hidden
         self.saved_filter_state = None
+        if hasattr(self, "_persist_library_filter_memory"):
+            self._persist_library_filter_memory()
         if getattr(self, 'filter_menu', None) is not None:
             try:
                 self.filter_menu.deleteLater()
@@ -2968,7 +3069,7 @@ class LibraryMixin:
             row,
             health_color=health_color,
             round_icon=is_unknown_clip,
-            on_left_click=lambda ev, grid_item=item: self._grid_select_item(grid_item, ev),
+            on_left_click=lambda ev, grid_item=item: self._defer_grid_select_item(grid_item, ev),
             on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
         )
         if queue_membership:
@@ -3575,6 +3676,9 @@ class LibraryMixin:
                 "most recent copy is shown.",
             )
 
+        if hasattr(self, "sync_library_filter_view"):
+            self.sync_library_filter_view()
+
         logging.info(
             "Library scan: roots=%s clips=%d healthy=%d issues=%d dead=%d "
             "ignored_duplicates=%d fast=%s quiet_append=%s snapshot=%s",
@@ -3723,6 +3827,9 @@ class LibraryMixin:
             self.preload_render_history(announce=False)
         elif hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
+
+        if hasattr(self, "sync_library_filter_view"):
+            self.sync_library_filter_view()
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
         logging.info("Skip: painted %d clips from session snapshot", len(clips))
