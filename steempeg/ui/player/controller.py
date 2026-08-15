@@ -905,11 +905,23 @@ class PlayerMixin:
         """Pass volume to MPV with a perceptual curve (slider may exceed 100% when boost is on)."""
         if hasattr(self, 'player') and self.player:
             if value > 0:
-                # Unity at 100%; >100% soft-amps (e.g. 200% → ~141 mpv volume).
+                # Unity at 100%; >100% soft-amps (e.g. 200% → ~141, 500% → ~224 mpv).
                 perceived_volume = (value / 100.0) ** 0.5 * 100.0
             else:
                 perceived_volume = 0.0
-                
+
+            # mpv clamps above volume-max (default ~130); raise for boost ceilings.
+            try:
+                from steempeg.ui.player_boost import get_volume_boost_ceiling
+
+                ceil_pct = max(int(value) if value else 0, get_volume_boost_ceiling(), 100)
+                needed_max = (ceil_pct / 100.0) ** 0.5 * 100.0
+                cur_max = float(self.player["volume-max"] or 100.0)
+                if cur_max + 0.5 < needed_max:
+                    self.player["volume-max"] = needed_max
+            except Exception:
+                pass
+
             self.player.volume = perceived_volume
     def set_vlc_speed(self, value):
         """ Passes the speed value to MPV (MPV handles pitch correction automatically) """
