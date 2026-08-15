@@ -32,6 +32,7 @@ from steempeg.ui.queue_card_shared import (
     job_can_remove,
     set_game_icon_label,
 )
+from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -371,7 +372,7 @@ class _PortableQueueRow(QFrame):
         for label in self.findChildren(QLabel):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setMinimumHeight(max(_THUMB_H + 12, 96))
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
@@ -507,6 +508,13 @@ class _PortableQueueRow(QFrame):
         menu.exec(event.globalPos())
 
 
+class _PortableQueueHost(QWidget):
+    """Scroll body: min height = preferred height so list rows are not squashed."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        return self.sizeHint()
+
+
 class PortableQueueSidebar(QWidget):
     """Left queue rail: rounded header (title + Add) above a separate clips list panel."""
 
@@ -631,13 +639,10 @@ class PortableQueueSidebar(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 2px; }"
-            "QScrollBar::handle:vertical { background: #4e4e4e; min-height: 30px; border-radius: 4px; }"
-            "QScrollBar::handle:vertical:hover { background: #b29ae7; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+            + LIBRARY_SCROLLBAR_VERTICAL
         )
 
-        self._host = QWidget()
+        self._host = _PortableQueueHost()
         self._host.setStyleSheet("background: transparent;")
         self._list = QVBoxLayout(self._host)
         self._list.setContentsMargins(0, 0, 0, 0)
