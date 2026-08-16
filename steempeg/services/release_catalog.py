@@ -94,15 +94,112 @@ class VersionMilestone:
     detail: str
 
 
-# Landmarks — manual anchors; release notes fill gaps for unlisted versions.
+# Landmarks — manual anchors from docs/github_changelogs_dump.txt (and kitchen
+# majors). Release notes still fill row highlights for unlisted versions.
+# (i) badge = keyed Early v8–v11, or any v12+ version listed here.
 VERSION_MILESTONES: tuple[VersionMilestone, ...] = (
-    VersionMilestone(36.0, "🎨", "New chrome", "Frameless title bar and chrome theme experiments."),
-    VersionMilestone(35.0, "📼", "Rendered library", "Rendered output sidecars and filter panel."),
-    VersionMilestone(30.0, "📋", "Render queue", "Batch render queue and export history."),
-    VersionMilestone(29.0, "🔧", "UI refactor", "Major player and shell layout refactor."),
-    VersionMilestone(27.0, "🔍", "Sort & filter", "Sorting and filtering."),
-    VersionMilestone(22.0, "🎬", "Clips manager", "Clips manager UI update."),
-    VersionMilestone(20.0, "📍", "Timeline markers", "Timeline marker support."),
+    VersionMilestone(
+        43.0,
+        "⚡",
+        "Skip library startup",
+        "Session snapshot paints Clips / Rendered / Screenshots instantly; expanded Main Settings.",
+    ),
+    VersionMilestone(
+        42.0,
+        "🎨",
+        "Visual settings",
+        "Game-icon shapes and player-header layout; Clip info chip & popup; permanent export folder.",
+    ),
+    VersionMilestone(
+        41.0,
+        "💾",
+        "Export presets",
+        "Named Video/Audio/Export presets; custom marker classes UI; title-bar Check for Updates.",
+    ),
+    VersionMilestone(
+        40.0,
+        "🐧",
+        "Linux · Deck · channels",
+        "First desktop Linux build, Steam Deck channel, and per-platform Update Center zips.",
+    ),
+    VersionMilestone(
+        38.0,
+        "🔄",
+        "Fast library refresh",
+        "Background scan, clip posters, live preview quality ladder, and encode-speed presets.",
+    ),
+    VersionMilestone(
+        37.0,
+        "🆙",
+        "Update Center",
+        "Browse/install any GitHub release (upgrade or downgrade), backup & restore, detached updater.",
+    ),
+    VersionMilestone(
+        36.0,
+        "🖼",
+        "Frameless chrome",
+        "Custom title bar with traffic lights; chrome color themes; dead-clip salvage.",
+    ),
+    VersionMilestone(
+        35.0,
+        "🎞",
+        "Export codecs & presets",
+        "MP4/MKV/MOV/WebM + codecs; Share/Edit/Web named presets; honest source bitrate.",
+    ),
+    VersionMilestone(
+        34.0,
+        "📼",
+        "Rendered library",
+        "Rendered videos tab with filters and .steempeg.json companion meta sidecars.",
+    ),
+    VersionMilestone(
+        33.0,
+        "🗂",
+        "Queue grid & history",
+        "Render queue thumbnail grid and batch export history archive.",
+    ),
+    VersionMilestone(
+        32.0,
+        "📁",
+        "Multi-folder library",
+        "Scan multiple Steam recording folders; clip health indicators; bug reports.",
+    ),
+    VersionMilestone(
+        30.0,
+        "📋",
+        "Render queue",
+        "Batch render queue with drag-reorder; Steam marker icons auto-loaded.",
+    ),
+    VersionMilestone(
+        29.0,
+        "🔧",
+        "UI redesign kickoff",
+        "Global UI overhaul start; in-player screenshots and markers.",
+    ),
+    VersionMilestone(
+        27.0,
+        "🔍",
+        "Sort & filter",
+        "Clips Manager filter by game/type and deep sort; marker-to-trim snapping.",
+    ),
+    VersionMilestone(
+        26.0,
+        "📍",
+        "Custom markers",
+        "Drop custom timeline markers; advanced trim snap tools.",
+    ),
+    VersionMilestone(
+        22.0,
+        "🎬",
+        "Clips grid",
+        "Netflix-style clips library grid view with grid/list toggle.",
+    ),
+    VersionMilestone(
+        20.0,
+        "🎯",
+        "Timeline markers",
+        "CS2/JSON timeline markers, PyAV hover preview, and zoomable ruler.",
+    ),
     VersionMilestone(16.0, "▶", "MPV player", "VLC replaced with mpv playback engine."),
     VersionMilestone(16.0, "⚡", "Stable updater", "Download, unzip and updater.bat. Same model as today."),
     VersionMilestone(12.1, "📦", "Zip installer", "First working in-app zip download and install."),
@@ -918,15 +1015,6 @@ def _milestone_to_dict(milestone: VersionMilestone) -> dict:
     }
 
 
-def _milestone_from_dict(data: dict) -> VersionMilestone:
-    return VersionMilestone(
-        float(data.get("version", 0)),
-        str(data.get("icon", "")),
-        str(data.get("short_label", "")),
-        str(data.get("detail", "")),
-    )
-
-
 def _entry_to_dict(entry: ReleaseEntry) -> dict:
     return {
         "tag_name": entry.tag_name,
@@ -957,16 +1045,16 @@ def _entry_from_dict(data: dict) -> ReleaseEntry | None:
             return None
         era = VersionEra(str(data.get("era", VersionEra.RELIABLE.value)))
         install_tier = InstallTier(str(data.get("install_tier", InstallTier.NO_ZIP.value)))
-        milestones = tuple(
-            _milestone_from_dict(item) for item in (data.get("milestones") or [])
-        )
+        version_float = float(data.get("version_float", version_to_float(version)))
+        # Always prefer live VERSION_MILESTONES so (i) badges update without a GitHub refetch.
+        milestones = milestones_for_version(version_float)
         platforms = frozenset(str(p) for p in (data.get("available_platforms") or []))
         return ReleaseEntry(
             tag_name=str(data.get("tag_name") or ""),
             name=str(data.get("name") or ""),
             version=version,
             version_str=str(data.get("version_str") or format_version(version)),
-            version_float=float(data.get("version_float", version_to_float(version))),
+            version_float=version_float,
             html_url=str(data.get("html_url") or ""),
             body=str(data.get("body") or ""),
             zip_url=data.get("zip_url"),
