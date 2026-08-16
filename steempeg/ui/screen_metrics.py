@@ -24,7 +24,10 @@ REF_PPI = 110.0
 _MIN_SANE_PPI = 72.0
 _MAX_SANE_PPI = 400.0
 # How hard low PPI may shrink chrome (never enlarge past 1.0 for desktop).
-_PPI_SCALE_MIN = 0.78
+# Floor used to be 0.78 — fine for TVs, but 27″ FHD (~82 PPI) clamped there and
+# looked tiny vs Windows taskbar. 0.90 still densifies coarse pixels a bit without
+# crushing Evolution-class monitors; Emily’s ~110 PPI ref stays at 1.0 (ratio ≥ floor).
+_PPI_SCALE_MIN = 0.90
 _PPI_SCALE_MAX = 1.0
 
 
