@@ -638,8 +638,8 @@ class SettingsDialog(SteempegDialog):
                 "Mostly height, padding, and chips of the upper player header "
                 "(game title / Select a clip chrome, status chips, queue badges); "
                 "same typeface at all sizes (mild size only). "
-                "Small / Medium / Large. "
-                "Large matches the previous default height. "
+                "Small / Medium / Large — Large is the stock default "
+                "(pre-pref height). "
                 "Works with window density; empty and filled stay the same height. "
                 "Combo previews live; Save persists. Cancel restores "
                 "the last saved size."
@@ -673,7 +673,8 @@ class SettingsDialog(SteempegDialog):
         v.addWidget(
             self._hint(
                 "Height of the scrubber strip and time ruler under the player. "
-                "Small / Medium / Large. Large matches the previous default height. "
+                "Small / Medium / Large — Large is the stock default "
+                "(pre-pref height). Same typeface at all sizes. "
                 "Combo previews live; Save persists. Cancel restores "
                 "the last saved size."
             )

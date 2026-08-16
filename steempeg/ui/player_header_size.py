@@ -4,9 +4,8 @@ Settings → Visual → Player header → Size: Small / Medium / Large.
 
 Works *with* UI density: S/M/L scales the density ``header_*`` metrics.
 Size is mostly strip height and padding; type stays near the Large baseline
-(13 → 13 → 12). Large matches the pre-pref baseline; Medium is the product
-default for new installs; upgrading stores without a saved pref map to Large
-once.
+(13 → 13 → 12). Large matches the pre-pref baseline and is the product default
+for new installs; upgrading stores without a saved pref also map to Large once.
 """
 from __future__ import annotations
 
@@ -24,8 +23,8 @@ PLAYER_HEADER_SMALL = "small"
 PLAYER_HEADER_MEDIUM = "medium"
 PLAYER_HEADER_LARGE = "large"
 
-# New installs / explicit default in Settings.
-PLAYER_HEADER_DEFAULT = PLAYER_HEADER_MEDIUM
+# New installs / explicit default in Settings (Large = pre-pref baseline).
+PLAYER_HEADER_DEFAULT = PLAYER_HEADER_LARGE
 
 PLAYER_HEADER_SIZE_LABELS: tuple[tuple[str, str], ...] = (
     (PLAYER_HEADER_SMALL, "Small"),
@@ -107,9 +106,9 @@ def normalize_player_header_size(value: object | None) -> str:
         return text
     if text in ("s", "sm", "compact", "thin", "short", "dense"):
         return PLAYER_HEADER_SMALL
-    if text in ("m", "med", "normal", "default"):
+    if text in ("m", "med", "normal"):
         return PLAYER_HEADER_MEDIUM
-    if text in ("l", "lg", "tall", "current", "baseline", "comfort"):
+    if text in ("l", "lg", "tall", "current", "baseline", "comfort", "default"):
         return PLAYER_HEADER_LARGE
     return PLAYER_HEADER_DEFAULT
 

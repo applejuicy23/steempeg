@@ -1,8 +1,8 @@
 """Player timeline strip height preference (scrubber + ruler).
 
 Settings → Visual: Small / Medium / Large. Large matches the pre-pref
-baseline (track ≈13px + taller ticks/digits). Medium is the product default
-for new installs; upgrading installs without a saved pref map to Large once.
+baseline (track ≈13px + taller ticks/digits) and is the product default for
+new installs; upgrading installs without a saved pref also map to Large once.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ TIMELINE_STRIP_SMALL = "small"
 TIMELINE_STRIP_MEDIUM = "medium"
 TIMELINE_STRIP_LARGE = "large"
 
-# New installs / explicit default in Settings.
-TIMELINE_STRIP_DEFAULT = TIMELINE_STRIP_MEDIUM
+# New installs / explicit default in Settings (Large = pre-pref baseline).
+TIMELINE_STRIP_DEFAULT = TIMELINE_STRIP_LARGE
 
 TIMELINE_STRIP_LABELS: tuple[tuple[str, str], ...] = (
     (TIMELINE_STRIP_SMALL, "Small"),
@@ -89,9 +89,9 @@ def normalize_timeline_strip_size(value: object | None) -> str:
         return text
     if text in ("s", "sm", "compact", "thin", "short"):
         return TIMELINE_STRIP_SMALL
-    if text in ("m", "med", "normal", "default"):
+    if text in ("m", "med", "normal"):
         return TIMELINE_STRIP_MEDIUM
-    if text in ("l", "lg", "tall", "current", "baseline"):
+    if text in ("l", "lg", "tall", "current", "baseline", "default"):
         return TIMELINE_STRIP_LARGE
     return TIMELINE_STRIP_DEFAULT
 
