@@ -259,9 +259,15 @@ class PortableRenderControlStrip(QFrame):
         name = ""
         icon_path = ""
 
-        # Prefer the status-strip / queue-context job (not a stale library preview).
+        # Prefer the status-strip / queue-context job when queue identity chrome
+        # is on (not a library preview diversion or Left).
         job = None
-        if hasattr(app, "_queue_is_active") and app._queue_is_active():
+        owns = True
+        if hasattr(app, "_queue_owns_identity_chrome"):
+            owns = bool(app._queue_owns_identity_chrome())
+        elif hasattr(app, "_queue_is_active"):
+            owns = bool(app._queue_is_active())
+        if owns:
             if hasattr(app, "_status_strip_context_job"):
                 job = app._status_strip_context_job()
             elif hasattr(app, "_queue_context_job"):

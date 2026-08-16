@@ -3871,19 +3871,21 @@ class RenderedLibraryMixin:
 
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
-        queue_owns_header = hasattr(self, "_queue_is_active") and self._queue_is_active()
+        queue_active = hasattr(self, "_queue_is_active") and self._queue_is_active()
         if hasattr(self, "_clear_queue_selection"):
             self._clear_queue_selection()
         else:
             self._selected_queue_job_id = None
+        # Previewing Rendered while queue mode is on — bind header to this file,
+        # not Ready job #1 (same diversion as Clips Manager library preview).
+        if queue_active:
+            self._queue_library_preview_diversion = True
 
         display_title, icon_path, _thumb, is_unknown, _game_key = self._resolved_rendered_meta(
             file_path, os.path.basename(file_path)
         )
 
-        if queue_owns_header and hasattr(self, "_sync_player_header_to_queue_context"):
-            self._sync_player_header_to_queue_context()
-        elif hasattr(self, "custom_text_label"):
+        if hasattr(self, "custom_text_label"):
             from steempeg.ui.player_header_layout import set_player_header_game_text
 
             extra: list[str] = []
@@ -3906,7 +3908,7 @@ class RenderedLibraryMixin:
                 time=time_part,
                 extra=extra,
             )
-        if not queue_owns_header and hasattr(self, "custom_icon_label"):
+        if hasattr(self, "custom_icon_label"):
             from steempeg.ui.icon_utils import apply_square_icon
             from steempeg.ui.player_header_layout import player_header_icon_px
 
@@ -3953,6 +3955,14 @@ class RenderedLibraryMixin:
             self.set_player_header_clip_controls_visible(True)
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
+        if queue_active and not getattr(self, "_is_rendering", False):
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
+            if hasattr(self, "update_final_setup"):
+                try:
+                    self.update_final_setup()
+                except Exception:
+                    pass
 
         if hasattr(self, "schedule_play_media_file"):
             self.schedule_play_media_file(file_path)

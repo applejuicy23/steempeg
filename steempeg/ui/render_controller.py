@@ -1161,7 +1161,7 @@ class RenderMixin:
             or getattr(self, "_update_check_busy", False)
         ):
             return False
-        if not self._queue_is_active():
+        if not self._queue_owns_identity_chrome():
             return False
         job = self._status_strip_context_job()
         if job is None:
@@ -1262,22 +1262,32 @@ class RenderMixin:
             logging.warning("Could not open rendered file %s: %s", file_path, exc)
 
     def _queue_is_active(self) -> bool:
-        """True when the queue owns header / Render CTA (jobs exist, scheme not left)."""
+        """True when the queue owns Start CTA (jobs exist, scheme not left)."""
         if not (getattr(self, "render_queue", None) and len(self.render_queue) > 0):
             return False
         return not bool(getattr(self, "_queue_scheme_deferred", False))
+
+    def _queue_owns_identity_chrome(self) -> bool:
+        """True when header / dash summary follow the queue context job.
+
+        False while Left (deferred) or while the user is previewing a library /
+        rendered card (diversion) — those follow the playing clip instead.
+        """
+        if not self._queue_is_active():
+            return False
+        return not bool(getattr(self, "_queue_library_preview_diversion", False))
 
     def _queue_drives_start_cta(self) -> bool:
         """True when Start should batch-render pending queue jobs."""
         return self._queue_is_active() and self._queue_pending_count() > 0
 
     def _queue_context_job(self):
-        """Job that owns player-header identity while the queue is non-empty.
+        """Job that owns player-header identity while queue chrome is focused.
 
         Priority: active render → selected queue card → next pending → first listed
         (so completed jobs still listed keep a stable context — v44 P0).
         """
-        if not self._queue_is_active():
+        if not self._queue_owns_identity_chrome():
             return None
         active = getattr(self, "_active_render_job", None)
         if active is not None:
@@ -1298,11 +1308,10 @@ class RenderMixin:
     def _status_strip_context_job(self):
         """Job that owns the footer status strip (name/stats + numbered badge).
 
-        Unlike the player-header context, idle/filling queue always follows the
-        first pending job (queue head). Library preview or a selected card that
-        is not the head must not disagree with the badge number.
+        When queue identity chrome is on, idle/filling queue follows the first
+        pending job (queue head) so the badge number and game line agree.
         """
-        if not self._queue_is_active():
+        if not self._queue_owns_identity_chrome():
             return None
         active = getattr(self, "_active_render_job", None)
         if active is not None:
@@ -1364,6 +1373,9 @@ class RenderMixin:
 
     def _restore_header_from_library_selection(self) -> None:
         """After the queue clears or Leave — fall back to Clips / Rendered selection."""
+        preview = getattr(self, "_preview_clip_path", None)
+        preview_norm = os.path.normpath(preview) if preview else ""
+
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             table = getattr(self, "table_rendered", None)
             if table is not None and table.currentRow() >= 0 and hasattr(
@@ -1371,35 +1383,34 @@ class RenderMixin:
             ):
                 self.update_rendered_selection()
                 return
-        if not hasattr(self.ui, "table_clips"):
-            return
-        row = self.ui.table_clips.currentRow()
-        if row >= 0:
-            self._apply_header_from_table_row(row)
-            return
-        preview = getattr(self, "_preview_clip_path", None)
-        if not preview:
-            return
-        norm = os.path.normpath(preview)
-        for r in range(self.ui.table_clips.rowCount()):
-            item = self.ui.table_clips.item(r, 0)
-            if item and os.path.normpath(item.data(Qt.UserRole) or "") == norm:
-                self._apply_header_from_table_row(r)
-                return
-        # Preview may be a rendered export after the queue drained.
-        if hasattr(self, "_resolved_rendered_meta") and os.path.isfile(norm):
-            if hasattr(self, "update_rendered_selection") and getattr(
-                self, "table_rendered", None
-            ) is not None:
-                # Best-effort: header from path meta even if table row isn't current.
-                display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
-                    norm, os.path.basename(norm)
-                )
-                if hasattr(self, "custom_text_label"):
-                    from steempeg.ui.player_header_layout import set_player_header_game_text
 
-                    extra = ["Unknown"] if is_unknown else []
-                    set_player_header_game_text(self, display_title, extra=extra)
+        # Prefer the clip actually playing — table currentRow can still point at
+        # a queue-highlighted card after a library preview diversion.
+        if preview_norm and hasattr(self.ui, "table_clips"):
+            for r in range(self.ui.table_clips.rowCount()):
+                item = self.ui.table_clips.item(r, 0)
+                if item and os.path.normpath(item.data(Qt.UserRole) or "") == preview_norm:
+                    self._apply_header_from_table_row(r)
+                    return
+
+        if hasattr(self.ui, "table_clips"):
+            row = self.ui.table_clips.currentRow()
+            if row >= 0:
+                self._apply_header_from_table_row(row)
+                return
+
+        if not preview_norm:
+            return
+        # Preview may be a rendered export after the queue drained / Leave.
+        if hasattr(self, "_resolved_rendered_meta") and os.path.isfile(preview_norm):
+            if hasattr(self, "custom_text_label"):
+                from steempeg.ui.player_header_layout import set_player_header_game_text
+
+                display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
+                    preview_norm, os.path.basename(preview_norm)
+                )
+                extra = ["Unknown"] if is_unknown else []
+                set_player_header_game_text(self, display_title, extra=extra)
                 if icon_path and hasattr(self, "_set_player_header_game_icon"):
                     self._set_player_header_game_icon(icon_path=icon_path)
 
@@ -1537,7 +1548,12 @@ class RenderMixin:
         apply_square_icon(self.custom_icon_label, shaped, icon_px)
 
     def _handle_clips_manager_selection_with_queue(self, clip_path: str, selected_row: int) -> None:
-        """Preview from Clips Manager while queue is active; header stays queue-first."""
+        """Preview from Clips Manager while queue mode is on (not Left).
+
+        Queued card click → activate that job (queue-first chrome).
+        Any other library card → play it and bind header/dash to that clip
+        (Preview diversion) until Leave, Resume, or a queue card is chosen.
+        """
         self._flush_current_trim_state()
         clip_path = os.path.normpath(clip_path)
         if hasattr(self, "_is_valid_clip_path") and not self._is_valid_clip_path(clip_path):
@@ -1559,10 +1575,10 @@ class RenderMixin:
 
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
+        self._queue_library_preview_diversion = True
         self._populate_quality_options_for_clip(clip_path)
         self._apply_export_session_state(trim_restore, silent=True)
-        # Preview this card, but keep title/icon on the queue context job.
-        self._sync_player_header_to_queue_context()
+        self._apply_header_from_table_row(selected_row)
 
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
@@ -1575,6 +1591,8 @@ class RenderMixin:
             self._sync_library_mode_chrome()
         if hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
+        if not getattr(self, "_is_rendering", False):
+            self.update_status_indicator("Ready", "ready")
 
     def _queue_persist_path(self) -> str:
         return os.path.join(self.cache_dir, "render_queue.json")
@@ -3222,6 +3240,12 @@ class RenderMixin:
         self._saved_rendered_selection_path = ""
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
+        # While Left with jobs kept, keep diversion so Resume does not snap the
+        # header back to Ready #1 while this clip is still playing.
+        has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
+        self._queue_library_preview_diversion = bool(
+            has_jobs and getattr(self, "_queue_scheme_deferred", False)
+        )
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
         session = self._session_state_for_clip(clip_path)
@@ -3876,9 +3900,9 @@ class RenderMixin:
             self._sync_start_render_enabled(combo_valid=combo_valid)
 
         # 6. Short Summary ABOVE Ready
-        # Queue mode: footer strip follows the status-strip job (queue head /
-        # active render), never an arbitrary library preview that isn't #1.
-        strip_job = self._status_strip_context_job() if self._queue_is_active() else None
+        # Queue identity chrome: footer strip follows the status-strip job.
+        # Library preview diversion / Left: follow the playing clip instead.
+        strip_job = self._status_strip_context_job()
         q_word = quality.split()[0] if quality.split() else "Unknown"
 
         game_name = "Steam Clip"
@@ -3956,11 +3980,11 @@ class RenderMixin:
                     )
                     apply_square_icon(self.bottom_icon_label, shaped, 24)
 
-            # Player header follows queue context while jobs remain (v44 P0).
+            # Player header icon from preview when queue identity chrome is off.
             if (
                 hasattr(self, 'custom_text_label')
                 and hasattr(self, 'custom_icon_label')
-                and not self._queue_is_active()
+                and not self._queue_owns_identity_chrome()
             ):
                 self._set_player_header_game_icon(icon_path=target_icon)
 
@@ -4291,6 +4315,7 @@ class RenderMixin:
             job.output_file,
         )
         if sync_ui:
+            self._queue_library_preview_diversion = False
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
             self._persist_render_queue()
@@ -4379,6 +4404,7 @@ class RenderMixin:
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
+        self._queue_library_preview_diversion = False
         self._sync_player_header_to_queue_context()
         self.update_playback_badge()
         sidebar = getattr(self, "_portable_queue_sidebar", None)

@@ -252,6 +252,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._queue_batch_active = False
         self._queue_scheme_deferred = False
         self._queue_resume_job_id = None
+        # Library card preview while queue mode is on — header/dash follow the
+        # playing clip instead of Ready job #1 until a queue card is activated.
+        self._queue_library_preview_diversion = False
         self.render_thread = None
         self._preview_clip_path = None
         self._clip_session_memory = {}
