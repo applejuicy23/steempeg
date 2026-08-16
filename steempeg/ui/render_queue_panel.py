@@ -132,9 +132,11 @@ class QueueJobCard(QFrame):
         jobs: list[RenderJob] | None = None,
         thumb_w: int = _LIST_THUMB_W,
         thumb_h: int = _LIST_THUMB_H,
+        dense: UiDensity | None = None,
     ):
         super().__init__(parent)
         self._cache_dir = cache_dir
+        self._dense = dense or COMFORT
         self.setObjectName("QueueJobCard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._job = job
@@ -160,6 +162,7 @@ class QueueJobCard(QFrame):
             height=thumb_h,
             show_game_icon=False,
             cache_dir=self._cache_dir,
+            dense=self._dense,
         )
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
@@ -416,7 +419,9 @@ class QueueJobCard(QFrame):
 
     def _refresh_num_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
-        self._num_label.setStyleSheet(_status_dot_style(color))
+        self._num_label.setStyleSheet(
+            _status_dot_style(color, dense=getattr(self, "_dense", None))
+        )
 
     def _apply_card_style(self) -> None:
         # Portable: status outline only (no wash for waiting queued). Desktop keeps
@@ -943,7 +948,9 @@ class RenderQueuePanel(QWidget):
     def _make_card(self, job: RenderJob, selected: bool):
         cache_dir = self._queue_cache_dir()
         if self._view_mode == "grid":
-            return QueueGridJobCard(job, selected=selected, cache_dir=cache_dir)
+            return QueueGridJobCard(
+                job, selected=selected, cache_dir=cache_dir, dense=self._density
+            )
         d = self._density
         return QueueJobCard(
             job,
@@ -952,6 +959,7 @@ class RenderQueuePanel(QWidget):
             jobs=self._jobs,
             thumb_w=d.queue_thumb_w,
             thumb_h=d.queue_thumb_h,
+            dense=d,
         )
 
     def apply_density(self, dense: UiDensity) -> None:

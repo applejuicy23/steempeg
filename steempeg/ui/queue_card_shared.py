@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui.ui_density import COMFORT, UiDensity
 
 _FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
@@ -99,10 +100,18 @@ _QUEUE_MENU_STYLE = """
 """
 
 
-def status_dot_style(color: str, *, size: int = _STATUS_DOT) -> str:
+def status_dot_style(
+    color: str,
+    *,
+    size: int = _STATUS_DOT,
+    dense: UiDensity | None = None,
+) -> str:
+    """Yellow/status queue index circle — same face as Refresh (Segoe bold + footer_font)."""
+    font_px = int((dense or COMFORT).footer_font)
     radius = size // 2
     return (
-        f"color: #1a1a1a; font-weight: bold; font-size: 12px;"
+        f"color: #1a1a1a; {_FONT} "
+        f"font-weight: bold; font-size: {font_px}px;"
         f"background-color: {color}; border-radius: {radius}px;"
         f"min-width: {size}px; max-width: {size}px;"
         f"min-height: {size}px; max-height: {size}px;"
@@ -153,6 +162,7 @@ def build_queue_thumb_strip(
     height: int = _LIST_THUMB_H,
     show_game_icon: bool = True,
     cache_dir: str | None = None,
+    dense: UiDensity | None = None,
 ) -> tuple[QWidget, QLabel, QLabel]:
     """Thumbnail area with queue index badge; optional game icon bottom-left."""
     wrap = QWidget()
@@ -167,7 +177,7 @@ def build_queue_thumb_strip(
     badge = QLabel(str(job.queue_index), wrap)
     badge.setFixedSize(_STATUS_DOT, _STATUS_DOT)
     badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    badge.setStyleSheet(status_dot_style(color))
+    badge.setStyleSheet(status_dot_style(color, dense=dense))
     badge.move(6, 6)
 
     icon_label = QLabel(wrap)

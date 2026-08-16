@@ -34,7 +34,9 @@ from steempeg.ui.queue_card_shared import (
     _QUEUE_MENU_STYLE,
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
+    status_dot_style as _status_dot_style,
 )
+from steempeg.ui.ui_density import COMFORT, UiDensity
 
 # Match library grid card width; queue footer is taller (more metadata lines).
 _CARD_W = 280
@@ -63,25 +65,23 @@ _REMOVE_BTN_STYLE = """
 """
 
 
-def _status_dot_style(color: str) -> str:
-    r = _STATUS_DOT // 2
-    return (
-        f"color: #1a1a1a; font-weight: bold; font-size: 12px;"
-        f"background-color: {color}; border-radius: {r}px;"
-        f"min-width: {_STATUS_DOT}px; max-width: {_STATUS_DOT}px;"
-        f"min-height: {_STATUS_DOT}px; max-height: {_STATUS_DOT}px;"
-        f"padding: 0; margin: 0;"
-    )
-
-
 class QueueGridJobCard(QWidget):
     clicked = Signal(str)
     remove_requested = Signal(str)
     dropped_on = Signal(str, str)
 
-    def __init__(self, job: RenderJob, selected: bool = False, cache_dir: str | None = None, parent=None):
+    def __init__(
+        self,
+        job: RenderJob,
+        selected: bool = False,
+        cache_dir: str | None = None,
+        parent=None,
+        *,
+        dense: UiDensity | None = None,
+    ):
         super().__init__(parent)
         self._cache_dir = cache_dir or os.path.join(get_save_directory(), "cache")
+        self._dense = dense or COMFORT
         self.setObjectName("QueueGridJobCard")
         self._job = job
         self._job_id = job.id
@@ -127,7 +127,7 @@ class QueueGridJobCard(QWidget):
         self._index_badge = QLabel(str(job.queue_index), thumb_wrap)
         self._index_badge.setFixedSize(_STATUS_DOT, _STATUS_DOT)
         self._index_badge.setAlignment(Qt.AlignCenter)
-        self._index_badge.setStyleSheet(_status_dot_style(color))
+        self._index_badge.setStyleSheet(_status_dot_style(color, dense=self._dense))
         self._index_badge.move(8, 8)
 
         icon_path = job.game_icon_path
@@ -237,7 +237,9 @@ class QueueGridJobCard(QWidget):
         self._drop_highlight = False
         self._index_badge.setText(str(job.queue_index))
         color = STATUS_COLORS.get(job.status, "#ffcc00")
-        self._index_badge.setStyleSheet(_status_dot_style(color))
+        self._index_badge.setStyleSheet(
+            _status_dot_style(color, dense=getattr(self, "_dense", None))
+        )
         self._title_label.setText(job.game_name.strip() or os.path.basename(job.clip_path))
         self._meta_label.setText(format_job_datetime_line(job))
         self._preset_label.setText(format_job_preset(job.settings))
