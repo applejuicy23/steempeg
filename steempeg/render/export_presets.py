@@ -205,21 +205,37 @@ def _short_res(settings: RenderJobSettings) -> str:
     return ""
 
 
+def _format_video_bitrate_mbps(mbps: float) -> str:
+    """Preset-summary bitrate: Mbps at ≥1, else whole kbps (matches audio labels).
+
+    Ultra-low ladder rows are stored as Mbps in the combo (e.g. ``0.01 Mbps``)
+    but read better as ``10 kbps`` in the expandable recipe strip.
+    """
+    value = float(mbps)
+    if value < 1:
+        kbps = max(1, int(round(value * 1000)))
+        return f"{kbps} kbps"
+    s = f"{value:.1f}".rstrip("0").rstrip(".")
+    return f"{s} Mbps"
+
+
+def _format_video_bitrate_kbps(kbps: float | int) -> str:
+    """Same as ``_format_video_bitrate_mbps`` when the stored unit is already kbps."""
+    return _format_video_bitrate_mbps(float(kbps) / 1000.0)
+
+
 def _short_video_bitrate(settings: RenderJobSettings) -> str:
     quality = (settings.quality_text or "").strip()
     bitrate = (settings.bitrate_text or "").strip()
     if "Original" in quality and "Target" not in quality:
         return "source"
     if "Custom" in bitrate and settings.custom_vbitrate is not None:
-        s = f"{settings.custom_vbitrate:.1f}".rstrip("0").rstrip(".")
-        return f"{s} Mbps"
+        return _format_video_bitrate_mbps(settings.custom_vbitrate)
     match = re.search(r"([\d.]+)\s*Mbps", bitrate)
     if match:
-        return f"{match.group(1)} Mbps"
+        return _format_video_bitrate_mbps(float(match.group(1)))
     if "Target File Size" in quality and settings.custom_target_bitrate:
-        mbps = settings.custom_target_bitrate / 1000
-        s = f"{mbps:.1f}".rstrip("0").rstrip(".")
-        return f"{s} Mbps"
+        return _format_video_bitrate_kbps(settings.custom_target_bitrate)
     return ""
 
 
