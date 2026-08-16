@@ -4387,6 +4387,13 @@ class RenderMixin:
 
     # --- Custom export presets (v41 → v45 manager UX) ------------------------
 
+    def _export_preset_expanded_names(self) -> set[str]:
+        names = getattr(self, "_export_preset_expanded", None)
+        if names is None:
+            names = set()
+            self._export_preset_expanded = names
+        return names
+
     def _export_preset_search_text(self) -> str:
         edit = getattr(self.ui, "preset_search_edit", None)
         if edit is None:
@@ -4395,8 +4402,6 @@ class RenderMixin:
 
     def _list_selected_export_preset_name(self) -> str:
         """Name from the selected list row only (Delete / Update target)."""
-        from PySide6.QtCore import Qt
-
         lst = getattr(self.ui, "preset_list", None)
         if lst is None or lst.currentItem() is None:
             return ""
@@ -4419,6 +4424,7 @@ class RenderMixin:
             list_preset_names,
             load_favourite_names,
         )
+        from steempeg.ui.render_panel import PresetListRow
 
         lst = getattr(self.ui, "preset_list", None)
         if lst is None:
@@ -4426,18 +4432,36 @@ class RenderMixin:
         selected = self._list_selected_export_preset_name()
         search = self._export_preset_search_text()
         names = list_preset_names(self.load_user_settings, search=search)
-        favs = load_favourite_names(self.load_user_settings)
-        fav_set = set(favs)
+        fav_set = set(load_favourite_names(self.load_user_settings))
+        expanded = self._export_preset_expanded_names()
+        # Drop expand state for presets that no longer exist.
+        known = set(list_preset_names(self.load_user_settings, search=""))
+        expanded.intersection_update(known)
 
         lst.blockSignals(True)
         lst.clear()
         for name in names:
-            label = f"★ {name}" if name in fav_set else name
-            item = QListWidgetItem(label)
+            summary = format_preset_summary(get_preset_settings(name, self.load_user_settings))
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, name)
-            tip = format_preset_summary(get_preset_settings(name, self.load_user_settings))
-            item.setToolTip(tip)
+            item.setToolTip(summary)
+            row = PresetListRow(
+                name,
+                summary=summary,
+                is_favourite=name in fav_set,
+                expanded=name in expanded,
+                on_select=self._select_export_preset_by_name,
+                on_toggle_fav=self.toggle_export_preset_favourite_from_ui,
+                on_toggle_expand=self._toggle_export_preset_row_expanded,
+                on_apply=self.apply_export_preset_to_panel,
+                on_update=self.update_export_preset_from_ui,
+                on_rename=self.rename_export_preset_from_ui,
+                on_duplicate=self.duplicate_export_preset_from_ui,
+                on_delete=self.delete_export_preset_from_ui,
+            )
             lst.addItem(item)
+            lst.setItemWidget(item, row)
+            item.setSizeHint(row.preferred_size_hint())
         lst.blockSignals(False)
 
         if selected:
@@ -4447,52 +4471,32 @@ class RenderMixin:
                     lst.setCurrentItem(it)
                     break
 
-        self._refresh_export_preset_favourite_chips(favs)
         self._sync_export_preset_selection_chrome()
 
-    def _refresh_export_preset_favourite_chips(self, favs: list[str] | None = None) -> None:
-        from steempeg.render.export_presets import load_favourite_names
-
-        lay = getattr(self.ui, "preset_favourites_layout", None)
-        if lay is None:
+    def _toggle_export_preset_row_expanded(self, name: str) -> None:
+        key = (name or "").strip()
+        if not key:
             return
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        if favs is None:
-            favs = load_favourite_names(self.load_user_settings)
-        if not favs:
-            empty = QLabel("Star a preset to pin it here.")
-            empty.setStyleSheet(
-                "color: #777777; background: transparent; font-size: 11px;"
-                " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
-            )
-            lay.addWidget(empty)
-            lay.addStretch(1)
+        self._select_export_preset_by_name(key)
+        expanded = self._export_preset_expanded_names()
+        if key in expanded:
+            expanded.discard(key)
+        else:
+            expanded.add(key)
+        lst = getattr(self.ui, "preset_list", None)
+        if lst is None:
             return
-        for name in favs:
-            chip = QPushButton(f"★ {name}")
-            chip.setCursor(Qt.CursorShape.PointingHandCursor)
-            chip.setFixedHeight(28)
-            chip.setStyleSheet(
-                "QPushButton { background-color: #3a324a; color: #f0ecff;"
-                " border: 1px solid #6b5a8e; border-radius: 10px;"
-                " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
-                " font-weight: bold; font-size: 11px; padding: 0px 10px; }"
-                " QPushButton:hover { background-color: #4a3d66; border-color: #b29ae7; }"
-                " QPushButton:pressed { background-color: #2a2438; }"
-            )
-            chip.clicked.connect(
-                lambda checked=False, n=name: self._select_export_preset_by_name(n)
-            )
-            lay.addWidget(chip)
-        lay.addStretch(1)
+        for i in range(lst.count()):
+            it = lst.item(i)
+            if it is None or it.data(Qt.ItemDataRole.UserRole) != key:
+                continue
+            row = lst.itemWidget(it)
+            if row is not None and hasattr(row, "set_expanded"):
+                row.set_expanded(key in expanded)
+                it.setSizeHint(row.preferred_size_hint())
+            break
 
     def _select_export_preset_by_name(self, name: str) -> None:
-        from PySide6.QtCore import Qt
-
         lst = getattr(self.ui, "preset_list", None)
         if lst is None:
             return
@@ -4515,52 +4519,14 @@ class RenderMixin:
                     break
 
     def _sync_export_preset_selection_chrome(self) -> None:
-        from steempeg.render.export_presets import (
-            format_preset_summary,
-            get_preset_settings,
-            is_favourite,
-        )
-
-        name = self._list_selected_export_preset_name()
-        detail = getattr(self.ui, "preset_detail_label", None)
-        selected_lbl = getattr(self.ui, "preset_selected_label", None)
-        btn_delete = getattr(self.ui, "btn_preset_delete", None)
-        btn_update = getattr(self.ui, "btn_preset_update", None)
-        btn_rename = getattr(self.ui, "btn_preset_rename", None)
-        btn_duplicate = getattr(self.ui, "btn_preset_duplicate", None)
-        btn_apply = getattr(self.ui, "btn_preset_apply", None)
-        btn_fav = getattr(self.ui, "btn_preset_favourite", None)
-
-        has = bool(name)
-        for btn in (btn_delete, btn_update, btn_rename, btn_duplicate, btn_apply, btn_fav):
-            if btn is not None:
-                btn.setEnabled(has)
-
-        if selected_lbl is not None:
-            selected_lbl.setText(f"Selected: {name}" if has else "Selected: none — pick a row to Update / Delete")
-
-        if btn_delete is not None:
-            btn_delete.setText(f'Delete “{name}”' if has else "Delete")
-
-        if btn_fav is not None:
-            if has and is_favourite(name, self.load_user_settings):
-                btn_fav.setText("☆ Unfavourite")
-            else:
-                btn_fav.setText("★ Favourite")
-
-        if detail is not None:
-            if not has:
-                detail.setText("Select a preset to preview its recipe.")
-            else:
-                settings = get_preset_settings(name, self.load_user_settings)
-                detail.setText(format_preset_summary(settings))
+        # Row widgets carry their own actions; selection only drives the name field.
+        return
 
     def _on_export_preset_selection_changed(self) -> None:
         edit = getattr(self.ui, "preset_name_edit", None)
         name = self._list_selected_export_preset_name()
         if edit is not None and name:
             edit.setText(name)
-        self._sync_export_preset_selection_chrome()
 
     def _selected_export_preset_name(self) -> str:
         """Name field first (Save as new), else selected list row."""
@@ -4583,6 +4549,59 @@ class RenderMixin:
             persist_render_settings(self)
         except Exception:
             pass
+
+    def _prompt_export_preset_rename(self, current: str) -> str | None:
+        """Steempeg-chrome rename prompt. Returns new name or None if cancelled."""
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
+
+        from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
+        from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+
+        theme = dialog_theme(self.ui)
+        dlg = SteempegDialog("Rename preset", self.ui, **theme)
+        from steempeg.ui.ui_density import scaled_dialog_size
+
+        mw, mh = scaled_dialog_size(380, 160, parent=self.ui)
+        dlg.setMinimumSize(mw, mh)
+        dlg.resize(*scaled_dialog_size(400, 170, parent=self.ui))
+
+        root = dlg.content_layout
+        tip = QLabel(f"Rename “{current}”")
+        tip.setStyleSheet(
+            "color: #cfcfcf; background: transparent; font-size: 12px;"
+            " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+        )
+        tip.setWordWrap(True)
+        root.addWidget(tip)
+
+        edit = QLineEdit(current)
+        edit.setStyleSheet(
+            "QLineEdit { background-color: #2a2a2a; color: #e8e8e8; border: 1px solid #444;"
+            " border-radius: 8px; padding: 8px 10px; font-weight: bold; }"
+            " QLineEdit:focus { border: 1px solid #8e7cc3; }"
+        )
+        edit.selectAll()
+        root.addWidget(edit)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setStyleSheet(_BTN_SECONDARY)
+        btn_cancel.clicked.connect(dlg.reject)
+        actions.addWidget(btn_cancel)
+        actions.addStretch(1)
+        btn_ok = QPushButton("Rename")
+        btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setStyleSheet(_BTN_PRIMARY)
+        btn_ok.clicked.connect(dlg.accept)
+        actions.addWidget(btn_ok)
+        root.addLayout(actions)
+
+        edit.returnPressed.connect(dlg.accept)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return None
+        return (edit.text() or "").strip() or None
 
     def save_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import load_presets_map, save_preset
@@ -4621,13 +4640,13 @@ class RenderMixin:
         steempeg_information(self.ui, "Preset saved", f"Saved “{key}”.")
         self._persist_render_settings_quiet()
 
-    def update_export_preset_from_ui(self) -> None:
-        """Overwrite the selected list preset from the live panel (optional rename)."""
-        from steempeg.render.export_presets import rename_preset, save_preset
+    def update_export_preset_from_ui(self, name: str | None = None) -> None:
+        """Overwrite a saved preset from the live panel."""
+        from steempeg.render.export_presets import save_preset
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import snapshot_settings_from_ui
 
-        selected = self._list_selected_export_preset_name()
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
         if not selected:
             steempeg_warning(
                 self.ui,
@@ -4635,30 +4654,14 @@ class RenderMixin:
                 "Select a saved preset in the list first.",
             )
             return
-        edit = getattr(self.ui, "preset_name_edit", None)
-        typed = (edit.text() or "").strip() if edit is not None else ""
-        target = typed or selected
+        self._select_export_preset_by_name(selected)
         try:
-            if target != selected:
-                target = rename_preset(
-                    selected,
-                    target,
-                    load_settings=self.load_user_settings,
-                    save_settings=self.save_user_settings,
-                )
             key = save_preset(
-                target,
+                selected,
                 snapshot_settings_from_ui(self),
                 load_settings=self.load_user_settings,
                 save_settings=self.save_user_settings,
             )
-        except FileExistsError:
-            steempeg_warning(
-                self.ui,
-                "Update preset",
-                f"A preset named “{target}” already exists.",
-            )
-            return
         except (KeyError, ValueError) as exc:
             steempeg_warning(self.ui, "Update preset", str(exc))
             return
@@ -4667,11 +4670,11 @@ class RenderMixin:
         self._set_preset_status(f"Updated “{key}” from the current panel.")
         self._persist_render_settings_quiet()
 
-    def rename_export_preset_from_ui(self) -> None:
+    def rename_export_preset_from_ui(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import rename_preset
         from steempeg.ui.message_dialog import steempeg_warning
 
-        selected = self._list_selected_export_preset_name()
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
         if not selected:
             steempeg_warning(
                 self.ui,
@@ -4679,10 +4682,9 @@ class RenderMixin:
                 "Select a saved preset in the list first.",
             )
             return
-        edit = getattr(self.ui, "preset_name_edit", None)
-        new_name = (edit.text() or "").strip() if edit is not None else ""
-        if not new_name:
-            steempeg_warning(self.ui, "Rename preset", "Enter the new name first.")
+        self._select_export_preset_by_name(selected)
+        new_name = self._prompt_export_preset_rename(selected)
+        if new_name is None:
             return
         if new_name == selected:
             self._set_preset_status(f"“{selected}” already has that name.")
@@ -4704,15 +4706,22 @@ class RenderMixin:
         except (KeyError, ValueError) as exc:
             steempeg_warning(self.ui, "Rename preset", str(exc))
             return
+        expanded = self._export_preset_expanded_names()
+        if selected in expanded:
+            expanded.discard(selected)
+            expanded.add(key)
         self.refresh_export_presets_list()
         self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
         self._set_preset_status(f"Renamed to “{key}”.")
 
-    def duplicate_export_preset_from_ui(self) -> None:
+    def duplicate_export_preset_from_ui(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import duplicate_preset
         from steempeg.ui.message_dialog import steempeg_warning
 
-        selected = self._list_selected_export_preset_name()
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
         if not selected:
             steempeg_warning(
                 self.ui,
@@ -4736,11 +4745,11 @@ class RenderMixin:
             edit.setText(key)
         self._set_preset_status(f"Duplicated as “{key}”.")
 
-    def toggle_export_preset_favourite_from_ui(self) -> None:
+    def toggle_export_preset_favourite_from_ui(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import toggle_favourite
         from steempeg.ui.message_dialog import steempeg_warning
 
-        selected = self._list_selected_export_preset_name()
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
         if not selected:
             steempeg_warning(
                 self.ui,
@@ -4764,34 +4773,39 @@ class RenderMixin:
         else:
             self._set_preset_status(f"Removed “{selected}” from favourites.")
 
-    def apply_export_preset_to_panel(self) -> None:
+    def apply_export_preset_to_panel(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import get_preset_settings
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
-        name = self._list_selected_export_preset_name() or self._selected_export_preset_name()
-        if not name:
+        preset_name = (
+            (name or "").strip()
+            or self._list_selected_export_preset_name()
+            or self._selected_export_preset_name()
+        )
+        if not preset_name:
             steempeg_warning(self.ui, "Apply preset", "Select a preset in the list.")
             return
-        settings = get_preset_settings(name, self.load_user_settings)
+        settings = get_preset_settings(preset_name, self.load_user_settings)
         if settings is None:
             steempeg_warning(
                 self.ui,
                 "Apply preset",
-                f"No saved preset named “{name}”.",
+                f"No saved preset named “{preset_name}”.",
             )
             return
+        self._select_export_preset_by_name(preset_name)
         # One summary rebuild at the end — not once per combo signal.
         apply_job_settings_to_ui(self, settings, refresh_summary=True)
-        self._set_preset_status(f"Applied “{name}” to the export panel.")
+        self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
         self._persist_render_settings_quiet()
 
-    def delete_export_preset_from_ui(self) -> None:
+    def delete_export_preset_from_ui(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import delete_preset
         from steempeg.ui.message_dialog import steempeg_question, steempeg_warning
 
-        name = self._list_selected_export_preset_name()
-        if not name:
+        preset_name = (name or "").strip() or self._list_selected_export_preset_name()
+        if not preset_name:
             steempeg_warning(
                 self.ui,
                 "Delete preset",
@@ -4801,25 +4815,26 @@ class RenderMixin:
         if not steempeg_question(
             self.ui,
             "Delete preset?",
-            f"Delete saved preset “{name}”?\n\nThis cannot be undone.",
+            f"Delete saved preset “{preset_name}”?\n\nThis cannot be undone.",
         ):
             return
         if not delete_preset(
-            name,
+            preset_name,
             load_settings=self.load_user_settings,
             save_settings=self.save_user_settings,
         ):
             steempeg_warning(
                 self.ui,
                 "Delete preset",
-                f"No saved preset named “{name}”.",
+                f"No saved preset named “{preset_name}”.",
             )
             return
+        self._export_preset_expanded_names().discard(preset_name)
         edit = getattr(self.ui, "preset_name_edit", None)
         if edit is not None:
             edit.clear()
         self.refresh_export_presets_list()
-        self._set_preset_status(f"Deleted “{name}”.")
+        self._set_preset_status(f"Deleted “{preset_name}”.")
 
     def apply_export_preset_to_queue_job(self, job_id: str, preset_name: str) -> None:
         from steempeg.render.export_presets import apply_preset_to_job, get_preset_settings
@@ -4879,6 +4894,7 @@ class RenderMixin:
             # Clicking a queued card re-enters the scheme with this job.
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
+        self._queue_library_preview_diversion = False
         self._loading_queue_job = True
         try:
             self._flush_clip_session_state()
@@ -5037,6 +5053,11 @@ class RenderMixin:
             return
         self._queue_resume_job_id = None
         self._queue_scheme_deferred = True
+        # While Left, identity follows the playing clip; keep that across Resume
+        # until the user activates a queue card (or clears the queue).
+        self._queue_library_preview_diversion = bool(
+            getattr(self, "_preview_clip_path", None)
+        )
         logging.info(
             "Left render queue mode — %s job(s) kept",
             len(self.render_queue),
@@ -5065,24 +5086,33 @@ class RenderMixin:
         if not getattr(self, "render_queue", None) or not len(self.render_queue):
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
+            self._queue_library_preview_diversion = False
             self._sync_queue_scheme_chrome()
             return
         self._queue_scheme_deferred = False
         self._queue_resume_job_id = None
+        # Resume restores queue-first identity unless the user is mid library preview.
+        # Keep an existing diversion (previewing a non-queue card) so the header
+        # does not jump back to Ready #1 while that clip is still playing.
         logging.info(
             "Resumed render queue mode — %s job(s)",
             len(self.render_queue),
         )
         # Do not seek/select job #1 or any queue card.
+        if not getattr(self, "_queue_library_preview_diversion", False):
+            self._sync_player_header_to_queue_context()
         self._sync_start_render_enabled()
         self.update_playback_badge()
         self.refresh_render_queue_panel()
+        if not getattr(self, "_is_rendering", False):
+            self.update_status_indicator("Ready", "ready")
 
     def _sync_queue_scheme_chrome(self) -> None:
         has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
         if not has_jobs:
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
+            self._queue_library_preview_diversion = False
         deferred = bool(getattr(self, "_queue_scheme_deferred", False)) and has_jobs
         busy = bool(
             getattr(self, "_is_rendering", False)
@@ -5278,6 +5308,7 @@ class RenderMixin:
         self._selected_queue_job_id = None
         self._queue_scheme_deferred = False
         self._queue_resume_job_id = None
+        self._queue_library_preview_diversion = False
         self.refresh_render_queue_panel()
         self._sync_start_render_enabled()
         self._persist_render_queue()
@@ -5425,6 +5456,12 @@ class RenderMixin:
         badge.setMinimumHeight(min_h)
         badge.setMinimumWidth(0)
         badge.setMaximumWidth(16777215)
+        try:
+            from steempeg.ui.player_header_layout import player_header_chip_qfont
+
+            badge.setFont(player_header_chip_qfont(font_px))
+        except Exception:
+            pass
         badge.setStyleSheet(
             f"QPushButton {{"
             f"color: {color};"
@@ -5910,6 +5947,7 @@ class RenderMixin:
             self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
         self.refresh_render_queue_panel()
+        self._queue_library_preview_diversion = False
         self._sync_player_header_to_queue_context()
         self.update_playback_badge()
         self._persist_render_queue()
