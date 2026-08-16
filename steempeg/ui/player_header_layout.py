@@ -24,10 +24,20 @@ KEY_PLAYER_HEADER_LAYOUT = "player_header_layout"
 # Same stack Large / construction use — pin in QSS, QFont, and rich-text HTML.
 # Qt rich text often ignores QLabel stylesheet ``font-family`` when spans set
 # ``font-size``; omitting family made Medium/Small fall back to a different face.
-_HEADER_TITLE_FONT_CSS = (
-    f"font-family: {tok.FONT_APP}; font-weight: 700;"
-)
+# Keep rich-text family to a single Segoe token (full stack lives on QFont/QSS) —
+# comma-lists in QTextDocument CSS have been flaky across Qt builds.
+_HEADER_TITLE_FONT_CSS = "font-family: 'Segoe UI'; font-weight: 700;"
 _HEADER_CHIP_FONT_CSS = f"font-family: {tok.FONT_APP};"
+
+# QFont family list matching FONT_APP (no CSS quotes / generic sans-serif).
+_HEADER_FONT_FAMILIES: tuple[str, ...] = (
+    "Segoe UI",
+    "Noto Sans",
+    "Twemoji",
+    "Noto Emoji",
+    "DejaVu Sans",
+    "Arial",
+)
 
 HEADER_LAYOUT_STEEMPEG_UI = "steempeg_ui"
 HEADER_LAYOUT_STEAM_LIKE = "steam_like"
@@ -90,9 +100,17 @@ def player_header_title_qfont(font_px: int | None = None) -> QFont:
     """Bold Segoe stack matching Large / construction — pixel size only varies."""
     px = max(11, int(font_px or COMFORT.header_font))
     font = QFont()
-    font.setFamilies(
-        ["Segoe UI", "Noto Sans", "Twemoji", "Noto Emoji", "DejaVu Sans", "Arial"]
-    )
+    font.setFamilies(list(_HEADER_FONT_FAMILIES))
+    font.setPixelSize(px)
+    font.setWeight(QFont.Weight.Bold)
+    return font
+
+
+def player_header_chip_qfont(font_px: int | None = None) -> QFont:
+    """Bold Segoe stack for header status / portable chips — size only varies."""
+    px = max(11, int(font_px or COMFORT.header_font))
+    font = QFont()
+    font.setFamilies(list(_HEADER_FONT_FAMILIES))
     font.setPixelSize(px)
     font.setWeight(QFont.Weight.Bold)
     return font
@@ -212,6 +230,7 @@ def format_player_header_html(
     fs = max(11, int(font_px or COMFORT.header_font))
     # Inline size + family: Qt rich text often ignores QLabel stylesheet fonts.
     # Family must be in the span or Medium/Small can resolve a different face.
+    # Single Segoe token in HTML; full stack stays on QFont / QSS.
     _title_style = (
         f"color:#ffffff; font-size:{fs}px; {_HEADER_TITLE_FONT_CSS} "
         "vertical-align:middle;"

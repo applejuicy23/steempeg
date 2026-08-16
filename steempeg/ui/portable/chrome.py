@@ -252,6 +252,7 @@ def hide_portable_chrome(app) -> None:
 
 
 def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
+    from steempeg.ui.player_header_layout import player_header_chip_qfont
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
@@ -276,6 +277,7 @@ def _style_add_clip_button(btn: QPushButton, *, dense=None) -> None:
     btn.setIcon(add_clip_icon(icon_px))
     btn.setIconSize(QSize(icon_px, icon_px))
     btn.setText(" Choose a Clip")
+    btn.setFont(player_header_chip_qfont(font))
     btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
     from PySide6.QtWidgets import QSizePolicy
@@ -393,6 +395,7 @@ def _style_add_to_queue_button(btn: QPushButton, *, dense=None) -> None:
     from PySide6.QtWidgets import QSizePolicy
 
     from steempeg.ui.icon_assets import bold_plus_icon
+    from steempeg.ui.player_header_layout import player_header_chip_qfont
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
@@ -424,6 +427,7 @@ def _style_add_to_queue_button(btn: QPushButton, *, dense=None) -> None:
     btn.setIcon(bold_plus_icon(icon_sz, _ADD_QUEUE_COLOR))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(" Queue")
+    btn.setFont(player_header_chip_qfont(font))
     btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
     btn.setMinimumWidth(0)
@@ -437,6 +441,7 @@ def _style_in_queue_button(btn: QPushButton, text: str, *, dense=None) -> None:
     from PySide6.QtWidgets import QSizePolicy
 
     from steempeg.ui.icon_assets import queue_chip_icon
+    from steempeg.ui.player_header_layout import player_header_chip_qfont
     from steempeg.ui.ui_density import COMFORT
 
     d = dense if dense is not None else COMFORT
@@ -461,6 +466,7 @@ def _style_in_queue_button(btn: QPushButton, text: str, *, dense=None) -> None:
     btn.setIcon(queue_chip_icon(icon_sz))
     btn.setIconSize(QSize(icon_sz, icon_sz))
     btn.setText(f" {text}")
+    btn.setFont(player_header_chip_qfont(font))
     btn.setStyleSheet(style)
     btn.setFixedHeight(chip)
     btn.setMinimumWidth(0)

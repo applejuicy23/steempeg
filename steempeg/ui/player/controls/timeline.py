@@ -194,7 +194,7 @@ class TimelineCanvas(QWidget):
             f" border: 1px solid {tok.TOOLTIP_BORDER};"
             f" border-radius: 6px;"
             f" padding: 5px 9px;"
-            f" font-family: 'Segoe UI', {tok.FONT_APP};"
+            f" font-family: {tok.FONT_APP};"
             f" font-size: 12px;"
             f" font-weight: bold;"
             f"}}"
@@ -254,7 +254,22 @@ class TimelineCanvas(QWidget):
             + self._BOTTOM_PAD
         )
         self.setMinimumHeight(self._CANVAS_H)
-        self._ruler_font = QFont("Segoe UI Semibold", self._RULER_FONT_PT)
+        # Same FONT_APP Segoe stack as the rest of the player — never the separate
+        # "Segoe UI Semibold" family name (that reads as a different typeface vs
+        # header chips when S/M/L rebuilds the ruler).
+        self._ruler_font = QFont()
+        self._ruler_font.setFamilies(
+            [
+                "Segoe UI",
+                "Noto Sans",
+                "Twemoji",
+                "Noto Emoji",
+                "DejaVu Sans",
+                "Arial",
+            ]
+        )
+        self._ruler_font.setPointSize(max(6, int(self._RULER_FONT_PT)))
+        self._ruler_font.setWeight(QFont.Weight.DemiBold)
         self._rebuild_playhead_scroller()
         self.update()
 

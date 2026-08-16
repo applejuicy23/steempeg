@@ -1173,6 +1173,12 @@ class LibraryMixin:
         self.btn_clip_health.setMinimumHeight(min_h)
         self.btn_clip_health.setMinimumWidth(0)
         self.btn_clip_health.setMaximumWidth(16777215)
+        try:
+            from steempeg.ui.player_header_layout import player_header_chip_qfont
+
+            self.btn_clip_health.setFont(player_header_chip_qfont(font_px))
+        except Exception:
+            pass
         self.btn_clip_health.setStyleSheet(
             f"QPushButton {{"
             f"background-color: rgba({r}, {g}, {b}, 0.22);"
