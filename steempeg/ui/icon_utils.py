@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import os
+import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
 
@@ -11,17 +12,18 @@ from steempeg.infra.paths import get_resource_path
 
 
 def app_window_icon() -> QIcon:
-    """Best bundled icon for window chrome and taskbar buttons."""
-    ico_path = get_resource_path("logo.ico")
-    if os.path.isfile(ico_path):
-        icon = QIcon(ico_path)
-        if not icon.isNull():
-            return icon
-    png_path = get_resource_path("logo.png")
-    if os.path.isfile(png_path):
-        icon = QIcon(png_path)
-        if not icon.isNull():
-            return icon
+    """Best bundled icon for window chrome and taskbar / dock buttons."""
+    # Linux docks (GNOME) often ignore .ico; Windows prefers the multi-size .ico.
+    names = ("logo.png", "logo.ico") if sys.platform != "win32" else ("logo.ico", "logo.png")
+    for name in names:
+        path = get_resource_path(name)
+        if os.path.isfile(path):
+            icon = QIcon(path)
+            if not icon.isNull():
+                if sys.platform != "win32" and path.lower().endswith(".png"):
+                    for edge in (16, 24, 32, 48, 64, 128, 256):
+                        icon.addFile(path, QSize(edge, edge))
+                return icon
     return QIcon()
 
 

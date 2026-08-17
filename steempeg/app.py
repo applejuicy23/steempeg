@@ -219,9 +219,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.ui.setWindowTitle(f"Steempeg v{APP_VERSION_STR}")
         
         # Setting the application icon
-        icon_path = get_resource_path("logo.png")
-        if os.path.exists(icon_path):
-            self.ui.setWindowIcon(QIcon(icon_path))
+        from steempeg.ui.icon_utils import app_window_icon
+
+        _win_icon = app_window_icon()
+        if not _win_icon.isNull():
+            self.ui.setWindowIcon(_win_icon)
 
         # 2. DATABASE AND VARIABLES
         # Steam bitrate dictionary in megabits (Mbps) for different resolutions
@@ -4725,6 +4727,9 @@ def main():
             os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
             os.environ.setdefault("GALLIUM_DRIVER", "llvmpipe")
             os.environ.setdefault("QT_OPENGL", "software")
+        from steempeg.infra.linux_desktop import prepare_linux_qt_environment
+
+        prepare_linux_qt_environment()
 
     from PySide6.QtCore import Qt as _Qt
 
@@ -4737,19 +4742,18 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Steempeg")
     app.setApplicationDisplayName("Steempeg")
+    if sys.platform != "win32":
+        from steempeg.infra.linux_desktop import apply_linux_qt_app, install_linux_desktop_entry
+
+        apply_linux_qt_app(app)
+        install_linux_desktop_entry()
     try:
         from steempeg.ui.design_tokens import apply_app_tooltip_style
 
         apply_app_tooltip_style(app)
     except Exception:
         pass
-    try:
-        from PySide6.QtGui import QGuiApplication
-
-        QGuiApplication.setDesktopFileName("steempeg")
-    except Exception:
-        pass
-    if sys.platform != "win32":
+    if sys.platform != "win32" and os.environ.get("STEEMPEG_KEEP_CONSOLE", "0") == "1":
         print(f"[steempeg] Qt platform={app.platformName()!r}", flush=True)
 
     # Color emoji fallbacks. Prefer Twemoji over Noto Color Emoji: Bazzite's
@@ -4785,9 +4789,14 @@ def main():
         # Second instance: do not hold a lock (primary keeps it).
         _instance_lock = None
 
-    icon_path = get_resource_path("logo.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    from steempeg.ui.icon_utils import app_window_icon
+
+    _app_icon = app_window_icon()
+    icon_path = get_resource_path("logo.ico" if sys.platform == "win32" else "logo.png")
+    if not os.path.isfile(icon_path):
+        icon_path = get_resource_path("logo.png")
+    if not _app_icon.isNull():
+        app.setWindowIcon(_app_icon)
 
     from PySide6.QtWidgets import QDialog
     from steempeg.ui.shell_chooser import (
@@ -4823,8 +4832,8 @@ def main():
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
             sys.exit(1)
             
-        if os.path.exists(icon_path):
-            window.ui.setWindowIcon(QIcon(icon_path))
+        if not _app_icon.isNull():
+            window.ui.setWindowIcon(_app_icon)
 
         from PySide6.QtCore import Qt
         if sys.platform == "win32":
