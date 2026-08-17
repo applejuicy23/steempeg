@@ -621,13 +621,12 @@ def sync_portable_queue_header(app) -> None:
     elif not idle and preview:
         path = os.path.normpath(str(preview))
 
-    # Prefer the selected queue card (browse position) over find-by-path so the
-    # In queue (N) chip tracks which job is focused — not total pending count.
+    # Follow the playing clip — not Ready job #1. Selected card only counts
+    # when it is that same clip (duplicate In-queue cycling).
     job = None
-    selected_id = getattr(app, "_selected_queue_job_id", None)
-    if selected_id and hasattr(app, "render_queue"):
+    if path and hasattr(app, "_focused_queue_job_for_badge"):
         try:
-            job = app.render_queue.get(selected_id)
+            job = app._focused_queue_job_for_badge(path)
         except Exception:
             job = None
     if job is None and path and hasattr(app, "_queue_job_for_clip"):
@@ -638,7 +637,9 @@ def sync_portable_queue_header(app) -> None:
 
     rendering = bool(getattr(app, "_is_rendering", False))
     has_clip = bool(path)
-    can_add = has_clip and not rendering
+    can_add = has_clip and not rendering and not bool(
+        getattr(app, "_queue_add_busy", False)
+    )
 
     pending = 0
     if hasattr(app, "render_queue"):
@@ -652,14 +653,21 @@ def sync_portable_queue_header(app) -> None:
     show_add = False
     show_queue_chip = False
     queue_chip_text = "Queue"
+    showing_in_queue = False
     if has_clip and job is not None:
         st = job.status
         if st == JobStatus.QUEUED:
             show_queue_chip = True
-            # N = this job's 1-based queue position (matches desktop header chip).
-            # Idle presence uses Queue (pending) below — not this label.
+            # N = 1-based queue position(s) for this clip (matches desktop header).
+            label = None
+            if hasattr(app, "_in_queue_label_for_clip") and path:
+                try:
+                    label = app._in_queue_label_for_clip(path)
+                except Exception:
+                    label = None
             index = int(getattr(job, "queue_index", 0) or 0) or 1
-            queue_chip_text = f"In queue ({index})"
+            queue_chip_text = label or f"In queue ({index})"
+            showing_in_queue = True
         elif st == JobStatus.RENDERING:
             show_queue_chip = True
             queue_chip_text = "Rendering"
@@ -715,6 +723,12 @@ def sync_portable_queue_header(app) -> None:
         and badge.text().strip().lower() == "preview"
     ):
         badge.hide()
+
+    if hasattr(app, "_sync_in_queue_cycle_for_clip"):
+        try:
+            app._sync_in_queue_cycle_for_clip(path, showing_in_queue=showing_in_queue)
+        except Exception:
+            pass
 
 
 def _ensure_library_scan_badge(app, lay: QHBoxLayout) -> None:
@@ -862,8 +876,117 @@ def prewarm_portable_sheets(app) -> None:
         app._portable_sheets_warming = False
 
 
+def _configure_portable_sheet_modeless(dlg) -> None:
+    """Steempeg chrome sheets must not freeze the Portable shell.
+
+    ``QDialog.exec()`` always runs a modal local event loop (ignores setModal).
+    Call this before ``show()`` so Render / Choose a Clip stay clickable together
+    with theatre chrome behind them — same as Desktop Render Settings.
+    """
+    dlg.setModal(False)
+    dlg.setWindowModality(Qt.WindowModality.NonModal)
+
+
+def _raise_portable_sheet(dlg) -> bool:
+    try:
+        dlg.raise_()
+        dlg.activateWindow()
+        return True
+    except RuntimeError:
+        return False
+
+
+def _resync_cursor_after_sheet() -> None:
+    try:
+        from steempeg.ui.window_chrome import force_app_cursor_resync
+
+        force_app_cursor_resync()
+        QTimer.singleShot(0, force_app_cursor_resync)
+        QTimer.singleShot(50, force_app_cursor_resync)
+    except Exception:
+        pass
+
+
+def _refresh_render_sheet_after_nested_picker(host) -> None:
+    """Reclaim neo / queue chrome after a modeless Choose a Clip closes."""
+    if host is None:
+        return
+    try:
+        if hasattr(host, "reset_title_bar_chrome"):
+            host.reset_title_bar_chrome()
+        host.raise_()
+        host.activateWindow()
+        if hasattr(host, "_reclaim_neo_into_sheet"):
+            host._reclaim_neo_into_sheet()
+            neo = getattr(host, "_neo", None)
+            if neo is not None:
+                try:
+                    neo.show()
+                except RuntimeError:
+                    pass
+        queue = getattr(host, "_queue", None)
+        if queue is not None and hasattr(queue, "refresh"):
+            queue.refresh()
+        strip = getattr(host, "_strip", None)
+        if strip is not None:
+            if hasattr(strip, "sync_from_app"):
+                strip.sync_from_app()
+            if hasattr(strip, "sync_game_header"):
+                strip.sync_game_header()
+    except Exception:
+        _log.exception("Refresh Render sheet after Choose a Clip failed")
+
+
+def _repark_clip_picker_after_nested(app, dlg) -> None:
+    if dlg is None:
+        return
+    try:
+        if dlg.windowFlags() & Qt.WindowType.Dialog:
+            dlg._park_hidden_dialog()
+        else:
+            garage = _ensure_sheet_garage(app)
+            dlg._park_as_embedded_widget(garage)
+    except Exception:
+        _log.exception("Re-park Choose a Clip after nested open failed")
+
+
+def mark_portable_render_sheet_closed(app) -> None:
+    """Clear the open flag after a modeless Render sheet parks or destroys."""
+    was_open = bool(getattr(app, "_portable_render_settings_open", False))
+    app._portable_render_settings_open = False
+    if not was_open:
+        return
+    sync_portable_render_button(app)
+    _resync_cursor_after_sheet()
+
+
+def mark_portable_clip_picker_closed(app) -> None:
+    """Clear the open flag and restore a nested Render host after picker close."""
+    was_open = bool(getattr(app, "_portable_clip_picker_open", False))
+    app._portable_clip_picker_open = False
+    nested_host = getattr(app, "_portable_clip_picker_host", None)
+    app._portable_clip_picker_host = None
+    if not was_open:
+        return
+    dlg = getattr(app, "_portable_clip_picker_dlg", None)
+    if nested_host is not None:
+        _repark_clip_picker_after_nested(app, dlg)
+        _refresh_render_sheet_after_nested_picker(nested_host)
+    if hasattr(app, "_sync_library_scan_interaction_lock"):
+        try:
+            app._sync_library_scan_interaction_lock(
+                busy=bool(getattr(app, "_clips_scan_active", False))
+            )
+        except Exception:
+            pass
+    _resync_cursor_after_sheet()
+
+
 def dispose_portable_sheets(app) -> None:
     """Tear down warm sheets and return borrowed panels to the main shell."""
+    app._portable_clip_picker_host = None
+    app._portable_clip_picker_open = False
+    app._portable_render_settings_open = False
     for attr in ("_portable_clip_picker_dlg", "_portable_render_sheet_dlg"):
         dlg = getattr(app, attr, None)
         if dlg is None:
@@ -891,18 +1014,20 @@ def dispose_portable_sheets(app) -> None:
 
 def open_portable_clip_picker(app, *, host_parent=None) -> None:
     if getattr(app, "_portable_clip_picker_open", False):
-        return
+        dlg = getattr(app, "_portable_clip_picker_dlg", None)
+        if dlg is not None and _raise_portable_sheet(dlg):
+            return
+        app._portable_clip_picker_open = False
     # Allow opening during scan so the user sees the grayed/locked library;
     # selection stays gated by _clips_library_accepts_selection / setEnabled(False).
     if hasattr(app, "hide_floating_overlays"):
         app.hide_floating_overlays()
 
-    # Nest under an open Render sheet when caller didn't pass a parent.
+    # Remember an open Render sheet so we can raise it after this picker closes.
     if host_parent is None and getattr(app, "_portable_render_settings_open", False):
         host_parent = getattr(app, "_portable_render_sheet_dlg", None)
 
     nested = host_parent is not None
-    app._portable_clip_picker_open = True
     try:
         # Toolbar / tabs / combos live in left_panel — refresh density for the
         # current shell width before the sheet borrows that chrome.
@@ -932,35 +1057,16 @@ def open_portable_clip_picker(app, *, host_parent=None) -> None:
             app._sync_library_scan_interaction_lock(
                 busy=bool(getattr(app, "_clips_scan_active", False))
             )
-        dlg.exec()
+        _configure_portable_sheet_modeless(dlg)
+        app._portable_clip_picker_open = True
+        app._portable_clip_picker_host = host_parent if nested else None
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
     except Exception:
-        _log.exception("Open Clips Manager failed")
-    finally:
         app._portable_clip_picker_open = False
-        # After nested exec, park back under the garage (not the Render sheet).
-        dlg = getattr(app, "_portable_clip_picker_dlg", None)
-        if dlg is not None and nested:
-            try:
-                from PySide6.QtCore import Qt
-
-                if dlg.windowFlags() & Qt.WindowType.Dialog:
-                    dlg._park_hidden_dialog()
-                else:
-                    garage = _ensure_sheet_garage(app)
-                    dlg._park_as_embedded_widget(garage)
-            except Exception:
-                _log.exception("Re-park Choose a Clip after nested open failed")
-            if host_parent is not None and hasattr(host_parent, "reset_title_bar_chrome"):
-                try:
-                    host_parent.reset_title_bar_chrome()
-                    host_parent.raise_()
-                    host_parent.activateWindow()
-                except Exception:
-                    _log.exception("Refresh Render sheet after nested Choose a Clip failed")
-        if hasattr(app, "_sync_library_scan_interaction_lock"):
-            app._sync_library_scan_interaction_lock(
-                busy=bool(getattr(app, "_clips_scan_active", False))
-            )
+        app._portable_clip_picker_host = None
+        _log.exception("Open Clips Manager failed")
 
 
 def _apply_portable_shell_density(app) -> None:
@@ -1012,10 +1118,12 @@ def _dispose_portable_render_sheet(app) -> None:
 
 def open_portable_render_settings(app) -> None:
     if getattr(app, "_portable_render_settings_open", False):
-        return
+        dlg = getattr(app, "_portable_render_sheet_dlg", None)
+        if dlg is not None and _raise_portable_sheet(dlg):
+            return
+        app._portable_render_settings_open = False
     if hasattr(app, "hide_floating_overlays"):
         app.hide_floating_overlays()
-    app._portable_render_settings_open = True
     try:
         _apply_portable_shell_density(app)
 
@@ -1052,11 +1160,14 @@ def open_portable_render_settings(app) -> None:
             app._portable_render_sheet_dlg = dlg
             app._portable_sheets_warm = True
         dlg.prepare_for_show()
-        dlg.exec()
+        _configure_portable_sheet_modeless(dlg)
+        app._portable_render_settings_open = True
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
     except Exception:
-        _log.exception("Open Render sheet failed")
-    finally:
         app._portable_render_settings_open = False
+        _log.exception("Open Render sheet failed")
         sync_portable_render_button(app)
 
 

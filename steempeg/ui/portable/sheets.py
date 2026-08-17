@@ -599,10 +599,12 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._app._neo_dock_home = None
 
     def prepare_for_show(self) -> None:
-        """Re-arm a warm sheet before exec (no reparent)."""
+        """Re-arm a warm sheet before show (no reparent)."""
         host = getattr(self._app, "ui", None)
         if hasattr(self, "release_map_suppression"):
             self.release_map_suppression(host)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self._hw = getattr(self._app, "hide_watcher", None)
         if self._hw is not None:
             self._hw.set_suppressed(True)
@@ -681,29 +683,30 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._queue.sync_selection(job_id)
 
     def _on_choose_clip(self) -> None:
-        """Nest Choose a Clip over this Render sheet (keep Render open)."""
+        """Open Choose a Clip without blocking this Render sheet."""
         from steempeg.ui.portable.chrome import open_portable_clip_picker
 
         open_portable_clip_picker(self._app, host_parent=self)
-        if hasattr(self, "reset_title_bar_chrome"):
-            self.reset_title_bar_chrome()
-        self.raise_()
-        self.activateWindow()
-        # Clip pick may have changed preview / queue context — and dock chrome
-        # can briefly steal neo; reclaim so the sheet never shows a black void.
-        if hasattr(self, "_reclaim_neo_into_sheet"):
-            self._reclaim_neo_into_sheet()
-            if self._neo is not None:
-                try:
-                    self._neo.show()
-                except RuntimeError:
-                    pass
-        if hasattr(self._queue, "refresh"):
-            self._queue.refresh()
-        if hasattr(self._strip, "sync_from_app"):
-            self._strip.sync_from_app()
-        if hasattr(self._strip, "sync_game_header"):
-            self._strip.sync_game_header()
+
+    def _close_nested_clip_picker(self) -> None:
+        app = self._app
+        if not getattr(app, "_portable_clip_picker_open", False):
+            return
+        # Avoid raising this sheet from picker close while we are dismissing.
+        app._portable_clip_picker_host = None
+        picker = getattr(app, "_portable_clip_picker_dlg", None)
+        if picker is None:
+            app._portable_clip_picker_open = False
+            return
+        try:
+            picker.done(0)
+        except RuntimeError:
+            app._portable_clip_picker_open = False
+
+    def _notify_sheet_closed(self) -> None:
+        from steempeg.ui.portable.chrome import mark_portable_render_sheet_closed
+
+        mark_portable_render_sheet_closed(self._app)
 
     def _on_save(self) -> None:
         persist_render_settings(self._app)
@@ -719,6 +722,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
         self.accept()
 
     def done(self, result: int) -> None:
+        self._close_nested_clip_picker()
         if self._warm:
             # Keep neo embedded — next open is show/hide, not reparent thrash.
             if self._hw is not None:
@@ -727,12 +731,12 @@ class PortableRenderSettingsDialog(SteempegDialog):
                 tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
                 if tabs is not None:
                     tabs.hide()
-            # Exit modal loop without tearing down the embedded neo panel.
             from PySide6.QtWidgets import QDialog
 
             QDialog.done(self, result)
             # Keep Dialog HWND — only unmap. Demoting to Widget made every reopen slow.
             self._park_hidden_dialog()
+            self._notify_sheet_closed()
             return
 
         restore_portable_neo_chrome(self._app)
@@ -755,6 +759,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._hw.set_suppressed(False)
             self._hw = None
         super().done(result)
+        self._notify_sheet_closed()
 
 
 class PortableClipPickerDialog(SteempegDialog):
@@ -861,10 +866,12 @@ class PortableClipPickerDialog(SteempegDialog):
         )
 
     def prepare_for_show(self) -> None:
-        """Re-arm a warm picker before exec (panel already embedded)."""
+        """Re-arm a warm picker before show (panel already embedded)."""
         host = getattr(self._app, "ui", None)
         if hasattr(self, "release_map_suppression"):
             self.release_map_suppression(host)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self._armed = False
         # Prewarm may have sized against a maximized shell — re-fit now.
         self._sync_size_to_shell()
@@ -1144,6 +1151,7 @@ class PortableClipPickerDialog(SteempegDialog):
 
             QDialog.done(self, result)
             self._park_hidden_dialog()
+            self._notify_picker_closed()
             return
 
         self._restore_library()
@@ -1160,3 +1168,9 @@ class PortableClipPickerDialog(SteempegDialog):
                     pass
             self._panel = None
         super().done(result)
+        self._notify_picker_closed()
+
+    def _notify_picker_closed(self) -> None:
+        from steempeg.ui.portable.chrome import mark_portable_clip_picker_closed
+
+        mark_portable_clip_picker_closed(self._app)
