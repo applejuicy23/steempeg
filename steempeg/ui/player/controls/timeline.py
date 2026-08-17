@@ -78,9 +78,11 @@ class TimelineCanvas(QWidget):
     _RULER_GAP = 4
     _MAJOR_TICK_H = 11
     _MINOR_TICK_H = 5
+    _TICK_PEN_W = 1.0
     _RULER_FONT_PT = 9
     _BOTTOM_PAD = 8
     # Seek strip height: Steam Game Recording bar ≈13px at 2560×1440 (= Large).
+    # S/M/L keep this height — only digits / ticks scale.
     _TRACK_H = 13.0
     # Leave room above the strip for timeline pins (20px logical).
     _TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
@@ -201,7 +203,7 @@ class TimelineCanvas(QWidget):
         )
         self.text_tooltip.hide()
 
-        # Strip + ruler from Settings S/M/L (Large = class defaults above).
+        # Strip + ruler from Settings S/M/L (Large = class defaults above; track stays).
         self.apply_strip_metrics(metrics_for_current())
         
         # We use your get_resource_path function so that the icons are always found!
@@ -238,10 +240,11 @@ class TimelineCanvas(QWidget):
         }
 
     def apply_strip_metrics(self, metrics: TimelineStripMetrics) -> None:
-        """Apply S/M/L strip + ruler metrics (pins keep the same headroom)."""
+        """Apply S/M/L ruler metrics (track height stays at Large)."""
         self._TRACK_H = float(metrics.track_h)
         self._MAJOR_TICK_H = int(metrics.major_tick_h)
         self._MINOR_TICK_H = int(metrics.minor_tick_h)
+        self._TICK_PEN_W = float(metrics.tick_pen_w)
         self._RULER_FONT_PT = int(metrics.ruler_font_pt)
         self._RULER_GAP = int(metrics.ruler_gap)
         self._BOTTOM_PAD = int(metrics.bottom_pad)
@@ -985,7 +988,7 @@ class TimelineCanvas(QWidget):
         end_sec = min(int(self.duration_ms / 1000), int(self.x_to_ms(rect.right()) / 1000) + 1)
         start_sec -= start_sec % int(max(1, step)) 
 
-        painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
+        painter.setPen(QPen(QColor(255, 255, 255, 180), float(self._TICK_PEN_W)))
         painter.setFont(self._ruler_font)
 
         ruler_y = track_y + track_height + self._RULER_GAP
@@ -1847,7 +1850,7 @@ class CustomTimelineWidget(QScrollArea):
         """)
 
     def apply_strip_size(self, size: object | None = None) -> None:
-        """Live-apply Settings S/M/L to the scrubber strip + ruler."""
+        """Live-apply Settings S/M/L to the time ruler (track height unchanged)."""
         from steempeg.ui.timeline_strip_size import (
             get_timeline_strip_size,
             metrics_for,

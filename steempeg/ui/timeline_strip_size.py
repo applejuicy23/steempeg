@@ -1,8 +1,10 @@
-"""Player timeline strip height preference (scrubber + ruler).
+"""Player timeline strip size preference (ruler ticks + digits, not the bar).
 
-Settings → Visual: Small / Medium / Large. Large matches the pre-pref
-baseline (track ≈13px + taller ticks/digits) and is the product default for
-new installs; upgrading installs without a saved pref also map to Large once.
+Settings → Visual: Small / Medium / Large. Large is the product default and
+matches the pre-pref baseline (full-size track + tall ticks + 9pt digits).
+S/M/L scale time labels and tick marks only — the scrubber / progress track
+stays at Large's height. Upgrading installs without a saved pref also map
+to Large once.
 """
 from __future__ import annotations
 
@@ -42,41 +44,59 @@ _PRIOR_SETTINGS_HINTS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class TimelineStripMetrics:
-    """Logical px for the seek strip + digit/tick ruler (pins stay above)."""
+    """Logical px for the seek strip + digit/tick ruler (pins stay above).
+
+    ``track_h`` is the purple/gray scrubber and is the same at every size.
+    Digits and tick marks are the S/M/L axis; charcoal pad may tighten
+    slightly under smaller type so labels do not float in empty space.
+    """
 
     track_h: float
     major_tick_h: int
     minor_tick_h: int
+    tick_pen_w: float
     ruler_font_pt: int
     ruler_gap: int
     bottom_pad: int
 
+    @property
+    def chrome_below(self) -> int:
+        """Dark ruler band under the scrubber (gap + major ticks + pad)."""
+        return int(self.ruler_gap + self.major_tick_h + self.bottom_pad)
 
-# Large ≈ today's hardcoded look after density/taller-strip work.
+
+# Large = pre-pref / previous Large (track 13 + 11/5 ticks + 9pt). Track is
+# constant. Medium ≈ v36.1 compact digits/ticks under that same bar. Small
+# is one step smaller on ticks + type only.
+_TRACK_H_LARGE = 13.0
+
 _METRICS: dict[str, TimelineStripMetrics] = {
     TIMELINE_STRIP_LARGE: TimelineStripMetrics(
-        track_h=13.0,
+        track_h=_TRACK_H_LARGE,
         major_tick_h=11,
         minor_tick_h=5,
+        tick_pen_w=1.0,
         ruler_font_pt=9,
         ruler_gap=4,
         bottom_pad=8,
     ),
     TIMELINE_STRIP_MEDIUM: TimelineStripMetrics(
-        track_h=10.0,
-        major_tick_h=9,
+        track_h=_TRACK_H_LARGE,
+        major_tick_h=10,
         minor_tick_h=4,
+        tick_pen_w=1.0,
         ruler_font_pt=8,
-        ruler_gap=3,
-        bottom_pad=6,
+        ruler_gap=4,
+        bottom_pad=7,
     ),
     TIMELINE_STRIP_SMALL: TimelineStripMetrics(
-        track_h=8.0,
-        major_tick_h=7,
+        track_h=_TRACK_H_LARGE,
+        major_tick_h=8,
         minor_tick_h=3,
+        tick_pen_w=1.0,
         ruler_font_pt=7,
-        ruler_gap=2,
-        bottom_pad=5,
+        ruler_gap=3,
+        bottom_pad=6,
     ),
 }
 
