@@ -112,6 +112,7 @@ from steempeg.ui.render_panel import set_settings_panel_locked
 from steempeg.ui.render_job_builder import (
     apply_job_settings_to_ui,
     build_render_job_from_ui,
+    collect_queue_add_payload,
     resolve_render_params,
     snapshot_settings_from_ui,
 )
@@ -1268,10 +1269,12 @@ class RenderMixin:
         return not bool(getattr(self, "_queue_scheme_deferred", False))
 
     def _queue_owns_identity_chrome(self) -> bool:
-        """True when header / dash summary follow the queue context job.
+        """True when queue mode may drive identity chrome.
 
         False while Left (deferred) or while the user is previewing a library /
-        rendered card (diversion) — those follow the playing clip instead.
+        rendered card (diversion). Player header still follows the playing clip
+        via ``_queue_context_job`` (not Ready job #1). Footer Ready+#N stays
+        queue-head through ``_status_strip_context_job``.
         """
         if not self._queue_is_active():
             return False
@@ -1284,11 +1287,23 @@ class RenderMixin:
     def _queue_context_job(self):
         """Job that owns player-header identity while queue chrome is focused.
 
-        Priority: active render → selected queue card → next pending → first listed
-        (so completed jobs still listed keep a stable context — v44 P0).
+        Follow the clip actually playing. Ready job #1 only when that clip is
+        on screen (or nothing is playing). Clicking a queue card plays it, so
+        selection matches preview. Active render still wins during a batch.
         """
         if not self._queue_owns_identity_chrome():
             return None
+        preview = getattr(self, "_preview_clip_path", None)
+        preview_norm = os.path.normpath(preview) if preview else ""
+
+        def _clip_matches(job) -> bool:
+            if job is None:
+                return False
+            if not preview_norm:
+                return True
+            path = getattr(job, "clip_path", None) or ""
+            return os.path.normpath(path) == preview_norm
+
         active = getattr(self, "_active_render_job", None)
         if active is not None:
             live = self.render_queue.get(getattr(active, "id", ""))
@@ -1297,8 +1312,14 @@ class RenderMixin:
         selected_id = getattr(self, "_selected_queue_job_id", None)
         if selected_id:
             job = self.render_queue.get(selected_id)
+            if job is not None and _clip_matches(job):
+                return job
+        if preview_norm:
+            job = self._queue_job_for_clip(preview_norm)
             if job is not None:
                 return job
+            # Playing a clip that is not queued — don't advertise Ready #1.
+            return None
         pending = self.render_queue.next_queued()
         if pending is not None:
             return pending
@@ -1366,6 +1387,12 @@ class RenderMixin:
         """Drive header from the queue context job. False = no queue context."""
         job = self._queue_context_job()
         if job is None:
+            # Queue is active but the playing clip is not the Ready/#1 job —
+            # keep (or restore) identity from the clip on screen.
+            if self._queue_owns_identity_chrome() and getattr(
+                self, "_preview_clip_path", None
+            ):
+                self._restore_header_from_library_selection()
             return False
         self._apply_header_from_job(job)
         self._sync_dash_queue_status_chrome()
@@ -1811,6 +1838,44 @@ class RenderMixin:
             save_queue_to_file(self._queue_persist_path(), self.render_queue)
         except OSError as exc:
             logging.warning("Could not save render queue: %s", exc)
+
+    def _persist_render_queue_async(self) -> None:
+        """Snapshot queue JSON on the UI thread; write the file off-thread.
+
+        Used after Add so disk I/O does not contend with card rebuild on the
+        same click. Other call sites keep the synchronous persist (quit-safe).
+        """
+        import json
+        import threading
+
+        if bool(getattr(self, "_queue_persist_busy", False)):
+            # Prior async write still running — sync so the newer snapshot wins.
+            self._persist_render_queue()
+            return
+
+        try:
+            path = self._queue_persist_path()
+            payload = self.render_queue.to_json_list()
+        except Exception:
+            logging.exception("Could not snapshot render queue for async save")
+            self._persist_render_queue()
+            return
+
+        self._queue_persist_busy = True
+
+        def _write() -> None:
+            try:
+                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2)
+            except OSError as exc:
+                logging.warning("Could not save render queue: %s", exc)
+            finally:
+                self._queue_persist_busy = False
+
+        threading.Thread(
+            target=_write, name="steempeg-queue-persist", daemon=True
+        ).start()
 
     def _load_persisted_render_queue(self) -> None:
         if not hasattr(self, "render_queue"):
@@ -4291,6 +4356,10 @@ class RenderMixin:
         The same clip may be queued more than once (e.g. Discord vs Drive presets).
         When ``sync_ui`` is True (portable Add, single-clip callers), refresh the
         queue panel and optionally notify about an existing duplicate.
+
+        Heavy work: widget snapshot on the click, MPD walk / probe on a worker
+        thread, then card rebuild + queue JSON on the next tick so Portable Add
+        does not freeze the sheet.
         """
         was_duplicate = bool(
             clip_path and self.render_queue.contains_clip(clip_path)
@@ -4302,11 +4371,72 @@ class RenderMixin:
                 if not verified:
                     logging.warning("Skipped unverified dead clip for queue: %s", clip_path)
                     return None
-                if hasattr(self, "_register_salvaged_clip"):
-                    self._register_salvaged_clip(clip_path)
+        if sync_ui:
+            # Widget snapshot now; MPD walk / probe on a worker so Add doesn't freeze.
+            if bool(getattr(self, "_queue_add_busy", False)):
+                return None
+            payload = collect_queue_add_payload(self, clip_path)
+            if payload is None:
+                return None
+            self._start_async_queue_add(payload, clip_path, was_duplicate)
+            return None
+
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
+        return self._commit_queue_job(job, clip_path, was_duplicate, sync_ui=False)
+
+    def _remember_job_salvage(self, job) -> None:
+        mpds = list(getattr(job, "salvage_mpds", None) or [])
+        if not mpds:
+            return
+        if not hasattr(self, "_salvaged_clips"):
+            self._salvaged_clips = {}
+        self._salvaged_clips[os.path.normpath(job.clip_path)] = mpds
+
+    def _sync_queue_add_busy_chrome(self) -> None:
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None and hasattr(sidebar, "_sync_add_enabled"):
+            try:
+                sidebar._sync_add_enabled()
+            except RuntimeError:
+                pass
+        if getattr(self, "_portable_shell", False):
+            try:
+                from steempeg.ui.portable.chrome import sync_portable_queue_header
+
+                sync_portable_queue_header(self)
+            except Exception:
+                pass
+
+    def _start_async_queue_add(self, payload, clip_path: str, was_duplicate: bool) -> None:
+        from steempeg.ui.queue_add_worker import QueueAddWorker
+
+        self._queue_add_busy = True
+        self._sync_queue_add_busy_chrome()
+        worker = QueueAddWorker(
+            payload, parent=self.ui if hasattr(self, "ui") else None
+        )
+        self._queue_add_worker = worker
+
+        def _ok(job) -> None:
+            self._queue_add_busy = False
+            self._commit_queue_job(job, clip_path, was_duplicate, sync_ui=True)
+
+        def _fail(msg: str) -> None:
+            self._queue_add_busy = False
+            self._sync_queue_add_busy_chrome()
+            logging.warning("Could not add clip to render queue: %s", msg)
+
+        worker.finished_ok.connect(_ok)
+        worker.failed.connect(_fail)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _commit_queue_job(
+        self, job, clip_path: str, was_duplicate: bool, *, sync_ui: bool
+    ):
+        self._remember_job_salvage(job)
         self.render_queue.add(job)
         logging.info(
             "Queued render job #%s: %s -> %s",
@@ -4314,19 +4444,54 @@ class RenderMixin:
             job.game_name,
             job.output_file,
         )
+        self._sync_queue_add_busy_chrome()
         if sync_ui:
             self._queue_library_preview_diversion = False
-            self.refresh_render_queue_panel()
+            QTimer.singleShot(
+                0,
+                lambda p=clip_path, d=was_duplicate: self._sync_ui_after_queue_add(p, d),
+            )
+        return job
+
+    def _sync_ui_after_queue_add(self, clip_path: str, was_duplicate: bool) -> None:
+        """Persist + refresh queue chrome after a single-clip Add.
+
+        When the portable Render sheet owns the visible queue rail, refresh that
+        rail first and defer the (hidden) desktop card rebuild so Add stays snappy.
+        """
+        self._persist_render_queue_async()
+
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        portable_visible = False
+        if sidebar is not None:
+            try:
+                portable_visible = bool(sidebar.isVisible())
+            except RuntimeError:
+                self._portable_queue_sidebar = None
+                sidebar = None
+
+        if portable_visible and sidebar is not None and hasattr(sidebar, "refresh"):
+            sidebar.refresh()
+            self._update_start_button_label()
             self._sync_start_render_enabled()
-            self._persist_render_queue()
+            self._sync_queue_scheme_chrome()
             self._sync_player_header_to_queue_context()
             self.update_playback_badge()
-            sidebar = getattr(self, "_portable_queue_sidebar", None)
-            if sidebar is not None and hasattr(sidebar, "refresh"):
-                sidebar.refresh()
-            if was_duplicate:
-                self._maybe_notify_queue_duplicate([clip_path])
-        return job
+            # Desktop dock is behind the sheet — catch up on the following tick.
+            QTimer.singleShot(
+                0,
+                lambda: self.refresh_render_queue_panel(
+                    sync_splitter=False, include_portable=False
+                ),
+            )
+        else:
+            self.refresh_render_queue_panel()
+            self._sync_start_render_enabled()
+            self._sync_player_header_to_queue_context()
+            self.update_playback_badge()
+
+        if was_duplicate:
+            self._maybe_notify_queue_duplicate([clip_path])
 
     def _maybe_notify_queue_duplicate(self, clip_paths) -> None:
         """Inform that a clip was already queued; skip if user opted out."""
@@ -4407,9 +4572,6 @@ class RenderMixin:
         self._queue_library_preview_diversion = False
         self._sync_player_header_to_queue_context()
         self.update_playback_badge()
-        sidebar = getattr(self, "_portable_queue_sidebar", None)
-        if sidebar is not None and hasattr(sidebar, "refresh"):
-            sidebar.refresh()
 
     # --- Custom export presets (v41 → v45 manager UX) ------------------------
 
@@ -5038,19 +5200,38 @@ class RenderMixin:
                 removed_any = True
         if not removed_any:
             return
-        self._persist_render_queue()
         if not self.render_queue:
             self._on_queue_became_empty()
             return
         if was_selected:
             nxt = self.render_queue.jobs[0]
             self.activate_queue_job(nxt.id)
+            self._persist_render_queue_async()
+            return
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        portable_visible = False
+        if sidebar is not None:
+            try:
+                portable_visible = bool(sidebar.isVisible())
+            except RuntimeError:
+                self._portable_queue_sidebar = None
+                sidebar = None
+        if portable_visible and sidebar is not None and hasattr(sidebar, "refresh"):
+            sidebar.refresh()
+            self._update_start_button_label()
+            self._sync_start_render_enabled()
+            self._sync_queue_scheme_chrome()
+            self.update_playback_badge()
+            QTimer.singleShot(
+                0,
+                lambda: self.refresh_render_queue_panel(
+                    sync_splitter=False, include_portable=False
+                ),
+            )
         else:
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
-            sidebar = getattr(self, "_portable_queue_sidebar", None)
-            if sidebar is not None and hasattr(sidebar, "refresh"):
-                sidebar.refresh()
+        self._persist_render_queue_async()
 
     def toggle_render_queue_scheme(self) -> None:
         """Leave queue-first chrome without Clear, or Resume the same list."""
@@ -5373,11 +5554,114 @@ class RenderMixin:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
 
+    def _in_queue_membership_indices(self, clip_path) -> list:
+        """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""
+        if not clip_path or not hasattr(self, "render_queue"):
+            return []
+        jobs = self.render_queue.find_all_by_clip_path(clip_path)
+        indices = []
+        for job in jobs:
+            try:
+                idx = int(getattr(job, "queue_index", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if idx > 0:
+                indices.append(idx)
+        return indices
+
+    def _in_queue_label_for_clip(self, clip_path) -> str | None:
+        """``In queue (N)`` for this clip; cycles when the clip is queued more than once."""
+        indices = self._in_queue_membership_indices(clip_path)
+        if not indices:
+            return None
+        stored = getattr(self, "_in_queue_cycle_indices", None) or []
+        if list(stored) != list(indices):
+            self._in_queue_cycle_i = 0
+        if len(indices) == 1:
+            return f"In queue ({indices[0]})"
+        i = int(getattr(self, "_in_queue_cycle_i", 0) or 0) % len(indices)
+        return f"In queue ({indices[i]})"
+
+    def _ensure_in_queue_cycle(self, indices) -> None:
+        clean = []
+        for raw in indices or []:
+            try:
+                idx = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if idx > 0:
+                clean.append(idx)
+        indices = clean
+        prev = getattr(self, "_in_queue_cycle_indices", None) or []
+        if list(prev) != list(indices):
+            self._in_queue_cycle_i = 0
+        self._in_queue_cycle_indices = list(indices)
+        if len(indices) <= 1:
+            self._stop_in_queue_cycle()
+            return
+        timer = getattr(self, "_in_queue_cycle_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setInterval(1000)  # same cadence as ClipCard queue-badge cycling
+            timer.timeout.connect(self._on_in_queue_cycle_tick)
+            self._in_queue_cycle_timer = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_in_queue_cycle(self) -> None:
+        timer = getattr(self, "_in_queue_cycle_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._in_queue_cycle_i = 0
+
+    def _sync_in_queue_cycle_for_clip(self, clip_path, *, showing_in_queue: bool) -> None:
+        if not showing_in_queue or not clip_path:
+            self._stop_in_queue_cycle()
+            self._in_queue_cycle_indices = []
+            return
+        self._ensure_in_queue_cycle(self._in_queue_membership_indices(clip_path))
+
+    def _on_in_queue_cycle_tick(self) -> None:
+        indices = getattr(self, "_in_queue_cycle_indices", None) or []
+        if len(indices) <= 1:
+            self._stop_in_queue_cycle()
+            return
+        self._in_queue_cycle_i = (
+            int(getattr(self, "_in_queue_cycle_i", 0) or 0) + 1
+        ) % len(indices)
+        try:
+            self._apply_in_queue_cycle_frame()
+        except RuntimeError:
+            self._stop_in_queue_cycle()
+
+    def _apply_in_queue_cycle_frame(self) -> None:
+        """Swap In queue (N) text only — no chrome restyle on the 1s tick."""
+        indices = getattr(self, "_in_queue_cycle_indices", None) or []
+        if not indices:
+            return
+        i = int(getattr(self, "_in_queue_cycle_i", 0) or 0) % len(indices)
+        label = f"In queue ({indices[i]})"
+        badge = getattr(self, "label_playback_badge", None)
+        if badge is not None:
+            try:
+                if badge.isVisible() and badge.text().strip().lower().startswith("in queue"):
+                    badge.setText(f" {label}")
+            except RuntimeError:
+                pass
+        in_btn = getattr(self, "btn_portable_in_queue", None)
+        if in_btn is not None:
+            try:
+                if in_btn.isVisible() and in_btn.text().strip().lower().startswith("in queue"):
+                    in_btn.setText(f" {label}")
+            except RuntimeError:
+                pass
+
     def _focused_queue_job_for_badge(self, clip_path=None):
         """Queue job for the In-queue header chip (selected card, else clip match).
 
-        N in ``In queue (N)`` is this job's 1-based ``queue_index``, not pending
-        count. Footer Ready+#N stays queue-head via ``_status_strip_context_job``.
+        N in ``In queue (N)`` is a 1-based ``queue_index``. When the open clip is
+        queued more than once, the chip cycles those indices (~1s, same as ClipCard).
+        Footer Ready+#N stays queue-head via ``_status_strip_context_job``.
         """
         selected_id = getattr(self, "_selected_queue_job_id", None)
         if selected_id:
@@ -5404,7 +5688,8 @@ class RenderMixin:
                     if job:
                         if job.status == JobStatus.QUEUED:
                             return (
-                                f"In queue ({job.queue_index})",
+                                self._in_queue_label_for_clip(clip_path)
+                                or f"In queue ({job.queue_index})",
                                 STATUS_COLORS[JobStatus.QUEUED],
                             )
                         return STATUS_HEADER_LABELS[job.status], STATUS_COLORS[job.status]
@@ -5424,7 +5709,11 @@ class RenderMixin:
                 return STATUS_HEADER_LABELS[JobStatus.ERROR], STATUS_COLORS[JobStatus.ERROR]
             if job.status == JobStatus.RENDERING:
                 return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
-            return f"In queue ({job.queue_index})", STATUS_COLORS[JobStatus.QUEUED]
+            return (
+                self._in_queue_label_for_clip(clip_path)
+                or f"In queue ({job.queue_index})",
+                STATUS_COLORS[JobStatus.QUEUED],
+            )
 
         # Preview only shows while the Render Queue actually has clips in it.
         # Portable replaces Preview with the Add to Queue / Queue chip.
@@ -5441,6 +5730,12 @@ class RenderMixin:
 
         text, color = self._playback_badge_for_context()
         badge = self.label_playback_badge
+        showing_in_queue = bool(text) and text.strip().lower().startswith("in queue")
+        if not getattr(self, "_portable_shell", False):
+            self._sync_in_queue_cycle_for_clip(
+                self._current_header_clip_path(),
+                showing_in_queue=showing_in_queue,
+            )
         if not text:
             badge.hide()
             try:
@@ -5585,7 +5880,9 @@ class RenderMixin:
         if hasattr(self, "render_queue_panel"):
             self.render_queue_panel.clear_selection()
 
-    def refresh_render_queue_panel(self, sync_splitter: bool = True):
+    def refresh_render_queue_panel(
+        self, sync_splitter: bool = True, *, include_portable: bool = True
+    ):
         """Rebuild the right-side queue list from ``render_queue``."""
         if not hasattr(self, "render_queue_panel"):
             return
@@ -5616,16 +5913,17 @@ class RenderMixin:
         self._sync_queue_scheme_chrome()
         if not getattr(self, "_is_rendering", False):
             self._sync_dash_queue_status_chrome()
-        sidebar = getattr(self, "_portable_queue_sidebar", None)
-        if sidebar is not None:
-            try:
-                if skip_rebuild:
-                    if hasattr(sidebar, "sync_selection"):
-                        sidebar.sync_selection(selected_id)
-                elif hasattr(sidebar, "refresh"):
-                    sidebar.refresh()
-            except RuntimeError:
-                self._portable_queue_sidebar = None
+        if include_portable:
+            sidebar = getattr(self, "_portable_queue_sidebar", None)
+            if sidebar is not None:
+                try:
+                    if skip_rebuild:
+                        if hasattr(sidebar, "sync_selection"):
+                            sidebar.sync_selection(selected_id)
+                    elif hasattr(sidebar, "refresh"):
+                        sidebar.refresh()
+                except RuntimeError:
+                    self._portable_queue_sidebar = None
         if sync_splitter:
             self._sync_queue_splitter_visibility()
         self.update_playback_badge()

@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional
 
 from PySide6.QtCore import Qt
 
@@ -264,6 +265,17 @@ def find_clip_metadata(app: SteempegApp, clip_path: str) -> Optional[dict]:
     return None
 
 
+def _salvage_mpd_paths(clip_path: str) -> list[str]:
+    """Find ``session_salvage.mpd`` trees without touching Qt."""
+    mpds: list[str] = []
+    if not os.path.isdir(clip_path):
+        return mpds
+    for root, _dirs, files in os.walk(clip_path):
+        if "session_salvage.mpd" in files:
+            mpds.append(os.path.join(root, "session_salvage.mpd"))
+    return sorted(mpds)
+
+
 def _mpd_paths_for_clip(app: SteempegApp, clip_path: str) -> list[str]:
     """Resolve manifests for a clip, including cured/salvage manifests."""
     clip_path = os.path.normpath(clip_path)
@@ -277,7 +289,9 @@ def _mpd_paths_for_clip(app: SteempegApp, clip_path: str) -> list[str]:
     if mpds:
         return mpds
     salvage = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []))
-    return salvage
+    if salvage:
+        return salvage
+    return _salvage_mpd_paths(clip_path)
 
 
 def _ui_encoder_snapshot(app: SteempegApp) -> tuple[str, str, str]:
@@ -577,43 +591,179 @@ def apply_per_clip_export_to_settings(
     settings.mute_audio = False
 
 
-def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[RenderJob]:
-    """Snapshot the current settings panel into a queue job for ``clip_path``."""
+@dataclass
+class QueueAddPayload:
+    """UI-thread snapshot so MPD walk / probe can run off the GUI thread."""
+
+    clip_path: str
+    same_preview: bool
+    settings: Optional[RenderJobSettings]
+    encoder_codec: str
+    encoder_display: str
+    encode_speed: str
+    meta: dict[str, Any]
+    cache_dir: str
+    current_game_icon: str
+    is_cured: bool
+    salvage_mpds: list[str]
+    trim: dict[str, Any]
+    clip_memory: dict[str, Any]
+    existing_export: Optional[dict[str, Any]]
+    output_basename: str
+    save_dir: str
+
+
+def collect_queue_add_payload(
+    app: SteempegApp, clip_path: str
+) -> Optional[QueueAddPayload]:
+    """Read widgets / tables only. Safe to call from the UI thread."""
     clip_path = os.path.normpath(clip_path)
     if not os.path.isdir(clip_path):
         logging.warning("build_render_job_from_ui: not a clip folder: %s", clip_path)
         return None
 
-    # One MPD walk: real manifests first, then cured/salvage fallback.
-    if hasattr(app, "_register_salvaged_clip") and hasattr(app, "_is_clip_cured"):
+    is_cured = False
+    if hasattr(app, "_is_clip_cured"):
         try:
-            if app._is_clip_cured(clip_path):
-                app._register_salvaged_clip(clip_path)
+            is_cured = bool(app._is_clip_cured(clip_path))
+        except Exception:
+            is_cured = False
+
+    salvage_mpds = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []) or [])
+    meta = find_clip_metadata(app, clip_path) or {}
+    preview = getattr(app, "_preview_clip_path", None)
+    same_preview = bool(preview and os.path.normpath(preview) == clip_path)
+    enc_codec, enc_display, enc_speed = _ui_encoder_snapshot(app)
+
+    settings = snapshot_settings_from_ui(app) if same_preview else None
+    save_dir = ""
+    if settings is not None:
+        save_dir = str(settings.save_dir or "")
+    if not save_dir:
+        save_dir = resolve_app_export_folder(app, notify=False)
+
+    trim = {"is_trim_mode": False, "trim_start_ms": 0, "trim_end_ms": 0}
+    if not same_preview and hasattr(app, "_trim_state_for_clip"):
+        try:
+            trim = dict(app._trim_state_for_clip(clip_path) or {})
         except Exception:
             pass
+
+    clip_memory = dict(
+        getattr(app, "_clip_session_memory", {}).get(clip_path, {}) or {}
+    )
+    existing_export = None
+    if not same_preview and not clip_memory and hasattr(app, "render_queue"):
+        existing = app.render_queue.find_by_clip_path(clip_path)
+        if existing is not None:
+            s = existing.settings
+            existing_export = {
+                "container_format": s.container_format or "MP4",
+                "codec_text": s.codec_text,
+                "audio_format": s.audio_format,
+                "output_preset": s.output_preset or "Custom",
+                "audio_only": bool(s.audio_only),
+                "mute_audio": bool(s.mute_audio),
+            }
+
+    basename_src = settings or RenderJobSettings(
+        output_basename=(
+            app.ui.input_filename.text().strip()
+            if hasattr(app.ui, "input_filename")
+            else "rendered"
+        )
+    )
+    output_basename = _output_basename_for_clip(app, clip_path, basename_src)
+
+    return QueueAddPayload(
+        clip_path=clip_path,
+        same_preview=same_preview,
+        settings=settings,
+        encoder_codec=enc_codec,
+        encoder_display=enc_display,
+        encode_speed=enc_speed,
+        meta=dict(meta),
+        cache_dir=str(getattr(app, "cache_dir", "") or ""),
+        current_game_icon=str(getattr(app, "current_game_icon", "") or ""),
+        is_cured=is_cured,
+        salvage_mpds=salvage_mpds,
+        trim=trim,
+        clip_memory=clip_memory,
+        existing_export=existing_export,
+        output_basename=output_basename,
+        save_dir=save_dir,
+    )
+
+
+def _apply_export_memory_to_settings(
+    settings: RenderJobSettings,
+    *,
+    clip_memory: dict[str, Any],
+    existing_export: Optional[dict[str, Any]],
+) -> None:
+    if clip_memory:
+        settings.container_format = clip_memory.get("container", "MP4")
+        settings.codec_text = clip_memory.get("codec_text", "H.264 (AVC)")
+        settings.audio_format = clip_memory.get("audio_format", "AAC")
+        settings.output_preset = clip_memory.get("output_preset", "Custom")
+        settings.audio_only = bool(clip_memory.get("audio_only", False))
+        settings.mute_audio = bool(clip_memory.get("mute_audio", False))
+        return
+    if not existing_export:
+        return
+    settings.container_format = existing_export.get("container_format") or "MP4"
+    settings.codec_text = existing_export.get("codec_text") or settings.codec_text
+    settings.audio_format = existing_export.get("audio_format") or settings.audio_format
+    settings.output_preset = existing_export.get("output_preset") or "Custom"
+    settings.audio_only = bool(existing_export.get("audio_only", False))
+    settings.mute_audio = bool(existing_export.get("mute_audio", False))
+
+
+def _duration_label_from_mpd(mpd_path: str) -> str:
+    try:
+        with open(mpd_path, encoding="utf-8") as handle:
+            content = handle.read()
+        seconds = discovery.parse_duration_seconds(content)
+        if seconds is None or seconds <= 0:
+            return ""
+        total = int(seconds)
+        minutes, secs = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
+    except OSError:
+        return ""
+
+
+def build_render_job_from_payload(payload: QueueAddPayload) -> Optional[RenderJob]:
+    """MPD walk / probe / job assemble — no Qt widgets (worker-safe)."""
+    clip_path = payload.clip_path
     real_mpds = discovery.find_mpd_paths(clip_path)
-    salvage_mpds: list[str] = []
-    if real_mpds:
-        mpds = real_mpds
-    else:
-        salvage_mpds = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []))
+    salvage_mpds = list(payload.salvage_mpds)
+    if not real_mpds:
+        if payload.is_cured:
+            found = _salvage_mpd_paths(clip_path)
+            if found:
+                salvage_mpds = found
         mpds = salvage_mpds
+    else:
+        mpds = real_mpds
+        salvage_mpds = []
     if not mpds:
         logging.warning("build_render_job_from_ui: no MPD for %s", clip_path)
         return None
 
-    meta = find_clip_metadata(app, clip_path) or {}
-    preview = getattr(app, "_preview_clip_path", None)
-    same_preview = preview and os.path.normpath(preview) == clip_path
-
-    duration_label = ""
-    if same_preview:
-        settings = snapshot_settings_from_ui(app)
+    meta = payload.meta or {}
+    duration_label = str(meta.get("duration_label") or "")
+    if payload.same_preview and payload.settings is not None:
+        settings = payload.settings
     else:
         defaults = probe_clip_render_defaults(
-            clip_path, app, mpds=mpds, allow_ffprobe=False
+            clip_path, app=None, mpds=mpds, allow_ffprobe=False
         )
-        enc_codec, enc_display, enc_speed = _ui_encoder_snapshot(app)
         settings = RenderJobSettings(
             quality_text=defaults["quality_text"],
             fps_text=defaults["fps_text"],
@@ -621,63 +771,38 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
             orig_fps=int(defaults["orig_fps"]),
             orig_video_mbps=float(defaults["orig_video_mbps"]),
             orig_audio_kbps=int(defaults["orig_audio_kbps"]),
-            save_dir=resolve_app_export_folder(app, notify=False),
-            encoder_codec=enc_codec,
-            encoder_display=enc_display,
-            encode_speed=enc_speed,
+            save_dir=payload.save_dir,
+            encoder_codec=payload.encoder_codec,
+            encoder_display=payload.encoder_display,
+            encode_speed=payload.encode_speed,
         )
-        apply_per_clip_export_to_settings(app, clip_path, settings)
-        # Keep the live HW encoder even if per-clip memory restored codec labels.
-        settings.encoder_codec = enc_codec
-        settings.encoder_display = enc_display
-        settings.encode_speed = enc_speed
-        duration_label = str(defaults.get("duration_label") or "")
+        _apply_export_memory_to_settings(
+            settings,
+            clip_memory=payload.clip_memory,
+            existing_export=payload.existing_export,
+        )
+        settings.encoder_codec = payload.encoder_codec
+        settings.encoder_display = payload.encoder_display
+        settings.encode_speed = payload.encode_speed
+        duration_label = str(defaults.get("duration_label") or "") or duration_label
+        settings.is_trim_mode = bool(payload.trim.get("is_trim_mode", False))
+        settings.trim_start_ms = int(payload.trim.get("trim_start_ms", 0))
+        settings.trim_end_ms = int(payload.trim.get("trim_end_ms", 0))
 
-    if not duration_label:
-        duration_label = str(meta.get("duration_label") or "")
+    settings.output_basename = payload.output_basename or settings.output_basename
 
-    settings.output_basename = _output_basename_for_clip(app, clip_path, settings)
-
-    if not same_preview:
-        if hasattr(app, "_trim_state_for_clip"):
-            trim = app._trim_state_for_clip(clip_path)
-            settings.is_trim_mode = bool(trim.get("is_trim_mode", False))
-            settings.trim_start_ms = int(trim.get("trim_start_ms", 0))
-            settings.trim_end_ms = int(trim.get("trim_end_ms", 0))
-        else:
+    if payload.same_preview and payload.settings is not None:
+        if not payload.settings.is_trim_mode:
             settings.is_trim_mode = False
             settings.trim_start_ms = 0
             settings.trim_end_ms = 0
-    elif not (
-        preview
-        and hasattr(app, "custom_timeline")
-        and app.custom_timeline.is_trim_mode
-    ):
-        settings.is_trim_mode = False
-        settings.trim_start_ms = 0
-        settings.trim_end_ms = 0
 
-    icon_path = game_icon_path_for_clip(app.cache_dir, clip_path)
+    icon_path = game_icon_path_for_clip(payload.cache_dir, clip_path)
     if not icon_path or not os.path.exists(icon_path):
-        icon_path = getattr(app, "current_game_icon", "") or icon_path
+        icon_path = payload.current_game_icon or icon_path
 
     if not duration_label and mpds:
-        try:
-            with open(mpds[0], encoding="utf-8") as handle:
-                content = handle.read()
-            seconds = discovery.parse_duration_seconds(content)
-            if seconds is not None and seconds > 0:
-                total = int(seconds)
-                minutes, secs = divmod(total, 60)
-                hours, minutes = divmod(minutes, 60)
-                if hours:
-                    duration_label = f"{hours}h {minutes}m"
-                elif minutes:
-                    duration_label = f"{minutes}m {secs}s"
-                else:
-                    duration_label = f"{secs}s"
-        except OSError:
-            pass
+        duration_label = _duration_label_from_mpd(mpds[0])
 
     job = RenderJob(
         clip_path=clip_path,
@@ -691,6 +816,14 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
     )
     job.refresh_output_path()
     return job
+
+
+def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[RenderJob]:
+    """Snapshot the current settings panel into a queue job for ``clip_path``."""
+    payload = collect_queue_add_payload(app, clip_path)
+    if payload is None:
+        return None
+    return build_render_job_from_payload(payload)
 
 
 def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedRenderParams]:
