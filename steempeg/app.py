@@ -4954,6 +4954,15 @@ def main():
                 logging.debug("startup bring-to-front failed", exc_info=True)
 
         _bring_main_to_front()
+        if sys.platform != "win32":
+            try:
+                from steempeg.ui.disk_space_warning import (
+                    schedule_linux_low_disk_startup_warning,
+                )
+
+                schedule_linux_low_disk_startup_warning(window)
+            except Exception:
+                logging.exception("Linux disk-space warning failed to schedule")
         # Light re-assert only — heavy restore already ran pre-show.
         # Do NOT clear ``_ui_density`` here: that forced a full chrome rebuild
         # after the window was already visible (1–3s of "still preparing").

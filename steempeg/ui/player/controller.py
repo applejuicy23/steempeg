@@ -3111,6 +3111,7 @@ class PlayerMixin:
             return
         try:
             from steempeg.core.dash.mpd_playback import (
+                estimate_remux_bytes,
                 existing_playback_cache_for_play,
                 host_libmpv_needs_mpd_bridge,
                 remux_mpd_for_playback,
@@ -3128,6 +3129,14 @@ class PlayerMixin:
         abs_path = os.path.abspath(mpds[0]).replace("\\", "/")
         if existing_playback_cache_for_play(abs_path):
             return
+        try:
+            from steempeg.infra.disk_space import should_skip_linux_remux_prefetch
+
+            if should_skip_linux_remux_prefetch(estimate_remux_bytes(abs_path)):
+                logging.info("Prefetch remux skipped: low disk space (%s)", abs_path)
+                return
+        except Exception:
+            pass
         inflight = getattr(self, "_prefetch_remux_paths", None)
         if inflight is None:
             inflight = set()
@@ -3164,6 +3173,20 @@ class PlayerMixin:
                     pass
             self._progressive_remux = None
 
+        if sys.platform != "win32":
+            try:
+                from steempeg.core.dash.mpd_playback import remux_disk_plan
+                from steempeg.ui.disk_space_warning import ensure_linux_disk_for_remux
+
+                need, _free = remux_disk_plan(abs_path)
+                if not ensure_linux_disk_for_remux(self.ui, need_bytes=need):
+                    self._is_switching = False
+                    if hasattr(self, "clear_clip_open_loading"):
+                        self.clear_clip_open_loading()
+                    return
+            except Exception:
+                logging.exception("Linux remux disk-space check failed")
+
         try:
             started = start_remux_job(abs_path)
         except Exception as exc:
@@ -3172,7 +3195,13 @@ class PlayerMixin:
             if hasattr(self, "clear_clip_open_loading"):
                 self.clear_clip_open_loading()
             try:
-                steempeg_warning(self.ui, "Clip prepare failed", str(exc)[:400])
+                from steempeg.infra.disk_space import looks_like_disk_full_error
+                from steempeg.ui.disk_space_warning import warn_linux_disk_remux_blocked
+
+                if sys.platform != "win32" and looks_like_disk_full_error(exc):
+                    warn_linux_disk_remux_blocked(self.ui, exc)
+                else:
+                    steempeg_warning(self.ui, "Clip prepare failed", str(exc)[:400])
             except Exception:
                 pass
             return
@@ -3194,7 +3223,13 @@ class PlayerMixin:
             if err_text:
                 self._is_switching = False
                 try:
-                    steempeg_warning(self.ui, "Clip prepare failed", err_text[:400])
+                    from steempeg.infra.disk_space import looks_like_disk_full_error
+                    from steempeg.ui.disk_space_warning import warn_linux_disk_remux_blocked
+
+                    if sys.platform != "win32" and looks_like_disk_full_error(err_text):
+                        warn_linux_disk_remux_blocked(self.ui, err_text)
+                    else:
+                        steempeg_warning(self.ui, "Clip prepare failed", err_text[:400])
                 except Exception:
                     pass
                 return

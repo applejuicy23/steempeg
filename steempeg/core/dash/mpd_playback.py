@@ -99,11 +99,21 @@ def _cache_max_bytes() -> int:
 
 
 def _disk_free_bytes(path: str) -> int:
-    try:
-        st = os.statvfs(path)
-        return int(st.f_bavail) * int(st.f_frsize)
-    except OSError:
-        return 0
+    from steempeg.infra.disk_space import free_bytes
+
+    return free_bytes(path)
+
+
+def estimate_remux_bytes(mpd_path: str) -> int:
+    """Public size estimate for UI disk-space checks before a cold remux."""
+    return _estimate_remux_bytes(os.path.abspath(mpd_path))
+
+
+def remux_disk_plan(mpd_path: str) -> tuple[int, int]:
+    """Prune remux cache for *mpd_path*, then return ``(need_bytes, free_bytes)``."""
+    need = _estimate_remux_bytes(os.path.abspath(mpd_path))
+    _prune_playback_cache(need_bytes=need)
+    return need, _disk_free_bytes(_cache_dir())
 
 
 def _estimate_remux_bytes(abs_mpd: str) -> int:
@@ -180,10 +190,10 @@ def _prepare_remux_paths(abs_mpd: str) -> tuple[str, str, int]:
     need = _estimate_remux_bytes(abs_mpd)
     _prune_playback_cache(need_bytes=need)
     free = _disk_free_bytes(_cache_dir())
-    if free < need + _DISK_HEADROOM_BYTES:
+    if free < need:
         raise RuntimeError(
             f"Not enough disk space for DASH remux "
-            f"(need ~{need / (1024**3):.1f} GiB + headroom, free {free / (1024**3):.1f} GiB). "
+            f"(need ~{need / (1024**3):.1f} GiB, free {free / (1024**3):.1f} GiB). "
             f"Free space or lower STEEMPEG_MPD_CACHE_GB."
         )
     out = os.path.join(_cache_dir(), f"{_cache_key(abs_mpd)}.mkv")
