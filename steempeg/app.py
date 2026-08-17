@@ -1982,10 +1982,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         QSlider#slider_timeline::groove:horizontal {
             border-radius: 2px;
             height: 4px;
-            background: rgba(255, 255, 255, 50); 
+            background: rgba(255, 255, 255, 50);
+        }
         QSlider#slider_timeline {
-            margin-left: 15px;  
-            margin-right: 5px;  
+            margin-left: 15px;
+            margin-right: 5px;
         }
         QSlider#slider_timeline::sub-page:horizontal {
             background: #1a9fff;
@@ -1995,12 +1996,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             background: #ffffff;
             width: 12px;
             height: 12px;
-            margin: -4px 0; 
+            margin: -4px 0;
             border-radius: 6px;
         }
         QSlider#slider_timeline::handle:horizontal:hover {
-            transform: scale(1.2);
-            background: #1a9fff; 
+            background: #1a9fff;
         }
         """
         self.ui.right_panel.setStyleSheet(player_style)
@@ -2542,11 +2542,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.right_h_splitter.setObjectName("right_h_splitter")
                 self.right_h_splitter.setHandleWidth(6)
                 self.right_h_splitter.setChildrenCollapsible(True)
-                # Player column may collapse to 0 so the two handles can "kiss"
-                # (Clips | Queue with no middle scrap). False here + a 360px floor
-                # made the right handle constantly bounce back.
-                self.right_h_splitter.setCollapsible(0, True)
-                self.right_h_splitter.setCollapsible(1, True)
                 self.right_h_splitter.setStyleSheet(self.ui.main_splitter.styleSheet())
                 self.right_h_splitter.splitterMoved.connect(self._on_right_h_splitter_moved)
 
@@ -2557,6 +2552,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.ui.right_panel.setMinimumWidth(0)
                 self.right_h_splitter.addWidget(self.ui.right_panel)
                 self.right_h_splitter.addWidget(self.render_queue_panel)
+                # After addWidget — setCollapsible before children is Index out of range.
+                # Player column may collapse to 0 so the two handles can "kiss"
+                # (Clips | Queue with no middle scrap). False here + a 360px floor
+                # made the right handle constantly bounce back.
+                self.right_h_splitter.setCollapsible(0, True)
+                self.right_h_splitter.setCollapsible(1, True)
                 self.ui.main_splitter.insertWidget(panel_idx, self.right_h_splitter)
                 # Allow Clips to push the whole right column away (kiss from the left).
                 self.ui.main_splitter.setChildrenCollapsible(True)
