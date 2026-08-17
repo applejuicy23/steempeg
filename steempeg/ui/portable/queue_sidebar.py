@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path, get_save_directory, reveal_in_file_manager
-from steempeg.render.queue import JobStatus, RenderJob
+from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
 from steempeg.render.queue_display import (
     format_job_datetime_line,
     format_job_output,
@@ -35,6 +35,7 @@ from steempeg.ui.queue_card_shared import (
     job_can_remove,
     set_game_icon_label,
     status_border_for_job,
+    status_dot_style,
 )
 from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
 from steempeg.ui.ui_density import COMFORT
@@ -271,6 +272,7 @@ class _PortableQueueRow(QFrame):
             cache_dir=cache_dir,
         )
         badge.setText(str(index))
+        self._index_badge = badge
         thumb_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         lay.addWidget(thumb_wrap, 0, Qt.AlignmentFlag.AlignTop)
         self._thumb_wrap = thumb_wrap
@@ -351,6 +353,15 @@ class _PortableQueueRow(QFrame):
         self.setMinimumHeight(max(_THUMB_H + 12, 96))
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
+    def sizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        hint = super().sizeHint()
+        h = max(int(hint.height()), int(self.minimumHeight()), _THUMB_H + 12, 96)
+        return QSize(max(int(hint.width()), 1), h)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        # Match scroll-host pattern: never report a compressed min under layout pressure.
+        return self.sizeHint()
+
     def enterEvent(self, event):
         if self._btn_remove is not None:
             self._btn_remove.show()
@@ -380,6 +391,14 @@ class _PortableQueueRow(QFrame):
             _REMOVE_INSET,
         )
         btn.raise_()
+
+    def set_index(self, index: int, *, color: str | None = None) -> None:
+        badge = getattr(self, "_index_badge", None)
+        if badge is None:
+            return
+        badge.setText(str(index))
+        if color:
+            badge.setStyleSheet(status_dot_style(color))
 
     def set_selected(self, selected: bool) -> None:
         self._selected = bool(selected)
@@ -485,6 +504,27 @@ class _PortableQueueRow(QFrame):
 
 class _PortableQueueHost(QWidget):
     """Scroll body: min height = preferred height so list rows are not squashed."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        lay = self.layout()
+        if lay is None:
+            return super().sizeHint()
+        hint = lay.sizeHint()
+        margins = lay.contentsMargins()
+        total_h = margins.top() + margins.bottom()
+        visible = 0
+        for i in range(lay.count()):
+            item = lay.itemAt(i)
+            if item is None:
+                continue
+            child = item.widget()
+            if child is None or not child.isVisibleTo(self):
+                continue
+            total_h += max(int(child.minimumHeight()), int(child.sizeHint().height()))
+            visible += 1
+        if visible > 1:
+            total_h += int(lay.spacing()) * (visible - 1)
+        return QSize(max(int(hint.width()), 1), max(int(hint.height()), total_h, 1))
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
         return self.sizeHint()
@@ -616,9 +656,13 @@ class PortableQueueSidebar(QWidget):
             "QScrollArea { background: transparent; border: none; }"
             + LIBRARY_SCROLLBAR_VERTICAL
         )
+        self._scroll = scroll
 
         self._host = _PortableQueueHost()
         self._host.setStyleSheet("background: transparent;")
+        self._host.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
         self._list = QVBoxLayout(self._host)
         self._list.setContentsMargins(0, 0, 0, 0)
         self._list.setSpacing(8)
@@ -688,7 +732,9 @@ class PortableQueueSidebar(QWidget):
             self._app.save_user_settings(
                 "portable_queue_empty_hint_dismissed", self._empty_hint_dismissed
             )
-        self.refresh()
+        jobs = self._jobs_snapshot()
+        self._sync_empty_visibility(jobs)
+        self._relayout_scroll_body()
 
     def apply_rail_width(
         self, *, compact: bool | None = None, width: int | None = None
@@ -702,17 +748,20 @@ class PortableQueueSidebar(QWidget):
         rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
         self.setFixedWidth(rail_w)
 
-    def refresh(self) -> None:
-        # Clear rows (keep stretch at end). Detach immediately — deleteLater alone
-        # left a ghost empty label painting under the new stub.
-        while self._list.count() > 1:
-            item = self._list.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                _dispose_list_child(w)
+    def _jobs_snapshot(self) -> list[RenderJob]:
+        return list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
 
-        # Keep completed jobs so the green "done" outline is visible in the rail.
-        jobs = list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
+    def _sync_title(self, jobs: list[RenderJob]) -> None:
+        pending = sum(
+            1
+            for j in jobs
+            if getattr(j, "status", None) in (JobStatus.QUEUED, JobStatus.RENDERING)
+        )
+        self._title.setText(f"Queue ({pending})" if pending else f"Queue ({len(jobs)})")
+        if hasattr(self, "_btn_clear"):
+            self._btn_clear.setEnabled(len(jobs) > 0)
+
+    def _sync_selection_ids(self, jobs: list[RenderJob]) -> None:
         live_ids = {j.id for j in jobs}
         self._selected_ids = {jid for jid in self._selected_ids if jid in live_ids}
         active = getattr(self._app, "_selected_queue_job_id", None)
@@ -723,42 +772,137 @@ class PortableQueueSidebar(QWidget):
                 next(iter(self._selected_ids), None)
             )
 
-        pending = sum(
-            1
-            for j in jobs
-            if getattr(j, "status", None) in (JobStatus.QUEUED, JobStatus.RENDERING)
+    def _sync_empty_visibility(self, jobs: list[RenderJob]) -> None:
+        empty = getattr(self, "_empty_center", None)
+        if empty is None:
+            return
+        show = (not jobs) and (not self._empty_hint_dismissed)
+        empty.setVisible(show)
+
+    def _sync_row_chrome(self, jobs: list[RenderJob]) -> None:
+        """Update index badges / borders / selection without recreating cards."""
+        self._row_ids = [j.id for j in jobs]
+        for i, job in enumerate(jobs, start=1):
+            row = self._rows.get(job.id)
+            if row is None:
+                continue
+            try:
+                idx = int(getattr(job, "queue_index", 0) or 0) or i
+            except (TypeError, ValueError):
+                idx = i
+            row.set_index(idx, color=STATUS_COLORS.get(job.status, "#ffcc00"))
+            border, border_w = status_border_for_job(job, jobs)
+            row.set_status_border(border, border_w)
+            row.set_selected(job.id in self._selected_ids)
+
+    def _insert_row(self, job: RenderJob, index: int) -> _PortableQueueRow:
+        cache_dir = _queue_cache_dir(self._app)
+        jobs = self._jobs_snapshot()
+        border, border_w = status_border_for_job(job, jobs)
+        row = _PortableQueueRow(
+            job,
+            index,
+            job.id in self._selected_ids,
+            border_color=border,
+            border_w=border_w,
+            cache_dir=cache_dir,
+            parent=self._host,
         )
-        self._title.setText(f"Queue ({pending})" if pending else f"Queue ({len(jobs)})")
-        self._row_ids = []
-        self._rows = {}
-        if hasattr(self, "_btn_clear"):
-            self._btn_clear.setEnabled(len(jobs) > 0)
+        row.clicked.connect(self._on_row_clicked)
+        row.remove_requested.connect(self._on_remove_requested)
+        # Empty stub stays at 0; stretch stays last — insert before stretch.
+        self._list.insertWidget(self._list.count() - 1, row)
+        self._row_ids.append(job.id)
+        self._rows[job.id] = row
+        return row
+
+    def _remove_row_widget(self, job_id: str) -> None:
+        row = self._rows.pop(job_id, None)
+        if job_id in self._row_ids:
+            self._row_ids.remove(job_id)
+        if row is None:
+            return
+        try:
+            self._list.removeWidget(row)
+        except RuntimeError:
+            return
+        _dispose_list_child(row)
+
+    def _clear_job_rows(self) -> None:
+        for job_id in list(self._row_ids):
+            self._remove_row_widget(job_id)
+
+    def _ids_are_prefix(self, existing: list[str], new: list[str]) -> bool:
+        return bool(new) and existing == new[: len(existing)] and len(new) > len(existing)
+
+    def _ids_are_order_preserving_subset(
+        self, existing: list[str], new: list[str]
+    ) -> bool:
+        if not new or len(new) >= len(existing):
+            return False
+        new_set = set(new)
+        if not new_set.issubset(set(existing)):
+            return False
+        filtered = [jid for jid in existing if jid in new_set]
+        return filtered == new
+
+    def refresh(self) -> None:
+        """Sync the rail with ``render_queue`` without blanking existing cards.
+
+        Add appends rows; delete removes that widget only. Full rebuild only when
+        order changes (reorder / unexpected mismatch).
+        """
+        jobs = self._jobs_snapshot()
+        self._sync_selection_ids(jobs)
+        self._sync_title(jobs)
+        job_ids = [j.id for j in jobs]
+        existing_ids = list(self._row_ids)
 
         if not jobs:
-            if not self._empty_hint_dismissed:
-                self._empty_center = self._build_empty_stub()
-                self._list.insertWidget(0, self._empty_center)
+            self._clear_job_rows()
+            self._sync_empty_visibility(jobs)
+            self._relayout_scroll_body()
             self._sync_add_enabled()
             return
 
-        cache_dir = _queue_cache_dir(self._app)
-        for pending_i, job in enumerate(jobs, start=1):
-            border, border_w = status_border_for_job(job, jobs)
-            row = _PortableQueueRow(
-                job,
-                pending_i,
-                job.id in self._selected_ids,
-                border_color=border,
-                border_w=border_w,
-                cache_dir=cache_dir,
-                parent=self._host,
-            )
-            row.clicked.connect(self._on_row_clicked)
-            row.remove_requested.connect(self._on_remove_requested)
-            self._list.insertWidget(self._list.count() - 1, row)
-            self._row_ids.append(job.id)
-            self._rows[job.id] = row
+        self._sync_empty_visibility(jobs)
 
+        if existing_ids == job_ids and existing_ids:
+            self._sync_row_chrome(jobs)
+            self._sync_add_enabled()
+            return
+
+        if self._ids_are_prefix(existing_ids, job_ids):
+            grew_from_empty = not existing_ids
+            for i, job in enumerate(jobs[len(existing_ids) :], start=len(existing_ids) + 1):
+                self._insert_row(job, i)
+            self._sync_row_chrome(jobs)
+            self._relayout_scroll_body(allow_shrink=grew_from_empty)
+            QTimer.singleShot(
+                0,
+                lambda shrink=grew_from_empty: self._relayout_scroll_body(
+                    allow_shrink=shrink
+                ),
+            )
+            self._sync_add_enabled()
+            return
+
+        if self._ids_are_order_preserving_subset(existing_ids, job_ids):
+            to_remove = [jid for jid in existing_ids if jid not in set(job_ids)]
+            for jid in to_remove:
+                self._remove_row_widget(jid)
+            self._sync_row_chrome(jobs)
+            self._relayout_scroll_body()
+            QTimer.singleShot(0, self._relayout_scroll_body)
+            self._sync_add_enabled()
+            return
+
+        self._clear_job_rows()
+        for i, job in enumerate(jobs, start=1):
+            self._insert_row(job, i)
+        self._sync_row_chrome(jobs)
+        self._relayout_scroll_body()
+        QTimer.singleShot(0, self._relayout_scroll_body)
         self._sync_add_enabled()
 
     def _apply_selection_styles(self) -> None:
@@ -821,7 +965,27 @@ class PortableQueueSidebar(QWidget):
             for jid in ids:
                 self._app.remove_queue_job(jid)
         self._selected_ids -= set(ids)
-        self.refresh()
+        # Controller already syncs the rail incrementally — do not rebuild.
+
+    def _relayout_scroll_body(self, *, allow_shrink: bool = True) -> None:
+        """Pin scroll-widget min height to card stack so QScrollArea cannot squash."""
+        host = getattr(self, "_host", None)
+        if host is None:
+            return
+        try:
+            if allow_shrink:
+                host.setMinimumHeight(0)
+            host.updateGeometry()
+            hint_h = max(int(host.sizeHint().height()), 1)
+            if allow_shrink:
+                host.setMinimumHeight(hint_h)
+            else:
+                host.setMinimumHeight(max(int(host.minimumHeight()), hint_h))
+            scroll = getattr(self, "_scroll", None)
+            if scroll is not None:
+                scroll.updateGeometry()
+        except RuntimeError:
+            return
 
     def _sync_add_enabled(self) -> None:
         resolve = getattr(self._app, "_resolve_export_clip_path", None)
@@ -831,16 +995,22 @@ class PortableQueueSidebar(QWidget):
                 ok = bool(resolve())
             except Exception:
                 ok = False
-        self._btn_add.setEnabled(ok and not getattr(self._app, "_is_rendering", False))
+        self._btn_add.setEnabled(
+            ok
+            and not getattr(self._app, "_is_rendering", False)
+            and not getattr(self._app, "_queue_add_busy", False)
+        )
 
     def _on_add_current(self) -> None:
         resolve = getattr(self._app, "_resolve_export_clip_path", None)
         path = resolve() if callable(resolve) else None
         if not path:
             return
+        self._btn_add.setEnabled(False)
         if hasattr(self._app, "add_clip_to_render_queue"):
             self._app.add_clip_to_render_queue(path)
-        self.refresh()
+        if not getattr(self._app, "_queue_add_busy", False):
+            self._sync_add_enabled()
 
     def _on_history(self) -> None:
         if hasattr(self._app, "show_render_queue_history"):
@@ -849,4 +1019,4 @@ class PortableQueueSidebar(QWidget):
     def _on_clear(self) -> None:
         if hasattr(self._app, "clear_render_queue"):
             self._app.clear_render_queue()
-        self.refresh()
+        # Empty-queue path already refreshes the rail.
