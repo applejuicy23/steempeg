@@ -672,9 +672,10 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(strip_row)
         v.addWidget(
             self._hint(
-                "Height of the scrubber strip and time ruler under the player. "
+                "Time labels and tick marks under the scrubber. "
                 "Small / Medium / Large — Large is the stock default "
-                "(pre-pref height). Same typeface at all sizes. "
+                "(full-size ruler). The progress track stays the same "
+                "height. Same typeface at all sizes. "
                 "Combo previews live; Save persists. Cancel restores "
                 "the last saved size."
             )
@@ -1911,20 +1912,20 @@ def show_settings_dialog(app) -> None:
 def maybe_show_small_screen_warning(app, ui_shell: str | None = None) -> None:
     """Startup tip when resolution / inches are below comfort (dismissable).
 
-    Skipped on Steam Deck Portable (that shell is built for 1280×800). Still
-    shown for Desktop on Deck, and for every cramped PC display.
+    Shown only in Desktop — cramped panels actually hurt there. Portable
+    (PC and Deck) skips this modal; the shell chooser already warns inline.
     """
     try:
         from steempeg.ui.screen_metrics import (
             is_screen_undersized,
             screen_size_summary,
         )
-        from steempeg.ui.shell_chooser import UI_SHELL_DESKTOP, is_steamdeck_build
+        from steempeg.ui.shell_chooser import UI_SHELL_DESKTOP
     except Exception:
         return
 
     shell = ui_shell or getattr(app, "_ui_shell", None) or load_ui_shell()
-    if is_steamdeck_build() and shell != UI_SHELL_DESKTOP:
+    if shell != UI_SHELL_DESKTOP:
         return
 
     parent = getattr(app, "ui", None)

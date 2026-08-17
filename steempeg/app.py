@@ -4991,13 +4991,15 @@ def main():
             if should_run_silent_update_check(_upd_settings):
                 window.schedule_silent_update_check(2800)
 
-        # Small-screen tip after chrome settles (also warned on shell chooser).
-        from steempeg.ui.settings_dialog import maybe_show_small_screen_warning
+        # Small-screen tip after chrome settles — Desktop only (chooser already
+        # warns inline; Portable is built for cramped screens).
+        if ui_shell != UI_SHELL_PORTABLE:
+            from steempeg.ui.settings_dialog import maybe_show_small_screen_warning
 
-        QTimer.singleShot(
-            900,
-            lambda: maybe_show_small_screen_warning(window, ui_shell),
-        )
+            QTimer.singleShot(
+                900,
+                lambda: maybe_show_small_screen_warning(window, ui_shell),
+            )
 
         geo = window.ui.geometry()
         logging.info(
