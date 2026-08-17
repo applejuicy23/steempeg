@@ -25,8 +25,10 @@ _MIN_SANE_PPI = 72.0
 _MAX_SANE_PPI = 400.0
 # How hard low PPI may shrink chrome (never enlarge past 1.0 for desktop).
 # Floor used to be 0.78 — fine for TVs, but 27″ FHD (~82 PPI) clamped there and
-# looked tiny vs Windows taskbar. 0.90 still densifies coarse pixels a bit without
-# crushing Evolution-class monitors; Emily’s ~110 PPI ref stays at 1.0 (ratio ≥ floor).
+# looked tiny vs Windows taskbar. 0.90 is a *mild pixel* floor, applied once in
+# density_for_width (not multiplied into shell_layout_scale). 75–95 PPI on an
+# already-FHD-wide window is blended toward 1.0 (~0.95). Emily’s ~110 PPI ref
+# stays at 1.0 (ratio ≥ floor, skip if within 2%).
 _PPI_SCALE_MIN = 0.90
 _PPI_SCALE_MAX = 1.0
 
@@ -124,10 +126,14 @@ def chrome_ppi_scale(
     widget: QWidget | None = None,
     screen: QScreen | None = None,
 ) -> float:
-    """Multiplier for chrome pixel sizes relative to ``REF_PPI``.
+    """Multiplier for chrome *pixel* sizes relative to ``REF_PPI``.
 
     * Low PPI (big inches / coarse pixels) → ``< 1`` — smaller DIP chrome.
     * At/above ref → ``1.0`` (do not inflate high-PPI desktop chrome).
+
+    This is the coarse-pixel path only. Do **not** also fold it into
+    ``shell_layout_scale`` (that double-applied on 24–27″ FHD). Wide FHD
+    windows further damp this in ``density_for_width``.
     """
     ppi = screen_ppi(widget, screen)
     if ppi >= REF_PPI:

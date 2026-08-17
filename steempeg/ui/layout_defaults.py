@@ -19,6 +19,14 @@ LAYOUT_SCALE_MAX_WIDTH = 1520  # full comfort
 LAYOUT_SCALE_MIN_HEIGHT = STEAM_DECK_HEIGHT
 LAYOUT_SCALE_MAX_HEIGHT = 960
 
+# compact=True when layout_scale < 0.5 → width < 1400. Maximized 1080p (~1920)
+# and 1440p (~2560) are well above this; compact is for actually-narrow shells
+# (Deck, 1280-class, half-screen), not coarse 27″ FHD pixels.
+COMPACT_DENSITY_WIDTH = LAYOUT_SCALE_MIN_WIDTH + (LAYOUT_SCALE_MAX_WIDTH - LAYOUT_SCALE_MIN_WIDTH) // 2
+# Typical maximized 1080p (taskbar steals height, not width). Hard floor so PPI
+# cannot pull this class into compact labels / Deck chrome.
+FHD_SHELL_WIDTH = 1920
+
 # Legacy cliff alias (~1360). Prefer layout_scale(); kept for call sites / docs.
 COMPACT_LAYOUT_WIDTH = STEAM_DECK_WIDTH + 80
 
@@ -125,20 +133,19 @@ def layout_scale(window_width: int) -> float:
 
 
 def shell_layout_scale(window_width: int, *, widget=None, screen=None) -> float:
-    """Width scale pulled toward compact on low-PPI (physically large) screens.
+    """Width-only shell scale: 0 at Deck (~1280), 1 at ≥1520.
 
-    Wide + coarse pixels (e.g. 24–27″ FHD) used to look like full comfort while
-    every button was huge in inches. PPI < ref shrinks ``t``; high-PPI Deck-class
-    leaves width scale alone (portable already forces comfort chrome).
+    Compact vs comfort is about whether the *window* is actually small.
+    Coarse pixels (24–27″ FHD ~82–92 PPI) used to multiply this ``t`` by
+    ``chrome_ppi_scale`` *and* shrink DIP chrome in ``density_for_width`` —
+    maximized 1080p looked ~20% squashed. PPI is a separate mild pixel
+    shrink; ``widget`` / ``screen`` stay for call-site compatibility.
     """
-    from steempeg.ui.screen_metrics import chrome_ppi_scale
-
-    t = layout_scale(window_width)
-    ppi_f = chrome_ppi_scale(widget, screen)
-    if ppi_f >= 0.97:
-        return t
-    # Low PPI: blend toward compact without ignoring a truly narrow window.
-    return clamp01(t * ppi_f)
+    _ = (widget, screen)
+    w = int(window_width or 0)
+    if w >= FHD_SHELL_WIDTH:
+        return 1.0
+    return layout_scale(window_width)
 
 
 def height_layout_scale(window_height: int) -> float:
@@ -154,8 +161,16 @@ def height_layout_scale(window_height: int) -> float:
 
 
 def is_compact_layout(window_width: int, *, widget=None, screen=None) -> bool:
-    """True when short labels / compact bool heuristics should win (scale < 0.5)."""
-    return shell_layout_scale(window_width, widget=widget, screen=screen) < 0.5
+    """True when short labels / compact bool heuristics should win (scale < 0.5).
+
+    Cliff is ``COMPACT_DENSITY_WIDTH`` (~1400). FHD-class width (≥1920) never
+    compact. ``widget`` / ``screen`` kept for call-site compatibility.
+    """
+    _ = (widget, screen)
+    w = int(window_width or 0)
+    if w <= 0 or w >= FHD_SHELL_WIDTH:
+        return False
+    return w < COMPACT_DENSITY_WIDTH
 
 
 def left_panel_min_width(window_width: int, *, widget=None, screen=None) -> int:

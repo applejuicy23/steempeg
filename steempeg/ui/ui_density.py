@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass, fields
 
 from steempeg.ui.layout_defaults import (
+    FHD_SHELL_WIDTH,
     clamp01,
     lerp_int,
     shell_layout_scale,
@@ -332,13 +333,39 @@ def scale_density_pixels(dense: UiDensity, factor: float) -> UiDensity:
     return UiDensity(**kwargs)
 
 
+def _ppi_pixel_factor(window_width: int, ppi_f: float) -> float:
+    """Coarse-pixel shrink for DIP chrome — never a second compact lerp.
+
+    Floor is 0.90. When the window is already full-comfort width (≥1520,
+    including maximized 1080p), blend halfway to 1.0 so 27″ FHD (~82 PPI)
+    is ~0.95 instead of stacking on a pulled-down ``t``.
+    """
+    f = float(ppi_f)
+    t = shell_layout_scale(window_width)
+    if t >= 1.0 and f < 1.0:
+        f = 0.5 * f + 0.5
+    return f
+
+
 def density_for_width(window_width: int, *, widget=None, screen=None) -> UiDensity:
-    """Chrome density from window width + physical PPI of the target screen."""
+    """Chrome density: width chooses compact vs comfort; PPI mildly scales pixels.
+
+    Two axes (do not multiply both on 1080p):
+
+    * Small window (Deck / 1280 / half-screen) → ``shell_layout_scale`` toward
+      compact. FHD-wide (≥1920) is always comfort ``t``.
+    * Coarse pixels (big-inch FHD) → ``chrome_ppi_scale`` on DIP sizes only,
+      damped when the window is already wide.
+    """
+    t = shell_layout_scale(window_width, widget=widget, screen=screen)
+    if int(window_width or 0) >= FHD_SHELL_WIDTH:
+        t = 1.0
+    dense = lerp_density(t)
     from steempeg.ui.screen_metrics import chrome_ppi_scale
 
-    t = shell_layout_scale(window_width, widget=widget, screen=screen)
-    dense = lerp_density(t)
-    return scale_density_pixels(dense, chrome_ppi_scale(widget, screen))
+    return scale_density_pixels(
+        dense, _ppi_pixel_factor(window_width, chrome_ppi_scale(widget, screen))
+    )
 
 
 def chrome_equal(a: UiDensity | None, b: UiDensity | None) -> bool:
