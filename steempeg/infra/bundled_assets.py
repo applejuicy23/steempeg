@@ -98,7 +98,12 @@ _BASE_ASSETS = (
     "startrender.png",
     "pauserender.png",
     "cancelrender.png",
+    # Leave / Resume queue-mode CTAs (desktop dash + portable strip).
+    "exit.png",
+    "resume.png",
     "logsinfo.png",
+    # About / easter-egg logo variant.
+    "phibechipeegg.png",
     "play2.png",
     "windows.png",
     "linux.png",
