@@ -643,14 +643,10 @@ class RenderedLibraryMixin:
         refresh = getattr(self, "btn_refresh", None)
 
         if picker is not None:
-            try:
-                picker.main_btn.clicked.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            try:
-                picker.add_btn.clicked.disconnect()
-            except (RuntimeError, TypeError):
-                pass
+            from steempeg.ui.signal_utils import safe_disconnect
+
+            safe_disconnect(picker.main_btn.clicked)
+            safe_disconnect(picker.add_btn.clicked)
 
             if mode == "rendered":
                 path = getattr(self, "custom_destination", "") or ""

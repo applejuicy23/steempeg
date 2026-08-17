@@ -337,10 +337,9 @@ def _ensure_add_clip_button(app) -> None:
             btn = None
     if btn is not None:
         _style_add_clip_button(btn, dense=dense)
-        try:
-            btn.clicked.disconnect()
-        except (TypeError, RuntimeError):
-            pass
+        from steempeg.ui.signal_utils import safe_disconnect
+
+        safe_disconnect(btn.clicked)
         btn.clicked.connect(lambda: open_portable_clip_picker(app))
         # Older sessions created the button without the title|chip divider.
         if getattr(app, "portable_add_clip_divider", None) is None:
@@ -772,10 +771,9 @@ def _style_portable_render_button(btn: QPushButton, *, pending: int = 0, has_cli
 def _ensure_render_button(app) -> None:
     if getattr(app, "btn_portable_render", None) is not None:
         # Rebind click to open the combined sheet (upgrade older instant-start wiring).
-        try:
-            app.btn_portable_render.clicked.disconnect()
-        except (TypeError, RuntimeError):
-            pass
+        from steempeg.ui.signal_utils import safe_disconnect
+
+        safe_disconnect(app.btn_portable_render.clicked)
         app.btn_portable_render.clicked.connect(lambda: open_portable_render_settings(app))
         pending = app.render_queue.pending_count() if hasattr(app, "render_queue") else 0
         has_clip = False

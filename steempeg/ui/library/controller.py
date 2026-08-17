@@ -475,10 +475,9 @@ class LibraryMixin:
         if btn is None or not hasattr(btn, "menu_btn"):
             return
         # Avoid stacking handlers if setup runs more than once.
-        try:
-            btn.menu_btn.clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
+        from steempeg.ui.signal_utils import safe_disconnect
+
+        safe_disconnect(btn.menu_btn.clicked)
 
         def _show_menu():
             menu = QMenu(self.ui)
