@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.ui.widgets import FlowLayout
+
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.icon_assets import (
     info_icon,
@@ -590,6 +592,7 @@ class _VersionRow(QFrame):
         self._band = _risk_band(entry.version_float)
         self.setObjectName("versionRow")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet(
             _row_stylesheet(band=self._band, selected=False, indent=bool(indent))
         )
@@ -764,6 +767,13 @@ class _ReleaseFetchThread(QThread):
             self.finished_error.emit(f"Could not load releases:\n{exc}")
 
 
+class _ReleaseListHost(QWidget):
+    """Scroll body: min height tracks preferred height so version rows are not squashed."""
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
+        return self.sizeHint()
+
+
 class UpdateCenterDialog(SteempegDialog):
     install_requested = Signal(object)
     restore_requested = Signal(object)
@@ -782,8 +792,13 @@ class UpdateCenterDialog(SteempegDialog):
         super().__init__("Update Center", parent, bar_color=bar_color, bg_color=bg_color)
 
         (mw, mh), (rw, rh) = _update_center_dialog_size(parent)
-        self._size_cap_h = rh  # do not grow past default/cap (notes scroll instead)
+        # Cap like Settings: notice/ack/Keep must not inflate the shell past the
+        # intended footprint — notes and the version list scroll instead.
+        self._size_cap_h = rh
+        self._map_w = rw
+        self._map_h = rh
         self.setMinimumSize(mw, mh)
+        self.setMaximumHeight(rh)
         self.resize(rw, rh)
         self._releases: list[ReleaseEntry] = []
         self._local_backups = local_backups
@@ -851,10 +866,13 @@ class UpdateCenterDialog(SteempegDialog):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
-        self._list_host = QWidget()
+        self._list_host = _ReleaseListHost()
         self._list_host.setObjectName("releaseListHost")
         self._list_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._list_host.setStyleSheet(f"background-color: {tok.BG_SHELL};")
+        self._list_host.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
         self._list_layout = QVBoxLayout(self._list_host)
         self._list_layout.setContentsMargins(0, 0, 4, 0)
         self._list_layout.setSpacing(4)
@@ -1004,9 +1022,17 @@ class UpdateCenterDialog(SteempegDialog):
         )
         right.addWidget(keep_title)
 
-        keep_row = QHBoxLayout()
-        keep_row.setContentsMargins(0, 0, 0, 0)
-        keep_row.setSpacing(14)
+        # Flow so cramped two-column widths (Deck / ~780) wrap instead of
+        # clipping "Render history" off the right edge of the detail pane.
+        keep_host = QWidget()
+        keep_host.setStyleSheet("background: transparent;")
+        keep_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        keep_policy.setHeightForWidth(True)
+        keep_host.setSizePolicy(keep_policy)
+        keep_row = FlowLayout()
+        keep_host.setLayout(keep_row)
         keep_prefs = self._load_keep_prefs()
         self._keep_checks: dict[str, SteempegCheckBox] = {}
         for key, label in (
@@ -1020,8 +1046,7 @@ class UpdateCenterDialog(SteempegDialog):
             check.stateChanged.connect(self._on_keep_prefs_changed)
             self._keep_checks[key] = check
             keep_row.addWidget(check)
-        keep_row.addStretch(1)
-        right.addLayout(keep_row)
+        right.addWidget(keep_host)
 
         self._ack_frame = QFrame()
         self._ack_frame.setObjectName("updateAckFrame")
@@ -1036,6 +1061,9 @@ class UpdateCenterDialog(SteempegDialog):
         self._ack_check.stateChanged.connect(self._refresh_actions)
         ack_layout.addWidget(self._ack_check, 1)
         self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
+        self._ack_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         self._ack_frame.hide()
         right.addWidget(self._ack_frame)
 
@@ -1070,6 +1098,61 @@ class UpdateCenterDialog(SteempegDialog):
 
         self._start_fetch()
 
+    def _prepare_geometry_before_map(self) -> None:
+        """Re-apply capped size + parent center before DWM maps the shell."""
+        w = max(int(getattr(self, "_map_w", 0) or self.width() or 1), 1)
+        h = max(int(getattr(self, "_map_h", 0) or self.height() or 1), 1)
+        self.setMaximumHeight(int(getattr(self, "_size_cap_h", h) or h))
+        self.resize(w, h)
+        self.ensurePolished()
+        self._center_on_parent()
+
+    def _center_on_parent(self) -> None:
+        """Dead-center on the main window using the capped map size (Settings-style)."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        ref: QWidget | None = None
+        parent = self.parentWidget()
+        if isinstance(parent, QWidget) and parent.isVisible():
+            ref = parent.window() if parent.window() is not None else parent
+        if ref is None:
+            aw = QApplication.activeWindow()
+            if isinstance(aw, QWidget):
+                ref = aw
+
+        dw = max(int(getattr(self, "_map_w", 0) or self.width() or 1), 1)
+        dh = max(int(getattr(self, "_map_h", 0) or self.height() or 1), 1)
+
+        if ref is not None and ref.isVisible():
+            origin = ref.mapToGlobal(QPoint(0, 0))
+            rw, rh = max(ref.width(), 1), max(ref.height(), 1)
+            x = origin.x() + (rw - dw) // 2
+            y = origin.y() + (rh - dh) // 2
+            if dw > rw:
+                x = origin.x()
+            if dh > rh:
+                y = origin.y()
+        else:
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                return
+            avail = screen.availableGeometry()
+            x = avail.x() + (avail.width() - dw) // 2
+            y = avail.y() + (avail.height() - dh) // 2
+
+        screen = None
+        if ref is not None:
+            screen = QGuiApplication.screenAt(ref.mapToGlobal(ref.rect().center()))
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = max(avail.x(), min(x, avail.x() + max(0, avail.width() - dw)))
+            y = max(avail.y(), min(y, avail.y() + max(0, avail.height() - dh)))
+        self.move(x, y)
+
     def showEvent(self, event: QShowEvent) -> None:
         if self._hold_hidden_until_catalog and not self._releases:
             event.ignore()
@@ -1081,6 +1164,7 @@ class UpdateCenterDialog(SteempegDialog):
         if not self._hold_hidden_until_catalog:
             return
         self._hold_hidden_until_catalog = False
+        self._prepare_geometry_before_map()
         if not self.isVisible():
             self.show()
             self.raise_()
@@ -1194,6 +1278,7 @@ class UpdateCenterDialog(SteempegDialog):
                     break
 
         self._select_entry(initial_entry)
+        self._list_host.updateGeometry()
 
     def _on_fetch_error(self, message: str):
         self._refreshing_catalog = False
