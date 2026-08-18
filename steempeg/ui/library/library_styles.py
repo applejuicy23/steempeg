@@ -39,66 +39,88 @@ LIBRARY_SCROLLBAR_VERTICAL = f"""
     }}
 """
 
-LIBRARY_TABLE_STYLE = """
-    QTableWidget {
+def library_table_stylesheet() -> str:
+    """List/table chrome — reads active ``design_tokens`` (UI theme synced)."""
+    from steempeg.ui import design_tokens as tok
+    from steempeg.ui import ui_theme as ut
+
+    p = ut.active_palette()
+    # v45.1 stock row chrome — do not substitute panel border / nav hover on Default.
+    if p.name == ut.UI_THEME_DEFAULT:
+        row_border = "#282828"
+        row_hover = "#303030"
+    else:
+        row_border = p.border_panel
+        row_hover = p.neo_nav_hover_bg
+    return f"""
+    QTableWidget {{
         background: transparent;
         border: none;
         outline: none;
-    }
-    QTableWidget::item {
+    }}
+    QTableWidget::item {{
         padding: 4px 12px;
-        border-bottom: 1px solid #282828;
+        border-bottom: 1px solid {row_border};
         color: #d1d1d1;
         font-size: 13px;
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    }
-    QTableWidget::item:hover {
-        background-color: #303030;
-    }
-    QTableWidget::item:selected {
+    }}
+    QTableWidget::item:hover {{
+        background-color: {row_hover};
+    }}
+    QTableWidget::item:selected {{
         background-color: #3a2e54;
         color: #ffffff;
-    }
-    QHeaderView {
+    }}
+    QHeaderView {{
         background-color: transparent;
         border: none;
-    }
-    QHeaderView::section {
+    }}
+    QHeaderView::section {{
         background-color: transparent;
         color: #d1d1d1;
         padding: 6px;
         border: none;
-        border-bottom: 1px solid #333333;
+        border-bottom: 1px solid {tok.BORDER_DEFAULT};
         font-size: 13px;
         font-weight: bold;
-    }
-    QHeaderView::section:hover {
+    }}
+    QHeaderView::section:hover {{
         color: #ffffff;
-    }
-    QHeaderView::section:checked {
+    }}
+    QHeaderView::section:checked {{
         color: #b29ae7;
-    }
-    QHeaderView::up-arrow, QHeaderView::down-arrow {
+    }}
+    QHeaderView::up-arrow, QHeaderView::down-arrow {{
         width: 0px; height: 0px;
-    }
+    }}
 """ + LIBRARY_SCROLLBAR_VERTICAL
 
-LIBRARY_GRID_STYLE = """
-    QListWidget { background: transparent; border: none; outline: none; }
-    QListWidget::item {
+
+def library_grid_stylesheet() -> str:
+    """Grid item slot fill — ``BG_CARD`` from the active UI theme."""
+    from steempeg.ui import design_tokens as tok
+
+    card = tok.BG_CARD
+    return f"""
+    QListWidget {{ background: transparent; border: none; outline: none; }}
+    QListWidget::item {{
         border-radius: 0px;
         border: none;
-        background-color: #2d2d2d;
+        background-color: {card};
         padding: 0px;
         margin: 0px;
-    }
-    QListWidget::item:selected {
-        background-color: #2d2d2d;
-    }
-    QListWidget::item:focus {
+    }}
+    QListWidget::item:selected {{
+        background-color: {card};
+    }}
+    QListWidget::item:focus {{
         outline: none;
-    }
+    }}
 """ + LIBRARY_SCROLLBAR_VERTICAL
+
+
+# Call sites must invoke the functions below so tokens stay in sync after theme changes.
 
 
 def library_view_needs_vertical_scroll(view: QAbstractItemView) -> bool:
