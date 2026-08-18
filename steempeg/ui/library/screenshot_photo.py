@@ -2,7 +2,8 @@
 
 Size matches the classic Screenshots grid (~160×90 image + caption).
 Chrome borrows ClipCard: footer bar, purple hover/selection ring, press scale,
-and a persistent «just opened» accent — without the large 254×184 clip cards.
+inline source logo in the meta row (Steam vs Steempeg), and a persistent
+«just opened» accent — without the large 254×184 clip cards.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from steempeg.infra.paths import get_resource_path
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
 
 # ClipCard accent family
@@ -58,6 +60,55 @@ _TITLE_GAP = 3
 _DRAG_SLOP = 6
 _ICON_PX = 16
 _ICON_GAP = 5
+_SOURCE_ICON_PX = 14
+_SOURCE_ICON_GAP = 4
+
+_source_icon_cache: dict[str, QPixmap] = {}
+
+
+def _load_source_icon(source: str, dpr: float = 1.0) -> QPixmap:
+    """Bundled Steam / Steempeg logo for the footer meta row."""
+    key = "steam" if (source or "").strip().lower() == "steam" else "steempeg"
+    dpr = max(1.0, float(dpr or 1.0))
+    cache_key = f"{key}@{_SOURCE_ICON_PX}@{dpr:.2f}"
+    cached = _source_icon_cache.get(cache_key)
+    if cached is not None and not cached.isNull():
+        return cached
+    pix = QPixmap()
+    if key == "steempeg":
+        try:
+            from steempeg.ui.icon_utils import app_logo_pixmap
+
+            logo = app_logo_pixmap(_SOURCE_ICON_PX, dpr=dpr)
+            if logo is not None and not logo.isNull():
+                pix = logo
+        except Exception:
+            pix = QPixmap()
+    if pix.isNull():
+        asset = "steam.png" if key == "steam" else "logo.png"
+        path = get_resource_path(asset)
+        if path and os.path.isfile(path):
+            src = QPixmap(path)
+            if not src.isNull():
+                phys = max(1, int(round(_SOURCE_ICON_PX * dpr)))
+                try:
+                    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
+                    shaped = shaped_game_icon_pixmap(src, phys, ICON_SHAPE_CIRCLE)
+                    if shaped is not None and not shaped.isNull():
+                        pix = shaped
+                        pix.setDevicePixelRatio(dpr)
+                except Exception:
+                    pix = src.scaled(
+                        phys,
+                        phys,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    pix.setDevicePixelRatio(dpr)
+    if not pix.isNull():
+        _source_icon_cache[cache_key] = pix
+    return pix
 
 
 class ScreenshotPhoto(QWidget):
@@ -74,6 +125,7 @@ class ScreenshotPhoto(QWidget):
         on_right_click: Optional[Callable[[QMouseEvent], None]] = None,
         on_activate: Optional[Callable[[], None]] = None,
         on_drag_over: Optional[Callable[[QPoint], None]] = None,
+        source: str = "steempeg",
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -83,6 +135,7 @@ class ScreenshotPhoto(QWidget):
         self._on_drag_over = on_drag_over
         self._title = (title or "").strip()
         self._subtitle = (subtitle or "").strip()
+        self._source = self._normalize_source(source)
         self._pix = QPixmap()
         self._icon = QPixmap()
         self._hovered = False
@@ -115,6 +168,21 @@ class ScreenshotPhoto(QWidget):
             return
         self._subtitle = text
         self.update()
+
+    @staticmethod
+    def _normalize_source(source: str) -> str:
+        key = (source or "steempeg").strip().lower()
+        return "steam" if key == "steam" else "steempeg"
+
+    def set_source(self, source: str) -> None:
+        key = self._normalize_source(source)
+        if key == self._source:
+            return
+        self._source = key
+        self.update()
+
+    def source_key(self) -> str:
+        return self._source
 
     def set_thumbnail(self, thumb_path: str) -> None:
         if thumb_path and os.path.isfile(thumb_path):
@@ -359,12 +427,30 @@ class ScreenshotPhoto(QWidget):
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                 fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
             )
+            source_icon = _load_source_icon(
+                self._source, dpr=max(1.0, float(self.devicePixelRatioF()))
+            )
+            meta_left = text_left
+            meta_text_width = text_width
+            if not source_icon.isNull():
+                icon_y = meta_rect.top() + max(0, (meta_rect.height() - _SOURCE_ICON_PX) // 2)
+                p.drawPixmap(text_left, icon_y, source_icon)
+                meta_left = text_left + _SOURCE_ICON_PX + _SOURCE_ICON_GAP
+                meta_text_width = max(24, text_width - _SOURCE_ICON_PX - _SOURCE_ICON_GAP)
+            meta_draw = QRect(
+                meta_left,
+                meta_rect.top(),
+                meta_text_width,
+                meta_rect.height(),
+            )
             p.setFont(meta_font)
             p.setPen(_META_FG)
             p.drawText(
-                meta_rect,
+                meta_draw,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_meta.elidedText(self._subtitle, Qt.TextElideMode.ElideRight, text_width),
+                fm_meta.elidedText(
+                    self._subtitle, Qt.TextElideMode.ElideRight, meta_text_width
+                ),
             )
         else:
             title_rect = QRect(
