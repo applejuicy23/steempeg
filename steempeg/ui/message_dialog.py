@@ -57,9 +57,14 @@ class DialogButton:
 
 
 def dialog_theme(parent) -> dict[str, str]:
-    """Resolve title-bar / background colors from the nearest ancestor with a chrome theme."""
+    """Resolve title-bar / background colors from the active UI theme or chrome override."""
+    from steempeg.ui import ui_theme as ut
+
     node = parent
     while node is not None:
+        if getattr(node, "_ui_theme_applied", False):
+            colors = ut.chrome_colors_for_active()
+            return {"bar_color": colors["title_bar"], "bg_color": colors["app_bg"]}
         theme_key = getattr(node, "_chrome_theme", None)
         if theme_key is not None:
             colors = tok.chrome_theme_colors(theme_key)
@@ -68,7 +73,7 @@ def dialog_theme(parent) -> dict[str, str]:
             node = node.parent()
         except RuntimeError:
             break
-    colors = tok.chrome_theme_colors(tok.DEFAULT_CHROME_THEME)
+    colors = ut.chrome_colors_for_active()
     return {"bar_color": colors["title_bar"], "bg_color": colors["app_bg"]}
 
 
