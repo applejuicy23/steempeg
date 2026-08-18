@@ -186,6 +186,13 @@ from steempeg.ui.settings_prefs import (
 from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.ui_theme import (
+    KEY_UI_THEME,
+    UI_THEME_DEFAULT,
+    UI_THEME_LABELS,
+    get_ui_theme,
+    normalize_ui_theme,
+)
 
 # Persisted preference keys
 KEY_NOTIFY_ON_RENDER_COMPLETE = "notify_on_render_complete"
@@ -241,21 +248,6 @@ _EDIT = """
     QLineEdit:hover { border: 2px solid #6b5a8e; }
     QLineEdit:focus { border: 2px solid #8e7cc3; }
 """
-_TABS = """
-    QTabWidget::pane {
-        border: 1px solid #444; border-radius: 8px;
-        background: #1e1e1e; top: -1px;
-    }
-    QTabBar::tab {
-        background: #2a2a2a; color: #aaa; padding: 8px 14px; margin-right: 4px;
-        border-top-left-radius: 6px; border-top-right-radius: 6px;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-        font-size: 12px; font-weight: bold;
-    }
-    QTabBar::tab:selected { background: #4a3d66; color: #fff; }
-    QTabBar::tab:hover:!selected { background: #353535; color: #ddd; }
-"""
-
 
 _SETTINGS_DESIGN_W = 540
 _SETTINGS_DESIGN_H = 560
@@ -367,7 +359,10 @@ class SettingsDialog(SteempegDialog):
         root.setSpacing(10)
 
         tabs = QTabWidget()
-        tabs.setStyleSheet(_TABS)
+        from steempeg.ui import ui_theme as ut
+
+        tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
+        self._settings_tabs = tabs
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(tabs, 1)
 
@@ -516,6 +511,36 @@ class SettingsDialog(SteempegDialog):
 
         # ----- Visual -----
         visual, v = _tab_page()
+        v.addWidget(self._section("Theme"))
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        theme_lbl = QLabel("Theme")
+        theme_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_ui_theme = QComboBox()
+        self._combo_ui_theme.setStyleSheet(_COMBO)
+        for value, label in UI_THEME_LABELS:
+            self._combo_ui_theme.addItem(label, value)
+        cur_theme = normalize_ui_theme(settings.get(KEY_UI_THEME, UI_THEME_DEFAULT))
+        self._committed_ui_theme = cur_theme
+        tidx = self._combo_ui_theme.findData(cur_theme)
+        self._combo_ui_theme.setCurrentIndex(max(0, tidx))
+        theme_row.addWidget(theme_lbl)
+        theme_row.addWidget(self._combo_ui_theme, 1)
+        v.addLayout(theme_row)
+        v.addWidget(
+            self._hint(
+                "Default matches the stock Steempeg look. TrueDark is a darker unified "
+                "family. TrueDark OLED uses pure black shell and player canvas with "
+                "slightly elevated cards. Combo previews live; Save persists. "
+                "Cancel restores the last saved theme."
+            )
+        )
+        self._ui_theme_preview_timer = QTimer(self)
+        self._ui_theme_preview_timer.setSingleShot(True)
+        self._ui_theme_preview_timer.setInterval(200)
+        self._ui_theme_preview_timer.timeout.connect(self._apply_ui_theme_preview)
+        self._combo_ui_theme.currentIndexChanged.connect(self._preview_ui_theme)
+
         v.addWidget(self._section("Game icons"))
         shape_row = QHBoxLayout()
         shape_row.setSpacing(8)
@@ -1402,6 +1427,61 @@ class SettingsDialog(SteempegDialog):
 
         restart_application(self._app)
 
+    def _preview_ui_theme(self, *_args) -> None:
+        self._ui_theme_preview_timer.start()
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Re-tint dialog shell + tab scroll areas after a Visual theme change."""
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
+        super().apply_ui_theme_chrome()
+        tabs = getattr(self, "_settings_tabs", None)
+        if tabs is not None:
+            tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
+        bg = tok.BG_SHELL
+        for scroll in self.findChildren(QScrollArea):
+            inner = scroll.widget()
+            if inner is not None:
+                inner.setStyleSheet(f"background-color: {bg};")
+            tok.apply_dialog_scroll_bg(scroll, bg)
+            scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
+
+    def _apply_ui_theme_preview(self) -> None:
+        import logging
+
+        theme = normalize_ui_theme(self._combo_ui_theme.currentData())
+        logging.info("UI theme preview → %s", theme)
+        self._refresh_ui_theme(theme, preview=True)
+
+    def _refresh_ui_theme(self, theme: str, *, preview: bool = False) -> None:
+        if hasattr(self._app, "apply_ui_theme"):
+            try:
+                self._app.apply_ui_theme(theme, persist=False, preview=preview)
+            except Exception:
+                import logging
+
+                logging.exception("UI theme refresh failed for %s", theme)
+                return
+        if preview:
+            self.apply_ui_theme_chrome()
+
+    def _restore_ui_theme_on_cancel(self) -> None:
+        """Undo live UI theme preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_ui_theme_preview_timer", None) is not None:
+            self._ui_theme_preview_timer.stop()
+        committed = normalize_ui_theme(
+            getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
+        )
+        live = get_ui_theme()
+        combo = normalize_ui_theme(self._combo_ui_theme.currentData())
+        if live == committed and combo == committed:
+            return
+        logging.info("UI theme cancelled → restored %s", committed)
+        self._refresh_ui_theme(committed, preview=True)
+
     def _preview_icon_shape(self, *_args) -> None:
         """Debounced live preview (not persisted until Save)."""
         self._icon_shape_preview_timer.start()
@@ -1653,6 +1733,7 @@ class SettingsDialog(SteempegDialog):
         self._refresh_player_boost(committed_vol, committed_spd)
 
     def reject(self) -> None:
+        self._restore_ui_theme_on_cancel()
         self._restore_icon_shape_on_cancel()
         self._restore_clip_card_style_on_cancel()
         self._restore_header_layout_on_cancel()
@@ -1705,6 +1786,14 @@ class SettingsDialog(SteempegDialog):
             prio if prio else PRIORITY_NORMAL,
         )
         # Cancel pending preview so Save is the sole refresh.
+        if getattr(self, "_ui_theme_preview_timer", None) is not None:
+            self._ui_theme_preview_timer.stop()
+        ui_theme = normalize_ui_theme(self._combo_ui_theme.currentData())
+        self._save_setting(KEY_UI_THEME, ui_theme)
+        self._committed_ui_theme = ui_theme
+        logging.info("UI theme applied → %s (settings.json)", ui_theme)
+        self._refresh_ui_theme(ui_theme)
+
         if getattr(self, "_icon_shape_preview_timer", None) is not None:
             self._icon_shape_preview_timer.stop()
         shape = normalize_icon_shape(self._combo_icon_shape.currentData())
