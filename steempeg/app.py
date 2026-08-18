@@ -144,6 +144,32 @@ QPushButton#btn_play:focus, QPushButton#btn_skip_back:focus, QPushButton#btn_ski
 }
 """
 
+_PLAYER_SLIDER_QSS = """
+QSlider#slider_timeline::groove:horizontal {
+    border-radius: 2px;
+    height: 4px;
+    background: rgba(255, 255, 255, 50);
+}
+QSlider#slider_timeline {
+    margin-left: 15px;
+    margin-right: 5px;
+}
+QSlider#slider_timeline::sub-page:horizontal {
+    background: #1a9fff;
+    border-radius: 2px;
+}
+QSlider#slider_timeline::handle:horizontal {
+    background: #ffffff;
+    width: 12px;
+    height: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+}
+QSlider#slider_timeline::handle:horizontal:hover {
+    background: #1a9fff;
+}
+"""
+
 
 class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def _apply_playback_button_styles(self):
@@ -202,7 +228,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         # Chrome color theme (built-in default until saved settings load at startup).
         from steempeg.ui import design_tokens as _tok_boot
+        from steempeg.ui.ui_theme import UI_THEME_DEFAULT
+
         self._chrome_theme = _tok_boot.DEFAULT_CHROME_THEME
+        self._ui_theme = UI_THEME_DEFAULT
+        self._ui_theme_applied = False
 
         from PySide6.QtGui import QColor, QPalette
         self.ui.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -419,11 +449,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self, "restore_salvage_verified_clips"):
             self.restore_salvage_verified_clips()
 
-        # Apply the saved chrome color theme now that settings are reachable
-        # (falls back to the built-in default theme when nothing is saved yet).
-        from steempeg.ui import design_tokens as _tok_theme
-        saved_theme = self.load_user_settings().get("chrome_theme", _tok_theme.DEFAULT_CHROME_THEME)
-        self.apply_chrome_theme(saved_theme, persist=False)
+        # Apply the saved UI theme now that settings are reachable.
+        from steempeg.ui.ui_theme import KEY_UI_THEME, UI_THEME_DEFAULT, normalize_ui_theme
+
+        saved_ui = normalize_ui_theme(
+            self.load_user_settings().get(KEY_UI_THEME, UI_THEME_DEFAULT)
+        )
+        self.apply_ui_theme(saved_ui, persist=False)
         
         # 3. CONFIGURING THE INTERFACE (TABLE AND COMBOBOXES)
         if hasattr(self.ui, 'table_clips'):
@@ -654,7 +686,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             top_bar_layout.addWidget(mega_top_pill)
 
             # 2. KILLING A QT TABLE 
-            from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
+            from steempeg.ui.library.library_styles import (
+                library_grid_stylesheet,
+                library_table_stylesheet,
+            )
 
             self.ui.table_clips.setShowGrid(False)
             
@@ -671,7 +706,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.table_clips.verticalHeader().setDefaultSectionSize(46) 
             self.ui.table_clips.setIconSize(qtc.QSize(26, 26)) 
 
-            self.ui.table_clips.setStyleSheet(LIBRARY_TABLE_STYLE)
+            self.ui.table_clips.setStyleSheet(library_table_stylesheet())
             
             header = self.ui.table_clips.horizontalHeader()
             header.setStretchLastSection(False) 
@@ -708,7 +743,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.grid_clips.setDragDropMode(qtw.QAbstractItemView.NoDragDrop)
             self.grid_clips.setMovement(qtw.QListView.Static)
             self.grid_clips.itemSelectionChanged.connect(self.on_grid_selection_changed)
-            self.grid_clips.setStyleSheet(LIBRARY_GRID_STYLE)
+            self.grid_clips.setStyleSheet(library_grid_stylesheet())
             self.grid_clips.setVerticalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
 
             original_parent_layout = self.ui.table_clips.parentWidget().layout()
@@ -718,7 +753,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             # 4. LIBRARY BLOCK
             self.library_views_container = qtw.QFrame()
-            self.library_views_container.setStyleSheet("QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }")
+            from steempeg.ui import ui_theme as ut
+            self.library_views_container.setStyleSheet(ut.elevated_panel_stylesheet())
             views_layout = qtw.QVBoxLayout(self.library_views_container)
             views_layout.setContentsMargins(10, 10, 10, 10)
             
@@ -1408,10 +1444,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             # 3. Creating Our Single Monolithic Circle
             self.render_dashboard = qtw.QFrame()
             self.render_dashboard.setObjectName("renderDashboard")
-            self.render_dashboard.setStyleSheet("""
-                QFrame#renderDashboard { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }
-                QFrame#renderDashboard QLabel { border: none; background: transparent; }
-            """)
+            from steempeg.ui import ui_theme as ut
+            self.render_dashboard.setStyleSheet(
+                ut.elevated_panel_stylesheet(object_name="renderDashboard")
+                + " QFrame#renderDashboard QLabel { border: none; background: transparent; }"
+            )
             
             dash_layout = qtw.QVBoxLayout(self.render_dashboard)
             dash_layout.setContentsMargins(18, 16, 18, 16)
@@ -1637,6 +1674,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         
         # --- 2. LIVE VIDEO CONTAINER (Strictly 16:9) ---
+        from steempeg.ui import ui_theme as ut
+
         self.aspect_frame = QFrame()
         # Default 3px transparent border to prevent video flickering during cropping.
         self.aspect_frame.setStyleSheet("background-color: #000000; border: none; border-radius: 0px;")
@@ -1652,13 +1691,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         
         # Placeholder canvas (near-black) + centered info chip for logo/text.
         self.placeholder_frame = QFrame()
-        self.placeholder_frame.setStyleSheet("""
-            QFrame#playerPlaceholderCanvas {
-                background-color: #1e1e1e;
-                border-radius: 0px;
-                border: none;
-            }
-        """)
+        self.placeholder_frame.setStyleSheet(ut.player_placeholder_canvas_stylesheet())
         self.placeholder_frame.setObjectName("playerPlaceholderCanvas")
         place_layout = QVBoxLayout(self.placeholder_frame)
         place_layout.setContentsMargins(24, 24, 24, 24)
@@ -1669,17 +1702,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.place_card = QFrame()
         self.place_card.setObjectName("playerPlaceholderCard")
         self.place_card.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
-        self.place_card.setStyleSheet(f"""
-            QFrame#playerPlaceholderCard {{
-                background-color: {tok.BG_PLAYER_CANVAS};
-                border: 1px solid #3d3d45;
-                border-radius: 18px;
-            }}
-            QFrame#playerPlaceholderCard QLabel {{
-                background: transparent;
-                border: none;
-            }}
-        """)
+        self.place_card.setStyleSheet(ut.player_placeholder_card_stylesheet())
         card_lay = QVBoxLayout(self.place_card)
         card_lay.setContentsMargins(28, 22, 28, 22)
         card_lay.setSpacing(12)
@@ -1720,20 +1743,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.design_tokens import with_tooltip_style
 
         self.player_header_frame = QFrame()
-        self.player_header_frame.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d2d;
-                border-radius: 6px;
-            }
-        """)
+        self.player_header_frame.setStyleSheet(ut.player_header_stylesheet())
         from steempeg.ui.ui_density import COMFORT as _HDR_COMFORT
 
-        # Fixed height = filled header (chips + pads); empty placeholder must match.
+        from steempeg.ui.layout_defaults import PLAYER_HEADER_CANVAS_GAP
+
+        # Fixed height = filled header (chips + pads) + painted canvas gap; empty placeholder must match.
         _hdr_min_h = max(
             int(_HDR_COMFORT.header_chip) + 2 * int(_HDR_COMFORT.header_pad_v),
             int(_HDR_COMFORT.header_min_h),
             int(_HDR_COMFORT.header_icon) + 2 * int(_HDR_COMFORT.header_pad_v),
-        )
+        ) + PLAYER_HEADER_CANVAS_GAP
         self.player_header_frame.setFixedHeight(_hdr_min_h)
         self.player_header_frame.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -1743,7 +1763,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             int(_HDR_COMFORT.header_pad_h),
             int(_HDR_COMFORT.header_pad_v),
             int(_HDR_COMFORT.header_pad_h),
-            int(_HDR_COMFORT.header_pad_v),
+            int(_HDR_COMFORT.header_pad_v) + PLAYER_HEADER_CANVAS_GAP,
         )
         header_layout.setSpacing(max(6, int(_HDR_COMFORT.header_pad_h)))
 
@@ -1980,32 +2000,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.label_player_icon.hide()
 
 
-        player_style = """
-        QSlider#slider_timeline::groove:horizontal {
-            border-radius: 2px;
-            height: 4px;
-            background: rgba(255, 255, 255, 50);
-        }
-        QSlider#slider_timeline {
-            margin-left: 15px;
-            margin-right: 5px;
-        }
-        QSlider#slider_timeline::sub-page:horizontal {
-            background: #1a9fff;
-            border-radius: 2px;
-        }
-        QSlider#slider_timeline::handle:horizontal {
-            background: #ffffff;
-            width: 12px;
-            height: 12px;
-            margin: -4px 0;
-            border-radius: 6px;
-        }
-        QSlider#slider_timeline::handle:horizontal:hover {
-            background: #1a9fff;
-        }
-        """
-        self.ui.right_panel.setStyleSheet(player_style)
+        self.ui.right_panel.setStyleSheet(_PLAYER_SLIDER_QSS)
 
         # --- SETTING UP BUTTON ICONS ---
         #1: Erase old text
@@ -2070,12 +2065,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.player_footer_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
                 
                 from steempeg.ui.design_tokens import with_tooltip_style
-                self.player_footer_frame.setStyleSheet(with_tooltip_style("""
-                    #HudFrame {
-                        background-color: #2d2d2d;
-                        border-radius: 6px;
-                    }
-                """ + _PLAYBACK_BUTTONS_QSS))
+                self.player_footer_frame.setStyleSheet(with_tooltip_style(
+                    ut.player_footer_stylesheet() + _PLAYBACK_BUTTONS_QSS
+                ))
                 
                 v_layout = QVBoxLayout(self.player_footer_frame)
                 v_layout.setContentsMargins(15, 12, 15, 12)
@@ -2388,6 +2380,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     DESKTOP_BOTTOM_PANE_SPACING,
                     MAIN_V_SPLIT_BOTTOM_PAD,
                     MAIN_V_SPLIT_TOP_PAD,
+                    PLAYER_COLUMN_SPACING,
                 )
 
                 # 3. Top Box (Player and Buttons)
@@ -2395,7 +2388,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 top_v_layout = QVBoxLayout(self.top_v_wrap)
                 # Breath before the splitter handle (not a thick dark band).
                 top_v_layout.setContentsMargins(0, 0, 0, MAIN_V_SPLIT_TOP_PAD)
-                top_v_layout.setSpacing(right_layout.spacing())
+                top_v_layout.setSpacing(PLAYER_COLUMN_SPACING)
 
                 # 4. Bottom Box (Tabs and Status)
                 self.bottom_v_wrap = QWidget()
@@ -2825,6 +2818,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self._apply_responsive_layout_mins()
 
         self._apply_dark_shell()
+        self._refresh_ui_theme_surfaces()
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator
@@ -3370,6 +3364,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def _current_app_bg(self) -> str:
         """Background color for the current chrome theme."""
         from steempeg.ui import design_tokens as tok
+        from steempeg.ui import ui_theme as ut
+
+        if getattr(self, "_ui_theme_applied", False):
+            return ut.chrome_colors_for_active()["app_bg"]
         return tok.chrome_theme_colors(getattr(self, "_chrome_theme", "default"))["app_bg"]
 
     def _shell_stylesheet(self, bg_color: str) -> str:
@@ -3422,6 +3420,203 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         if persist:
             self.save_user_settings("chrome_theme", name)
+
+    def apply_ui_theme(self, name: str, persist: bool = True, *, preview: bool = False) -> None:
+        """Switch Default / TrueDark / TrueDark OLED — tokens + shell surfaces."""
+        from PySide6.QtGui import QColor, QPalette
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.design_tokens import apply_app_tooltip_style
+
+        name = ut.normalize_ui_theme(name)
+        ut.apply_palette(name)
+        self._ui_theme = name
+        self._ui_theme_applied = True
+        setattr(self.ui, "_ui_theme_applied", True)
+
+        if name == ut.UI_THEME_DEFAULT:
+            from steempeg.ui import design_tokens as tok
+
+            self._chrome_theme = tok.DEFAULT_CHROME_THEME
+
+        colors = ut.chrome_colors_for_active()
+        app_bg = colors["app_bg"]
+        bar_bg = colors["title_bar"]
+
+        for attr, obj_name in (
+            ("_custom_chrome_shell", "appShell"),
+            ("_custom_content_wrap", "appContent"),
+        ):
+            widget = getattr(self.ui, attr, None)
+            if widget is not None:
+                widget.setStyleSheet(f"QWidget#{obj_name} {{ background-color: {app_bg}; }}")
+
+        title_bar = getattr(self.ui, "title_bar", None)
+        if title_bar is not None and hasattr(title_bar, "set_bar_color"):
+            title_bar.set_bar_color(bar_bg)
+
+        self._apply_dark_shell()
+        self._refresh_ui_theme_surfaces(preview=preview)
+
+        # Default restore: density-scaled footer / neo chrome uses stock hardcoded QSS.
+        if not preview and name == ut.UI_THEME_DEFAULT:
+            dense = getattr(self, "_ui_density", None)
+            if dense is not None:
+                self._apply_ui_density(dense)
+
+        if preview:
+            return
+
+        palette = self.ui.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
+        self.ui.setPalette(palette)
+        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
+        try:
+            apply_app_tooltip_style()
+        except Exception:
+            pass
+
+        if persist:
+            self.save_user_settings(ut.KEY_UI_THEME, name)
+
+    def _refresh_library_view_styles(self) -> None:
+        """Re-tint clips + rendered list/grid chrome from active tokens."""
+        from steempeg.ui.library.library_styles import (
+            library_grid_stylesheet,
+            library_table_stylesheet,
+        )
+
+        grid_qss = library_grid_stylesheet()
+        table_qss = library_table_stylesheet()
+        for attr in ("grid_clips", "grid_rendered"):
+            view = getattr(self, attr, None)
+            if view is not None:
+                view.setStyleSheet(grid_qss)
+        ui = getattr(self, "ui", None)
+        if ui is not None and hasattr(ui, "table_clips"):
+            ui.table_clips.setStyleSheet(table_qss)
+        if hasattr(self, "table_rendered"):
+            self.table_rendered.setStyleSheet(table_qss)
+
+    def _refresh_open_settings_dialogs(self) -> None:
+        """Live-tint an open Settings window during theme preview / Save."""
+        from PySide6.QtWidgets import QApplication
+
+        from steempeg.ui.settings_dialog import SettingsDialog
+
+        for widget in QApplication.allWidgets():
+            if isinstance(widget, SettingsDialog) and widget.isVisible():
+                if hasattr(widget, "apply_ui_theme_chrome"):
+                    try:
+                        widget.apply_ui_theme_chrome()
+                    except Exception:
+                        pass
+
+    def _refresh_ui_theme_surfaces(self, *, preview: bool = False) -> None:
+        """Re-tint major chrome widgets after a UI theme switch (no layout/mask changes)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPalette
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.design_tokens import with_tooltip_style
+        from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
+
+        p = ut.active_palette()
+
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is not None:
+            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+
+        scroll = getattr(self, "right_scroll", None)
+        if scroll is not None:
+            scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
+            vp = scroll.viewport()
+            if vp is not None:
+                vp.setAutoFillBackground(True)
+                pal = vp.palette()
+                qc = QColor(p.bg_settings_panel)
+                for group in (
+                    QPalette.ColorGroup.Active,
+                    QPalette.ColorGroup.Inactive,
+                    QPalette.ColorGroup.Disabled,
+                ):
+                    pal.setColor(group, QPalette.ColorRole.Window, qc)
+                    pal.setColor(group, QPalette.ColorRole.Base, qc)
+                vp.setPalette(pal)
+
+        if hasattr(self.ui, "settings_tabs"):
+            self.ui.settings_tabs.setStyleSheet(
+                ut.neo_settings_tabs_stylesheet(settings_panel_stylesheet())
+            )
+            for i in range(self.ui.settings_tabs.count()):
+                page = self.ui.settings_tabs.widget(i)
+                if page is None:
+                    continue
+                obj = page.objectName()
+                if obj:
+                    page.setStyleSheet(ut.neo_tab_page_stylesheet(obj))
+                else:
+                    page.setStyleSheet(
+                        f"background-color: {p.bg_settings_panel}; border: none;"
+                    )
+
+        for btn in getattr(self, "neo_nav_buttons", []) or []:
+            btn.setStyleSheet(ut.neo_nav_pill_stylesheet())
+
+        header = getattr(self, "player_header_frame", None)
+        if header is not None:
+            header.setStyleSheet(ut.player_header_stylesheet())
+
+        placeholder = getattr(self, "placeholder_frame", None)
+        if placeholder is not None:
+            placeholder.setStyleSheet(ut.player_placeholder_canvas_stylesheet())
+
+        place_card = getattr(self, "place_card", None)
+        if place_card is not None:
+            place_card.setStyleSheet(ut.player_placeholder_card_stylesheet())
+
+        lib = getattr(self, "library_views_container", None)
+        if lib is not None:
+            lib.setStyleSheet(ut.elevated_panel_stylesheet())
+
+        dash = getattr(self, "render_dashboard", None)
+        if dash is not None:
+            dash.setStyleSheet(
+                ut.elevated_panel_stylesheet(object_name="renderDashboard")
+                + " QFrame#renderDashboard QLabel { border: none; background: transparent; }"
+            )
+
+        footer = getattr(self, "_footer_mega_pill", None)
+        if footer is not None:
+            footer.setStyleSheet(ut.footer_pill_stylesheet())
+
+        # Stock footer buttons keep density/init QSS on Default — only retint the pill face.
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            ut_style = ut.unified_button_stylesheet()
+            for attr in (
+                "btn_browse",
+                "btn_refresh",
+                "btn_open_folder",
+                "btn_open_video",
+            ):
+                btn = getattr(self.ui, attr, None)
+                if btn is not None:
+                    btn.setStyleSheet(ut_style)
+
+        queue_panel = getattr(self, "render_queue_panel", None)
+        if queue_panel is not None and hasattr(queue_panel, "apply_ui_theme_chrome"):
+            try:
+                queue_panel.apply_ui_theme_chrome()
+            except Exception:
+                pass
+
+        hud = getattr(self, "player_footer_frame", None)
+        if hud is not None:
+            hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            hud.setStyleSheet(
+                with_tooltip_style(ut.player_footer_stylesheet() + _PLAYBACK_BUTTONS_QSS)
+            )
+
+        self._refresh_library_view_styles()
+        self._refresh_open_settings_dialogs()
 
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
@@ -4094,6 +4289,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             fnt.setBold(True)
             fnt.setPixelSize(int(dense.footer_font))  # match Refresh
             combo.setFont(fnt)
+            if hasattr(self, "_sync_sort_combo_for_panel"):
+                self._sync_sort_combo_for_panel()
 
         # List view fixed columns: Deck can't fit Type+Date+Duration at comfort widths.
         table = getattr(self.ui, "table_clips", None)
