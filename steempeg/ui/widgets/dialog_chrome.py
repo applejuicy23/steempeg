@@ -128,6 +128,23 @@ class _DialogTitleBar(QWidget):
             """
         )
 
+    def set_bar_color(self, bar_color: str) -> None:
+        self.setStyleSheet(
+            f"""
+            QWidget#SteempegDialogBar {{
+                background-color: {bar_color};
+                border-top-left-radius: {_CARD_RADIUS_PX}px;
+                border-top-right-radius: {_CARD_RADIUS_PX}px;
+                border-bottom: 1px solid {tok.BORDER_SUBTLE};
+            }}
+            QLabel#SteempegDialogTitle {{
+                color: {tok.TEXT_TITLE};
+                font-family: {tok.FONT_UI};
+                background: transparent;
+            }}
+            """
+        )
+
     def _toggle_maximize(self) -> None:
         dlg = self._dialog
         if dlg.isMaximized():
@@ -238,7 +255,9 @@ class SteempegDialog(QDialog):
                 Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
             )
 
-        theme = tok.chrome_theme_colors(tok.DEFAULT_CHROME_THEME)
+        from steempeg.ui import ui_theme as ut
+
+        theme = ut.chrome_colors_for_active()
         bar_color = bar_color or theme["title_bar"]
         bg_color = bg_color or theme["app_bg"]
         self._bar_color = bar_color
@@ -605,3 +624,16 @@ class SteempegDialog(QDialog):
             {COMBO_POPUP_ITEM_RULES}
             """
         )
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Re-tint title bar + body from the active UI theme palette."""
+        from steempeg.ui import ui_theme as ut
+
+        colors = ut.chrome_colors_for_active()
+        bar = colors["title_bar"]
+        bg = colors["app_bg"]
+        self._bar_color = bar
+        self._bg_color = bg
+        if hasattr(self._title_bar, "set_bar_color"):
+            self._title_bar.set_bar_color(bar)
+        self._apply_card_chrome(bar, bg)
