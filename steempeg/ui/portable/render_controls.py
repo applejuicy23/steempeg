@@ -274,7 +274,10 @@ class PortableRenderControlStrip(QFrame):
                 job = app._queue_context_job()
         if job is not None:
             name = (getattr(job, "game_name", "") or "").strip()
-            icon_path = (getattr(job, "game_icon_path", "") or "").strip()
+            from steempeg.render.queue import resolve_job_game_icon_path
+
+            cache_dir = getattr(app, "cache_dir", "") or ""
+            icon_path = resolve_job_game_icon_path(cache_dir, job)
 
         if not name:
             bottom_text = getattr(app, "bottom_text_label", None)
