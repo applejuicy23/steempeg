@@ -228,3 +228,33 @@ DEFAULT_CHROME_THEME = "exp2"
 def chrome_theme_colors(name: str) -> dict:
     """Return {'title_bar', 'app_bg'} for a theme name (falls back to default)."""
     return CHROME_THEMES.get(name, CHROME_THEMES[DEFAULT_CHROME_THEME])
+
+
+def sync_from_ui_theme(palette) -> None:
+    """Push active :class:`~steempeg.ui.ui_theme.UiThemePalette` into module tokens."""
+    global BG_SHELL, BG_TITLE_BAR, BG_PLAYER_CANVAS, BG_CARD, BG_SETTINGS_PANEL
+    global BORDER_SUBTLE, BORDER_DEFAULT, BORDER_CARD
+    global TOOLTIP_BG, TOOLTIP_BORDER, STYLE_TOOLTIP
+
+    BG_SHELL = palette.bg_shell
+    BG_TITLE_BAR = palette.chrome_title_bar
+    BG_PLAYER_CANVAS = palette.bg_player_canvas
+    BG_CARD = palette.bg_card
+    BG_SETTINGS_PANEL = palette.bg_settings_panel
+    BORDER_SUBTLE = palette.border_subtle
+    BORDER_DEFAULT = palette.border_default
+    BORDER_CARD = palette.border_card
+    TOOLTIP_BG = palette.tooltip_bg
+    TOOLTIP_BORDER = palette.tooltip_border
+    STYLE_TOOLTIP = (
+        f"QToolTip {{"
+        f" background-color: {TOOLTIP_BG};"
+        f" color: {TOOLTIP_FG};"
+        f" border: 1px solid {TOOLTIP_BORDER};"
+        f" border-radius: 6px;"
+        f" padding: 5px 9px;"
+        f" font-family: 'Segoe UI', {FONT_APP};"
+        f" font-size: 12px;"
+        f" font-weight: bold;"
+        f"}}"
+    )
