@@ -59,7 +59,7 @@ from steempeg.ui.library.screenshot_photo import (
     ScreenshotPhoto,
 )
 from steempeg.ui.library.library_tab import LibraryTabWidget
-from steempeg.ui.library.library_styles import LIBRARY_GRID_STYLE, LIBRARY_TABLE_STYLE
+from steempeg.ui.library.library_styles import library_grid_stylesheet, library_table_stylesheet
 from steempeg.ui.message_dialog import (
     steempeg_confirm_delete,
     steempeg_information,
@@ -83,12 +83,44 @@ _DURATION_SORT_INDICES = (9, 10)
 _SCREENSHOT_HIDDEN_SORT = (
     _TYPE_SORT_INDICES + _HEALTH_SORT_INDICES + _DURATION_SORT_INDICES + _FOLDER_SORT_INDICES
 )
+# Global sort indices (shared with Clips combo) shown on the Screenshots tab.
+_SCREENSHOTS_SORT_DEFS: tuple[tuple[int, str, str], ...] = (
+    (0, "defaultsort.png", "Default"),
+    (1, "lettersort1.png", "Game Name (A - Z)"),
+    (2, "lettersort2.png", "Game Name (Z - A)"),
+    (7, "datesort1.png", "Date (Oldest First)"),
+    (8, "datesort2.png", "Date (Newest First)"),
+)
+_FULL_SORT_DEFS: tuple[tuple[str, str], ...] = (
+    ("defaultsort.png", "Default"),
+    ("lettersort1.png", "Game Name (A - Z)"),
+    ("lettersort2.png", "Game Name (Z - A)"),
+    ("lettersort1.png", "Type (A - Z)"),
+    ("lettersort2.png", "Type (Z - A)"),
+    ("nohealth.png", "Bad health first"),
+    ("health.png", "Good health first"),
+    ("datesort1.png", "Date (Oldest First)"),
+    ("datesort2.png", "Date (Newest First)"),
+    ("durationsort1.png", "Duration (Shortest)"),
+    ("durationsort2.png", "Duration (Longest)"),
+    ("lettersort1.png", "Folder (A - Z)"),
+    ("lettersort2.png", "Folder (Z - A)"),
+)
+
+
+def _screenshots_local_sort_index(global_idx: int) -> int:
+    for i, (gidx, _icon, _label) in enumerate(_SCREENSHOTS_SORT_DEFS):
+        if gidx == int(global_idx):
+            return i
+    return len(_SCREENSHOTS_SORT_DEFS) - 1
 _SHOT_GAME_ROLE = Qt.ItemDataRole.UserRole + 1
 _SHOT_MTIME_ROLE = Qt.ItemDataRole.UserRole + 2
 _SHOT_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 3  # "steam" | "steempeg"
 _SHOT_APP_ID_ROLE = Qt.ItemDataRole.UserRole + 4
 _SHOT_THUMB_ROLE = Qt.ItemDataRole.UserRole + 5  # cached thumb path (may be unset)
 _SCREENSHOT_NAME_RE = re.compile(r"^(.+?)_\d+ms_\d{8}_\d{6}$", re.IGNORECASE)
+# Filename sanitizer turns : * ? " < > | \ / into _; never map these labels to a game.
+_GENERIC_SCREENSHOT_GAMES = frozenset({"clip", "unknown", "unknown game"})
 # Viewport lazy load: overscan past the visible rect, debounce after scroll stops.
 _SHOT_VIEWPORT_OVERSCAN_PX = 220
 _SHOT_SCROLL_IDLE_MS = 120
@@ -153,6 +185,77 @@ def _parse_screenshot_game_name(filename: str) -> str:
     return stem
 
 
+def _normalize_screenshot_game_key(name: str) -> str:
+    """Collapse filename-safe vs Steam display names for matching.
+
+    ``Hatsune Miku_ Project DIVA Mega Mix+`` and
+    ``Hatsune Miku: Project DIVA Mega Mix+`` become the same key.
+    """
+    text = str(name or "").strip().casefold()
+    if not text:
+        return ""
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def match_screenshot_game_in_cache(
+    game_name: str, cache: dict | None
+) -> tuple[str, str]:
+    """Map a Steempeg screenshot game label to ``(app_id, canonical_name)``.
+
+    Exact (casefold) first, then punctuation/underscore-normalized equality,
+    then a conservative prefix/contains match for truncated names.
+    Generic labels like ``Clip`` never match.
+    """
+    raw = str(game_name or "").strip()
+    if not raw:
+        return "", ""
+    folded = raw.casefold()
+    if folded in _GENERIC_SCREENSHOT_GAMES:
+        return "", ""
+    want = _normalize_screenshot_game_key(raw)
+    if not want or want in _GENERIC_SCREENSHOT_GAMES:
+        return "", ""
+
+    exact_id = ""
+    exact_name = ""
+    norm_id = ""
+    norm_name = ""
+    fuzzy: list[tuple[int, str, str]] = []
+
+    for app_id, cached_name in (cache or {}).items():
+        aid = str(app_id or "").strip()
+        label = str(cached_name or "").strip()
+        if not aid or not label:
+            continue
+        if label.casefold() == folded:
+            exact_id, exact_name = aid, label
+            break
+        got = _normalize_screenshot_game_key(label)
+        if not got:
+            continue
+        if got == want:
+            if not norm_id:
+                norm_id, norm_name = aid, label
+            continue
+        shorter, longer = (want, got) if len(want) <= len(got) else (got, want)
+        if len(shorter) < 12:
+            continue
+        if longer.startswith(shorter) or shorter in longer:
+            fuzzy.append((abs(len(got) - len(want)), aid, label))
+
+    if exact_id:
+        return exact_id, exact_name
+    if norm_id:
+        return norm_id, norm_name
+    if fuzzy:
+        fuzzy.sort(key=lambda row: row[0])
+        _delta, aid, label = fuzzy[0]
+        return aid, label
+    return "", ""
+
+
 def _rendered_type_label(ext: str) -> str:
     ext = ext.lower()
     if ext in RENDERED_VIDEO_EXTS:
@@ -181,6 +284,7 @@ class RenderedLibraryMixin:
         self._rendered_filter_types: set[str] | None = None
         self._rendered_filter_games: set[str] | None = None
         self._screenshots_filter_games: set[str] | None = None
+        self._screenshots_filter_folders: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
         self._saved_clips_selection_path = ""
@@ -201,6 +305,7 @@ class RenderedLibraryMixin:
         }
         # Last sort index actually applied to each panel's data (skip rebuild on tab switch).
         self._sort_applied_by_panel: dict[str, int] = {}
+        self._sort_combo_mode: str | None = None
         self._library_rendered_rows: list[ScannedRenderedFile] = []
         # Screenshots viewport lazy-load (placeholders until visible).
         self._screenshots_scroll_active = False
@@ -299,15 +404,64 @@ class RenderedLibraryMixin:
         if not hasattr(self, "combo_sort"):
             return
         mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "screenshots":
+            self._ensure_screenshots_sort_combo()
+            return
+        self._ensure_full_sort_combo()
         view = self.combo_sort.view()
         for i in range(self.combo_sort.count()):
             view.setRowHidden(i, False)
-        if mode == "screenshots":
-            for i in _SCREENSHOT_HIDDEN_SORT:
-                view.setRowHidden(i, True)
-        elif mode == "rendered":
+        if mode == "rendered":
             for i in _HEALTH_SORT_INDICES:
                 view.setRowHidden(i, True)
+
+    def _rebuild_sort_combo_items(
+        self, items: tuple[tuple[str, str], ...], *, mode_key: str
+    ) -> None:
+        from steempeg.infra.paths import get_resource_path
+
+        combo = self.combo_sort
+        if getattr(self, "_sort_combo_mode", None) == mode_key and combo.count() == len(
+            items
+        ):
+            return
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for icon_name, label in items:
+                combo.addItem(QIcon(get_resource_path(icon_name)), label)
+            combo.setMaxVisibleItems(max(14, len(items)))
+            view = combo.view()
+            if view is not None:
+                fm = combo.fontMetrics()
+                longest = max(
+                    (fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
+                    default=0,
+                )
+                view.setMinimumWidth(longest + 78)
+            self._sort_combo_mode = mode_key
+        finally:
+            combo.blockSignals(False)
+
+    def _ensure_full_sort_combo(self) -> None:
+        self._rebuild_sort_combo_items(_FULL_SORT_DEFS, mode_key="full")
+
+    def _ensure_screenshots_sort_combo(self) -> None:
+        shot_items = tuple((icon, label) for _g, icon, label in _SCREENSHOTS_SORT_DEFS)
+        self._rebuild_sort_combo_items(shot_items, mode_key="screenshots")
+
+    def _screenshots_global_sort_index(self) -> int:
+        if not hasattr(self, "combo_sort"):
+            return 8
+        local = int(self.combo_sort.currentIndex())
+        if getattr(self, "_sort_combo_mode", None) == "screenshots":
+            if 0 <= local < len(_SCREENSHOTS_SORT_DEFS):
+                return int(_SCREENSHOTS_SORT_DEFS[local][0])
+            return 8
+        idx = local
+        if idx not in {g for g, _, _ in _SCREENSHOTS_SORT_DEFS}:
+            return 8
+        return idx
 
     def _sort_indices_valid_for_panel(self, mode: str) -> set[int]:
         hidden = set()
@@ -323,7 +477,10 @@ class RenderedLibraryMixin:
             return
         if not hasattr(self, "_sort_index_by_panel"):
             self._sort_index_by_panel = {}
-        self._sort_index_by_panel[mode] = int(self.combo_sort.currentIndex())
+        if mode == "screenshots":
+            self._sort_index_by_panel[mode] = self._screenshots_global_sort_index()
+        else:
+            self._sort_index_by_panel[mode] = int(self.combo_sort.currentIndex())
 
     def _restore_sort_for_panel(self, mode: str) -> None:
         if not hasattr(self, "combo_sort") or not mode:
@@ -335,6 +492,14 @@ class RenderedLibraryMixin:
         if idx not in valid:
             idx = 8 if mode == "screenshots" else 0
             self._sort_index_by_panel[mode] = idx
+        if mode == "screenshots":
+            local = _screenshots_local_sort_index(idx)
+            if self.combo_sort.currentIndex() == local:
+                return
+            self.combo_sort.blockSignals(True)
+            self.combo_sort.setCurrentIndex(local)
+            self.combo_sort.blockSignals(False)
+            return
         if self.combo_sort.currentIndex() == idx:
             return
         self.combo_sort.blockSignals(True)
@@ -593,7 +758,9 @@ class RenderedLibraryMixin:
             # Re-sort only when this panel's data isn't already in the combo order.
             # Full apply_rendered_sorting rebuilds every grid card — too slow on tab flip.
             want = (
-                int(self.combo_sort.currentIndex())
+                self._screenshots_global_sort_index()
+                if mode == "screenshots" and hasattr(self, "_screenshots_global_sort_index")
+                else int(self.combo_sort.currentIndex())
                 if hasattr(self, "combo_sort")
                 else 0
             )
@@ -1023,7 +1190,8 @@ class RenderedLibraryMixin:
         if rendered:
             payload["rendered_filters"] = rendered
         shots = fpersist.encode_screenshots_filters(
-            getattr(self, "_screenshots_filter_games", None)
+            getattr(self, "_screenshots_filter_games", None),
+            getattr(self, "_screenshots_filter_folders", None),
         )
         if shots:
             payload["screenshots_filters"] = shots
@@ -1035,12 +1203,14 @@ class RenderedLibraryMixin:
 
         data = state if isinstance(state, dict) else {}
         self.saved_filter_state = fpersist.decode_clips_filters(data.get("clips_filters"))
-        games, types = fpersist.decode_rendered_filters(data.get("rendered_filters"))
-        self._rendered_filter_games = games
+        rgames, types = fpersist.decode_rendered_filters(data.get("rendered_filters"))
+        self._rendered_filter_games = rgames
         self._rendered_filter_types = types
-        self._screenshots_filter_games = fpersist.decode_screenshots_filters(
+        sgames, folders = fpersist.decode_screenshots_filters(
             data.get("screenshots_filters")
         )
+        self._screenshots_filter_games = sgames
+        self._screenshots_filter_folders = folders
 
     def _persist_library_filter_memory(self) -> None:
         """Write filter memory without waiting for the full UI-persist gate.
@@ -1357,7 +1527,7 @@ class RenderedLibraryMixin:
         self.table_rendered.setColumnWidth(1, 100)
         self.table_rendered.setColumnWidth(2, 160)
         self.table_rendered.setColumnWidth(3, 100)
-        self.table_rendered.setStyleSheet(LIBRARY_TABLE_STYLE)
+        self.table_rendered.setStyleSheet(library_table_stylesheet())
 
         self.grid_rendered = QListWidget()
         self.grid_rendered.setViewMode(QListWidget.ViewMode.IconMode)
@@ -1369,7 +1539,7 @@ class RenderedLibraryMixin:
         self.grid_rendered.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.grid_rendered.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_rendered.setMovement(QListWidget.Movement.Static)
-        self.grid_rendered.setStyleSheet(LIBRARY_GRID_STYLE)
+        self.grid_rendered.setStyleSheet(library_grid_stylesheet())
 
         self.table_rendered.itemSelectionChanged.connect(self.update_rendered_selection)
         self.table_rendered.itemSelectionChanged.connect(self._sync_rendered_grid_from_table)
@@ -1496,19 +1666,23 @@ class RenderedLibraryMixin:
             try:
                 from datetime import datetime
 
-                # Compact card footer: date only (no time), short month — logo +
-                # "Steam · 13 August 2026  14:30" was eliding into "…".
                 dt = to_display_datetime(datetime.fromtimestamp(float(mtime)))
                 when = dt.strftime("%d %b %Y")
                 subtitle = f"{source_label} · {when}"
             except (OSError, OverflowError, ValueError, TypeError):
                 subtitle = source_label
-        icon_path = self._screenshot_icon_path_for_app_id(app_id) if app_id else ""
+        icon_path = ""
+        resolved_id = self._screenshot_app_id_for_game_label(
+            label, app_id=app_id, source=source_key
+        )
+        if resolved_id:
+            icon_path = self._screenshot_icon_path_for_app_id(resolved_id)
         photo = ScreenshotPhoto(
             "",
             title=label,
             subtitle=subtitle,
             game_icon_path=icon_path,
+            source=source_key,
             on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
                 grid_item, ev, force_single=True
             ),
@@ -1572,6 +1746,11 @@ class RenderedLibraryMixin:
         game = str(item.data(_SHOT_GAME_ROLE) or "") or _parse_screenshot_game_name(path)
         source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
         app_id = str(item.data(_SHOT_APP_ID_ROLE) or "")
+        game, app_id = self._resolve_screenshot_row_identity(
+            game, app_id, source=source
+        )
+        item.setData(_SHOT_GAME_ROLE, game)
+        item.setData(_SHOT_APP_ID_ROLE, app_id)
         thumb = str(item.data(_SHOT_THUMB_ROLE) or "")
         item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
         photo = self._attach_screenshot_photo(
@@ -1854,6 +2033,245 @@ class RenderedLibraryMixin:
             item.setData(_SHOT_THUMB_ROLE, thumb_path)
             self._apply_screenshot_thumb(item, thumb_path)
 
+    def _invalidate_screenshot_game_lookup_memo(self) -> None:
+        self._screenshot_game_to_app_id = {}
+        self._invalidate_screenshot_norm_app_id_map()
+
+    def _screenshot_app_id_for_game_name(self, game_name: str) -> str:
+        """Best-effort app_id from games.json (Steempeg shots only store game name)."""
+        app_id, _canonical = self._screenshot_identity_for_game_name(game_name)
+        return app_id
+
+    def _screenshot_app_id_for_game_label(
+        self, game_name: str, *, app_id: str = "", source: str = "steempeg"
+    ) -> str:
+        """Resolve app_id from games.json, grid item data, or a Steam sibling."""
+        aid = str(app_id or "").strip()
+        label = str(game_name or "").strip()
+        if aid:
+            return aid
+        if label:
+            aid = self._screenshot_app_id_for_game_name(label)
+            if aid:
+                return aid
+        norm = _normalize_screenshot_game_key(label)
+        if not norm:
+            return ""
+        memo = getattr(self, "_screenshot_norm_to_app_id", None)
+        if isinstance(memo, dict):
+            cached = str(memo.get(norm) or "").strip()
+            if cached:
+                return cached
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return ""
+        found = ""
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            row_name = str(item.data(_SHOT_GAME_ROLE) or "").strip()
+            row_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+            if not row_id:
+                continue
+            row_norm = _normalize_screenshot_game_key(row_name)
+            if row_norm and row_norm == norm:
+                found = row_id
+                break
+        if found and isinstance(memo, dict):
+            memo[norm] = found
+        return found
+
+    def _invalidate_screenshot_norm_app_id_map(self) -> None:
+        self._screenshot_norm_to_app_id = {}
+
+    def _collect_screenshot_games_catalog(self) -> dict[str, dict]:
+        """Canonical game → {app_id, count, max_mtime, norm} from the live grid."""
+        grid = getattr(self, "grid_screenshots", None)
+        catalog: dict[str, dict] = {}
+        if grid is None:
+            return catalog
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            raw_name = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+            app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+            game, app_id = self._resolve_screenshot_row_identity(
+                raw_name, app_id, source=source
+            )
+            if not app_id:
+                app_id = self._screenshot_app_id_for_game_label(
+                    game, app_id="", source=source
+                )
+            canon = (game or raw_name).strip() or "Unknown"
+            try:
+                mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+            except (TypeError, ValueError):
+                mtime = 0.0
+            norm = _normalize_screenshot_game_key(canon)
+            rec = catalog.get(canon)
+            if rec is None:
+                rec = {"app_id": app_id, "count": 0, "max_mtime": 0.0, "norm": norm}
+                catalog[canon] = rec
+            rec["count"] = int(rec.get("count") or 0) + 1
+            rec["max_mtime"] = max(float(rec.get("max_mtime") or 0.0), mtime)
+            if app_id and not rec.get("app_id"):
+                rec["app_id"] = app_id
+        by_norm: dict[str, str] = {}
+        for rec in catalog.values():
+            aid = str(rec.get("app_id") or "").strip()
+            norm = str(rec.get("norm") or "").strip()
+            if aid and norm:
+                by_norm.setdefault(norm, aid)
+        for rec in catalog.values():
+            if not rec.get("app_id"):
+                norm = str(rec.get("norm") or "").strip()
+                sibling = by_norm.get(norm, "")
+                if sibling:
+                    rec["app_id"] = sibling
+        return catalog
+
+    def _sort_screenshot_game_catalog_items(
+        self, catalog: dict[str, dict]
+    ) -> list[tuple[str, dict]]:
+        idx = self._screenshots_global_sort_index()
+
+        def name_key(row: tuple[str, dict]) -> str:
+            return row[0].lower()
+
+        def count_key(row: tuple[str, dict]) -> int:
+            return int(row[1].get("count") or 0)
+
+        def recent_key(row: tuple[str, dict]) -> float:
+            return float(row[1].get("max_mtime") or 0.0)
+
+        items = list(catalog.items())
+        if idx == 1:
+            items.sort(key=name_key)
+        elif idx == 2:
+            items.sort(key=name_key, reverse=True)
+        elif idx == 7:
+            items.sort(key=recent_key)
+        elif idx == 8:
+            items.sort(key=recent_key, reverse=True)
+        else:
+            items.sort(key=name_key)
+        return items
+
+    def _screenshot_identity_for_game_name(self, game_name: str) -> tuple[str, str]:
+        """Return ``(app_id, canonical Steam name)`` for a filename/display label."""
+        name = str(game_name or "").strip()
+        if not name:
+            return "", ""
+        memo = getattr(self, "_screenshot_game_to_app_id", None)
+        if not isinstance(memo, dict):
+            memo = {}
+            self._screenshot_game_to_app_id = memo
+        key = name.casefold()
+        cached = memo.get(key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            return str(cached[0] or ""), str(cached[1] or "")
+        if isinstance(cached, str):
+            # Older memo stored app_id only.
+            aid = cached.strip()
+            return aid, (self._screenshot_game_name_for_app_id(aid) if aid else "")
+        cache = getattr(self, "game_names_cache", None) or {}
+        found_id, found_name = match_screenshot_game_in_cache(name, cache)
+        if not found_id and not cache:
+            # games.json not loaded yet — don't cache a miss.
+            return "", ""
+        memo[key] = (found_id, found_name)
+        return found_id, found_name
+
+    def _resolve_screenshot_row_identity(
+        self, game: str, app_id: str, *, source: str = "steempeg"
+    ) -> tuple[str, str]:
+        """Fill missing Steempeg app_id + prefer the games.json display name."""
+        label = str(game or "").strip()
+        aid = str(app_id or "").strip()
+        source_key = (source or "steempeg").strip().lower()
+        if source_key != "steam":
+            if not aid and label:
+                aid, canonical = self._screenshot_identity_for_game_name(label)
+                if canonical and not self._is_screenshot_placeholder_name(
+                    canonical, aid
+                ):
+                    label = canonical
+            elif aid:
+                canonical = self._screenshot_game_name_for_app_id(aid)
+                if canonical and not self._is_screenshot_placeholder_name(
+                    canonical, aid
+                ):
+                    # Filename sanitizer turns ``:`` into ``_`` — same game, nicer label.
+                    if (
+                        not label
+                        or self._is_screenshot_placeholder_name(label, aid)
+                        or _normalize_screenshot_game_key(label)
+                        == _normalize_screenshot_game_key(canonical)
+                    ):
+                        label = canonical
+        elif aid and (
+            not label or self._is_screenshot_placeholder_name(label, aid)
+        ):
+            label = self._screenshot_game_name_for_app_id(aid)
+        return label, aid
+
+    def _backfill_steempeg_screenshot_identities(self) -> int:
+        """Re-resolve Steempeg rows after games.json fills; update live cards."""
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return 0
+        filters = getattr(self, "_screenshots_filter_games", None)
+        touched = 0
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+            if source.strip().lower() == "steam":
+                continue
+            old_name = str(item.data(_SHOT_GAME_ROLE) or "").strip()
+            old_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+            game, app_id = self._resolve_screenshot_row_identity(
+                old_name, old_id, source=source
+            )
+            if game == old_name and app_id == old_id:
+                # Still try the logo if we already knew the app but the widget
+                # was painted before cache/{appid}.jpg existed.
+                resolved_id = app_id or self._screenshot_app_id_for_game_label(
+                    old_name, app_id="", source=source
+                )
+                if resolved_id:
+                    photo = grid.itemWidget(item)
+                    if isinstance(photo, ScreenshotPhoto):
+                        icon = self._screenshot_icon_path_for_app_id(resolved_id)
+                        if icon:
+                            photo.set_game_icon(icon)
+                continue
+            item.setData(_SHOT_GAME_ROLE, game)
+            item.setData(_SHOT_APP_ID_ROLE, app_id)
+            touched += 1
+            if isinstance(filters, set) and old_name and old_name in filters:
+                filters.discard(old_name)
+                if game:
+                    filters.add(game)
+            photo = grid.itemWidget(item)
+            if isinstance(photo, ScreenshotPhoto):
+                if game:
+                    photo.set_title(game)
+                resolved_id = app_id or self._screenshot_app_id_for_game_label(
+                    game, app_id="", source=source
+                )
+                if resolved_id:
+                    icon = self._screenshot_icon_path_for_app_id(resolved_id)
+                    if icon:
+                        photo.set_game_icon(icon)
+        if touched:
+            self._apply_screenshots_filters(refresh_viewport=False)
+        return touched
+
     def _screenshot_game_name_for_app_id(self, app_id: str) -> str:
         """Resolve display name: games.json → local appmanifest → ``App {id}``.
 
@@ -1926,6 +2344,7 @@ class RenderedLibraryMixin:
         from steempeg.core import games as games_mod
 
         return games_mod.is_unresolved_game_name(name, app_id)
+
     def _collect_steempeg_screenshot_rows(self, folder: str) -> list[dict]:
         rows: list[dict] = []
         if not folder or not os.path.isdir(folder):
@@ -1947,13 +2366,16 @@ class RenderedLibraryMixin:
             except OSError:
                 mtime = 0.0
             game = _parse_screenshot_game_name(path)
+            game, app_id = self._resolve_screenshot_row_identity(
+                game, "", source="steempeg"
+            )
             rows.append(
                 {
                     "full_path": os.path.normpath(path),
                     "mtime": float(mtime),
                     "game_name": game,
                     "source": "steempeg",
-                    "app_id": "",
+                    "app_id": app_id,
                 }
             )
         return rows
@@ -2247,6 +2669,7 @@ class RenderedLibraryMixin:
         self._stop_steam_screenshots_scan()
         self._stop_screenshot_thumb_backfill()
         self._stop_screenshot_game_name_backfill()
+        self._invalidate_screenshot_norm_app_id_map()
         self._pending_cached_screenshot_thumbs = []
         self._screenshot_thumb_chunk_scheduled = False
         self._screenshot_live_paths = set()
@@ -2263,7 +2686,9 @@ class RenderedLibraryMixin:
         if not hasattr(self, "_sort_applied_by_panel"):
             self._sort_applied_by_panel = {}
         if hasattr(self, "combo_sort"):
-            self._sort_applied_by_panel["screenshots"] = int(self.combo_sort.currentIndex())
+            self._sort_applied_by_panel["screenshots"] = self._screenshots_global_sort_index()
+        if self._screenshots_global_sort_index() != 0:
+            self.apply_screenshots_sorting()
         self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
         n_local = len(steempeg_rows)
@@ -2314,10 +2739,9 @@ class RenderedLibraryMixin:
                 game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
                 source = str(row.get("source") or "steempeg")
                 app_id = str(row.get("app_id") or "")
-                if app_id and (
-                    not game or self._is_screenshot_placeholder_name(game, app_id)
-                ):
-                    game = self._screenshot_game_name_for_app_id(app_id)
+                game, app_id = self._resolve_screenshot_row_identity(
+                    game, app_id, source=source
+                )
                 item = self._make_screenshot_item(
                     path, mtime, game, source=source, app_id=app_id
                 )
@@ -2442,6 +2866,7 @@ class RenderedLibraryMixin:
         worker = getattr(self, "_steam_screenshots_worker", None)
         if worker is not None:
             try:
+                cache_changed = False
                 for app_id, name in (worker.game_names_cache or {}).items():
                     aid = str(app_id)
                     if not aid or not name:
@@ -2454,6 +2879,9 @@ class RenderedLibraryMixin:
                         self.game_names_cache = cache
                     if cache.get(aid) != name:
                         cache[aid] = str(name)
+                        cache_changed = True
+                if cache_changed:
+                    self._invalidate_screenshot_game_lookup_memo()
                 if hasattr(self, "save_json_cache"):
                     try:
                         self.save_json_cache()
@@ -2478,6 +2906,7 @@ class RenderedLibraryMixin:
         self._steam_screenshots_finish_busy = True
         try:
             self._rebuild_screenshot_path_index()
+            self._backfill_steempeg_screenshot_identities()
             folder = self._screenshots_folder_path()
             self._screenshots_scanned_folder = folder
             snapshot = self._collect_screenshot_grid_snapshot()
@@ -2503,6 +2932,8 @@ class RenderedLibraryMixin:
             self._schedule_screenshots_viewport_refresh(50)
             self._schedule_screenshots_grid_reflow(50)
             self._schedule_screenshot_game_name_backfill()
+            if self._screenshots_global_sort_index() != 0:
+                self.apply_screenshots_sorting()
         finally:
             self._steam_screenshots_finish_busy = False
 
@@ -2689,9 +3120,11 @@ class RenderedLibraryMixin:
         if not hasattr(self, "_sort_applied_by_panel"):
             self._sort_applied_by_panel = {}
         if hasattr(self, "combo_sort"):
-            self._sort_applied_by_panel["screenshots"] = int(
-                self.combo_sort.currentIndex()
+            self._sort_applied_by_panel["screenshots"] = (
+                self._screenshots_global_sort_index()
             )
+        if self._screenshots_global_sort_index() != 0:
+            self.apply_screenshots_sorting()
         self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
         logging.info(
@@ -2794,12 +3227,14 @@ class RenderedLibraryMixin:
             if not aid or not label:
                 continue
             cache[aid] = label
+        self._invalidate_screenshot_game_lookup_memo()
         if hasattr(self, "save_json_cache"):
             try:
                 self.save_json_cache()
             except Exception:
                 pass
         updated = self.apply_screenshot_game_names(names)
+        updated += self._backfill_steempeg_screenshot_identities()
         if updated and hasattr(self, "set_status") and getattr(
             self, "_library_panel_mode", ""
         ) == "screenshots":
@@ -2835,7 +3270,10 @@ class RenderedLibraryMixin:
                 # Still refresh live icon if we now have a cache logo.
                 photo = grid.itemWidget(item)
                 if isinstance(photo, ScreenshotPhoto):
-                    icon = self._screenshot_icon_path_for_app_id(app_id)
+                    resolved_id = app_id or self._screenshot_app_id_for_game_label(
+                        old_name or new_name, app_id=app_id
+                    )
+                    icon = self._screenshot_icon_path_for_app_id(resolved_id)
                     if icon:
                         photo.set_game_icon(icon)
                 continue
@@ -2847,7 +3285,8 @@ class RenderedLibraryMixin:
             photo = grid.itemWidget(item)
             if isinstance(photo, ScreenshotPhoto):
                 photo.set_title(new_name)
-                icon = self._screenshot_icon_path_for_app_id(app_id)
+                resolved_id = app_id or self._screenshot_app_id_for_game_label(new_name)
+                icon = self._screenshot_icon_path_for_app_id(resolved_id)
                 if icon:
                     photo.set_game_icon(icon)
 
@@ -2866,7 +3305,7 @@ class RenderedLibraryMixin:
         grid = getattr(self, "grid_screenshots", None)
         if grid is None or not hasattr(self, "combo_sort"):
             return
-        idx = self.combo_sort.currentIndex()
+        idx = self._screenshots_global_sort_index()
         # Drop live widgets first (while items are still in the grid).
         for i in range(grid.count()):
             item = grid.item(i)
@@ -2894,13 +3333,18 @@ class RenderedLibraryMixin:
         def date_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> float:
             return float(entry[2] or 0.0)
 
+        def default_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> tuple:
+            source_rank = 0 if (entry[4] or "steempeg").strip().lower() != "steam" else 1
+            return (source_rank, -date_key(entry))
+
         if idx in (1, 2):
             payload.sort(key=game_key, reverse=(idx == 2))
         elif idx == 7:
             payload.sort(key=date_key)
-        else:
-            # Default + Newest First (and other date-ish indices)
+        elif idx == 8:
             payload.sort(key=date_key, reverse=True)
+        else:
+            payload.sort(key=default_key)
 
         grid.setUpdatesEnabled(False)
         try:
@@ -2912,25 +3356,55 @@ class RenderedLibraryMixin:
         self._screenshot_seen_paths = set(
             (getattr(self, "_screenshot_items_by_path", None) or {}).keys()
         )
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        self._sort_applied_by_panel["screenshots"] = idx
         self._apply_screenshots_filters()
         self._schedule_screenshots_viewport_refresh(0)
 
-    def _row_hidden_by_screenshots_filters(self, game_name: str) -> bool:
+    def _row_hidden_by_screenshots_filters(
+        self, game_name: str, source: str = "steempeg"
+    ) -> bool:
         games = getattr(self, "_screenshots_filter_games", None)
-        if games is None:
-            return False
-        return (game_name or "Unknown") not in games
+        folders = getattr(self, "_screenshots_filter_folders", None)
+        if games is not None and (game_name or "Unknown") not in games:
+            return True
+        if folders is not None:
+            src = (source or "steempeg").strip().lower() or "steempeg"
+            if src not in folders:
+                return True
+        return False
+
+    def _remap_screenshots_filter_game_names(self) -> None:
+        """Keep persisted Games-filter keys in sync with canonical Steam names."""
+        games = getattr(self, "_screenshots_filter_games", None)
+        if not isinstance(games, set) or not games:
+            return
+        remapped: set[str] = set()
+        changed = False
+        for name in games:
+            new_name, _aid = self._resolve_screenshot_row_identity(
+                name, "", source="steempeg"
+            )
+            label = (new_name or name).strip() or name
+            remapped.add(label)
+            if label != name:
+                changed = True
+        if changed:
+            self._screenshots_filter_games = remapped
 
     def _apply_screenshots_filters(self, *, refresh_viewport: bool = True) -> None:
         grid = getattr(self, "grid_screenshots", None)
         if grid is None:
             return
+        self._remap_screenshots_filter_game_names()
         for i in range(grid.count()):
             item = grid.item(i)
             if item is None:
                 continue
             game = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
-            item.setHidden(self._row_hidden_by_screenshots_filters(game))
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+            item.setHidden(self._row_hidden_by_screenshots_filters(game, source))
         self._update_library_count_label()
         if refresh_viewport:
             self._schedule_screenshots_viewport_refresh(16)
@@ -4232,9 +4706,12 @@ class RenderedLibraryMixin:
             if not hasattr(self, "_sort_applied_by_panel"):
                 self._sort_applied_by_panel = {}
             if hasattr(self, "combo_sort"):
-                self._sort_applied_by_panel["screenshots"] = int(
-                    self.combo_sort.currentIndex()
+                self._sort_applied_by_panel["screenshots"] = (
+                    self._screenshots_global_sort_index()
                 )
+            menu = getattr(self, "screenshots_filter_menu", None)
+            if menu is not None and menu.isVisible() and hasattr(menu, "gather_statistics"):
+                menu.gather_statistics(self)
             self._persist_library_ui_state()
             return
         from steempeg.ui.library.controller import LibraryMixin
