@@ -1,4 +1,4 @@
-"""Filter popup for the Screenshots library (games only)."""
+"""Filter popup for the Screenshots library (folders + games)."""
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
@@ -14,9 +14,12 @@ from PySide6.QtWidgets import (
 from steempeg.ui.library.filter_pill_paint import PillPaintDragMixin
 from steempeg.ui.widgets import FlowLayout
 
+_FOLDER_KEYS = ("steam", "steempeg")
+_FOLDER_LABELS = {"steam": "Steam", "steempeg": "Steempeg"}
+
 
 class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
-    """Screenshots filter — Games chips only (no Type / Health)."""
+    """Screenshots filter — Folders (Steam / Steempeg) + Games chips."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -26,6 +29,7 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
 
         self.app = None
         self._game_buttons: dict[str, QPushButton] = {}
+        self._folder_buttons: dict[str, QPushButton] = {}
 
         self.container = QFrame(self)
         self.container.setObjectName("MainFilterContainer")
@@ -44,29 +48,43 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        capsule = QFrame()
-        capsule.setObjectName("CategoryCapsule")
-        capsule.setStyleSheet("""
-            QFrame#CategoryCapsule {
-                background-color: #2d2d2d;
-                border: 1px solid #383838;
-                border-radius: 14px;
-            }
-            QLabel#CategoryTitle {
-                color: #cccccc;
-                border: none;
-                background: transparent;
-                font-size: 13px;
-                font-weight: bold;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
-            }
-        """)
-        cap_layout = QVBoxLayout(capsule)
-        cap_layout.setContentsMargins(12, 12, 12, 12)
-        cap_layout.setSpacing(8)
-        title_lbl = QLabel("🎮 Games:")
-        title_lbl.setObjectName("CategoryTitle")
-        cap_layout.addWidget(title_lbl, 0)
+        def create_category_capsule(title_text, content_widget):
+            capsule = QFrame()
+            capsule.setObjectName("CategoryCapsule")
+            capsule.setStyleSheet("""
+                QFrame#CategoryCapsule {
+                    background-color: #2d2d2d;
+                    border: 1px solid #383838;
+                    border-radius: 14px;
+                }
+                QLabel#CategoryTitle {
+                    color: #cccccc;
+                    border: none;
+                    background: transparent;
+                    font-size: 13px;
+                    font-weight: bold;
+                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
+                }
+            """)
+            cap_layout = QVBoxLayout(capsule)
+            cap_layout.setContentsMargins(12, 12, 12, 12)
+            cap_layout.setSpacing(8)
+            title_lbl = QLabel(title_text)
+            title_lbl.setObjectName("CategoryTitle")
+            cap_layout.addWidget(title_lbl, 0)
+            cap_layout.addWidget(content_widget, 0)
+            return capsule
+
+        self.folders_container = QWidget()
+        self.folders_container.setStyleSheet("background: transparent;")
+        self.folders_container.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.folders_layout = FlowLayout()
+        self.folders_container.setLayout(self.folders_layout)
+        layout.addWidget(
+            create_category_capsule("📁 Folders:", self.folders_container), 0
+        )
 
         self.games_container = QWidget()
         self.games_container.setStyleSheet("background: transparent;")
@@ -75,13 +93,32 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         )
         self.games_layout = FlowLayout()
         self.games_container.setLayout(self.games_layout)
-        cap_layout.addWidget(self.games_container, 0)
-        layout.addWidget(capsule, 0)
+        layout.addWidget(
+            create_category_capsule("🎮 Games:", self.games_container), 0
+        )
 
         self._init_pill_paint_drag()
         self._register_pill_paint_zone(
+            self.folders_container, self.folders_layout, self._update_apply_label
+        )
+        self._register_pill_paint_zone(
             self.games_container, self.games_layout, self._update_apply_label
         )
+
+        for key in _FOLDER_KEYS:
+            icon = self._icon_for_source(key)
+            btn = QPushButton(icon, f" {_FOLDER_LABELS[key]}")
+            if not icon.isNull():
+                btn.setIconSize(QSize(16, 16))
+            btn.setCheckable(True)
+            btn.setChecked(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._PILL_BTN_STYLE)
+            btn.setProperty("raw_name", key)
+            btn.clicked.connect(self._update_apply_label)
+            self._wire_pill_paint_button(btn)
+            self.folders_layout.addWidget(btn)
+            self._folder_buttons[key] = btn
 
         bottom_layout = QHBoxLayout()
         bottom_layout.setContentsMargins(0, 10, 0, 0)
@@ -161,13 +198,30 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
 
     def _tighten_flow_sections(self) -> None:
         width = self._flow_inner_width()
-        h = max(1, int(self.games_layout.heightForWidth(width)))
-        self.games_container.setFixedHeight(h)
+        for container, flow in (
+            (self.folders_container, self.folders_layout),
+            (self.games_container, self.games_layout),
+        ):
+            h = max(1, int(flow.heightForWidth(width)))
+            container.setFixedHeight(h)
         self.adjustSize()
 
     def set_content_max_height(self, max_px: int) -> None:
         _ = max_px
         self._tighten_flow_sections()
+
+    @staticmethod
+    def _icon_for_source(source: str) -> QIcon:
+        """Steam / Steempeg logo matching screenshot card footer badges."""
+        try:
+            from steempeg.ui.library.screenshot_photo import _load_source_icon
+
+            pix = _load_source_icon(source)
+            if pix is None or pix.isNull():
+                return QIcon()
+            return QIcon(pix)
+        except Exception:
+            return QIcon()
 
     @staticmethod
     def _icon_for_app_id(app_window, app_id: str) -> QIcon:
@@ -195,24 +249,65 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
             return QIcon(path)
 
     def gather_statistics(self, app_window):
-        from steempeg.ui.library.rendered_library import _SHOT_APP_ID_ROLE, _SHOT_GAME_ROLE
-
         self.app = app_window
         grid = getattr(app_window, "grid_screenshots", None)
 
-        # name → app_id (prefer first non-empty app_id for the logo)
-        unique_games: dict[str, str] = {}
-        if grid is not None:
+        catalog: dict[str, dict] = {}
+        if hasattr(app_window, "_collect_screenshot_games_catalog"):
+            try:
+                catalog = app_window._collect_screenshot_games_catalog() or {}
+            except Exception:
+                catalog = {}
+        if not catalog and grid is not None:
+            from steempeg.ui.library.rendered_library import (
+                _SHOT_APP_ID_ROLE,
+                _SHOT_GAME_ROLE,
+                _SHOT_MTIME_ROLE,
+                _SHOT_SOURCE_ROLE,
+            )
+
             for i in range(grid.count()):
                 item = grid.item(i)
                 if item is None:
                     continue
                 gname = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
                 app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
-                if gname not in unique_games:
-                    unique_games[gname] = app_id
-                elif app_id and not unique_games[gname]:
-                    unique_games[gname] = app_id
+                if not app_id:
+                    lookup = getattr(app_window, "_screenshot_app_id_for_game_label", None)
+                    if callable(lookup):
+                        try:
+                            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+                            app_id = str(
+                                lookup(gname, app_id="", source=source) or ""
+                            ).strip()
+                        except Exception:
+                            app_id = ""
+                try:
+                    mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+                except (TypeError, ValueError):
+                    mtime = 0.0
+                rec = catalog.setdefault(
+                    gname, {"app_id": app_id, "count": 0, "max_mtime": 0.0}
+                )
+                rec["count"] = int(rec.get("count") or 0) + 1
+                rec["max_mtime"] = max(float(rec.get("max_mtime") or 0.0), mtime)
+                if app_id and not rec.get("app_id"):
+                    rec["app_id"] = app_id
+
+        if hasattr(app_window, "_sort_screenshot_game_catalog_items"):
+            try:
+                game_rows = app_window._sort_screenshot_game_catalog_items(catalog)
+            except Exception:
+                game_rows = sorted(catalog.items(), key=lambda kv: kv[0].lower())
+        else:
+            game_rows = sorted(catalog.items(), key=lambda kv: kv[0].lower())
+
+        saved_folders = getattr(app_window, "_screenshots_filter_folders", None)
+        for key, btn in self._folder_buttons.items():
+            if saved_folders is None:
+                btn.setChecked(True)
+            else:
+                btn.setChecked(key in saved_folders)
 
         self._drop_pill_layout_buttons(self.games_layout)
         while self.games_layout.count():
@@ -222,7 +317,8 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         self._game_buttons.clear()
 
         saved_games = getattr(app_window, "_screenshots_filter_games", None)
-        for name, app_id in sorted(unique_games.items(), key=lambda kv: kv[0].lower()):
+        for name, rec in game_rows:
+            app_id = str((rec or {}).get("app_id") or "").strip()
             short_name = name[:14] + "..." if len(name) > 14 else name
             icon = self._icon_for_app_id(app_window, app_id)
             btn = QPushButton(icon, f" {short_name}")
@@ -252,14 +348,26 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
             return None
         return selected
 
+    def _selected_folders(self) -> set[str] | None:
+        if not self._folder_buttons:
+            return None
+        selected = {n for n, b in self._folder_buttons.items() if b.isChecked()}
+        if len(selected) == len(self._folder_buttons):
+            return None
+        return selected
+
     def _live_match_count(self) -> int:
         if not self.app:
             return 0
         games = self._selected_games()
+        folders = self._selected_folders()
         grid = getattr(self.app, "grid_screenshots", None)
         if grid is None:
             return 0
-        from steempeg.ui.library.rendered_library import _SHOT_GAME_ROLE
+        from steempeg.ui.library.rendered_library import (
+            _SHOT_GAME_ROLE,
+            _SHOT_SOURCE_ROLE,
+        )
 
         count = 0
         for i in range(grid.count()):
@@ -269,6 +377,11 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
             gname = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
             if games is not None and gname not in games:
                 continue
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg").strip().lower()
+            if not source:
+                source = "steempeg"
+            if folders is not None and source not in folders:
+                continue
             count += 1
         return count
 
@@ -276,6 +389,8 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         self.btn_apply.setText(f"Apply Filters ({self._live_match_count()})")
 
     def _clear_all(self):
+        for btn in self._folder_buttons.values():
+            btn.setChecked(True)
         for btn in self._game_buttons.values():
             btn.setChecked(True)
         self._update_apply_label()
@@ -283,6 +398,7 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
             return
         # Match Clips Clear: apply immediately and wipe persisted filter memory.
         self.app._screenshots_filter_games = None
+        self.app._screenshots_filter_folders = None
         self.app._apply_screenshots_filters()
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
@@ -292,6 +408,7 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         if not self.app:
             return
         self.app._screenshots_filter_games = self._selected_games()
+        self.app._screenshots_filter_folders = self._selected_folders()
         self.app._apply_screenshots_filters()
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
