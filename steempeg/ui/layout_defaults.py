@@ -74,6 +74,12 @@ LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → to
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
 RENDER_QUEUE_BOTTOM_INSET = 0
 
+# Player column stack (canvas ↔ #HudFrame) — flush below the header gap.
+# Keep 0; full 8px stack spacing also gaps canvas↔footer.
+PLAYER_COLUMN_SPACING = 0
+# Header title bar ↔ canvas breathing room — painted on header (padding-bottom).
+PLAYER_HEADER_CANVAS_GAP = 4
+
 # Vertical splitter (player ↔ neo/dash) — keep in sync with app.py + render_controller.
 # Was 10+10; that read as a thick dark band under the timeline. Stay tight but not glued.
 MAIN_V_SPLIT_TOP_PAD = 4  # top_v_wrap bottom margin (below player footer)
