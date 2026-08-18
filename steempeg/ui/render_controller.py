@@ -28,6 +28,9 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import capabilities
+from steempeg.ui.design_tokens import ACCENT_PRIMARY
+
+_TRANSIENT_STATUS_MS = 3500
 
 _DEFAULT_CLIP_SESSION = {
     "is_trim_mode": False,
@@ -93,6 +96,7 @@ from steempeg.render.queue import (
     STATUS_COLORS,
     STATUS_HEADER_LABELS,
     load_queue_from_file,
+    resolve_job_game_icon_path,
     save_queue_to_file,
 )
 from steempeg.render.queue_display import format_job_preset
@@ -745,6 +749,27 @@ class RenderMixin:
             return f"{int(rounded)}%"
         return f"{rounded:.1f}%"
 
+    def _cancel_transient_status_timer(self) -> None:
+        timer = getattr(self, "_transient_status_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    def _schedule_transient_status_clear(self, ms: int = _TRANSIENT_STATUS_MS) -> None:
+        timer = getattr(self, "_transient_status_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._clear_transient_status)
+            self._transient_status_timer = timer
+        else:
+            timer.stop()
+        timer.start(max(500, int(ms)))
+
+    def _clear_transient_status(self) -> None:
+        if getattr(self, "_is_rendering", False):
+            return
+        self.update_status_indicator("Ready", "ready")
+
     @staticmethod
     def _elide_status_label_text(label, full_text: str) -> str:
         """Keep «Loading N/M —» visible; elide only the game/file name tail."""
@@ -771,6 +796,8 @@ class RenderMixin:
         """Update the macOS-style status dot, label, progress bar and percent label."""
         if not hasattr(self.ui, 'label_status'):
             return
+        if state != "accent":
+            self._cancel_transient_status_timer()
         # While the library scan is running, ignore unrelated "Ready" updates that
         # would reset the progress bar mid-load (settings callbacks, layout refresh, etc).
         if getattr(self, "_clips_scan_active", False) and scan_phase is None and state == "ready":
@@ -798,6 +825,7 @@ class RenderMixin:
             "success": "#4CAF50",
             "cancelling": "#ff4444",
             "cancelled": "#ff4444",
+            "accent": ACCENT_PRIMARY,
         }
         color = colors.get(state, "#a871ff")
         queue_index = None
@@ -868,7 +896,7 @@ class RenderMixin:
 
         if state == "success":
             percent = 100.0
-        elif state == "ready" or state == "error":
+        elif state in ("ready", "error", "accent"):
             percent = 0.0
         # busy/rendering: keep percent parsed from "(N%)" in the status text
 
@@ -883,17 +911,17 @@ class RenderMixin:
                     bar.set_progress(percent)
                 elif state == "success":
                     bar.set_progress(100.0)
-                elif not preserve_progress and state in ("ready", "error"):
+                elif not preserve_progress and state in ("ready", "error", "accent"):
                     bar.set_progress(0.0)
                 elif state == "busy" and hasattr(bar, "set_scan_bounce"):
                     bar.set_scan_bounce()
-                bar.set_state(state)
+                bar.set_state("ready" if state == "accent" else state)
             else:
                 if percent is not None:
                     bar.setValue(int(percent * 10))
                 elif state == "success":
                     bar.setValue(1000)
-                elif not preserve_progress and state in ("ready", "error"):
+                elif not preserve_progress and state in ("ready", "error", "accent"):
                     bar.setValue(0)
                 bar.setTextVisible(False)
                 chunk = (
@@ -922,10 +950,11 @@ class RenderMixin:
                 self.label_pct.setText(self._format_pct_label(percent))
             elif state == "success":
                 self.label_pct.setText("100%")
-            elif not preserve_progress and state in ("ready", "error"):
+            elif not preserve_progress and state in ("ready", "error", "accent"):
                 self.label_pct.setText("0%")
 
-        self._sync_portable_render_strip(full_text, state, percent)
+        strip_state = "ready" if state == "accent" else state
+        self._sync_portable_render_strip(full_text, strip_state, percent)
 
     def _status_dot_widget(self):
         """Visible status chrome dot — portable strip when shell is active."""
@@ -1269,38 +1298,82 @@ class RenderMixin:
         return not bool(getattr(self, "_queue_scheme_deferred", False))
 
     def _queue_owns_identity_chrome(self) -> bool:
-        """True when queue mode may drive identity chrome.
+        """True when queue mode may drive render-dash identity chrome.
 
         False while Left (deferred) or while the user is previewing a library /
-        rendered card (diversion). Player header still follows the playing clip
-        via ``_queue_context_job`` (not Ready job #1). Footer Ready+#N stays
-        queue-head through ``_status_strip_context_job``.
+        rendered card (diversion). Player header follows the open clip only
+        (via ``_queue_context_job``). Footer Ready+#N stays queue-head through
+        ``_status_strip_context_job``.
         """
         if not self._queue_is_active():
             return False
         return not bool(getattr(self, "_queue_library_preview_diversion", False))
+
+    def _apply_player_idle_chrome(self) -> None:
+        """Idle player header + center placeholder (Steempeg logo, no queue bleed)."""
+        if hasattr(self, "_reset_player_placeholder_default"):
+            self._reset_player_placeholder_default()
+        elif hasattr(self, "place_logo") and hasattr(self, "place_text"):
+            from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
+
+            self.place_logo.setStyleSheet("background: transparent; border: none;")
+            apply_square_icon(self.place_logo, app_logo_pixmap(80, dpr=1.0), 80)
+            self.place_logo.show()
+            self.place_text.setText("Please select a clip from the library")
+            self.place_text.setStyleSheet(
+                "color: #888888; font-size: 14px; font-weight: bold; margin-top: 15px;"
+            )
+
+        if hasattr(self, "custom_icon_label") and hasattr(self, "custom_text_label"):
+            from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+            from steempeg.ui.icon_utils import apply_square_icon
+            from steempeg.ui.player_header_layout import (
+                player_header_icon_px,
+                set_player_header_game_text,
+            )
+
+            unknown = get_resource_path("unknown_icon.png")
+            self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
+            hdr_px = player_header_icon_px(self)
+            hdr_pix = shaped_game_icon_pixmap(QPixmap(unknown), hdr_px, ICON_SHAPE_CIRCLE)
+            apply_square_icon(self.custom_icon_label, hdr_pix, hdr_px)
+            set_player_header_game_text(
+                self,
+                "Select a clip to preview...",
+                placeholder=True,
+            )
+
+    def _sync_queue_player_and_dash_chrome(self) -> None:
+        """Dash follows queue head; player header only when a clip is open."""
+        if getattr(self, "_preview_clip_path", None):
+            self._sync_player_header_to_queue_context()
+        elif self._queue_owns_identity_chrome():
+            self._apply_player_idle_chrome()
+            self._sync_dash_queue_status_chrome()
+        elif hasattr(self, "reset_bottom_summary"):
+            self.reset_bottom_summary()
 
     def _queue_drives_start_cta(self) -> bool:
         """True when Start should batch-render pending queue jobs."""
         return self._queue_is_active() and self._queue_pending_count() > 0
 
     def _queue_context_job(self):
-        """Job that owns player-header identity while queue chrome is focused.
+        """Job that owns player-header identity while a clip is on screen.
 
-        Follow the clip actually playing. Ready job #1 only when that clip is
-        on screen (or nothing is playing). Clicking a queue card plays it, so
-        selection matches preview. Active render still wins during a batch.
+        Follow the clip actually playing — never queue head when idle.
+        Clicking a queue card plays it, so selection matches preview.
+        Active render still wins during a batch.
         """
         if not self._queue_owns_identity_chrome():
             return None
         preview = getattr(self, "_preview_clip_path", None)
         preview_norm = os.path.normpath(preview) if preview else ""
+        if not preview_norm:
+            return None
 
         def _clip_matches(job) -> bool:
             if job is None:
                 return False
-            if not preview_norm:
-                return True
             path = getattr(job, "clip_path", None) or ""
             return os.path.normpath(path) == preview_norm
 
@@ -1314,17 +1387,11 @@ class RenderMixin:
             job = self.render_queue.get(selected_id)
             if job is not None and _clip_matches(job):
                 return job
-        if preview_norm:
-            job = self._queue_job_for_clip(preview_norm)
-            if job is not None:
-                return job
-            # Playing a clip that is not queued — don't advertise Ready #1.
-            return None
-        pending = self.render_queue.next_queued()
-        if pending is not None:
-            return pending
-        jobs = list(getattr(self.render_queue, "jobs", None) or [])
-        return jobs[0] if jobs else None
+        job = self._queue_job_for_clip(preview_norm)
+        if job is not None:
+            return job
+        # Playing a clip that is not queued — don't advertise Ready #1.
+        return None
 
     def _status_strip_context_job(self):
         """Job that owns the footer status strip (name/stats + numbered badge).
@@ -1359,9 +1426,10 @@ class RenderMixin:
         preset = format_job_preset(job.settings) if getattr(job, "settings", None) else "—"
         self.bottom_text_label.setText(f"{game_name}  •  {preset}")
 
-        target_icon = (getattr(job, "game_icon_path", "") or "").strip()
+        cache_dir = getattr(self, "cache_dir", "") or ""
+        target_icon = resolve_job_game_icon_path(cache_dir, job)
         unknown_icon_path = get_resource_path("unknown_icon.png")
-        if not target_icon or not os.path.exists(target_icon):
+        if not target_icon or not os.path.isfile(target_icon):
             target_icon = unknown_icon_path
         from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
 
@@ -3689,8 +3757,7 @@ class RenderMixin:
             return
         clip_path = self._active_preview_clip_path()
         if not clip_path:
-            if hasattr(self.ui, 'label_short_summary'):
-                if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
+            self._sync_queue_player_and_dash_chrome()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
             if hasattr(self.ui, 'label_location'):
@@ -3700,7 +3767,8 @@ class RenderMixin:
                 path_row.hide()
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
-            if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
+            if hasattr(self, 'btn_copy_loc'):
+                self.btn_copy_loc.hide()
             # Queue can still render with no preview selection.
             self._sync_start_render_enabled()
             return
@@ -3974,8 +4042,11 @@ class RenderMixin:
         target_icon = getattr(self, 'current_game_icon', '')
         if strip_job is not None:
             game_name = (strip_job.game_name or "").strip() or game_name
-            if strip_job.game_icon_path:
-                target_icon = strip_job.game_icon_path
+            resolved = resolve_job_game_icon_path(
+                getattr(self, "cache_dir", "") or "", strip_job
+            )
+            if resolved:
+                target_icon = resolved
         else:
             preview_path = self._active_preview_clip_path()
             if preview_path and hasattr(self.ui, "table_clips"):
@@ -4475,7 +4546,7 @@ class RenderMixin:
             self._update_start_button_label()
             self._sync_start_render_enabled()
             self._sync_queue_scheme_chrome()
-            self._sync_player_header_to_queue_context()
+            self._sync_queue_player_and_dash_chrome()
             self.update_playback_badge()
             # Desktop dock is behind the sheet — catch up on the following tick.
             QTimer.singleShot(
@@ -4487,7 +4558,7 @@ class RenderMixin:
         else:
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
-            self._sync_player_header_to_queue_context()
+            self._sync_queue_player_and_dash_chrome()
             self.update_playback_badge()
 
         if was_duplicate:
@@ -4570,7 +4641,7 @@ class RenderMixin:
         self._sync_start_render_enabled()
         self._persist_render_queue()
         self._queue_library_preview_diversion = False
-        self._sync_player_header_to_queue_context()
+        self._sync_queue_player_and_dash_chrome()
         self.update_playback_badge()
 
     # --- Custom export presets (v41 → v45 manager UX) ------------------------
@@ -5307,7 +5378,7 @@ class RenderMixin:
         )
         # Do not seek/select job #1 or any queue card.
         if not getattr(self, "_queue_library_preview_diversion", False):
-            self._sync_player_header_to_queue_context()
+            self._sync_queue_player_and_dash_chrome()
         self._sync_start_render_enabled()
         self.update_playback_badge()
         self.refresh_render_queue_panel()
@@ -5843,15 +5914,17 @@ class RenderMixin:
             duration=getattr(job, "duration_label", "") or "",
         )
         if hasattr(self, "custom_icon_label"):
-            icon_path = job.game_icon_path
+            icon_path = resolve_job_game_icon_path(
+                getattr(self, "cache_dir", "") or "", job
+            )
             unknown = get_resource_path("unknown_icon.png")
-            path = icon_path if icon_path and os.path.exists(icon_path) else unknown
-            if path and os.path.exists(path):
+            path = icon_path if icon_path and os.path.isfile(icon_path) else unknown
+            if path and os.path.isfile(path):
                 from steempeg.ui.icon_shape import shaped_game_icon_pixmap
                 from steempeg.ui.icon_utils import apply_square_icon
                 from steempeg.ui.player_header_layout import player_header_icon_px
 
-                if icon_path and os.path.exists(icon_path):
+                if icon_path and os.path.isfile(icon_path):
                     self.current_game_icon = icon_path
                 icon_px = player_header_icon_px(self)
                 src = QPixmap(path)
@@ -5912,7 +5985,7 @@ class RenderMixin:
         self._update_start_button_label()
         self._sync_queue_scheme_chrome()
         if not getattr(self, "_is_rendering", False):
-            self._sync_dash_queue_status_chrome()
+            self._sync_queue_player_and_dash_chrome()
         if include_portable:
             sidebar = getattr(self, "_portable_queue_sidebar", None)
             if sidebar is not None:
@@ -6272,7 +6345,7 @@ class RenderMixin:
         self._update_start_button_label()
         self.refresh_render_queue_panel()
         self._queue_library_preview_diversion = False
-        self._sync_player_header_to_queue_context()
+        self._sync_queue_player_and_dash_chrome()
         self.update_playback_badge()
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
