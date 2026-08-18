@@ -145,6 +145,19 @@ def game_icon_path_for_clip(cache_dir: str, clip_path: str) -> str:
     return ""
 
 
+def resolve_job_game_icon_path(cache_dir: str, job: RenderJob) -> str:
+    """Best on-disk game icon for a queue job (persisted path, then clip app id)."""
+    stored = (getattr(job, "game_icon_path", "") or "").strip()
+    if stored and os.path.isfile(stored):
+        return stored
+    clip_path = getattr(job, "clip_path", "") or ""
+    if clip_path:
+        derived = game_icon_path_for_clip(cache_dir, clip_path)
+        if derived and os.path.isfile(derived):
+            return derived
+    return stored or (game_icon_path_for_clip(cache_dir, clip_path) if clip_path else "")
+
+
 class RenderQueue:
     """Ordered list of render jobs with basic queue operations."""
 
