@@ -1,8 +1,8 @@
 """Serialize library filter memory for ``library_ui.json``.
 
 Clips Manager keeps a rich ``saved_filter_state`` (Qt dates/times + checklists).
-Rendered / Screenshots store simpler game (and type) checklists as sets or
-``None`` meaning “all selected / no filter”.
+Rendered / Screenshots store simpler game (and type / folder) checklists as sets
+or ``None`` meaning “all selected / no filter”.
 """
 from __future__ import annotations
 
@@ -168,13 +168,20 @@ def decode_rendered_filters(data: Any) -> tuple[set[str] | None, set[str] | None
     return decode_name_set(data.get("games")), decode_name_set(data.get("types"))
 
 
-def encode_screenshots_filters(games: set[str] | None) -> dict | None:
-    if games is None:
+def encode_screenshots_filters(
+    games: set[str] | None, folders: set[str] | None = None
+) -> dict | None:
+    if games is None and folders is None:
         return None
-    return {"games": encode_name_set(games)}
+    return {
+        "games": encode_name_set(games),
+        "folders": encode_name_set(folders),
+    }
 
 
-def decode_screenshots_filters(data: Any) -> set[str] | None:
+def decode_screenshots_filters(
+    data: Any,
+) -> tuple[set[str] | None, set[str] | None]:
     if not isinstance(data, dict):
-        return None
-    return decode_name_set(data.get("games"))
+        return None, None
+    return decode_name_set(data.get("games")), decode_name_set(data.get("folders"))
