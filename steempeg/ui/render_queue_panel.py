@@ -58,6 +58,7 @@ from steempeg.ui.ui_density import (
     tab_label,
     toolbar_mega_pill_style,
 )
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
 
@@ -93,9 +94,6 @@ _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
 _GRID_GAP = 10
-_ROUNDED_LIST_BOX = (
-    "QFrame { background-color: #2d2d2d; border: 1px solid #353535; border-radius: 12px; }"
-)
 _QUEUE_TOGGLE_ACTIVE = (
     "background-color: #5138e6; color: #ffffff; border-radius: 12px;"
     " font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
@@ -760,7 +758,7 @@ class RenderQueuePanel(QWidget):
 
         self._list_container = QFrame()
         self._list_container.setObjectName("queueListContainer")
-        self._list_container.setStyleSheet(_ROUNDED_LIST_BOX)
+        self._list_container.setStyleSheet(ut.elevated_panel_stylesheet())
         list_outer = QVBoxLayout(self._list_container)
         list_outer.setContentsMargins(8, 8, 8, 8)
         list_outer.setSpacing(10)
@@ -1194,3 +1192,11 @@ class RenderQueuePanel(QWidget):
         for card in self._card_widgets:
             card.set_selected(card._job_id == job_id)
         self.job_selected.emit(job_id)
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Re-tint list container after Settings → Visual theme change."""
+        from steempeg.ui import ui_theme as ut
+
+        box = getattr(self, "_list_container", None)
+        if box is not None:
+            box.setStyleSheet(ut.elevated_panel_stylesheet())
