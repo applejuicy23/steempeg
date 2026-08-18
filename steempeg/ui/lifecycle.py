@@ -404,6 +404,11 @@ class LifecycleMixin:
     def set_status(self, text):
         """Updates the render status row (delegates to update_status_indicator when available)."""
         if hasattr(self, 'update_status_indicator'):
+            if text.startswith("Screenshots: updated "):
+                self.update_status_indicator(text, "accent")
+                if hasattr(self, "_schedule_transient_status_clear"):
+                    self._schedule_transient_status_clear()
+                return
             state = "ready"
             if text == "Error!":
                 state = "error"
@@ -981,7 +986,10 @@ class LifecycleMixin:
             self.ui.input_filename.blockSignals(False)
             
         if hasattr(self.ui, 'label_short_summary'):
-            if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
+            if hasattr(self, "_sync_queue_player_and_dash_chrome"):
+                self._sync_queue_player_and_dash_chrome()
+            elif hasattr(self, 'reset_bottom_summary'):
+                self.reset_bottom_summary()
         if hasattr(self.ui, 'label_detailed_summary'):
             self.ui.label_detailed_summary.setText("Waiting for clip selection...")
         if hasattr(self.ui, 'label_location'):
