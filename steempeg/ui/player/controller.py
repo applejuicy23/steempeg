@@ -604,7 +604,10 @@ class PlayerMixin:
             self.ui.input_filename.blockSignals(False)
             
         if hasattr(self.ui, 'label_short_summary'):
-            if hasattr(self, 'reset_bottom_summary'): self.reset_bottom_summary()
+            if hasattr(self, "_sync_queue_player_and_dash_chrome"):
+                self._sync_queue_player_and_dash_chrome()
+            elif hasattr(self, 'reset_bottom_summary'):
+                self.reset_bottom_summary()
         if hasattr(self.ui, 'label_detailed_summary'):
             # Queue card switches call close_current_clip mid-activate; skip the
             # placeholder so Final Render Details doesn't flash "Waiting…" over
@@ -1636,9 +1639,12 @@ class PlayerMixin:
 
         footer.setObjectName("HudFrame")
         from steempeg.ui.design_tokens import with_tooltip_style
-        footer.setStyleSheet(with_tooltip_style(
-            "QFrame#HudFrame { background-color: #2d2d2d; border-radius: 6px; border: none; }"
-        ))
+        from steempeg.ui import ui_theme as ut
+
+        # Same windowed HUD QSS as init (radius 6, themed fill) — not the floating FS HUD.
+        footer.setStyleSheet(with_tooltip_style(ut.player_footer_stylesheet()))
+        if hasattr(self, "_apply_playback_button_styles"):
+            self._apply_playback_button_styles()
 
         _fstrace("EXIT footer reparent done")
         v_container = getattr(self.ui, 'video_container', None)
