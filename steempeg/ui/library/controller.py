@@ -2298,7 +2298,9 @@ class LibraryMixin:
             self.scan_clips()
 
             if hasattr(self.ui, 'label_short_summary'):
-                if hasattr(self, 'reset_bottom_summary'):
+                if hasattr(self, "_sync_queue_player_and_dash_chrome"):
+                    self._sync_queue_player_and_dash_chrome()
+                elif hasattr(self, 'reset_bottom_summary'):
                     self.reset_bottom_summary()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
