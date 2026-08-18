@@ -10,7 +10,10 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 # Force light ink — Windows light OS theme otherwise paints near-black Text
 # on our dark custom popup (QSS alone is not always enough).
 _POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
-_POPUP_BG = tok.BG_SHELL  # #1e1e1e
+
+
+def _popup_bg() -> str:
+    return tok.BG_SHELL
 _POPUP_ITEM_BG = "#333333"
 _POPUP_SEL_BG = "#3a3350"
 _POPUP_SEL_FG = "#ffffff"
@@ -27,7 +30,7 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
     border = 2 if d.scale >= 0.45 else 1
     return f"""
     QComboBox QAbstractItemView {{
-        background-color: {_POPUP_BG};
+        background-color: {_popup_bg()};
         color: {_POPUP_FG};
         border: 2px solid #4a4a4a;
         border-radius: 10px;
@@ -88,7 +91,7 @@ def apply_dark_combo_popup(
     if view is None:
         return
 
-    bg = QColor(_POPUP_BG)
+    bg = QColor(_popup_bg())
     fg = QColor(_POPUP_FG)
     item_bg = QColor(_POPUP_ITEM_BG)
     sel_bg = QColor(_POPUP_SEL_BG)
@@ -192,7 +195,7 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
 # flat rows, normal weight, row height matched to the collapsed combo box.
 COMPACT_COMBO_POPUP_ITEM_RULES = f"""
     QComboBox QAbstractItemView {{
-        background-color: {_POPUP_BG};
+        background-color: {_popup_bg()};
         color: {_POPUP_FG};
         border: 2px solid #4a4a4a;
         border-radius: 10px;
