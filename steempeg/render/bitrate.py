@@ -6,6 +6,21 @@ FFmpeg from overshooting the requested size.
 """
 from dataclasses import dataclass
 
+
+def format_video_mbps(mbps: float, *, with_unit: bool = True) -> str:
+    """User-facing source/original video bitrate (same string on every surface).
+
+    ≥ 1 Mbps: always one decimal (``22.4 Mbps``, never rounded to ``22``).
+    < 1 Mbps: two decimals so tiny values stay distinct (``0.32 Mbps``).
+    """
+    value = float(mbps)
+    if value < 1.0:
+        text = f"{max(value, 0.01):.2f}"
+    else:
+        text = f"{value:.1f}"
+    return f"{text} Mbps" if with_unit else text
+
+
 _SAFETY = 0.96          # headroom so the real file lands under the target
 _MIN_VIDEO_KBPS = 100
 

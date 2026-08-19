@@ -5,6 +5,7 @@ import os
 import re
 
 from steempeg.core.dash import discovery
+from steempeg.render.bitrate import format_video_mbps
 from steempeg.render.queue import RenderJob, RenderJobSettings
 
 
@@ -92,11 +93,15 @@ def _short_fps(settings: RenderJobSettings) -> str:
 def _short_bitrate_original(settings: RenderJobSettings) -> str:
     mbps = float(settings.orig_video_mbps or 0.0)
     if mbps > 0:
-        s = f"{mbps:.1f}".rstrip("0").rstrip(".")
-        return f"{s} Mbps"
+        return format_video_mbps(mbps)
     match = re.search(r"([\d.]+)\s*Mbps", settings.bitrate_text or "")
     if match:
-        return f"{match.group(1)} Mbps"
+        try:
+            parsed = float(match.group(1))
+        except (TypeError, ValueError):
+            return f"{match.group(1)} Mbps"
+        if parsed > 0:
+            return format_video_mbps(parsed)
     return ""
 
 
