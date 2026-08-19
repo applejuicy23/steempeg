@@ -54,8 +54,19 @@ class UiThemePalette:
     settings_btn_pressed_bg: str
     button_secondary_bg: str
     button_secondary_border: str
+    button_secondary_hover_bg: str
+    button_secondary_pressed_bg: str
     button_disabled_bg: str
     button_disabled_border: str
+    bg_player_footer: str
+    bg_timeline_strip: str
+    bg_clip_card_footer: str
+    bg_clip_card_plate: str
+    bg_library_toolbar: str
+    bg_library_tab: str
+    bg_view_toggle_track: str
+    border_library_tab_idle: str
+    border_library_tab_hover: str
 
 
 # Default — matches shipped look (exp2 chrome + current token family).
@@ -87,41 +98,63 @@ _PALETTE_DEFAULT = UiThemePalette(
     settings_btn_pressed_bg="#141414",
     button_secondary_bg="#383838",
     button_secondary_border="#444444",
+    button_secondary_hover_bg="#404040",
+    button_secondary_pressed_bg="#3a324a",
     button_disabled_bg="#222222",
     button_disabled_border="#2d2d2d",
+    bg_player_footer="#2d2d2d",
+    bg_timeline_strip="#1e1e1e",
+    bg_clip_card_footer="#383838",
+    bg_clip_card_plate="#1a1a1a",
+    bg_library_toolbar="#2d2d2d",
+    bg_library_tab="#2d2d2d",
+    bg_view_toggle_track="#141414",
+    border_library_tab_idle="#353535",
+    border_library_tab_hover="#555555",
 )
 
-# TrueDark — darker unified family; card/settings/player share one elevated tone.
+# TrueDark — darker unified family; elevated surfaces sit one step above shell.
 _PALETTE_TRUE_DARK = UiThemePalette(
     name=UI_THEME_TRUE_DARK,
     chrome_title_bar="#1a1a1a",
     chrome_app_bg="#0f0f0f",
     bg_shell="#121212",
     bg_player_canvas="#1a1a1a",
-    bg_card="#1a1a1a",
-    bg_settings_panel="#1a1a1a",
-    bg_player_header="#1a1a1a",
+    bg_card="#141414",
+    bg_settings_panel="#161616",
+    bg_player_header="#161616",
     bg_placeholder_canvas="#0f0f0f",
-    bg_elevated="#1a1a1a",
-    border_card="#2a2a2a",
-    border_panel="#2a2a2a",
+    bg_elevated="#161616",
+    border_card="#262626",
+    border_panel="#262626",
     border_default="#333333",
     border_subtle="#000000",
     tooltip_bg="#252525",
     tooltip_border="#444444",
-    neo_nav_hover_bg="#2a2a2a",
-    neo_nav_checked_bg="#1f1f1f",
+    neo_nav_hover_bg="#252525",
+    neo_nav_checked_bg="#1a1a1a",
     neo_nav_idle="#909090",
     neo_nav_hover_border="#5a4b7a",
     neo_nav_checked_border="#8e7cc3",
-    settings_btn_bg="#252525",
-    settings_btn_border="#333333",
-    settings_btn_hover_bg="#1f1f1f",
+    settings_btn_bg="#1a1a1a",
+    settings_btn_border="#2a2a2a",
+    settings_btn_hover_bg="#222222",
     settings_btn_pressed_bg="#0f0f0f",
-    button_secondary_bg="#2a2a2a",
-    button_secondary_border="#383838",
-    button_disabled_bg="#1a1a1a",
-    button_disabled_border="#252525",
+    button_secondary_bg="#1a1a1a",
+    button_secondary_border="#2a2a2a",
+    button_secondary_hover_bg="#252525",
+    button_secondary_pressed_bg="#2a2438",
+    button_disabled_bg="#121212",
+    button_disabled_border="#1a1a1a",
+    bg_player_footer="#161616",  # match bg_player_header — visible panel vs shell
+    bg_timeline_strip="#0a0a0a",
+    bg_clip_card_footer="#222222",
+    bg_clip_card_plate="#141414",
+    bg_library_toolbar="#161616",
+    bg_library_tab="#161616",
+    bg_view_toggle_track="#0f0f0f",
+    border_library_tab_idle="#2a2a2a",
+    border_library_tab_hover="#444444",
 )
 
 # TrueDark OLED — pure black shell/player canvas; cards stay slightly elevated.
@@ -153,8 +186,19 @@ _PALETTE_TRUE_DARK_OLED = UiThemePalette(
     settings_btn_pressed_bg="#000000",
     button_secondary_bg="#1a1a1a",
     button_secondary_border="#333333",
+    button_secondary_hover_bg="#222222",
+    button_secondary_pressed_bg="#2a2438",
     button_disabled_bg="#0a0a0a",
     button_disabled_border="#1a1a1a",
+    bg_player_footer="#000000",
+    bg_timeline_strip="#141414",
+    bg_clip_card_footer="#1a1a1a",
+    bg_clip_card_plate="#141414",
+    bg_library_toolbar="#141414",
+    bg_library_tab="#141414",
+    bg_view_toggle_track="#0a0a0a",
+    border_library_tab_idle="#222222",
+    border_library_tab_hover="#333333",
 )
 
 UI_THEMES: Final[dict[str, UiThemePalette]] = {
@@ -210,13 +254,24 @@ def elevated_panel_stylesheet(*, object_name: str | None = None) -> str:
 
 
 def player_header_stylesheet() -> str:
-    """Player title bar — rounded top only; squares off at canvas seam."""
+    """Player title bar — seam radii (Reunited) or full panel radius (Fractured)."""
+    from steempeg.ui.layout_defaults import PLAYER_LAYOUT_PANEL_RADIUS_PX
+    from steempeg.ui.player_layout import PLAYER_LAYOUT_FRACTURED, get_player_layout
+
     p = _active
+    r = PLAYER_LAYOUT_PANEL_RADIUS_PX
+    if get_player_layout() == PLAYER_LAYOUT_FRACTURED:
+        return f"""
+        QFrame {{
+            background-color: {p.bg_player_header};
+            border-radius: {r}px;
+        }}
+    """
     return f"""
         QFrame {{
             background-color: {p.bg_player_header};
-            border-top-left-radius: 6px;
-            border-top-right-radius: 6px;
+            border-top-left-radius: {r}px;
+            border-top-right-radius: {r}px;
             border-bottom-left-radius: 0px;
             border-bottom-right-radius: 0px;
         }}
@@ -277,8 +332,8 @@ def unified_button_stylesheet() -> str:
             min-height: 24px;
             outline: none;
         }}
-        QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
-        QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+        QPushButton:hover {{ background-color: {p.button_secondary_hover_bg}; border: 2px solid #6b5a8e; }}
+        QPushButton:pressed {{ background-color: {p.button_secondary_pressed_bg}; border: 2px solid #b29ae7; }}
         QPushButton:disabled {{
             background-color: {p.button_disabled_bg};
             color: #555555;
@@ -289,6 +344,330 @@ def unified_button_stylesheet() -> str:
             color: #ffffff;
             border: 2px solid {p.button_secondary_border};
             outline: none;
+        }}
+        QPushButton::menu-indicator {{ image: none; }}
+    """
+
+
+def footer_button_stylesheet(dense) -> str:
+    """Library footer row — density-aware secondary buttons."""
+    p = _active
+    r = dense.footer_radius
+    return f"""
+        QPushButton {{
+            background-color: {p.button_secondary_bg};
+            color: #ffffff;
+            border: 2px solid {p.button_secondary_border};
+            border-radius: {r}px;
+            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            font-weight: bold;
+            font-size: {dense.footer_font}px;
+            padding: {dense.footer_pad};
+            min-height: {dense.footer_min_h}px;
+            outline: none;
+        }}
+        QPushButton:hover {{
+            background-color: {p.button_secondary_hover_bg};
+            border: 2px solid #6b5a8e;
+        }}
+        QPushButton:pressed {{
+            background-color: {p.button_secondary_pressed_bg};
+            border: 2px solid #b29ae7;
+        }}
+        QPushButton:disabled {{
+            background-color: {p.button_disabled_bg};
+            color: #555555;
+            border: 2px solid {p.button_disabled_border};
+        }}
+        QPushButton:focus, QPushButton:default {{
+            background-color: {p.button_secondary_bg};
+            color: #ffffff;
+            border: 2px solid {p.button_secondary_border};
+            outline: none;
+        }}
+        QPushButton::menu-indicator {{ image: none; }}
+    """
+
+
+def split_footer_composite_stylesheet(dense, variant: str) -> str:
+    """Choose Folder / Refresh composite — main + menu/add cells."""
+    p = _active
+    r = dense.footer_radius
+    if variant == "folder":
+        main_name, side_name = "FolderPickerMain", "FolderPickerAdd"
+        side_text_size = 17 if not dense.compact else 14
+        side_min = dense.footer_add_w
+        side_max = dense.footer_add_w + 4
+    else:
+        main_name, side_name = "RefreshMain", "RefreshMenu"
+        side_text_size = 12
+        side_min = 24 if dense.compact else 28
+        side_max = 28 if dense.compact else 32
+    return f"""
+    QPushButton#{main_name} {{
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-size: {dense.footer_font}px;
+        font-weight: bold;
+        background-color: {p.button_secondary_bg};
+        color: #ffffff;
+        border: 2px solid {p.button_secondary_border};
+        border-right: none;
+        border-top-left-radius: {r}px;
+        border-bottom-left-radius: {r}px;
+        border-top-right-radius: 0px;
+        border-bottom-right-radius: 0px;
+        padding: {dense.footer_pad};
+        min-height: {dense.footer_min_h}px;
+    }}
+    QPushButton#{main_name}:hover {{
+        background-color: {p.button_secondary_hover_bg};
+        border: 2px solid #6b5a8e;
+        border-right: none;
+    }}
+    QPushButton#{main_name}:pressed {{
+        background-color: {p.button_secondary_pressed_bg};
+        border: 2px solid #b29ae7;
+        border-right: none;
+    }}
+    QPushButton#{side_name} {{
+        background-color: {p.button_secondary_bg};
+        color: #ffffff;
+        border: 2px solid {p.button_secondary_border};
+        border-left: 1px solid {p.border_default};
+        border-top-left-radius: 0px;
+        border-bottom-left-radius: 0px;
+        border-top-right-radius: {r}px;
+        border-bottom-right-radius: {r}px;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-size: {side_text_size}px;
+        font-weight: bold;
+        min-width: {side_min}px;
+        max-width: {side_max}px;
+        padding: 2px 0;
+        min-height: {dense.footer_min_h}px;
+    }}
+    QPushButton#{side_name}:hover {{
+        background-color: {p.button_secondary_hover_bg};
+        color: #d4c4ff;
+        border: 2px solid #6b5a8e;
+        border-left: 1px solid #6b5a8e;
+    }}
+    QPushButton#{side_name}:pressed {{
+        background-color: {p.button_secondary_pressed_bg};
+        border: 2px solid #b29ae7;
+        border-left: 1px solid #b29ae7;
+    }}
+    """
+
+
+def toolbar_icon_button_stylesheet(*, radius: int = 6, height: int = 32) -> str:
+    """Compact square toolbar actions (History, Filter-adjacent)."""
+    p = _active
+    return f"""
+        QPushButton {{
+            background-color: {p.button_secondary_bg};
+            color: #e0e0e0;
+            border: 2px solid {p.button_secondary_border};
+            border-radius: {radius}px;
+            padding: 4px;
+        }}
+        QPushButton:hover {{
+            background-color: {p.button_secondary_hover_bg};
+            color: #ffffff;
+            border: 2px solid #6b5a8e;
+        }}
+        QPushButton:pressed {{
+            background-color: {p.button_secondary_pressed_bg};
+            border: 2px solid #b29ae7;
+        }}
+        QPushButton:disabled {{
+            background-color: {p.button_disabled_bg};
+            color: #5a5a5a;
+            border: 2px solid {p.button_disabled_border};
+        }}
+    """
+
+
+def toolbar_text_button_stylesheet(*, radius: int = 6, font_px: int = 13, height: int = 32) -> str:
+    """Labeled toolbar actions (Clear queue, etc.).
+
+    Height is enforced on the widget (``setFixedHeight``), not via QSS min-height —
+    padding + min-height double-counts and drops the button below Grid/List peers.
+    """
+    p = _active
+    pad_v = max(0, (height - font_px - 4) // 2)  # 4px = 2px border top + bottom
+    return f"""
+        QPushButton {{
+            background-color: {p.button_secondary_bg};
+            color: #e0e0e0;
+            border: 2px solid {p.button_secondary_border};
+            border-radius: {radius}px;
+            padding: {pad_v}px 12px;
+            font-size: {font_px}px;
+            font-weight: bold;
+            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        }}
+        QPushButton:hover {{
+            background-color: {p.button_secondary_hover_bg};
+            color: #ffffff;
+            border: 2px solid #6b5a8e;
+        }}
+        QPushButton:pressed {{
+            background-color: {p.button_secondary_pressed_bg};
+            border: 2px solid #b29ae7;
+        }}
+        QPushButton:disabled {{
+            background-color: {p.button_disabled_bg};
+            color: #5a5a5a;
+            border: 2px solid {p.button_disabled_border};
+        }}
+    """
+
+
+def library_tab_stylesheet(
+    *,
+    font_px: int,
+    radius: int,
+    active: bool,
+    hover: bool,
+) -> str:
+    p = _active
+    if active:
+        border, color = "#6b5a8e", "#ffffff"
+    elif hover:
+        border, color = p.border_library_tab_hover, "#ffffff"
+    else:
+        border, color = p.border_library_tab_idle, "#aaaaaa"
+    return f"""
+    QFrame#libraryTab {{
+        background-color: {p.bg_library_tab};
+        border: 1px solid {border};
+        border-radius: {radius}px;
+    }}
+    QLabel#libraryTabText {{
+        color: {color};
+        background: transparent;
+        border: none;
+        font-weight: bold;
+        font-size: {font_px}px;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+    }}
+    """
+
+
+def add_library_panel_button_stylesheet(dense) -> str:
+    p = _active
+    sz = dense.add_tab_size
+    return f"""
+        QPushButton {{
+            background-color: {p.bg_library_tab};
+            color: #ffffff;
+            border: 1px solid {p.border_library_tab_idle};
+            border-radius: {dense.tab_radius}px;
+            font-weight: 800;
+            font-size: {18 if not dense.compact else 14}px;
+            padding: 0px;
+            min-width: {sz}px; max-width: {sz}px;
+            min-height: {sz}px; max-height: {sz}px;
+        }}
+        QPushButton:hover {{
+            background-color: {p.neo_nav_hover_bg};
+            border-color: #6b5a8e;
+        }}
+    """
+
+
+def timeline_strip_stylesheet() -> str:
+    """Custom timeline scroll area — groove zone lighter than #HudFrame footer."""
+    p = _active
+    return f"""
+        QScrollArea {{
+            border: none;
+            background: {p.bg_timeline_strip};
+            border-radius: 8px;
+            padding: 6px 12px 0px 12px;
+        }}
+        QScrollArea > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
+        QScrollArea > QWidget > QWidget {{ background: transparent; }}
+    """
+
+
+def clip_card_chrome() -> tuple[str, str, str]:
+    """Footer fill, empty-thumb plate, idle border ring."""
+    p = _active
+    idle_border = p.border_default if p.name == UI_THEME_DEFAULT else p.border_card
+    return p.bg_clip_card_footer, p.bg_clip_card_plate, idle_border
+
+
+def queue_list_panel_stylesheet(*, object_name: str = "queueListContainer") -> str:
+    """Render queue card list host — ClipCard plate tone in dark themes."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        return elevated_panel_stylesheet(object_name=object_name)
+    selector = f"QFrame#{object_name}" if object_name else "QFrame"
+    return (
+        f"{selector} {{ background-color: {p.bg_clip_card_plate}; "
+        f"border: 1px solid {p.border_card}; border-radius: 12px; }}"
+    )
+
+
+def queue_job_card_face(*, selected: bool = False, ready_tint: bool = False) -> str:
+    """List-mode queue card fill — plate tone in TrueDark, legacy gray in Default."""
+    p = _active
+    if selected:
+        return "#322a45"
+    if ready_tint:
+        return "rgba(255, 204, 0, 0.10)"
+    if p.name == UI_THEME_DEFAULT:
+        return "#2a2a2a"
+    return p.bg_clip_card_plate
+
+
+def queue_grid_footer_stylesheet(*, radius: int = 9) -> str:
+    """Grid queue card metadata footer — matches library ClipCard footer."""
+    footer, _, _ = clip_card_chrome()
+    return f"""
+        QWidget {{
+            background-color: {footer};
+            border: none;
+            border-bottom-left-radius: {radius}px;
+            border-bottom-right-radius: {radius}px;
+        }}
+    """
+
+
+def dash_secondary_button_stylesheet(
+    *,
+    font: int = 13,
+    radius: int = 8,
+    pad: str = "6px 14px",
+) -> str:
+    """Render dash gray actions (Logs, Leave) — secondary button family."""
+    p = _active
+    return f"""
+        QPushButton {{
+            font-family: {tok.FONT_APP};
+            font-size: {font}px;
+            font-weight: bold;
+            background-color: {p.button_secondary_bg};
+            color: #ffffff;
+            border: 2px solid {p.button_secondary_border};
+            border-radius: {radius}px;
+            padding: {pad};
+            outline: none;
+        }}
+        QPushButton:hover {{
+            background-color: {p.button_secondary_hover_bg};
+            border: 2px solid #6b5a8e;
+        }}
+        QPushButton:pressed {{
+            background-color: {p.button_secondary_pressed_bg};
+            border: 2px solid #b29ae7;
+        }}
+        QPushButton:disabled {{
+            background-color: {p.button_disabled_bg};
+            color: #555555;
+            border: 2px solid {p.button_disabled_border};
         }}
         QPushButton::menu-indicator {{ image: none; }}
     """
@@ -346,25 +725,6 @@ def neo_settings_scroll_stylesheet() -> str:
             background-color: {bg};
             border: none;
         }}
-        QScrollBar:vertical {{
-            background: transparent;
-            width: 12px;
-            margin: 15px 5px 15px 0px;
-        }}
-        QScrollBar::handle:vertical {{
-            background: #5a4b7a;
-            min-height: 30px;
-            border-radius: 5px;
-        }}
-        QScrollBar::handle:vertical:hover {{
-            background: #8e7cc3;
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
-        }}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-            background: none;
-        }}
     """
 
 
@@ -397,21 +757,177 @@ def neo_tab_page_stylesheet(object_name: str) -> str:
 
 
 def player_footer_stylesheet() -> str:
-    """Player HUD / control bar — rounded bottom only; squares off at canvas seam.
+    """Player HUD — seam radii (Reunited) or full panel radius (Fractured).
 
     Do not add ``border: none`` here: Qt QSS then skips clipping the fill to
     ``border-radius``, which squares off #HudFrame.
     """
+    from steempeg.ui.layout_defaults import PLAYER_LAYOUT_PANEL_RADIUS_PX
+    from steempeg.ui.player_layout import PLAYER_LAYOUT_FRACTURED, get_player_layout
+
     p = _active
-    return f"""
+    r = PLAYER_LAYOUT_PANEL_RADIUS_PX
+    footer_bg = p.bg_player_footer
+    if get_player_layout() == PLAYER_LAYOUT_FRACTURED:
+        return f"""
         #HudFrame {{
-            background-color: {p.bg_player_header};
-            border-top-left-radius: 0px;
-            border-top-right-radius: 0px;
-            border-bottom-left-radius: 6px;
-            border-bottom-right-radius: 6px;
+            background-color: {footer_bg};
+            border-radius: {r}px;
         }}
     """
+    return f"""
+        #HudFrame {{
+            background-color: {footer_bg};
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-left-radius: {r}px;
+            border-bottom-right-radius: {r}px;
+        }}
+    """
+
+
+def player_chrome_pill_stylesheet(*, radius: int) -> str:
+    """Theater / fullscreen / marker pill track — Default keeps legacy gray."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg = "#4e4e4e"
+        border = "none"
+    elif p.name == UI_THEME_TRUE_DARK:
+        # Darker than bg_player_footer (#161616) so pills read as controls, not panel.
+        bg = p.bg_timeline_strip
+        border = f"1px solid {p.button_secondary_border}"
+    else:
+        bg = p.button_secondary_bg
+        border = "none"
+    return (
+        f"QFrame {{ background-color: {bg}; border-radius: {radius}px; border: {border}; }}"
+    )
+
+
+def player_chrome_round_button_stylesheet(*, radius: int) -> str:
+    """Volume / speed round mute buttons in the player footer."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, hover = "#4e4e4e", "#5a5a5a"
+        border = "none"
+    elif p.name == UI_THEME_TRUE_DARK:
+        bg = p.bg_timeline_strip
+        hover = p.neo_nav_hover_bg
+        border = f"1px solid {p.button_secondary_border}"
+    else:
+        bg, hover = p.button_secondary_bg, p.button_secondary_hover_bg
+        border = "none"
+    return (
+        f"QPushButton {{ background-color: {bg}; border-radius: {radius}px; border: {border}; }}"
+        f" QPushButton:hover {{ background-color: {hover}; }}"
+    )
+
+
+def render_settings_plate_stylesheet(
+    *,
+    radius: int = 12,
+    object_name: str | None = None,
+) -> str:
+    """Source Info stat blocks, Export summary card, and similar plates."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border = "#303030", "#3a3a3a"
+    else:
+        bg, border = p.bg_elevated, p.button_secondary_border
+    selector = f"QFrame#{object_name}" if object_name else "QFrame"
+    return (
+        f"{selector} {{ background-color: {bg}; border: 1px solid {border}; "
+        f"border-radius: {radius}px; }}"
+    )
+
+
+def render_settings_source_row_stylesheet() -> str:
+    """Per-directory source path rows in Source Info."""
+    p = _active
+    bg = "#252525" if p.name == UI_THEME_DEFAULT else p.bg_clip_card_plate
+    return f"QFrame#srcRow {{ background-color: {bg}; border-radius: 10px; }}"
+
+
+def render_settings_target_readout_stylesheet() -> str:
+    """Video Settings target-size readout chip."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border = "#303030", "#3a3a3a"
+    else:
+        bg, border = p.bg_elevated, p.button_secondary_border
+    return (
+        f"QLabel {{ background-color: {bg}; border: 1px solid {border};"
+        f" border-radius: 10px; padding: 9px 13px; color: #cfcfcf;"
+        f" font-size: 11px; font-weight: normal; line-height: 1.35;"
+        f" font-family: {tok.FONT_APP}; }}"
+    )
+
+
+def render_settings_combo_overlay_stylesheet() -> str:
+    """Custom-value overlay chip on active render combos."""
+    bg = combo_chrome_colors().field_bg
+    return (
+        f"QFrame#customOverlay {{ background-color: {bg};"
+        f" border-top-left-radius: 10px; border-bottom-left-radius: 10px; }}"
+    )
+
+
+@dataclass(frozen=True)
+class ComboChromeColors:
+    """QComboBox face + popup list tokens for the active UI theme."""
+
+    field_bg: str
+    field_border: str
+    field_hover_bg: str
+    drop_bg: str
+    popup_bg: str
+    popup_border: str
+    popup_item_bg: str
+    popup_item_hover: str
+    popup_sel_bg: str
+    popup_sel_fg: str
+    popup_dis_fg: str
+    popup_dis_bg: str
+
+
+def combo_chrome_colors() -> ComboChromeColors:
+    """Combo face and popup palette — Default unchanged; dark themes use timeline black."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        return ComboChromeColors(
+            field_bg="#383838",
+            field_border="#4a4a4a",
+            field_hover_bg="#404040",
+            drop_bg="#262626",
+            popup_bg=p.bg_shell,
+            popup_border="#4a4a4a",
+            popup_item_bg="#333333",
+            popup_item_hover="#404040",
+            popup_sel_bg="#3a3350",
+            popup_sel_fg="#ffffff",
+            popup_dis_fg="#5a5a5a",
+            popup_dis_bg="#262626",
+        )
+    return ComboChromeColors(
+        field_bg=p.bg_timeline_strip,
+        field_border=p.button_secondary_border,
+        field_hover_bg=p.neo_nav_hover_bg,
+        drop_bg=p.bg_elevated,
+        popup_bg=p.bg_elevated,
+        popup_border=p.button_secondary_border,
+        popup_item_bg=p.bg_timeline_strip,
+        popup_item_hover=p.neo_nav_hover_bg,
+        popup_sel_bg="#3a3350",
+        popup_sel_fg="#ffffff",
+        popup_dis_fg="#5a5a5a",
+        popup_dis_bg=p.button_disabled_bg,
+    )
+
+
+def render_settings_active_combo_colors() -> tuple[str, str, str]:
+    """Enabled combo field fill, border, and drop-down cell (disabled rows unchanged)."""
+    c = combo_chrome_colors()
+    return c.field_bg, c.field_border, c.drop_bg
 
 
 def settings_dialog_tabs_stylesheet() -> str:
@@ -437,3 +953,543 @@ def settings_dialog_tabs_stylesheet() -> str:
     QTabBar::tab:selected {{ background: #4a3d66; color: #fff; }}
     QTabBar::tab:hover:!selected {{ background: {tab_hover}; color: #ddd; }}
 """
+
+
+_MENU_FONT = "'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif"
+
+
+@dataclass(frozen=True)
+class MenuPopupColors:
+    """QMenu popup palette — aligned with ``combo_chrome_colors`` on dark themes."""
+
+    bg: str
+    border: str
+    fg: str
+    item_hover_bg: str
+    item_selected_bg: str
+    item_selected_fg: str
+    separator: str
+    disabled_fg: str
+    border_width: int
+    accent_selected_bg: str
+    accent_selected_fg: str
+
+
+def menu_popup_colors() -> MenuPopupColors:
+    """Theme-aware QMenu tokens — Default unchanged; TrueDark matches combo popups."""
+    p = _active
+    c = combo_chrome_colors()
+    if p.name == UI_THEME_DEFAULT:
+        return MenuPopupColors(
+            bg="#2d2d2d",
+            border="#444444",
+            fg="#ffffff",
+            item_hover_bg="#6b5a8e",
+            item_selected_bg="#6b5a8e",
+            item_selected_fg="#ffffff",
+            separator="#444444",
+            disabled_fg="#888888",
+            border_width=2,
+            accent_selected_bg="#3a324a",
+            accent_selected_fg="#b29ae7",
+        )
+    return MenuPopupColors(
+        bg=c.popup_bg,
+        border=c.popup_border,
+        fg="#e0e0e0",
+        item_hover_bg=c.popup_item_hover,
+        item_selected_bg=c.popup_sel_bg,
+        item_selected_fg=c.popup_sel_fg,
+        separator=c.popup_border,
+        disabled_fg=c.popup_dis_fg,
+        border_width=1,
+        accent_selected_bg=p.button_secondary_pressed_bg,
+        accent_selected_fg="#b29ae7",
+    )
+
+
+def menu_stylesheet(
+    *,
+    item_padding: str = "6px 24px 6px 24px",
+    item_margin: str = "2px 4px",
+    menu_padding: str = "0px",
+    font_size: str = "13px",
+    font_weight: str = "bold",
+    selected_mode: str = "fill",
+    extra: str = "",
+    selector: str = "QMenu",
+) -> str:
+    """Shared QMenu QSS — Default preserves legacy gray; TrueDark uses elevated chocolate."""
+    mc = menu_popup_colors()
+    if selected_mode == "accent":
+        sel_bg, sel_fg = mc.accent_selected_bg, mc.accent_selected_fg
+    else:
+        sel_bg, sel_fg = mc.item_selected_bg, mc.item_selected_fg
+    return f"""
+    {selector} {{
+        background-color: {mc.bg};
+        color: {mc.fg};
+        border: {mc.border_width}px solid {mc.border};
+        border-radius: 8px;
+        font-family: {_MENU_FONT};
+        font-size: {font_size};
+        font-weight: {font_weight};
+        padding: {menu_padding};
+    }}
+    {selector}::item {{
+        padding: {item_padding};
+        border-radius: 4px;
+        margin: {item_margin};
+    }}
+    {selector}::item:selected {{
+        background-color: {sel_bg};
+        color: {sel_fg};
+    }}
+    {selector}::separator {{
+        height: 1px;
+        background-color: {mc.separator};
+        margin: 4px 10px;
+    }}
+    {extra}
+    """
+
+
+def library_menu_stylesheet() -> str:
+    """Refresh ▾, clip RMB, Apply ▾, and other standard action menus."""
+    return menu_stylesheet()
+
+
+def health_menu_stylesheet() -> str:
+    """Clip/rendered health menus — keep colored icons on disabled rows."""
+    return menu_stylesheet(
+        item_padding="8px 28px 8px 12px",
+        extra="""
+    QMenu::item:disabled {
+        color: #e0e0e0;
+        background: transparent;
+    }
+    """,
+    )
+
+
+def folders_menu_stylesheet() -> str:
+    """Choose-folder multi-path popup — menu chrome + embedded folder rows."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        row_bg, row_border = "#2a2a2a", "#4a4a4a"
+        row_label = "#ffffff"
+        btn_bg, btn_border = "#3f3f3f", "#5c5c5c"
+    else:
+        row_bg, row_border = p.bg_timeline_strip, p.button_secondary_border
+        row_label = "#e0e0e0"
+        btn_bg, btn_border = p.button_secondary_bg, p.button_secondary_border
+    return menu_stylesheet(
+        menu_padding="4px 0",
+        item_padding="8px 28px 8px 20px",
+        item_margin="2px 6px",
+        extra=f"""
+    QMenu::item {{
+        background: transparent;
+        border: none;
+    }}
+    QMenu::item:disabled {{
+        color: {row_label};
+        background: transparent;
+        padding: 6px 20px 4px 20px;
+        font-size: 13px;
+        font-weight: bold;
+    }}
+    QWidget#FolderRowFrame {{
+        background: transparent;
+        border: none;
+    }}
+    QWidget#FolderRow {{
+        background-color: {row_bg};
+        border: 1px solid {row_border};
+        border-radius: 12px;
+    }}
+    QLabel#FolderRowLabel {{
+        color: {row_label};
+        font-family: {_MENU_FONT};
+        font-size: 13px;
+        font-weight: bold;
+        background: transparent;
+        border: none;
+        padding: 0;
+    }}
+    QLabel#FolderRowLabel[missing="true"] {{
+        color: #d46a6a;
+    }}
+    QPushButton#FolderRowRemove, QPushButton#FolderRowReplace {{
+        background-color: {btn_bg};
+        border: 1px solid {btn_border};
+        border-radius: 11px;
+        min-width: 24px;
+        max-width: 24px;
+        min-height: 24px;
+        max-height: 24px;
+        padding: 0;
+    }}
+    QPushButton#FolderRowRemove:hover {{
+        background-color: #8a2525;
+        border: 1px solid #a82e2e;
+    }}
+    QPushButton#FolderRowRemove:pressed {{
+        background-color: #661a1a;
+        border: 1px solid #7a1f1f;
+    }}
+    QPushButton#FolderRowReplace:hover {{
+        background-color: #4a3d66;
+        border: 1px solid #6b5a8e;
+    }}
+    QPushButton#FolderRowReplace:pressed {{
+        background-color: #3a324a;
+        border: 1px solid #5a4b7a;
+    }}
+    """,
+    )
+
+
+def logs_menu_stylesheet() -> str:
+    """Logs ▾ dropdown — purple accent on selected row."""
+    return menu_stylesheet(
+        menu_padding="4px 0",
+        item_padding="8px 28px 8px 20px",
+        item_margin="2px 6px",
+        selected_mode="accent",
+    )
+
+
+def queue_menu_stylesheet() -> str:
+    """Render queue card RMB menus."""
+    mc = menu_popup_colors()
+    disabled = "#777777" if _active.name == UI_THEME_DEFAULT else mc.disabled_fg
+    return menu_stylesheet(
+        menu_padding="4px 0",
+        item_padding="8px 28px 8px 20px",
+        item_margin="2px 6px",
+        selected_mode="accent",
+        extra=f"""
+    QMenu::item:disabled {{
+        color: {disabled};
+    }}
+    """,
+    )
+
+
+def preview_quality_menu_stylesheet() -> str:
+    """Player header preview-quality dropdown."""
+    mc = menu_popup_colors()
+    return menu_stylesheet(
+        menu_padding="4px 0px",
+        item_padding="6px 28px 6px 16px",
+        item_margin="2px 6px",
+        extra=f"""
+    QMenu::item:disabled {{
+        color: {mc.disabled_fg};
+        background: transparent;
+        font-weight: normal;
+        font-size: 11px;
+        padding-top: 2px;
+        padding-bottom: 8px;
+    }}
+    """,
+    )
+
+
+def compact_menu_stylesheet() -> str:
+    """Minimal picker menus (e.g. multi-file screenshot list)."""
+    return menu_stylesheet(
+        item_padding="6px 24px",
+        font_weight="normal",
+    )
+
+
+def filter_menu_container_stylesheet(*, radius: int) -> str:
+    """Clips filter popup outer pill."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border = "#252525", "#3d3d3d"
+    else:
+        bg, border = p.bg_elevated, p.border_card
+    return (
+        f"QFrame#MainFilterContainer {{ background-color: {bg}; "
+        f"border: 1px solid {border}; border-radius: {radius}px; }}"
+    )
+
+
+def filter_menu_capsule_stylesheet(*, radius: int, title_font: int) -> str:
+    """Category mega-capsule inside the filter popup."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border = "#2d2d2d", "#383838"
+    else:
+        bg, border = p.bg_clip_card_plate, p.border_card
+    return f"""
+        QFrame#CategoryCapsule {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-radius: {radius}px;
+        }}
+        QLabel#CategoryTitle {{
+            color: #cccccc;
+            border: none;
+            background: transparent;
+            font-size: {title_font}px;
+            font-weight: bold;
+            font-family: {_MENU_FONT};
+        }}
+    """
+
+
+def filter_chip_button_stylesheet(
+    *,
+    font: int,
+    pad_v: int,
+    pad_h: int,
+    min_h: int,
+    radius: int,
+    border: int,
+) -> str:
+    """Checkable game/type/health chips in the filter popup."""
+    p = _active
+    c = combo_chrome_colors()
+    if p.name == UI_THEME_DEFAULT:
+        bg, idle_fg = "#383838", "#aaaaaa"
+        brd = "#444444"
+        hover_bg, hover_brd = "#404040", "#555555"
+        checked_bg, checked_brd = "#404040", "#6b5a8e"
+        checked_hover_bg, checked_hover_brd = "#3a324a", "#b29ae7"
+    else:
+        bg, brd = c.field_bg, c.field_border
+        idle_fg = "#aaaaaa"
+        hover_bg, hover_brd = c.field_hover_bg, p.border_default
+        checked_bg, checked_brd = c.field_hover_bg, "#6b5a8e"
+        checked_hover_bg, checked_hover_brd = p.button_secondary_pressed_bg, "#b29ae7"
+    return f"""
+        QPushButton {{
+            background-color: {bg};
+            color: {idle_fg};
+            border: {border}px solid {brd};
+            border-radius: {radius}px;
+            font-family: {_MENU_FONT};
+            font-weight: bold;
+            font-size: {font}px;
+            padding: {pad_v}px {pad_h}px;
+            min-height: {min_h}px;
+        }}
+        QPushButton:hover {{
+            background-color: {hover_bg};
+            color: #ffffff;
+            border: {border}px solid {hover_brd};
+        }}
+        QPushButton:checked {{
+            background-color: {checked_bg};
+            color: #ffffff;
+            border: {border}px solid {checked_brd};
+        }}
+        QPushButton:checked:hover {{
+            background-color: {checked_hover_bg};
+            border: {border}px solid {checked_hover_brd};
+        }}
+    """
+
+
+def filter_action_button_stylesheet(
+    *,
+    font: int,
+    pad_v: int,
+    pad_h: int,
+    min_h: int,
+    radius: int,
+    border: int,
+) -> str:
+    """Apply / Clear row in the filter popup."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, brd = "#383838", "#444444"
+        hover_bg, pressed_bg = "#404040", "#3a324a"
+        dis_bg, dis_brd = "#222222", "#2d2d2d"
+    else:
+        bg, brd = p.button_secondary_bg, p.button_secondary_border
+        hover_bg, pressed_bg = p.button_secondary_hover_bg, p.button_secondary_pressed_bg
+        dis_bg, dis_brd = p.button_disabled_bg, p.button_disabled_border
+    return f"""
+        QPushButton {{
+            background-color: {bg};
+            color: #ffffff;
+            border: {border}px solid {brd};
+            border-radius: {radius}px;
+            font-family: {_MENU_FONT};
+            font-weight: bold;
+            font-size: {font}px;
+            padding: {pad_v}px {pad_h}px;
+            min-height: {min_h}px;
+        }}
+        QPushButton:hover {{ background-color: {hover_bg}; border: {border}px solid #6b5a8e; }}
+        QPushButton:pressed {{ background-color: {pressed_bg}; border: {border}px solid #b29ae7; }}
+        QPushButton:disabled {{
+            background-color: {dis_bg};
+            color: #555555;
+            border: {border}px solid {dis_brd};
+        }}
+        QPushButton::menu-indicator {{ image: none; }}
+    """
+
+
+def filter_date_time_input_stylesheet(
+    *,
+    font: int,
+    pad_v: int,
+    pad_h: int,
+    min_h: int,
+    radius: int,
+    border: int,
+    drop_w: int,
+    spin_w: int,
+    arrow_up: str,
+    arrow_down: str,
+    arrow_sz: int,
+) -> str:
+    """QDateEdit / QTimeEdit rows inside the filter popup."""
+    p = _active
+    c = combo_chrome_colors()
+    if p.name == UI_THEME_DEFAULT:
+        bg, brd = "#383838", "#444444"
+        hover_bg, focus_bg = "#404040", "#3a324a"
+        drop_bg = "#333333"
+        cal_bg, cal_alt = "#252525", "#2d2d2d"
+        cal_btn = "#383838"
+    else:
+        bg, brd = c.field_bg, c.field_border
+        hover_bg, focus_bg = c.field_hover_bg, p.button_secondary_pressed_bg
+        drop_bg = c.drop_bg
+        cal_bg, cal_alt = c.popup_bg, c.popup_item_bg
+        cal_btn = c.field_bg
+    return f"""
+        QDateEdit, QTimeEdit {{
+            background-color: {bg};
+            color: #ffffff;
+            border: {border}px solid {brd};
+            border-radius: {radius}px;
+            font-family: {_MENU_FONT};
+            font-weight: bold;
+            font-size: {font}px;
+            padding: {pad_v}px {pad_h}px;
+            min-height: {min_h}px;
+            max-height: {min_h + 2}px;
+        }}
+        QDateEdit:hover, QTimeEdit:hover {{
+            background-color: {hover_bg};
+            border: {border}px solid #6b5a8e;
+        }}
+        QDateEdit:focus, QTimeEdit:focus {{
+            background-color: {focus_bg};
+            border: {border}px solid #b29ae7;
+        }}
+        QDateEdit::drop-down {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: {drop_w}px;
+            border-left: 1px solid {brd};
+            border-top-right-radius: {radius - 1}px;
+            border-bottom-right-radius: {radius - 1}px;
+            background-color: {drop_bg};
+        }}
+        QTimeEdit::up-button {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: {spin_w}px;
+            border-left: 1px solid {brd};
+            border-bottom: 1px solid {brd};
+            border-top-right-radius: {radius - 1}px;
+            background-color: {drop_bg};
+        }}
+        QTimeEdit::down-button {{
+            subcontrol-origin: border;
+            subcontrol-position: bottom right;
+            width: {spin_w}px;
+            border-left: 1px solid {brd};
+            border-bottom-right-radius: {radius - 1}px;
+            background-color: {drop_bg};
+        }}
+        QDateEdit::drop-down:hover, QTimeEdit::up-button:hover, QTimeEdit::down-button:hover {{
+            background-color: #6b5a8e;
+        }}
+        QDateEdit::drop-down:pressed, QTimeEdit::up-button:pressed, QTimeEdit::down-button:pressed {{
+            background-color: #b29ae7;
+        }}
+        QTimeEdit::up-arrow {{
+            image: url("{arrow_up}");
+            width: {arrow_sz}px; height: {arrow_sz}px;
+        }}
+        QTimeEdit::down-arrow, QDateEdit::down-arrow {{
+            image: url("{arrow_down}");
+            width: {arrow_sz}px; height: {arrow_sz}px;
+        }}
+        QCalendarWidget QWidget {{
+            alternate-background-color: {cal_alt};
+            background-color: {cal_bg};
+            color: white;
+        }}
+        QCalendarWidget QToolButton {{
+            color: white;
+            background-color: {cal_btn};
+            border-radius: 4px;
+            padding: 2px;
+        }}
+        QCalendarWidget QToolButton:hover {{ background-color: #6b5a8e; }}
+        QCalendarWidget QAbstractItemView:enabled {{
+            color: white;
+            background-color: {cal_bg};
+            selection-background-color: #6b5a8e;
+            selection-color: white;
+            border-radius: 4px;
+        }}
+    """
+
+
+def settings_density_line_edit_stylesheet(
+    *,
+    border: int,
+    btn_r: int,
+    field_font: int,
+    ph: int,
+) -> str:
+    """Render panel filename field — combo face on dark themes."""
+    c = combo_chrome_colors()
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        dis_bg, dis_border = "#262626", "#333333"
+    else:
+        dis_bg, dis_border = p.button_disabled_bg, p.button_disabled_border
+    return (
+        f"QLineEdit {{ background-color: {c.field_bg}; color: #ffffff;"
+        f" border: {border}px solid {c.field_border}; border-radius: {btn_r}px;"
+        f" font-family: {tok.FONT_APP}; font-weight: bold; font-size: {field_font}px;"
+        f" padding: 0px {ph}px; }}"
+        f" QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}"
+        f" QLineEdit:disabled {{ background-color: {dis_bg}; color: {c.popup_dis_fg};"
+        f" border: {border}px solid {dis_border}; }}"
+    )
+
+
+def settings_density_push_button_stylesheet(
+    *,
+    border: int,
+    btn_r: int,
+    field_font: int,
+    ph: int,
+) -> str:
+    """Render panel Save-as / destination row actions."""
+    p = _active
+    return (
+        f"QPushButton {{ background-color: {p.button_secondary_bg}; color: #ffffff;"
+        f" border: {border}px solid {p.button_secondary_border}; border-radius: {btn_r}px;"
+        f" font-family: {tok.FONT_APP}; font-weight: bold; font-size: {field_font}px;"
+        f" padding: 0px {ph}px; }}"
+        f" QPushButton:hover {{ background-color: {p.button_secondary_hover_bg};"
+        f" border: {border}px solid #6b5a8e; }}"
+        f" QPushButton:pressed {{ background-color: {p.button_secondary_pressed_bg};"
+        f" border: {border}px solid #b29ae7; }}"
+    )
