@@ -68,6 +68,17 @@ def get_resource_path(relative_path):
     return paths.get_resource_path(relative_path)
 
 
+def _is_enabled_setting(value) -> bool:
+    """Parse settings flag values that may arrive as bool/str/int."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def _force_native_window_icon(widget, ico_path):
     """Push the .ico onto the realized HWND via WM_SETICON.
 
@@ -172,6 +183,20 @@ QSlider#slider_timeline::handle:horizontal:hover {
 
 
 class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
+    def _refresh_dev_button_visibility(self) -> None:
+        """Show/hide footer Dev button from cache/settings.json dev_mode."""
+        btn_dev = getattr(getattr(self, "ui", None), "btn_dev", None)
+        if btn_dev is None:
+            return
+        enabled = False
+        try:
+            settings = self.load_user_settings() or {}
+            if isinstance(settings, dict):
+                enabled = _is_enabled_setting(settings.get("dev_mode", False))
+        except Exception:
+            enabled = False
+        btn_dev.setVisible(enabled)
+
     def _apply_playback_button_styles(self):
         """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
         if not hasattr(self.ui, "btn_play"):
@@ -385,6 +410,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 migrate_clip_card_style_in_settings,
             )
             from steempeg.ui.player_header_layout import load_header_layout_from_settings
+            from steempeg.ui.player_layout import load_player_layout_from_settings
             from steempeg.ui.player_header_size import (
                 KEY_PLAYER_HEADER_SIZE,
                 KEY_PLAYER_HEADER_SIZE_REV,
@@ -411,6 +437,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
             load_clip_card_style_from_settings(_settings0)
             load_header_layout_from_settings(_settings0)
+            load_player_layout_from_settings(_settings0)
             if migrate_player_header_size_in_settings(_settings0):
                 if KEY_PLAYER_HEADER_SIZE in _settings0:
                     self.save_user_settings(
@@ -1021,26 +1048,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     background-color: {_neo_settings};
                     border: none;
                 }}
-                QScrollBar:vertical {{
-                    background: transparent;
-                    width: 12px;
-                    margin: 15px 5px 15px 0px;
-                }}
-                QScrollBar::handle:vertical {{
-                    background: #5a4b7a;
-                    min-height: 30px;
-                    border-radius: 5px;
-                }}
-                QScrollBar::handle:vertical:hover {{
-                    background: #8e7cc3;
-                }}
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                    height: 0px;
-                }}
-                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                    background: none;
-                }}
             """)
+            from steempeg.ui.widgets.vertical_scrollbar import (
+                ensure_steempg_vertical_scrollbar,
+                settings_scrollbar_chrome,
+            )
+
+            ensure_steempg_vertical_scrollbar(
+                self.right_scroll, chrome=settings_scrollbar_chrome()
+            )
             # Palette lock — Windows light theme must not paint the viewport black/white.
             from PySide6.QtGui import QColor, QPalette
 
@@ -1333,7 +1349,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if btn_about: bottom_row.addWidget(btn_about, 1)
         if btn_update: bottom_row.addWidget(btn_update, 1)
         bottom_row.addWidget(btn_settings, 1)
-        
+
+        # Dev Mode button (hidden unless dev_mode is true in settings.json)
+        btn_dev = QPushButton("Dev")
+        btn_dev.setObjectName("btn_dev")
+        btn_dev.setToolTip("Developer Tools")
+        self._apply_library_footer_button(btn_dev, unified_table_style)
+        btn_dev.setVisible(False)
+        self.ui.btn_dev = btn_dev
+        bottom_row.addWidget(btn_dev, 1)
+        self._refresh_dev_button_visibility()
+
         # 7. RECOVERING SIGNALS (Presses)
         self.btn_refresh.main_btn.clicked.connect(self.refresh_library)
         if hasattr(self, "setup_refresh_menu"):
@@ -1348,6 +1374,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if btn_about: btn_about.clicked.connect(self.show_about_dialog)
         if btn_update: btn_update.clicked.connect(self.check_for_updates)
         btn_settings.clicked.connect(self.show_settings_dialog)
+        btn_dev.clicked.connect(self.show_dev_dialog)
         if hasattr(self, "_wire_title_bar_about_updates"):
             self._wire_title_bar_about_updates()
         self.ui.btn_start.clicked.connect(self.start_render_thread)
@@ -2132,9 +2159,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     self.btn_trim.setText("✂️ Trim")
                 
                 # --- THEATER & FULLSCREEN PILL CONTAINER ---
+                from steempeg.ui.ui_density import COMFORT as _COMFORT
+
+                _pill_chip_r = _COMFORT.chrome_chip // 2
                 self.pill_container = QFrame()
-                # Elegant dark background with full border control
-                self.pill_container.setStyleSheet("QFrame { background-color: #4e4e4e; border-radius: 20px; border: none; }")
+                self.pill_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                self.pill_container.setStyleSheet(
+                    ut.player_chrome_pill_stylesheet(radius=_pill_chip_r)
+                )
                 
                 pill_layout = QHBoxLayout(self.pill_container)
                 # Add outer padding inside the pill (5px left/right) and 4px spacing between buttons
@@ -2181,7 +2213,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                 # New Cropping Toolbar
                 self.trim_tools_pill = QFrame()
-                self.trim_tools_pill.setStyleSheet("QFrame { background-color: #4e4e4e; border-radius: 20px; border: none; }")
+                self.trim_tools_pill.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                self.trim_tools_pill.setStyleSheet(
+                    ut.player_chrome_pill_stylesheet(radius=_pill_chip_r)
+                )
                 
                 trim_tools_layout = QHBoxLayout(self.trim_tools_pill)
                 trim_tools_layout.setContentsMargins(5, 0, 5, 0)
@@ -2253,8 +2288,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 """)
 
                 self.marker_pill = QFrame()
+                self.marker_pill.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 self.marker_pill.setStyleSheet(
-                    "QFrame { background-color: #4e4e4e; border-radius: 20px; border: none; }"
+                    ut.player_chrome_pill_stylesheet(radius=_pill_chip_r)
                 )
                 marker_pill_layout = QHBoxLayout(self.marker_pill)
                 marker_pill_layout.setContentsMargins(5, 0, 5, 0)
@@ -2579,6 +2615,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                 # Saving the new index for Fullscreen
                 self.controls_layout_index = top_v_layout.indexOf(self.player_footer_frame)
+                try:
+                    from steempeg.ui.layout_defaults import apply_player_layout_mode
+
+                    apply_player_layout_mode(self)
+                except Exception:
+                    pass
+                self._refresh_player_footer_chrome(_COMFORT)
                 self.custom_timeline.pause_requested.connect(self.on_timeline_press)
                 self.custom_timeline.seek_requested.connect(self.on_timeline_seek)
                 self.custom_timeline.resume_requested.connect(self.on_timeline_release)
@@ -3055,13 +3098,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Same rhythm as Original preset warning: 8px between title and body.
         lay.setSpacing(8)
 
-        # Match render_controller Original preset warning title style.
-        heading = QLabel("Clip info")
-        heading.setStyleSheet(
-            "color: #ffffff; font-weight: bold; font-size: 12px;"
-            " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';"
-            " background: transparent;"
+        from steempeg.ui.player_header_layout import (
+            player_header_font_px,
+            player_header_title_qfont,
         )
+        from steempeg.ui.render_panel import SummaryLabel
+
+        # Same face as the player-header game name (Hatsune Miku title).
+        heading_font = player_header_title_qfont(player_header_font_px(self))
+        heading_qss = (
+            f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
+            " font-family: 'Segoe UI'; background: transparent;"
+        )
+        heading = QLabel("Clip info")
+        heading.setFont(heading_font)
+        heading.setStyleSheet(heading_qss)
         lay.addWidget(heading)
 
         lines = [ln for ln in text.split("\n") if ln.strip()]
@@ -3163,10 +3214,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             name = QLabel(title_line)
             name.setWordWrap(True)
-            name.setStyleSheet(
-                f"color: {tok.TEXT_PRIMARY}; font-weight: 600; font-size: 12px;"
-                f" font-family: {tok.FONT_APP}; background: transparent;"
-            )
+            name.setFont(heading_font)
+            name.setStyleSheet(heading_qss)
             title_row.addWidget(name, 1)
             lay.addLayout(title_row)
 
@@ -3178,10 +3227,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             row.setSpacing(10)
             if cap:
                 cap_lbl = QLabel(f"{cap}:")
-                cap_lbl.setStyleSheet(
-                    f"color: {tok.TEXT_MUTED}; font-size: 11px;"
-                    f" font-family: {tok.FONT_APP}; background: transparent;"
-                )
+                # Export Settings Final Render Details keys (Clip time / Quality / Bitrate).
+                cap_lbl.setStyleSheet(SummaryLabel._KEY_QSS)
                 cap_lbl.setMinimumWidth(96)
                 row.addWidget(cap_lbl, 0)
             val_lbl = QLabel(val)
@@ -3195,10 +3242,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         if source_paths:
             src_cap = QLabel("Source:")
-            src_cap.setStyleSheet(
-                f"color: {tok.TEXT_MUTED}; font-size: 11px;"
-                f" font-family: {tok.FONT_APP}; background: transparent;"
-            )
+            src_cap.setStyleSheet(SummaryLabel._KEY_QSS)
             lay.addWidget(src_cap)
             path_font = QFont("Cascadia Mono")
             if not path_font.exactMatch():
@@ -3300,6 +3344,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         except Exception:
             pass
         return applied
+
+    def refresh_player_layout_mode(self, mode: str | None = None) -> str:
+        """Apply Settings → Visual player layout (Reunited / Fractured) without restart."""
+        from steempeg.ui.layout_defaults import apply_player_layout_mode
+        from steempeg.ui.player_layout import get_player_layout, set_player_layout
+
+        if mode is not None:
+            set_player_layout(mode)
+        try:
+            return apply_player_layout_mode(self, get_player_layout())
+        except Exception:
+            logging.exception("Player layout apply failed for %s", get_player_layout())
+            return get_player_layout()
 
     def refresh_timeline_strip_size(self, size: str | None = None) -> str:
         """Apply Settings → Visual timeline strip S/M/L without restart."""
@@ -3478,6 +3535,68 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if persist:
             self.save_user_settings(ut.KEY_UI_THEME, name)
 
+    def finalize_ui_theme_shell(self) -> None:
+        """Root shell QSS after live preview — skips surface re-tint."""
+        from PySide6.QtGui import QColor, QPalette
+
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.design_tokens import apply_app_tooltip_style
+
+        name = ut.get_ui_theme()
+        colors = ut.chrome_colors_for_active()
+        app_bg = colors["app_bg"]
+
+        if name == ut.UI_THEME_DEFAULT:
+            dense = getattr(self, "_ui_density", None)
+            if dense is not None:
+                self._apply_ui_density(dense)
+                return
+
+        palette = self.ui.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
+        self.ui.setPalette(palette)
+        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
+        try:
+            apply_app_tooltip_style()
+        except Exception:
+            pass
+
+    def _refresh_dash_secondary_button_styles(self, dense) -> None:
+        """Logs + Leave (non-deferred) — secondary button family in dark themes."""
+        from steempeg.ui import ui_theme as ut
+
+        pad = "1px 8px" if dense.compact else "6px 14px"
+        radius = max(8, dense.dash_btn_h // 2)
+        font = dense.dash_font
+
+        btn_logs = getattr(self.ui, "btn_logs", None)
+        if btn_logs is not None:
+            btn_logs.setMinimumSize(0, 0)
+            btn_logs.setFixedHeight(dense.dash_btn_h)
+            if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+                btn_logs.setStyleSheet(
+                    ut.dash_secondary_button_stylesheet(font=font, radius=radius, pad=pad)
+                )
+            else:
+                template = getattr(self, "_dash_btn_style_logs", None)
+                if template:
+                    btn_logs.setStyleSheet(
+                        template.format(font=font, radius=radius, pad=pad)
+                    )
+
+        leave_btn = getattr(self, "_btn_queue_leave_resume", None)
+        if leave_btn is not None:
+            try:
+                leave_btn.setFixedHeight(dense.dash_btn_h)
+                if hasattr(self, "_paint_desktop_queue_leave_resume"):
+                    has_jobs = bool(getattr(self, "render_queue", None)) and len(
+                        self.render_queue
+                    ) > 0
+                    deferred = bool(getattr(self, "_queue_scheme_deferred", False)) and has_jobs
+                    self._paint_desktop_queue_leave_resume(leave_btn, deferred=deferred)
+            except RuntimeError:
+                self._btn_queue_leave_resume = None
+
     def _refresh_library_view_styles(self) -> None:
         """Re-tint clips + rendered list/grid chrome from active tokens."""
         from steempeg.ui.library.library_styles import (
@@ -3528,6 +3647,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         scroll = getattr(self, "right_scroll", None)
         if scroll is not None:
             scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
+            from steempeg.ui.widgets.vertical_scrollbar import (
+                ensure_steempg_vertical_scrollbar,
+                settings_scrollbar_chrome,
+            )
+
+            ensure_steempg_vertical_scrollbar(
+                scroll, chrome=settings_scrollbar_chrome()
+            )
             vp = scroll.viewport()
             if vp is not None:
                 vp.setAutoFillBackground(True)
@@ -3588,8 +3715,32 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if footer is not None:
             footer.setStyleSheet(ut.footer_pill_stylesheet())
 
-        # Stock footer buttons keep density/init QSS on Default — only retint the pill face.
+        dense = getattr(self, "_ui_density", None)
+        from steempeg.ui.ui_density import COMFORT, toolbar_mega_pill_style
+
+        if dense is None:
+            dense = COMFORT
+
+        # Footer row + library toolbar — TrueDark/OLED only; Default keeps density QSS.
         if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            footer_style = ut.footer_button_stylesheet(dense)
+            self._footer_unified_style = footer_style
+            for attr in (
+                "btn_about",
+                "btn_update_check",
+                "btn_settings",
+                "btn_dev",
+            ):
+                btn = getattr(self.ui, attr, None)
+                if btn is not None:
+                    self._apply_library_footer_button(btn, footer_style)
+            picker = getattr(self, "folder_picker", None)
+            if picker is not None and hasattr(picker, "apply_density"):
+                picker.apply_density(dense)
+            refresh = getattr(self, "btn_refresh", None)
+            if refresh is not None and hasattr(refresh, "apply_density"):
+                refresh.apply_density(dense)
+        else:
             ut_style = ut.unified_button_stylesheet()
             for attr in (
                 "btn_browse",
@@ -3600,6 +3751,68 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 btn = getattr(self.ui, attr, None)
                 if btn is not None:
                     btn.setStyleSheet(ut_style)
+
+        lib_pill = getattr(self, "library_toolbar_pill", None)
+        if lib_pill is not None:
+            lib_pill.setStyleSheet(
+                toolbar_mega_pill_style(dense, object_name="libraryToolbarPill")
+            )
+
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            panel = getattr(self, "_library_panel_mode", "clips")
+            mode = getattr(self, "_clips_view_mode", None) or getattr(
+                self, "current_view_mode", "grid"
+            )
+            if panel == "rendered":
+                mode = getattr(self, "_rendered_view_mode", "grid")
+            elif panel == "screenshots":
+                mode = "grid"
+            chrome.set_mode(mode, emit=False)
+            chrome.set_grid_only(panel == "screenshots")
+            chrome.apply_density(dense)
+            self.toggle_style_active = chrome.toggle_style_active
+            self.toggle_style_inactive = chrome.toggle_style_inactive
+
+        tabs = getattr(self, "_library_tabs", None) or {}
+        for tab in tabs.values():
+            if hasattr(tab, "_apply_style"):
+                tab._apply_style()
+
+        add_btn = getattr(self, "btn_library_add", None)
+        if add_btn is not None and ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+
+        filt = getattr(self, "btn_filter_pill", None)
+        if filt is not None and hasattr(filt, "apply_density"):
+            filt.apply_density(dense)
+
+        for menu_attr in ("filter_menu", "rendered_filter_menu", "screenshots_filter_menu"):
+            menu = getattr(self, menu_attr, None)
+            if menu is not None and hasattr(menu, "apply_density"):
+                try:
+                    menu.apply_density(dense)
+                except Exception:
+                    pass
+
+        from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup, compact_combo_stylesheet
+
+        combo = getattr(self, "combo_sort", None)
+        if combo is not None:
+            combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
+            apply_dark_combo_popup(combo, dense=dense)
+
+        self._refresh_dash_secondary_button_styles(dense)
+
+        timeline = getattr(self, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "_apply_timeline_chrome_stylesheet"):
+            timeline._apply_timeline_chrome_stylesheet()
+            canvas = getattr(timeline, "canvas", None)
+            if canvas is not None:
+                canvas.update()
+            overview = timeline.horizontalScrollBar()
+            if overview is not None:
+                overview.update()
 
         queue_panel = getattr(self, "render_queue_panel", None)
         if queue_panel is not None and hasattr(queue_panel, "apply_ui_theme_chrome"):
@@ -3615,8 +3828,60 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 with_tooltip_style(ut.player_footer_stylesheet() + _PLAYBACK_BUTTONS_QSS)
             )
 
+        self._refresh_player_footer_chrome(dense)
+
+        from steempeg.ui.render_panel import (
+            apply_render_panel_theme_chrome,
+            apply_settings_panel_density,
+        )
+
+        apply_render_panel_theme_chrome(self.ui)
+        apply_settings_panel_density(self.ui, dense)
+
         self._refresh_library_view_styles()
+
+        if hasattr(self, "sync_clip_card_edge_roles"):
+            try:
+                self.sync_clip_card_edge_roles()
+            except Exception:
+                pass
+
+        grid_shots = getattr(self, "grid_screenshots", None)
+        if grid_shots is not None:
+            try:
+                for i in range(grid_shots.count()):
+                    item = grid_shots.item(i)
+                    if item is None:
+                        continue
+                    w = grid_shots.itemWidget(item)
+                    if w is not None:
+                        w.update()
+            except Exception:
+                pass
+
         self._refresh_open_settings_dialogs()
+
+    def _refresh_player_footer_chrome(self, dense=None) -> None:
+        """Re-tint volume/speed round buttons and footer pill clusters."""
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.ui_density import COMFORT
+
+        if dense is None:
+            dense = getattr(self, "_ui_density", None) or COMFORT
+
+        chip = int(getattr(dense, "chrome_chip", 40) or 40)
+        chip_r = chip // 2
+
+        for ctrl_attr in ("volume_control", "speed_control"):
+            ctrl = getattr(self, ctrl_attr, None)
+            if ctrl is not None and hasattr(ctrl, "apply_density"):
+                ctrl.apply_density(dense)
+
+        for pill_attr in ("pill_container", "trim_tools_pill", "marker_pill"):
+            frame = getattr(self, pill_attr, None)
+            if frame is not None:
+                frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                frame.setStyleSheet(ut.player_chrome_pill_stylesheet(radius=chip_r))
 
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
@@ -3641,6 +3906,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         """Re-apply splitter sizes once the maximized window has real geometry."""
         self._ui_density = None  # force chrome density for the real window size
         self._apply_startup_splitter_sizes()
+        self._refresh_player_footer_chrome()
         if hasattr(self, "apply_desktop_render_layout"):
             self.apply_desktop_render_layout()
         if hasattr(self, "_restore_library_ui_state"):
@@ -3789,6 +4055,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         w = int(self.ui.width() or 0)
         if w <= 0:
+            if apply_density:
+                self._refresh_player_footer_chrome()
+            from steempeg.ui.player.controls.adaptive_trim_tools import (
+                sync_trim_tools_placement,
+            )
+
+            sync_trim_tools_placement(self)
             return
 
         host = self.ui
@@ -4196,17 +4469,22 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         add_btn = getattr(self, "btn_library_add", None)
         if add_btn is not None:
             sz = dense.add_tab_size
-            add_btn.setFixedSize(sz, sz)
-            add_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: #2d2d2d; color: #ffffff; border: 1px solid #353535;
-                    border-radius: {dense.tab_radius}px; font-weight: 800;
-                    font-size: {18 if not dense.compact else 14}px; padding: 0px;
-                    min-width: {sz}px; max-width: {sz}px;
-                    min-height: {sz}px; max-height: {sz}px;
-                }}
-                QPushButton:hover {{ background-color: #3a3a3a; border-color: #6b5a8e; }}
-            """)
+            from steempeg.ui import ui_theme as ut
+
+            if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+                add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+            else:
+                add_btn.setFixedSize(sz, sz)
+                add_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #2d2d2d; color: #ffffff; border: 1px solid #353535;
+                        border-radius: {dense.tab_radius}px; font-weight: 800;
+                        font-size: {18 if not dense.compact else 14}px; padding: 0px;
+                        min-width: {sz}px; max-width: {sz}px;
+                        min-height: {sz}px; max-height: {sz}px;
+                    }}
+                    QPushButton:hover {{ background-color: #3a3a3a; border-color: #6b5a8e; }}
+                """)
 
         # --- Left toolbar ---
         outer = getattr(self, "_left_toolbar_outer", None)
@@ -4307,7 +4585,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 table.setColumnWidth(3, 100)
 
         # --- Footer ---
-        footer_style = f"""
+        from steempeg.ui import ui_theme as ut
+
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            footer_style = ut.footer_button_stylesheet(dense)
+        else:
+            footer_style = f"""
             QPushButton {{
                 background-color: #383838; color: #ffffff; border: 2px solid #444444;
                 border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
@@ -4338,6 +4621,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self._apply_library_footer_button(btn_settings, footer_style)
             btn_settings.setText(settings_button_label(dense))
             btn_settings.setToolTip("Settings")
+        btn_dev = getattr(self.ui, "btn_dev", None)
+        if btn_dev is not None:
+            self._apply_library_footer_button(btn_dev, footer_style)
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "apply_density"):
             picker.apply_density(dense)
@@ -4418,6 +4704,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         except Exception:
             pass
 
+        try:
+            from steempeg.ui.layout_defaults import apply_player_layout_mode
+
+            apply_player_layout_mode(self)
+        except Exception:
+            pass
+
         chip = dense.chrome_chip
         chip_r = chip // 2
         # Same face for theater + fullscreen + trim chips. Scale with the chip
@@ -4483,12 +4776,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 ctrl.apply_density(dense)
 
         # Pill frames around theater/fullscreen / markers stay circular-ish
+        from steempeg.ui import ui_theme as ut
+
         for pill_attr in ("pill_container", "trim_tools_pill", "marker_pill"):
             frame = getattr(self, pill_attr, None)
             if frame is not None:
-                frame.setStyleSheet(
-                    f"QFrame {{ background-color: #4e4e4e; border-radius: {chip_r}px; border: none; }}"
-                )
+                frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                frame.setStyleSheet(ut.player_chrome_pill_stylesheet(radius=chip_r))
 
         # Sync press-feedback rest sizes after transport icon/min changes.
         from steempeg.ui.widgets.press_feedback import install_press_feedback
@@ -4542,11 +4836,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             btn_row.setSpacing(8 if dense.compact else 12)
         # Keep a stable card radius (not tied to button height).
         dash_r = 10 if dense.compact else 12
-        dash.setStyleSheet(
-            f"QFrame#renderDashboard {{ background-color: #2d2d2d; border: 1px solid #353535; "
-            f"border-radius: {dash_r}px; }}"
-            f"QFrame#renderDashboard QLabel {{ border: none; background: transparent; }}"
-        )
+        from steempeg.ui import ui_theme as ut
+
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            dash.setStyleSheet(
+                ut.elevated_panel_stylesheet(object_name="renderDashboard")
+                + " QFrame#renderDashboard QLabel { border: none; background: transparent; }"
+            )
+        else:
+            dash.setStyleSheet(
+                f"QFrame#renderDashboard {{ background-color: #2d2d2d; border: 1px solid #353535; "
+                f"border-radius: {dash_r}px; }}"
+                f"QFrame#renderDashboard QLabel {{ border: none; background: transparent; }}"
+            )
         _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
         bottom_text = getattr(self, "bottom_text_label", None)
         if bottom_text is not None:
@@ -4613,7 +4915,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             "btn_start": getattr(self, "_dash_btn_style_start", None),
             "btn_pause": getattr(self, "_dash_btn_style_pause", None),
             "btn_cancel": getattr(self, "_dash_btn_style_cancel", None),
-            "btn_logs": getattr(self, "_dash_btn_style_logs", None),
         }
         for btn_name, template in style_map.items():
             btn = getattr(self.ui, btn_name, None)
@@ -4625,6 +4926,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 btn.setStyleSheet(
                     template.format(font=font, radius=radius, pad=pad)
                 )
+        self._refresh_dash_secondary_button_styles(dense)
         settings_btn = getattr(self, "btn_render_settings", None)
         settings_style = getattr(self, "_dash_btn_style_render_settings", None)
         if settings_btn is not None and settings_style:
@@ -4632,12 +4934,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             settings_btn.setStyleSheet(
                 settings_style.format(font=font, radius=radius, pad=pad)
             )
-        leave_btn = getattr(self, "_btn_queue_leave_resume", None)
-        if leave_btn is not None:
-            try:
-                leave_btn.setFixedHeight(dense.dash_btn_h)
-            except RuntimeError:
-                self._btn_queue_leave_resume = None
         if hasattr(self, "_sync_queue_scheme_chrome"):
             self._sync_queue_scheme_chrome()
         if hasattr(self, "_sync_dash_queue_status_chrome"):
