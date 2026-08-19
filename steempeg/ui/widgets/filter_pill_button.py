@@ -18,6 +18,8 @@ class FilterPillButton(QPushButton):
         self.apply_density(COMFORT)
 
     def apply_density(self, dense: UiDensity) -> None:
+        from steempeg.ui import ui_theme as ut
+
         # Same outer box as the Sorting combo (comfort ~36px ≈ combo min-h + pad + border).
         sz = dense.filter_size
         icon = max(10, sz // 2 - (1 if dense.compact else 2))
@@ -27,6 +29,30 @@ class FilterPillButton(QPushButton):
         pad = 1 if dense.compact else 2
         self.setFixedSize(sz, sz)
         self.setIconSize(QSize(icon, icon))
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            p = ut.active_palette()
+            self.setStyleSheet(f"""
+        QPushButton#FilterPill {{
+            background-color: {p.button_secondary_bg};
+            border: {border}px solid {p.button_secondary_border};
+            border-radius: {radius}px;
+            padding: {pad}px;
+        }}
+        QPushButton#FilterPill:hover {{
+            background-color: {p.button_secondary_hover_bg};
+            border: {border}px solid #6b5a8e;
+        }}
+        QPushButton#FilterPill:pressed {{
+            background-color: {p.button_secondary_pressed_bg};
+            border: {border}px solid #b29ae7;
+        }}
+        QPushButton#FilterPill:disabled {{
+            background-color: {p.button_disabled_bg};
+            border: {border}px solid {p.button_disabled_border};
+            color: #777777;
+        }}
+    """)
+            return
         self.setStyleSheet(f"""
         QPushButton#FilterPill {{
             background-color: #383838;

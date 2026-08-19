@@ -6,6 +6,10 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 
 
 def _folder_style(dense: UiDensity) -> str:
+    from steempeg.ui import ui_theme as ut
+
+    if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+        return ut.split_footer_composite_stylesheet(dense, "folder")
     r = dense.footer_radius
     return f"""
     QPushButton#FolderPickerMain {{

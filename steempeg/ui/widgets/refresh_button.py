@@ -7,6 +7,10 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 
 
 def _refresh_style(dense: UiDensity) -> str:
+    from steempeg.ui import ui_theme as ut
+
+    if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+        return ut.split_footer_composite_stylesheet(dense, "refresh")
     r = dense.footer_radius
     menu_w = 24 if dense.compact else 28
     menu_max = 28 if dense.compact else 32
