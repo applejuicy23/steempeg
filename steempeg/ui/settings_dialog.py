@@ -50,6 +50,14 @@ from steempeg.ui.player_header_layout import (
     normalize_header_layout,
     set_header_layout,
 )
+from steempeg.ui.player_layout import (
+    KEY_PLAYER_LAYOUT,
+    PLAYER_LAYOUT_DEFAULT,
+    PLAYER_LAYOUT_LABELS,
+    get_player_layout,
+    normalize_player_layout,
+    set_player_layout,
+)
 from steempeg.ui.player_header_size import (
     KEY_PLAYER_HEADER_SIZE,
     KEY_PLAYER_HEADER_SIZE_REV,
@@ -95,7 +103,9 @@ from steempeg.ui.message_dialog import (
     steempeg_warning,
 )
 from steempeg.ui.shell_chooser import (
+    UI_SHELL_ASK_KEY,
     UI_SHELL_DESKTOP,
+    UI_SHELL_KEY,
     UI_SHELL_PORTABLE,
     is_steamdeck_build,
     load_ask_ui_shell,
@@ -127,6 +137,7 @@ from steempeg.ui.settings_prefs import (
     KEY_MARKER_TRIM_OFFSET_MS,
     KEY_MEDIA_CACHE_LIMIT_GB,
     KEY_MPV_LOG_LEVEL,
+    KEY_PERMANENT_EXPORT_FOLDER,
     KEY_REMEMBER_LIBRARY_TAB,
     KEY_SCREENSHOTS_FOLDER,
     KEY_STARTUP_LIBRARY_SCAN,
@@ -316,7 +327,10 @@ class _SettingsTabScroll(QScrollArea):
 
 def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
     """Wrap a settings tab page; lavender pill scrollbar matches the library."""
-    from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+    from steempeg.ui.library.library_styles import (
+        LIBRARY_SCROLLBAR_VERTICAL,
+        install_library_vertical_scrollbar,
+    )
 
     bg = tok.BG_SHELL
     inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -331,6 +345,7 @@ def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
     scroll.setMinimumHeight(0)
     tok.apply_dialog_scroll_bg(scroll, bg)
     scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
+    install_library_vertical_scrollbar(scroll)
     scroll.setWidget(inner)
     return scroll
 
@@ -449,6 +464,7 @@ class SettingsDialog(SteempegDialog):
         for value, label in DESKTOP_RENDER_LAYOUT_LABELS:
             self._combo_desktop_render.addItem(label, value)
         cur_layout = load_desktop_render_layout(settings)
+        self._committed_desktop_render = cur_layout
         lidx = self._combo_desktop_render.findData(cur_layout)
         self._combo_desktop_render.setCurrentIndex(max(0, lidx))
         layout_row.addWidget(layout_lbl)
@@ -675,6 +691,38 @@ class SettingsDialog(SteempegDialog):
         self._header_size_preview_timer.setInterval(200)
         self._header_size_preview_timer.timeout.connect(self._apply_header_size_preview)
         self._combo_header_size.currentIndexChanged.connect(self._preview_header_size)
+
+        v.addWidget(self._section("Player layout"))
+        player_layout_row = QHBoxLayout()
+        player_layout_row.setSpacing(8)
+        player_layout_lbl = QLabel("Layout")
+        player_layout_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_player_layout = QComboBox()
+        self._combo_player_layout.setStyleSheet(_COMBO)
+        for value, label in PLAYER_LAYOUT_LABELS:
+            self._combo_player_layout.addItem(label, value)
+        cur_player_layout = normalize_player_layout(
+            settings.get(KEY_PLAYER_LAYOUT, PLAYER_LAYOUT_DEFAULT)
+        )
+        self._committed_player_layout = cur_player_layout
+        plidx = self._combo_player_layout.findData(cur_player_layout)
+        self._combo_player_layout.setCurrentIndex(max(0, plidx))
+        player_layout_row.addWidget(player_layout_lbl)
+        player_layout_row.addWidget(self._combo_player_layout, 1)
+        v.addLayout(player_layout_row)
+        v.addWidget(
+            self._hint(
+                "Reunited: unified flush player stack (header, canvas, footer). "
+                "Fractured: separated panels with visible gaps between header, "
+                "video, and controls. Combo previews live; Save persists. "
+                "Cancel restores the last saved layout."
+            )
+        )
+        self._player_layout_preview_timer = QTimer(self)
+        self._player_layout_preview_timer.setSingleShot(True)
+        self._player_layout_preview_timer.setInterval(200)
+        self._player_layout_preview_timer.timeout.connect(self._apply_player_layout_preview)
+        self._combo_player_layout.currentIndexChanged.connect(self._preview_player_layout)
 
         v.addWidget(self._section("Player timeline"))
         strip_row = QHBoxLayout()
@@ -1433,7 +1481,10 @@ class SettingsDialog(SteempegDialog):
     def apply_ui_theme_chrome(self) -> None:
         """Re-tint dialog shell + tab scroll areas after a Visual theme change."""
         from steempeg.ui import ui_theme as ut
-        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
 
         super().apply_ui_theme_chrome()
         tabs = getattr(self, "_settings_tabs", None)
@@ -1446,6 +1497,7 @@ class SettingsDialog(SteempegDialog):
                 inner.setStyleSheet(f"background-color: {bg};")
             tok.apply_dialog_scroll_bg(scroll, bg)
             scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
+            install_library_vertical_scrollbar(scroll)
 
     def _apply_ui_theme_preview(self) -> None:
         import logging
@@ -1567,6 +1619,26 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Player header size refresh failed for %s", size)
 
+    def _preview_player_layout(self, *_args) -> None:
+        self._player_layout_preview_timer.start()
+
+    def _apply_player_layout_preview(self) -> None:
+        import logging
+
+        layout = normalize_player_layout(self._combo_player_layout.currentData())
+        set_player_layout(layout)
+        logging.info("Player layout preview → %s", layout)
+        self._refresh_player_layout(layout)
+
+    def _refresh_player_layout(self, layout: str) -> None:
+        if hasattr(self._app, "refresh_player_layout_mode"):
+            try:
+                self._app.refresh_player_layout_mode(layout)
+            except Exception:
+                import logging
+
+                logging.exception("Player layout refresh failed for %s", layout)
+
     def _preview_timeline_strip(self, *_args) -> None:
         self._timeline_strip_preview_timer.start()
 
@@ -1679,6 +1751,23 @@ class SettingsDialog(SteempegDialog):
         logging.info("Player header size cancelled → restored %s", committed)
         self._refresh_header_size(committed)
 
+    def _restore_player_layout_on_cancel(self) -> None:
+        """Undo live player layout preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_player_layout_preview_timer", None) is not None:
+            self._player_layout_preview_timer.stop()
+        committed = normalize_player_layout(
+            getattr(self, "_committed_player_layout", PLAYER_LAYOUT_DEFAULT)
+        )
+        live = get_player_layout()
+        combo = normalize_player_layout(self._combo_player_layout.currentData())
+        if live == committed and combo == committed:
+            return
+        set_player_layout(committed)
+        logging.info("Player layout cancelled → restored %s", committed)
+        self._refresh_player_layout(committed)
+
     def _restore_timeline_strip_on_cancel(self) -> None:
         """Undo live timeline strip size preview that was never Saved."""
         import logging
@@ -1738,17 +1827,46 @@ class SettingsDialog(SteempegDialog):
         self._restore_clip_card_style_on_cancel()
         self._restore_header_layout_on_cancel()
         self._restore_header_size_on_cancel()
+        self._restore_player_layout_on_cancel()
         self._restore_timeline_strip_on_cancel()
         self._restore_player_boost_on_cancel()
         super().reject()
 
-    def _persist_settings(self) -> None:
+    def _stop_visual_preview_timers(self) -> None:
+        for attr in (
+            "_ui_theme_preview_timer",
+            "_icon_shape_preview_timer",
+            "_clip_card_style_preview_timer",
+            "_header_layout_preview_timer",
+            "_header_size_preview_timer",
+            "_player_layout_preview_timer",
+            "_timeline_strip_preview_timer",
+            "_player_boost_preview_timer",
+        ):
+            timer = getattr(self, attr, None)
+            if timer is not None:
+                timer.stop()
+
+    def _persist_settings(self) -> list:
+        """Write settings.json once; return deferred UI apply callbacks."""
         import logging
+        import time
+
+        deferred: list = []
+        pending: dict = {}
+        t0 = time.perf_counter()
+
+        prev: dict = {}
+        if hasattr(self._app, "load_user_settings"):
+            try:
+                prev = self._app.load_user_settings() or {}
+            except Exception:
+                prev = {}
 
         interval = normalize_update_check_interval(
             self._combo_update_interval.currentData()
         )
-        self._save_setting(KEY_UPDATE_CHECK_INTERVAL, interval)
+        pending[KEY_UPDATE_CHECK_INTERVAL] = interval
 
         requested = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         folder, fell_back = ensure_usable_export_folder(requested)
@@ -1756,168 +1874,163 @@ class SettingsDialog(SteempegDialog):
             notify_export_folder_fallback(
                 self, requested, folder, use_dialog=True
             )
-        apply_export_folder(self._app, folder, persist=True)
+        pending[KEY_PERMANENT_EXPORT_FOLDER] = folder
+        blob = prev.get("render_export_settings")
+        if isinstance(blob, dict):
+            export_blob = dict(blob)
+            export_blob["save_dir"] = folder
+            pending["render_export_settings"] = export_blob
+        apply_export_folder(self._app, folder, persist=False)
         self._committed_export_folder = folder
         self._edit_export_folder.setText(folder)
         self._refresh_export_folder_hint()
 
         render_tab = normalize_render_tab(self._combo_render_tab.currentData())
-        self._save_setting(KEY_DEFAULT_RENDER_TAB, render_tab)
+        pending[KEY_DEFAULT_RENDER_TAB] = render_tab
         self._committed_render_tab = render_tab
         apply_default_render_tab(self._app, render_tab)
 
         desktop_layout = normalize_desktop_render_layout(
             self._combo_desktop_render.currentData()
         )
-        self._save_setting(KEY_DESKTOP_RENDER_LAYOUT, desktop_layout)
-        if hasattr(self._app, "apply_desktop_render_layout"):
-            self._app.apply_desktop_render_layout()
+        pending[KEY_DESKTOP_RENDER_LAYOUT] = desktop_layout
+        if desktop_layout != getattr(self, "_committed_desktop_render", desktop_layout):
+            if hasattr(self._app, "apply_desktop_render_layout"):
+                deferred.append(self._app.apply_desktop_render_layout)
+        self._committed_desktop_render = desktop_layout
 
-        self._save_setting(
-            KEY_NOTIFY_ON_RENDER_COMPLETE, self._chk_notify.isChecked()
-        )
-        self._save_setting(
-            KEY_PAUSE_PREVIEW_DURING_RENDER,
-            self._chk_pause_preview.isChecked(),
-        )
+        pending[KEY_NOTIFY_ON_RENDER_COMPLETE] = self._chk_notify.isChecked()
+        pending[KEY_PAUSE_PREVIEW_DURING_RENDER] = self._chk_pause_preview.isChecked()
         prio = self._combo_priority.currentData()
-        self._save_setting(
-            KEY_RENDER_PROCESS_PRIORITY,
-            prio if prio else PRIORITY_NORMAL,
-        )
-        # Cancel pending preview so Save is the sole refresh.
-        if getattr(self, "_ui_theme_preview_timer", None) is not None:
-            self._ui_theme_preview_timer.stop()
+        pending[KEY_RENDER_PROCESS_PRIORITY] = prio if prio else PRIORITY_NORMAL
+
+        self._stop_visual_preview_timers()
+
         ui_theme = normalize_ui_theme(self._combo_ui_theme.currentData())
-        self._save_setting(KEY_UI_THEME, ui_theme)
+        pending[KEY_UI_THEME] = ui_theme
+        opened_theme = normalize_ui_theme(
+            getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
+        )
+        if ui_theme != opened_theme:
+            logging.info("UI theme applied → %s (settings.json)", ui_theme)
+            if get_ui_theme() == ui_theme and hasattr(
+                self._app, "finalize_ui_theme_shell"
+            ):
+                deferred.append(self._app.finalize_ui_theme_shell)
+            else:
+                deferred.append(lambda t=ui_theme: self._refresh_ui_theme(t))
         self._committed_ui_theme = ui_theme
-        logging.info("UI theme applied → %s (settings.json)", ui_theme)
-        self._refresh_ui_theme(ui_theme)
 
-        if getattr(self, "_icon_shape_preview_timer", None) is not None:
-            self._icon_shape_preview_timer.stop()
         shape = normalize_icon_shape(self._combo_icon_shape.currentData())
-        self._save_setting(KEY_GAME_ICON_SHAPE, shape)
+        pending[KEY_GAME_ICON_SHAPE] = shape
         set_icon_shape(shape)
+        if shape != self._committed_icon_shape:
+            deferred.append(lambda s=shape: self._refresh_icon_shapes(s))
         self._committed_icon_shape = shape
-        logging.info("Icon shape applied → %s (settings.json)", shape)
-        self._refresh_icon_shapes(shape)
 
-        if getattr(self, "_clip_card_style_preview_timer", None) is not None:
-            self._clip_card_style_preview_timer.stop()
         card_style = normalize_clip_card_style(self._combo_clip_card_style.currentData())
-        self._save_setting(KEY_CLIP_CARD_STYLE, card_style)
-        self._save_setting(KEY_CLIP_CARD_STYLE_REV, CLIP_CARD_STYLE_REV_CURRENT)
+        pending[KEY_CLIP_CARD_STYLE] = card_style
+        pending[KEY_CLIP_CARD_STYLE_REV] = CLIP_CARD_STYLE_REV_CURRENT
         set_clip_card_style(card_style)
+        if card_style != self._committed_clip_card_style:
+            deferred.append(lambda s=card_style: self._refresh_clip_card_styles(s))
         self._committed_clip_card_style = card_style
-        logging.info("ClipCard style applied → %s (settings.json)", card_style)
-        self._refresh_clip_card_styles(card_style)
 
-        if getattr(self, "_header_layout_preview_timer", None) is not None:
-            self._header_layout_preview_timer.stop()
         header_layout = normalize_header_layout(self._combo_header_layout.currentData())
-        self._save_setting(KEY_PLAYER_HEADER_LAYOUT, header_layout)
+        pending[KEY_PLAYER_HEADER_LAYOUT] = header_layout
         set_header_layout(header_layout)
+        if header_layout != self._committed_header_layout:
+            deferred.append(lambda l=header_layout: self._refresh_header_layout(l))
         self._committed_header_layout = header_layout
-        logging.info("Player header layout applied → %s (settings.json)", header_layout)
-        self._refresh_header_layout(header_layout)
 
-        if getattr(self, "_header_size_preview_timer", None) is not None:
-            self._header_size_preview_timer.stop()
         header_size = normalize_player_header_size(self._combo_header_size.currentData())
-        self._save_setting(KEY_PLAYER_HEADER_SIZE, header_size)
-        self._save_setting(KEY_PLAYER_HEADER_SIZE_REV, PLAYER_HEADER_SIZE_REV_CURRENT)
+        pending[KEY_PLAYER_HEADER_SIZE] = header_size
+        pending[KEY_PLAYER_HEADER_SIZE_REV] = PLAYER_HEADER_SIZE_REV_CURRENT
         set_player_header_size(header_size)
+        if header_size != self._committed_header_size:
+            deferred.append(lambda s=header_size: self._refresh_header_size(s))
         self._committed_header_size = header_size
-        logging.info("Player header size applied → %s (settings.json)", header_size)
-        self._refresh_header_size(header_size)
 
-        if getattr(self, "_timeline_strip_preview_timer", None) is not None:
-            self._timeline_strip_preview_timer.stop()
+        player_layout = normalize_player_layout(self._combo_player_layout.currentData())
+        pending[KEY_PLAYER_LAYOUT] = player_layout
+        set_player_layout(player_layout)
+        if player_layout != self._committed_player_layout:
+            deferred.append(lambda l=player_layout: self._refresh_player_layout(l))
+        self._committed_player_layout = player_layout
+
         strip_size = normalize_timeline_strip_size(self._combo_timeline_strip.currentData())
-        self._save_setting(KEY_TIMELINE_STRIP_SIZE, strip_size)
-        self._save_setting(KEY_TIMELINE_STRIP_SIZE_REV, TIMELINE_STRIP_SIZE_REV_CURRENT)
+        pending[KEY_TIMELINE_STRIP_SIZE] = strip_size
+        pending[KEY_TIMELINE_STRIP_SIZE_REV] = TIMELINE_STRIP_SIZE_REV_CURRENT
         set_timeline_strip_size(strip_size)
+        if strip_size != self._committed_timeline_strip:
+            deferred.append(lambda s=strip_size: self._refresh_timeline_strip(s))
         self._committed_timeline_strip = strip_size
-        logging.info("Timeline strip size applied → %s (settings.json)", strip_size)
-        self._refresh_timeline_strip(strip_size)
 
-        if getattr(self, "_player_boost_preview_timer", None) is not None:
-            self._player_boost_preview_timer.stop()
         vol_ceiling = normalize_volume_boost_ceiling(
             self._combo_volume_ceiling.currentData()
         )
         spd_ceiling = normalize_speed_boost_ceiling(
             self._combo_speed_ceiling.currentData()
         )
-        self._save_setting(KEY_VOLUME_BOOST_CEILING, vol_ceiling)
-        self._save_setting(KEY_SPEED_BOOST_CEILING, spd_ceiling)
+        pending[KEY_VOLUME_BOOST_CEILING] = vol_ceiling
+        pending[KEY_SPEED_BOOST_CEILING] = spd_ceiling
         set_volume_boost_ceiling(vol_ceiling)
         set_speed_boost_ceiling(spd_ceiling)
+        if (
+            vol_ceiling != self._committed_volume_ceiling
+            or spd_ceiling != self._committed_speed_ceiling
+        ):
+            deferred.append(
+                lambda v=vol_ceiling, s=spd_ceiling: self._refresh_player_boost(v, s)
+            )
         self._committed_volume_ceiling = vol_ceiling
         self._committed_speed_ceiling = spd_ceiling
-        logging.info(
-            "Player boost applied → volume %s%% / speed %s (settings.json)",
-            vol_ceiling,
-            spd_ceiling,
-        )
-        self._refresh_player_boost(vol_ceiling, spd_ceiling)
 
         date_fmt = normalize_date_format(self._combo_date_format.currentData())
         clock_fmt = normalize_clock_format(self._combo_clock_format.currentData())
         tz = normalize_display_timezone(self._combo_timezone.currentData())
-        prev = {}
-        if hasattr(self._app, "load_user_settings"):
-            try:
-                prev = self._app.load_user_settings() or {}
-            except Exception:
-                prev = {}
         date_changed = (
             normalize_date_format(prev.get(KEY_DATE_FORMAT)) != date_fmt
             or normalize_clock_format(prev.get(KEY_CLOCK_FORMAT)) != clock_fmt
             or normalize_display_timezone(prev.get(KEY_DISPLAY_TIMEZONE)) != tz
         )
-        self._save_setting(KEY_DATE_FORMAT, date_fmt)
-        self._save_setting(KEY_CLOCK_FORMAT, clock_fmt)
-        self._save_setting(KEY_DISPLAY_TIMEZONE, tz)
+        pending[KEY_DATE_FORMAT] = date_fmt
+        pending[KEY_CLOCK_FORMAT] = clock_fmt
+        pending[KEY_DISPLAY_TIMEZONE] = tz
 
-        trim_ms = normalize_marker_trim_offset_ms(self._combo_marker_trim.currentData())
-        self._save_setting(KEY_MARKER_TRIM_OFFSET_MS, trim_ms)
-
-        scan_mode = normalize_startup_library_scan(self._combo_startup_scan.currentData())
-        self._save_setting(KEY_STARTUP_LIBRARY_SCAN, scan_mode)
+        pending[KEY_MARKER_TRIM_OFFSET_MS] = normalize_marker_trim_offset_ms(
+            self._combo_marker_trim.currentData()
+        )
+        pending[KEY_STARTUP_LIBRARY_SCAN] = normalize_startup_library_scan(
+            self._combo_startup_scan.currentData()
+        )
 
         cache_gb = normalize_media_cache_limit_gb(self._combo_cache_limit.currentData())
-        self._save_setting(KEY_MEDIA_CACHE_LIMIT_GB, cache_gb)
-        try:
-            from steempeg.infra.media_cache import prune_media_cache
+        pending[KEY_MEDIA_CACHE_LIMIT_GB] = cache_gb
+        cache_dir = getattr(self._app, "cache_dir", None)
 
-            prune_media_cache(getattr(self._app, "cache_dir", None), cache_gb)
-        except Exception:
-            logging.exception("media cache prune on Save failed")
+        def _prune_cache() -> None:
+            try:
+                from steempeg.infra.media_cache import prune_media_cache
 
-        app_log = normalize_log_level(
+                prune_media_cache(cache_dir, cache_gb)
+            except Exception:
+                logging.exception("media cache prune on Save failed")
+
+        deferred.append(_prune_cache)
+
+        pending[KEY_APP_LOG_LEVEL] = normalize_log_level(
             self._combo_app_log.currentData(), default=DEFAULT_APP_LOG_LEVEL
         )
-        ff_log = normalize_log_level(
+        pending[KEY_FFMPEG_LOG_LEVEL] = normalize_log_level(
             self._combo_ffmpeg_log.currentData(), default=DEFAULT_FFMPEG_LOG_LEVEL
         )
-        mpv_log = normalize_log_level(
+        pending[KEY_MPV_LOG_LEVEL] = normalize_log_level(
             self._combo_mpv_log.currentData(), default=DEFAULT_MPV_LOG_LEVEL
         )
-        self._save_setting(KEY_APP_LOG_LEVEL, app_log)
-        self._save_setting(KEY_FFMPEG_LOG_LEVEL, ff_log)
-        self._save_setting(KEY_MPV_LOG_LEVEL, mpv_log)
-
-        self._save_setting(
-            KEY_CONFIRM_BEFORE_DELETE, self._chk_confirm_delete.isChecked()
-        )
-        self._save_setting(
-            KEY_REMEMBER_LIBRARY_TAB, self._chk_remember_tab.isChecked()
-        )
-        self._save_setting(
-            KEY_TEST_NEW_FULLSCREEN, self._chk_test_new_fullscreen.isChecked()
-        )
+        pending[KEY_CONFIRM_BEFORE_DELETE] = self._chk_confirm_delete.isChecked()
+        pending[KEY_REMEMBER_LIBRARY_TAB] = self._chk_remember_tab.isChecked()
+        pending[KEY_TEST_NEW_FULLSCREEN] = self._chk_test_new_fullscreen.isChecked()
 
         shots = normalize_screenshots_folder(self._edit_screenshots.text())
         if not shots:
@@ -1927,39 +2040,66 @@ class SettingsDialog(SteempegDialog):
                 os.makedirs(shots, exist_ok=True)
             except OSError:
                 shots = default_screenshots_dir()
-        self._save_setting(KEY_SCREENSHOTS_FOLDER, shots)
+        pending[KEY_SCREENSHOTS_FOLDER] = shots
         self._edit_screenshots.setText(shots)
         if hasattr(self._app, "screenshots_dir"):
             self._app.screenshots_dir = shots
 
-        hwdec = normalize_hwdec_preview(self._combo_hwdec.currentData())
-        self._save_setting(KEY_HWDEC_PREVIEW, hwdec)
+        pending[KEY_HWDEC_PREVIEW] = normalize_hwdec_preview(self._combo_hwdec.currentData())
 
-        # Refresh live runtime (logs / date / ffmpeg / marker trim / hwdec).
+        shell = self._combo_shell.currentData()
+        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
+            pending[UI_SHELL_KEY] = shell
+        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
+            pending[UI_SHELL_ASK_KEY] = self._chk_ask_shell.isChecked()
+        elif is_steamdeck_build():
+            pending[UI_SHELL_ASK_KEY] = False
+
+        if hasattr(self._app, "save_user_settings_batch"):
+            self._app.save_user_settings_batch(pending)
+        else:
+            for key, value in pending.items():
+                self._save_setting(key, value)
+
+        merged = dict(prev)
+        merged.update(pending)
         try:
-            fresh = self._app.load_user_settings() if hasattr(self._app, "load_user_settings") else {}
-            configure_runtime_prefs(fresh or {})
+            configure_runtime_prefs(merged)
         except Exception:
             logging.exception("configure_runtime_prefs after Save failed")
 
         if date_changed and hasattr(self._app, "refresh_library_datetime_displays"):
-            try:
-                self._app.refresh_library_datetime_displays()
-            except Exception:
-                logging.exception("datetime display refresh after Save failed")
+            deferred.append(self._app.refresh_library_datetime_displays)
 
-        shell = self._combo_shell.currentData()
-        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
-            save_ui_shell(shell)
-        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
-            save_ask_ui_shell(self._chk_ask_shell.isChecked())
-        elif is_steamdeck_build():
-            # Deck never shows the chooser.
-            save_ask_ui_shell(False)
+        logging.info(
+            "Settings Save persisted in %.0f ms (%d deferred task(s))",
+            (time.perf_counter() - t0) * 1000,
+            len(deferred),
+        )
+        return deferred
 
     def _save(self) -> None:
-        self._persist_settings()
+        import logging
+        import time
+
+        deferred = self._persist_settings()
         self.accept()
+        if not deferred:
+            return
+
+        def _run_deferred() -> None:
+            t0 = time.perf_counter()
+            for fn in deferred:
+                try:
+                    fn()
+                except Exception:
+                    logging.exception("Settings Save deferred apply failed")
+            logging.info(
+                "Settings Save deferred apply finished in %.0f ms",
+                (time.perf_counter() - t0) * 1000,
+            )
+
+        QTimer.singleShot(0, _run_deferred)
 
 
 def show_settings_dialog(app) -> None:
