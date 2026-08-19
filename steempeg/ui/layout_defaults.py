@@ -74,11 +74,83 @@ LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → to
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
 RENDER_QUEUE_BOTTOM_INSET = 0
 
-# Player column stack (canvas ↔ #HudFrame) — flush below the header gap.
-# Keep 0; full 8px stack spacing also gaps canvas↔footer.
+# Player column stack (canvas ↔ #HudFrame) — runtime; see sync_player_layout_constants().
+# Reunited (default): 0 spacing, 4px header canvas gap. Fractured: 8px / 0px.
 PLAYER_COLUMN_SPACING = 0
-# Header title bar ↔ canvas breathing room — painted on header (padding-bottom).
 PLAYER_HEADER_CANVAS_GAP = 4
+
+PLAYER_LAYOUT_COLUMN_SPACING_REUNITED = 0
+PLAYER_LAYOUT_COLUMN_SPACING_FRACTURED = 8
+PLAYER_LAYOUT_HEADER_CANVAS_GAP_REUNITED = 4
+PLAYER_LAYOUT_HEADER_CANVAS_GAP_FRACTURED = 0
+PLAYER_LAYOUT_PANEL_RADIUS_PX = 6
+
+
+def sync_player_layout_constants(mode: str) -> str:
+    """Update module spacing/gap tokens from ``player_layout`` pref value."""
+    from steempeg.ui.player_layout import (
+        PLAYER_LAYOUT_FRACTURED,
+        normalize_player_layout,
+    )
+
+    global PLAYER_COLUMN_SPACING, PLAYER_HEADER_CANVAS_GAP
+    applied = normalize_player_layout(mode)
+    if applied == PLAYER_LAYOUT_FRACTURED:
+        PLAYER_COLUMN_SPACING = PLAYER_LAYOUT_COLUMN_SPACING_FRACTURED
+        PLAYER_HEADER_CANVAS_GAP = PLAYER_LAYOUT_HEADER_CANVAS_GAP_FRACTURED
+    else:
+        PLAYER_COLUMN_SPACING = PLAYER_LAYOUT_COLUMN_SPACING_REUNITED
+        PLAYER_HEADER_CANVAS_GAP = PLAYER_LAYOUT_HEADER_CANVAS_GAP_REUNITED
+    return applied
+
+
+def apply_player_layout_mode(app, mode: str | None = None) -> str:
+    """Apply Settings → Visual player layout (Reunited / Fractured) to the shell."""
+    from steempeg.ui import ui_theme as ut
+    from steempeg.ui.design_tokens import with_tooltip_style
+    from steempeg.ui.player_header_layout import apply_player_header_density
+    from steempeg.ui.player_layout import get_player_layout, set_player_layout
+
+    applied = set_player_layout(mode if mode is not None else get_player_layout())
+
+    top_wrap = getattr(app, "top_v_wrap", None)
+    if top_wrap is not None:
+        lay = top_wrap.layout()
+        if lay is not None:
+            lay.setSpacing(PLAYER_COLUMN_SPACING)
+
+    dense = getattr(app, "_ui_density_player", None) or getattr(app, "_ui_density", None)
+    try:
+        apply_player_header_density(app, dense)
+    except Exception:
+        pass
+
+    header = getattr(app, "player_header_frame", None)
+    if header is not None:
+        header.setStyleSheet(ut.player_header_stylesheet())
+
+    hud = getattr(app, "player_footer_frame", None)
+    if hud is not None:
+        from PySide6.QtCore import Qt
+
+        extra = ""
+        try:
+            from steempeg.app import _PLAYBACK_BUTTONS_QSS
+
+            extra = _PLAYBACK_BUTTONS_QSS
+        except Exception:
+            pass
+        hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hud.setStyleSheet(with_tooltip_style(ut.player_footer_stylesheet() + extra))
+
+    refresh = getattr(app, "_refresh_player_footer_chrome", None)
+    if callable(refresh):
+        try:
+            refresh(dense)
+        except Exception:
+            pass
+
+    return applied
 
 # Vertical splitter (player ↔ neo/dash) — keep in sync with app.py + render_controller.
 # Was 10+10; that read as a thick dark band under the timeline. Stay tight but not glued.
