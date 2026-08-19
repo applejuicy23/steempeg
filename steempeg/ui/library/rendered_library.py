@@ -59,7 +59,11 @@ from steempeg.ui.library.screenshot_photo import (
     ScreenshotPhoto,
 )
 from steempeg.ui.library.library_tab import LibraryTabWidget
-from steempeg.ui.library.library_styles import library_grid_stylesheet, library_table_stylesheet
+from steempeg.ui.library.library_styles import (
+    install_library_vertical_scrollbar,
+    library_grid_stylesheet,
+    library_table_stylesheet,
+)
 from steempeg.ui.message_dialog import (
     steempeg_confirm_delete,
     steempeg_information,
@@ -371,10 +375,10 @@ class RenderedLibraryMixin:
             self.btn_library_add.setToolTip("Add or remove library panels")
 
     def _show_add_library_panel_menu(self):
-        from steempeg.ui.lifecycle import _LOGS_MENU_STYLE
+        from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self.ui)
-        menu.setStyleSheet(_LOGS_MENU_STYLE)
+        menu.setStyleSheet(ut.logs_menu_stylesheet())
         actions: dict = {}
         can_remove = len(self._library_tabs) > 1
 
@@ -1528,6 +1532,7 @@ class RenderedLibraryMixin:
         self.table_rendered.setColumnWidth(2, 160)
         self.table_rendered.setColumnWidth(3, 100)
         self.table_rendered.setStyleSheet(library_table_stylesheet())
+        install_library_vertical_scrollbar(self.table_rendered)
 
         self.grid_rendered = QListWidget()
         self.grid_rendered.setViewMode(QListWidget.ViewMode.IconMode)
@@ -1540,6 +1545,7 @@ class RenderedLibraryMixin:
         self.grid_rendered.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_rendered.setMovement(QListWidget.Movement.Static)
         self.grid_rendered.setStyleSheet(library_grid_stylesheet())
+        install_library_vertical_scrollbar(self.grid_rendered)
 
         self.table_rendered.itemSelectionChanged.connect(self.update_rendered_selection)
         self.table_rendered.itemSelectionChanged.connect(self._sync_rendered_grid_from_table)
@@ -1596,7 +1602,10 @@ class RenderedLibraryMixin:
         self.grid_screenshots.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_screenshots.setMovement(QListWidget.Movement.Static)
         self.grid_screenshots.setDragEnabled(False)
-        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
 
         # Transparent cells — ScreenshotPhoto draws the framed image itself.
         self.grid_screenshots.setStyleSheet(
@@ -1613,6 +1622,7 @@ class RenderedLibraryMixin:
             """
             + LIBRARY_SCROLLBAR_VERTICAL
         )
+        install_library_vertical_scrollbar(self.grid_screenshots)
         # Start hidden; sync_screenshots_vertical_scrollbar switches to AlwaysOn
         # once content overflows (stable wrap width — no AsNeeded 3→2 sticky).
         self.grid_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2555,10 +2565,10 @@ class RenderedLibraryMixin:
         paths = self._context_menu_screenshot_paths(pos)
         if not paths:
             return
-        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+        from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self.grid_screenshots)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         action_open = menu.addAction("📂 Open")
         action_folder = menu.addAction("📁 Open folder")
         if len(paths) == 1:
@@ -4529,10 +4539,10 @@ class RenderedLibraryMixin:
         file_paths = self._context_menu_rendered_paths_grid(pos)
         if not file_paths:
             return
-        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+        from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self.grid_rendered)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
         menu.exec(self.grid_rendered.viewport().mapToGlobal(pos))
 
@@ -4540,10 +4550,10 @@ class RenderedLibraryMixin:
         file_paths = self._context_menu_rendered_paths_table(pos)
         if not file_paths:
             return
-        from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+        from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self.table_rendered)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
         menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
 

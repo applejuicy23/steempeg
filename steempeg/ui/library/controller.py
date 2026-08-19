@@ -70,128 +70,7 @@ from steempeg.ui.message_dialog import (
     steempeg_question,
     steempeg_warning,
 )
-
-
-_LIBRARY_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-    }
-    QMenu::item {
-        padding: 6px 24px 6px 24px;
-        border-radius: 4px;
-        margin: 2px 4px;
-    }
-    QMenu::item:selected {
-        background-color: #6b5a8e;
-    }
-    QMenu::separator {
-        height: 1px;
-        background-color: #444444;
-        margin: 4px 10px;
-    }
-"""
-
-_HEALTH_MENU_STYLE = _LIBRARY_MENU_STYLE + """
-    QMenu::item {
-        padding: 8px 28px 8px 12px;
-    }
-    /* Disabled rows must keep icon color (Healthy green / Issues amber / Dead red).
-       Default QMenu greys out icons on setEnabled(False), which made the health
-       glyph look B&W and sit in the far-left reserved icon column. */
-    QMenu::item:disabled {
-        color: #e0e0e0;
-        background: transparent;
-    }
-"""
-
-
-_FOLDERS_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        padding: 4px 0;
-    }
-    QMenu::item {
-        padding: 8px 28px 8px 20px;
-        border-radius: 4px;
-        margin: 2px 6px;
-        background: transparent;
-        border: none;
-    }
-    QMenu::item:selected {
-        background-color: #6b5a8e;
-    }
-    QMenu::item:disabled {
-        color: #ffffff;
-        background: transparent;
-        padding: 6px 20px 4px 20px;
-        font-size: 13px;
-        font-weight: bold;
-    }
-    QMenu::separator {
-        height: 1px;
-        background: #444444;
-        margin: 4px 10px;
-    }
-    QWidget#FolderRowFrame {
-        background: transparent;
-        border: none;
-    }
-    QWidget#FolderRow {
-        background-color: #2a2a2a;
-        border: 1px solid #4a4a4a;
-        border-radius: 12px;
-    }
-    QLabel#FolderRowLabel {
-        color: #ffffff;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        background: transparent;
-        border: none;
-        padding: 0;
-    }
-    QLabel#FolderRowLabel[missing="true"] {
-        color: #d46a6a;
-    }
-    QPushButton#FolderRowRemove, QPushButton#FolderRowReplace {
-        background-color: #3f3f3f;
-        border: 1px solid #5c5c5c;
-        border-radius: 11px;
-        min-width: 24px;
-        max-width: 24px;
-        min-height: 24px;
-        max-height: 24px;
-        padding: 0;
-    }
-    QPushButton#FolderRowRemove:hover {
-        background-color: #8a2525;
-        border: 1px solid #a82e2e;
-    }
-    QPushButton#FolderRowRemove:pressed {
-        background-color: #661a1a;
-        border: 1px solid #7a1f1f;
-    }
-    QPushButton#FolderRowReplace:hover {
-        background-color: #4a3d66;
-        border: 1px solid #6b5a8e;
-    }
-    QPushButton#FolderRowReplace:pressed {
-        background-color: #3a324a;
-        border: 1px solid #5a4b7a;
-    }
-"""
+from steempeg.ui import ui_theme as ut
 
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
@@ -481,7 +360,7 @@ class LibraryMixin:
 
         def _show_menu():
             menu = QMenu(self.ui)
-            menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+            menu.setStyleSheet(ut.library_menu_stylesheet())
             mode = getattr(self, "_library_panel_mode", "clips")
 
             action_all = menu.addAction("🔄  Refresh all")
@@ -1212,7 +1091,7 @@ class LibraryMixin:
         display = self.get_clip_display_health_report(clip_path)
         fs_report = self.get_clip_health_report(clip_path)
         menu = QMenu(self.ui)
-        menu.setStyleSheet(_HEALTH_MENU_STYLE)
+        menu.setStyleSheet(ut.health_menu_stylesheet())
 
         # Title row as a widget: icon sits next to the label (not a reserved muted
         # left column), and keeps full color even though the row is non-clickable.
@@ -1271,7 +1150,7 @@ class LibraryMixin:
         display = self.get_rendered_display_health_report(file_path)
         assessment = self._resolve_rendered_health(file_path)
         menu = QMenu(self.ui)
-        menu.setStyleSheet(_HEALTH_MENU_STYLE)
+        menu.setStyleSheet(ut.health_menu_stylesheet())
 
         title_host = QWidget(menu)
         title_row = QHBoxLayout(title_host)
@@ -2219,7 +2098,7 @@ class LibraryMixin:
         # translucent frameless window made the menu a layered top-level that
         # wouldn't close on focus loss and slid behind the main window.
         menu = QMenu(self.grid_clips)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
         menu.exec(self.grid_clips.viewport().mapToGlobal(pos))
@@ -2235,7 +2114,7 @@ class LibraryMixin:
         # See show_grid_context_menu: keep the native Qt.Popup flags so the menu
         # closes correctly instead of lingering behind the window.
         menu = QMenu(self.ui.table_clips)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
         menu.exec(self.ui.table_clips.viewport().mapToGlobal(pos))
@@ -2575,7 +2454,7 @@ class LibraryMixin:
         """Dropdown panel (styled like Logs) listing the main + extra library folders."""
         if not self.clips_folders:
             menu = QMenu(self.folder_picker)
-            menu.setStyleSheet(_FOLDERS_MENU_STYLE)
+            menu.setStyleSheet(ut.folders_menu_stylesheet())
             action_discover = menu.addAction("🔍  Discover Steam folders…")
             action_discover.triggered.connect(self.discover_steam_folders)
             action_choose = menu.addAction("📂  Choose folder manually…")
@@ -2588,7 +2467,7 @@ class LibraryMixin:
             return
 
         menu = QMenu(self.folder_picker)
-        menu.setStyleSheet(_FOLDERS_MENU_STYLE)
+        menu.setStyleSheet(ut.folders_menu_stylesheet())
 
         header = menu.addAction("Library folders")
         header.setEnabled(False)

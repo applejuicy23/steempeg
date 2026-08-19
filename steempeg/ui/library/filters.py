@@ -296,13 +296,19 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self._games_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._games_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._games_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._games_scroll.setStyleSheet("""
-            QScrollArea { background: transparent; border: none; }
-            QScrollBar:vertical { border: none; background: transparent; width: 8px; margin: 2px; }
-            QScrollBar::handle:vertical { background: #4e4e4e; min-height: 24px; border-radius: 4px; }
-            QScrollBar::handle:vertical:hover { background: #b29ae7; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-        """)
+        from steempeg.ui.library.library_styles import scrollbar_qss_suppress
+        from steempeg.ui.widgets.vertical_scrollbar import (
+            ensure_steempg_vertical_scrollbar,
+            filters_games_scrollbar_chrome,
+        )
+
+        self._games_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            + scrollbar_qss_suppress(width=8)
+        )
+        ensure_steempg_vertical_scrollbar(
+            self._games_scroll, chrome=filters_games_scrollbar_chrome()
+        )
         self._games_scroll.setWidget(self.games_container)
         self._games_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._games_scroll.setMinimumHeight(104)
@@ -977,86 +983,48 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         # Height is owned by set_content_max_height.
 
     def _date_time_input_style_for(self, dense) -> str:
-        """QDateEdit / QTimeEdit chrome — comfort uses init style; compact shrinks."""
-        if not bool(getattr(dense, "compact", False)):
-            return getattr(self, "_date_time_input_style", "")
+        """QDateEdit / QTimeEdit chrome — comfort + compact, theme-aware."""
+        from steempeg.ui import ui_theme as ut
 
-        font = 10
-        pad_v, pad_h = 1, 5
-        min_h = 18
-        radius = 6
-        border = 1
-        drop_w = 18
-        spin_w = 16
-        arrow_sz = 8
+        compact = bool(getattr(dense, "compact", False))
+        if compact:
+            font = 10
+            pad_v, pad_h = 1, 5
+            min_h = 18
+            radius = 6
+            border = 1
+            drop_w = 18
+            spin_w = 16
+            arrow_sz = 8
+        else:
+            font = 13
+            pad_v, pad_h = 4, 10
+            min_h = 24
+            radius = 8
+            border = 2
+            drop_w = 24
+            spin_w = 20
+            arrow_sz = 10
         up = getattr(self, "_filter_date_arrow_up", "")
         down = getattr(self, "_filter_date_arrow_down", "")
-        return f"""
-            QDateEdit, QTimeEdit {{
-                background-color: #383838;
-                color: #ffffff;
-                border: {border}px solid #444444;
-                border-radius: {radius}px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold;
-                font-size: {font}px;
-                padding: {pad_v}px {pad_h}px;
-                min-height: {min_h}px;
-                max-height: {min_h + 2}px;
-            }}
-            QDateEdit:hover, QTimeEdit:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
-            QDateEdit:focus, QTimeEdit:focus {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}
-            QDateEdit::drop-down {{
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: {drop_w}px;
-                border-left: 1px solid #444444;
-                border-top-right-radius: {radius - 1}px;
-                border-bottom-right-radius: {radius - 1}px;
-                background-color: #333333;
-            }}
-            QTimeEdit::up-button {{
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: {spin_w}px;
-                border-left: 1px solid #444444;
-                border-bottom: 1px solid #444444;
-                border-top-right-radius: {radius - 1}px;
-                background-color: #333333;
-            }}
-            QTimeEdit::down-button {{
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: {spin_w}px;
-                border-left: 1px solid #444444;
-                border-bottom-right-radius: {radius - 1}px;
-                background-color: #333333;
-            }}
-            QDateEdit::drop-down:hover, QTimeEdit::up-button:hover, QTimeEdit::down-button:hover {{
-                background-color: #6b5a8e;
-            }}
-            QDateEdit::drop-down:pressed, QTimeEdit::up-button:pressed, QTimeEdit::down-button:pressed {{
-                background-color: #b29ae7;
-            }}
-            QTimeEdit::up-arrow {{
-                image: url("{up}");
-                width: {arrow_sz}px; height: {arrow_sz}px;
-            }}
-            QTimeEdit::down-arrow, QDateEdit::down-arrow {{
-                image: url("{down}");
-                width: {arrow_sz}px; height: {arrow_sz}px;
-            }}
-            QCalendarWidget QWidget {{ alternate-background-color: #2d2d2d; background-color: #252525; color: white; }}
-            QCalendarWidget QToolButton {{ color: white; background-color: #383838; border-radius: 4px; padding: 2px; }}
-            QCalendarWidget QToolButton:hover {{ background-color: #6b5a8e; }}
-            QCalendarWidget QAbstractItemView:enabled {{
-                color: white; background-color: #252525;
-                selection-background-color: #6b5a8e; selection-color: white; border-radius: 4px;
-            }}
-        """
+        return ut.filter_date_time_input_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius,
+            border=border,
+            drop_w=drop_w,
+            spin_w=spin_w,
+            arrow_up=up,
+            arrow_down=down,
+            arrow_sz=arrow_sz,
+        )
 
     def apply_density(self, dense) -> None:
         """Shrink popup chrome for Deck / ultra-narrow windows."""
+        from steempeg.ui import ui_theme as ut
+
         self._density = dense
         compact = bool(getattr(dense, "compact", False))
         width = self._resolve_menu_width(dense)
@@ -1084,58 +1052,28 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             self._bottom_layout.setContentsMargins(0, 2, 0, 0)
 
         self.container.setStyleSheet(
-            f"QFrame#MainFilterContainer {{ background-color: #252525; "
-            f"border: 1px solid #3d3d3d; border-radius: {pill_r + 2}px; }}"
+            ut.filter_menu_container_stylesheet(radius=pill_r + 2)
         )
 
         for capsule in self.findChildren(QFrame, "CategoryCapsule"):
-            capsule.setStyleSheet(f"""
-                QFrame#CategoryCapsule {{
-                    background-color: #2d2d2d;
-                    border: 1px solid #383838;
-                    border-radius: {pill_r}px;
-                }}
-                QLabel#CategoryTitle {{
-                    color: #cccccc;
-                    border: none;
-                    background: transparent;
-                    font-size: {title_font}px;
-                    font-weight: bold;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
-                }}
-            """)
+            capsule.setStyleSheet(
+                ut.filter_menu_capsule_stylesheet(radius=pill_r, title_font=title_font)
+            )
             lay = capsule.layout()
             if lay is not None:
                 lay.setContentsMargins(cap_m, cap_m, cap_m, cap_m)
                 lay.setSpacing(4 if compact else 8)
 
-        self._PILL_BTN_STYLE = f"""
-            QPushButton {{
-                background-color: #383838;
-                color: #aaaaaa;
-                border: {border}px solid #444444;
-                border-radius: {radius}px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold;
-                font-size: {font}px;
-                padding: {pad_v}px {pad_h}px;
-                min-height: {min_h}px;
-            }}
-            QPushButton:hover {{
-                background-color: #404040;
-                color: #ffffff;
-                border: {border}px solid #555555;
-            }}
-            QPushButton:checked {{
-                background-color: #404040;
-                color: #ffffff;
-                border: {border}px solid #6b5a8e;
-            }}
-            QPushButton:checked:hover {{
-                background-color: #3a324a;
-                border: {border}px solid #b29ae7;
-            }}
-        """
+        from steempeg.ui import ui_theme as ut
+
+        self._PILL_BTN_STYLE = ut.filter_chip_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius,
+            border=border,
+        )
         for btn in self.findChildren(QPushButton):
             if btn in (self.btn_clear, self.btn_apply):
                 continue
@@ -1148,23 +1086,14 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             ):
                 btn.setStyleSheet(self._PILL_BTN_STYLE)
 
-        unified = f"""
-            QPushButton {{
-                background-color: #383838;
-                color: #ffffff;
-                border: {border}px solid #444444;
-                border-radius: {radius + 2}px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold;
-                font-size: {font}px;
-                padding: {pad_v}px {pad_h}px;
-                min-height: {min_h}px;
-            }}
-            QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
-            QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}
-            QPushButton:disabled {{ background-color: #222222; color: #555555; border: {border}px solid #2d2d2d; }}
-            QPushButton::menu-indicator {{ image: none; }}
-        """
+        unified = ut.filter_action_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius + 2,
+            border=border,
+        )
         clear_style = (
             unified.replace("color: #ffffff;", "color: #ff7777;")
             .replace("#6b5a8e", "#e05555")
@@ -1182,9 +1111,16 @@ class FilterMenu(PillPaintDragMixin, QWidget):
 
         bc_pad = "0px" if compact else "0px"
         bc_font = 11 if compact else 13
+        from steempeg.ui import ui_theme as ut
+
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            bc = ut.combo_chrome_colors()
+            field_bg, field_border = bc.field_bg, bc.field_border
+        else:
+            field_bg, field_border = "#1e1e1e", "#333"
         for combo in self.findChildren(BlockCombo):
             normal = f"""
-                QComboBox {{ background: #1e1e1e; color: white; border: 1px solid #333;
+                QComboBox {{ background: {field_bg}; color: white; border: 1px solid {field_border};
                     border-radius: 6px; padding: {bc_pad}; font-weight: bold; font-size: {bc_font}px;
                     font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
                     min-height: {min_h}px; max-height: {min_h + 4}px; }}
@@ -1194,7 +1130,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             """ + combo_popup_item_rules(dense)
             combo.style_normal = normal
             combo.style_error = normal.replace(
-                "border: 1px solid #333;", "border: 2px solid #ff4444;"
+                f"border: 1px solid {field_border};", "border: 2px solid #ff4444;"
             )
             combo.setStyleSheet(combo.style_normal if combo.is_valid() else combo.style_error)
             apply_dark_combo_popup(combo, dense=dense)
@@ -1215,6 +1151,14 @@ class FilterMenu(PillPaintDragMixin, QWidget):
 
         games_min = 92 if compact else 104
         self._games_scroll.setMinimumHeight(games_min)
+        from steempeg.ui.widgets.vertical_scrollbar import (
+            ensure_steempg_vertical_scrollbar,
+            filters_games_scrollbar_chrome,
+        )
+
+        ensure_steempg_vertical_scrollbar(
+            self._games_scroll, chrome=filters_games_scrollbar_chrome()
+        )
         self._relayout_sections()
 
     _PILL_BTN_STYLE = """

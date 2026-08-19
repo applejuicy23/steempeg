@@ -7,27 +7,11 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 
 
 def _tab_qss(font_px: int, radius: int, *, active: bool, hover: bool) -> str:
-    if active:
-        border, color = "#6b5a8e", "#ffffff"
-    elif hover:
-        border, color = "#555555", "#ffffff"
-    else:
-        border, color = "#353535", "#aaaaaa"
-    return f"""
-    QFrame#libraryTab {{
-        background-color: #2d2d2d;
-        border: 1px solid {border};
-        border-radius: {radius}px;
-    }}
-    QLabel#libraryTabText {{
-        color: {color};
-        background: transparent;
-        border: none;
-        font-weight: bold;
-        font-size: {font_px}px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    }}
-"""
+    from steempeg.ui import ui_theme as ut
+
+    return ut.library_tab_stylesheet(
+        font_px=font_px, radius=radius, active=active, hover=hover
+    )
 
 
 _CLOSE_HIDDEN = """

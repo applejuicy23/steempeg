@@ -9,6 +9,17 @@ import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import ui_theme as _ut
+
+
+def _clip_plate_color() -> str:
+    return _ut.clip_card_chrome()[1]
+
+
+def _clip_footer_color() -> str:
+    return _ut.clip_card_chrome()[0]
+
+
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
@@ -91,7 +102,7 @@ def _clip_pixmap_to_corners(
     painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
     painter.setRenderHint(qtg.QPainter.RenderHint.SmoothPixmapTransform, True)
     painter.setClipPath(path)
-    painter.fillPath(path, qtg.QColor("#1a1a1a"))
+    painter.fillPath(path, qtg.QColor(_clip_plate_color()))
     painter.drawPixmap(0, 0, cropped)
     painter.end()
     return out
@@ -188,6 +199,9 @@ class ClipCard(qtw.QWidget):
         badge_w = self.badge_label.width()
         self.badge_label.move(254 - badge_w - 6, 144 - 24)
 
+        footer_bg = _clip_footer_color()
+        plate = _clip_plate_color()
+
         if status_badge:
             self.status_badge_label = qtw.QLabel(status_badge, self.thumb_label)
             self.status_badge_label.setStyleSheet(
@@ -203,7 +217,7 @@ class ClipCard(qtw.QWidget):
             self.health_dot.setFixedSize(14, 14)
             self.health_dot.setStyleSheet(
                 f"background-color: {health_color};"
-                "border: 2px solid #1a1a1a;"
+                f"border: 2px solid {plate};"
                 "border-radius: 7px;"
             )
             self.health_dot.move(254 - 20, 6)
@@ -221,15 +235,15 @@ class ClipCard(qtw.QWidget):
 
         text_widget = qtw.QWidget()
         self._footer_widget = text_widget
-        text_widget.setStyleSheet("""
-            QWidget {
-                background-color: #383838;
+        text_widget.setStyleSheet(f"""
+            QWidget {{
+                background-color: {footer_bg};
                 border: none;
                 border-top-left-radius: 12px;
                 border-top-right-radius: 12px;
                 border-bottom-left-radius: 0px;
                 border-bottom-right-radius: 0px;
-            }
+            }}
         """)
 
         text_layout = qtw.QHBoxLayout(text_widget)
@@ -363,15 +377,19 @@ class ClipCard(qtw.QWidget):
             "background-color: transparent; border: none;"
         )
         footer = getattr(self, "_footer_widget", None)
+        footer_bg = _clip_footer_color()
         if footer is not None:
             footer.setStyleSheet(
                 f"QWidget {{"
-                f"background-color: #383838; border: none;"
+                f"background-color: {footer_bg}; border: none;"
                 f"border-top-left-radius: {ftl}px; border-top-right-radius: {ftr}px;"
                 f"border-bottom-left-radius: {fbl}px;"
                 f"border-bottom-right-radius: {fbr}px;"
                 f"}}"
             )
+        overlay = getattr(self, "_load_overlay", None)
+        if overlay is not None:
+            overlay.set_clip_radii(ttl, ttr, tbr, tbl)
         self._refresh_clipped_thumb()
 
     def _refresh_clipped_thumb(self) -> None:
@@ -387,7 +405,7 @@ class ClipCard(qtw.QWidget):
             )
             painter = qtg.QPainter(plate)
             painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
-            painter.fillPath(path, qtg.QColor("#1a1a1a"))
+            painter.fillPath(path, qtg.QColor(_clip_plate_color()))
             painter.end()
             self.thumb_label.setPixmap(plate)
             return
@@ -508,19 +526,27 @@ class ClipCard(qtw.QWidget):
             # Snapshot press mode hides thumb_label — drop it so the spinner can paint.
             self._yield_press_for_overlay()
             overlay.setGeometry(0, 0, self.thumb_label.width(), self.thumb_label.height())
-            overlay.start(percent=percent)
+            ttl, ttr, tbr, tbl = self._radius_plan()["thumb"]
+            overlay.set_clip_radii(ttl, ttr, tbr, tbl)
+            # Always show a live % (0 until probe/mpv/remux reports). None hid the label.
+            overlay.start(percent=0 if percent is None else percent)
             overlay.raise_()
+            veil = getattr(self, "_dim_veil", None)
+            if veil is not None:
+                veil.hide()
             border = getattr(self, "_border_overlay", None)
             if border is not None:
                 border.raise_()
         else:
             overlay.stop()
+            self._sync_unavailable_dim()
 
     def set_loading_progress(self, percent: int | None) -> None:
         overlay = getattr(self, "_load_overlay", None)
         if overlay is None or not getattr(self, "_loading", False):
             return
         overlay.set_progress(percent)
+        overlay.repaint()
 
     def is_loading(self) -> bool:
         return bool(getattr(self, "_loading", False))
@@ -591,12 +617,13 @@ class ClipCard(qtw.QWidget):
         super().leaveEvent(event)
 
     def _apply_selection_style(self) -> None:
+        _, _, idle_border = _ut.clip_card_chrome()
         if self._selected:
             border = "3px solid #b29ae7"
         elif self._hovered:
             border = "2px solid #7a6aa8"
         else:
-            border = "2px solid #444444"
+            border = f"2px solid {idle_border}"
         tl, tr, br, bl = self._corner_radii()
         self._border_overlay.setStyleSheet(f"""
             QFrame {{

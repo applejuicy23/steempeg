@@ -38,8 +38,13 @@ _ACCENT = QColor("#b29ae7")
 _ACCENT_HOVER = QColor("#7a6aa8")
 _ACCENT_OPENED = QColor("#d4c4f5")
 _IDLE_BORDER = QColor("#444444")
-_IMG_BG = QColor("#1a1a1a")
-_FOOTER_BG = QColor("#383838")
+
+
+def _photo_chrome() -> tuple[QColor, QColor, QColor]:
+    from steempeg.ui import ui_theme as ut
+
+    footer, plate, idle = ut.clip_card_chrome()
+    return QColor(plate), QColor(footer), QColor(idle)
 _TITLE_FG = QColor("#e0e0e0")
 _META_FG = QColor("#888888")
 
@@ -333,6 +338,7 @@ class ScreenshotPhoto(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
+        img_bg, footer_bg, idle_border = _photo_chrome()
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -362,7 +368,7 @@ class ScreenshotPhoto(QWidget):
 
         p.save()
         p.setClipPath(img_path.intersected(card))
-        p.fillRect(img, _IMG_BG)
+        p.fillRect(img, img_bg)
         if not self._pix.isNull():
             target = self._pix.scaled(
                 max(1, int(round(img.width()))),
@@ -382,7 +388,7 @@ class ScreenshotPhoto(QWidget):
         top_sq = QPainterPath()
         top_sq.addRect(QRectF(foot.left(), foot.top(), foot.width(), _RADIUS))
         foot_path = foot_path.united(top_sq)
-        p.fillPath(foot_path.intersected(card), _FOOTER_BG)
+        p.fillPath(foot_path.intersected(card), footer_bg)
 
         # Match ClipCard title/date faces (13px bold / 11px meta) with real padding
         # so text doesn't glue to the image edge or the card bottom.
@@ -476,7 +482,7 @@ class ScreenshotPhoto(QWidget):
             border, width = _ACCENT_HOVER, 2.0
         else:
             # Soft idle ring — photo float, but still reads as a card.
-            border, width = _IDLE_BORDER, 1.0
+            border, width = idle_border, 1.0
 
         pen = p.pen()
         pen.setColor(border)
