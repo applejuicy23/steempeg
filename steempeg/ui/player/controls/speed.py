@@ -27,14 +27,11 @@ from steempeg.ui.widgets.gradient_slider import (
     level_slider_x,
 )
 
-_ROUND_BTN_STYLE = """
-    QPushButton {{ background-color: #4e4e4e; border-radius: {radius}px; }}
-    QPushButton:hover {{ background-color: #5a5a5a; }}
-"""
-
-
 def _round_btn_style(size: int = 40) -> str:
-    return tok.with_tooltip_style(_ROUND_BTN_STYLE.format(radius=max(1, size // 2)))
+    from steempeg.ui import ui_theme as ut
+
+    radius = max(1, size // 2)
+    return tok.with_tooltip_style(ut.player_chrome_round_button_stylesheet(radius=radius))
 
 
 def _drag_value_font() -> QFont:

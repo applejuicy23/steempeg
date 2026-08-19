@@ -42,6 +42,12 @@ from steempeg.ui.timeline_strip_size import (
 )
 
 
+def _timeline_strip_fill() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.active_palette().bg_timeline_strip
+
+
 def _paint_timeline_marker_pixmap(
     painter: QPainter,
     pix: QPixmap,
@@ -900,7 +906,7 @@ class TimelineCanvas(QWidget):
         pad = 12.0
         usable_w = width - (pad * 2)
 
-        painter.fillRect(self.rect(), QColor("#1e1e1e"))
+        painter.fillRect(self.rect(), QColor(_timeline_strip_fill()))
         
         track_height = self._TRACK_H
         track_y = self._TRACK_Y
@@ -1194,31 +1200,10 @@ class TimelineCanvas(QWidget):
         self.update_playhead(x)
 
     def show_marker_context_menu(self, pos, marker):
+        from steempeg.ui import ui_theme as ut
+
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { 
-                background-color: #2d2d2d; 
-                color: #ffffff; 
-                border: 2px solid #444444; 
-                border-radius: 8px; 
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QMenu::item { 
-                padding: 6px 24px 6px 24px; 
-                border-radius: 4px;
-                margin: 2px 4px;
-            }
-            QMenu::item:selected { 
-                background-color: #6b5a8e; 
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #444444;
-                margin: 4px 10px;
-            }
-        """)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         
         # Declare variables in advance so the code doesn't crash if the buttons are missing
         action_edit = None
@@ -1262,12 +1247,10 @@ class TimelineCanvas(QWidget):
             self.screenshot_requested.emit(float(marker.get('time_ms', 0)))
     
     def show_track_context_menu(self, pos, time_ms):
+        from steempeg.ui import ui_theme as ut
+
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444; border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; font-weight: bold; }
-            QMenu::item { padding: 6px 24px 6px 24px; border-radius: 4px; margin: 2px 4px; }
-            QMenu::item:selected { background-color: #6b5a8e; }
-        """)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
 
         action_add_marker = menu.addAction("📍 Add Marker Here")
         action_screenshot = menu.addAction("📸 Take Screenshot Here")
@@ -1700,7 +1683,7 @@ class TimelineOverviewScrollBar(QScrollBar):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.fillRect(self.rect(), QColor("#1e1e1e"))
+        painter.fillRect(self.rect(), QColor(_timeline_strip_fill()))
 
         # Capsule track (full round ends).
         radius = float(groove.height()) * 0.5
@@ -1819,26 +1802,19 @@ class CustomTimelineWidget(QScrollArea):
         """
 
     def _apply_timeline_chrome_stylesheet(self) -> None:
+        from steempeg.ui import ui_theme as ut
+
         top_gap = int(getattr(self, "_timeline_top_gap", 0))
         bar_h = int(getattr(self, "_timeline_bar_h", 13))
         bottom_gap = int(getattr(self, "_timeline_bottom_gap", 5))
-        self.setStyleSheet(f"""
-            QScrollArea {{ 
-                border: none; 
-                background: #1e1e1e; 
-                border-radius: 8px; 
-                padding: 6px 12px 0px 12px; /* Margins: top (6px), right (12px), bottom (0), left (12px) */
-            }}
-            
-            QScrollArea > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
-            QScrollArea > QWidget > QWidget {{ background: transparent; }}
-            
+        self.setStyleSheet(
+            ut.timeline_strip_stylesheet()
+            + f"""
             QScrollBar:horizontal {{
                 height: {bar_h}px;
                 background: transparent;
                 border: none;
-                /* margin: top (top_gap), right (4), bottom (bottom_gap), left (4) */
-                margin: {top_gap}px 4px {bottom_gap}px 4px; 
+                margin: {top_gap}px 4px {bottom_gap}px 4px;
             }}
             QScrollBar::handle:horizontal {{
                 background: transparent;
@@ -1847,7 +1823,8 @@ class CustomTimelineWidget(QScrollArea):
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
                 width: 0px;
             }}
-        """)
+        """
+        )
 
     def apply_strip_size(self, size: object | None = None) -> None:
         """Live-apply Settings S/M/L to the time ruler (track height unchanged)."""

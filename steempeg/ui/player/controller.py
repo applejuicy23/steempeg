@@ -815,6 +815,18 @@ class PlayerMixin:
             ready = True  # never get wedged on a transient property error
 
         if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
+            if hasattr(self, "update_clip_open_loading_progress"):
+                buf = self._clip_open_mpv_buffer_percent()
+                if buf is not None:
+                    pct = 70 + int(buf * 0.25)
+                else:
+                    t0 = getattr(self, "_clip_open_play_t0", None)
+                    if t0:
+                        elapsed = max(0.0, time.time() - float(t0))
+                        pct = min(92, 70 + int(elapsed * 40))
+                    else:
+                        pct = 70
+                self.update_clip_open_loading_progress(pct)
             QTimer.singleShot(16, self._reveal_video_when_ready)
             return
 
@@ -1645,6 +1657,8 @@ class PlayerMixin:
         footer.setStyleSheet(with_tooltip_style(ut.player_footer_stylesheet()))
         if hasattr(self, "_apply_playback_button_styles"):
             self._apply_playback_button_styles()
+        if hasattr(self, "_refresh_player_footer_chrome"):
+            self._refresh_player_footer_chrome()
 
         _fstrace("EXIT footer reparent done")
         v_container = getattr(self.ui, 'video_container', None)
@@ -2709,6 +2723,8 @@ class PlayerMixin:
     def clear_clip_open_loading(self) -> None:
         """Hide open-spinner on library cards and queue rows."""
         self._opening_clip_path = None
+        self._clip_open_play_t0 = None
+        self._clip_open_load_pct = -1
         grid = getattr(self, "grid_clips", None)
         if grid is not None:
             try:
@@ -2773,7 +2789,7 @@ class PlayerMixin:
                             continue
                         card = grid.itemWidget(item)
                         if card is not None and hasattr(card, "set_loading"):
-                            card.set_loading(True, percent=percent)
+                            card.set_loading(True, percent=0 if percent is None else percent)
                         break
                 except RuntimeError:
                     pass
@@ -2785,7 +2801,7 @@ class PlayerMixin:
                 for card in getattr(panel, "_card_widgets", None) or ():
                     if getattr(card, "_job_id", None) == jid and hasattr(card, "set_loading"):
                         try:
-                            card.set_loading(True, percent=percent)
+                            card.set_loading(True, percent=0 if percent is None else percent)
                         except RuntimeError:
                             pass
             sidebar = getattr(self, "_portable_queue_sidebar", None)
@@ -2793,12 +2809,19 @@ class PlayerMixin:
                 row = getattr(sidebar, "_rows", {}).get(jid)
                 if row is not None and hasattr(row, "set_loading"):
                     try:
-                        row.set_loading(True, percent=percent)
+                        row.set_loading(True, percent=0 if percent is None else percent)
                     except RuntimeError:
                         pass
 
     def update_clip_open_loading_progress(self, percent: int | None) -> None:
         """Update % on whichever card is currently showing the open spinner."""
+        if percent is None:
+            return
+        pct = max(0, min(100, int(percent)))
+        last = int(getattr(self, "_clip_open_load_pct", -1) or -1)
+        if pct < last:
+            return
+        self._clip_open_load_pct = pct
         grid = getattr(self, "grid_clips", None)
         if grid is not None:
             try:
@@ -2809,7 +2832,7 @@ class PlayerMixin:
                     card = grid.itemWidget(item)
                     if card is not None and getattr(card, "is_loading", lambda: False)():
                         if hasattr(card, "set_loading_progress"):
-                            card.set_loading_progress(percent)
+                            card.set_loading_progress(pct)
             except RuntimeError:
                 pass
         panel = getattr(self, "render_queue_panel", None)
@@ -2818,7 +2841,7 @@ class PlayerMixin:
                 if getattr(card, "is_loading", lambda: False)():
                     if hasattr(card, "set_loading_progress"):
                         try:
-                            card.set_loading_progress(percent)
+                            card.set_loading_progress(pct)
                         except RuntimeError:
                             pass
         sidebar = getattr(self, "_portable_queue_sidebar", None)
@@ -2827,9 +2850,29 @@ class PlayerMixin:
                 if getattr(row, "is_loading", lambda: False)():
                     if hasattr(row, "set_loading_progress"):
                         try:
-                            row.set_loading_progress(percent)
+                            row.set_loading_progress(pct)
                         except RuntimeError:
                             pass
+
+    def _clip_open_mpv_buffer_percent(self) -> int | None:
+        """mpv cache fill 0–99 while the first frame is still pending; ignore stuck 100%."""
+        player = getattr(self, "player", None)
+        if player is None:
+            return None
+        try:
+            buf = getattr(player, "cache_buffering_state", None)
+            if buf is None:
+                return None
+            buf = int(buf)
+        except Exception:
+            return None
+        if 0 <= buf < 100:
+            return buf
+        return None
+
+    def _nudge_clip_open_loading(self, percent: int) -> None:
+        if hasattr(self, "update_clip_open_loading_progress"):
+            self.update_clip_open_loading_progress(percent)
 
     def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
@@ -2972,8 +3015,10 @@ class PlayerMixin:
                 early_play_path = cached.replace("\\", "/")
             else:
                 pending_remux = True
-                # No spinner — remux in background; play as soon as the file grows.
+                # Remux in background; play as soon as the file grows. Banner % tracks bytes.
                 self._start_clip_remux_async(switch_gen, abs_path, clip_path)
+        if not pending_remux:
+            self._nudge_clip_open_loading(48)
 
         # STEP 2: AUTO-SEARCH JSON TIMELINE
         offset_ms = 0
@@ -3088,6 +3133,9 @@ class PlayerMixin:
                     clip_path=clip_path,
                     cache_dir=cache_dir,
                 )
+
+        if not pending_remux:
+            self._nudge_clip_open_loading(58)
 
 
         # 3. PREPARE THE CANVAS
@@ -3220,8 +3268,6 @@ class PlayerMixin:
         job: RemuxJob = started
         self._progressive_remux = (switch_gen, job)
         early_started = {"done": False}
-        if hasattr(self, "update_clip_open_loading_progress"):
-            self.update_clip_open_loading_progress(0)
 
         def _on_ui(play_path: str = "", err_text: str = "", finished: bool = False) -> None:
             if switch_gen != getattr(self, "_media_switch_gen", 0):
@@ -3362,6 +3408,9 @@ class PlayerMixin:
                 self._discard_dead_linux_mpv()
                 self._is_switching = False
                 return
+
+        self._clip_open_play_t0 = time.time()
+        self._nudge_clip_open_loading(70)
 
         QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
@@ -3813,12 +3862,9 @@ class PlayerMixin:
             return
 
         pick = QMenu(self.ui)
-        pick.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
-                    border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; }
-            QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
-            QMenu::item:selected { background-color: #6b5a8e; }
-        """)
+        from steempeg.ui import ui_theme as ut
+
+        pick.setStyleSheet(ut.compact_menu_stylesheet())
         for path in files:
             action = pick.addAction(os.path.basename(path))
             action.triggered.connect(
@@ -3861,12 +3907,9 @@ class PlayerMixin:
             return
 
         pick = QMenu(self.ui)
-        pick.setStyleSheet("""
-            QMenu { background-color: #2d2d2d; color: #ffffff; border: 2px solid #444444;
-                    border-radius: 8px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; }
-            QMenu::item { padding: 6px 24px; border-radius: 4px; margin: 2px 4px; }
-            QMenu::item:selected { background-color: #6b5a8e; }
-        """)
+        from steempeg.ui import ui_theme as ut
+
+        pick.setStyleSheet(ut.compact_menu_stylesheet())
         for path in files:
             action = pick.addAction(os.path.basename(path))
             action.triggered.connect(

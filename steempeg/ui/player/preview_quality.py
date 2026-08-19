@@ -9,40 +9,6 @@ SETTINGS_KEY = "preview_quality"
 DEFAULT_QUALITY = "source"
 VF_LABEL = "steempeg_preview"
 
-_PREVIEW_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        padding: 4px 0px;
-    }
-    QMenu::item {
-        padding: 6px 28px 6px 16px;
-        border-radius: 4px;
-        margin: 2px 6px;
-    }
-    QMenu::item:selected {
-        background-color: #6b5a8e;
-    }
-    QMenu::item:disabled {
-        color: #888888;
-        background: transparent;
-        font-weight: normal;
-        font-size: 11px;
-        padding-top: 2px;
-        padding-bottom: 8px;
-    }
-    QMenu::separator {
-        height: 1px;
-        background-color: #444444;
-        margin: 4px 10px;
-    }
-"""
-
 
 @dataclass(frozen=True)
 class PreviewQualityPreset:
@@ -219,4 +185,6 @@ def apply_mpv_preview_quality(player, preset_id: str) -> bool:
 
 
 def menu_stylesheet() -> str:
-    return _PREVIEW_MENU_STYLE
+    from steempeg.ui import ui_theme as ut
+
+    return ut.preview_quality_menu_stylesheet()
