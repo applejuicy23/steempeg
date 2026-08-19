@@ -3514,14 +3514,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._apply_dark_shell()
         self._refresh_ui_theme_surfaces(preview=preview)
 
-        # Default restore: density-scaled footer / neo chrome uses stock hardcoded QSS.
-        if not preview and name == ut.UI_THEME_DEFAULT:
-            dense = getattr(self, "_ui_density", None)
-            if dense is not None:
-                self._apply_ui_density(dense)
-
         if preview:
             return
+
+        from steempeg.ui.ui_density import COMFORT
+
+        dense = getattr(self, "_ui_density", None) or COMFORT
+        # Re-apply density chrome so footer composites, neo nav, queue, and render
+        # panel combos pick up the new theme (Default stock QSS vs TrueDark tokens).
+        self._apply_ui_density(dense)
+        try:
+            from steempeg.ui.layout_defaults import apply_player_layout_mode
+
+            apply_player_layout_mode(self)
+        except Exception:
+            pass
 
         palette = self.ui.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
@@ -3721,36 +3728,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if dense is None:
             dense = COMFORT
 
-        # Footer row + library toolbar — TrueDark/OLED only; Default keeps density QSS.
-        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
-            footer_style = ut.footer_button_stylesheet(dense)
-            self._footer_unified_style = footer_style
-            for attr in (
-                "btn_about",
-                "btn_update_check",
-                "btn_settings",
-                "btn_dev",
-            ):
-                btn = getattr(self.ui, attr, None)
-                if btn is not None:
-                    self._apply_library_footer_button(btn, footer_style)
-            picker = getattr(self, "folder_picker", None)
-            if picker is not None and hasattr(picker, "apply_density"):
-                picker.apply_density(dense)
-            refresh = getattr(self, "btn_refresh", None)
-            if refresh is not None and hasattr(refresh, "apply_density"):
-                refresh.apply_density(dense)
-        else:
-            ut_style = ut.unified_button_stylesheet()
-            for attr in (
-                "btn_browse",
-                "btn_refresh",
-                "btn_open_folder",
-                "btn_open_video",
-            ):
-                btn = getattr(self.ui, attr, None)
-                if btn is not None:
-                    btn.setStyleSheet(ut_style)
+        self._apply_library_footer_theme(dense)
 
         lib_pill = getattr(self, "library_toolbar_pill", None)
         if lib_pill is not None:
@@ -3779,9 +3757,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if hasattr(tab, "_apply_style"):
                 tab._apply_style()
 
-        add_btn = getattr(self, "btn_library_add", None)
-        if add_btn is not None and ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
-            add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+        self._apply_library_add_button_theme(dense)
 
         filt = getattr(self, "btn_filter_pill", None)
         if filt is not None and hasattr(filt, "apply_density"):
@@ -4451,13 +4427,93 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         btn.setDefault(False)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-    def _apply_library_density(self, dense):
-        """Clips Manager + footer chrome from the left pane's density."""
+    def _library_footer_style_for_density(self, dense):
+        """Secondary footer-row QSS — stock gray on Default, theme tokens on TrueDark."""
+        from steempeg.ui import ui_theme as ut
+
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            return ut.footer_button_stylesheet(dense)
+        return f"""
+            QPushButton {{
+                background-color: #383838; color: #ffffff; border: 2px solid #444444;
+                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
+                min-height: {dense.footer_min_h}px; outline: none;
+            }}
+            QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+            QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}
+            QPushButton:focus, QPushButton:default {{
+                background-color: #383838; color: #ffffff; border: 2px solid #444444; outline: none;
+            }}
+            QPushButton::menu-indicator {{ image: none; }}
+        """
+
+    def _apply_library_footer_theme(self, dense) -> None:
+        """About / Settings / Folder / Refresh — theme-aware footer chrome."""
         from steempeg.ui.ui_density import (
             folder_button_label,
-            tab_label,
+            settings_button_label,
             updates_button_label,
         )
+
+        footer_style = self._library_footer_style_for_density(dense)
+        self._footer_unified_style = footer_style
+        btn_about = getattr(self.ui, "btn_about", None)
+        btn_update = getattr(self.ui, "btn_update_check", None)
+        btn_settings = getattr(self.ui, "btn_settings", None)
+        if btn_about is not None:
+            self._apply_library_footer_button(btn_about, footer_style)
+        if btn_update is not None:
+            self._apply_library_footer_button(btn_update, footer_style)
+            btn_update.setText(updates_button_label(dense))
+            btn_update.setToolTip("Check for updates")
+        if btn_settings is not None:
+            self._apply_library_footer_button(btn_settings, footer_style)
+            btn_settings.setText(settings_button_label(dense))
+            btn_settings.setToolTip("Settings")
+        btn_dev = getattr(self.ui, "btn_dev", None)
+        if btn_dev is not None:
+            self._apply_library_footer_button(btn_dev, footer_style)
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "apply_density"):
+            picker.apply_density(dense)
+            folders = getattr(self, "clips_folders", None) or []
+            n = len(folders) if folders else 0
+            if hasattr(self, "update_folder_button_label"):
+                self.update_folder_button_label()
+            else:
+                picker.set_folder_label(folder_button_label(max(n, 1) if n else 0, dense))
+        refresh = getattr(self, "btn_refresh", None)
+        if refresh is not None and hasattr(refresh, "apply_density"):
+            refresh.apply_density(dense)
+
+    def _apply_library_add_button_theme(self, dense) -> None:
+        """Library + tab — stock gray on Default, elevated tab tone on TrueDark."""
+        from steempeg.ui import ui_theme as ut
+
+        add_btn = getattr(self, "btn_library_add", None)
+        if add_btn is None:
+            return
+        sz = dense.add_tab_size
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+            return
+        add_btn.setFixedSize(sz, sz)
+        add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #2d2d2d; color: #ffffff; border: 1px solid #353535;
+                border-radius: {dense.tab_radius}px; font-weight: 800;
+                font-size: {18 if not dense.compact else 14}px; padding: 0px;
+                min-width: {sz}px; max-width: {sz}px;
+                min-height: {sz}px; max-height: {sz}px;
+            }}
+            QPushButton:hover {{ background-color: #3a3a3a; border-color: #6b5a8e; }}
+        """)
+
+    def _apply_library_density(self, dense):
+        """Clips Manager + footer chrome from the left pane's density."""
+        from steempeg.ui.ui_density import tab_label
 
         # --- Library tabs ---
         tabs = getattr(self, "_library_tabs", None) or {}
@@ -4466,25 +4522,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 tab.set_label(tab_label(mode, dense))
             if hasattr(tab, "apply_density"):
                 tab.apply_density(dense)
-        add_btn = getattr(self, "btn_library_add", None)
-        if add_btn is not None:
-            sz = dense.add_tab_size
-            from steempeg.ui import ui_theme as ut
-
-            if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
-                add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
-            else:
-                add_btn.setFixedSize(sz, sz)
-                add_btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: #2d2d2d; color: #ffffff; border: 1px solid #353535;
-                        border-radius: {dense.tab_radius}px; font-weight: 800;
-                        font-size: {18 if not dense.compact else 14}px; padding: 0px;
-                        min-width: {sz}px; max-width: {sz}px;
-                        min-height: {sz}px; max-height: {sz}px;
-                    }}
-                    QPushButton:hover {{ background-color: #3a3a3a; border-color: #6b5a8e; }}
-                """)
+        self._apply_library_add_button_theme(dense)
 
         # --- Left toolbar ---
         outer = getattr(self, "_left_toolbar_outer", None)
@@ -4585,57 +4623,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 table.setColumnWidth(3, 100)
 
         # --- Footer ---
-        from steempeg.ui import ui_theme as ut
-
-        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
-            footer_style = ut.footer_button_stylesheet(dense)
-        else:
-            footer_style = f"""
-            QPushButton {{
-                background-color: #383838; color: #ffffff; border: 2px solid #444444;
-                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
-                min-height: {dense.footer_min_h}px; outline: none;
-            }}
-            QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}
-            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
-            QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}
-            QPushButton:focus, QPushButton:default {{
-                background-color: #383838; color: #ffffff; border: 2px solid #444444; outline: none;
-            }}
-            QPushButton::menu-indicator {{ image: none; }}
-        """
-        self._footer_unified_style = footer_style
-        btn_about = getattr(self.ui, "btn_about", None)
-        btn_update = getattr(self.ui, "btn_update_check", None)
-        btn_settings = getattr(self.ui, "btn_settings", None)
-        if btn_about is not None:
-            self._apply_library_footer_button(btn_about, footer_style)
-        if btn_update is not None:
-            self._apply_library_footer_button(btn_update, footer_style)
-            btn_update.setText(updates_button_label(dense))
-            btn_update.setToolTip("Check for updates")
-        if btn_settings is not None:
-            from steempeg.ui.ui_density import settings_button_label
-
-            self._apply_library_footer_button(btn_settings, footer_style)
-            btn_settings.setText(settings_button_label(dense))
-            btn_settings.setToolTip("Settings")
-        btn_dev = getattr(self.ui, "btn_dev", None)
-        if btn_dev is not None:
-            self._apply_library_footer_button(btn_dev, footer_style)
-        picker = getattr(self, "folder_picker", None)
-        if picker is not None and hasattr(picker, "apply_density"):
-            picker.apply_density(dense)
-            folders = getattr(self, "clips_folders", None) or []
-            n = len(folders) if folders else 0
-            if hasattr(self, "update_folder_button_label"):
-                self.update_folder_button_label()
-            else:
-                picker.set_folder_label(folder_button_label(max(n, 1) if n else 0, dense))
-        refresh = getattr(self, "btn_refresh", None)
-        if refresh is not None and hasattr(refresh, "apply_density"):
-            refresh.apply_density(dense)
+        self._apply_library_footer_theme(dense)
 
     def _apply_player_density(self, dense):
         """Player column + export settings chrome from the center pane's density."""
@@ -4662,19 +4650,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 neo_lay.setContentsMargins(m, t, m, t)
                 neo_lay.setSpacing(int(round(6 + (10 - 6) * dense.scale)))
         nav_names = NEO_NAV_COMPACT if dense.compact else NEO_NAV_COMFORT
-        # Portable sheet keeps comfort pill chrome — only the rail width is trimmed.
-        # padding uses T R B L so left pad clears the icon from the tab edge;
-        # icon→text gap comes from neo_nav_icon_gap (transparent pad on the glyph).
-        pill = f"""
-            QPushButton {{
-                background-color: transparent; color: #a0a0a0;
-                border: 2px solid transparent; border-radius: {10 if dense.compact else 14}px;
-                padding: {dense.neo_nav_pad}; text-align: left;
-                font-size: {dense.neo_nav_font}px; font-weight: 700;
-            }}
-            QPushButton:hover {{ background-color: #383838; border: 2px solid #5a4b7a; color: #e0e0e0; }}
-            QPushButton:checked {{ background-color: #252525; border: 2px solid #8e7cc3; color: #ffffff; }}
-        """
+        from steempeg.ui import ui_theme as ut
+
+        pill = ut.neo_nav_pill_stylesheet()
         from steempeg.ui.icon_assets import neo_nav_tab_icon
 
         icon_sz = max(10, int(getattr(dense, "neo_nav_icon", 16) or 16))
