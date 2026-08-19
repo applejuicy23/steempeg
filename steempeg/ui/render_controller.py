@@ -130,9 +130,11 @@ from steempeg.ui.message_dialog import (
 )
 
 
-def _fmt_orig_mbps(value: float) -> str:
-    """Round source bitrate for Original UI (e.g. 21.9 → 22)."""
-    return str(int(round(value)))
+def _source_vbitrate_label(mbps: float) -> str:
+    """Source Info video-bitrate line; Unknown when the probe has no value."""
+    if mbps > 0:
+        return f"Video Bitrate: {bitrate.format_video_mbps(mbps)}"
+    return "Video Bitrate: Unknown"
 
 
 def _fmt_mbps(value: float) -> str:
@@ -173,9 +175,8 @@ _RENDER_ERROR_DIALOG_STYLE = """
         font-family: Consolas, monospace;
         font-size: 11px;
     }
-    QScrollBar:vertical { border: none; background: #141414; width: 12px; margin: 2px; border-radius: 4px; }
-    QScrollBar::handle:vertical { background: #444444; min-height: 20px; border-radius: 4px; }
-    QScrollBar::handle:vertical:hover { background: #666666; }
+    QScrollBar:vertical { border: none; background: transparent; width: 12px; }
+    QScrollBar::handle:vertical { background: transparent; border: none; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
     QPushButton {
@@ -3082,6 +3083,8 @@ class RenderMixin:
             self.ui.input_filename.setText(f"{clip_folder_name}_rendered")
 
         all_mpds = self.get_all_mpd_paths(clip_path)
+        if hasattr(self, "update_clip_open_loading_progress"):
+            self.update_clip_open_loading_progress(18)
         if not all_mpds:
             self.ui.source_label.setText("Source: No MPD files found")
             self.ui.orig_res_label.setText("Original resolution: Unknown")
@@ -3096,6 +3099,8 @@ class RenderMixin:
         # (and some Steam recordings) have video only; without this the audio format/
         # bitrate combos would offer choices for a track that doesn't exist.
         self._current_clip_has_audio = self._detect_clip_has_audio(all_mpds)
+        if hasattr(self, "update_clip_open_loading_progress"):
+            self.update_clip_open_loading_progress(28)
 
         source_dirs = [os.path.dirname(m) for m in all_mpds]
         unique_source_dirs = list(dict.fromkeys(source_dirs))
@@ -3191,27 +3196,25 @@ class RenderMixin:
             except Exception:
                 pass
 
+        if hasattr(self, "update_clip_open_loading_progress"):
+            self.update_clip_open_loading_progress(40)
+
         if unique_resolutions:
             res_text = ", ".join(sorted(list(unique_resolutions)))
             audio_kbps = getattr(self, "current_orig_audio_bitrate", 192)
             self.ui.orig_res_label.setText(f"Original resolution: {res_text}")
             if hasattr(self.ui, "label_vbitrate"):
-                if hasattr(self, "current_orig_bitrate") and self.current_orig_bitrate > 0:
-                    rounded_bitrate = int(round(self.current_orig_bitrate))
-                    self.ui.label_vbitrate.setText(f"Video Bitrate: {rounded_bitrate} Mbps")
-                else:
-                    self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+                self.ui.label_vbitrate.setText(
+                    _source_vbitrate_label(getattr(self, "current_orig_bitrate", 0))
+                )
             if hasattr(self.ui, "label_abitrate"):
                 self.ui.label_abitrate.setText(f"Audio Bitrate: {audio_kbps} kbps")
         else:
             self.ui.orig_res_label.setText("Original resolution: Unknown")
             if hasattr(self.ui, "label_vbitrate"):
-                if getattr(self, "current_orig_bitrate", 0) > 0:
-                    self.ui.label_vbitrate.setText(
-                        f"Video Bitrate: {int(round(self.current_orig_bitrate))} Mbps"
-                    )
-                else:
-                    self.ui.label_vbitrate.setText("Video Bitrate: Unknown")
+                self.ui.label_vbitrate.setText(
+                    _source_vbitrate_label(getattr(self, "current_orig_bitrate", 0))
+                )
             if hasattr(self.ui, "label_abitrate"):
                 self.ui.label_abitrate.setText("Audio Bitrate: Unknown")
             max_height = 1080
@@ -3462,8 +3465,7 @@ class RenderMixin:
         if peak > 0:
             self.current_orig_bitrate = peak
             if hasattr(self.ui, "label_vbitrate"):
-                rounded = int(round(peak))
-                self.ui.label_vbitrate.setText(f"Video Bitrate: {rounded} Mbps")
+                self.ui.label_vbitrate.setText(_source_vbitrate_label(peak))
         return peak
 
     def update_bitrate_options(self):
@@ -3483,8 +3485,9 @@ class RenderMixin:
         if "Original" in quality_text:
             source_cap_mbps = self._refresh_source_video_bitrate()
             if source_cap_mbps > 0:
-                val = _fmt_orig_mbps(source_cap_mbps)
-                self.ui.combo_bitrate.addItem(f"{val} Mbps (Original)")
+                self.ui.combo_bitrate.addItem(
+                    f"{bitrate.format_video_mbps(source_cap_mbps)} (Original)"
+                )
             else:
                 self.ui.combo_bitrate.addItem("Unknown Mbps (Original)")
 
@@ -3557,7 +3560,7 @@ class RenderMixin:
 
         source_cap_mbps = self._refresh_source_video_bitrate()
         cap_label = (
-            f"~{int(round(source_cap_mbps))} Mbps"
+            bitrate.format_video_mbps(source_cap_mbps)
             if source_cap_mbps > 0
             else "unknown"
         )
@@ -3933,7 +3936,7 @@ class RenderMixin:
                 if m:
                     orig_mbps = float(m.group(1))
             video_bitrate_display = (
-                f"{_fmt_orig_mbps(orig_mbps)} Mbps" if orig_mbps > 0 else "—"
+                bitrate.format_video_mbps(orig_mbps) if orig_mbps > 0 else "—"
             )
         else:
             match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
@@ -4191,9 +4194,11 @@ class RenderMixin:
         if btn is None:
             return
 
+        from steempeg.ui import ui_theme as ut
+
         menu = QMenu(self.ui)
         menu.setStyleSheet(
-            "QMenu { background-color: #2a2a2a; border: 1px solid #4a4a4a; border-radius: 8px; padding: 4px; }"
+            ut.menu_stylesheet(menu_padding="4px", extra="QLabel { background: transparent; }")
         )
 
         host = QWidget()
@@ -4385,7 +4390,10 @@ class RenderMixin:
             orig_v_bitrate = getattr(self, 'current_orig_bitrate', 10.0)
             
             if val > orig_v_bitrate:
-                self.warn_vbitrate.setToolTip(f"The maximum bitrate of the original video is {orig_v_bitrate:.1f} Mbps. Higher values will be capped!")
+                self.warn_vbitrate.setToolTip(
+                    f"The maximum bitrate of the original video is "
+                    f"{bitrate.format_video_mbps(orig_v_bitrate)}. Higher values will be capped!"
+                )
                 self.warn_vbitrate.show()
             elif val < 0.1:
                 self.warn_vbitrate.setToolTip("Video bitrate cannot be less than 0.1 Mbps.")
@@ -5465,19 +5473,28 @@ class RenderMixin:
                 "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
             )
             btn.setIcon(load_icon("exit.png", icon_sz))
-            btn.setStyleSheet(
-                "QPushButton {"
-                f" background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;"
-                f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
-                " font-weight: bold;"
-                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-                "}"
-                "QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }"
-                "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"
-                "QPushButton:disabled {"
-                " background-color: #262626; color: #5a5a5a; border: 2px solid #333333;"
-                "}"
-            )
+            from steempeg.ui import ui_theme as ut
+
+            if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+                btn.setStyleSheet(
+                    ut.dash_secondary_button_stylesheet(
+                        font=font, radius=radius, pad=pad
+                    )
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton {"
+                    f" background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;"
+                    f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
+                    " font-weight: bold;"
+                    " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                    "}"
+                    "QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }"
+                    "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"
+                    "QPushButton:disabled {"
+                    " background-color: #262626; color: #5a5a5a; border: 2px solid #333333;"
+                    "}"
+                )
 
     def _ensure_desktop_queue_leave_resume_button(self) -> None:
         """Leave/Resume CTA on the desktop render dash beside Render Queue (N)."""
@@ -6461,6 +6478,14 @@ class RenderMixin:
         text_edit.setReadOnly(True)
         short_error = (error_msg or "Unknown error")[-2000:]
         text_edit.setText(short_error)
+        from steempeg.ui.widgets.vertical_scrollbar import (
+            ensure_steempg_vertical_scrollbar,
+            error_dialog_scrollbar_chrome,
+        )
+
+        ensure_steempg_vertical_scrollbar(
+            text_edit, chrome=error_dialog_scrollbar_chrome()
+        )
         content_layout.addWidget(text_edit)
 
         btn_layout = QHBoxLayout()

@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QGuiApplication, QIcon
 
 from steempeg.ui.icon_assets import arrow_icon, warning_icon
-from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.layout_defaults import (
     SETTINGS_CONTENT_WIDTH,
     SETTINGS_PAGE_MARGIN_BOTTOM,
@@ -69,18 +69,41 @@ _PATHBOX_QSS = ("QLabel { background-color: #353535; border-radius: 10px; paddin
 _STAT_CAP_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_VAL_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; border: none; " + _FONT
 _STAT_FRAME_QSS = "QFrame { background-color: #303030; border: 1px solid #3a3a3a; border-radius: 12px; }"
-# Target-size readout ("Target: … | Safe Bitrate: … / Quality: …") — a readable info card,
-# not the tiny grey caption it used to borrow.
-_TARGET_READOUT_QSS = ("QLabel { background-color: #303030; border: 1px solid #3a3a3a;"
-                       " border-radius: 10px; padding: 9px 13px; color: #cfcfcf;"
-                       " font-size: 11px; font-weight: normal; line-height: 1.35; " + _FONT + " }")
 
 # The overlay chip blends into the combo body and leaves the drop-down arrow uncovered.
 # (Combo QSS: 2px border, 30px drop-down cell + its 2px left border -> reserve 32px on the right.)
 _ARROW_RESERVE = 32
 _BORDER = 2
-_OVERLAY_QSS = ("QFrame#customOverlay { background-color: #383838;"
-                " border-top-left-radius: 10px; border-bottom-left-radius: 10px; }")
+
+
+def _stat_frame_qss() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_settings_plate_stylesheet(radius=12)
+
+
+def _target_readout_qss() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_settings_target_readout_stylesheet()
+
+
+def _overlay_qss() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_settings_combo_overlay_stylesheet()
+
+
+def _source_row_qss() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_settings_source_row_stylesheet()
+
+
+def _summary_card_qss() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_settings_plate_stylesheet(radius=14, object_name="summaryCard")
 _CUSTOM_EDIT_QSS = ("QLineEdit { background: transparent; border: none; color: #ffffff;"
                     " font-size: 12px; font-weight: bold; " + _FONT + " }"
                     " QLineEdit:hover, QLineEdit:focus { border: none; background: transparent; }")
@@ -178,7 +201,7 @@ class SourcePathsBox(QWidget):
     def _make_message_row(self, text):
         row = QFrame()
         row.setObjectName("srcRow")
-        row.setStyleSheet(self._ROW_QSS)
+        row.setStyleSheet(_source_row_qss())
         h = QHBoxLayout(row)
         h.setContentsMargins(12, 8, 12, 8)
         lbl = QLabel(text)
@@ -189,7 +212,7 @@ class SourcePathsBox(QWidget):
     def _make_path_row(self, display_text, full_path):
         row = QFrame()
         row.setObjectName("srcRow")
-        row.setStyleSheet(self._ROW_QSS)
+        row.setStyleSheet(_source_row_qss())
         row.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h = QHBoxLayout(row)
         h.setContentsMargins(12, 6, 6, 6)
@@ -592,7 +615,7 @@ def _custom_field(ui, label, combo, input_attr, warn_attr, unit):
     overlay = QFrame(combo)                      # child of the combo -> paints on top of its body
     overlay.setObjectName("customOverlay")
     overlay.setAttribute(Qt.WA_StyledBackground, True)
-    overlay.setStyleSheet(_OVERLAY_QSS)
+    overlay.setStyleSheet(_overlay_qss())
     ol = QHBoxLayout(overlay)
     ol.setContentsMargins(12, 0, 8, 0)
     ol.setSpacing(6)
@@ -653,7 +676,7 @@ def _toggle_row(toggle, text):
 
 def _stat_block(caption, value_label):
     frame = QFrame()
-    frame.setStyleSheet(_STAT_FRAME_QSS)
+    frame.setStyleSheet(_stat_frame_qss())
     box = QVBoxLayout(frame)
     box.setContentsMargins(12, 8, 12, 8)
     box.setSpacing(2)
@@ -708,7 +731,7 @@ def restyle_video_page(ui):
     grid.setVerticalSpacing(12)
     grid.addLayout(_quality_field(ui, ui.label_2, ui.combo_quality), 0, 0)
     grid.addLayout(_custom_field(ui, ui.label_5, ui.combo_fps, "input_custom_fps", "warn_fps", "FPS"), 0, 1)
-    ui.label_target_size.setStyleSheet(_TARGET_READOUT_QSS)
+    ui.label_target_size.setStyleSheet(_target_readout_qss())
     grid.addWidget(ui.label_target_size, 1, 0, 1, 2)
     grid.addWidget(ui.size_slider, 2, 0, 1, 2)
     grid.addLayout(_custom_field(ui, ui.label_4, ui.combo_bitrate, "input_custom_vbitrate", "warn_vbitrate", "Mbps"), 3, 0)
@@ -878,8 +901,7 @@ def restyle_export_page(ui):
 
     card = QFrame()
     card.setObjectName("summaryCard")
-    card.setStyleSheet("QFrame#summaryCard { background-color: #303030; border: 1px solid #3a3a3a;"
-                       " border-radius: 14px; }")
+    card.setStyleSheet(_summary_card_qss())
     card_box = QVBoxLayout(card)
     card_box.setContentsMargins(16, 12, 16, 14)
     card_box.setSpacing(10)
@@ -1055,6 +1077,32 @@ def set_settings_panel_locked(app, locked: bool):
 _EXPORT_COMBO_NAMES = frozenset({"combo_output_preset", "combo_container"})
 
 
+def apply_render_panel_theme_chrome(ui) -> None:
+    """Re-tint Source Info plates, Export summary card, and custom combo overlays."""
+    tabs = getattr(ui, "settings_tabs", None)
+    root = tabs if tabs is not None else ui
+
+    stat_qss = _stat_frame_qss()
+    for block in root.findChildren(QFrame, "settingsStatBlock"):
+        block.setStyleSheet(stat_qss)
+
+    card_qss = _summary_card_qss()
+    for card in root.findChildren(QFrame, "summaryCard"):
+        card.setStyleSheet(card_qss)
+
+    row_qss = _source_row_qss()
+    for row in root.findChildren(QFrame, "srcRow"):
+        row.setStyleSheet(row_qss)
+
+    overlay_qss = _overlay_qss()
+    for overlay in root.findChildren(QFrame, "customOverlay"):
+        overlay.setStyleSheet(overlay_qss)
+
+    target = getattr(ui, "label_target_size", None)
+    if target is not None:
+        target.setStyleSheet(_target_readout_qss())
+
+
 def apply_settings_panel_density(ui, dense) -> None:
     """Resize Source/Video/Audio/Export chrome for Deck-class windows."""
     content_w = int(dense.settings_content_w)
@@ -1167,17 +1215,15 @@ def apply_settings_panel_density(ui, dense) -> None:
     ph = 12 if dense.scale >= 0.85 else 8
     fname = getattr(ui, "input_filename", None)
     if fname is not None:
+        from steempeg.ui import ui_theme as ut
+
         # Same trick as Save as…: vertical centering from fixed height only.
         # QSS padding-top/bottom + setFixedHeight pushes glyphs onto the floor
         # (underscores / descenders clipped).
         fname.setStyleSheet(
-            f"QLineEdit {{ background-color: #383838; color: #ffffff;"
-            f" border: {border}px solid #4a4a4a; border-radius: {btn_r}px;"
-            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
-            f" QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}"
-            f" QLineEdit:disabled {{ background-color: #262626; color: #5a5a5a;"
-            f" border: {border}px solid #333333; }}"
+            ut.settings_density_line_edit_stylesheet(
+                border=border, btn_r=btn_r, field_font=field_font, ph=ph
+            )
         )
         fname.setFixedHeight(line_h)
         fname.setTextMargins(0, 0, 0, 0)
@@ -1189,16 +1235,15 @@ def apply_settings_panel_density(ui, dense) -> None:
 
     dest = getattr(ui, "destination_button", None)
     if dest is not None:
+        from steempeg.ui import ui_theme as ut
+
         dest.setFixedHeight(line_h)
         # Horizontal pad only — vertical centering comes from fixed height.
         # Avoid min-height + vertical padding fighting setFixedHeight (crushed label).
         dest.setStyleSheet(
-            f"QPushButton {{ background-color: #383838; color: #ffffff;"
-            f" border: {border}px solid #444444; border-radius: {btn_r}px;"
-            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-            f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
-            f" QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}"
-            f" QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}"
+            ut.settings_density_push_button_stylesheet(
+                border=border, btn_r=btn_r, field_font=field_font, ph=ph
+            )
         )
         fnt = dest.font()
         fnt.setFamily("Segoe UI")
@@ -1407,7 +1452,7 @@ class PresetListRow(QWidget):
         )
         header.addWidget(self._name_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # Refresh-style Apply ▾ split (see RefreshButton + _LIBRARY_MENU_STYLE).
+        # Refresh-style Apply ▾ split (see RefreshButton + library_menu_stylesheet).
         apply_split = QWidget()
         apply_split.setFixedHeight(26)
         apply_split.setStyleSheet(self._APPLY_SPLIT)
@@ -1435,7 +1480,7 @@ class PresetListRow(QWidget):
         self._apply_menu_btn.setToolTip("More preset actions")
 
         menu = QMenu(apply_split)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         act_update = menu.addAction("Update from panel")
         act_rename = menu.addAction("Rename…")
         act_dup = menu.addAction("Duplicate")

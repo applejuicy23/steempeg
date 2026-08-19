@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 
 from steempeg.core.dash import discovery, mpd
 from steempeg.core import capabilities
+from steempeg.render.bitrate import format_video_mbps
 from steempeg.render.encode_speed import normalize_encode_speed
 from steempeg.ui.settings_prefs import resolve_app_export_folder
 from steempeg.render.output_formats import resolve_video_encoder
@@ -415,8 +416,7 @@ def probe_clip_render_defaults(
     )
     fps_text = f"{orig_fps} FPS (Original)"
     if orig_video_mbps > 0:
-        s = f"{orig_video_mbps:.1f}".rstrip("0").rstrip(".")
-        bitrate_text = f"{s} Mbps (Original)"
+        bitrate_text = f"{format_video_mbps(orig_video_mbps)} (Original)"
     else:
         bitrate_text = "Unknown Mbps (Original)"
 
