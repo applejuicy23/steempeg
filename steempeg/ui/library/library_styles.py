@@ -6,28 +6,25 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QAbstractItemView, QWidget
 
 # Capsule chrome aligned with TimelineOverviewScrollBar (player timeline strip).
-_LIBRARY_SCROLLBAR_TRACK = "#4a4a4a"
-_LIBRARY_SCROLLBAR_THUMB = "#9f8dba"
-_LIBRARY_SCROLLBAR_THUMB_HOVER = "#cdbfe6"
-_LIBRARY_SCROLLBAR_WIDTH = 12
-_LIBRARY_SCROLLBAR_RADIUS = 6
+# Radius = width / 2 is applied in SteempegVerticalScrollBar paint (not QSS).
+SCROLLBAR_TRACK = "#4a4a4a"
+SCROLLBAR_THUMB = "#9f8dba"
+SCROLLBAR_THUMB_HOVER = "#cdbfe6"
+SCROLLBAR_WIDTH = 12
+SCROLLBAR_RADIUS = SCROLLBAR_WIDTH // 2  # 6px — full capsule ends
 
-LIBRARY_SCROLLBAR_VERTICAL = f"""
+
+def scrollbar_qss_suppress(*, width: int = SCROLLBAR_WIDTH) -> str:
+    """Hide native scrollbar chrome; pair with SteempegVerticalScrollBar."""
+    return f"""
     QScrollBar:vertical {{
         border: none;
-        background: {_LIBRARY_SCROLLBAR_TRACK};
-        width: {_LIBRARY_SCROLLBAR_WIDTH}px;
-        margin: 4px 2px;
-        border-radius: {_LIBRARY_SCROLLBAR_RADIUS}px;
+        background: transparent;
+        width: {width}px;
     }}
     QScrollBar::handle:vertical {{
-        background: {_LIBRARY_SCROLLBAR_THUMB};
-        min-height: 30px;
-        border-radius: {_LIBRARY_SCROLLBAR_RADIUS}px;
-        margin: 0px 1px;
-    }}
-    QScrollBar::handle:vertical:hover {{
-        background: {_LIBRARY_SCROLLBAR_THUMB_HOVER};
+        background: transparent;
+        border: none;
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
@@ -38,6 +35,19 @@ LIBRARY_SCROLLBAR_VERTICAL = f"""
         background: none;
     }}
 """
+
+
+# Back-compat alias — append to parent stylesheets; install SteempegVerticalScrollBar too.
+LIBRARY_SCROLLBAR_VERTICAL = scrollbar_qss_suppress()
+
+
+def install_library_vertical_scrollbar(view: QWidget | None) -> None:
+    """Painted lavender capsule bar on a scroll host (library / queue / dialogs)."""
+    if view is None:
+        return
+    from steempeg.ui.widgets.vertical_scrollbar import ensure_steempg_vertical_scrollbar
+
+    ensure_steempg_vertical_scrollbar(view)
 
 def library_table_stylesheet() -> str:
     """List/table chrome — reads active ``design_tokens`` (UI theme synced)."""
@@ -236,6 +246,8 @@ def install_library_scroll_sync(host) -> None:
     """Initial scrollbar policy + resize hook for the library views stack."""
     for view in _library_scroll_views(host):
         view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        install_library_vertical_scrollbar(view)
+    install_library_vertical_scrollbar(getattr(host, "grid_screenshots", None))
     container = getattr(host, "library_views_container", None)
     if container is not None:
         filt = LibraryScrollSyncFilter(host, container)
