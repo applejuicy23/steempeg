@@ -3816,9 +3816,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         self._refresh_library_view_styles()
 
-        if hasattr(self, "sync_clip_card_edge_roles"):
+        if hasattr(self, "refresh_clip_card_styles"):
             try:
-                self.sync_clip_card_edge_roles()
+                # Re-bake plate/footer/border from active theme tokens — edge-role
+                # sync alone skips reapply when row roles are unchanged.
+                self.refresh_clip_card_styles()
             except Exception:
                 pass
 
