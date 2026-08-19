@@ -9,6 +9,16 @@ import sys
 _log = logging.getLogger(__name__)
 
 
+def subprocess_hide_console_kwargs() -> dict:
+    """Extra kwargs for ``subprocess.run`` / ``Popen`` to hide console windows on Windows."""
+    if sys.platform != "win32":
+        return {}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {"creationflags": flags, "startupinfo": si}
+
+
 def kill_process_tree(proc_or_pid, *, label: str = "process") -> None:
     """Force-kill a process and its children.
 
