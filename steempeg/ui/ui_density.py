@@ -428,12 +428,15 @@ def toolbar_pill_radius(dense: UiDensity | None = None) -> int:
 
 def view_toggle_track_style(dense: UiDensity | None = None) -> str:
     """Dark track behind Grid/List. Object-name selector so parent QFrame sheets cannot square it."""
+    from steempeg.ui import ui_theme as ut
+
     d = dense if dense is not None else COMFORT
     r = toggle_track_radius(d)
     h = toggle_segment_min_height(d) + 4  # 2px layout margins on each side
+    track = ut.active_palette().bg_view_toggle_track
     return (
         f"QFrame#{VIEW_TOGGLE_TRACK_NAME} {{"
-        f" background-color: #141414; border-radius: {r}px; border: none;"
+        f" background-color: {track}; border-radius: {r}px; border: none;"
         f" min-height: {h}px;"
         f"}}"
     )
@@ -441,6 +444,8 @@ def view_toggle_track_style(dense: UiDensity | None = None) -> str:
 
 def view_toggle_button_styles(dense: UiDensity) -> tuple[str, str]:
     """Active / inactive Grid·List segment styles (RQ padding / type / capsule radius)."""
+    from steempeg.ui import ui_theme as ut
+
     r = toggle_segment_radius(dense)
     font = dense.toggle_font
     pad = dense.toggle_pad
@@ -451,23 +456,38 @@ def view_toggle_button_styles(dense: UiDensity) -> tuple[str, str]:
         f" font-weight: bold; font-size: {font}px; padding: {pad}; border: none;"
         f"}}"
     )
-    inactive = (
-        f"QPushButton#{VIEW_TOGGLE_SEG_NAME} {{"
-        f" background-color: transparent; color: #888888; border-radius: {r}px;"
-        f" font-weight: bold; font-size: {font}px; padding: {pad}; border: none;"
-        f"}}"
-    )
+    if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+        p = ut.active_palette()
+        inactive = (
+            f"QPushButton#{VIEW_TOGGLE_SEG_NAME} {{"
+            f" background-color: {p.button_secondary_bg}; color: #888888;"
+            f" border: 1px solid {p.button_secondary_border}; border-radius: {r}px;"
+            f" font-weight: bold; font-size: {font}px; padding: {pad};"
+            f"}}"
+        )
+    else:
+        inactive = (
+            f"QPushButton#{VIEW_TOGGLE_SEG_NAME} {{"
+            f" background-color: transparent; color: #888888; border-radius: {r}px;"
+            f" font-weight: bold; font-size: {font}px; padding: {pad}; border: none;"
+            f"}}"
+        )
     return active, inactive
 
 
 def toolbar_mega_pill_style(dense: UiDensity | None = None, *, object_name: str = "") -> str:
     """Outer floating island (library / queue toolbar). Prefer objectName to avoid cascade."""
+    from steempeg.ui import ui_theme as ut
+
+    p = ut.active_palette()
     r = toolbar_pill_radius(dense)
+    bg = p.bg_library_toolbar
+    border = p.border_panel
     if object_name:
         return f"""
             QFrame#{object_name} {{
-                background-color: #2d2d2d;
-                border: 1px solid #353535;
+                background-color: {bg};
+                border: 1px solid {border};
                 border-radius: {r}px;
             }}
             QFrame#{object_name} > QLabel {{
@@ -477,8 +497,8 @@ def toolbar_mega_pill_style(dense: UiDensity | None = None, *, object_name: str 
         """
     return f"""
         QFrame {{
-            background-color: #2d2d2d;
-            border: 1px solid #353535;
+            background-color: {bg};
+            border: 1px solid {border};
             border-radius: {r}px;
         }}
         QLabel {{ border: none; background: transparent; }}
