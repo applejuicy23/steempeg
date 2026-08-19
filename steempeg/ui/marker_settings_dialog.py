@@ -270,10 +270,17 @@ class _ScreenshotGroup(QWidget):
 def _scroll_page(inner: QWidget) -> QScrollArea:
     inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     inner.setStyleSheet(f"background-color: {tok.BG_SHELL};")
+    from steempeg.ui.library.library_styles import (
+        LIBRARY_SCROLLBAR_VERTICAL,
+        install_library_vertical_scrollbar,
+    )
+
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
+    scroll.setStyleSheet(tok.dialog_scroll_stylesheet(tok.BG_SHELL) + LIBRARY_SCROLLBAR_VERTICAL)
+    install_library_vertical_scrollbar(scroll)
     scroll.setWidget(inner)
     return scroll
 
@@ -540,7 +547,13 @@ class MarkerSettingsDialog(SteempegDialog):
         self._marker_scroll.setMinimumWidth(220)
         self._marker_scroll.setMinimumHeight(240)
         tok.apply_dialog_scroll_bg(self._marker_scroll, "#242424")
-        self._marker_scroll.setStyleSheet(_MARKER_HOST)
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
+
+        self._marker_scroll.setStyleSheet(_MARKER_HOST + LIBRARY_SCROLLBAR_VERTICAL)
+        install_library_vertical_scrollbar(self._marker_scroll)
         self._marker_list_inner = QWidget()
         self._marker_list_inner.setObjectName("markerListInner")
         self._marker_list_inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)

@@ -866,6 +866,13 @@ class UpdateCenterDialog(SteempegDialog):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
+
+        scroll.setStyleSheet(_SCROLL_STYLE + LIBRARY_SCROLLBAR_VERTICAL)
+        install_library_vertical_scrollbar(scroll)
         self._list_host = _ReleaseListHost()
         self._list_host.setObjectName("releaseListHost")
         self._list_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)

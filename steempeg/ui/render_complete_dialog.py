@@ -12,7 +12,7 @@ from steempeg.infra.paths import get_resource_path, is_in_default_rendered_video
 from steempeg.render.queue import RenderJob
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.ui import design_tokens as tok
-from steempeg.ui.library.controller import _LIBRARY_MENU_STYLE
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -172,7 +172,7 @@ class RenderCompleteDialog(SteempegDialog):
             )
 
         menu = QMenu(self)
-        menu.setStyleSheet(_LIBRARY_MENU_STYLE)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
         action_steempeg = menu.addAction("Open in Steempeg")
         action_steempeg.setEnabled(in_library)
         if in_library:

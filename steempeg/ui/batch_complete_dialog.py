@@ -186,6 +186,15 @@ class BatchCompleteDialog(SteempegDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         tok.apply_dialog_scroll_bg(scroll, self._bg_color)
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
+
+        scroll.setStyleSheet(
+            tok.dialog_scroll_stylesheet(self._bg_color) + LIBRARY_SCROLLBAR_VERTICAL
+        )
+        install_library_vertical_scrollbar(scroll)
 
         host = QWidget()
         host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
