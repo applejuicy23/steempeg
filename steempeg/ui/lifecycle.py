@@ -32,34 +32,6 @@ from steempeg.version import APP_VERSION_STR
 from steempeg.ui.message_dialog import steempeg_information, steempeg_question, steempeg_warning
 
 
-_LOGS_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        padding: 4px 0;
-    }
-    QMenu::item {
-        padding: 8px 28px 8px 20px;
-        border-radius: 4px;
-        margin: 2px 6px;
-    }
-    QMenu::item:selected {
-        background-color: #3a324a;
-        color: #b29ae7;
-    }
-    QMenu::separator {
-        height: 1px;
-        background: #444444;
-        margin: 4px 10px;
-    }
-"""
-
-
 _ABOUT_DIALOG_STYLE = """
     QWidget#AboutCard {
         background-color: #202020;
@@ -602,6 +574,16 @@ class LifecycleMixin:
         from steempeg.ui.settings_dialog import show_settings_dialog
 
         show_settings_dialog(self)
+        # In case settings changed while dialog was open, re-evaluate Dev button gate.
+        if hasattr(self, "_refresh_dev_button_visibility"):
+            self._refresh_dev_button_visibility()
+
+    def show_dev_dialog(self):
+        """Developer Tools dialog (hidden unless dev_mode is enabled)."""
+        from steempeg.ui.dev_mode_dialog import DevModeDialog
+
+        dlg = DevModeDialog(self.cache_dir, parent=getattr(self, "ui", None))
+        dlg.exec()
 
     def show_marker_settings(self):
         """Marker classes / CS2 pack / per-ID icon overrides."""
@@ -786,8 +768,10 @@ class LifecycleMixin:
         """Attach a styled Logs dropdown to btn_logs."""
         if not hasattr(self.ui, 'btn_logs'):
             return
+        from steempeg.ui import ui_theme as ut
+
         menu = QMenu(self.ui)
-        menu.setStyleSheet(_LOGS_MENU_STYLE)
+        menu.setStyleSheet(ut.logs_menu_stylesheet())
 
         action_app = menu.addAction("📄  App + FFmpeg logs")
         action_mpv = menu.addAction("🎬  MPV player log")
@@ -812,9 +796,10 @@ class LifecycleMixin:
     def _build_appearance_menu(self, parent_menu):
         """Experimental chrome color themes as a checkable submenu."""
         from PySide6.QtGui import QActionGroup
+        from steempeg.ui import ui_theme as ut
 
         submenu = parent_menu.addMenu("🎨  Appearance (Experiments)")
-        submenu.setStyleSheet(_LOGS_MENU_STYLE)
+        submenu.setStyleSheet(ut.logs_menu_stylesheet())
 
         from steempeg.ui import design_tokens as tok
         current = tok.DEFAULT_CHROME_THEME
