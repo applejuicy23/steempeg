@@ -62,42 +62,28 @@ def status_card_background(
     selected: bool = False,
 ) -> str:
     """Card fill: flat like portable, plus desktop Ready yellow tint."""
+    from steempeg.ui import ui_theme as ut
+
     if selected:
         return STATUS_CARD_BG_SELECTED
     border, _ = status_border_for_job(job, jobs)
-    if border == STATUS_BORDER_READY:
-        return STATUS_CARD_BG_READY
-    return STATUS_CARD_BG
+    ready = border == STATUS_BORDER_READY
+    return ut.queue_job_card_face(selected=False, ready_tint=ready)
 
-_QUEUE_MENU_STYLE = """
-    QMenu {
-        background-color: #2d2d2d;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-radius: 8px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        font-size: 13px;
-        font-weight: bold;
-        padding: 4px 0;
-    }
-    QMenu::item {
-        padding: 8px 28px 8px 20px;
-        border-radius: 4px;
-        margin: 2px 6px;
-    }
-    QMenu::item:selected {
-        background-color: #3a324a;
-        color: #b29ae7;
-    }
-    QMenu::item:disabled {
-        color: #777777;
-    }
-    QMenu::separator {
-        height: 1px;
-        background: #444444;
-        margin: 4px 10px;
-    }
-"""
+
+def queue_card_idle_border() -> str:
+    """Non-pipeline idle ring — ClipCard ``border_card`` in TrueDark."""
+    from steempeg.ui import ui_theme as ut
+
+    if ut.get_ui_theme() == ut.UI_THEME_DEFAULT:
+        return STATUS_BORDER_IDLE
+    _, _, idle = ut.clip_card_chrome()
+    return idle
+
+def queue_menu_stylesheet() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.queue_menu_stylesheet()
 
 
 def status_dot_style(

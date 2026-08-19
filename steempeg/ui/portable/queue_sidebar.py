@@ -30,14 +30,17 @@ from steempeg.ui.queue_card_shared import (
     STATUS_CARD_BG,
     STATUS_CARD_BG_SELECTED,
     _FONT,
-    _QUEUE_MENU_STYLE,
+    queue_menu_stylesheet,
     build_queue_thumb_strip,
     job_can_remove,
     set_game_icon_label,
     status_border_for_job,
     status_dot_style,
 )
-from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+from steempeg.ui.library.library_styles import (
+    LIBRARY_SCROLLBAR_VERTICAL,
+    install_library_vertical_scrollbar,
+)
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -412,7 +415,8 @@ class _PortableQueueRow(QFrame):
             return
         if self._loading:
             overlay.setGeometry(0, 0, wrap.width() or _THUMB_W, wrap.height() or _THUMB_H)
-            overlay.start(percent=percent)
+            overlay.set_clip_radii(8.0, 8.0, 8.0, 8.0)
+            overlay.start(percent=0 if percent is None else percent)
             overlay.raise_()
         else:
             overlay.stop()
@@ -422,6 +426,7 @@ class _PortableQueueRow(QFrame):
         if overlay is None or not getattr(self, "_loading", False):
             return
         overlay.set_progress(percent)
+        overlay.repaint()
 
     def is_loading(self) -> bool:
         return bool(getattr(self, "_loading", False))
@@ -472,7 +477,7 @@ class _PortableQueueRow(QFrame):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet(_QUEUE_MENU_STYLE)
+        menu.setStyleSheet(queue_menu_stylesheet())
         job = self._job
 
         act_select = menu.addAction("▶️  Select in editor")
@@ -656,6 +661,7 @@ class PortableQueueSidebar(QWidget):
             "QScrollArea { background: transparent; border: none; }"
             + LIBRARY_SCROLLBAR_VERTICAL
         )
+        install_library_vertical_scrollbar(scroll)
         self._scroll = scroll
 
         self._host = _PortableQueueHost()

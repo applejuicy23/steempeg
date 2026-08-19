@@ -31,12 +31,13 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.queue_card_shared import (
     _FONT,
     _MIME_JOB_ID,
-    _QUEUE_MENU_STYLE,
+    queue_menu_stylesheet,
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
     status_dot_style as _status_dot_style,
 )
 from steempeg.ui.ui_density import COMFORT, UiDensity
+from steempeg.ui import ui_theme as ut
 
 # Match library grid card width; queue footer is taller (more metadata lines).
 _CARD_W = 280
@@ -159,14 +160,8 @@ class QueueGridJobCard(QWidget):
 
         text_widget = QWidget()
         text_widget.setFixedHeight(_TEXT_H)
-        text_widget.setStyleSheet("""
-            QWidget {
-                background-color: #383838;
-                border: none;
-                border-bottom-left-radius: 9px;
-                border-bottom-right-radius: 9px;
-            }
-        """)
+        self._text_widget = text_widget
+        self._apply_footer_style()
         text_layout = QVBoxLayout(text_widget)
         # Padding matched to the comfortable 3-line reference block (12px sides, ~8/10 vertical).
         text_layout.setContentsMargins(12, 8, 12, 10)
@@ -257,7 +252,14 @@ class QueueGridJobCard(QWidget):
         self._selected = selected
         self._apply_border_style()
 
+    def _apply_footer_style(self) -> None:
+        w = getattr(self, "_text_widget", None)
+        if w is None:
+            return
+        w.setStyleSheet(ut.queue_grid_footer_stylesheet(radius=9))
+
     def _apply_border_style(self) -> None:
+        _, _, idle_border = ut.clip_card_chrome()
         if self._drop_highlight:
             border = "2px dashed #b29ae7"
         elif self._selected:
@@ -265,7 +267,8 @@ class QueueGridJobCard(QWidget):
         elif self._hovered:
             border = "2px solid #7a6aa8"
         else:
-            border = "2px solid #444444"
+            idle = idle_border if ut.get_ui_theme() != ut.UI_THEME_DEFAULT else "#444444"
+            border = f"2px solid {idle}"
         # Square top (thumb flush), rounded bottom — same as ClipCard.
         self._border_overlay.setStyleSheet(f"""
             QFrame {{
@@ -386,7 +389,7 @@ class QueueGridJobCard(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet(_QUEUE_MENU_STYLE)
+        menu.setStyleSheet(queue_menu_stylesheet())
         job = self._job
         is_done = job.status == JobStatus.COMPLETED
         output_dir = os.path.dirname(job.output_file) if job.output_file else ""
@@ -418,3 +421,10 @@ class QueueGridJobCard(QWidget):
             act_remove.triggered.connect(lambda: self.remove_requested.emit(self._job_id))
 
         menu.exec(event.globalPos())
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Re-tint footer + idle border after Settings → Visual theme change."""
+        _, plate, _ = ut.clip_card_chrome()
+        self._thumb_label.setStyleSheet(f"background-color: {plate}; border: none;")
+        self._apply_footer_style()
+        self._apply_border_style()

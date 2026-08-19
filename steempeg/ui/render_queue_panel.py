@@ -32,7 +32,10 @@ from steempeg.ui.layout_defaults import (
     LIBRARY_TAB_TO_TOOLBAR_SPACING,
     RENDER_QUEUE_BOTTOM_INSET,
 )
-from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+from steempeg.ui.library.library_styles import (
+    LIBRARY_SCROLLBAR_VERTICAL,
+    install_library_vertical_scrollbar,
+)
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -43,7 +46,7 @@ from steempeg.ui.queue_card_shared import (
     _LIST_THUMB_W,
     _MIME_JOB_ID,
     _QUEUE_CHROME_INSET,
-    _QUEUE_MENU_STYLE,
+    queue_menu_stylesheet,
     build_queue_thumb_strip,
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
@@ -102,8 +105,7 @@ _QUEUE_TOGGLE_INACTIVE = (
     "background-color: transparent; color: #888888; border-radius: 12px;"
     " font-weight: bold; font-size: 12px; padding: 6px 16px; border: none;"
 )
-# Lavender pill matches Clips Manager (LIBRARY_SCROLLBAR_VERTICAL). Further
-# end-rounding (timeline-style) stays v46 — see ROADMAP § v46 scroller note.
+# Lavender pill matches Clips Manager — painted capsule via SteempegVerticalScrollBar.
 _SCROLL_STYLE = """
     QScrollArea { background: transparent; border: none; }
     QWidget#queueListHost { background: transparent; }
@@ -366,7 +368,8 @@ class QueueJobCard(QFrame):
             return
         if self._loading:
             overlay.setGeometry(0, 0, wrap.width() or self._thumb_w, wrap.height() or self._thumb_h)
-            overlay.start(percent=percent)
+            overlay.set_clip_radii(8.0, 8.0, 8.0, 8.0)
+            overlay.start(percent=0 if percent is None else percent)
             overlay.raise_()
         else:
             overlay.stop()
@@ -376,6 +379,7 @@ class QueueJobCard(QFrame):
         if overlay is None or not getattr(self, "_loading", False):
             return
         overlay.set_progress(percent)
+        overlay.repaint()
 
     def is_loading(self) -> bool:
         return bool(getattr(self, "_loading", False))
@@ -553,7 +557,7 @@ class QueueJobCard(QFrame):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet(_QUEUE_MENU_STYLE)
+        menu.setStyleSheet(queue_menu_stylesheet())
 
         job = self._job
         is_done = job.status == JobStatus.COMPLETED
@@ -684,6 +688,7 @@ class RenderQueuePanel(QWidget):
         self._tool_layout = QHBoxLayout(toolbar)
         self._tool_layout.setContentsMargins(16, 6, 16, 6)
         self._tool_layout.setSpacing(8)
+        self._tool_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         tool_layout = self._tool_layout
 
         # Clear — styled like the Clips Manager sort combo (rounded #383838 field).
@@ -693,6 +698,7 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.setIcon(load_icon("clear.png", 16))
         self._btn_clear.setIconSize(QSize(16, 16))
         self._btn_clear.setFixedHeight(32)
+        self._btn_clear.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._btn_clear.setStyleSheet("""
             QPushButton {
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
@@ -732,8 +738,9 @@ class RenderQueuePanel(QWidget):
         actions_layout = QHBoxLayout(actions_group)
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.setSpacing(4)
-        actions_layout.addWidget(self._btn_history)
-        actions_layout.addWidget(self._btn_clear)
+        actions_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        actions_layout.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions_layout.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # View · Grid/List · (N) — shared chrome with Clips / Rendered / Screenshots
         self._view_chrome = ViewModeChrome(
@@ -752,13 +759,13 @@ class RenderQueuePanel(QWidget):
         self._view_chrome.add_to_layout(tool_layout)
 
         tool_layout.addStretch()
-        tool_layout.addWidget(actions_group)
+        tool_layout.addWidget(actions_group, 0, Qt.AlignmentFlag.AlignVCenter)
         toolbar_row.addWidget(toolbar)
         outer.addLayout(toolbar_row)
 
         self._list_container = QFrame()
         self._list_container.setObjectName("queueListContainer")
-        self._list_container.setStyleSheet(ut.elevated_panel_stylesheet())
+        self._list_container.setStyleSheet(ut.queue_list_panel_stylesheet())
         list_outer = QVBoxLayout(self._list_container)
         list_outer.setContentsMargins(8, 8, 8, 8)
         list_outer.setSpacing(10)
@@ -768,6 +775,7 @@ class RenderQueuePanel(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet(_SCROLL_STYLE)
+        install_library_vertical_scrollbar(self._scroll)
 
         self._list_host = QueueListHost()
         self._list_host.dropped_at_end.connect(self._on_drop_at_end)
@@ -980,7 +988,17 @@ class RenderQueuePanel(QWidget):
             )
         clear_r = 6
         self._btn_clear.setFixedHeight(dense.queue_btn_h)
-        self._btn_clear.setStyleSheet(f"""
+        self._btn_clear.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            self._btn_clear.setStyleSheet(
+                ut.toolbar_text_button_stylesheet(
+                    radius=clear_r,
+                    font_px=dense.footer_font,
+                    height=dense.queue_btn_h,
+                )
+            )
+        else:
+            self._btn_clear.setStyleSheet(f"""
             QPushButton {{
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
                 border-radius: {clear_r}px; padding: 2px 10px; font-size: {dense.footer_font}px;
@@ -995,7 +1013,12 @@ class RenderQueuePanel(QWidget):
         hist_r = 6
         icon_sz = max(12, dense.queue_btn_h - 10)
         self._btn_history.setIconSize(QSize(icon_sz, icon_sz))
-        self._btn_history.setStyleSheet(f"""
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            self._btn_history.setStyleSheet(
+                ut.toolbar_icon_button_stylesheet(radius=hist_r, height=dense.queue_btn_h)
+            )
+        else:
+            self._btn_history.setStyleSheet(f"""
             QPushButton {{
                 background-color: #383838; color: #ffffff; border: 2px solid #444444;
                 border-radius: {hist_r}px; padding: 2px;
@@ -1193,10 +1216,60 @@ class RenderQueuePanel(QWidget):
             card.set_selected(card._job_id == job_id)
         self.job_selected.emit(job_id)
 
+    def _refresh_queue_card_chrome(self) -> None:
+        """Re-tint list/grid job cards after Visual theme change."""
+        for card in self._card_widgets:
+            if hasattr(card, "apply_ui_theme_chrome"):
+                card.apply_ui_theme_chrome()
+            elif hasattr(card, "_apply_card_style"):
+                card._apply_card_style()
+
     def apply_ui_theme_chrome(self) -> None:
-        """Re-tint list container after Settings → Visual theme change."""
+        """Re-tint queue chrome after Settings → Visual theme change."""
         from steempeg.ui import ui_theme as ut
+        from steempeg.ui.ui_density import toolbar_mega_pill_style
+
+        dense = getattr(self, "_density", COMFORT)
 
         box = getattr(self, "_list_container", None)
         if box is not None:
-            box.setStyleSheet(ut.elevated_panel_stylesheet())
+            box.setStyleSheet(ut.queue_list_panel_stylesheet())
+
+        tab = getattr(self, "_tab", None)
+        if tab is not None and hasattr(tab, "_apply_style"):
+            tab._apply_style()
+
+        toolbar = getattr(self, "_toolbar", None)
+        if toolbar is not None:
+            toolbar.setStyleSheet(
+                toolbar_mega_pill_style(dense, object_name="queueToolbar")
+            )
+
+        chrome = getattr(self, "_view_chrome", None)
+        if chrome is not None:
+            chrome.apply_density(dense)
+            self._toggle_style_active = chrome.toggle_style_active
+            self._toggle_style_inactive = chrome.toggle_style_inactive
+            chrome.sync_styles_from_mode()
+
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            clear_r = 6
+            self._btn_clear.setFixedHeight(dense.queue_btn_h)
+            self._btn_clear.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            )
+            self._btn_clear.setStyleSheet(
+                ut.toolbar_text_button_stylesheet(
+                    radius=clear_r,
+                    font_px=dense.footer_font,
+                    height=dense.queue_btn_h,
+                )
+            )
+            hist_r = 6
+            self._btn_history.setStyleSheet(
+                ut.toolbar_icon_button_stylesheet(radius=hist_r, height=dense.queue_btn_h)
+            )
+        elif hasattr(self, "apply_density"):
+            self.apply_density(dense)
+
+        self._refresh_queue_card_chrome()
