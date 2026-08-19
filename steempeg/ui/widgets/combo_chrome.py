@@ -12,16 +12,15 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 _POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
 
 
-def _popup_bg() -> str:
-    return tok.BG_SHELL
-_POPUP_ITEM_BG = "#333333"
-_POPUP_SEL_BG = "#3a3350"
-_POPUP_SEL_FG = "#ffffff"
-_POPUP_DIS_FG = "#5a5a5a"
+def _combo_colors():
+    from steempeg.ui import ui_theme as ut
+
+    return ut.combo_chrome_colors()
 
 
 def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
     """Popup list row chrome scaled with UI density (avoids fat lists on Deck)."""
+    c = _combo_colors()
     d = dense or COMFORT
     h = d.combo_popup_item_h
     pv = d.combo_popup_item_pad_v
@@ -30,14 +29,14 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
     border = 2 if d.scale >= 0.45 else 1
     return f"""
     QComboBox QAbstractItemView {{
-        background-color: {_popup_bg()};
+        background-color: {c.popup_bg};
         color: {_POPUP_FG};
-        border: 2px solid #4a4a4a;
+        border: 2px solid {c.popup_border};
         border-radius: 10px;
         padding: {max(2, pv - 2)}px;
         outline: none;
         selection-background-color: transparent;
-        selection-color: {_POPUP_SEL_FG};
+        selection-color: {c.popup_sel_fg};
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
     }}
     QComboBox QAbstractItemView::item {{
@@ -45,29 +44,29 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
         padding: {pv}px {ph}px;
         border-radius: {radius}px;
         margin: 1px 2px;
-        background-color: {_POPUP_ITEM_BG};
+        background-color: {c.popup_item_bg};
         color: {_POPUP_FG};
         border: {border}px solid transparent;
     }}
     QComboBox QAbstractItemView::item:hover:enabled {{
-        background-color: #404040;
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_item_hover};
+        color: {c.popup_sel_fg};
         border: {border}px solid #6b5a8e;
     }}
     QComboBox QAbstractItemView::item:selected {{
-        background-color: {_POPUP_SEL_BG};
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_sel_bg};
+        color: {c.popup_sel_fg};
         border: {border}px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:selected:enabled {{
-        background-color: {_POPUP_SEL_BG};
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_sel_bg};
+        color: {c.popup_sel_fg};
         border: {border}px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:disabled {{
-        background-color: #262626;
-        color: {_POPUP_DIS_FG};
-        border: {border}px solid #333333;
+        background-color: {c.popup_dis_bg};
+        color: {c.popup_dis_fg};
+        border: {border}px solid {c.popup_border};
     }}
 """
 
@@ -91,12 +90,13 @@ def apply_dark_combo_popup(
     if view is None:
         return
 
-    bg = QColor(_popup_bg())
+    c = _combo_colors()
+    bg = QColor(c.popup_bg)
     fg = QColor(_POPUP_FG)
-    item_bg = QColor(_POPUP_ITEM_BG)
-    sel_bg = QColor(_POPUP_SEL_BG)
-    sel_fg = QColor(_POPUP_SEL_FG)
-    dis_fg = QColor(_POPUP_DIS_FG)
+    item_bg = QColor(c.popup_item_bg)
+    sel_bg = QColor(c.popup_sel_bg)
+    sel_fg = QColor(c.popup_sel_fg)
+    dis_fg = QColor(c.popup_dis_fg)
 
     pal = view.palette()
     for group in (
@@ -152,11 +152,45 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
 
     Typeface matches Refresh (Segoe UI bold + footer_font); only the box densifies.
     """
+    from steempeg.ui import ui_theme as ut
+
     d = dense or COMFORT
+    field_bg, field_border, drop_bg = ut.render_settings_active_combo_colors()
+    c = ut.combo_chrome_colors()
     font = int(d.footer_font)
+    p = ut.active_palette()
+    if p.name == ut.UI_THEME_DEFAULT:
+        dis_bg, dis_border, drop_dis, dis_fg = "#262626", "#333333", "#1f1f1f", "#5a5a5a"
+    else:
+        dis_bg, dis_border = p.button_disabled_bg, p.button_disabled_border
+        drop_dis = p.button_disabled_bg
+        dis_fg = c.popup_dis_fg
     if d.scale >= 0.85:
         # Comfort base already 13/bold; keep historical padding/chrome.
-        return SETTINGS_COMBO_FIELD_RULES
+        return f"""
+    QComboBox, QLineEdit {{
+        background-color: {field_bg}; color: #ffffff;
+        border: 2px solid {field_border}; border-radius: 12px;
+        padding: 7px 10px; font-size: 13px; font-weight: bold;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+    }}
+    QComboBox:hover, QLineEdit:hover {{ border: 2px solid #6b5a8e; }}
+    QComboBox:disabled, QLineEdit:disabled {{
+        background-color: {dis_bg}; color: {dis_fg}; border: 2px solid {dis_border};
+    }}
+    QComboBox::drop-down:disabled {{ background-color: {drop_dis}; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: top right;
+        width: 30px; background-color: {drop_bg};
+        border-left: 2px solid {field_border};
+        border-top-right-radius: 10px; border-bottom-right-radius: 10px;
+    }}
+    QComboBox::down-arrow {{
+        width: 0; height: 0;
+        border-left: 5px solid transparent; border-right: 5px solid transparent;
+        border-top: 6px solid #cccccc;
+    }}
+"""
     pad = "3px 6px"
     radius = 8
     drop_w = 22
@@ -166,21 +200,21 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
     min_h = max(18, int(getattr(d, "combo_min_h", 18) or 18))
     return f"""
     QComboBox, QLineEdit {{
-        background-color: #383838; color: #ffffff;
-        border: {border}px solid #4a4a4a; border-radius: {radius}px;
+        background-color: {field_bg}; color: #ffffff;
+        border: {border}px solid {field_border}; border-radius: {radius}px;
         padding: {pad}; font-size: {font}px; font-weight: bold;
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         min-height: {min_h}px;
     }}
     QComboBox:hover, QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}
     QComboBox:disabled, QLineEdit:disabled {{
-        background-color: #262626; color: #5a5a5a; border: {border}px solid #333333;
+        background-color: {dis_bg}; color: {dis_fg}; border: {border}px solid {dis_border};
     }}
-    QComboBox::drop-down:disabled {{ background-color: #1f1f1f; }}
+    QComboBox::drop-down:disabled {{ background-color: {drop_dis}; }}
     QComboBox::drop-down {{
         subcontrol-origin: padding; subcontrol-position: top right;
-        width: {drop_w}px; background-color: #262626;
-        border-left: {border}px solid #4a4a4a;
+        width: {drop_w}px; background-color: {drop_bg};
+        border-left: {border}px solid {field_border};
         border-top-right-radius: {drop_r}px; border-bottom-right-radius: {drop_r}px;
     }}
     QComboBox::down-arrow {{
@@ -193,16 +227,18 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
 
 # Slimmer popup for the compact combos (Sorting / Filter in the Clips Manager):
 # flat rows, normal weight, row height matched to the collapsed combo box.
-COMPACT_COMBO_POPUP_ITEM_RULES = f"""
+def compact_combo_popup_item_rules() -> str:
+    c = _combo_colors()
+    return f"""
     QComboBox QAbstractItemView {{
-        background-color: {_popup_bg()};
+        background-color: {c.popup_bg};
         color: {_POPUP_FG};
-        border: 2px solid #4a4a4a;
+        border: 2px solid {c.popup_border};
         border-radius: 10px;
         padding: 4px;
         outline: none;
         selection-background-color: transparent;
-        selection-color: {_POPUP_SEL_FG};
+        selection-color: {c.popup_sel_fg};
         font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
         font-weight: normal;
     }}
@@ -217,26 +253,29 @@ COMPACT_COMBO_POPUP_ITEM_RULES = f"""
         font-weight: normal;
     }}
     QComboBox QAbstractItemView::item:hover:enabled {{
-        background-color: {_POPUP_SEL_BG};
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_sel_bg};
+        color: {c.popup_sel_fg};
         border: 1px solid #6b5a8e;
     }}
     QComboBox QAbstractItemView::item:selected {{
-        background-color: {_POPUP_SEL_BG};
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_sel_bg};
+        color: {c.popup_sel_fg};
         border: 1px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:selected:enabled {{
-        background-color: {_POPUP_SEL_BG};
-        color: {_POPUP_SEL_FG};
+        background-color: {c.popup_sel_bg};
+        color: {c.popup_sel_fg};
         border: 1px solid #b29ae7;
     }}
     QComboBox QAbstractItemView::item:disabled {{
         background-color: transparent;
-        color: {_POPUP_DIS_FG};
+        color: {c.popup_dis_fg};
         border: 1px solid transparent;
     }}
 """
+
+
+COMPACT_COMBO_POPUP_ITEM_RULES = compact_combo_popup_item_rules()
 
 COMPACT_COMBO_RULES = """
     QComboBox {
@@ -263,7 +302,47 @@ COMPACT_COMBO_RULES = """
 
 def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
     """Clips Manager sort combo — same typeface as Refresh; chrome densifies."""
+    from steempeg.ui import ui_theme as ut
+
     d = dense or COMFORT
+    if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+        p = ut.active_palette()
+        c = ut.combo_chrome_colors()
+        font = int(d.footer_font)
+        if d.scale >= 0.85:
+            pad = "4px 10px"
+            min_h = 24
+            radius = 8
+            border = 2
+        else:
+            pad = d.combo_pad
+            min_h = max(18, int(d.combo_min_h))
+            radius = max(6, min_h // 2)
+            border = 1
+        return f"""
+    QComboBox {{
+        background-color: {c.field_bg};
+        color: #ffffff;
+        border: {border}px solid {c.field_border};
+        border-radius: {radius}px;
+        padding: {pad};
+        font-weight: bold;
+        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-size: {font}px;
+        min-height: {min_h}px;
+    }}
+    QComboBox:hover {{
+        background-color: {c.field_hover_bg};
+        border: {border}px solid #6b5a8e;
+    }}
+    QComboBox:on {{ background-color: {c.field_bg}; }}
+    QComboBox:disabled {{
+        background-color: {p.button_disabled_bg};
+        color: #777777;
+        border: {border}px solid {p.button_disabled_border};
+    }}
+    QComboBox::drop-down {{ border: none; padding-right: 5px; background: transparent; }}
+"""
     if d.scale >= 0.85:
         return COMPACT_COMBO_RULES
     font = int(d.footer_font)
@@ -310,7 +389,7 @@ def compact_combo_stylesheet(
     elif dense is not None and dense.scale < 0.85:
         popup = combo_popup_item_rules(dense)
     else:
-        popup = COMPACT_COMBO_POPUP_ITEM_RULES
+        popup = compact_combo_popup_item_rules()
     return compact_combo_field_rules(dense) + popup
 
 
