@@ -547,15 +547,9 @@ class SettingsDialog(SteempegDialog):
             self._hint(
                 "Default matches the stock Steempeg look. TrueDark is a darker unified "
                 "family. TrueDark OLED uses pure black shell and player canvas with "
-                "slightly elevated cards. Combo previews live; Save persists. "
-                "Cancel restores the last saved theme."
+                "slightly elevated cards. Save applies; Cancel keeps the last saved theme."
             )
         )
-        self._ui_theme_preview_timer = QTimer(self)
-        self._ui_theme_preview_timer.setSingleShot(True)
-        self._ui_theme_preview_timer.setInterval(200)
-        self._ui_theme_preview_timer.timeout.connect(self._apply_ui_theme_preview)
-        self._combo_ui_theme.currentIndexChanged.connect(self._preview_ui_theme)
 
         v.addWidget(self._section("Game icons"))
         shape_row = QHBoxLayout()
@@ -1475,9 +1469,6 @@ class SettingsDialog(SteempegDialog):
 
         restart_application(self._app)
 
-    def _preview_ui_theme(self, *_args) -> None:
-        self._ui_theme_preview_timer.start()
-
     def apply_ui_theme_chrome(self) -> None:
         """Re-tint dialog shell + tab scroll areas after a Visual theme change."""
         from steempeg.ui import ui_theme as ut
@@ -1499,13 +1490,6 @@ class SettingsDialog(SteempegDialog):
             scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
             install_library_vertical_scrollbar(scroll)
 
-    def _apply_ui_theme_preview(self) -> None:
-        import logging
-
-        theme = normalize_ui_theme(self._combo_ui_theme.currentData())
-        logging.info("UI theme preview → %s", theme)
-        self._refresh_ui_theme(theme, preview=True)
-
     def _refresh_ui_theme(self, theme: str, *, preview: bool = False) -> None:
         if hasattr(self._app, "apply_ui_theme"):
             try:
@@ -1519,11 +1503,9 @@ class SettingsDialog(SteempegDialog):
             self.apply_ui_theme_chrome()
 
     def _restore_ui_theme_on_cancel(self) -> None:
-        """Undo live UI theme preview that was never Saved."""
+        """No live theme preview — only restore if runtime drifted from saved."""
         import logging
 
-        if getattr(self, "_ui_theme_preview_timer", None) is not None:
-            self._ui_theme_preview_timer.stop()
         committed = normalize_ui_theme(
             getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
         )
@@ -1532,7 +1514,7 @@ class SettingsDialog(SteempegDialog):
         if live == committed and combo == committed:
             return
         logging.info("UI theme cancelled → restored %s", committed)
-        self._refresh_ui_theme(committed, preview=True)
+        self._refresh_ui_theme(committed)
 
     def _preview_icon_shape(self, *_args) -> None:
         """Debounced live preview (not persisted until Save)."""
@@ -1834,7 +1816,6 @@ class SettingsDialog(SteempegDialog):
 
     def _stop_visual_preview_timers(self) -> None:
         for attr in (
-            "_ui_theme_preview_timer",
             "_icon_shape_preview_timer",
             "_clip_card_style_preview_timer",
             "_header_layout_preview_timer",
@@ -1911,14 +1892,16 @@ class SettingsDialog(SteempegDialog):
         opened_theme = normalize_ui_theme(
             getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
         )
-        if ui_theme != opened_theme:
-            logging.info("UI theme applied → %s (settings.json)", ui_theme)
-            if get_ui_theme() == ui_theme and hasattr(
-                self._app, "finalize_ui_theme_shell"
-            ):
-                deferred.append(self._app.finalize_ui_theme_shell)
-            else:
-                deferred.append(lambda t=ui_theme: self._refresh_ui_theme(t))
+        live_theme = normalize_ui_theme(get_ui_theme())
+        if ui_theme != live_theme:
+            logging.info(
+                "UI theme applied → %s (runtime was %s; settings.json)",
+                ui_theme,
+                live_theme,
+            )
+            deferred.append(lambda t=ui_theme: self._refresh_ui_theme(t))
+        elif ui_theme != opened_theme:
+            logging.info("UI theme persisted → %s (already live)", ui_theme)
         self._committed_ui_theme = ui_theme
 
         shape = normalize_icon_shape(self._combo_icon_shape.currentData())
