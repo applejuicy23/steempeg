@@ -280,6 +280,49 @@ LOADING_WAVE_TICK_MS = 80
 LOADING_WAVE_PHASE_STEP = 0.38  # rad/tick → ~1.3s full cycle
 LOADING_WAVE_DOT_COUNT = 3
 
+# Player-header status glyphs (Rendering cube / Completed check).
+_STATUS_GLYPH_CACHE: dict[tuple[str, str, int], QPixmap] = {}
+
+
+def _status_glyph_pixmap(name: str, color: str | QColor, size: int) -> QPixmap:
+    """White-on-black master → tinted glyph (cached). Same pipeline as dash buttons."""
+    # Local import — ``_glyph_pixmap_from_bw`` is defined later in this module.
+    if isinstance(color, QColor):
+        color_key = color.name(QColor.NameFormat.HexArgb)
+        fill = color.name(QColor.NameFormat.HexRgb)
+    else:
+        color_key = str(color)
+        fill = str(color)
+    edge = max(1, int(size))
+    cache_key = (name, color_key, edge)
+    hit = _STATUS_GLYPH_CACHE.get(cache_key)
+    if hit is not None and not hit.isNull():
+        return QPixmap(hit)
+    pix = _glyph_pixmap_from_bw(name, edge, color=fill)
+    if not pix.isNull():
+        _STATUS_GLYPH_CACHE[cache_key] = pix
+    return QPixmap(pix)
+
+
+def completed_status_pixmap(color: str | QColor, size: int = 22) -> QPixmap:
+    """Tinted ``completed.png`` for Completed plaques / status badges."""
+    return _status_glyph_pixmap("completed.png", color, size)
+
+
+def completed_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
+    """Player-header Completed plaque icon (left of “Completed” text)."""
+    return _icon_from_pixmap(completed_status_pixmap(color, size))
+
+
+def rendering_status_pixmap(color: str | QColor, size: int = 22) -> QPixmap:
+    """Tinted static ``rendering.png`` cube for the Rendering plaque."""
+    return _status_glyph_pixmap("rendering.png", color, size)
+
+
+def rendering_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
+    """Player-header Rendering plaque icon — static cube only (no orbit/square)."""
+    return _icon_from_pixmap(rendering_status_pixmap(color, size))
+
 
 def loading_wave_frame(
     color: str | QColor,

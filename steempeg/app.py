@@ -314,6 +314,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._queue_library_preview_diversion = False
         self.render_thread = None
         self._preview_clip_path = None
+        # Last successful export clip — Completed plaque in normal / deferred mode
+        # (single Start Render never inserts a COMPLETED job into render_queue).
+        self._completed_plaque_clip_path = None
         self._clip_session_memory = {}
 
         
@@ -4908,6 +4911,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self._paint_status_dot_loading_wave(
                     getattr(self, "_status_indicator_color", "#a871ff")
                 )
+            elif (
+                hasattr(self, "_sync_dash_queue_status_chrome")
+                and self._sync_dash_queue_status_chrome()
+            ):
+                pass  # queue Ready / Completed / index badge restored
             else:
                 dot_sz = 8 if dense.compact else 12
                 dot.setFixedSize(dot_sz, dot_sz)

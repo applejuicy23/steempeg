@@ -27,6 +27,9 @@ _BASE_ASSETS = (
     "linevolume.png",
     "btn_fullscreen.png",
     "btn_exit_fullscreen.png",
+    # Player-header plaques — Completed / Rendering (static cube) glyphs.
+    "completed.png",
+    "rendering.png",
     "kill.png",
     "knife.png",
     "nine.png",

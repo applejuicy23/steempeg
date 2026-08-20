@@ -382,7 +382,8 @@ class PortableRenderControlStrip(QFrame):
         ):
             pass  # badge + labels already applied
         else:
-            # Keep queue badge during render progress when queue owns the strip.
+            # Keep numbered queue badge during render progress when queue owns the strip.
+            # Rendering / Completed glyphs belong on the player-header plaque only.
             queue_index = None
             if hasattr(app, "_queue_is_active") and app._queue_is_active():
                 job = (

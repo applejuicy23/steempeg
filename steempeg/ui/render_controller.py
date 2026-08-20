@@ -66,7 +66,9 @@ from steempeg.ui.icon_assets import (
     LOADING_WAVE_TICK_MS,
     UPDATE_ARROWS_DEG_PER_TICK,
     UPDATE_ARROWS_TICK_MS,
+    completed_badge_icon,
     loading_wave_frame,
+    rendering_badge_icon,
     update_arrows_spin_frame,
     warning_pixmap,
 )
@@ -830,6 +832,7 @@ class RenderMixin:
         }
         color = colors.get(state, "#a871ff")
         queue_index = None
+        job = None
         if self._queue_is_active():
             # Badge tracks the status-strip job (queue head / active render), not
             # an arbitrary library preview that may disagree with the number.
@@ -872,6 +875,8 @@ class RenderMixin:
         elif library_scan_busy:
             self._paint_status_dot_loading_wave(color)
         elif queue_index and self._queue_is_active() and not suppress_queue_badge:
+            # Numbered queue badge only — Rendering/Completed glyphs live on the
+            # player-header plaque (label_playback_badge), never Part/progress chrome.
             self._paint_status_dot_queue_badge(queue_index, color)
         else:
             self._paint_status_dot_plain(color)
@@ -1131,6 +1136,11 @@ class RenderMixin:
     def _paint_status_dot_plain(self, color: str) -> None:
         self._stop_status_dot_update_spin()
         self._stop_status_dot_loading_wave()
+        # Clear any leftover Part-strip Rendering orbit from older builds.
+        timer = getattr(self, "_status_rendering_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._status_rendering_active = False
         dot = self._status_dot_widget()
         if dot is None:
             return
@@ -1155,6 +1165,11 @@ class RenderMixin:
         """Numbered circle — yellow queue / orange render / red error / green done."""
         self._stop_status_dot_update_spin()
         self._stop_status_dot_loading_wave()
+        # Clear any leftover Part-strip Rendering orbit from older builds.
+        timer = getattr(self, "_status_rendering_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._status_rendering_active = False
         dot = self._status_dot_widget()
         if dot is None:
             return
@@ -1207,6 +1222,8 @@ class RenderMixin:
         else:
             label = STATUS_HEADER_LABELS.get(job.status, "Ready")
 
+        # Progress strip keeps the numbered circle; Rendering/Completed icons
+        # belong on label_playback_badge next to Healthy.
         self._paint_status_dot_queue_badge(index, color)
 
         tip = f"#{index} · {label}"
@@ -1344,15 +1361,38 @@ class RenderMixin:
                 placeholder=True,
             )
 
+    def _refresh_clip_queue_badges_safe(self) -> None:
+        """Refresh ClipCard queue # circles; no-op if the mixin is absent."""
+        if hasattr(self, "refresh_clip_queue_badges"):
+            try:
+                self.refresh_clip_queue_badges()
+            except Exception:
+                logging.debug("refresh_clip_queue_badges failed", exc_info=True)
+
     def _sync_queue_player_and_dash_chrome(self) -> None:
-        """Dash follows queue head; player header only when a clip is open."""
+        """Dash follows queue head; player header only when a clip is open.
+
+        After Leave (deferred) or library diversion, never stamp queue Ready /
+        queue-job identity — restore clip-driven or idle chrome instead.
+        Also refreshes ClipCard queue # circles (hide on Leave, restore on Resume).
+        """
+        if not self._queue_owns_identity_chrome():
+            if getattr(self, "_preview_clip_path", None):
+                self._restore_header_from_library_selection()
+            else:
+                self._apply_player_idle_chrome()
+                if hasattr(self, "reset_bottom_summary"):
+                    self.reset_bottom_summary()
+            # Leave / diversion: clear yellow membership circles with the rest of
+            # queue chrome (Resume / active path restores them below too).
+            self._refresh_clip_queue_badges_safe()
+            return
         if getattr(self, "_preview_clip_path", None):
             self._sync_player_header_to_queue_context()
-        elif self._queue_owns_identity_chrome():
+        else:
             self._apply_player_idle_chrome()
             self._sync_dash_queue_status_chrome()
-        elif hasattr(self, "reset_bottom_summary"):
-            self.reset_bottom_summary()
+        self._refresh_clip_queue_badges_safe()
 
     def _queue_drives_start_cta(self) -> bool:
         """True when Start should batch-render pending queue jobs."""
@@ -5349,7 +5389,8 @@ class RenderMixin:
             len(self.render_queue),
         )
         self._clear_queue_selection()
-        self._restore_header_from_library_selection()
+        # Drop queue-driven header / Ready cluster / In-queue plaque immediately.
+        self._sync_queue_player_and_dash_chrome()
         if hasattr(self, "update_final_setup"):
             try:
                 self.update_final_setup()
@@ -5387,6 +5428,9 @@ class RenderMixin:
         # Do not seek/select job #1 or any queue card.
         if not getattr(self, "_queue_library_preview_diversion", False):
             self._sync_queue_player_and_dash_chrome()
+        else:
+            # Diversion skipped full chrome sync — still restore ClipCard circles.
+            self._refresh_clip_queue_badges_safe()
         self._sync_start_render_enabled()
         self.update_playback_badge()
         self.refresh_render_queue_panel()
@@ -5751,16 +5795,28 @@ class RenderMixin:
         queued more than once, the chip cycles those indices (~1s, same as ClipCard).
         Footer Ready+#N stays queue-head via ``_status_strip_context_job``.
         """
+        def _same(a, b) -> bool:
+            if not a or not b:
+                return False
+            return os.path.normcase(os.path.normpath(a)) == os.path.normcase(
+                os.path.normpath(b)
+            )
+
         selected_id = getattr(self, "_selected_queue_job_id", None)
         if selected_id:
             job = self.render_queue.get(selected_id)
             if job is not None:
                 if not clip_path:
                     return job
-                if os.path.normpath(job.clip_path) == os.path.normpath(clip_path):
+                if _same(job.clip_path, clip_path):
                     return job
         if clip_path:
-            return self._queue_job_for_clip(clip_path)
+            # Prefer a live RENDERING job for this clip over an earlier QUEUED twin.
+            matches = self.render_queue.find_all_by_clip_path(clip_path) or []
+            for job in matches:
+                if job.status == JobStatus.RENDERING:
+                    return job
+            return matches[0] if matches else None
         return None
 
     def _playback_badge_for_context(self):
@@ -5769,10 +5825,60 @@ class RenderMixin:
             # No open clip → no Queue plank (desktop sidebar / portable chip cover totals).
             return None, None
 
+        def _same_clip(a, b) -> bool:
+            if not a or not b:
+                return False
+            return os.path.normcase(os.path.normpath(a)) == os.path.normcase(
+                os.path.normpath(b)
+            )
+
+        is_rendering = bool(getattr(self, "_is_rendering", False))
+        deferred = not self._queue_is_active()
+
+        # Live encode → orange Rendering plaque next to Healthy, even after Leave.
+        # Deferred must not hide this; encode continues while Resume is shown.
+        if is_rendering:
+            active = getattr(self, "_active_render_job", None)
+            if active is not None:
+                if _same_clip(getattr(active, "clip_path", None), clip_path):
+                    return (
+                        STATUS_HEADER_LABELS[JobStatus.RENDERING],
+                        STATUS_COLORS[JobStatus.RENDERING],
+                    )
+                # Header may already follow the live job (selected id) while
+                # preview path briefly lags — still show Rendering.
+                selected_id = getattr(self, "_selected_queue_job_id", None)
+                if selected_id and selected_id == getattr(active, "id", None):
+                    return (
+                        STATUS_HEADER_LABELS[JobStatus.RENDERING],
+                        STATUS_COLORS[JobStatus.RENDERING],
+                    )
+
+        job = self._focused_queue_job_for_badge(clip_path)
+
+        # Completed — always, including normal Start Render and Leave/deferred.
+        # Single-clip exports never land a COMPLETED row in render_queue, so we
+        # also honour ``_completed_plaque_clip_path`` set on successful finish.
+        if job is not None and job.status == JobStatus.COMPLETED:
+            return (
+                STATUS_HEADER_LABELS[JobStatus.COMPLETED],
+                STATUS_COLORS[JobStatus.COMPLETED],
+            )
+        remembered = getattr(self, "_completed_plaque_clip_path", None)
+        if remembered and _same_clip(remembered, clip_path):
+            return (
+                STATUS_HEADER_LABELS[JobStatus.COMPLETED],
+                STATUS_COLORS[JobStatus.COMPLETED],
+            )
+
+        # Leave (deferred): hide In-queue / Preview / Error plaques only.
+        # Healthy stays; live Rendering + Completed handled above.
+        if deferred:
+            return None, None
+
         if hasattr(self, "get_clip_health_report"):
             if self.get_clip_health_report(clip_path).level == health.ClipHealth.DEAD:
                 if hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path):
-                    job = self._focused_queue_job_for_badge(clip_path)
                     if job:
                         if job.status == JobStatus.QUEUED:
                             return (
@@ -5783,16 +5889,7 @@ class RenderMixin:
                         return STATUS_HEADER_LABELS[job.status], STATUS_COLORS[job.status]
                 return None, None
 
-        if getattr(self, "_is_rendering", False):
-            active = getattr(self, "_active_render_job", None)
-            if active and os.path.normpath(active.clip_path) == os.path.normpath(clip_path):
-                return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
-
-        job = self._focused_queue_job_for_badge(clip_path)
-
         if job:
-            if job.status == JobStatus.COMPLETED:
-                return STATUS_HEADER_LABELS[JobStatus.COMPLETED], STATUS_COLORS[JobStatus.COMPLETED]
             if job.status == JobStatus.ERROR:
                 return STATUS_HEADER_LABELS[JobStatus.ERROR], STATUS_COLORS[JobStatus.ERROR]
             if job.status == JobStatus.RENDERING:
@@ -5805,12 +5902,9 @@ class RenderMixin:
 
         # Preview only shows while the Render Queue actually has clips in it.
         # Portable replaces Preview with the Add to Queue / Queue chip.
-        if self._queue_is_active():
-            if getattr(self, "_portable_shell", False):
-                return None, None
-            return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
-
-        return None, None
+        if getattr(self, "_portable_shell", False):
+            return None, None
+        return PREVIEW_BADGE_TEXT, PREVIEW_BADGE_COLOR
 
     def update_playback_badge(self):
         if not hasattr(self, "label_playback_badge"):
@@ -5850,7 +5944,16 @@ class RenderMixin:
         pad = getattr(self, "_player_header_status_pad", None) or "4px 12px 4px 10px"
         font_px = int(getattr(self, "_player_header_status_font", 13) or 13)
         min_h = int(getattr(self, "_player_header_status_min_h", 30) or 30)
-        if low.startswith("in queue"):
+        if low == "rendering":
+            # Static tinted cube left of “Rendering” (mirrors Healthy icon+text).
+            badge.setText(f" {label}")
+            badge.setIcon(rendering_badge_icon(color, icon_px))
+            badge.setIconSize(QSize(icon_px, icon_px))
+        elif low == "completed":
+            badge.setIcon(completed_badge_icon(color, icon_px))
+            badge.setIconSize(QSize(icon_px, icon_px))
+            badge.setText(f" {label}")
+        elif low.startswith("in queue"):
             # Match desktop health chip height (was squashed at 16px + 2px pad).
             badge.setIcon(queue_chip_icon(icon_px, color=color))
             badge.setIconSize(QSize(icon_px, icon_px))
@@ -6125,6 +6228,10 @@ class RenderMixin:
             return
         self._batch_current += 1
         self._selected_queue_job_id = job.id
+        # Keep preview path in sync with the job being encoded — otherwise
+        # ``_playback_badge_for_context`` compares against a stale clip and
+        # suppresses the orange Rendering plaque next to Healthy.
+        self._preview_clip_path = job.clip_path
         self._apply_header_from_job(job)
         self.refresh_render_queue_panel()
         self.update_playback_badge()
@@ -6254,6 +6361,8 @@ class RenderMixin:
         # Bind strip context before the Ready cluster paints so name + badge agree.
         self._is_rendering = True
         self._active_render_job = job
+        # New encode supersedes any prior Completed plaque for this session.
+        self._completed_plaque_clip_path = None
         # Mark this job only — find_by_clip_path would hit an earlier duplicate of the same clip.
         live = self.render_queue.get(getattr(job, "id", "")) or job
         live.status = JobStatus.RENDERING
@@ -6603,6 +6712,14 @@ class RenderMixin:
             self._sync_queue_job_render_status(
                 active_job, success, error_msg, output_file or ""
             )
+
+        if success and active_job is not None:
+            # Remember for normal-mode / deferred Completed plaque (job may not
+            # live in render_queue after a single Start Render).
+            self._completed_plaque_clip_path = getattr(active_job, "clip_path", None)
+        elif not success:
+            # Cancel / error: drop a stale Completed from a prior export.
+            self._completed_plaque_clip_path = None
 
         self._is_rendering = False
         self._active_render_job = None

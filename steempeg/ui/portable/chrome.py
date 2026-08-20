@@ -649,13 +649,25 @@ def sync_portable_queue_header(app) -> None:
 
     from steempeg.render.queue import JobStatus
 
+    queue_mode = True
+    if hasattr(app, "_queue_is_active"):
+        try:
+            queue_mode = bool(app._queue_is_active())
+        except Exception:
+            queue_mode = True
+
     show_add = False
     show_queue_chip = False
     queue_chip_text = "Queue"
     showing_in_queue = False
     if has_clip and job is not None:
         st = job.status
-        if st == JobStatus.QUEUED:
+        if not queue_mode:
+            # Left queue mode: keep jobs, but no In-queue chip. Live Rendering /
+            # Completed plaques stay on label_playback_badge (not this chip).
+            show_add = can_add
+            show_queue_chip = False
+        elif st == JobStatus.QUEUED:
             show_queue_chip = True
             # N = 1-based queue position(s) for this clip (matches desktop header).
             label = None
@@ -667,11 +679,8 @@ def sync_portable_queue_header(app) -> None:
             index = int(getattr(job, "queue_index", 0) or 0) or 1
             queue_chip_text = label or f"In queue ({index})"
             showing_in_queue = True
-        elif st == JobStatus.RENDERING:
-            show_queue_chip = True
-            queue_chip_text = "Rendering"
-        elif st in (JobStatus.COMPLETED, JobStatus.ERROR):
-            # Status label handles these; no add/queue chip needed.
+        elif st in (JobStatus.RENDERING, JobStatus.COMPLETED, JobStatus.ERROR):
+            # Player-header plaque (label_playback_badge) owns Rendering / Completed.
             show_add = False
             show_queue_chip = False
         else:
