@@ -10,6 +10,7 @@ import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import ui_theme as _ut
+from steempeg.ui.widgets.overflow_marquee import OverflowMarqueeLabel
 
 
 def _clip_plate_color() -> str:
@@ -248,23 +249,26 @@ class ClipCard(qtw.QWidget):
 
         text_layout = qtw.QHBoxLayout(text_widget)
         text_layout.setContentsMargins(12, 0, 12, 0)
+        text_layout.setSpacing(8)
 
-        title_lbl = qtw.QLabel(title.strip())
-        title_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
+        title_lbl = OverflowMarqueeLabel(title.strip())
         title_lbl.setStyleSheet(
             "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
         )
+        self.title_lbl = title_lbl
 
         date_lbl = qtw.QLabel(date_str)
         date_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
         date_lbl.setStyleSheet(
             "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
         )
+        date_lbl.setSizePolicy(
+            qtw.QSizePolicy.Policy.Maximum, qtw.QSizePolicy.Policy.Preferred
+        )
         self.date_lbl = date_lbl
 
-        text_layout.addWidget(title_lbl)
-        text_layout.addStretch()
-        text_layout.addWidget(date_lbl)
+        text_layout.addWidget(title_lbl, 1)
+        text_layout.addWidget(date_lbl, 0)
 
         layout.addWidget(self.thumb_label)
         layout.addWidget(text_widget)
