@@ -26,6 +26,7 @@ _BASE_ASSETS = (
     "cancel.png",
     "linevolume.png",
     "btn_fullscreen.png",
+    "btn_exit_fullscreen.png",
     "kill.png",
     "knife.png",
     "nine.png",

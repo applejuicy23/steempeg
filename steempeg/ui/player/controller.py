@@ -1760,7 +1760,9 @@ class PlayerMixin:
         QTimer.singleShot(200, lambda: setattr(self, 'fullscreen_lock', False))
 
         self.is_fullscreen = not getattr(self, 'is_fullscreen', False)
-        
+        if hasattr(self, "_apply_fullscreen_button_icon"):
+            self._apply_fullscreen_button_icon(fullscreen=self.is_fullscreen)
+
         if self.is_fullscreen:
             _fstrace("ENTER begin")
             self._freeze_mpv_surface(True)

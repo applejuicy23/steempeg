@@ -2193,14 +2193,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.btn_fullscreen = QPushButton()
                 self.btn_fullscreen.setFixedSize(40, 40)
                 self.btn_fullscreen.setCursor(Qt.PointingHandCursor)
-                self.btn_fullscreen.setToolTip("Full Screen (Press ESC to exit)")
                 self.btn_fullscreen.setStyleSheet(_pill_btn_qss)
-                
-                fs_icon_path = get_resource_path("btn_fullscreen.png")
-                if os.path.exists(fs_icon_path):
-                    self.btn_fullscreen.setIcon(QIcon(fs_icon_path))
-                    self.btn_fullscreen.setIconSize(QSize(22, 22))
-                else:
+                self._apply_fullscreen_button_icon(fullscreen=False)
+                if self.btn_fullscreen.icon().isNull():
                     self.btn_fullscreen.setText("🔲")
 
                 # Connect button signals
@@ -2717,11 +2712,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         
         # 3. Connect the Fullscreen button (make sure this name matches your Qt Designer button!)
         if hasattr(self.ui, 'btn_fullscreen'):
-            # You can set the icon programmatically too
-            icon_path = get_resource_path("btn_fullscreen.png")
-            if os.path.exists(icon_path):
-                self.ui.btn_fullscreen.setIcon(QIcon(icon_path))
-                self._sync_chrome_button_icon_size(self.ui.btn_fullscreen)
+            self._apply_fullscreen_button_icon(
+                fullscreen=bool(getattr(self, "is_fullscreen", False))
+            )
             self.ui.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
 
 
@@ -4408,6 +4401,34 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         else:
             btn.setIconSize(QSize(sz, sz))
 
+    def _apply_fullscreen_button_icon(self, *, fullscreen: bool | None = None) -> None:
+        """Enter vs exit fullscreen glyph — same chrome size as theater/trim chips."""
+        btn = getattr(self, "btn_fullscreen", None)
+        if btn is None:
+            ui = getattr(self, "ui", None)
+            btn = getattr(ui, "btn_fullscreen", None) if ui is not None else None
+        if btn is None:
+            return
+        if fullscreen is None:
+            fullscreen = bool(getattr(self, "is_fullscreen", False))
+        asset = "btn_exit_fullscreen.png" if fullscreen else "btn_fullscreen.png"
+        path = get_resource_path(asset)
+        if os.path.exists(path):
+            btn.setIcon(QIcon(path))
+            btn.setText("")
+            self._sync_chrome_button_icon_size(btn)
+        elif not fullscreen:
+            enter = get_resource_path("btn_fullscreen.png")
+            if os.path.exists(enter):
+                btn.setIcon(QIcon(enter))
+                btn.setText("")
+                self._sync_chrome_button_icon_size(btn)
+        btn.setToolTip(
+            "Exit Full Screen (Press ESC)"
+            if fullscreen
+            else "Full Screen (Press ESC to exit)"
+        )
+
     def _apply_ui_density(self, dense):
         """Apply one density to every pane (portable / forced comfort path)."""
         self._ui_density = dense
@@ -4736,6 +4757,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if attr == "btn_theater" and hasattr(self, "_apply_theater_button_icon"):
                     self._apply_theater_button_icon(
                         closed=bool(getattr(self, "is_theater", False))
+                    )
+                elif attr == "btn_fullscreen" and hasattr(
+                    self, "_apply_fullscreen_button_icon"
+                ):
+                    self._apply_fullscreen_button_icon(
+                        fullscreen=bool(getattr(self, "is_fullscreen", False))
                     )
                 else:
                     self._sync_chrome_button_icon_size(b, icon_sz)
