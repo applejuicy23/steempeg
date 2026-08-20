@@ -2936,7 +2936,11 @@ class LibraryMixin:
         item.setData(Qt.UserRole + 1, clip_path)
 
         queue_membership = None
-        if clip_path and hasattr(self, "render_queue"):
+        # Match Leave: no yellow # circles while queue scheme is deferred.
+        queue_mode = (
+            not hasattr(self, "_queue_is_active") or bool(self._queue_is_active())
+        )
+        if clip_path and hasattr(self, "render_queue") and queue_mode:
             jobs = self.render_queue.find_all_by_clip_path(clip_path)
             if jobs:
                 from steempeg.render.queue import STATUS_COLORS
@@ -3108,12 +3112,21 @@ class LibraryMixin:
         self.refresh_clip_queue_badges()
 
     def refresh_clip_queue_badges(self) -> None:
-        """Update queue # overlays without rebuilding the grid."""
+        """Update queue # overlays without rebuilding the grid.
+
+        Hidden while Left (``_queue_scheme_deferred`` / not ``_queue_is_active``);
+        restored on Resume when jobs still match.
+        """
         grid = getattr(self, "grid_clips", None)
         if grid is None or not hasattr(self, "render_queue"):
             return
         from steempeg.render.queue import STATUS_COLORS
         from steempeg.ui.library.grid_view import ClipCard
+
+        # Leave keeps jobs but drops queue-mode chrome — including ClipCard circles.
+        show_badges = True
+        if hasattr(self, "_queue_is_active"):
+            show_badges = bool(self._queue_is_active())
 
         for i in range(grid.count()):
             item = grid.item(i)
@@ -3123,7 +3136,7 @@ class LibraryMixin:
             if not isinstance(card, ClipCard):
                 continue
             clip_path = item.data(Qt.UserRole + 1)
-            if not clip_path:
+            if not clip_path or not show_badges:
                 card.set_queue_badge(None)
                 continue
             jobs = self.render_queue.find_all_by_clip_path(clip_path)
