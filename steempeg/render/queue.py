@@ -225,8 +225,8 @@ class RenderQueue:
         return sum(1 for j in self._jobs if j.status == JobStatus.QUEUED)
 
     def contains_clip(self, clip_path: str) -> bool:
-        norm = os.path.normpath(clip_path)
-        return any(os.path.normpath(j.clip_path) == norm for j in self._jobs)
+        norm = os.path.normcase(os.path.normpath(clip_path))
+        return any(os.path.normcase(os.path.normpath(j.clip_path)) == norm for j in self._jobs)
 
     def find_by_clip_path(self, clip_path: str) -> Optional[RenderJob]:
         jobs = self.find_all_by_clip_path(clip_path)
@@ -234,8 +234,12 @@ class RenderQueue:
 
     def find_all_by_clip_path(self, clip_path: str) -> List[RenderJob]:
         """All jobs for this clip folder (same path may be queued N times)."""
-        norm = os.path.normpath(clip_path)
-        return [j for j in self._jobs if os.path.normpath(j.clip_path) == norm]
+        norm = os.path.normcase(os.path.normpath(clip_path))
+        return [
+            j
+            for j in self._jobs
+            if os.path.normcase(os.path.normpath(j.clip_path)) == norm
+        ]
 
     def index_of(self, job_id: str) -> int:
         for i, job in enumerate(self._jobs):
