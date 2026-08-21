@@ -3372,6 +3372,25 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 logging.exception("Timeline strip size apply failed for %s", applied)
         return applied
 
+    def refresh_markers_on_strip(self, enabled: bool | None = None) -> bool:
+        """Apply Settings → Visual markers-on-strip overlay without restart."""
+        from steempeg.ui.settings_prefs import (
+            current_markers_on_strip,
+            set_markers_on_strip,
+        )
+
+        if enabled is not None:
+            set_markers_on_strip(enabled)
+        applied = current_markers_on_strip()
+        timeline = getattr(self, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "apply_strip_size"):
+            try:
+                # Re-apply metrics so TRACK_Y / canvas height follow the overlay flag.
+                timeline.apply_strip_size()
+            except Exception:
+                logging.exception("Markers-on-strip apply failed for %s", applied)
+        return applied
+
     def refresh_player_boost_ceilings(
         self,
         volume: int | None = None,
