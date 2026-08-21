@@ -2502,23 +2502,30 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.main_v_splitter.splitterMoved.connect(
                     self._on_main_v_splitter_moved
                 )
+                # Theme-aware handle first; layout sync may hide it (Like a Portable).
+                try:
+                    from steempeg.ui.layout_defaults import vertical_splitter_handle_qss
+                    from steempeg.ui.ui_theme import splitter_handle_colors
+
+                    idle, hover = splitter_handle_colors(vertical=True)
+                    self.main_v_splitter.setStyleSheet(
+                        vertical_splitter_handle_qss(idle, hover)
+                    )
+                except Exception:
+                    self.main_v_splitter.setStyleSheet("""
+                    QSplitter::handle {
+                        background-color: #444444;
+                        margin: 0px 40px;
+                        border-radius: 2px;
+                        height: 4px;
+                    }
+                    QSplitter::handle:hover {
+                        background-color: #b29ae7;
+                    }
+                """)
                 # Like a Portable: park neo + glue dash now that the v-splitter exists.
                 if hasattr(self, "apply_desktop_render_layout"):
                     self.apply_desktop_render_layout()
-                # Beautiful modern splitter handle
-                
-                self.main_v_splitter.setStyleSheet("""
-                    QSplitter::handle { 
-                        background-color: #444444; 
-                        
-                        margin: 0px 40px; 
-                        border-radius: 2px; 
-                        height: 4px; 
-                    } 
-                    QSplitter::handle:hover { 
-                        background-color: #b29ae7; 
-                    }
-                """)
 
                 # 7. Place the splitter back into the CLEAN right-hand panel.
                 self.right_content_wrap = QWidget()
@@ -3878,8 +3885,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
-        from steempeg.ui.layout_defaults import HORIZONTAL_SPLITTER_STYLESHEET
-
         dark = self._current_app_bg()
         shell = f"background-color: {dark};"
         for attr in ("left_panel", "right_panel"):
@@ -3888,12 +3893,26 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 panel.setAutoFillBackground(True)
                 panel.setStyleSheet(shell)
-        splitter_qss = f"QSplitter {{ {shell} }} {HORIZONTAL_SPLITTER_STYLESHEET}"
-        for splitter_attr in ("main_splitter", "right_h_splitter"):
-            splitter = getattr(self.ui, splitter_attr, None) or getattr(self, splitter_attr, None)
-            if splitter is not None:
-                splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-                splitter.setStyleSheet(splitter_qss)
+        # Theme-aware visible handles first; Like a Portable may hide them after.
+        try:
+            from steempeg.ui.portable_splitter_reveal import (
+                paint_desktop_splitter_handles,
+                sync_portable_splitter_reveal,
+            )
+
+            paint_desktop_splitter_handles(self)
+            sync_portable_splitter_reveal(self)
+        except Exception:
+            from steempeg.ui.layout_defaults import HORIZONTAL_SPLITTER_STYLESHEET
+
+            splitter_qss = f"QSplitter {{ {shell} }} {HORIZONTAL_SPLITTER_STYLESHEET}"
+            for splitter_attr in ("main_splitter", "right_h_splitter", "main_v_splitter"):
+                splitter = getattr(self.ui, splitter_attr, None) or getattr(
+                    self, splitter_attr, None
+                )
+                if splitter is not None:
+                    splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+                    splitter.setStyleSheet(splitter_qss)
 
     def _sync_startup_layout(self):
         """Re-apply splitter sizes once the maximized window has real geometry."""
