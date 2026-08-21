@@ -1060,16 +1060,19 @@ class PlayerMixin:
                 bottom_wrapper.setVisible(not self.is_theater)
         if hasattr(self, 'render_dashboard'):
             self.render_dashboard.setVisible(not self.is_theater)
-        if hasattr(self, 'render_queue_panel'):
-            self.render_queue_panel.setVisible(not self.is_theater)
+        # Keep the queue widget mapped (do not hide()) — QSplitter drops the
+        # player|queue handle when a child is hidden, and exit cannot always
+        # recreate it cleanly. Collapse width instead.
         if hasattr(self, 'right_h_splitter') and self.is_theater:
             sizes = self.right_h_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else 1
             self.right_h_splitter.setSizes([total, 0])
+            self._clamp_queue_panel_for_immersive(True)
             # Remember original handle geometry so we can restore the exact
             # same thickness as the left splitter (it is not always equal to
             # QUEUE_SPLITTER_GUTTER).
-            self._pre_theater_right_handle_width = self.right_h_splitter.handleWidth()
+            live_w = int(self.right_h_splitter.handleWidth() or 0)
+            self._pre_theater_right_handle_width = live_w if live_w > 0 else 6
             handle = self._splitter_handle(self.right_h_splitter, 1)
             self._pre_theater_right_handle_visible = (
                 handle.isVisible() if handle is not None else True
@@ -1077,6 +1080,8 @@ class PlayerMixin:
             # Collapse the queue splitter handle itself — otherwise a thick dark
             # strip remains on the right and breaks symmetry with the left edge.
             self._hide_right_h_splitter_handle()
+        elif hasattr(self, 'right_h_splitter') and not self.is_theater:
+            self._clamp_queue_panel_for_immersive(False)
 
         footer = getattr(self, "_footer_mega_pill", None)
         if footer is not None:
@@ -1112,15 +1117,33 @@ class PlayerMixin:
 
         # Restore the queue splitter handle after leaving theatre (we zeroed it on enter).
         if hasattr(self, 'right_h_splitter') and not self.is_theater:
+            # Prefer the snapshot taken before theatre collapse (expanded panes).
+            if hasattr(self, '_pre_theater_main_sizes') and hasattr(self.ui, 'main_splitter'):
+                try:
+                    self.ui.main_splitter.setSizes(list(self._pre_theater_main_sizes))
+                except Exception:
+                    pass
+            if hasattr(self, '_pre_theater_v_sizes') and hasattr(self, 'main_v_splitter'):
+                try:
+                    self.main_v_splitter.setSizes(list(self._pre_theater_v_sizes))
+                except Exception:
+                    pass
+            if hasattr(self, '_pre_theater_h_sizes'):
+                try:
+                    self.right_h_splitter.setSizes(list(self._pre_theater_h_sizes))
+                except Exception:
+                    pass
             # Restore the original handle width/visibility instead of hardcoding
             # constants; otherwise theatre toggling can make the right handle
             # thicker than the left.
             restored_width = getattr(self, '_pre_theater_right_handle_width', None)
-            if restored_width is not None:
-                self.right_h_splitter.setHandleWidth(int(restored_width))
-            else:
-                # Fallback: main splitter uses 6px; keep right visually aligned.
-                self.right_h_splitter.setHandleWidth(6)
+            try:
+                restored_width = int(restored_width) if restored_width is not None else 6
+            except (TypeError, ValueError):
+                restored_width = 6
+            if restored_width <= 0:
+                restored_width = 6
+            self.right_h_splitter.setHandleWidth(restored_width)
             restored_visible = getattr(self, '_pre_theater_right_handle_visible', None)
             if restored_visible is None:
                 restored_visible = True
@@ -1155,8 +1178,19 @@ class PlayerMixin:
 
         if not self.is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
             self._sync_queue_splitter_visibility()
-        if hasattr(self, '_sync_library_mode_chrome'):
-            self._sync_library_mode_chrome()
+        # Exit-only: library chrome + splitter paint. Running them on enter
+        # restyles every handle mid-collapse (Like a Portable felt ragged).
+        if not self.is_theater:
+            if hasattr(self, '_sync_library_mode_chrome'):
+                self._sync_library_mode_chrome()
+            try:
+                from steempeg.ui.portable_splitter_reveal import (
+                    ensure_right_h_handle_chrome,
+                )
+
+                ensure_right_h_handle_chrome(self)
+            except Exception:
+                pass
 
     def _save_splitter_sizes(self, splitter, attr_name):
         if splitter is None:
@@ -1184,9 +1218,20 @@ class PlayerMixin:
         splitter = getattr(self, "right_h_splitter", None)
         if splitter is None:
             return
-        setattr(self, width_attr, splitter.handleWidth())
+        # Never snapshot an already-collapsed immersive width (0) as the restore
+        # target — that is how the player|queue seam stays missing after FS exit.
+        live_w = int(splitter.handleWidth() or 0)
+        if live_w <= 0:
+            live_w = int(getattr(self, "_pre_theater_right_handle_width", 0) or 0)
+        if live_w <= 0:
+            live_w = 6
+        setattr(self, width_attr, live_w)
         handle = self._splitter_handle(splitter, 1)
-        setattr(self, visible_attr, handle.isVisible() if handle is not None else True)
+        # Width-0 handles report not visible; still restore as shown for desktop.
+        visible = True
+        if handle is not None and live_w > 0:
+            visible = bool(handle.isVisible())
+        setattr(self, visible_attr, visible)
 
     def _restore_right_h_splitter_handle(self) -> None:
         splitter = getattr(self, "right_h_splitter", None)
@@ -1198,11 +1243,15 @@ class PlayerMixin:
             width = getattr(self, "_pre_theater_right_handle_width", None)
         if visible is None:
             visible = getattr(self, "_pre_theater_right_handle_visible", None)
-        if width is None:
+        try:
+            width = int(width) if width is not None else 6
+        except (TypeError, ValueError):
+            width = 6
+        if width <= 0:
             width = 6
         if visible is None:
             visible = True
-        splitter.setHandleWidth(int(width))
+        splitter.setHandleWidth(width)
         self._set_splitter_handle_visible(splitter, bool(visible))
 
     def _hide_right_h_splitter_handle(self) -> None:
@@ -1211,6 +1260,27 @@ class PlayerMixin:
             return
         self._set_splitter_handle_visible(splitter, False)
         splitter.setHandleWidth(0)
+
+    def _clamp_queue_panel_for_immersive(self, collapsed: bool) -> None:
+        """Collapse queue without hide() so the right_h handle survives Qt layout."""
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is None:
+            return
+        if collapsed:
+            if getattr(self, "_pre_immersive_queue_max_width", None) is None:
+                try:
+                    self._pre_immersive_queue_max_width = int(panel.maximumWidth())
+                except Exception:
+                    self._pre_immersive_queue_max_width = 16777215
+            panel.setMinimumWidth(0)
+            panel.setMaximumWidth(0)
+            return
+        saved = getattr(self, "_pre_immersive_queue_max_width", None)
+        try:
+            panel.setMaximumWidth(16777215 if saved is None else max(int(saved), 0))
+        except Exception:
+            panel.setMaximumWidth(16777215)
+        self._pre_immersive_queue_max_width = None
 
     def _collapse_splitter(self, splitter, keep_index):
         if splitter is None:
@@ -1240,11 +1310,13 @@ class PlayerMixin:
         self._collapse_splitter(getattr(self.ui, 'main_splitter', None), keep_index=1)
         self._collapse_splitter(getattr(self, 'main_v_splitter', None), keep_index=0)
         self._collapse_splitter(getattr(self, 'right_h_splitter', None), keep_index=0)
-
-        if hasattr(self, 'render_queue_panel'):
-            self.render_queue_panel.hide()
+        # Keep queue mapped: hide() drops the right_h handle until a later open.
+        self._clamp_queue_panel_for_immersive(True)
 
     def _exit_immersive_layout(self, is_theater=False):
+        # Stay collapsed when landing back in theatre (portable shell); only
+        # desktop exit must reopen the queue maxWidth clamp.
+        self._clamp_queue_panel_for_immersive(bool(is_theater))
         if hasattr(self.ui, 'main_splitter') and hasattr(self, '_immersive_main_splitter_sizes'):
             self.ui.main_splitter.setSizes(self._immersive_main_splitter_sizes)
         if hasattr(self, 'main_v_splitter') and hasattr(self, '_immersive_v_splitter_sizes'):
@@ -1747,6 +1819,19 @@ class PlayerMixin:
             set_window_transitions(self.ui, True)
             # Thaw last, so the first frame the user sees is the finished layout.
             self._set_shell_paint_frozen(False)
+            # Re-assert player|queue handle after uncover — styles applied while
+            # frozen (or after handleWidth 0) can leave the right seam missing.
+            if not getattr(self, "is_theater", False) and not getattr(
+                self, "is_fullscreen", False
+            ):
+                try:
+                    from steempeg.ui.portable_splitter_reveal import (
+                        ensure_right_h_handle_chrome,
+                    )
+
+                    ensure_right_h_handle_chrome(self)
+                except Exception:
+                    self._restore_right_h_splitter_handle()
             self.ui.repaint()
             QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             self._hide_immersive_transition_cover()
@@ -1801,6 +1886,13 @@ class PlayerMixin:
                     self._immersive_v_splitter_sizes = list(self._pre_theater_v_sizes)
                 if hasattr(self, '_pre_theater_h_sizes'):
                     self._immersive_h_splitter_sizes = list(self._pre_theater_h_sizes)
+                # Theatre already zeroed the right handle — copy the pre-theatre
+                # snapshot so FS exit does not restore width 0.
+                pre_w = int(getattr(self, "_pre_theater_right_handle_width", 0) or 0)
+                self._immersive_right_h_handle_width = pre_w if pre_w > 0 else 6
+                self._immersive_right_h_handle_visible = bool(
+                    getattr(self, "_pre_theater_right_handle_visible", True)
+                )
             elif hasattr(self, 'right_h_splitter'):
                 self._save_right_h_splitter_handle(
                     '_immersive_right_h_handle_width',
@@ -1924,6 +2016,8 @@ class PlayerMixin:
             self._exit_immersive_mode()
             if getattr(self, "_portable_shell", False):
                 QTimer.singleShot(0, self.apply_portable_theatre_shell)
+            # Desktop handle paint is deferred to _finish_exit_uncover so it runs
+            # after shell thaw (painting while frozen left the right seam missing).
 
     
     def align_fullscreen_hud(self):
@@ -2009,6 +2103,16 @@ class PlayerMixin:
         # If the program is minimized (Win+D) or we are currently Alt-Tabbing, completely ignore any mouse attempts to wake up the interface!
         if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
             return
+
+        # Do not raise the floating HUD over an open QMenu — both are stays-on-top
+        # Tool/Popup windows; a late raise_() buries the menu visually while the
+        # popup grab still delivers clicks (invisible but clickable).
+        popup = QApplication.activePopupWidget()
+        tl = getattr(self, "custom_timeline", None)
+        canvas = getattr(tl, "canvas", None) if tl is not None else None
+        menu_open = popup is not None or (
+            canvas is not None and getattr(canvas, "_context_menu_open", False)
+        )
         
         self.ui.setCursor(Qt.ArrowCursor) 
         if hasattr(self, 'player_footer_frame'):
@@ -2018,7 +2122,10 @@ class PlayerMixin:
                 # motion the HUD is already placed — leave its geometry alone.
                 self.align_fullscreen_hud()
             self.player_footer_frame.show()
-            self.player_footer_frame.raise_()
+            if not menu_open:
+                self.player_footer_frame.raise_()
+            elif popup is not None:
+                popup.raise_()
         # Same as desktop with a clip playing — auto-hide the bar. Idle (no clip)
         # keeps the floating HUD up: it is the only exit affordance on a gray canvas.
         if self._is_player_idle_placeholder():
@@ -2037,6 +2144,20 @@ class PlayerMixin:
                 self.player_footer_frame.show()
                 self.player_footer_frame.raise_()
             self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+
+        # Marker / timeline QMenu (and any other popup) lives outside the HUD
+        # Tool window — underMouse() is false while the cursor is on the menu,
+        # and hiding the HUD would tear the menu down mid-interaction.
+        # Also honor the canvas flag: on some Win32 stacks activePopupWidget()
+        # can briefly miss a Tool-parented QMenu while it is still exec()'ing.
+        if QApplication.activePopupWidget() is not None:
+            self.fs_timer.start()
+            return
+        tl = getattr(self, "custom_timeline", None)
+        canvas = getattr(tl, "canvas", None) if tl is not None else None
+        if canvas is not None and getattr(canvas, "_context_menu_open", False):
+            self.fs_timer.start()
             return
         
         if hasattr(self, 'player_footer_frame') and self.player_footer_frame.underMouse():
@@ -3736,33 +3857,47 @@ class PlayerMixin:
             
         # Get the clip name (if selected) to add to the file name
         game_name = "Clip"
+        clip_path = ""
+        app_id = ""
         row = self.ui.table_clips.currentRow()
         if hasattr(self.ui, 'table_clips') and row >= 0:
             item = self.ui.table_clips.item(row, 0)
-            if item: 
+            if item:
                 # Trim extra spaces from the ends of the name
                 game_name = item.text().strip()
                 # Replace characters forbidden in filenames with underscores.
                 game_name = re.sub(r'[\\/*?:"<>|]', "_", game_name)
+                clip_path = str(item.data(Qt.UserRole) or "").strip()
+        if not clip_path:
+            clip_path = str(getattr(self, "_preview_clip_path", None) or "").strip()
+        if clip_path:
+            from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+
+            app_id = parse_app_id_from_clip_folder(os.path.basename(clip_path)) or ""
 
         # Determine the time (if a marker was clicked, use its time; otherwise, use the player's time)
         pos_ms = float(target_ms) if target_ms is not None else (getattr(self.player, 'time_pos', 0) * 1000)
-        
-        # Creating an attractive name
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{game_name}_{int(pos_ms)}ms_{timestamp}.png"
+
+        from steempeg.core.screenshot_clip_link import (
+            build_steempeg_screenshot_filename,
+            save_screenshot_clip_meta,
+        )
+
+        filename = build_steempeg_screenshot_filename(
+            game_name, pos_ms, clip_path=clip_path
+        )
         filepath = os.path.join(self.screenshots_dir, filename).replace('\\', '/')
-        
+
         need_seek = False
         original_pos = getattr(self.player, 'time_pos', 0) or 0
         original_pos_ms = float(original_pos) * 1000
-        
+
         # If we right-click far away from the slider, we need to jump there for a split second
         if target_ms is not None and abs(target_ms - original_pos_ms) > 200:
             need_seek = self._safe_mpv_seek(pos_ms / 1000.0)
             if need_seek:
-                time.sleep(0.15) 
-            
+                time.sleep(0.15)
+
         saved_ok = False
         try:
             self.player.command('screenshot-to-file', filepath, 'video')
@@ -3770,12 +3905,20 @@ class PlayerMixin:
             saved_ok = True
         except Exception as e:
             print(f"Screenshot error: {e}")
-            
+
         # We jump back in as if nothing had happened.
         if need_seek:
             self._safe_mpv_seek(original_pos_ms / 1000.0)
 
         if saved_ok:
+            if clip_path:
+                save_screenshot_clip_meta(
+                    filepath,
+                    clip_path=clip_path,
+                    app_id=app_id,
+                    pos_ms=pos_ms,
+                    game_name=game_name,
+                )
             self._show_screenshot_toast(self.screenshots_dir, screenshot_path=filepath)
 
     def _steam_screenshot_marker_context(self, marker):

@@ -876,6 +876,12 @@ class RenderedLibraryMixin:
         immersive = getattr(self, "is_theater", False) or getattr(
             self, "is_fullscreen", False
         )
+        # Theatre / fullscreen own dock visibility — don't fight their layout
+        # (Like a Portable glue + bottom show/hide made theatre enter ragged).
+        if immersive:
+            self._render_dock_visible = False
+            return
+
         portable_like = False
         if hasattr(self, "_desktop_render_layout_is_portable_like"):
             try:
@@ -890,7 +896,6 @@ class RenderedLibraryMixin:
             not show_bottom
             and prev_show is not False
             and hasattr(self, "main_v_splitter")
-            and not immersive
         ):
             try:
                 cur = list(self.main_v_splitter.sizes())
