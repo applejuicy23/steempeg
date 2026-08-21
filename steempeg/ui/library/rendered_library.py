@@ -2620,6 +2620,7 @@ class RenderedLibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
         action_open = menu.addAction("📂 Open")
         action_folder = menu.addAction("📁 Open folder")
+        action_related = menu.addAction("🎬 Open related clip")
         if len(paths) == 1:
             path = paths[0]
             action_open.triggered.connect(
@@ -2628,10 +2629,137 @@ class RenderedLibraryMixin:
             action_folder.triggered.connect(
                 lambda _checked=False, p=path: self._on_screenshot_open_folder(p)
             )
+            action_related.setEnabled(self._screenshot_related_clip_action_enabled(path))
+            action_related.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
+            )
         else:
             action_open.setEnabled(False)
             action_folder.setEnabled(False)
+            action_related.setEnabled(False)
         menu.exec(self.grid_screenshots.viewport().mapToGlobal(pos))
+
+    def _library_clip_refs_for_screenshot_link(self) -> list:
+        """Clips Manager rows as ``LibraryClipRef`` for screenshot → clip matching."""
+        from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+        from steempeg.core.screenshot_clip_link import LibraryClipRef
+
+        refs: list[LibraryClipRef] = []
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is None:
+            return refs
+        for row in range(table.rowCount()):
+            cell = table.item(row, 0)
+            if cell is None:
+                continue
+            path = cell.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                continue
+            path_s = os.path.normpath(str(path))
+            app_id = parse_app_id_from_clip_folder(os.path.basename(path_s)) or ""
+            game_name = (cell.text() or "").strip()
+            duration_sec = None
+            dur_item = table.item(row, 3)
+            if dur_item is not None:
+                from steempeg.core.screenshot_clip_link import parse_library_duration_sec
+
+                duration_sec = parse_library_duration_sec(dur_item.text())
+            refs.append(
+                LibraryClipRef(
+                    path=path_s,
+                    app_id=str(app_id or ""),
+                    duration_sec=duration_sec,
+                    game_name=game_name,
+                )
+            )
+        return refs
+
+    def _screenshot_item_for_path(self, path: str):
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None or not path:
+            return None
+        index = getattr(self, "_screenshot_items_by_path", None)
+        if isinstance(index, dict):
+            key = self._screenshot_path_key(path)
+            hit = index.get(key)
+            if hit is not None:
+                return hit
+        want = os.path.normcase(os.path.normpath(path))
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            row_path = item.data(Qt.ItemDataRole.UserRole) or ""
+            if os.path.normcase(os.path.normpath(str(row_path))) == want:
+                return item
+        return None
+
+    def _screenshot_related_clip_action_enabled(self, path: str) -> bool:
+        from steempeg.core.screenshot_clip_link import (
+            collect_screenshot_clip_hint,
+            hint_suggests_related_clip,
+        )
+
+        item = self._screenshot_item_for_path(path)
+        source = ""
+        app_id = ""
+        game = ""
+        if item is not None:
+            source = str(item.data(_SHOT_SOURCE_ROLE) or "")
+            app_id = str(item.data(_SHOT_APP_ID_ROLE) or "")
+            game = str(item.data(_SHOT_GAME_ROLE) or "")
+        hint = collect_screenshot_clip_hint(
+            path, source=source, app_id=app_id, game_name=game
+        )
+        return hint_suggests_related_clip(hint)
+
+    def _on_screenshot_open_related_clip(self, path: str) -> None:
+        """Resolve screenshot → clip, switch to Clips, load preview."""
+        from steempeg.core.screenshot_clip_link import resolve_related_clip_paths
+        from steempeg.ui.message_dialog import steempeg_information
+
+        if not path or not os.path.isfile(path):
+            return
+        item = self._screenshot_item_for_path(path)
+        source = str(item.data(_SHOT_SOURCE_ROLE) or "") if item else ""
+        app_id = str(item.data(_SHOT_APP_ID_ROLE) or "") if item else ""
+        game = str(item.data(_SHOT_GAME_ROLE) or "") if item else ""
+        matches = resolve_related_clip_paths(
+            path,
+            self._library_clip_refs_for_screenshot_link(),
+            source=source,
+            app_id=app_id,
+            game_name=game,
+        )
+        # Prefer library-valid folders; drop missing paths.
+        matches = [p for p in matches if self._is_valid_clip_path(p)]
+        if not matches:
+            steempeg_information(
+                self.ui,
+                "Related clip",
+                "No related clip was found for this screenshot.\n\n"
+                "Steempeg shots need a clip link (new captures store it) or a "
+                "single matching game in Clips Manager. Steam shots match when "
+                "their capture time falls inside a library clip for that game.",
+            )
+            return
+        if len(matches) == 1:
+            self.open_source_clip(matches[0], play=True)
+            return
+
+        # Ambiguous: let Emily pick (same pattern as multi Steam screenshot files).
+        from PySide6.QtGui import QCursor
+        from steempeg.ui import ui_theme as ut
+
+        pick = QMenu(self.ui)
+        pick.setStyleSheet(ut.library_menu_stylesheet())
+        for clip_path in matches:
+            label = os.path.basename(clip_path)
+            action = pick.addAction(f"🎮  {label}")
+            action.triggered.connect(
+                lambda _checked=False, p=clip_path: self.open_source_clip(p, play=True)
+            )
+        pick.exec(QCursor.pos())
 
     def _on_screenshot_open(self, path: str) -> None:
         if not path or not os.path.isfile(path):
