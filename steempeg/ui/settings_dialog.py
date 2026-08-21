@@ -121,6 +121,7 @@ from steempeg.ui.settings_prefs import (
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_HWDEC_PREVIEW,
     DEFAULT_MARKER_TRIM_OFFSET_MS,
+    DEFAULT_MARKERS_ON_STRIP,
     DEFAULT_MEDIA_CACHE_LIMIT_GB,
     DEFAULT_STARTUP_LIBRARY_SCAN,
     DISPLAY_TIMEZONE_LABELS,
@@ -135,6 +136,7 @@ from steempeg.ui.settings_prefs import (
     KEY_FFMPEG_LOG_LEVEL,
     KEY_HWDEC_PREVIEW,
     KEY_MARKER_TRIM_OFFSET_MS,
+    KEY_MARKERS_ON_STRIP,
     KEY_MEDIA_CACHE_LIMIT_GB,
     KEY_MPV_LOG_LEVEL,
     KEY_PERMANENT_EXPORT_FOLDER,
@@ -168,6 +170,7 @@ from steempeg.ui.settings_prefs import (
     load_ffmpeg_log_level,
     load_hwdec_preview,
     load_marker_trim_offset_ms,
+    load_markers_on_strip,
     load_media_cache_limit_gb,
     load_mpv_log_level,
     load_remember_library_tab,
@@ -181,6 +184,7 @@ from steempeg.ui.settings_prefs import (
     normalize_hwdec_preview,
     normalize_log_level,
     normalize_marker_trim_offset_ms,
+    normalize_markers_on_strip,
     normalize_media_cache_limit_gb,
     normalize_render_tab,
     normalize_screenshots_folder,
@@ -190,6 +194,7 @@ from steempeg.ui.settings_prefs import (
     resolve_permanent_export_folder,
     resolve_screenshots_folder,
     resolve_update_check_interval,
+    set_markers_on_strip,
     DEFAULT_APP_LOG_LEVEL,
     DEFAULT_FFMPEG_LOG_LEVEL,
     DEFAULT_MPV_LOG_LEVEL,
@@ -861,6 +866,20 @@ class SettingsDialog(SteempegDialog):
         )
 
         v.addWidget(self._section("Markers"))
+        self._chk_markers_on_strip = SteempegCheckBox("Markers on the strip")
+        cur_on_strip = load_markers_on_strip(settings)
+        self._committed_markers_on_strip = cur_on_strip
+        self._chk_markers_on_strip.setChecked(cur_on_strip)
+        self._chk_markers_on_strip.toggled.connect(self._preview_markers_on_strip)
+        v.addWidget(self._chk_markers_on_strip)
+        v.addWidget(
+            self._hint(
+                "Optional: draw kill/round icons on the purple seekbar "
+                "(v20-style) instead of the row above. Saves vertical space "
+                "on small screens. Off by default. Hover shows a tooltip; "
+                "Ctrl+click jumps to a marker so scrubbing stays free."
+            )
+        )
         trim_row = QHBoxLayout()
         trim_row.setSpacing(8)
         trim_lbl = QLabel("Trim from marker")
@@ -1641,6 +1660,34 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Timeline strip size refresh failed for %s", size)
 
+    def _preview_markers_on_strip(self, *_args) -> None:
+        enabled = bool(self._chk_markers_on_strip.isChecked())
+        set_markers_on_strip(enabled)
+        self._refresh_markers_on_strip(enabled)
+
+    def _refresh_markers_on_strip(self, enabled: bool) -> None:
+        if hasattr(self._app, "refresh_markers_on_strip"):
+            try:
+                self._app.refresh_markers_on_strip(enabled)
+            except Exception:
+                import logging
+
+                logging.exception("Markers-on-strip refresh failed for %s", enabled)
+
+    def _restore_markers_on_strip_on_cancel(self) -> None:
+        """Undo live markers-on-strip preview that was never Saved."""
+        committed = normalize_markers_on_strip(
+            getattr(self, "_committed_markers_on_strip", DEFAULT_MARKERS_ON_STRIP)
+        )
+        live = normalize_markers_on_strip(self._chk_markers_on_strip.isChecked())
+        if live == committed:
+            return
+        self._chk_markers_on_strip.blockSignals(True)
+        self._chk_markers_on_strip.setChecked(committed)
+        self._chk_markers_on_strip.blockSignals(False)
+        set_markers_on_strip(committed)
+        self._refresh_markers_on_strip(committed)
+
     def _preview_player_boost(self, *_args) -> None:
         self._player_boost_preview_timer.start()
 
@@ -1811,6 +1858,7 @@ class SettingsDialog(SteempegDialog):
         self._restore_header_size_on_cancel()
         self._restore_player_layout_on_cancel()
         self._restore_timeline_strip_on_cancel()
+        self._restore_markers_on_strip_on_cancel()
         self._restore_player_boost_on_cancel()
         super().reject()
 
@@ -1984,6 +2032,12 @@ class SettingsDialog(SteempegDialog):
         pending[KEY_MARKER_TRIM_OFFSET_MS] = normalize_marker_trim_offset_ms(
             self._combo_marker_trim.currentData()
         )
+        on_strip = normalize_markers_on_strip(self._chk_markers_on_strip.isChecked())
+        pending[KEY_MARKERS_ON_STRIP] = on_strip
+        set_markers_on_strip(on_strip)
+        if on_strip != self._committed_markers_on_strip:
+            deferred.append(lambda e=on_strip: self._refresh_markers_on_strip(e))
+        self._committed_markers_on_strip = on_strip
         pending[KEY_STARTUP_LIBRARY_SCAN] = normalize_startup_library_scan(
             self._combo_startup_scan.currentData()
         )

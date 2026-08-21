@@ -616,6 +616,31 @@ def load_marker_trim_offset_ms(settings: dict | None) -> int:
     )
 
 
+# ----- Markers on the strip (optional v20-style overlay) -----
+
+KEY_MARKERS_ON_STRIP = "markers_on_strip"
+DEFAULT_MARKERS_ON_STRIP = False
+
+
+def normalize_markers_on_strip(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_MARKERS_ON_STRIP
+
+
+def load_markers_on_strip(settings: dict | None) -> bool:
+    return normalize_markers_on_strip(
+        (settings or {}).get(KEY_MARKERS_ON_STRIP, DEFAULT_MARKERS_ON_STRIP)
+    )
+
+
 # ----- Startup library scan -----
 
 KEY_STARTUP_LIBRARY_SCAN = "startup_library_scan"
@@ -895,6 +920,7 @@ _runtime_ffmpeg_loglevel = "error"
 _runtime_mpv_loglevel = DEFAULT_MPV_LOG_LEVEL
 _runtime_hwdec = DEFAULT_HWDEC_PREVIEW
 _runtime_marker_trim_ms = DEFAULT_MARKER_TRIM_OFFSET_MS
+_runtime_markers_on_strip = DEFAULT_MARKERS_ON_STRIP
 _runtime_test_new_fullscreen = DEFAULT_TEST_NEW_FULLSCREEN
 
 
@@ -902,6 +928,7 @@ def configure_runtime_prefs(settings: dict | None = None) -> None:
     """Apply log / hwdec / marker-trim / date prefs for the live process."""
     global _runtime_ffmpeg_loglevel, _runtime_mpv_loglevel
     global _runtime_hwdec, _runtime_marker_trim_ms
+    global _runtime_markers_on_strip
     global _runtime_test_new_fullscreen
     settings = settings or {}
     apply_app_log_level(load_app_log_level(settings))
@@ -915,6 +942,7 @@ def configure_runtime_prefs(settings: dict | None = None) -> None:
     _runtime_mpv_loglevel = load_mpv_log_level(settings)
     _runtime_hwdec = load_hwdec_preview(settings)
     _runtime_marker_trim_ms = load_marker_trim_offset_ms(settings)
+    _runtime_markers_on_strip = load_markers_on_strip(settings)
     _runtime_test_new_fullscreen = load_test_new_fullscreen(settings)
     try:
         from steempeg.infra.locale_time import configure_display_time
@@ -951,3 +979,14 @@ def current_hwdec_preview() -> str:
 
 def current_marker_trim_offset_ms() -> int:
     return int(_runtime_marker_trim_ms or 0)
+
+
+def current_markers_on_strip() -> bool:
+    return bool(_runtime_markers_on_strip)
+
+
+def set_markers_on_strip(enabled: object | None) -> bool:
+    """Update the live overlay flag (Settings preview / Save)."""
+    global _runtime_markers_on_strip
+    _runtime_markers_on_strip = normalize_markers_on_strip(enabled)
+    return _runtime_markers_on_strip
