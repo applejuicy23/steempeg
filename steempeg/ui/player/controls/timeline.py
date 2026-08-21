@@ -14,7 +14,7 @@ import time
 
 import PySide6.QtWidgets as qtw
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -185,6 +185,9 @@ class TimelineCanvas(QWidget):
         self.mode_segments = []
         self.clip_ranges = []
         self.hovered_marker = None
+        # True while a timeline QMenu is up — Leave from popup grab must not
+        # clear marker selection (fullscreen auto-hide / re-RMB would break).
+        self._context_menu_open = False
         self.cached_pixmaps = {}
         self.current_app_id = None
         self.marker_store = MarkerIconStore()
@@ -254,18 +257,8 @@ class TimelineCanvas(QWidget):
         self._RULER_FONT_PT = int(metrics.ruler_font_pt)
         self._RULER_GAP = int(metrics.ruler_gap)
         self._BOTTOM_PAD = int(metrics.bottom_pad)
-        self._TRACK_Y = float(TIMELINE_MARKER_LOGICAL + 10)
-        self._CANVAS_H = int(
-            self._TRACK_Y
-            + self._TRACK_H
-            + self._RULER_GAP
-            + self._MAJOR_TICK_H
-            + self._BOTTOM_PAD
-        )
-        self.setMinimumHeight(self._CANVAS_H)
-        # Same FONT_APP Segoe stack as the rest of the player — never the separate
-        # "Segoe UI Semibold" family name (that reads as a different typeface vs
-        # header chips when S/M/L rebuilds the ruler).
+        # Provisional Y so scroller rebuild has a track height; finalize after head size.
+        self._TRACK_Y = self._marker_track_y()
         self._ruler_font = QFont()
         self._ruler_font.setFamilies(
             [
@@ -280,7 +273,36 @@ class TimelineCanvas(QWidget):
         self._ruler_font.setPointSize(max(6, int(self._RULER_FONT_PT)))
         self._ruler_font.setWeight(QFont.Weight.DemiBold)
         self._rebuild_playhead_scroller()
+        self._TRACK_Y = self._marker_track_y()
+        self._CANVAS_H = int(
+            self._TRACK_Y
+            + self._TRACK_H
+            + self._RULER_GAP
+            + self._MAJOR_TICK_H
+            + self._BOTTOM_PAD
+        )
+        self.setMinimumHeight(self._CANVAS_H)
         self.update()
+
+    def _markers_on_strip(self) -> bool:
+        """True when Settings → Visual → Markers on the strip is enabled."""
+        try:
+            from steempeg.ui.settings_prefs import current_markers_on_strip
+
+            return bool(current_markers_on_strip())
+        except Exception:
+            return False
+
+    def _marker_track_y(self) -> float:
+        """Y of the seek groove — tall pad for the above-row, compact for overlay."""
+        if self._markers_on_strip():
+            # Leave room for the playhead head; icons sit centered on the groove.
+            head = float(getattr(self, "master_head_h", 0.0) or 0.0)
+            overflow = max(
+                0.0, (float(TIMELINE_MARKER_LOGICAL) - float(self._TRACK_H)) / 2.0
+            )
+            return max(8.0, head, overflow + 2.0)
+        return float(TIMELINE_MARKER_LOGICAL + 10)
 
     def _rebuild_playhead_scroller(self) -> None:
         """Rebuild the playhead stem so it matches the current track height."""
@@ -1050,11 +1072,16 @@ class TimelineCanvas(QWidget):
             base_w = pix.width() / dpr
             base_h = pix.height() / dpr
 
-            base_icon_y = 2.0
-            base_bottom = base_icon_y + base_h
+            on_strip = self._markers_on_strip()
+            if on_strip:
+                # v20-style: sit icons on the groove (no connector stem).
+                base_icon_y = track_y + (track_height - base_h) / 2.0
+            else:
+                base_icon_y = 2.0
+                base_bottom = base_icon_y + base_h
             draw_x = m_x - base_w / 2.0
 
-            if not marker["is_round"]:
+            if not on_strip and not marker["is_round"]:
                 if is_hovered:
                     painter.setPen(
                         QPen(
@@ -1173,19 +1200,32 @@ class TimelineCanvas(QWidget):
 
         # CHECK ICON CLICK
         if event.button() == Qt.RightButton:
-            if getattr(self, 'hovered_marker', None):
-                #Right-click on an existing label
-                self.show_marker_context_menu(event.globalPosition().toPoint(), self.hovered_marker)
+            # Hit-test at press — do not rely on hover alone. Opening a QMenu
+            # (or HUD hide) can Leave-clear hovered_marker while the cursor
+            # never moved, which previously blocked re-RMB until leave/re-enter.
+            marker = self._marker_at(x, y)
+            if marker is None:
+                marker = getattr(self, 'hovered_marker', None)
+            if marker:
+                self.hovered_marker = marker
+                self.show_marker_context_menu(event.globalPosition().toPoint(), marker)
             else:
-                #Right-click on an empty space (or bar)
                 self.show_track_context_menu(event.globalPosition().toPoint(), ms)
             return
 
         # --- HANDLING LEFT-CLICK ON LABEL ---
+        # Above-row (default): click jumps. On-strip overlay: plain click scrubs;
+        # Ctrl+click jumps so seek isn't stolen (Emily: click-vs-scrub awkward).
         if getattr(self, 'hovered_marker', None) and event.button() == Qt.LeftButton:
-            jump_time = max(0, self.hovered_marker['time_ms'] - 2000)
-            self.force_jump(jump_time)
-            return
+            on_strip = self._markers_on_strip()
+            mods = event.modifiers()
+            jump_ok = (not on_strip) or bool(
+                mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+            )
+            if jump_ok:
+                jump_time = max(0, self.hovered_marker['time_ms'] - 2000)
+                self.force_jump(jump_time)
+                return
 
         # Disable the other buttons if we are not on the icon.
         if event.button() != Qt.LeftButton: return
@@ -1199,11 +1239,71 @@ class TimelineCanvas(QWidget):
         self.pause_requested.emit() 
         self.update_playhead(x)
 
+    def _marker_at(self, x, y):
+        """Return the marker under canvas coords (x, y), or None."""
+        from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
+
+        on_strip = self._markers_on_strip()
+        track_y = float(self._TRACK_Y)
+        track_h = float(self._TRACK_H)
+        # Above-row: hit the pin band. Overlay: narrow icon footprint on the groove
+        # so scrubbing the rest of the seekbar stays easy.
+        if on_strip:
+            x_pad = 2.0
+        else:
+            hit_top = max(28.0, float(TIMELINE_MARKER_LOGICAL) + 10.0)
+            hit_bot = 0.0
+            x_pad = 8.0
+
+        for marker in getattr(self, "markers", []):
+            m_x = self.ms_to_x(marker["time_ms"])
+            pix = self.get_icon_pixmap(marker)
+            if pix:
+                dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
+                pw = pix.width() / dpr
+                ph = pix.height() / dpr
+            else:
+                pw = float(TIMELINE_MARKER_LOGICAL)
+                ph = float(TIMELINE_MARKER_LOGICAL)
+
+            if abs(x - m_x) > (pw / 2.0) + x_pad:
+                continue
+            if on_strip:
+                icon_cy = track_y + track_h / 2.0
+                if abs(y - icon_cy) <= max(ph, track_h) / 2.0 + 2.0:
+                    return marker
+            elif hit_bot <= y <= hit_top:
+                return marker
+        return None
+
+    def _prepare_immersive_safe_menu(self, menu: QMenu) -> None:
+        """Keep timeline QMenus painted above immersive video / floating HUD.
+
+        Fullscreen promotes the footer to a ``Qt.Tool`` + ``WindowStaysOnTopHint``
+        HUD. A plain ``QMenu`` popup lacks stays-on-top, so the native mpv surface
+        (or the HUD restack) can bury the menu visually while Qt's popup grab still
+        delivers clicks — invisible but clickable. Add stays-on-top only; keep
+        native ``Qt.Popup`` flags so focus-loss dismiss still works.
+        """
+        win = self.window()
+        if win is None:
+            return
+        flags = win.windowFlags()
+        if not (
+            flags & Qt.WindowType.Tool
+            and flags & Qt.WindowType.WindowStaysOnTopHint
+        ):
+            return
+        menu.setWindowFlags(
+            menu.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
+        )
+
     def show_marker_context_menu(self, pos, marker):
         from steempeg.ui import ui_theme as ut
 
         menu = QMenu(self)
         menu.setStyleSheet(ut.library_menu_stylesheet())
+        self._prepare_immersive_safe_menu(menu)
         
         # Declare variables in advance so the code doesn't crash if the buttons are missing
         action_edit = None
@@ -1229,8 +1329,15 @@ class TimelineCanvas(QWidget):
         
         # NEW SCREENSHOT BUTTON
         action_screenshot = menu.addAction("📸 Take Screenshot Here")
-        
-        action = menu.exec(pos)
+
+        self._context_menu_open = True
+        self.hovered_marker = marker
+        self.update()
+        try:
+            action = menu.exec(pos)
+        finally:
+            self._context_menu_open = False
+            self._resync_hover_after_menu()
         
         # Handle clicks
         if action_edit and action == action_edit:
@@ -1251,16 +1358,49 @@ class TimelineCanvas(QWidget):
 
         menu = QMenu(self)
         menu.setStyleSheet(ut.library_menu_stylesheet())
+        self._prepare_immersive_safe_menu(menu)
 
         action_add_marker = menu.addAction("📍 Add Marker Here")
         action_screenshot = menu.addAction("📸 Take Screenshot Here")
-        
-        action = menu.exec(pos)
+
+        self._context_menu_open = True
+        try:
+            action = menu.exec(pos)
+        finally:
+            self._context_menu_open = False
+            self._resync_hover_after_menu()
         
         if action == action_add_marker:
             self.add_marker_requested.emit(float(time_ms))
         elif action == action_screenshot:
             self.screenshot_requested.emit(float(time_ms))
+
+    def _resync_hover_after_menu(self) -> None:
+        """Re-hit-test under the cursor after a popup Leave/grab cycle."""
+        if self.duration_ms <= 0:
+            return
+        local = self.mapFromGlobal(QCursor.pos())
+        if not self.rect().contains(local):
+            self.is_hovering = False
+            self.hover_x = -1.0
+            self.hovered_marker = None
+            if hasattr(self, "text_tooltip"):
+                self.text_tooltip.hide()
+            self.update()
+            return
+        x, y = float(local.x()), float(local.y())
+        self.hover_x = x
+        self.is_hovering = True
+        found = self._marker_at(x, y) if self.drag_state == "none" else None
+        if found != getattr(self, "hovered_marker", None):
+            self.hovered_marker = found
+            if found:
+                self._hide_hover_preview()
+            elif hasattr(self, "text_tooltip"):
+                self.text_tooltip.hide()
+            self.update()
+        else:
+            self.update()
 
     def set_trim_start_from_marker(self, marker):
         """Snap trim start to the marker, optionally with a Settings lead-in."""
@@ -1424,21 +1564,10 @@ class TimelineCanvas(QWidget):
             self.sniper._cancel_background_warm()
 
         found_marker = None
-        from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
-
-        hit_top = max(28.0, float(TIMELINE_MARKER_LOGICAL) + 10.0)
-        for marker in getattr(self, 'markers', []):
-            m_x = self.ms_to_x(marker['time_ms'])
-            pix = self.get_icon_pixmap(marker)
-            if pix:
-                dpr = max(float(pix.devicePixelRatio() or 1.0), 1.0)
-                pw = pix.width() / dpr
-            else:
-                pw = float(TIMELINE_MARKER_LOGICAL)
-
-            if abs(x - m_x) <= (pw / 2) + 8 and 0 <= y <= hit_top:
-                found_marker = marker
-                break
+        on_strip = self._markers_on_strip()
+        # Skip marker hover while actively scrubbing / dragging trim.
+        if self.drag_state == "none":
+            found_marker = self._marker_at(x, y)
         
         # Updating the UI when the icon focus changes.
         if found_marker != getattr(self, 'hovered_marker', None):
@@ -1459,13 +1588,16 @@ class TimelineCanvas(QWidget):
                         
                     html_text = f"<b>{title}</b>"
                     if desc: html_text += f"<br>{desc}"
+                    if on_strip:
+                        html_text += "<br><span style='font-weight:normal;opacity:0.85'>Ctrl+click to jump</span>"
                     
                     self.text_tooltip.setText(html_text)
                     self.text_tooltip.adjustSize()
                     
+                    tip_x = self.ms_to_x(found_marker["time_ms"])
                     scroll_area = self.parentWidget().parentWidget() if self.parentWidget() else self
                     global_y = scroll_area.mapToGlobal(QPoint(0, scroll_area.height() + 4)).y()
-                    global_x = self.mapToGlobal(QPoint(int(m_x), 0)).x() - (self.text_tooltip.width() // 2)
+                    global_x = self.mapToGlobal(QPoint(int(tip_x), 0)).x() - (self.text_tooltip.width() // 2)
                     
                     self.text_tooltip.move(global_x, global_y)
                     self.text_tooltip.show()
@@ -1587,6 +1719,11 @@ class TimelineCanvas(QWidget):
         self.update()
         self._refresh_overview_playhead_marker()
     def leaveEvent(self, event):
+        # Popup grab (context menu) synthesizes Leave even while the cursor is
+        # still over this canvas — keep marker hover so selection/RMB stay alive.
+        if getattr(self, "_context_menu_open", False):
+            super().leaveEvent(event)
+            return
         self.is_hovering = False
         self.hover_x = -1.0
         self.hovered_marker = None
