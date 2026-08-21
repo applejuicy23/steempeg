@@ -243,6 +243,20 @@ def chrome_colors_for_active() -> dict[str, str]:
     return {"title_bar": p.chrome_title_bar, "app_bg": p.chrome_app_bg}
 
 
+def splitter_handle_colors(*, vertical: bool = False) -> tuple[str, str]:
+    """Idle + hover colors for shell splitter handles.
+
+    Default keeps the classic gray bar (vertical hover stays purple). TrueDark /
+    OLED use Emily's mid-gray family for all handles — never purple.
+    """
+    if _active.name == UI_THEME_DEFAULT:
+        idle = "#444444"
+        hover = "#b29ae7" if vertical else "#666666"
+        return idle, hover
+    # Emily screenshot gray — readable on TrueDark #0f0f0f / OLED #000.
+    return ("#3E3E3E", "#555555")
+
+
 def elevated_panel_stylesheet(*, object_name: str | None = None) -> str:
     """Library / queue / render dashboard card face."""
     p = _active
