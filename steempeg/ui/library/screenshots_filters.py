@@ -159,12 +159,90 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         bottom_layout.addWidget(self.btn_apply)
         layout.addLayout(bottom_layout)
 
+        self._outer_layout = main_layout
+        self._inner_layout = layout
+        self._bottom_layout = bottom_layout
+
     def eventFilter(self, source, event):  # noqa: N802
         if self._try_handle_pill_paint_filter(source, event):
             return True
         return super().eventFilter(source, event)
 
-    # Match Clips Manager / Rendered videos game chips (filters.py / rendered_filters.py).
+    def apply_density(self, dense) -> None:
+        """Shrink popup chrome for Deck / ultra-narrow windows; re-tint for UI theme."""
+        from steempeg.ui import ui_theme as ut
+
+        compact = bool(getattr(dense, "compact", False))
+        width = 340 if compact else 460
+        self.setFixedWidth(width)
+
+        font = 11 if compact else 13
+        pad_v = 2 if compact else 4
+        pad_h = 8 if compact else 12
+        min_h = 18 if compact else 24
+        radius = 8 if compact else 10
+        border = 1 if compact else 2
+        outer_m = 6 if compact else 10
+        inner_m = 8 if compact else 16
+        gap = 6 if compact else 12
+        cap_m = 8 if compact else 12
+        title_font = 11 if compact else 13
+        pill_r = 10 if compact else 14
+
+        if getattr(self, "_outer_layout", None) is not None:
+            self._outer_layout.setContentsMargins(outer_m, outer_m, outer_m, outer_m)
+        if getattr(self, "_inner_layout", None) is not None:
+            self._inner_layout.setContentsMargins(inner_m, inner_m, inner_m, inner_m)
+            self._inner_layout.setSpacing(gap)
+        if getattr(self, "_bottom_layout", None) is not None:
+            self._bottom_layout.setContentsMargins(0, 6 if compact else 10, 0, 0)
+
+        self.container.setStyleSheet(
+            ut.filter_menu_container_stylesheet(radius=pill_r + 2)
+        )
+        for capsule in self.findChildren(QFrame, "CategoryCapsule"):
+            capsule.setStyleSheet(
+                ut.filter_menu_capsule_stylesheet(radius=pill_r, title_font=title_font)
+            )
+            lay = capsule.layout()
+            if lay is not None:
+                lay.setContentsMargins(cap_m, cap_m, cap_m, cap_m)
+                lay.setSpacing(4 if compact else 8)
+
+        self._PILL_BTN_STYLE = ut.filter_chip_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius,
+            border=border,
+        )
+        for btn in self.findChildren(QPushButton):
+            if btn in (self.btn_clear, self.btn_apply):
+                continue
+            if btn.isCheckable() or btn.parent() in (
+                getattr(self, "games_container", None),
+                getattr(self, "folders_container", None),
+            ):
+                btn.setStyleSheet(self._PILL_BTN_STYLE)
+
+        unified = ut.filter_action_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius + 2,
+            border=border,
+        )
+        clear_style = (
+            unified.replace("color: #ffffff;", "color: #ff7777;")
+            .replace("#6b5a8e", "#e05555")
+            .replace("#b29ae7", "#ff7777")
+        )
+        self.btn_clear.setStyleSheet(clear_style)
+        self.btn_apply.setStyleSheet(unified)
+
+    # Default fallback until apply_density (matches Clips / Rendered).
     _PILL_BTN_STYLE = """
         QPushButton {
             background-color: #383838;
@@ -319,6 +397,13 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         saved_games = getattr(app_window, "_screenshots_filter_games", None)
         for name, rec in game_rows:
             app_id = str((rec or {}).get("app_id") or "").strip()
+            if not app_id:
+                lookup = getattr(app_window, "_screenshot_app_id_for_game_label", None)
+                if callable(lookup):
+                    try:
+                        app_id = str(lookup(name, app_id="", source="steempeg") or "").strip()
+                    except Exception:
+                        app_id = ""
             short_name = name[:14] + "..." if len(name) > 14 else name
             icon = self._icon_for_app_id(app_window, app_id)
             btn = QPushButton(icon, f" {short_name}")

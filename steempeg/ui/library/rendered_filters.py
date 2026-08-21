@@ -146,7 +146,9 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
         return super().eventFilter(source, event)
 
     def apply_density(self, dense) -> None:
-        """Shrink popup chrome for Deck / ultra-narrow windows."""
+        """Shrink popup chrome for Deck / ultra-narrow windows; re-tint for UI theme."""
+        from steempeg.ui import ui_theme as ut
+
         compact = bool(getattr(dense, "compact", False))
         width = 340 if compact else 460
         self.setFixedWidth(width)
@@ -173,64 +175,39 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
             self._bottom_layout.setContentsMargins(0, 6 if compact else 10, 0, 0)
 
         self.container.setStyleSheet(
-            f"QFrame#MainFilterContainer {{ background-color: #252525; "
-            f"border: 1px solid #3d3d3d; border-radius: {pill_r + 2}px; }}"
+            ut.filter_menu_container_stylesheet(radius=pill_r + 2)
         )
         for capsule in self.findChildren(QFrame, "CategoryCapsule"):
-            capsule.setStyleSheet(f"""
-                QFrame#CategoryCapsule {{
-                    background-color: #2d2d2d;
-                    border: 1px solid #383838;
-                    border-radius: {pill_r}px;
-                }}
-                QLabel#CategoryTitle {{
-                    color: #cccccc; border: none; background: transparent;
-                    font-size: {title_font}px; font-weight: bold;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
-                }}
-            """)
+            capsule.setStyleSheet(
+                ut.filter_menu_capsule_stylesheet(radius=pill_r, title_font=title_font)
+            )
             lay = capsule.layout()
             if lay is not None:
                 lay.setContentsMargins(cap_m, cap_m, cap_m, cap_m)
                 lay.setSpacing(4 if compact else 8)
 
-        self._PILL_BTN_STYLE = f"""
-            QPushButton {{
-                background-color: #383838; color: #aaaaaa;
-                border: {border}px solid #444444; border-radius: {radius}px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold; font-size: {font}px;
-                padding: {pad_v}px {pad_h}px; min-height: {min_h}px;
-            }}
-            QPushButton:hover {{
-                background-color: #404040; color: #ffffff; border: {border}px solid #555555;
-            }}
-            QPushButton:checked {{
-                background-color: #404040; color: #ffffff; border: {border}px solid #6b5a8e;
-            }}
-            QPushButton:checked:hover {{
-                background-color: #3a324a; border: {border}px solid #b29ae7;
-            }}
-        """
+        self._PILL_BTN_STYLE = ut.filter_chip_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius,
+            border=border,
+        )
         for btn in self.findChildren(QPushButton):
             if btn in (self.btn_clear, self.btn_apply):
                 continue
             if btn.isCheckable():
                 btn.setStyleSheet(self._PILL_BTN_STYLE)
 
-        unified = f"""
-            QPushButton {{
-                background-color: #383838; color: #ffffff;
-                border: {border}px solid #444444; border-radius: {radius + 2}px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-                font-weight: bold; font-size: {font}px;
-                padding: {pad_v}px {pad_h}px; min-height: {min_h}px;
-            }}
-            QPushButton:hover {{ background-color: #404040; border: {border}px solid #6b5a8e; }}
-            QPushButton:pressed {{ background-color: #3a324a; border: {border}px solid #b29ae7; }}
-            QPushButton:disabled {{ background-color: #222222; color: #555555; border: {border}px solid #2d2d2d; }}
-            QPushButton::menu-indicator {{ image: none; }}
-        """
+        unified = ut.filter_action_button_stylesheet(
+            font=font,
+            pad_v=pad_v,
+            pad_h=pad_h,
+            min_h=min_h,
+            radius=radius + 2,
+            border=border,
+        )
         clear_style = (
             unified.replace("color: #ffffff;", "color: #ff7777;")
             .replace("#6b5a8e", "#e05555")
