@@ -13,7 +13,7 @@ import os
 import re
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QWidget
 
 from steempeg.ui import design_tokens as tok
@@ -421,13 +421,179 @@ def measure_right_dock_span(app, spacing: int = 10) -> int:
     return sum(widths) + max(0, spacing) * (len(widths) - 1)
 
 
+# Breathing room so glyphs never sit flush under Healthy / Completed plaques.
+_TITLE_DOCK_GAP_PX = 10
+
+
+def _header_content_width(header: QWidget) -> int:
+    """Inner width of the header bar (minus layout margins)."""
+    hw = int(header.width()) if header.width() > 0 else 0
+    if hw <= 0:
+        return 0
+    lay = header.layout()
+    if lay is None:
+        return hw
+    m = lay.contentsMargins()
+    return max(0, hw - int(m.left()) - int(m.right()))
+
+
+def title_cluster_max_width(app, header: QWidget) -> int:
+    """Largest width the icon+name(+info) cluster may occupy without underlapping dock.
+
+    Steam-like keeps a left dock-mirror matching the right plaques, so the title
+    lives in the middle band ``content - 2*dock``. Also keep the historic half-bar
+    cap so long names cannot shove portable ``|``. SteempegUI is left-aligned and
+    may use everything except the right dock.
+    """
+    content = _header_content_width(header)
+    if content <= 0:
+        return 0
+    lay = header.layout()
+    spacing = int(lay.spacing()) if lay is not None else 10
+    dock = measure_right_dock_span(app, spacing)
+    gap = _TITLE_DOCK_GAP_PX
+
+    if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
+        # mirror | title band | dock  → middle ≈ content - 2*dock - gaps
+        middle = content - 2 * dock - gap - 2 * max(0, spacing)
+        half_cap = content // 2 - 40
+        return max(80, min(middle, half_cap))
+
+    # Left-aligned: title grows from the left until the dock.
+    return max(80, content - dock - gap - max(0, spacing))
+
+
+def _title_text_budget(app, title: QWidget, cluster_max: int) -> int:
+    """Pixels left for ``custom_text_label`` inside the title cluster."""
+    if cluster_max <= 0:
+        return 0
+    row = title.layout()
+    spacing = int(row.spacing()) if row is not None else 8
+    used = 0
+    parts = 0
+    for name in ("custom_icon_label", "btn_player_header_info"):
+        child = getattr(app, name, None)
+        if not _widget_alive(child):
+            continue
+        if name == "btn_player_header_info" and child.isHidden():
+            continue
+        ww = _effective_widget_width(child)
+        if ww <= 0:
+            continue
+        used += ww
+        parts += 1
+    if parts:
+        used += spacing * parts  # icon↔text and/or text↔info
+    return max(40, cluster_max - used)
+
+
+def _header_line_plain_width(font: QFont, title: str, meta_plain: str = "") -> int:
+    fm = QFontMetrics(font)
+    if not meta_plain:
+        return int(fm.horizontalAdvance(title or ""))
+    # Approximate SteempegUI ``Title  •  meta`` (nbsp bullets → spaces for metrics).
+    sep = "  •  "
+    return int(fm.horizontalAdvance(f"{title}{sep}{meta_plain}"))
+
+
+def _meta_plain_for_elide(meta: dict) -> str:
+    """Plain meta tail used only for width checks (SteempegUI)."""
+    if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
+        return ""
+    date = str(meta.get("date") or "")
+    time = str(meta.get("time") or "")
+    duration = str(meta.get("duration") or "")
+    parts: list[str] = []
+    datetime_line = join_clip_date_time(date, time)
+    if datetime_line:
+        parts.append(datetime_line)
+    dur = (duration or "").strip()
+    if dur.lower().startswith("time:"):
+        dur = dur.split(":", 1)[1].strip()
+    if dur and dur not in ("-", "—", "Time: -", "Time:-"):
+        parts.append(dur)
+    for part in meta.get("extra") or ():
+        p = str(part or "").strip()
+        if p:
+            parts.append(p)
+    return _META_SEP.join(parts)
+
+
+def apply_header_title_elide(app, cluster_max: int) -> None:
+    """Elide the game name so icon+text+info never paint under Healthy / Completed.
+
+    Full title stays in ``_player_header_meta`` (Clip info / tooltips). Rich text is
+    rebuilt from an elided name; QLabel RichText does not auto-elide.
+    """
+    label = getattr(app, "custom_text_label", None)
+    meta = getattr(app, "_player_header_meta", None)
+    title = getattr(app, "player_header_title", None)
+    if not _widget_alive(label) or not isinstance(meta, dict) or not _widget_alive(title):
+        return
+    if cluster_max <= 0:
+        return
+
+    budget = _title_text_budget(app, title, cluster_max)
+    label.setMinimumWidth(0)
+    label.setMaximumWidth(max(40, budget))
+    label.setWordWrap(False)
+
+    font_px = player_header_font_px(app)
+    font = player_header_title_qfont(font_px)
+    label.setFont(font)
+    fm = QFontMetrics(font)
+
+    full_title = str(meta.get("title") or "").strip() or "—"
+    if meta.get("placeholder"):
+        elided = fm.elidedText(full_title, Qt.TextElideMode.ElideRight, budget)
+        html = format_player_header_html(elided, font_px=font_px)
+        tip = full_title if elided != full_title else ""
+    else:
+        meta_plain = _meta_plain_for_elide(meta)
+        # Binary-search a title width so title (+ optional meta) fits ``budget``.
+        lo, hi = 24, max(24, budget)
+        best = fm.elidedText(full_title, Qt.TextElideMode.ElideRight, lo)
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = fm.elidedText(full_title, Qt.TextElideMode.ElideRight, mid)
+            width = _header_line_plain_width(font, candidate, meta_plain)
+            if width <= budget:
+                best = candidate
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        # If meta alone overflows, drop meta from the painted line (Steam-like
+        # never has meta; SteempegUI still keeps facts in Clip info).
+        if (
+            meta_plain
+            and _header_line_plain_width(font, best, meta_plain) > budget
+        ):
+            best = fm.elidedText(full_title, Qt.TextElideMode.ElideRight, budget)
+            html = format_player_header_html(best, font_px=font_px)
+        else:
+            html = format_player_header_html(
+                best,
+                date=str(meta.get("date") or ""),
+                time=str(meta.get("time") or ""),
+                duration=str(meta.get("duration") or ""),
+                extra_parts=list(meta.get("extra") or ()),
+                font_px=font_px,
+            )
+        tip = full_title if best != full_title else ""
+
+    key = (html, budget, tip)
+    if getattr(app, "_player_header_elide_key", None) != key:
+        app._player_header_elide_key = key
+        label.setText(html)
+        label.setToolTip(tip)
+
+
 def sync_centered_title_width(app) -> None:
-    """Keep Steam-like title at its natural width without collapsing to zero.
+    """Keep the title cluster within the dock-safe band; elide long game names.
 
     Expanding wing/header spacers previously competed with ``Ignored`` policy and
-    ate the title cluster (icon + name + optional Clip info) at startup / with
-    short placeholder text. Prefer ``Preferred`` + a half-bar cap so long names
-    cannot shove ``|``.
+    ate the title cluster at startup. Prefer ``Preferred`` + a dock-aware cap so
+    Healthy / Completed / gear never sit on top of the name or play-info glyph.
     """
     title = getattr(app, "player_header_title", None)
     header = getattr(app, "player_header_frame", None)
@@ -448,21 +614,22 @@ def sync_centered_title_width(app) -> None:
     # Leave ``btn_player_header_info`` alone — ``refresh_player_header_info``
     # owns show/hide (hidden when no clip is selected).
 
-    if get_header_layout() != HEADER_LAYOUT_STEAM_LIKE:
-        title.setMaximumWidth(16777215)
-        title.setMinimumWidth(0)
-        return
-
     hw = int(header.width()) if header.width() > 0 else 0
     if hw <= 0:
         # Pre-show / pre-layout: do not force a zero min — sizeHint must win.
         title.setMaximumWidth(16777215)
         title.setMinimumWidth(0)
+        label = getattr(app, "custom_text_label", None)
+        if _widget_alive(label):
+            label.setMaximumWidth(16777215)
         return
 
-    cap = max(120, hw // 2 - 40)
+    cap = title_cluster_max_width(app, header)
     title.setMaximumWidth(cap)
     title.setMinimumWidth(0)
+    # Soft min so short/placeholder titles are not crushed by Expanding spacers,
+    # but never demand more than the dock-safe cap (that caused underlap).
+    apply_header_title_elide(app, cap)
     hint = max(0, int(title.sizeHint().width()))
     if hint > 0:
         title.setMinimumWidth(min(hint, cap))
@@ -494,7 +661,7 @@ def sync_header_center_mirror(app) -> None:
 
 
 class _HeaderCenterSyncFilter(QObject):
-    """Re-sync the dock mirror when status/actions show, hide, or resize."""
+    """Re-sync dock mirror / title elide when status/actions show, hide, or resize."""
 
     def eventFilter(self, obj, event):  # noqa: N802 — Qt API
         et = event.type()
@@ -505,11 +672,15 @@ class _HeaderCenterSyncFilter(QObject):
             QEvent.Type.LayoutRequest,
         ):
             app = self.parent()
-            if app is not None and get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
-                try:
+            if app is None:
+                return False
+            try:
+                if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
                     sync_header_center_mirror(app)
-                except Exception:
-                    pass
+                else:
+                    sync_centered_title_width(app)
+            except Exception:
+                pass
         return False
 
 
@@ -806,6 +977,8 @@ def refresh_player_header_text(app) -> None:
         return
     font_px = player_header_font_px(app)
     label.setFont(player_header_title_qfont(font_px))
+    # Clear elide cache so dock-safe pass rewrites for the new layout/font.
+    app._player_header_elide_key = None
     if meta.get("placeholder"):
         # Same rich-text + family pin as a filled title (plain text diverged).
         label.setText(
@@ -814,17 +987,18 @@ def refresh_player_header_text(app) -> None:
                 font_px=font_px,
             )
         )
-        return
-    label.setText(
-        format_player_header_html(
-            str(meta.get("title") or ""),
-            date=str(meta.get("date") or ""),
-            time=str(meta.get("time") or ""),
-            duration=str(meta.get("duration") or ""),
-            extra_parts=list(meta.get("extra") or ()),
-            font_px=font_px,
+    else:
+        label.setText(
+            format_player_header_html(
+                str(meta.get("title") or ""),
+                date=str(meta.get("date") or ""),
+                time=str(meta.get("time") or ""),
+                duration=str(meta.get("duration") or ""),
+                extra_parts=list(meta.get("extra") or ()),
+                font_px=font_px,
+            )
         )
-    )
+    sync_centered_title_width(app)
 
 
 def store_player_header_meta(
@@ -872,6 +1046,7 @@ def set_player_header_game_text(
         return
     font_px = player_header_font_px(app)
     label.setFont(player_header_title_qfont(font_px))
+    app._player_header_elide_key = None
     if placeholder:
         label.setText(format_player_header_html(title, font_px=font_px))
     else:
@@ -885,11 +1060,13 @@ def set_player_header_game_text(
                 font_px=font_px,
             )
         )
+    # Show/hide Clip info before measuring — it steals width from the name.
     if hasattr(app, "refresh_player_header_info"):
         try:
             app.refresh_player_header_info()
         except Exception:
             pass
+    sync_centered_title_width(app)
 
 
 def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
