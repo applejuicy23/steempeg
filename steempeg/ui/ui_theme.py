@@ -267,6 +267,61 @@ def elevated_panel_stylesheet(*, object_name: str | None = None) -> str:
     )
 
 
+def portable_render_chrome_colors() -> tuple[str, str]:
+    """Fill + border for portable Queue panels and the Render control strip.
+
+    Default keeps the classic mid-gray plate. TrueDark / OLED reuse the same
+    elevated face as the desktop render dashboard (not pure black).
+    """
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        return "#2d2d2d", "#383838"
+    return p.bg_elevated, p.border_panel
+
+
+def portable_queue_panel_stylesheet() -> str:
+    """Portable Queue header + list rail."""
+    bg, border = portable_render_chrome_colors()
+    return f"""
+QFrame#portableQueueHeader, QFrame#portableQueueList {{
+    background-color: {bg};
+    border: 1px solid {border};
+    border-radius: 10px;
+}}
+"""
+
+
+def portable_render_strip_stylesheet() -> str:
+    """Portable Render management strip (progress + Start / Leave / …)."""
+    bg, border = portable_render_chrome_colors()
+    return f"""
+QFrame#portableRenderStrip {{
+    background-color: {bg};
+    border: 1px solid {border};
+    border-radius: 10px;
+}}
+QFrame#portableRenderStrip QLabel {{
+    background: transparent;
+    border: none;
+}}
+"""
+
+
+def portable_render_save_bar_stylesheet() -> str:
+    """Full-width Save footer under the portable Render sheet."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, edge = "#141414", "#2a2a2a"
+    else:
+        # Match dialog shell — slightly under the elevated Queue/strip plates.
+        bg, edge = p.chrome_app_bg, p.border_panel
+    return (
+        "QFrame#portableRenderSaveBar {"
+        f" background-color: {bg}; border: none;"
+        f" border-top: 1px solid {edge}; }}"
+    )
+
+
 def player_header_stylesheet() -> str:
     """Player title bar — seam radii (Reunited) or full panel radius (Fractured)."""
     from steempeg.ui.layout_defaults import PLAYER_LAYOUT_PANEL_RADIUS_PX

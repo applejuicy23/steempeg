@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.render.queue import RenderJobSettings
 from steempeg.ui import design_tokens as tok
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.message_dialog import _BTN_SECONDARY, dialog_theme
 from steempeg.ui.portable.render_controls import PortableRenderControlStrip
 from steempeg.ui.render_job_builder import apply_job_settings_to_ui, snapshot_settings_from_ui
@@ -524,12 +525,10 @@ class PortableRenderSettingsDialog(SteempegDialog):
         # Full-width dark footer — Save only (queue + strip sit above).
         footer = QFrame()
         footer.setObjectName("portableRenderSaveBar")
-        footer.setStyleSheet(
-            "QFrame#portableRenderSaveBar {"
-            " background-color: #141414; border: none;"
-            " border-top: 1px solid #2a2a2a; }"
-        )
+        footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        footer.setStyleSheet(ut.portable_render_save_bar_stylesheet())
         footer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._save_bar = footer
         footer_lay = QHBoxLayout(footer)
         footer_lay.setContentsMargins(12, 10, 12, 12)
         footer_lay.setSpacing(8)
@@ -653,6 +652,30 @@ class PortableRenderSettingsDialog(SteempegDialog):
             QTimer.singleShot(0, self._app.fit_settings_tab_to_page)
         if hasattr(self, "reset_title_bar_chrome"):
             self.reset_title_bar_chrome()
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Retint dialog chrome + Queue rail + Render strip when UI theme changes."""
+        super().apply_ui_theme_chrome()
+        strip = getattr(self, "_strip", None)
+        if strip is not None and hasattr(strip, "apply_ui_theme_chrome"):
+            try:
+                strip.apply_ui_theme_chrome()
+            except Exception:
+                pass
+        queue = getattr(self, "_queue", None)
+        if queue is not None and hasattr(queue, "apply_ui_theme_chrome"):
+            try:
+                queue.apply_ui_theme_chrome()
+            except Exception:
+                pass
+        save_bar = getattr(self, "_save_bar", None)
+        if save_bar is not None:
+            try:
+                save_bar.setStyleSheet(ut.portable_render_save_bar_stylesheet())
+                for btn in save_bar.findChildren(QPushButton):
+                    btn.setStyleSheet(_BTN_SECONDARY)
+            except Exception:
+                pass
 
     def _force_close(self) -> None:
         from PySide6.QtWidgets import QDialog

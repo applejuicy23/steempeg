@@ -16,21 +16,10 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
 _FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-
-_STRIP_FRAME = """
-QFrame#portableRenderStrip {
-    background-color: #2d2d2d;
-    border: 1px solid #383838;
-    border-radius: 10px;
-}
-QFrame#portableRenderStrip QLabel {
-    background: transparent;
-    border: none;
-}
-"""
 
 # Same templates as desktop render dashboard (app.py), compact padding.
 _DASH_START = (
@@ -112,7 +101,8 @@ class PortableRenderControlStrip(QFrame):
         self._app = app
         self._state = "ready"
         self.setObjectName("portableRenderStrip")
-        self.setStyleSheet(_STRIP_FRAME)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.apply_ui_theme_chrome()
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         root = QVBoxLayout(self)
@@ -252,6 +242,10 @@ class PortableRenderControlStrip(QFrame):
         root.addLayout(btn_row)
         self.sync_game_header()
         self.sync_from_app()
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Default mid-gray strip → pure black on TrueDark / OLED."""
+        self.setStyleSheet(ut.portable_render_strip_stylesheet())
 
     def sync_game_header(self) -> None:
         """Compact game icon + name — queue-first when Render Queue has jobs."""

@@ -41,6 +41,7 @@ from steempeg.ui.library.library_styles import (
     LIBRARY_SCROLLBAR_VERTICAL,
     install_library_vertical_scrollbar,
 )
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -99,14 +100,6 @@ _MULTI_SELECT_MODIFIERS = (
     | Qt.KeyboardModifier.ShiftModifier
     | Qt.KeyboardModifier.AltModifier
 )
-
-_PANEL = """
-QFrame#portableQueueHeader, QFrame#portableQueueList {
-    background-color: #2d2d2d;
-    border: 1px solid #383838;
-    border-radius: 10px;
-}
-"""
 
 # Status outline only (no card fill by status) — pipeline colours live in
 # queue_card_shared.status_border_for_job.
@@ -564,7 +557,7 @@ class PortableQueueSidebar(QWidget):
         rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
         self.setFixedWidth(rail_w)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet(_PANEL)
+        self.apply_ui_theme_chrome()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -753,6 +746,10 @@ class PortableQueueSidebar(QWidget):
             return
         rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
         self.setFixedWidth(rail_w)
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Default mid-gray Queue rail → pure black on TrueDark / OLED."""
+        self.setStyleSheet(ut.portable_queue_panel_stylesheet())
 
     def _jobs_snapshot(self) -> list[RenderJob]:
         return list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])

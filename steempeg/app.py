@@ -3820,6 +3820,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             except Exception:
                 pass
 
+        # Portable Render sheet — Queue rail + management strip (even if parked).
+        for attr in ("_portable_render_strip", "_portable_queue_sidebar"):
+            w = getattr(self, attr, None)
+            if w is not None and hasattr(w, "apply_ui_theme_chrome"):
+                try:
+                    w.apply_ui_theme_chrome()
+                except Exception:
+                    pass
+        sheet = getattr(self, "_portable_render_sheet_dlg", None)
+        if sheet is not None and hasattr(sheet, "apply_ui_theme_chrome"):
+            try:
+                sheet.apply_ui_theme_chrome()
+            except Exception:
+                pass
+
         hud = getattr(self, "player_footer_frame", None)
         if hud is not None:
             hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
