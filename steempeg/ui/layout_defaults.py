@@ -170,16 +170,39 @@ SETTINGS_PAGE_MARGIN_RIGHT = 8
 SETTINGS_PAGE_MARGIN_BOTTOM = 8
 
 # Horizontal splitters (Clips | editor, editor | queue) — matches Render Queue handle.
-HORIZONTAL_SPLITTER_STYLESHEET = """
-    QSplitter::handle {
-        background-color: #444;
+# Prefer ``horizontal_splitter_handle_qss()`` so TrueDark can lift idle gray.
+def horizontal_splitter_handle_qss(
+    idle: str = "#444444", hover: str = "#666666"
+) -> str:
+    return f"""
+    QSplitter::handle {{
+        background-color: {idle};
         margin: 0px 2px;
         border-radius: 2px;
-    }
-    QSplitter::handle:hover {
-        background-color: #666;
-    }
+    }}
+    QSplitter::handle:hover {{
+        background-color: {hover};
+    }}
 """
+
+
+def vertical_splitter_handle_qss(
+    idle: str = "#444444", hover: str = "#b29ae7"
+) -> str:
+    return f"""
+    QSplitter::handle {{
+        background-color: {idle};
+        margin: 0px 40px;
+        border-radius: 2px;
+        height: 4px;
+    }}
+    QSplitter::handle:hover {{
+        background-color: {hover};
+    }}
+"""
+
+
+HORIZONTAL_SPLITTER_STYLESHEET = horizontal_splitter_handle_qss()
 
 # Custom title bar (see ui/window_chrome.py) — canonical value in design_tokens.
 TITLE_BAR_HEIGHT = 28
