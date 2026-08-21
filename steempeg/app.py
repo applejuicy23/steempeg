@@ -3646,18 +3646,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.table_rendered.setStyleSheet(table_qss)
 
     def _refresh_open_settings_dialogs(self) -> None:
-        """Live-tint an open Settings window during theme preview / Save."""
-        from PySide6.QtWidgets import QApplication
+        """Live-tint open Settings and other themeable dialogs during theme preview / Save."""
+        from PySide6.QtWidgets import QApplication, QDialog
 
-        from steempeg.ui.settings_dialog import SettingsDialog
-
-        for widget in QApplication.allWidgets():
-            if isinstance(widget, SettingsDialog) and widget.isVisible():
-                if hasattr(widget, "apply_ui_theme_chrome"):
-                    try:
-                        widget.apply_ui_theme_chrome()
-                    except Exception:
-                        pass
+        for widget in QApplication.topLevelWidgets():
+            if not isinstance(widget, QDialog) or not widget.isVisible():
+                continue
+            apply = getattr(widget, "apply_ui_theme_chrome", None)
+            if not callable(apply):
+                continue
+            try:
+                apply()
+            except Exception:
+                pass
 
     def _refresh_ui_theme_surfaces(self, *, preview: bool = False) -> None:
         """Re-tint major chrome widgets after a UI theme switch (no layout/mask changes)."""
