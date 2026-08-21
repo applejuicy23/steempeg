@@ -3904,7 +3904,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.apply_desktop_render_layout()
         if hasattr(self, "_restore_library_ui_state"):
             self._restore_library_ui_state()
-            QTimer.singleShot(500, self._restore_library_ui_state)
+            # Second restore runs under the startup settle veil (post-maximize),
+            # not as a naked 500ms flash of tab/footer chrome after show.
+            if not getattr(self, "_startup_settle_active", False):
+                QTimer.singleShot(500, self._restore_library_ui_state)
         if hasattr(self, "_library_ui_persist_ready"):
             QTimer.singleShot(250, lambda: setattr(self, "_library_ui_persist_ready", True))
         self.refresh_render_queue_panel(sync_splitter=True)
@@ -3973,6 +3976,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if hasattr(self, "restore_screenshots_from_session_cache"):
                     # Defer past showMaximized — sync paint of a unified Steam
                     # shelf (thousands of cards) blocked the window for minutes.
+                    # Startup settle veil stays up past this tick so chrome does
+                    # not flash while placeholders land.
                     def _restore_shots():
                         nonlocal restored_shots
                         restored_shots = bool(
@@ -4027,7 +4032,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._apply_responsive_layout_mins(apply_density=False)
         timer = getattr(self, "_density_resize_timer", None)
         defer_ms = int(getattr(self, "_density_resize_defer_ms", 120) or 120)
-        self._density_resize_defer_ms = 120
+        # While the startup veil is up, keep density flushing immediately so the
+        # post-maximize restyle lands under the cover — not 120ms after unveil.
+        if not getattr(self, "_startup_settle_active", False):
+            self._density_resize_defer_ms = 120
         if timer is None:
             from PySide6.QtCore import QTimer
 
@@ -5439,6 +5447,23 @@ def main():
         # Finish density / library restore / Skip paint WHILE STILL HIDDEN.
         # Showing first painted an empty "0 Clips" shell that then jumped —
         # and FRAMECHANGED settle looked like the half-done window closing.
+        from steempeg.ui.startup_settle import (
+            begin_startup_settle,
+            kick_startup_settle_after_show,
+        )
+        from steempeg.ui.settings_prefs import SCAN_CACHE, load_startup_library_scan
+
+        # Skip: opaque veil covers post-maximize chrome thrash (crooked footer /
+        # Ready badge). Quick/Full: settle pass only — no «Preparing workspace…»
+        # flash (that thrash was mainly a Skip-path issue).
+        _settle_settings = {}
+        if hasattr(window, "load_user_settings"):
+            try:
+                _settle_settings = window.load_user_settings() or {}
+            except Exception:
+                _settle_settings = {}
+        _use_settle_veil = load_startup_library_scan(_settle_settings) == SCAN_CACHE
+        begin_startup_settle(window, use_veil=_use_settle_veil)
         window._sync_startup_layout()
         try:
             from PySide6.QtCore import QEventLoop
@@ -5490,13 +5515,11 @@ def main():
                 schedule_linux_low_disk_startup_warning(window)
             except Exception:
                 logging.exception("Linux disk-space warning failed to schedule")
-        # Light re-assert only — heavy restore already ran pre-show.
-        # Do NOT clear ``_ui_density`` here: that forced a full chrome rebuild
-        # after the window was already visible (1–3s of "still preparing").
-        window._apply_startup_splitter_sizes()
-        if hasattr(window, "apply_desktop_render_layout"):
-            window.apply_desktop_render_layout()
-        window._ensure_startup_queue_open()
+        # One coherent post-maximize settle under the veil — do NOT thrash
+        # splitters / queue open / density on staggered 0ms/50ms timers (that
+        # was the Ready-badge + footer jump). Reveal when pass + density flush
+        # finish (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
+        kick_startup_settle_after_show(window)
         try:
             from PySide6.QtCore import QEventLoop
 
@@ -5508,11 +5531,9 @@ def main():
         # Geometry after maximize can still settle one tick later — re-claim
         # foreground after first paint (launcher / terminal may still hold focus).
         _bring_main_to_front()
-        QTimer.singleShot(0, window._ensure_startup_queue_open)
         QTimer.singleShot(0, _bring_main_to_front)
-        QTimer.singleShot(50, window._ensure_startup_queue_open)
         if ui_shell == UI_SHELL_PORTABLE:
-            # Library restore (500ms) must not fight theatre — re-assert after it.
+            # Theatre under the veil; one late re-assert after settle reveal.
             window.apply_portable_theatre_shell()
             QTimer.singleShot(600, window.apply_portable_theatre_shell)
             # Prewarm Clips/Render sheets off the critical path (map-suppressed —
