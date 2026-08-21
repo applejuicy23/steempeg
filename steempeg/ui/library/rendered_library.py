@@ -122,7 +122,6 @@ _SHOT_MTIME_ROLE = Qt.ItemDataRole.UserRole + 2
 _SHOT_SOURCE_ROLE = Qt.ItemDataRole.UserRole + 3  # "steam" | "steempeg"
 _SHOT_APP_ID_ROLE = Qt.ItemDataRole.UserRole + 4
 _SHOT_THUMB_ROLE = Qt.ItemDataRole.UserRole + 5  # cached thumb path (may be unset)
-_SCREENSHOT_NAME_RE = re.compile(r"^(.+?)_\d+ms_\d{8}_\d{6}$", re.IGNORECASE)
 # Filename sanitizer turns : * ? " < > | \ / into _; never map these labels to a game.
 _GENERIC_SCREENSHOT_GAMES = frozenset({"clip", "unknown", "unknown game"})
 # Viewport lazy load: overscan past the visible rect, debounce after scroll stops.
@@ -181,12 +180,11 @@ _SCREENSHOT_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 
 def _parse_screenshot_game_name(filename: str) -> str:
-    """Game prefix from ``{Game}_{ms}ms_{YYYYMMDD}_{HHMMSS}.ext`` names."""
-    stem = os.path.splitext(os.path.basename(filename))[0]
-    match = _SCREENSHOT_NAME_RE.match(stem)
-    if match:
-        return match.group(1).strip() or stem
-    return stem
+    """Game prefix from ``{Game}_{ms}ms_{YYYYMMDD}_{HHMMSS}[__clipfolder].ext`` names."""
+    from steempeg.core.screenshot_clip_link import parse_steempeg_screenshot_name
+
+    game, _pos_ms, _clip_folder = parse_steempeg_screenshot_name(filename)
+    return game or os.path.splitext(os.path.basename(filename))[0]
 
 
 def _normalize_screenshot_game_key(name: str) -> str:
@@ -194,10 +192,12 @@ def _normalize_screenshot_game_key(name: str) -> str:
 
     ``Hatsune Miku_ Project DIVA Mega Mix+`` and
     ``Hatsune Miku: Project DIVA Mega Mix+`` become the same key.
+    ``Tom & Jerry`` and ``Tom and Jerry`` also collapse together.
     """
     text = str(name or "").strip().casefold()
     if not text:
         return ""
+    text = text.replace("&", " and ")
     text = text.replace("_", " ").replace("-", " ")
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()
@@ -1756,8 +1756,8 @@ class RenderedLibraryMixin:
         game = str(item.data(_SHOT_GAME_ROLE) or "") or _parse_screenshot_game_name(path)
         source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
         app_id = str(item.data(_SHOT_APP_ID_ROLE) or "")
-        game, app_id = self._resolve_screenshot_row_identity(
-            game, app_id, source=source
+        game, app_id = self._enrich_steempeg_screenshot_identity(
+            path, game, app_id, source=source
         )
         item.setData(_SHOT_GAME_ROLE, game)
         item.setData(_SHOT_APP_ID_ROLE, app_id)
@@ -2215,6 +2215,8 @@ class RenderedLibraryMixin:
                     canonical, aid
                 ):
                     # Filename sanitizer turns ``:`` into ``_`` — same game, nicer label.
+                    # Generic ``Clip`` / ``Unknown`` also upgrade when we know app_id
+                    # (sidecar or ``__clip_<appid>_…`` suffix).
                     if (
                         not label
                         or self._is_screenshot_placeholder_name(label, aid)
@@ -2227,6 +2229,42 @@ class RenderedLibraryMixin:
         ):
             label = self._screenshot_game_name_for_app_id(aid)
         return label, aid
+
+    def _enrich_steempeg_screenshot_identity(
+        self,
+        path: str,
+        game: str,
+        app_id: str,
+        *,
+        source: str = "steempeg",
+    ) -> tuple[str, str]:
+        """Merge sidecar / ``__clipfolder`` app_id, then games.json reverse-lookup."""
+        source_key = (source or "steempeg").strip().lower()
+        label = str(game or "").strip()
+        aid = str(app_id or "").strip()
+        if source_key != "steam" and path:
+            try:
+                from steempeg.core.screenshot_clip_link import (
+                    collect_screenshot_clip_hint,
+                )
+
+                hint = collect_screenshot_clip_hint(
+                    path, source=source_key, app_id=aid, game_name=label
+                )
+                if hint.app_id:
+                    aid = str(hint.app_id).strip() or aid
+                hint_game = str(hint.game_name or "").strip()
+                if hint_game and (
+                    not label
+                    or label.casefold() in _GENERIC_SCREENSHOT_GAMES
+                    or self._is_screenshot_placeholder_name(label, aid)
+                ):
+                    label = hint_game
+            except Exception:
+                logging.debug(
+                    "Screenshot identity hint failed for %s", path, exc_info=True
+                )
+        return self._resolve_screenshot_row_identity(label, aid, source=source_key)
 
     def _backfill_steempeg_screenshot_identities(self) -> int:
         """Re-resolve Steempeg rows after games.json fills; update live cards."""
@@ -2242,10 +2280,11 @@ class RenderedLibraryMixin:
             source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
             if source.strip().lower() == "steam":
                 continue
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "")
             old_name = str(item.data(_SHOT_GAME_ROLE) or "").strip()
             old_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
-            game, app_id = self._resolve_screenshot_row_identity(
-                old_name, old_id, source=source
+            game, app_id = self._enrich_steempeg_screenshot_identity(
+                path, old_name, old_id, source=source
             )
             if game == old_name and app_id == old_id:
                 # Still try the logo if we already knew the app but the widget
@@ -2280,6 +2319,13 @@ class RenderedLibraryMixin:
                         photo.set_game_icon(icon)
         if touched:
             self._apply_screenshots_filters(refresh_viewport=False)
+            menu = getattr(self, "screenshots_filter_menu", None)
+            if (
+                menu is not None
+                and menu.isVisible()
+                and hasattr(menu, "gather_statistics")
+            ):
+                menu.gather_statistics(self)
         return touched
 
     def _screenshot_game_name_for_app_id(self, app_id: str) -> str:
@@ -2353,6 +2399,9 @@ class RenderedLibraryMixin:
     def _is_screenshot_placeholder_name(self, name: str, app_id: str = "") -> bool:
         from steempeg.core import games as games_mod
 
+        text = str(name or "").strip()
+        if text.casefold() in _GENERIC_SCREENSHOT_GAMES:
+            return True
         return games_mod.is_unresolved_game_name(name, app_id)
 
     def _collect_steempeg_screenshot_rows(self, folder: str) -> list[dict]:
@@ -2376,8 +2425,8 @@ class RenderedLibraryMixin:
             except OSError:
                 mtime = 0.0
             game = _parse_screenshot_game_name(path)
-            game, app_id = self._resolve_screenshot_row_identity(
-                game, "", source="steempeg"
+            game, app_id = self._enrich_steempeg_screenshot_identity(
+                path, game, "", source="steempeg"
             )
             rows.append(
                 {
@@ -2749,8 +2798,8 @@ class RenderedLibraryMixin:
                 game = str(row.get("game_name") or "") or _parse_screenshot_game_name(path)
                 source = str(row.get("source") or "steempeg")
                 app_id = str(row.get("app_id") or "")
-                game, app_id = self._resolve_screenshot_row_identity(
-                    game, app_id, source=source
+                game, app_id = self._enrich_steempeg_screenshot_identity(
+                    path, game, app_id, source=source
                 )
                 item = self._make_screenshot_item(
                     path, mtime, game, source=source, app_id=app_id
