@@ -154,35 +154,46 @@ _TABS = f"""
 
 
 class _MarkerPickRow(QFrame):
-    """One selectable marker row in the On clip list."""
+    """One selectable marker instance row in the On clip list (icon + label)."""
 
     activated = Signal(str)
 
     def __init__(
         self,
-        key: str,
+        row_id: str,
         label: str,
         *,
+        icon_pix=None,
         indent: int = 0,
         tip: str = "",
         parent=None,
     ):
         super().__init__(parent)
-        self._key = key
+        self._row_id = row_id
+        # Backward-compat alias used by ScreenshotGroup selection helpers.
+        self._key = row_id
         self.setObjectName("mkPick")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(_PICK_ROW)
         if tip:
             self.setToolTip(tip)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8 + indent * 14, 6, 8, 6)
-        lay.setSpacing(6)
+        lay.setContentsMargins(8 + indent * 14, 4, 8, 4)
+        lay.setSpacing(10)
+        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setStyleSheet("background: transparent; border: none;")
+        apply_square_icon(icon_lbl, icon_pix, _CLASS_ICON)
+        lay.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self._lbl = QLabel(label)
         self._lbl.setStyleSheet(
             f"color: {tok.TEXT_PRIMARY}; font-size: 13px; background: transparent; "
             f"font-family: {tok.FONT_APP};"
         )
-        lay.addWidget(self._lbl, 1)
+        lay.addWidget(self._lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
     def set_selected(self, selected: bool) -> None:
         self.setStyleSheet(_PICK_ROW_SEL if selected else _PICK_ROW)
@@ -192,7 +203,7 @@ class _MarkerPickRow(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.activated.emit(self._key)
+            self.activated.emit(self._row_id)
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -240,8 +251,9 @@ class _ScreenshotGroup(QWidget):
         child.setSpacing(2)
         for row in rows:
             pick = _MarkerPickRow(
-                row["key"],
+                row.get("row_id") or row["key"],
                 row.get("_display") or row["label"],
+                icon_pix=row.get("_icon"),
                 indent=1,
                 tip=row.get("_tip") or row["key"],
             )
@@ -315,7 +327,9 @@ class MarkerSettingsDialog(SteempegDialog):
 
         self._prefs = mprefs.load_marker_prefs()
         self._clip_rows = mprefs.clip_marker_setting_rows(self._clip_markers)
+        self._selected_row_id: str | None = None
         self._selected_key: str | None = None
+        self._list_icon_cache: dict[str, object] = {}
 
         root = self.content_layout
         root.setSpacing(10)
@@ -527,10 +541,11 @@ class MarkerSettingsDialog(SteempegDialog):
 
         lay.addWidget(
             self._hint(
-                "Markers on this clip. Custom pins and screenshots are listed "
-                "one-by-one. If there are more than 5 screenshots, expand the "
-                "Screenshots group (like Check for updates). Game types (kill, "
-                "death, …) share one setting for every match on the timeline."
+                "Every marker instance on this clip is listed (with its icon). "
+                "Custom pins and screenshots edit one instance. Game events "
+                "(kill, death, …) still share icon/class settings by type — "
+                "the editor shows how many markers that change affects. "
+                "If there are more than 5 screenshots, expand the Screenshots group."
             )
         )
 
@@ -591,6 +606,12 @@ class MarkerSettingsDialog(SteempegDialog):
         prev_row.addWidget(self._mk_preview)
         prev_row.addWidget(self._mk_id_lbl, 1)
         ed.addLayout(prev_row)
+
+        self._mk_type_hint = QLabel("")
+        self._mk_type_hint.setWordWrap(True)
+        self._mk_type_hint.setStyleSheet(_HINT)
+        self._mk_type_hint.hide()
+        ed.addWidget(self._mk_type_hint)
 
         ed.addWidget(QLabel("Label (optional)"))
         self._mk_label = QLineEdit()
@@ -928,10 +949,63 @@ class MarkerSettingsDialog(SteempegDialog):
             if 0 <= row < self._class_list.count():
                 self._class_list.setCurrentRow(row)
 
+    def _row_by_id(self, row_id: str | None) -> dict | None:
+        if not row_id:
+            return None
+        for r in self._clip_rows:
+            if (r.get("row_id") or r["key"]) == row_id:
+                return r
+        return None
+
+    def _list_icon_for_row(self, row: dict):
+        """Resolve a small pixmap for an On clip list row (cached by prefs key)."""
+        key = str(row.get("key") or "")
+        kind = str(row.get("kind") or "")
+        cache_key = f"{kind}:{key}"
+        if cache_key in self._list_icon_cache:
+            return self._list_icon_cache[cache_key]
+
+        pix = None
+        path = mprefs.resolve_custom_icon_path(key, prefs=self._prefs)
+        if path:
+            pix = load_scaled_pixmap(path, _CLASS_ICON)
+        if pix is None:
+            if kind == "user":
+                legacy_key = "usermarker"
+            elif kind == "screenshot":
+                legacy_key = "screenshot"
+            else:
+                legacy_key = str(row.get("icon_key") or key)
+            legacy = mprefs.legacy_asset_path(legacy_key)
+            if legacy:
+                pix = load_scaled_pixmap(legacy, _CLASS_ICON)
+        if pix is None and kind in ("steam", "legacy") and self._app_id:
+            try:
+                store = getattr(
+                    getattr(
+                        getattr(self._app, "custom_timeline", None), "canvas", None
+                    ),
+                    "marker_store",
+                    None,
+                )
+                steam_id = str(row.get("icon") or key)
+                if store is not None and steam_id:
+                    pix = store.get_icon(self._app_id, steam_id, _CLASS_ICON)
+            except Exception:
+                pix = None
+
+        tintable = kind in ("user", "screenshot")
+        tint = mprefs.resolve_tint_color(key, prefs=self._prefs)
+        if pix is not None and tint and tintable:
+            pix = tint_pixmap(pix, tint, height=_CLASS_ICON)
+
+        self._list_icon_cache[cache_key] = pix
+        return pix
+
     def _repopulate_markers(self) -> None:
         if not hasattr(self, "_marker_list_layout"):
             return
-        prev = self._selected_key
+        prev = self._selected_row_id
         # Clear previous widgets (keep trailing stretch).
         while self._marker_list_layout.count() > 1:
             item = self._marker_list_layout.takeAt(0)
@@ -940,11 +1014,13 @@ class MarkerSettingsDialog(SteempegDialog):
                 w.deleteLater()
         self._pick_rows = {}
         self._shot_group = None
+        self._list_icon_cache = {}
 
         users: list[dict] = []
         shots: list[dict] = []
         others: list[dict] = []
         for row in self._clip_rows:
+            row_id = row.get("row_id") or row["key"]
             key = row["key"]
             ov = mprefs.marker_override(key, self._prefs)
             display = (ov.get("label") or "").strip() or row["label"]
@@ -952,13 +1028,19 @@ class MarkerSettingsDialog(SteempegDialog):
                 cls = mprefs.get_class(ov["class_id"], self._prefs)
                 if cls:
                     display = f"{display}  ·  {cls.get('name')}"
+            if row.get("time_ms") is not None:
+                tc = mprefs.format_marker_timecode(row.get("time_ms"))
+                display = f"{display}  ·  {tc}"
             tip = key
-            if row.get("time_ms") is not None and row.get("kind") in (
-                "user",
-                "screenshot",
-            ):
+            if row.get("time_ms") is not None:
                 tip = f"{key}  ·  {int(row['time_ms'])} ms"
-            decorated = {**row, "_display": display, "_tip": tip}
+            decorated = {
+                **row,
+                "row_id": row_id,
+                "_display": display,
+                "_tip": tip,
+                "_icon": self._list_icon_for_row(row),
+            }
             kind = row.get("kind")
             if kind == "user":
                 users.append(decorated)
@@ -968,9 +1050,11 @@ class MarkerSettingsDialog(SteempegDialog):
                 others.append(decorated)
 
         def _add_pick(row: dict, *, indent: int = 0) -> None:
+            rid = row["row_id"]
             pick = _MarkerPickRow(
-                row["key"],
+                rid,
                 row["_display"],
+                icon_pix=row.get("_icon"),
                 indent=indent,
                 tip=row["_tip"],
             )
@@ -978,7 +1062,7 @@ class MarkerSettingsDialog(SteempegDialog):
             self._marker_list_layout.insertWidget(
                 self._marker_list_layout.count() - 1, pick
             )
-            self._pick_rows[row["key"]] = pick
+            self._pick_rows[rid] = pick
 
         for row in users:
             _add_pick(row)
@@ -991,7 +1075,7 @@ class MarkerSettingsDialog(SteempegDialog):
             )
             self._shot_group = group
             for pick in group._pick_rows:
-                self._pick_rows[pick._key] = pick
+                self._pick_rows[pick._row_id] = pick
         else:
             for row in shots:
                 _add_pick(row)
@@ -1018,8 +1102,12 @@ class MarkerSettingsDialog(SteempegDialog):
             w.setEnabled(enabled)
 
     def _clear_marker_editor(self) -> None:
+        self._selected_row_id = None
         self._selected_key = None
         self._mk_id_lbl.setText("")
+        if hasattr(self, "_mk_type_hint"):
+            self._mk_type_hint.hide()
+            self._mk_type_hint.setText("")
         self._mk_label.blockSignals(True)
         self._mk_label.clear()
         self._mk_label.blockSignals(False)
@@ -1037,32 +1125,60 @@ class MarkerSettingsDialog(SteempegDialog):
         self._mk_path_lbl.setText("")
         self._set_marker_editor_enabled(False)
 
-    def _on_marker_selected(self, key: str | None) -> None:
+    def _on_marker_selected(self, row_id: str | None) -> None:
         if not hasattr(self, "_mk_editor"):
             return
-        self._selected_key = key or None
-        for k, pick in self._pick_rows.items():
-            pick.set_selected(k == self._selected_key)
+        self._selected_row_id = row_id or None
+        row_info = self._row_by_id(self._selected_row_id)
+        self._selected_key = row_info["key"] if row_info else None
+        for rid, pick in self._pick_rows.items():
+            pick.set_selected(rid == self._selected_row_id)
         if self._shot_group is not None:
-            self._shot_group.set_selected_key(self._selected_key)
+            self._shot_group.set_selected_key(self._selected_row_id)
 
-        if not self._selected_key:
+        if not self._selected_key or not row_info:
             self._clear_marker_editor()
             return
 
         self._set_marker_editor_enabled(True)
         key = self._selected_key
-        label = mprefs.friendly_marker_label(key)
-        row_info = None
-        for r in self._clip_rows:
-            if r["key"] == key:
-                label = r.get("label") or label
-                row_info = r
-                break
+        label = row_info.get("label") or mprefs.friendly_marker_label(key)
         ov = mprefs.marker_override(key, self._prefs)
         if (ov.get("label") or "").strip():
             label = ov["label"].strip()
-        self._mk_id_lbl.setText(f"{label}\nID: {key}")
+        tc = ""
+        if row_info.get("time_ms") is not None:
+            tc = mprefs.format_marker_timecode(row_info.get("time_ms"))
+        id_line = f"{label}"
+        if tc:
+            id_line = f"{label}  ·  {tc}"
+        self._mk_id_lbl.setText(f"{id_line}\nID: {key}")
+
+        if hasattr(self, "_mk_type_hint"):
+            shared = bool(row_info.get("shared_type"))
+            count = int(row_info.get("type_count") or 1)
+            if shared and count > 1:
+                self._mk_type_hint.setText(
+                    f"Applies to {count} markers of this type on the clip."
+                )
+                self._mk_type_hint.show()
+            elif shared:
+                self._mk_type_hint.setText(
+                    "Game event type — settings apply to every match of this type."
+                )
+                self._mk_type_hint.show()
+            else:
+                self._mk_type_hint.setText(
+                    "Edits apply to this marker instance only."
+                )
+                self._mk_type_hint.show()
+
+        if hasattr(self, "_mk_reset_btn"):
+            if row_info.get("shared_type"):
+                self._mk_reset_btn.setText("Reset this type")
+            else:
+                self._mk_reset_btn.setText("Reset this marker")
+
         self._mk_label.blockSignals(True)
         self._mk_label.setText(ov.get("label") or "")
         self._mk_label.blockSignals(False)
@@ -1245,6 +1361,7 @@ class MarkerSettingsDialog(SteempegDialog):
 
     def _save_marker_fields(self) -> None:
         key = self._selected_key
+        row_id = self._selected_row_id
         if not key:
             return
         mprefs.set_marker_override(
@@ -1257,10 +1374,11 @@ class MarkerSettingsDialog(SteempegDialog):
         )
         self._emit_changed()
         self._repopulate_markers()
-        self._on_marker_selected(key)
+        self._on_marker_selected(row_id)
 
     def _pick_marker_icon(self) -> None:
         key = self._selected_key
+        row_id = self._selected_row_id
         if not key:
             return
         path, _ = QFileDialog.getOpenFileName(
@@ -1271,26 +1389,28 @@ class MarkerSettingsDialog(SteempegDialog):
             self._emit_changed()
             self._refresh_marker_preview()
             self._repopulate_markers()
-            self._on_marker_selected(key)
+            self._on_marker_selected(row_id)
 
     def _clear_marker_icon(self) -> None:
         key = self._selected_key
+        row_id = self._selected_row_id
         if not key:
             return
         mprefs.set_marker_override(key, custom_icon="")
         self._emit_changed()
         self._refresh_marker_preview()
         self._repopulate_markers()
-        self._on_marker_selected(key)
+        self._on_marker_selected(row_id)
 
     def _reset_one_marker(self) -> None:
         key = self._selected_key
+        row_id = self._selected_row_id
         if not key:
             return
         mprefs.reset_marker_override(key)
         self._emit_changed()
         self._repopulate_markers()
-        self._on_marker_selected(key)
+        self._on_marker_selected(row_id)
 
     def _reset_steam(self) -> None:
         if not steempeg_question(

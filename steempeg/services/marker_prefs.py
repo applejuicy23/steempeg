@@ -571,27 +571,43 @@ def marker_resolve_keys(marker: dict) -> list[str]:
     return keys
 
 
-def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
-    """Configurable rows from the open clip.
+def format_marker_timecode(time_ms: int | None) -> str:
+    """Compact clip-relative timecode for On clip list rows (m:ss or h:mm:ss)."""
+    ms = max(0, int(time_ms or 0))
+    total_s = ms // 1000
+    h, rem = divmod(total_s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
-    Game markers (kill, death, …) stay one row per type. Custom pins and
-    screenshots are listed individually (Screenshot 1, 2, …).
+
+def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
+    """Configurable rows from the open clip — one row per marker instance.
+
+    Custom pins and screenshots keep per-instance prefs keys. Game markers
+    (kill, death, …) are listed individually but still share one prefs key per
+    Steam/legacy type (``shared_type`` + ``type_count`` for the settings UI).
+    Round-number markers are skipped (not configurable).
     """
-    type_rows: dict[str, dict] = {}
     user_rows: list[dict] = []
     shot_rows: list[dict] = []
+    game_rows: list[dict] = []
     unnamed_n = 0
     shot_n = 0
+    type_counts: dict[str, int] = {}
 
     ordered = sorted(
         list(clip_markers or ()),
         key=lambda m: (int(m.get("time_ms") or 0), str(m.get("id") or "")),
     )
-    for m in ordered:
+    for i, m in enumerate(ordered):
         if m.get("is_round"):
             continue
         steam_icon = str(m.get("icon") or "").strip()
         icon_key = str(m.get("icon_key") or "").strip()
+        marker_id = str(m.get("id") or "")
+        time_ms = int(m.get("time_ms") or 0)
 
         if is_user_marker(m):
             key = user_instance_prefs_key(m.get("id"), time_ms=m.get("time_ms"))
@@ -603,13 +619,18 @@ def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
                 label = f"Custom Marker {unnamed_n}"
             user_rows.append(
                 {
+                    "row_id": key,
                     "key": key,
                     "kind": "user",
                     "title": title,
                     "label": label,
-                    "marker_id": str(m.get("id") or ""),
-                    "time_ms": int(m.get("time_ms") or 0),
+                    "marker_id": marker_id,
+                    "time_ms": time_ms,
                     "raw_time_ms": m.get("raw_time_ms"),
+                    "icon": steam_icon,
+                    "icon_key": icon_key or "usermarker",
+                    "shared_type": False,
+                    "type_count": 1,
                 }
             )
             continue
@@ -626,13 +647,18 @@ def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
                 label = f"Screenshot {shot_n}"
             shot_rows.append(
                 {
+                    "row_id": key,
                     "key": key,
                     "kind": "screenshot",
                     "title": title,
                     "label": label,
-                    "marker_id": str(m.get("id") or ""),
-                    "time_ms": int(m.get("time_ms") or 0),
+                    "marker_id": marker_id,
+                    "time_ms": time_ms,
                     "raw_time_ms": m.get("raw_time_ms"),
+                    "icon": steam_icon,
+                    "icon_key": icon_key or "screenshot",
+                    "shared_type": False,
+                    "type_count": 1,
                 }
             )
             continue
@@ -641,18 +667,33 @@ def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
         if not key or is_round_number_key(key):
             continue
         title = str(m.get("title") or "")
-        type_rows[key] = {
-            "key": key,
-            "kind": "steam" if steam_icon else "legacy",
-            "title": title,
-            "label": friendly_marker_label(key, title=title),
-        }
+        type_counts[key] = type_counts.get(key, 0) + 1
+        if marker_id:
+            row_id = f"game_{marker_id}"
+        else:
+            row_id = f"game_{key}_t{time_ms}_{i}"
+        game_rows.append(
+            {
+                "row_id": row_id,
+                "key": key,
+                "kind": "steam" if steam_icon else "legacy",
+                "title": title,
+                "label": friendly_marker_label(key, title=title),
+                "marker_id": marker_id,
+                "time_ms": time_ms,
+                "raw_time_ms": m.get("raw_time_ms"),
+                "icon": steam_icon,
+                "icon_key": icon_key,
+                "shared_type": True,
+                "type_count": 1,  # filled below
+            }
+        )
 
-    return (
-        user_rows
-        + shot_rows
-        + sorted(type_rows.values(), key=lambda r: r["label"].lower())
-    )
+    for row in game_rows:
+        row["type_count"] = type_counts.get(row["key"], 1)
+
+    # Chronological within each kind block (users → screenshots → game events).
+    return user_rows + shot_rows + game_rows
 
 
 def legacy_asset_path(icon_key: str) -> str | None:
