@@ -153,70 +153,6 @@ def _fmt_mbps(value: float) -> str:
     return f"{max(value, 0.01):.2f}".rstrip("0").rstrip(".")
 
 
-_RENDER_ERROR_DIALOG_STYLE = """
-    QWidget#RenderErrorShell {
-        background-color: #202020;
-        border: 1px solid #444444;
-        border-radius: 8px;
-    }
-    QLabel#ErrorTitle {
-        color: #ff4444;
-        font-size: 18px;
-        font-weight: bold;
-    }
-    QLabel#ErrorDesc {
-        color: #cccccc;
-        font-size: 13px;
-    }
-    QTextEdit {
-        background-color: #141414;
-        color: #ff8888;
-        border: 1px solid #333333;
-        border-radius: 6px;
-        padding: 8px;
-        font-family: Consolas, monospace;
-        font-size: 11px;
-    }
-    QScrollBar:vertical { border: none; background: transparent; width: 12px; }
-    QScrollBar::handle:vertical { background: transparent; border: none; }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-    QPushButton {
-        background-color: #333333;
-        color: white;
-        border: 1px solid #555555;
-        border-radius: 16px;
-        padding: 6px 20px;
-        font-weight: bold;
-        font-size: 12px;
-        min-height: 32px;
-        outline: none;
-    }
-    QPushButton:hover {
-        background-color: #444444;
-        border: 1px solid #777777;
-    }
-    QPushButton:pressed {
-        background-color: #222222;
-    }
-    QPushButton#LogBtn {
-        background-color: #4a2525;
-        border: 1px solid #7a3535;
-    }
-    QPushButton#LogBtn:hover {
-        background-color: #6a2e2e;
-        border: 1px solid #9a4545;
-    }
-    QPushButton#StopBtn {
-        background-color: #4a2525;
-        border: 1px solid #7a3535;
-    }
-    QPushButton#StopBtn:hover {
-        background-color: #6a2e2e;
-        border: 1px solid #9a4545;
-    }
-"""
-
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
 # PATH setup the application performs at startup.
 if getattr(sys, "frozen", False):
@@ -2144,6 +2080,14 @@ class RenderMixin:
         self._sync_portable_like_dock_chrome(
             restore_v_sizes=leaving_portable or portable_like
         )
+        try:
+            from steempeg.ui.portable_splitter_reveal import (
+                sync_portable_splitter_reveal,
+            )
+
+            sync_portable_splitter_reveal(self)
+        except Exception:
+            pass
         if portable_like:
             # Second pass after layout settles — keep user close, else glue open.
             QTimer.singleShot(0, self._settle_portable_like_dash)
@@ -6130,11 +6074,14 @@ class RenderMixin:
         # unrelated events (render progress, queue add/remove, refresh) funnel through
         # here, so without this guard the panel pops back open mid-immersive.
         if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
-            if hasattr(self, "render_queue_panel"):
-                self.render_queue_panel.hide()
+            if hasattr(self, "_clamp_queue_panel_for_immersive"):
+                self._clamp_queue_panel_for_immersive(True)
             total = sum(self.right_h_splitter.sizes()) or self.right_h_splitter.width()
             self.right_h_splitter.setSizes([max(int(total), 1), 0])
             return
+
+        if hasattr(self, "_clamp_queue_panel_for_immersive"):
+            self._clamp_queue_panel_for_immersive(False)
 
         # Always allow collapse — locking the pane open while jobs exist made the
         # nested minimumWidth shove Clips Manager on the outer splitter.
@@ -6532,14 +6479,18 @@ class RenderMixin:
         auto_continue_seconds: int = 10,
     ) -> bool:
         """Frameless FFmpeg error dialog. Returns True to continue queue, False to stop."""
+        from steempeg.ui import ui_theme as ut
+
         dialog = QDialog(self.ui)
+        dialog.setObjectName("SteempegRenderErrorDialog")
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         dialog.setFixedSize(780, 420)
 
         shell = QWidget(dialog)
         shell.setObjectName("RenderErrorShell")
-        shell.setStyleSheet(_RENDER_ERROR_DIALOG_STYLE)
+        shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        shell.setStyleSheet(ut.render_error_dialog_stylesheet())
 
         root = QVBoxLayout(dialog)
         root.setContentsMargins(0, 0, 0, 0)
@@ -6664,6 +6615,15 @@ class RenderMixin:
             (dialog.styleSheet() or "")
             + "QDialog { border-radius: 10px; }"
         )
+
+        def apply_ui_theme_chrome() -> None:
+            """Live-retint if Settings switches theme while this dialog is open."""
+            shell.setStyleSheet(ut.render_error_dialog_stylesheet())
+            ensure_steempg_vertical_scrollbar(
+                text_edit, chrome=error_dialog_scrollbar_chrome()
+            )
+
+        dialog.apply_ui_theme_chrome = apply_ui_theme_chrome  # type: ignore[attr-defined]
 
         if batch_continue:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted

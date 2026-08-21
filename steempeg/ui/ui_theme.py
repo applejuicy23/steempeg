@@ -1507,3 +1507,218 @@ def settings_density_push_button_stylesheet(
         f" QPushButton:pressed {{ background-color: {p.button_secondary_pressed_bg};"
         f" border: {border}px solid #b29ae7; }}"
     )
+
+
+def _frameless_card_dialog_colors() -> dict[str, str]:
+    """Shared face colors for About / FFmpeg error frameless cards.
+
+    Default keeps the shipped #202020 family. TrueDark / OLED follow active
+    elevated-card tokens so the windows match the shell (not the old lighter plate).
+    """
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        return {
+            "card_bg": "#202020",
+            "card_border": "#444444",
+            "title": "#b29ae7",
+            "dim": "#888888",
+            "text": "#dddddd",
+            "disclaimer": "#8a8a8a",
+            "btn_bg": "#333333",
+            "btn_border": "#555555",
+            "btn_hover_bg": "#444444",
+            "btn_hover_border": "#777777",
+            "btn_pressed_bg": "#222222",
+            "danger_bg": "#4a2525",
+            "danger_border": "#7a3535",
+            "danger_hover_bg": "#6a2e2e",
+            "danger_hover_border": "#9a4545",
+            "danger_pressed_bg": "#3a1d1d",
+            "accent_bg": "#4a3d66",
+            "accent_border": "#6b5a8e",
+            "accent_fg": "#f0ecff",
+            "accent_hover_bg": "#5a4d76",
+            "accent_pressed_bg": "#3a324a",
+            "error_title": "#ff4444",
+            "error_desc": "#cccccc",
+            "log_bg": "#141414",
+            "log_fg": "#ff8888",
+            "log_border": "#333333",
+        }
+    return {
+        "card_bg": p.bg_elevated,
+        "card_border": p.border_default,
+        "title": "#b29ae7",
+        "dim": "#888888",
+        "text": "#e0e0e0",
+        "disclaimer": "#7a7a7a",
+        "btn_bg": p.button_secondary_bg,
+        "btn_border": p.button_secondary_border,
+        "btn_hover_bg": p.button_secondary_hover_bg,
+        "btn_hover_border": "#555555",
+        "btn_pressed_bg": p.button_secondary_pressed_bg,
+        "danger_bg": "#4a2525",
+        "danger_border": "#7a3535",
+        "danger_hover_bg": "#6a2e2e",
+        "danger_hover_border": "#9a4545",
+        "danger_pressed_bg": "#3a1d1d",
+        "accent_bg": "#4a3d66",
+        "accent_border": "#6b5a8e",
+        "accent_fg": "#f0ecff",
+        "accent_hover_bg": "#5a4d76",
+        "accent_pressed_bg": "#3a324a",
+        "error_title": "#ff5555",
+        "error_desc": "#c8c8c8",
+        "log_bg": p.chrome_app_bg,
+        "log_fg": "#ff9999",
+        "log_border": p.border_card,
+    }
+
+
+def about_dialog_stylesheet() -> str:
+    """About frameless card — Default legacy plate; TrueDark elevated tokens."""
+    c = _frameless_card_dialog_colors()
+    return f"""
+    QWidget#AboutCard {{
+        background-color: {c["card_bg"]};
+        border: 1px solid {c["card_border"]};
+        border-radius: 8px;
+    }}
+    QLabel {{ background: transparent; }}
+    QLabel#AboutTitle {{ color: {c["title"]}; font-size: 22px; font-weight: bold; }}
+    QLabel#AboutDim {{ color: {c["dim"]}; font-size: 11px; }}
+    QLabel#AboutText {{ color: {c["text"]}; font-size: 12px; }}
+    QLabel#AboutDisclaimer {{
+        color: {c["disclaimer"]};
+        font-size: 10px;
+        font-style: italic;
+    }}
+    QPushButton {{
+        background-color: {c["btn_bg"]};
+        color: white;
+        border: 1px solid {c["btn_border"]};
+        border-radius: 16px;
+        padding: 6px 24px;
+        font-weight: bold;
+        font-size: 12px;
+        min-height: 32px;
+        outline: none;
+    }}
+    QPushButton:hover {{
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid {c["btn_hover_border"]};
+    }}
+    QPushButton:pressed {{
+        background-color: {c["btn_pressed_bg"]};
+    }}
+    QPushButton#AboutReportBtn {{
+        background-color: {c["danger_bg"]};
+        border: 1px solid {c["danger_border"]};
+        color: #ffffff;
+    }}
+    QPushButton#AboutReportBtn:hover {{
+        background-color: {c["danger_hover_bg"]};
+        border: 1px solid {c["danger_hover_border"]};
+    }}
+    QPushButton#AboutReportBtn:pressed {{
+        background-color: {c["danger_pressed_bg"]};
+    }}
+    QPushButton#AboutUpdateBtn {{
+        background-color: {c["accent_bg"]};
+        border: 1px solid {c["accent_border"]};
+        color: {c["accent_fg"]};
+    }}
+    QPushButton#AboutUpdateBtn:hover {{
+        background-color: {c["accent_hover_bg"]};
+        border: 1px solid #b29ae7;
+    }}
+    QPushButton#AboutUpdateBtn:pressed {{
+        background-color: {c["accent_pressed_bg"]};
+    }}
+"""
+
+
+def render_error_dialog_stylesheet() -> str:
+    """FFmpeg / render-failed frameless card — Default legacy; TrueDark tokens."""
+    c = _frameless_card_dialog_colors()
+    return f"""
+    QWidget#RenderErrorShell {{
+        background-color: {c["card_bg"]};
+        border: 1px solid {c["card_border"]};
+        border-radius: 8px;
+    }}
+    QLabel#ErrorTitle {{
+        color: {c["error_title"]};
+        font-size: 18px;
+        font-weight: bold;
+    }}
+    QLabel#ErrorDesc {{
+        color: {c["error_desc"]};
+        font-size: 13px;
+    }}
+    QTextEdit {{
+        background-color: {c["log_bg"]};
+        color: {c["log_fg"]};
+        border: 1px solid {c["log_border"]};
+        border-radius: 6px;
+        padding: 8px;
+        font-family: Consolas, monospace;
+        font-size: 11px;
+    }}
+    QScrollBar:vertical {{ border: none; background: transparent; width: 12px; }}
+    QScrollBar::handle:vertical {{ background: transparent; border: none; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+    QPushButton {{
+        background-color: {c["btn_bg"]};
+        color: white;
+        border: 1px solid {c["btn_border"]};
+        border-radius: 16px;
+        padding: 6px 20px;
+        font-weight: bold;
+        font-size: 12px;
+        min-height: 32px;
+        outline: none;
+    }}
+    QPushButton:hover {{
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid {c["btn_hover_border"]};
+    }}
+    QPushButton:pressed {{
+        background-color: {c["btn_pressed_bg"]};
+    }}
+    QPushButton#LogBtn {{
+        background-color: {c["danger_bg"]};
+        border: 1px solid {c["danger_border"]};
+    }}
+    QPushButton#LogBtn:hover {{
+        background-color: {c["danger_hover_bg"]};
+        border: 1px solid {c["danger_hover_border"]};
+    }}
+    QPushButton#StopBtn {{
+        background-color: {c["danger_bg"]};
+        border: 1px solid {c["danger_border"]};
+    }}
+    QPushButton#StopBtn:hover {{
+        background-color: {c["danger_hover_bg"]};
+        border: 1px solid {c["danger_hover_border"]};
+    }}
+"""
+
+
+def about_dialog_link_style() -> str:
+    """Inline HTML link color for About (accent stays brand purple)."""
+    return "color:#b29ae7; text-decoration:none;"
+
+
+def about_dialog_muted_span_color() -> str:
+    """Inline muted span color for About developer handle."""
+    return _frameless_card_dialog_colors()["dim"]
+
+
+def render_error_scrollbar_colors() -> tuple[str, str, str]:
+    """Track / thumb / thumb-hover for the FFmpeg error log scroller."""
+    c = _frameless_card_dialog_colors()
+    if _active.name == UI_THEME_DEFAULT:
+        return ("#141414", "#444444", "#666666")
+    return (c["log_bg"], c["card_border"], "#666666")

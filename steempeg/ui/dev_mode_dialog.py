@@ -1057,6 +1057,14 @@ class DevModeDialog(SteempegDialog):
         btn_system.clicked.connect(self._run_system_info)
         lay.addWidget(btn_system)
 
+        btn_ffmpeg_err = QPushButton("Simulate FFmpeg error dialog")
+        btn_ffmpeg_err.setToolTip(
+            "Show the Render Failed window with sample FFmpeg log text "
+            "(for TrueDark / theme visual checks — no real encode)."
+        )
+        btn_ffmpeg_err.clicked.connect(self._simulate_ffmpeg_error_dialog)
+        lay.addWidget(btn_ffmpeg_err)
+
         self._tools_log = QPlainTextEdit()
         self._tools_log.setReadOnly(True)
         self._tools_log.setMaximumBlockCount(5000)
@@ -1228,3 +1236,46 @@ class DevModeDialog(SteempegDialog):
         self._system_worker.finished_all.connect(
             lambda: self._tools_log.appendPlainText("\n— System Info complete —"))
         self._system_worker.start()
+
+    def _simulate_ffmpeg_error_dialog(self):
+        """Open the real Render Failed chrome with sample FFmpeg soup (theme QA)."""
+        host = None
+        parent = self.parent()
+        while parent is not None:
+            host = getattr(parent, "_app_host", None)
+            if host is not None:
+                break
+            parent = parent.parent() if hasattr(parent, "parent") else None
+        if host is None or not hasattr(host, "_show_steempeg_render_error_dialog"):
+            self._tools_log.appendPlainText(
+                "ERROR: Could not reach the render controller to show the FFmpeg error dialog."
+            )
+            return
+
+        sample = (
+            "ffmpeg version N-118201-g7f3a9c2 Copyright (c) 2000-2026 the FFmpeg developers\n"
+            "  built with gcc 14.2.0 (Rev1, Built by MSYS2 project)\n"
+            "  configuration: --enable-gpl --enable-libx264 --enable-libx265\n"
+            "Input #0, concat, from 'C:/Users/emily/AppData/Local/Temp/steempeg_concat.txt':\n"
+            "  Duration: 00:03:42.18, start: 0.000000, bitrate: 18420 kb/s\n"
+            "  Stream #0:0: Video: h264 (High), yuv420p, 1920x1080, 60 fps\n"
+            "  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo, fltp\n"
+            "Stream mapping:\n"
+            "  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))\n"
+            "  Stream #0:1 -> #0:1 (aac (native) -> aac (native))\n"
+            "[libx264 @ 000001a4f2c0] Error while opening encoder: Cannot allocate memory\n"
+            "Error initializing output stream 0:0 -- Error while opening encoder for "
+            "output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, "
+            "width or height\n"
+            "[out#0/mp4 @ 000001a4f880] Error opening encoder: Cannot allocate memory\n"
+            "Error opening output file C:/Records/clip_export.mp4.\n"
+            "Error opening output files: Cannot allocate memory\n"
+            "Conversion failed!\n"
+            "\n"
+            "os error: NOT ENOUGH MEMORY / ENOSPC (disk full or pagefile exhausted)\n"
+        )
+        self._tools_log.appendPlainText("Showing simulated FFmpeg error dialog…")
+        try:
+            host._show_steempeg_render_error_dialog(sample)
+        except Exception as exc:
+            self._tools_log.appendPlainText(f"ERROR: simulate failed: {exc}")

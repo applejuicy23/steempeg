@@ -32,66 +32,6 @@ from steempeg.version import APP_VERSION_STR
 from steempeg.ui.message_dialog import steempeg_information, steempeg_question, steempeg_warning
 
 
-_ABOUT_DIALOG_STYLE = """
-    QWidget#AboutCard {
-        background-color: #202020;
-        border: 1px solid #444444;
-        border-radius: 8px;
-    }
-    QLabel { background: transparent; }
-    QLabel#AboutTitle { color: #b29ae7; font-size: 22px; font-weight: bold; }
-    QLabel#AboutDim { color: #888888; font-size: 11px; }
-    QLabel#AboutText { color: #dddddd; font-size: 12px; }
-    QLabel#AboutDisclaimer {
-        color: #8a8a8a;
-        font-size: 10px;
-        font-style: italic;
-    }
-    QPushButton {
-        background-color: #333333;
-        color: white;
-        border: 1px solid #555555;
-        border-radius: 16px;
-        padding: 6px 24px;
-        font-weight: bold;
-        font-size: 12px;
-        min-height: 32px;
-        outline: none;
-    }
-    QPushButton:hover {
-        background-color: #444444;
-        border: 1px solid #777777;
-    }
-    QPushButton:pressed {
-        background-color: #222222;
-    }
-    QPushButton#AboutReportBtn {
-        background-color: #4a2525;
-        border: 1px solid #7a3535;
-        color: #ffffff;
-    }
-    QPushButton#AboutReportBtn:hover {
-        background-color: #6a2e2e;
-        border: 1px solid #9a4545;
-    }
-    QPushButton#AboutReportBtn:pressed {
-        background-color: #3a1d1d;
-    }
-    QPushButton#AboutUpdateBtn {
-        background-color: #4a3d66;
-        border: 1px solid #6b5a8e;
-        color: #f0ecff;
-    }
-    QPushButton#AboutUpdateBtn:hover {
-        background-color: #5a4d76;
-        border: 1px solid #b29ae7;
-    }
-    QPushButton#AboutUpdateBtn:pressed {
-        background-color: #3a324a;
-    }
-"""
-
-
 def _crisp_icon(path, size, dpr=2.0):
     """Smoothly-scaled, HiDPI-aware icon so embedded logos aren't pixelated."""
     pix = QPixmap(path)
@@ -597,9 +537,13 @@ class LifecycleMixin:
             return  # Block if already open
         self._about_is_open = True
 
-        link = "color:#b29ae7; text-decoration:none;"
+        from steempeg.ui import ui_theme as ut
+
+        link = ut.about_dialog_link_style()
+        muted = ut.about_dialog_muted_span_color()
 
         dialog = QDialog(self.ui)
+        dialog.setObjectName("SteempegAboutDialog")
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         # Make the window itself transparent so only the stylesheet's rounded rect is
         # painted; otherwise the square window background pokes out past the 8px radius.
@@ -620,7 +564,7 @@ class LifecycleMixin:
                 dialog.setFixedSize(*scaled_dialog_size(660, 480, parent=self.ui))
         else:
             dialog.setFixedSize(*scaled_dialog_size(620, 470, parent=self.ui))
-        dialog.setStyleSheet(_ABOUT_DIALOG_STYLE)
+        dialog.setStyleSheet(ut.about_dialog_stylesheet())
 
         shell_layout = QVBoxLayout(dialog)
         shell_layout.setContentsMargins(0, 0, 0, 0)
@@ -658,16 +602,17 @@ class LifecycleMixin:
 
         dev = QLabel(
             'Developer: <b>Emily</b> 🎀 '
-            '<span style="color:#888888;">@applejuicy23</span>'
+            f'<span style="color:{muted};">@applejuicy23</span>'
         )
         dev.setObjectName("AboutText")
         content.addWidget(dev)
 
-        content.addLayout(self._about_icon_row(
+        github_row = self._about_icon_row(
             "github.jpg",
             f'<b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg" '
             f'style="{link}">applejuicy23/steempeg</a>',
-        ))
+        )
+        content.addLayout(github_row)
         content.addLayout(self._about_icon_row(
             "steam.png",
             f'<b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/" '
@@ -731,6 +676,17 @@ class LifecycleMixin:
         content.addLayout(btn_row)
 
         main_layout.addLayout(content)
+
+        def apply_ui_theme_chrome() -> None:
+            """Live-retint if Settings switches theme while About is open."""
+            dialog.setStyleSheet(ut.about_dialog_stylesheet())
+            new_muted = ut.about_dialog_muted_span_color()
+            dev.setText(
+                'Developer: <b>Emily</b> 🎀 '
+                f'<span style="color:{new_muted};">@applejuicy23</span>'
+            )
+
+        dialog.apply_ui_theme_chrome = apply_ui_theme_chrome  # type: ignore[attr-defined]
 
         try:
             dialog.exec()

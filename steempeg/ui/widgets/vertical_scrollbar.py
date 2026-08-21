@@ -82,11 +82,14 @@ def filters_games_scrollbar_chrome() -> VerticalScrollbarChrome:
 
 
 def error_dialog_scrollbar_chrome() -> VerticalScrollbarChrome:
-    """Render error dialog — dark track + gray thumb."""
+    """Render error dialog — theme track + gray thumb (Default legacy / TrueDark tokens)."""
+    from steempeg.ui import ui_theme as ut
+
+    track, thumb, hover = ut.render_error_scrollbar_colors()
     return VerticalScrollbarChrome(
-        track_color=QColor("#141414"),
-        thumb_color=QColor("#444444"),
-        thumb_hover_color=QColor("#666666"),
+        track_color=QColor(track),
+        thumb_color=QColor(thumb),
+        thumb_hover_color=QColor(hover),
         width=12,
         margin_left=2,
         margin_right=2,
