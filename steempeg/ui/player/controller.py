@@ -2753,6 +2753,17 @@ class PlayerMixin:
         if not file_path or not os.path.isfile(file_path):
             return
 
+        # Same export already open — keep position (tab restore / re-select).
+        # Mirrors Clips Manager skip-reopen of the current clip.
+        if (
+            not getattr(self, "_is_switching", False)
+            and self._norm_clip_path_key(file_path)
+            == self._norm_clip_path_key(getattr(self, "_active_play_media_path", None))
+        ):
+            self._preview_clip_path = file_path
+            self._rendered_media_path = file_path
+            return
+
         if hasattr(self, "get_rendered_health_report"):
             report = self.get_rendered_health_report(file_path)
             if report.level == health.ClipHealth.DEAD:

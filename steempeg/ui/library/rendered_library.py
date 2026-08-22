@@ -658,10 +658,17 @@ class RenderedLibraryMixin:
                 continue
             row_path = cell.data(Qt.ItemDataRole.UserRole)
             if row_path and os.path.normpath(row_path) == norm:
+                sm = self.table_rendered.selectionModel()
                 self.table_rendered.blockSignals(True)
-                self.table_rendered.selectRow(row)
-                self.table_rendered.setCurrentCell(row, 0)
-                self.table_rendered.blockSignals(False)
+                if sm is not None:
+                    sm.blockSignals(True)
+                try:
+                    self.table_rendered.selectRow(row)
+                    self.table_rendered.setCurrentCell(row, 0)
+                finally:
+                    if sm is not None:
+                        sm.blockSignals(False)
+                    self.table_rendered.blockSignals(False)
                 self._sync_rendered_grid_from_table()
                 return True
         return False
@@ -4473,6 +4480,25 @@ class RenderedLibraryMixin:
                     if row_item and not row_item.isHidden():
                         row_item.setSelected(True)
             else:
+                # Already the open export — ignore the click (no reload).
+                # Mirrors Clips Manager ``_grid_select_item`` skip-reopen.
+                file_path = item.data(Qt.ItemDataRole.UserRole + 1)
+                if (
+                    update_preview
+                    and file_path
+                    and hasattr(self, "_norm_clip_path_key")
+                    and self._norm_clip_path_key(file_path)
+                    == self._norm_clip_path_key(
+                        getattr(self, "_active_play_media_path", None)
+                        or getattr(self, "_rendered_media_path", None)
+                        or getattr(self, "_preview_clip_path", None)
+                    )
+                ):
+                    item.setSelected(True)
+                    grid.blockSignals(False)
+                    self._rendered_grid_select_in_progress = False
+                    self._sync_rendered_grid_card_visuals()
+                    return
                 grid.clearSelection()
                 item.setSelected(True)
 
@@ -4530,6 +4556,16 @@ class RenderedLibraryMixin:
         type_clean = type_label.replace("🎬 ", "").strip()
         date_str = self.table_rendered.item(row, 2).text() if self.table_rendered.item(row, 2) else ""
         size_str = self.table_rendered.item(row, 3).text() if self.table_rendered.item(row, 3) else ""
+
+        already_open = (
+            hasattr(self, "_norm_clip_path_key")
+            and bool(file_path)
+            and self._norm_clip_path_key(file_path)
+            == self._norm_clip_path_key(
+                getattr(self, "_active_play_media_path", None)
+                or getattr(self, "_rendered_media_path", None)
+            )
+        )
 
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
@@ -4626,13 +4662,14 @@ class RenderedLibraryMixin:
                 except Exception:
                     pass
 
-        if hasattr(self, "schedule_play_media_file"):
-            self.schedule_play_media_file(file_path)
-        elif hasattr(self, "play_media_file"):
-            self.play_media_file(file_path)
-        # Match Clips Manager: a newly selected item starts at zoom 1.0 (not the previous file's zoom).
-        if hasattr(self, "custom_timeline"):
-            self.custom_timeline.set_zoom_state(1.0, 0)
+        if not already_open:
+            if hasattr(self, "schedule_play_media_file"):
+                self.schedule_play_media_file(file_path)
+            elif hasattr(self, "play_media_file"):
+                self.play_media_file(file_path)
+            # Match Clips Manager: a newly selected item starts at zoom 1.0.
+            if hasattr(self, "custom_timeline"):
+                self.custom_timeline.set_zoom_state(1.0, 0)
         self._sync_library_mode_chrome()
         self._persist_library_ui_state()
 
