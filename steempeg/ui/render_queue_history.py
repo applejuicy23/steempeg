@@ -32,21 +32,29 @@ _DIALOG_STYLE = """
     QLabel { background: transparent; border: none; }
 """
 
-_BATCH_FRAME = """
-    QFrame#batchFrame {
-        background-color: #2a2a2a;
-        border: 1px solid #3d3d3d;
-        border-radius: 10px;
-    }
-"""
 
-_JOB_FRAME = """
-    QFrame#jobFrame {
-        background-color: #242424;
-        border: 1px solid #353535;
-        border-radius: 8px;
-    }
-"""
+def _surface_styles() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_history_surface_stylesheet()
+
+
+def _pill_btn_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_history_pill_button_stylesheet(bold=True)
+
+
+def _action_btn_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_history_pill_button_stylesheet(bold=False)
+
+
+def _close_btn_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.render_history_close_button_stylesheet()
 
 
 def _format_batch_when(iso: str) -> str:
@@ -81,27 +89,8 @@ _STATUS_ICON = 14
 _FONT_SEMIBOLD = f"font-family: {tok.FONT_APP}; font-weight: 600;"
 
 # Match Render Queue Clear / Refresh: Segoe UI bold 13px.
-_PILL_BTN_STYLE = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 4px 12px;
-        font-size: 13px; font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-"""
-
-_ACTION_BTN_STYLE = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 4px 12px;
-        font-size: 13px; font-weight: normal;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-"""
+_PILL_BTN_STYLE = _pill_btn_style()
+_ACTION_BTN_STYLE = _action_btn_style()
 
 
 class RenderQueueHistoryDialog(SteempegDialog):
@@ -125,8 +114,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
         self._batches = batches
-        # Append frame/label rules on top of the shared card stylesheet.
-        self.setStyleSheet(self.styleSheet() + _DIALOG_STYLE + _BATCH_FRAME + _JOB_FRAME)
+        self._apply_history_styles()
 
         root = self.content_layout
 
@@ -153,11 +141,13 @@ class RenderQueueHistoryDialog(SteempegDialog):
         clear_font.setPixelSize(13)
         btn_clear.setFont(clear_font)
         btn_clear.clicked.connect(self._confirm_clear)
+        self._btn_clear = btn_clear
         header.addWidget(btn_clear)
         root.addLayout(header)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        self._history_scroll = scroll
         tok.apply_dialog_scroll_bg(scroll, self._bg_color)
         from steempeg.ui.library.library_styles import (
             LIBRARY_SCROLLBAR_VERTICAL,
@@ -172,6 +162,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         host = QWidget()
         host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         host.setStyleSheet(f"background-color: {self._bg_color};")
+        self._history_scroll_host = host
         host_layout = QVBoxLayout(host)
         host_layout.setContentsMargins(0, 0, 0, 0)
         host_layout.setSpacing(12)
@@ -212,16 +203,54 @@ class RenderQueueHistoryDialog(SteempegDialog):
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.PointingHandCursor)
         btn_close.setFixedWidth(100)
-        btn_close.setStyleSheet("""
-            QPushButton {
-                background-color: #3a324a; color: #e0d4ff; border: 1px solid #6b5a8e;
-                border-radius: 8px; padding: 8px 16px; font-weight: bold;
-            }
-            QPushButton:hover { background-color: #4a3f5c; }
-        """)
+        btn_close.setStyleSheet(_close_btn_style())
+        self._btn_close = btn_close
         btn_close.clicked.connect(self.accept)
         close_row.addWidget(btn_close)
         root.addLayout(close_row)
+
+    def _apply_history_styles(self) -> None:
+        """Layer card faces + label rules on SteempegDialog chrome."""
+        global _PILL_BTN_STYLE, _ACTION_BTN_STYLE
+        _PILL_BTN_STYLE = _pill_btn_style()
+        _ACTION_BTN_STYLE = _action_btn_style()
+        self.setStyleSheet(self.styleSheet() + _DIALOG_STYLE + _surface_styles())
+
+    def _refresh_theme_surfaces(self) -> None:
+        """Re-tint cards and action buttons from active tokens."""
+        global _PILL_BTN_STYLE, _ACTION_BTN_STYLE
+        _PILL_BTN_STYLE = _pill_btn_style()
+        _ACTION_BTN_STYLE = _action_btn_style()
+        self._apply_history_styles()
+        host = getattr(self, "_history_scroll_host", None)
+        if host is not None:
+            host.setStyleSheet(f"background-color: {self._bg_color};")
+        scroll = getattr(self, "_history_scroll", None)
+        if scroll is not None:
+            from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
+            scroll.setStyleSheet(
+                tok.dialog_scroll_stylesheet(self._bg_color) + LIBRARY_SCROLLBAR_VERTICAL
+            )
+        btn_clear = getattr(self, "_btn_clear", None)
+        if btn_clear is not None:
+            btn_clear.setStyleSheet(_PILL_BTN_STYLE)
+        btn_close = getattr(self, "_btn_close", None)
+        if btn_close is not None:
+            btn_close.setStyleSheet(_close_btn_style())
+        for btn in self.findChildren(QPushButton):
+            if btn in (btn_clear, btn_close):
+                continue
+            text = (btn.text() or "").strip()
+            if text in ("Open folder", "Open file", "Rendered videos"):
+                btn.setStyleSheet(_ACTION_BTN_STYLE)
+            else:
+                btn.setStyleSheet(_PILL_BTN_STYLE)
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Live-retint when Settings switches UI theme while Render History is open."""
+        super().apply_ui_theme_chrome()
+        self._refresh_theme_surfaces()
 
     def _pump_history_batches(self) -> None:
         layout = getattr(self, "_history_host_layout", None)
