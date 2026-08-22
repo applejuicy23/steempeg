@@ -1102,6 +1102,21 @@ def apply_render_panel_theme_chrome(ui) -> None:
     if target is not None:
         target.setStyleSheet(_target_readout_qss())
 
+    apply_presets_tab_theme_chrome(ui)
+
+
+def apply_presets_tab_theme_chrome(ui) -> None:
+    """Re-tint Presets tab inputs, list plate, and row Apply chrome."""
+    name = getattr(ui, "preset_name_edit", None)
+    if name is not None:
+        name.setStyleSheet(ut.presets_line_edit_stylesheet())
+    search = getattr(ui, "preset_search_edit", None)
+    if search is not None:
+        search.setStyleSheet(ut.presets_line_edit_stylesheet(compact=True))
+    lst = getattr(ui, "preset_list", None)
+    if lst is not None:
+        lst.setStyleSheet(ut.presets_list_widget_stylesheet())
+
 
 def apply_settings_panel_density(ui, dense) -> None:
     """Resize Source/Video/Audio/Export chrome for Deck-class windows."""
@@ -1318,62 +1333,7 @@ class PresetListRow(QWidget):
         " QPushButton:hover { background-color: rgba(255,255,255,0.08); color: #ffffff; }"
         " QPushButton:pressed { background-color: rgba(255,255,255,0.14); }"
     )
-    # Match RefreshButton (refresh_button.py): split pill, #444 border, purple hover.
-    _APPLY_SPLIT = f"""
-    QPushButton#PresetApplyMain {{
-        {_FONT}
-        font-size: 11px;
-        font-weight: bold;
-        background-color: #383838;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-right: none;
-        border-top-left-radius: 12px;
-        border-bottom-left-radius: 12px;
-        border-top-right-radius: 0px;
-        border-bottom-right-radius: 0px;
-        padding: 0px 10px;
-        min-height: 22px;
-    }}
-    QPushButton#PresetApplyMain:hover {{
-        background-color: #404040;
-        border: 2px solid #6b5a8e;
-        border-right: none;
-    }}
-    QPushButton#PresetApplyMain:pressed {{
-        background-color: #3a324a;
-        border: 2px solid #b29ae7;
-        border-right: none;
-    }}
-    QPushButton#PresetApplyMenu {{
-        background-color: #383838;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-left: 1px solid #555555;
-        border-top-left-radius: 0px;
-        border-bottom-left-radius: 0px;
-        border-top-right-radius: 12px;
-        border-bottom-right-radius: 12px;
-        {_FONT}
-        font-size: 12px;
-        font-weight: bold;
-        min-width: 22px;
-        max-width: 26px;
-        padding: 2px 0;
-        min-height: 22px;
-    }}
-    QPushButton#PresetApplyMenu:hover {{
-        background-color: #404040;
-        color: #d4c4ff;
-        border: 2px solid #6b5a8e;
-        border-left: 1px solid #6b5a8e;
-    }}
-    QPushButton#PresetApplyMenu:pressed {{
-        background-color: #3a324a;
-        border: 2px solid #b29ae7;
-        border-left: 1px solid #b29ae7;
-    }}
-    """
+    # Apply ▾ split chrome resolved in __init__ from active theme tokens.
     _NAME_QSS = (
         f"QLabel {{ color: #f0f0f0; background: transparent; font-size: 13px;"
         f" font-weight: bold; {_FONT} }}"
@@ -1455,7 +1415,7 @@ class PresetListRow(QWidget):
         # Refresh-style Apply ▾ split (see RefreshButton + library_menu_stylesheet).
         apply_split = QWidget()
         apply_split.setFixedHeight(26)
-        apply_split.setStyleSheet(self._APPLY_SPLIT)
+        apply_split.setStyleSheet(ut.presets_apply_split_stylesheet())
         apply_lay = QHBoxLayout(apply_split)
         apply_lay.setContentsMargins(0, 0, 0, 0)
         apply_lay.setSpacing(0)
@@ -1606,11 +1566,7 @@ def restyle_presets_page(ui, app) -> None:
     name_edit = QLineEdit()
     name_edit.setObjectName("preset_name_edit")
     name_edit.setPlaceholderText("e.g. Discord 720p")
-    name_edit.setStyleSheet(
-        "QLineEdit { background-color: #2a2a2a; color: #e8e8e8; border: 1px solid #444;"
-        " border-radius: 8px; padding: 8px 10px; font-weight: bold; }"
-        " QLineEdit:focus { border: 1px solid #8e7cc3; }"
-    )
+    name_edit.setStyleSheet(ut.presets_line_edit_stylesheet())
     ui.preset_name_edit = name_edit
 
     def _save_as_like_btn(
@@ -1676,11 +1632,7 @@ def restyle_presets_page(ui, app) -> None:
     search_edit.setObjectName("preset_search_edit")
     search_edit.setPlaceholderText("Search…")
     search_edit.setClearButtonEnabled(True)
-    search_edit.setStyleSheet(
-        "QLineEdit { background-color: #2a2a2a; color: #e8e8e8; border: 1px solid #444;"
-        " border-radius: 8px; padding: 6px 10px; font-weight: bold; }"
-        " QLineEdit:focus { border: 1px solid #8e7cc3; }"
-    )
+    search_edit.setStyleSheet(ut.presets_line_edit_stylesheet(compact=True))
     ui.preset_search_edit = search_edit
     root.addWidget(_content_width_wrap(search_edit))
 
@@ -1689,14 +1641,7 @@ def restyle_presets_page(ui, app) -> None:
     preset_list.setMinimumHeight(180)
     preset_list.setSpacing(2)
     preset_list.setUniformItemSizes(False)
-    preset_list.setStyleSheet(
-        "QListWidget { background-color: #2a2a2a; border: 1px solid #3a3a3a;"
-        " border-radius: 10px; color: #e0e0e0; padding: 4px; outline: none; }"
-        " QListWidget::item { padding: 0px; border-radius: 8px; margin: 1px 0px; }"
-        " QListWidget::item:selected { background-color: #4a3d66;"
-        " border: 1px solid #b29ae7; }"
-        " QListWidget::item:hover:!selected { background-color: #383838; }"
-    )
+    preset_list.setStyleSheet(ut.presets_list_widget_stylesheet())
     ui.preset_list = preset_list
     root.addWidget(_content_width_wrap(preset_list), 1)
 
