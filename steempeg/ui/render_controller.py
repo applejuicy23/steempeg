@@ -1444,20 +1444,31 @@ class RenderMixin:
         return True
 
     def _restore_header_from_library_selection(self) -> None:
-        """After the queue clears or Leave — fall back to Clips / Rendered selection."""
+        """After the queue clears or Leave — fall back to Clips / Rendered selection.
+
+        Header chrome only — never call ``update_rendered_selection`` here (that
+        reloads MPV and resets playback position on tab / queue chrome sync).
+        """
         preview = getattr(self, "_preview_clip_path", None)
         preview_norm = os.path.normpath(preview) if preview else ""
 
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
-            table = getattr(self, "table_rendered", None)
-            if table is not None and table.currentRow() >= 0 and hasattr(
-                self, "update_rendered_selection"
-            ):
-                self.update_rendered_selection()
-                return
-
-        # Prefer the clip actually playing — table currentRow can still point at
+        # Prefer the media actually playing — table currentRow can still point at
         # a queue-highlighted card after a library preview diversion.
+        if preview_norm and hasattr(self, "_resolved_rendered_meta") and os.path.isfile(
+            preview_norm
+        ):
+            if hasattr(self, "custom_text_label"):
+                from steempeg.ui.player_header_layout import set_player_header_game_text
+
+                display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
+                    preview_norm, os.path.basename(preview_norm)
+                )
+                extra = ["Unknown"] if is_unknown else []
+                set_player_header_game_text(self, display_title, extra=extra)
+                if icon_path and hasattr(self, "_set_player_header_game_icon"):
+                    self._set_player_header_game_icon(icon_path=icon_path)
+            return
+
         if preview_norm and hasattr(self.ui, "table_clips"):
             for r in range(self.ui.table_clips.rowCount()):
                 item = self.ui.table_clips.item(r, 0)
@@ -1470,21 +1481,6 @@ class RenderMixin:
             if row >= 0:
                 self._apply_header_from_table_row(row)
                 return
-
-        if not preview_norm:
-            return
-        # Preview may be a rendered export after the queue drained / Leave.
-        if hasattr(self, "_resolved_rendered_meta") and os.path.isfile(preview_norm):
-            if hasattr(self, "custom_text_label"):
-                from steempeg.ui.player_header_layout import set_player_header_game_text
-
-                display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
-                    preview_norm, os.path.basename(preview_norm)
-                )
-                extra = ["Unknown"] if is_unknown else []
-                set_player_header_game_text(self, display_title, extra=extra)
-                if icon_path and hasattr(self, "_set_player_header_game_icon"):
-                    self._set_player_header_game_icon(icon_path=icon_path)
 
     def _queue_controls_preview(self) -> bool:
         """Alias kept for library/grid hooks."""
@@ -3287,8 +3283,9 @@ class RenderMixin:
                 and self._is_previewing_rendered_media()
             )
             if previewing_rendered:
-                if hasattr(self, "update_rendered_selection"):
-                    self.update_rendered_selection()
+                # Header/chrome only — never re-open the export (resets position).
+                self._restore_header_from_library_selection()
+                self._sync_start_render_enabled()
                 return
             clip_path = self._resolve_export_clip_path()
             if clip_path:
@@ -3296,8 +3293,8 @@ class RenderMixin:
                 self.update_final_setup()
                 self._update_start_button_label()
                 return
-            if hasattr(self, "update_rendered_selection"):
-                self.update_rendered_selection()
+            self._restore_header_from_library_selection()
+            self._sync_start_render_enabled()
             return
         if getattr(self, '_grid_select_in_progress', False):
             return

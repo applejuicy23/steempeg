@@ -4574,10 +4574,11 @@ class RenderedLibraryMixin:
             self._clear_queue_selection()
         else:
             self._selected_queue_job_id = None
-        # Previewing Rendered while queue mode is on — bind header to this file,
-        # not Ready job #1 (same diversion as Clips Manager library preview).
+        # Render Queue active: keep the render control panel on the queue head /
+        # encode target. Finished exports are preview-only — do not divert dash
+        # identity chrome the way Clips Manager does for Steam clips.
         if queue_active:
-            self._queue_library_preview_diversion = True
+            self._queue_library_preview_diversion = False
 
         display_title, icon_path, _thumb, is_unknown, _game_key = self._resolved_rendered_meta(
             file_path, os.path.basename(file_path)
@@ -4654,13 +4655,9 @@ class RenderedLibraryMixin:
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
         if queue_active and not getattr(self, "_is_rendering", False):
-            if hasattr(self, "update_status_indicator"):
-                self.update_status_indicator("Ready", "ready")
-            if hasattr(self, "update_final_setup"):
-                try:
-                    self.update_final_setup()
-                except Exception:
-                    pass
+            # Re-bind Ready / summary to the queue job, not this export's metadata.
+            if hasattr(self, "_sync_dash_queue_status_chrome"):
+                self._sync_dash_queue_status_chrome()
 
         if not already_open:
             if hasattr(self, "schedule_play_media_file"):
