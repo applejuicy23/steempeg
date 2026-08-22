@@ -4309,6 +4309,8 @@ class PlayerMixin:
             self.save_user_settings(pq.SETTINGS_KEY, preset_id)
 
     def show_preview_quality_menu(self) -> None:
+        if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
+            return
         from PySide6.QtGui import QActionGroup
         from PySide6.QtWidgets import QMenu
 

@@ -2911,6 +2911,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ):
             if widget is not None:
                 widget.setVisible(bool(visible))
+        # Preview quality is for Steam/DASH clips only — finished exports have no
+        # adaptive streams to pick, so hide the gear on Rendered videos playback.
+        btn_q = getattr(self, "btn_preview_settings", None)
+        if btn_q is not None:
+            show_q = bool(visible)
+            if show_q and hasattr(self, "_is_previewing_rendered_media"):
+                try:
+                    show_q = not bool(self._is_previewing_rendered_media())
+                except Exception:
+                    show_q = True
+            btn_q.setVisible(show_q)
         self.refresh_player_header_info(has_clip=bool(visible))
         # Steam-like: keep ``|`` / title at bar midpoint when the right dock
         # appears or disappears (Healthy / gear / close).
