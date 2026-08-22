@@ -3059,6 +3059,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         )
 
         from steempeg.ui import design_tokens as tok
+        from steempeg.ui import ui_theme as ut
         from steempeg.ui.icon_shape import shaped_game_icon_pixmap
 
         btn = getattr(self, "btn_player_header_info", None)
@@ -3084,14 +3085,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         menu = QMenu(btn)
         self._clip_info_popup = menu
         menu.setObjectName("clipInfoPopup")
-        menu.setStyleSheet(
-            "QMenu#clipInfoPopup {"
-            f" background-color: {tok.TOOLTIP_BG};"
-            f" border: 1px solid {tok.TOOLTIP_BORDER};"
-            " border-radius: 8px;"
-            " padding: 0px;"
-            "}"
-        )
+        menu.setStyleSheet(ut.clip_info_popup_stylesheet())
+        _, _, info_value_fg, info_muted_fg = ut.clip_info_popup_colors()
 
         host = QWidget()
         host.setStyleSheet("background: transparent;")
@@ -3105,8 +3100,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             player_header_font_px,
             player_header_title_qfont,
         )
-        from steempeg.ui.render_panel import SummaryLabel
-
         # Same face as the player-header game name (Hatsune Miku title).
         heading_font = player_header_title_qfont(player_header_font_px(self))
         heading_qss = (
@@ -3231,13 +3224,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if cap:
                 cap_lbl = QLabel(f"{cap}:")
                 # Export Settings Final Render Details keys (Clip time / Quality / Bitrate).
-                cap_lbl.setStyleSheet(SummaryLabel._KEY_QSS)
+                cap_lbl.setStyleSheet(
+                    f"color: {info_muted_fg}; background: transparent; "
+                    f"font-size: 13px; font-family: {tok.FONT_APP};"
+                )
                 cap_lbl.setMinimumWidth(96)
                 row.addWidget(cap_lbl, 0)
             val_lbl = QLabel(val)
             val_lbl.setWordWrap(True)
             val_lbl.setStyleSheet(
-                f"color: {tok.TOOLTIP_FG}; font-size: 11px;"
+                f"color: {info_value_fg}; font-size: 11px;"
                 f" font-family: {tok.FONT_APP}; background: transparent;"
             )
             row.addWidget(val_lbl, 1)
@@ -3245,7 +3241,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         if source_paths:
             src_cap = QLabel("Source:")
-            src_cap.setStyleSheet(SummaryLabel._KEY_QSS)
+            src_cap.setStyleSheet(
+                f"color: {info_muted_fg}; background: transparent; "
+                f"font-size: 13px; font-family: {tok.FONT_APP};"
+            )
             lay.addWidget(src_cap)
             path_font = QFont("Cascadia Mono")
             if not path_font.exactMatch():
@@ -3264,7 +3263,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 path_lbl.setFixedWidth(320)
                 path_lbl.setFont(path_font)
                 path_lbl.setStyleSheet(
-                    f"color: {tok.TEXT_MUTED}; background: transparent;"
+                    f"color: {info_muted_fg}; background: transparent;"
                 )
                 lay.addWidget(path_lbl)
 
@@ -3667,6 +3666,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.design_tokens import with_tooltip_style
         from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
+
+        # Clip info is built once at open — close so the next show picks up tokens.
+        clip_info = getattr(self, "_clip_info_popup", None)
+        if clip_info is not None:
+            try:
+                clip_info.close()
+            except RuntimeError:
+                pass
+            self._clip_info_popup = None
 
         p = ut.active_palette()
 
