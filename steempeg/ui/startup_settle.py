@@ -138,6 +138,11 @@ def _run_startup_settle_pass(app) -> None:
             app._ensure_startup_queue_open()
         if hasattr(app, "_refresh_player_footer_chrome"):
             app._refresh_player_footer_chrome()
+        from steempeg.ui.player.controls.adaptive_trim_tools import (
+            sync_trim_tools_placement,
+        )
+
+        sync_trim_tools_placement(app)
         # Keep Ready / queue badge painted for the real density.
         if hasattr(app, "update_status_indicator"):
             label = getattr(getattr(app, "ui", None), "label_status", None)

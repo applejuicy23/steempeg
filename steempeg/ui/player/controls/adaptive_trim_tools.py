@@ -401,6 +401,39 @@ def _place_markers_inline(app, markers: QWidget) -> None:
     markers.show()
 
 
+def _overlay_row_top_y(app, overlay: QWidget) -> int | None:
+    """Top Y of the shared bottom overlay row (Trim/Cancel baseline + gap).
+
+    Trim tools drop from the Trim button bottom, not the taller theater/fs pill.
+    Stacked markers must use the same anchor when trim tools are hidden so the
+    bottom row stays level across Trim on/off.
+    """
+    trim = getattr(app, "btn_trim", None)
+    if trim is not None and trim.isVisible():
+        anchor = trim.mapTo(overlay, QPoint(trim.width() // 2, trim.height()))
+        return int(anchor.y() + _DROP_GAP_PX)
+
+    row = getattr(app, "_footer_controls_row", None)
+    if row is not None and row.isVisible():
+        anchor = row.mapTo(overlay, QPoint(0, row.height()))
+        return int(anchor.y() + _DROP_GAP_PX)
+    return None
+
+
+def _overlay_row_height(app) -> int:
+    tools = getattr(app, "trim_tools_pill", None)
+    markers = getattr(app, "marker_pill", None)
+    heights = [40]
+    for w in (tools, markers):
+        if w is None:
+            continue
+        if w.height() > 0:
+            heights.append(w.height())
+        heights.append(w.sizeHint().height())
+        heights.append(w.minimumSizeHint().height())
+    return max(heights)
+
+
 def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
     """Y for stacked markers: match trim-tool circles when they share the row."""
     tools = getattr(app, "trim_tools_pill", None)
@@ -413,6 +446,11 @@ def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
         th = max(tools.height(), 1)
         # Same baseline as trim circles; center if pill heights differ slightly.
         return int(tools.y() + (th - mh) // 2)
+
+    row_top = _overlay_row_top_y(app, overlay)
+    if row_top is not None:
+        rh = _overlay_row_height(app)
+        return int(row_top + (rh - mh) // 2)
 
     bottom_center = pill.mapTo(
         overlay, QPoint(pill.width() // 2, pill.height())
@@ -430,10 +468,8 @@ def _reposition_markers_below(app, markers: QWidget, pill: QWidget) -> None:
     hint = markers.sizeHint()
     mw = max(hint.width(), markers.minimumSizeHint().width(), 90)
     mh = max(hint.height(), markers.minimumSizeHint().height(), 40)
-    bottom_center = pill.mapTo(
-        overlay, QPoint(pill.width() // 2, pill.height())
-    )
-    x = int(bottom_center.x() - mw // 2)
+    pill_center = pill.mapTo(overlay, pill.rect().center())
+    x = int(pill_center.x() - mw // 2)
     y = _marker_stack_y(app, overlay, pill, mh)
     x = max(0, min(x, max(0, overlay.width() - mw)))
     markers.setGeometry(x, y, mw, mh)
