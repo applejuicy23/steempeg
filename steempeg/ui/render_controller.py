@@ -1817,12 +1817,18 @@ class RenderMixin:
         from steempeg.ui.render_queue_history import RenderQueueHistoryDialog
 
         from steempeg.ui import design_tokens as tok
+        from steempeg.ui import ui_theme as ut
 
         batches = getattr(self, "_render_history_cache", None)
         if batches is None:
             batches = load_history(self._queue_history_path())
             self._render_history_cache = batches
-        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        if ut.get_ui_theme() == ut.UI_THEME_DEFAULT:
+            theme = tok.chrome_theme_colors(
+                getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME)
+            )
+        else:
+            theme = ut.chrome_colors_for_active()
         dlg = RenderQueueHistoryDialog(
             batches, parent=self.ui, bar_color=theme["title_bar"], bg_color=theme["app_bg"]
         )
