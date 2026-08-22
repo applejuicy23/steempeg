@@ -159,7 +159,14 @@ class UpdaterMixin:
     def _open_update_center(self):
         exe_dir = get_install_root()
         backups = find_local_backups(exe_dir)
-        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        from steempeg.ui import ui_theme as ut
+
+        if ut.get_ui_theme() == ut.UI_THEME_DEFAULT:
+            theme = tok.chrome_theme_colors(
+                getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME)
+            )
+        else:
+            theme = ut.chrome_colors_for_active()
         keep_prefs = None
         try:
             from steempeg.ui.settings_prefs import load_update_keep_when

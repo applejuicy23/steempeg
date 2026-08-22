@@ -68,70 +68,70 @@ _PLATFORM_ASSET = {
     "steamdeck": "steamdeck.png",
 }
 
-_ROW_NORMAL = """
-    QFrame#versionRow {
-        background-color: #2a2a2a;
-        border: 1px solid #353535;
-        border-radius: 8px;
-    }
-"""
-_ROW_SELECTED = """
-    QFrame#versionRow {
-        background-color: #3a324a;
-        border: 1px solid #6b5a8e;
-        border-radius: 8px;
-    }
-"""
-_ROW_CHILD = """
-    QFrame#versionRow {
-        background-color: #262626;
-        border: 1px solid #333333;
-        border-radius: 6px;
-    }
-"""
-# Risk banding (locked IA): below v12.1 red · v12.1 to v16 orange · newer normal.
-_ROW_ANCIENT = """
-    QFrame#versionRow {
-        background-color: #3a2226;
-        border: 1px solid #5a3038;
-        border-radius: 8px;
-    }
-"""
-_ROW_ANCIENT_SELECTED = """
-    QFrame#versionRow {
-        background-color: #4a2a32;
-        border: 1px solid #6b5a8e;
-        border-radius: 8px;
-    }
-"""
-_ROW_ANCIENT_CHILD = """
-    QFrame#versionRow {
-        background-color: #322022;
-        border: 1px solid #4a2830;
-        border-radius: 6px;
-    }
-"""
-_ROW_RISKY = """
-    QFrame#versionRow {
-        background-color: #3a2e22;
-        border: 1px solid #5a4a28;
-        border-radius: 8px;
-    }
-"""
-_ROW_RISKY_SELECTED = """
-    QFrame#versionRow {
-        background-color: #4a3a28;
-        border: 1px solid #6b5a8e;
-        border-radius: 8px;
-    }
-"""
-_ROW_RISKY_CHILD = """
-    QFrame#versionRow {
-        background-color: #322818;
-        border: 1px solid #4a3a20;
-        border-radius: 6px;
-    }
-"""
+def _row_stylesheet(*, band: str, selected: bool, indent: bool) -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_row_stylesheet(band=band, selected=selected, indent=indent)
+
+
+def _scroll_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_scroll_extras_stylesheet(bg_shell=tok.BG_SHELL)
+
+
+def _notes_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_notes_stylesheet()
+
+
+def _btn_primary_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_btn_primary_stylesheet()
+
+
+def _btn_secondary_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_btn_secondary_stylesheet()
+
+
+def _btn_current_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_btn_current_stylesheet()
+
+
+def _icon_btn_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_icon_btn_stylesheet()
+
+
+def _ack_frame_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_ack_frame_stylesheet()
+
+
+def _backup_frame_style() -> str:
+    from steempeg.ui import ui_theme as ut
+
+    return ut.update_center_backup_frame_stylesheet()
+
+
+_SCROLL_STYLE = _scroll_style()
+_NOTES_STYLE = _notes_style()
+_BTN_PRIMARY = _btn_primary_style()
+_BTN_SECONDARY = _btn_secondary_style()
+_ICON_BTN = _icon_btn_style()
+_ACK_FRAME_STYLE = _ack_frame_style()
+
+# Transparent pad after footer CTA glyphs (Qt QSS has no icon→label spacing;
+# same approach as neo_nav_icon_gap). Modest nudge — not a redesign.
+_FOOTER_ICON_GAP = 4
 
 
 def _risk_band(version_float: float) -> str:
@@ -141,62 +141,6 @@ def _risk_band(version_float: float) -> str:
     if version_float < RECOMMENDED_INSTALL_VERSION - 0.001:
         return "risky"
     return "normal"
-
-
-def _row_stylesheet(*, band: str, selected: bool, indent: bool) -> str:
-    if selected:
-        if band == "ancient":
-            return _ROW_ANCIENT_SELECTED
-        if band == "risky":
-            return _ROW_RISKY_SELECTED
-        return _ROW_SELECTED
-    if band == "ancient":
-        return _ROW_ANCIENT_CHILD if indent else _ROW_ANCIENT
-    if band == "risky":
-        return _ROW_RISKY_CHILD if indent else _ROW_RISKY
-    return _ROW_CHILD if indent else _ROW_NORMAL
-
-_SCROLL_STYLE = f"""
-    {tok.dialog_scroll_stylesheet(tok.BG_SHELL)}
-    QWidget#releaseListHost {{ background-color: {tok.BG_SHELL}; }}
-"""
-
-_NOTES_STYLE = f"""
-    QTextEdit {{
-        background-color: #1a1a1a;
-        border: 1px solid #3d3d3d;
-        border-radius: 8px;
-        color: {tok.TEXT_PRIMARY};
-        font-family: {tok.FONT_APP};
-        font-size: 13px;
-        padding: 14px 16px;
-        selection-background-color: #4a3d66;
-        selection-color: #f0ecff;
-    }}
-"""
-
-_BTN_PRIMARY = """
-    QPushButton {
-        background-color: #4a3d66; color: #f0ecff; border: 2px solid #6b5a8e;
-        border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
-    }
-    QPushButton:hover { background-color: #5a4d76; border-color: #b29ae7; }
-    QPushButton:pressed { background-color: #3a324a; }
-    QPushButton:disabled { background-color: #2a2a2a; color: #666; border-color: #444; }
-"""
-
-_BTN_SECONDARY = """
-    QPushButton {
-        background-color: #333; color: #ccc; border: 1px solid #555;
-        border-radius: 8px; padding: 6px 14px; font-size: 12px;
-    }
-    QPushButton:hover { background-color: #444; color: #fff; }
-    QPushButton:disabled { background-color: #2a2a2a; color: #666; border-color: #444; }
-"""
-
-# Transparent pad after footer CTA glyphs (Qt QSS has no icon→label spacing;
-# same approach as neo_nav_icon_gap). Modest nudge — not a redesign.
-_FOOTER_ICON_GAP = 4
 
 
 def _footer_cta_icon(pix: QPixmap, size: int = 14, gap: int = _FOOTER_ICON_GAP) -> tuple[QIcon, QSize]:
@@ -212,23 +156,6 @@ def _footer_cta_icon(pix: QPixmap, size: int = 14, gap: int = _FOOTER_ICON_GAP) 
     painter.drawPixmap(0, 0, pix)
     painter.end()
     return QIcon(canvas), QSize(size + gap, size)
-
-_ICON_BTN = """
-    QPushButton {
-        background-color: transparent; color: #ccc; border: none;
-        min-width: 20px; max-width: 20px;
-        min-height: 20px; max-height: 20px; padding: 0;
-    }
-    QPushButton:hover { background-color: #454545; border-radius: 10px; }
-"""
-
-_ACK_FRAME_STYLE = """
-    QFrame#updateAckFrame {
-        background-color: #3a324a;
-        border: 1px solid #6b5a8e;
-        border-radius: 8px;
-    }
-"""
 
 _NOTICE_WARN = (
     f"color: #e8b86d; font-size: 11px; font-family: {tok.FONT_APP}; "
@@ -813,7 +740,7 @@ class UpdateCenterDialog(SteempegDialog):
         self._initial_keep_prefs = keep_prefs
         self._hold_hidden_until_catalog = not bool(load_releases_cache())
 
-        self.setStyleSheet(self.styleSheet() + _SCROLL_STYLE + _NOTES_STYLE)
+        self._apply_dialog_extras_styles()
 
         root = self.content_layout
         columns = QHBoxLayout()
@@ -871,8 +798,9 @@ class UpdateCenterDialog(SteempegDialog):
             install_library_vertical_scrollbar,
         )
 
-        scroll.setStyleSheet(_SCROLL_STYLE + LIBRARY_SCROLLBAR_VERTICAL)
+        scroll.setStyleSheet(_scroll_style() + LIBRARY_SCROLLBAR_VERTICAL)
         install_library_vertical_scrollbar(scroll)
+        self._release_scroll = scroll
         self._list_host = _ReleaseListHost()
         self._list_host.setObjectName("releaseListHost")
         self._list_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -891,15 +819,8 @@ class UpdateCenterDialog(SteempegDialog):
 
         backup_frame = QFrame()
         backup_frame.setObjectName("updateBackupFrame")
-        backup_frame.setStyleSheet(
-            """
-            QFrame#updateBackupFrame {
-                background-color: #262626;
-                border: 1px solid #3d3d3d;
-                border-radius: 8px;
-            }
-            """
-        )
+        backup_frame.setStyleSheet(_backup_frame_style())
+        self._backup_frame = backup_frame
         backup_lay = QVBoxLayout(backup_frame)
         backup_lay.setContentsMargins(12, 10, 12, 10)
         backup_lay.setSpacing(8)
@@ -1103,6 +1024,7 @@ class UpdateCenterDialog(SteempegDialog):
         actions.addStretch()
         right.addLayout(actions)
 
+        self._refresh_theme_surfaces()
         self._start_fetch()
 
     def _prepare_geometry_before_map(self) -> None:
@@ -1391,6 +1313,7 @@ class UpdateCenterDialog(SteempegDialog):
 
         if not entry:
             self._btn_install.setText("Update")
+            self._btn_install.setStyleSheet(_btn_primary_style())
             self._btn_install.setEnabled(False)
             self._ack_frame.hide()
             return
@@ -1429,6 +1352,10 @@ class UpdateCenterDialog(SteempegDialog):
         else:
             self._btn_install.setText("Cannot install")
 
+        if is_current:
+            self._btn_install.setStyleSheet(_btn_current_style())
+        else:
+            self._btn_install.setStyleSheet(_btn_primary_style())
         self._btn_install.setEnabled(can_install)
 
     def _load_keep_prefs(self) -> dict[str, bool]:
@@ -1515,6 +1442,60 @@ class UpdateCenterDialog(SteempegDialog):
         if self._backup_combo is not None:
             return self._backup_combo.currentData()
         return self._local_backups[0] if self._local_backups else None
+
+    def _apply_dialog_extras_styles(self) -> None:
+        """Scroll + notes QSS layered on SteempegDialog card chrome."""
+        from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
+        extras = _scroll_style() + _notes_style()
+        self.setStyleSheet(self.styleSheet() + extras)
+        scroll = getattr(self, "_release_scroll", None)
+        if scroll is not None:
+            scroll.setStyleSheet(_scroll_style() + LIBRARY_SCROLLBAR_VERTICAL)
+
+    def _refresh_theme_surfaces(self) -> None:
+        """Re-tint lists, backup, buttons, and version rows from active tokens."""
+        global _SCROLL_STYLE, _NOTES_STYLE, _BTN_PRIMARY, _BTN_SECONDARY, _ICON_BTN, _ACK_FRAME_STYLE
+        _SCROLL_STYLE = _scroll_style()
+        _NOTES_STYLE = _notes_style()
+        _BTN_PRIMARY = _btn_primary_style()
+        _BTN_SECONDARY = _btn_secondary_style()
+        _ICON_BTN = _icon_btn_style()
+        _ACK_FRAME_STYLE = _ack_frame_style()
+
+        self._apply_dialog_extras_styles()
+        if hasattr(self, "_list_host") and self._list_host is not None:
+            self._list_host.setStyleSheet(f"background-color: {tok.BG_SHELL};")
+        backup_frame = getattr(self, "_backup_frame", None)
+        if backup_frame is not None:
+            backup_frame.setStyleSheet(_backup_frame_style())
+        if hasattr(self, "_ack_frame"):
+            self._ack_frame.setStyleSheet(_ACK_FRAME_STYLE)
+        if hasattr(self, "_btn_github"):
+            self._btn_github.setStyleSheet(_BTN_SECONDARY)
+        if hasattr(self, "_btn_restore"):
+            self._btn_restore.setStyleSheet(_BTN_SECONDARY)
+        if hasattr(self, "_refresh_actions"):
+            self._refresh_actions()
+        selected = self._selected
+        for widget in getattr(self, "_row_widgets", []):
+            if isinstance(widget, _VersionRow):
+                is_sel = (
+                    selected is not None
+                    and widget._entry.version_float == selected.version_float
+                )
+                widget.set_selected(is_sel)
+            elif hasattr(widget, "set_selected_entry"):
+                widget.set_selected_entry(selected)
+        for btn in self.findChildren(QPushButton):
+            ss = btn.styleSheet() or ""
+            if "min-width: 20px" in ss and "transparent" in ss:
+                btn.setStyleSheet(_ICON_BTN)
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Live-retint when Settings switches UI theme while Update Center is open."""
+        super().apply_ui_theme_chrome()
+        self._refresh_theme_surfaces()
 
     def closeEvent(self, event):
         if self._notes_image_loader is not None:
