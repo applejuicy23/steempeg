@@ -733,8 +733,6 @@ class LifecycleMixin:
         action_mpv = menu.addAction("🎬  MPV player log")
         action_folder = menu.addAction("📂  Open logs folder")
         menu.addSeparator()
-        self._build_appearance_menu(menu)
-        menu.addSeparator()
         action_clear_logs = menu.addAction("🧹  Clear old logs…")
         action_clear_cache = menu.addAction("🗑️  Clear cache…")
         menu.addSeparator()
@@ -748,36 +746,18 @@ class LifecycleMixin:
         action_report.triggered.connect(self.show_report_dialog)
 
         self.ui.btn_logs.setMenu(menu)
+        self._logs_menu = menu
 
-    def _build_appearance_menu(self, parent_menu):
-        """Experimental chrome color themes as a checkable submenu."""
-        from PySide6.QtGui import QActionGroup
+    def refresh_logs_menu_chrome(self) -> None:
+        """Re-tint Logs ▾ popup when UI theme switches."""
         from steempeg.ui import ui_theme as ut
 
-        submenu = parent_menu.addMenu("🎨  Appearance (Experiments)")
-        submenu.setStyleSheet(ut.logs_menu_stylesheet())
-
-        from steempeg.ui import design_tokens as tok
-        current = tok.DEFAULT_CHROME_THEME
-        if hasattr(self, "load_user_settings"):
-            current = self.load_user_settings().get("chrome_theme", tok.DEFAULT_CHROME_THEME)
-
-        group = QActionGroup(submenu)
-        group.setExclusive(True)
-        options = [
-            ("default", "Default (black bar)"),
-            ("exp1", "Experiment 1 — #1e1e1e title bar"),
-            ("exp2", "Experiment 2 — #222222 bar + #141414 background"),
-            ("exp3", "Experiment 3 — #2d2d2d bar + #1e1e1e background"),
-            ("exp4", "Experiment 4 — #2d2d2d bar + #141414 background"),
-        ]
-        for name, label in options:
-            act = submenu.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(name == current)
-            group.addAction(act)
-            act.triggered.connect(lambda _=False, n=name: self.apply_chrome_theme(n))
-        self._appearance_menu_group = group
+        menu = getattr(self, "_logs_menu", None)
+        if menu is None and hasattr(self.ui, "btn_logs"):
+            menu = self.ui.btn_logs.menu()
+        if menu is not None:
+            menu.setStyleSheet(ut.logs_menu_stylesheet())
+            self._logs_menu = menu
 
     def show_report_dialog(self):
         from steempeg.ui.report_dialog import show_report_dialog
