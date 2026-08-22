@@ -96,7 +96,6 @@ from steempeg.ui.timeline_strip_size import (
 )
 from steempeg.ui.message_dialog import (
     _BTN_PRIMARY,
-    _BTN_SECONDARY,
     dialog_theme,
     steempeg_information,
     steempeg_question,
@@ -199,7 +198,7 @@ from steempeg.ui.settings_prefs import (
     DEFAULT_FFMPEG_LOG_LEVEL,
     DEFAULT_MPV_LOG_LEVEL,
 )
-from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.ui_theme import (
@@ -242,28 +241,6 @@ _HINT = (
     f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; "
     f"font-family: {tok.FONT_APP};"
 )
-_COMBO = """
-    QComboBox {
-        background-color: #383838; color: #ffffff;
-        border: 2px solid #4a4a4a; border-radius: 8px;
-        padding: 4px 10px; font-size: 12px; font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-        min-height: 26px;
-    }
-    QComboBox:hover { border: 2px solid #6b5a8e; }
-    QComboBox::drop-down { border: none; width: 22px; }
-""" + COMBO_POPUP_ITEM_RULES
-_EDIT = """
-    QLineEdit {
-        background-color: #383838; color: #ffffff;
-        border: 2px solid #4a4a4a; border-radius: 8px;
-        padding: 4px 10px; font-size: 12px;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-        min-height: 26px;
-    }
-    QLineEdit:hover { border: 2px solid #6b5a8e; }
-    QLineEdit:focus { border: 2px solid #8e7cc3; }
-"""
 
 _SETTINGS_DESIGN_W = 540
 _SETTINGS_DESIGN_H = 560
@@ -394,7 +371,6 @@ class SettingsDialog(SteempegDialog):
         upd_lbl = QLabel("Check for updates")
         upd_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_update_interval = QComboBox()
-        self._combo_update_interval.setStyleSheet(_COMBO)
         for value, label in UPDATE_INTERVAL_LABELS:
             self._combo_update_interval.addItem(label, value)
         cur_upd = resolve_update_check_interval(settings)
@@ -413,17 +389,14 @@ class SettingsDialog(SteempegDialog):
         export_row = QHBoxLayout()
         export_row.setSpacing(8)
         self._edit_export_folder = QLineEdit()
-        self._edit_export_folder.setStyleSheet(_EDIT)
         self._edit_export_folder.setPlaceholderText(default_export_dir())
         self._committed_export_folder = resolve_permanent_export_folder(settings)
         self._edit_export_folder.setText(self._committed_export_folder)
         btn_browse_export = QPushButton("Browse…")
         btn_browse_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_browse_export.setStyleSheet(_BTN_SECONDARY)
         btn_browse_export.clicked.connect(self._browse_export_folder)
         btn_clear_export = QPushButton("Reset")
         btn_clear_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_clear_export.setStyleSheet(_BTN_SECONDARY)
         btn_clear_export.setToolTip("Reset to the default rendered_videos folder")
         btn_clear_export.clicked.connect(self._reset_export_folder)
         export_row.addWidget(self._edit_export_folder, 1)
@@ -443,7 +416,6 @@ class SettingsDialog(SteempegDialog):
         tab_lbl = QLabel("Default tab")
         tab_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_render_tab = QComboBox()
-        self._combo_render_tab.setStyleSheet(_COMBO)
         for value, label in RENDER_TAB_LABELS:
             self._combo_render_tab.addItem(label, value)
         cur_tab = load_default_render_tab(settings)
@@ -465,7 +437,6 @@ class SettingsDialog(SteempegDialog):
         layout_lbl = QLabel("Desktop layout")
         layout_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_desktop_render = QComboBox()
-        self._combo_desktop_render.setStyleSheet(_COMBO)
         for value, label in DESKTOP_RENDER_LAYOUT_LABELS:
             self._combo_desktop_render.addItem(label, value)
         cur_layout = load_desktop_render_layout(settings)
@@ -489,7 +460,6 @@ class SettingsDialog(SteempegDialog):
         shell_lbl = QLabel("UI shell")
         shell_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_shell = QComboBox()
-        self._combo_shell.setStyleSheet(_COMBO)
         self._combo_shell.addItem("Desktop", UI_SHELL_DESKTOP)
         self._combo_shell.addItem("Portable (theatre)", UI_SHELL_PORTABLE)
         current_shell = load_ui_shell() or UI_SHELL_DESKTOP
@@ -518,7 +488,6 @@ class SettingsDialog(SteempegDialog):
         restart_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         btn_restart = QPushButton("Restart app")
         btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_restart.setStyleSheet(_BTN_SECONDARY)
         btn_restart.clicked.connect(self._restart_app)
         restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         restart_row.addWidget(
@@ -538,7 +507,6 @@ class SettingsDialog(SteempegDialog):
         theme_lbl = QLabel("Theme")
         theme_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_ui_theme = QComboBox()
-        self._combo_ui_theme.setStyleSheet(_COMBO)
         for value, label in UI_THEME_LABELS:
             self._combo_ui_theme.addItem(label, value)
         cur_theme = normalize_ui_theme(settings.get(KEY_UI_THEME, UI_THEME_DEFAULT))
@@ -562,7 +530,6 @@ class SettingsDialog(SteempegDialog):
         shape_lbl = QLabel("Corner shape")
         shape_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_icon_shape = QComboBox()
-        self._combo_icon_shape.setStyleSheet(_COMBO)
         for value, label in ICON_SHAPE_LABELS:
             self._combo_icon_shape.addItem(label, value)
         cur_shape = normalize_icon_shape(
@@ -594,7 +561,6 @@ class SettingsDialog(SteempegDialog):
         card_lbl = QLabel("ClipCard style")
         card_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_clip_card_style = QComboBox()
-        self._combo_clip_card_style.setStyleSheet(_COMBO)
         for value, label in CARD_STYLE_LABELS:
             self._combo_clip_card_style.addItem(label, value)
         migrate_clip_card_style_in_settings(settings)
@@ -629,7 +595,6 @@ class SettingsDialog(SteempegDialog):
         header_lbl = QLabel("Layout")
         header_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_header_layout = QComboBox()
-        self._combo_header_layout.setStyleSheet(_COMBO)
         for value, label in HEADER_LAYOUT_LABELS:
             self._combo_header_layout.addItem(label, value)
         cur_header = normalize_header_layout(
@@ -660,7 +625,6 @@ class SettingsDialog(SteempegDialog):
         header_size_lbl = QLabel("Size")
         header_size_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_header_size = QComboBox()
-        self._combo_header_size.setStyleSheet(_COMBO)
         for value, label in PLAYER_HEADER_SIZE_LABELS:
             self._combo_header_size.addItem(label, value)
         migrate_player_header_size_in_settings(settings)
@@ -697,7 +661,6 @@ class SettingsDialog(SteempegDialog):
         player_layout_lbl = QLabel("Layout")
         player_layout_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_player_layout = QComboBox()
-        self._combo_player_layout.setStyleSheet(_COMBO)
         for value, label in PLAYER_LAYOUT_LABELS:
             self._combo_player_layout.addItem(label, value)
         cur_player_layout = normalize_player_layout(
@@ -729,7 +692,6 @@ class SettingsDialog(SteempegDialog):
         strip_lbl = QLabel("Strip size")
         strip_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_timeline_strip = QComboBox()
-        self._combo_timeline_strip.setStyleSheet(_COMBO)
         for value, label in TIMELINE_STRIP_LABELS:
             self._combo_timeline_strip.addItem(label, value)
         migrate_timeline_strip_size_in_settings(settings)
@@ -764,7 +726,6 @@ class SettingsDialog(SteempegDialog):
         vol_lbl = QLabel("Volume ceiling")
         vol_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_volume_ceiling = QComboBox()
-        self._combo_volume_ceiling.setStyleSheet(_COMBO)
         for value, label in VOLUME_CEILING_LABELS:
             self._combo_volume_ceiling.addItem(label, value)
         cur_vol = normalize_volume_boost_ceiling(
@@ -782,7 +743,6 @@ class SettingsDialog(SteempegDialog):
         spd_lbl = QLabel("Speed ceiling")
         spd_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_speed_ceiling = QComboBox()
-        self._combo_speed_ceiling.setStyleSheet(_COMBO)
         for value, label in SPEED_CEILING_LABELS:
             self._combo_speed_ceiling.addItem(label, value)
         cur_spd = normalize_speed_boost_ceiling(
@@ -815,7 +775,6 @@ class SettingsDialog(SteempegDialog):
         date_lbl = QLabel("Date format")
         date_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_date_format = QComboBox()
-        self._combo_date_format.setStyleSheet(_COMBO)
         for value, label in DATE_FORMAT_LABELS:
             self._combo_date_format.addItem(label, value)
         cur_date = load_date_format(settings)
@@ -830,7 +789,6 @@ class SettingsDialog(SteempegDialog):
         clock_lbl = QLabel("Clock")
         clock_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_clock_format = QComboBox()
-        self._combo_clock_format.setStyleSheet(_COMBO)
         for value, label in CLOCK_FORMAT_LABELS:
             self._combo_clock_format.addItem(label, value)
         cur_clock = load_clock_format(settings)
@@ -845,7 +803,6 @@ class SettingsDialog(SteempegDialog):
         tz_lbl = QLabel("Timezone")
         tz_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_timezone = QComboBox()
-        self._combo_timezone.setStyleSheet(_COMBO)
         for value, label in DISPLAY_TIMEZONE_LABELS:
             self._combo_timezone.addItem(label, value)
         cur_tz = load_display_timezone(settings)
@@ -885,7 +842,6 @@ class SettingsDialog(SteempegDialog):
         trim_lbl = QLabel("Trim from marker")
         trim_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_marker_trim = QComboBox()
-        self._combo_marker_trim.setStyleSheet(_COMBO)
         for value, label in MARKER_TRIM_LABELS:
             self._combo_marker_trim.addItem(label, value)
         cur_trim = load_marker_trim_offset_ms(settings)
@@ -929,7 +885,6 @@ class SettingsDialog(SteempegDialog):
         prio_lbl = QLabel("Priority while rendering")
         prio_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_priority = QComboBox()
-        self._combo_priority.setStyleSheet(_COMBO)
         for value, label in _PRIORITY_LABELS:
             self._combo_priority.addItem(label, value)
         cur_prio = str(settings.get(KEY_RENDER_PROCESS_PRIORITY, PRIORITY_NORMAL))
@@ -952,7 +907,6 @@ class SettingsDialog(SteempegDialog):
         scan_lbl = QLabel("On launch")
         scan_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_startup_scan = QComboBox()
-        self._combo_startup_scan.setStyleSheet(_COMBO)
         for value, label in STARTUP_SCAN_LABELS:
             self._combo_startup_scan.addItem(label, value)
         cur_scan = load_startup_library_scan(settings)
@@ -976,7 +930,6 @@ class SettingsDialog(SteempegDialog):
         cache_lbl = QLabel("Size limit")
         cache_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_cache_limit = QComboBox()
-        self._combo_cache_limit.setStyleSheet(_COMBO)
         for value, label in MEDIA_CACHE_LIMIT_LABELS:
             self._combo_cache_limit.addItem(label, value)
         cur_cache = load_media_cache_limit_gb(settings)
@@ -1007,7 +960,6 @@ class SettingsDialog(SteempegDialog):
         )
         btn_reset_hints = QPushButton("Reset all")
         btn_reset_hints.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_reset_hints.setStyleSheet(_BTN_SECONDARY)
         btn_reset_hints.clicked.connect(self._reset_hints)
         hints_row.addWidget(btn_reset_hints, 0, Qt.AlignmentFlag.AlignVCenter)
         s.addLayout(hints_row)
@@ -1020,11 +972,9 @@ class SettingsDialog(SteempegDialog):
         support_row.setSpacing(8)
         btn_logs = QPushButton("Open logs folder")
         btn_logs.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_logs.setStyleSheet(_BTN_SECONDARY)
         btn_logs.clicked.connect(self._open_logs)
         btn_cache = QPushButton("Clear cache…")
         btn_cache.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_cache.setStyleSheet(_BTN_SECONDARY)
         btn_cache.clicked.connect(self._clear_cache)
         support_row.addWidget(btn_logs)
         support_row.addWidget(btn_cache)
@@ -1042,7 +992,6 @@ class SettingsDialog(SteempegDialog):
             lbl = QLabel(label)
             lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
             combo = QComboBox()
-            combo.setStyleSheet(_COMBO)
             for value, text in LOG_LEVEL_LABELS:
                 combo.addItem(text, value)
             cur = loader(settings)
@@ -1072,7 +1021,6 @@ class SettingsDialog(SteempegDialog):
         )
         btn_import = QPushButton("Import from backup…")
         btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_import.setStyleSheet(_BTN_SECONDARY)
         btn_import.clicked.connect(self._import_from_backup)
         import_row.addWidget(btn_import, 0, Qt.AlignmentFlag.AlignVCenter)
         s.addLayout(import_row)
@@ -1123,16 +1071,13 @@ class SettingsDialog(SteempegDialog):
         shot_row = QHBoxLayout()
         shot_row.setSpacing(8)
         self._edit_screenshots = QLineEdit()
-        self._edit_screenshots.setStyleSheet(_EDIT)
         self._edit_screenshots.setPlaceholderText(default_screenshots_dir())
         self._edit_screenshots.setText(resolve_screenshots_folder(settings))
         btn_browse_shots = QPushButton("Browse…")
         btn_browse_shots.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_browse_shots.setStyleSheet(_BTN_SECONDARY)
         btn_browse_shots.clicked.connect(self._browse_screenshots_folder)
         btn_reset_shots = QPushButton("Reset")
         btn_reset_shots.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_reset_shots.setStyleSheet(_BTN_SECONDARY)
         btn_reset_shots.clicked.connect(self._reset_screenshots_folder)
         shot_row.addWidget(self._edit_screenshots, 1)
         shot_row.addWidget(btn_browse_shots, 0)
@@ -1146,7 +1091,6 @@ class SettingsDialog(SteempegDialog):
         hw_lbl = QLabel("Hardware decode")
         hw_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
         self._combo_hwdec = QComboBox()
-        self._combo_hwdec.setStyleSheet(_COMBO)
         for value, label in HWDEC_LABELS:
             self._combo_hwdec.addItem(label, value)
         cur_hw = load_hwdec_preview(settings)
@@ -1169,9 +1113,9 @@ class SettingsDialog(SteempegDialog):
         actions.addStretch(1)
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_cancel.setStyleSheet(_BTN_SECONDARY)
         btn_cancel.clicked.connect(self.reject)
         btn_save = QPushButton("Save")
+        btn_save.setObjectName("settingsPrimaryBtn")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_PRIMARY)
         btn_save.clicked.connect(self._save)
@@ -1183,6 +1127,8 @@ class SettingsDialog(SteempegDialog):
         from steempeg.ui.widgets.no_wheel_filter import install_no_wheel_value_filter
 
         install_no_wheel_value_filter(self)
+
+        self._apply_settings_form_chrome()
 
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
@@ -1488,6 +1434,33 @@ class SettingsDialog(SteempegDialog):
 
         restart_application(self._app)
 
+    def _apply_settings_form_chrome(self) -> None:
+        """Theme-aware combos, line edits, and secondary buttons across all tabs."""
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.window_chrome import _TrafficLight
+
+        combo_qss = ut.settings_dialog_combo_stylesheet()
+        for combo in self.findChildren(QComboBox):
+            combo.setStyleSheet(combo_qss)
+            apply_dark_combo_popup(combo)
+
+        edit_qss = ut.settings_dialog_line_edit_stylesheet()
+        for edit in self.findChildren(QLineEdit):
+            edit.setStyleSheet(edit_qss)
+
+        sec_qss = ut.settings_dialog_secondary_button_stylesheet()
+        for btn in self.findChildren(QPushButton):
+            # Title-bar traffic lights are QPushButtons — never restyle them as
+            # form secondary buttons (idle becomes a gray square outline; hover
+            # re-applies the red circle via _TrafficLight._apply_style).
+            if isinstance(btn, _TrafficLight):
+                btn._apply_style()
+                continue
+            if btn.objectName() == "settingsPrimaryBtn":
+                btn.setStyleSheet(_BTN_PRIMARY)
+                continue
+            btn.setStyleSheet(sec_qss)
+
     def apply_ui_theme_chrome(self) -> None:
         """Re-tint dialog shell + tab scroll areas after a Visual theme change."""
         from steempeg.ui import ui_theme as ut
@@ -1508,6 +1481,7 @@ class SettingsDialog(SteempegDialog):
             tok.apply_dialog_scroll_bg(scroll, bg)
             scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
             install_library_vertical_scrollbar(scroll)
+        self._apply_settings_form_chrome()
 
     def _refresh_ui_theme(self, theme: str, *, preview: bool = False) -> None:
         if hasattr(self._app, "apply_ui_theme"):
