@@ -2288,9 +2288,45 @@ class RenderMixin:
 
     def _dash_only_bottom_height(self) -> int:
         """Exact height for the glued render-control strip (no black padding)."""
-        from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
+        from steempeg.ui.layout_defaults import (
+            MAIN_V_SPLIT_BOTTOM_PAD,
+            PORTABLE_LIKE_MIDDLE_GAP,
+        )
 
-        return int(MAIN_V_SPLIT_BOTTOM_PAD) + self._dash_content_height()
+        if self._desktop_render_layout_is_portable_like():
+            pad = int(PORTABLE_LIKE_MIDDLE_GAP)
+        else:
+            pad = int(MAIN_V_SPLIT_BOTTOM_PAD)
+        return pad + self._dash_content_height()
+
+    def _set_main_v_splitter_handle_visible(self, visible: bool) -> None:
+        """Show/hide the player↔dash handle (Like a Portable keeps it gone)."""
+        v_split = getattr(self, "main_v_splitter", None)
+        if v_split is None:
+            return
+        try:
+            if visible:
+                width = int(getattr(self, "_pre_portable_like_v_handle_width", 0) or 0)
+                if width <= 0:
+                    width = 6
+                v_split.setHandleWidth(width)
+                if v_split.count() >= 2:
+                    handle = v_split.handle(1)
+                    if handle is not None:
+                        handle.setEnabled(True)
+                        handle.show()
+            else:
+                live = int(v_split.handleWidth() or 0)
+                if live > 0:
+                    self._pre_portable_like_v_handle_width = live
+                v_split.setHandleWidth(0)
+                if v_split.count() >= 2:
+                    handle = v_split.handle(1)
+                    if handle is not None:
+                        handle.setEnabled(False)
+                        handle.hide()
+        except RuntimeError:
+            return
 
     def _pin_dash_queue_header_buttons(self) -> None:
         """Keep Start / Render Settings / Pause / Cancel / Logs from stretching tall.
@@ -2576,7 +2612,7 @@ class RenderMixin:
         self._apply_portable_like_dash_closed(closed)
 
     def _sync_portable_like_dock_chrome(self, *, restore_v_sizes: bool = True) -> None:
-        """Like a Portable: dash glued to bottom; splitter only opens/closes it."""
+        """Like a Portable: dash glued to bottom; no middle splitter (air gap only)."""
         from PySide6.QtWidgets import QSizePolicy
 
         neo = getattr(self, "neo_wrapper", None)
@@ -2607,9 +2643,15 @@ class RenderMixin:
             from steempeg.ui.layout_defaults import (
                 DESKTOP_BOTTOM_PANE_SPACING,
                 MAIN_V_SPLIT_BOTTOM_PAD,
+                MAIN_V_SPLIT_TOP_PAD,
             )
 
             # Unlock glue BEFORE re-docking neo so stretch can fill the pane.
+            top = getattr(self, "top_v_wrap", None)
+            if top is not None:
+                top_lay = top.layout()
+                if top_lay is not None:
+                    top_lay.setContentsMargins(0, 0, 0, MAIN_V_SPLIT_TOP_PAD)
             if bottom is not None:
                 bottom.setMaximumHeight(16777215)
                 bottom.setMinimumHeight(0)
@@ -2629,11 +2671,7 @@ class RenderMixin:
                     QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
                 )
                 self._pin_dash_queue_header_buttons()
-            if v_split.count() >= 2:
-                handle = v_split.handle(1)
-                if handle is not None:
-                    handle.setEnabled(True)
-                    handle.show()
+            self._set_main_v_splitter_handle_visible(True)
             v_split.setStretchFactor(0, 1)
             v_split.setStretchFactor(1, 1)
             if restore_v_sizes:
@@ -2680,7 +2718,8 @@ class RenderMixin:
             return
 
         # --- Like a Portable ---
-        self._ensure_portable_like_splitter_guard()
+        # No middle splitter: dash glued with a title-bar-sized air gap only.
+        self._set_main_v_splitter_handle_visible(False)
         if not floating:
             self._park_neo_away_from_dock()
         self._ensure_dash_in_bottom_wrap()
@@ -2693,15 +2732,22 @@ class RenderMixin:
             dash.setMaximumHeight(content_h)
             self._pin_dash_queue_header_buttons()
 
-        if bottom is not None:
-            from steempeg.ui.layout_defaults import MAIN_V_SPLIT_BOTTOM_PAD
+        from steempeg.ui.layout_defaults import PORTABLE_LIKE_MIDDLE_GAP
 
+        top = getattr(self, "top_v_wrap", None)
+        if top is not None:
+            top_lay = top.layout()
+            if top_lay is not None:
+                # Gap lives on the bottom pane only (same 4px as header↔title bar).
+                top_lay.setContentsMargins(0, 0, 0, 0)
+
+        if bottom is not None:
             # No stretch void above the dash inside the bottom pane.
             lay = bottom.layout()
             if lay is not None:
                 if getattr(self, "_pre_portable_like_bottom_spacing", None) is None:
                     self._pre_portable_like_bottom_spacing = int(lay.spacing())
-                lay.setContentsMargins(0, MAIN_V_SPLIT_BOTTOM_PAD, 0, 0)
+                lay.setContentsMargins(0, int(PORTABLE_LIKE_MIDDLE_GAP), 0, 0)
                 lay.setSpacing(0)
                 # Drop leftover spacers that used to sit under neo.
                 for i in range(lay.count() - 1, -1, -1):
@@ -2724,16 +2770,9 @@ class RenderMixin:
                 self._pre_portable_like_v_sizes = list(sizes)
         v_split.setStretchFactor(0, 1)
         v_split.setStretchFactor(1, 0)
-        if v_split.count() >= 2:
-            handle = v_split.handle(1)
-            if handle is not None:
-                handle.setEnabled(True)
-                handle.show()
-        # Respect a user close; otherwise glue open at dash height (never leave air).
-        if getattr(self, "_portable_like_dash_closed", False):
-            self._apply_portable_like_dash_closed(True)
-        else:
-            self._glue_portable_like_dash_open()
+        # Always glued open — no middle handle to drag shut.
+        self._portable_like_dash_closed = False
+        self._glue_portable_like_dash_open()
 
     def toggle_desktop_render_settings(self) -> None:
         from steempeg.ui.desktop_render_settings import toggle_desktop_render_settings

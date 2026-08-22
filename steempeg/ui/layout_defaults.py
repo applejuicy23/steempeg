@@ -157,6 +157,8 @@ def apply_player_layout_mode(app, mode: str | None = None) -> str:
 MAIN_V_SPLIT_TOP_PAD = 4  # top_v_wrap bottom margin (below player footer)
 MAIN_V_SPLIT_BOTTOM_PAD = 4  # bottom_v_wrap top margin (above neo / dash)
 DESKTOP_BOTTOM_PANE_SPACING = 6  # neo ↔ Start/Pause/Cancel dash (Desktop only)
+# Like a Portable: no middle handle — air gap matches title bar ↔ player header.
+PORTABLE_LIKE_MIDDLE_GAP = PLAYER_LAYOUT_HEADER_CANVAS_GAP_REUNITED
 
 # Source Info stat grid width — right edge of settings-tab content ("red line").
 SETTINGS_STAT_COL_W = 210

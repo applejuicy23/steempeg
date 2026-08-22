@@ -2,8 +2,11 @@
 
 Like a Portable middle hide-until-hover was killed after it caused whole-UI lag
 (cursor polls / stylesheet thrash) and broke SplitH/V cursors. Keep this module
-as a thin paint helper so call sites stay stable; reintroduce reveal only with a
-cheap, transition-only design later.
+as a thin paint helper so call sites stay stable.
+
+Like a Portable now has **no** middle handle at all — only left/right side
+splitters paint; the player↔dash seam is a fixed air gap (see
+``PORTABLE_LIKE_MIDDLE_GAP``).
 """
 from __future__ import annotations
 
@@ -20,6 +23,16 @@ _MIDDLE_SPLITTER_NAME = "main_v_splitter"
 _SHELL_SPLITTER_NAMES = _SIDE_SPLITTER_NAMES + (_MIDDLE_SPLITTER_NAME,)
 
 
+def _desktop_portable_like(app) -> bool:
+    check = getattr(app, "_desktop_render_layout_is_portable_like", None)
+    if callable(check):
+        try:
+            return bool(check())
+        except Exception:
+            return False
+    return False
+
+
 def sync_portable_splitter_reveal(app) -> None:
     """No-op reveal: tear down any live controller and paint always-on handles."""
     _kill_reveal_controller(app)
@@ -27,10 +40,13 @@ def sync_portable_splitter_reveal(app) -> None:
 
 
 def paint_desktop_splitter_handles(app) -> None:
-    """Always-visible, theme-aware handles + native resize cursors."""
+    """Always-visible side handles; hide middle handle in Like a Portable."""
     _clear_handle_widget_styles(app)
     _apply_visible_splitter_styles(app)
-    _restore_handle_cursors(app)
+    if _desktop_portable_like(app):
+        _hide_middle_handle(app)
+    else:
+        _restore_handle_cursors(app, names=_SHELL_SPLITTER_NAMES)
 
 
 def ensure_right_h_handle_chrome(app) -> None:
@@ -58,6 +74,28 @@ def ensure_right_h_handle_chrome(app) -> None:
     except RuntimeError:
         return
     paint_desktop_splitter_handles(app)
+
+
+def _hide_middle_handle(app) -> None:
+    """Like a Portable: zero-width middle handle + side cursors only."""
+    apply = getattr(app, "_set_main_v_splitter_handle_visible", None)
+    if callable(apply):
+        try:
+            apply(False)
+        except Exception:
+            pass
+    else:
+        for _name, splitter in _iter_shell_splitters(app, (_MIDDLE_SPLITTER_NAME,)):
+            try:
+                splitter.setHandleWidth(0)
+                if splitter.count() >= 2:
+                    handle = splitter.handle(1)
+                    if handle is not None:
+                        handle.setEnabled(False)
+                        handle.hide()
+            except RuntimeError:
+                continue
+    _restore_handle_cursors(app, names=_SIDE_SPLITTER_NAMES)
 
 
 def _kill_reveal_controller(app) -> None:
@@ -119,12 +157,21 @@ def _apply_visible_splitter_styles(app) -> None:
     shell = f"background-color: {dark};"
     h_qss = f"QSplitter {{ {shell} }} {_visible_handle_qss(vertical=False)}"
     v_qss = _visible_handle_qss(vertical=True)
+    portable_like = _desktop_portable_like(app)
 
     for name, splitter in _iter_shell_splitters(app):
         try:
             splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             if name == _MIDDLE_SPLITTER_NAME:
-                splitter.setStyleSheet(v_qss)
+                if portable_like:
+                    # No painted bar — gap comes from layout margins only.
+                    splitter.setStyleSheet(
+                        f"QSplitter {{ {shell} }} "
+                        "QSplitter::handle { height: 0px; margin: 0px; "
+                        "background: transparent; }"
+                    )
+                else:
+                    splitter.setStyleSheet(v_qss)
             else:
                 splitter.setStyleSheet(h_qss)
         except RuntimeError:
@@ -144,9 +191,11 @@ def _clear_handle_widget_styles(app) -> None:
             continue
 
 
-def _restore_handle_cursors(app) -> None:
+def _restore_handle_cursors(
+    app, names: tuple[str, ...] = _SIDE_SPLITTER_NAMES
+) -> None:
     """Ensure Qt resize arrows after any prior handle QSS / filter mess."""
-    for name, splitter in _iter_shell_splitters(app):
+    for _name, splitter in _iter_shell_splitters(app, names):
         try:
             if splitter.count() < 2:
                 continue
