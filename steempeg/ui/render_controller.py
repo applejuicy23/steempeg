@@ -1511,8 +1511,47 @@ class RenderMixin:
             return self._is_valid_clip_path(path)
         return True
 
+    def _is_rendered_export_path(self, path: str | None) -> bool:
+        """True for a flat finished export file (Rendered videos), not a Steam clip folder."""
+        if not path:
+            return False
+        try:
+            if not os.path.isfile(path):
+                return False
+        except OSError:
+            return False
+        ext = os.path.splitext(path)[1].lower()
+        try:
+            from steempeg.ui.library.rendered_library import RENDERED_ALL_EXTS
+
+            return ext in RENDERED_ALL_EXTS
+        except Exception:
+            return ext in {
+                ".mp4",
+                ".mkv",
+                ".webm",
+                ".mov",
+                ".avi",
+                ".m4v",
+                ".mp3",
+                ".wav",
+                ".aac",
+                ".flac",
+                ".m4a",
+                ".ogg",
+                ".opus",
+            }
+
     def _resolve_export_clip_path(self) -> str | None:
-        """Steam clip folder for single export — survives library tab switches."""
+        """Steam clip folder for single export — survives library tab switches.
+
+        While a finished export is on screen, never fall through to sticky Steam
+        clip memory — that made START RENDER re-encode the previous clip from
+        the Rendered videos tab. Queue-driven Start still uses pending jobs.
+        """
+        if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
+            return None
+
         preview = getattr(self, "_preview_clip_path", None)
         if self._is_export_clip_path(preview):
             path = os.path.normpath(preview)
@@ -1542,7 +1581,7 @@ class RenderMixin:
                 self._last_export_clip_path = path
                 return path
 
-        # Sticky: keep last Steam clip after preview switches to a rendered file.
+        # Sticky: keep last Steam clip after preview switches (e.g. Screenshots).
         sticky = getattr(self, "_last_export_clip_path", None)
         if self._is_export_clip_path(sticky):
             return os.path.normpath(sticky)
@@ -4427,6 +4466,25 @@ class RenderMixin:
         thread, then card rebuild + queue JSON on the next tick so Portable Add
         does not freeze the sheet.
         """
+        if self._is_rendered_export_path(clip_path):
+            logging.warning("Refused to queue rendered export: %s", clip_path)
+            if sync_ui:
+                steempeg_warning(
+                    self.ui,
+                    "Cannot queue export",
+                    "Rendered exports cannot be added to the Render Queue. "
+                    "Select a Steam clip in Clips Manager instead.",
+                )
+            return None
+        if clip_path and not self._is_export_clip_path(clip_path):
+            logging.warning("Refused to queue non-clip path: %s", clip_path)
+            if sync_ui:
+                steempeg_warning(
+                    self.ui,
+                    "Cannot queue clip",
+                    "Only Steam clip folders can be queued for render.",
+                )
+            return None
         was_duplicate = bool(
             clip_path and self.render_queue.contains_clip(clip_path)
         )
@@ -6138,9 +6196,26 @@ class RenderMixin:
             self.start_queue_batch_render()
             return
 
+        if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
+            steempeg_warning(
+                self.ui,
+                "Cannot render export",
+                "Finished exports cannot be re-encoded. "
+                "Select a Steam clip in Clips Manager, or Resume Render Queue "
+                "and start pending jobs.",
+            )
+            return
+
         clip_path = self._resolve_export_clip_path()
         if not clip_path:
             steempeg_warning(self.ui, "Error", "Please select a clip from the list first!")
+            return
+        if self._is_rendered_export_path(clip_path) or not self._is_export_clip_path(clip_path):
+            steempeg_warning(
+                self.ui,
+                "Cannot render export",
+                "Only Steam clip folders can be rendered.",
+            )
             return
 
         job = build_render_job_from_ui(self, clip_path)
@@ -6266,6 +6341,22 @@ class RenderMixin:
 
     def _start_render_job(self, job, batch_mode: bool = False) -> None:
         from steempeg.ui.settings_prefs import resolve_app_export_folder
+
+        clip_path = getattr(job, "clip_path", None) or ""
+        if self._is_rendered_export_path(clip_path) or not self._is_export_clip_path(clip_path):
+            steempeg_warning(
+                self.ui,
+                "Cannot render export",
+                "Only Steam clip folders can be rendered — finished exports are not encode sources.",
+            )
+            if batch_mode:
+                # Drop the bad job and continue the batch if anything remains.
+                job_id = getattr(job, "id", None)
+                if job_id and hasattr(self, "render_queue"):
+                    self.render_queue.remove(job_id)
+                    self._persist_render_queue_async()
+                self.process_next_in_queue()
+            return
 
         # Catch deleted / unwritable destinations before ffmpeg opens the output.
         safe_dir = resolve_app_export_folder(
