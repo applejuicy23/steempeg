@@ -2753,6 +2753,35 @@ class PlayerMixin:
         if not file_path or not os.path.isfile(file_path):
             return
 
+        if hasattr(self, "get_rendered_health_report"):
+            report = self.get_rendered_health_report(file_path)
+            if report.level == health.ClipHealth.DEAD:
+                logging.warning(
+                    "Blocked dead rendered file playback: %s — %s",
+                    file_path,
+                    report.issues,
+                )
+                self._preview_clip_path = file_path
+                self._rendered_media_path = file_path
+                self._active_play_media_path = None
+                self._clear_player_surface()
+                if hasattr(self, "_reset_player_placeholder_default"):
+                    self._reset_player_placeholder_default()
+                if hasattr(self, "update_clip_health_button"):
+                    self.update_clip_health_button()
+                detail = (
+                    "; ".join(report.issues[:3])
+                    if report.issues
+                    else "File cannot be opened."
+                )
+                steempeg_warning(
+                    self.ui,
+                    "Unplayable export",
+                    "This rendered file is damaged or incomplete and cannot be played.",
+                    detail=f"{detail}\n\nRe-render from the source clip, or delete this file.",
+                )
+                return
+
         from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS, RENDERED_VIDEO_EXTS
         from steempeg.core.rendered_media import load_markers_sidecar, markers_to_canvas
 
@@ -2792,6 +2821,8 @@ class PlayerMixin:
         abs_path = os.path.abspath(file_path).replace("\\", "/")
 
         if hasattr(self, "custom_timeline"):
+            # Drop any DASH sniper override from a prior Steam clip preview.
+            self.custom_timeline.sniper_source_path = ""
             self.custom_timeline.current_video_path = abs_path
             self.custom_timeline.thumb_dir = None
             self.custom_timeline.set_duration(0)
