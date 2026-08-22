@@ -3811,6 +3811,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         self._refresh_dash_secondary_button_styles(dense)
 
+        if hasattr(self, "refresh_logs_menu_chrome"):
+            try:
+                self.refresh_logs_menu_chrome()
+            except Exception:
+                pass
+
         timeline = getattr(self, "custom_timeline", None)
         if timeline is not None and hasattr(timeline, "_apply_timeline_chrome_stylesheet"):
             timeline._apply_timeline_chrome_stylesheet()
@@ -3859,6 +3865,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         apply_render_panel_theme_chrome(self.ui)
         apply_settings_panel_density(self.ui, dense)
+
+        if hasattr(self, "refresh_export_presets_list"):
+            try:
+                self.refresh_export_presets_list()
+            except Exception:
+                pass
 
         self._refresh_library_view_styles()
 
