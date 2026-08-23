@@ -871,14 +871,26 @@ class RenderedLibraryMixin:
         prev_show = getattr(self, "_render_dock_visible", None)
         self._render_dock_visible = show_bottom
 
-        # The player wrapper reserves a 10px gap above the splitter handle. With the
-        # dock hidden there is no handle, so drop that gap — otherwise a stray mini
-        # empty strip sits under the player for rendered previews.
+        portable_like = False
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                portable_like = bool(self._desktop_render_layout_is_portable_like())
+            except Exception:
+                portable_like = False
+
+        # Desktop: player wrapper reserves a 10px gap above the splitter handle.
+        # Like a Portable: gap lives on bottom_v_wrap (or the middle handle) — keep
+        # top_v_wrap flush so library sync cannot fight portable glue.
         if hasattr(self, "top_v_wrap") and self.top_v_wrap.layout() is not None:
             m = self.top_v_wrap.layout().contentsMargins()
-            self.top_v_wrap.layout().setContentsMargins(
-                m.left(), m.top(), m.right(), 10 if show_bottom else 0
-            )
+            if portable_like:
+                self.top_v_wrap.layout().setContentsMargins(
+                    m.left(), m.top(), m.right(), 0
+                )
+            else:
+                self.top_v_wrap.layout().setContentsMargins(
+                    m.left(), m.top(), m.right(), 10 if show_bottom else 0
+                )
 
         immersive = getattr(self, "is_theater", False) or getattr(
             self, "is_fullscreen", False
@@ -888,13 +900,6 @@ class RenderedLibraryMixin:
         if immersive:
             self._render_dock_visible = False
             return
-
-        portable_like = False
-        if hasattr(self, "_desktop_render_layout_is_portable_like"):
-            try:
-                portable_like = bool(self._desktop_render_layout_is_portable_like())
-            except Exception:
-                portable_like = False
 
         # Snapshot a usable dock height before mode-hide. Suppress HideWatcher so its
         # Hide/Show setSizes cannot race Like a Portable glue / our restore.
@@ -930,6 +935,11 @@ class RenderedLibraryMixin:
                     ):
                         saved = getattr(self, "_render_dock_saved_sizes", None)
                         if portable_like and hasattr(
+                            self, "_reapply_portable_like_middle_gap"
+                        ):
+                            self._portable_like_dash_closed = False
+                            self._reapply_portable_like_middle_gap()
+                        elif portable_like and hasattr(
                             self, "_glue_portable_like_dash_open"
                         ):
                             self._portable_like_dash_closed = False
@@ -981,7 +991,12 @@ class RenderedLibraryMixin:
                     self._pin_dash_queue_header_buttons()
                 except Exception:
                     pass
-            if hasattr(self, "_glue_portable_like_dash_open"):
+            if hasattr(self, "_reapply_portable_like_middle_gap"):
+                try:
+                    self._reapply_portable_like_middle_gap()
+                except Exception:
+                    pass
+            elif hasattr(self, "_glue_portable_like_dash_open"):
                 try:
                     self._glue_portable_like_dash_open()
                 except Exception:
@@ -1465,8 +1480,18 @@ class RenderedLibraryMixin:
         )
         return False
 
-    def open_source_clip(self, clip_path: str, *, play: bool = True) -> bool:
-        """Switch to Clips Manager and select the original Steam clip folder."""
+    def open_source_clip(
+        self,
+        clip_path: str,
+        *,
+        play: bool = True,
+        seek_sec: float | None = None,
+    ) -> bool:
+        """Switch to Clips Manager and select the original Steam clip folder.
+
+        ``seek_sec`` — optional playhead offset after the clip finishes loading
+        (screenshot → related clip). ``None`` / non-positive → open at start.
+        """
         from steempeg.ui.message_dialog import steempeg_warning
 
         if not clip_path or not self._is_valid_clip_path(clip_path):
@@ -1477,9 +1502,47 @@ class RenderedLibraryMixin:
                 "It may have been moved or deleted from your library folders.",
             )
             return False
-        self.open_library_panel("clips")
-        if self._select_clip_path(clip_path, play=play):
+
+        # Light tab flip — skip grid relayout / sort / selection restore thrash.
+        self._show_clips_panel_for_source_jump()
+
+        # Already on this clip: seek in place (fixes lag + second-open EOF snap).
+        if (
+            play
+            and seek_sec is not None
+            and float(seek_sec) > 0
+            and hasattr(self, "_is_clip_actively_previewing")
+            and self._is_clip_actively_previewing(clip_path)
+        ):
+            if hasattr(self, "_clear_rendered_selection_visual"):
+                self._clear_rendered_selection_visual()
+            self._saved_rendered_selection_path = ""
+            self._highlight_clip_path(clip_path)
+            if hasattr(self, "_seek_active_clip_to_sec"):
+                self._seek_active_clip_to_sec(float(seek_sec))
+            if hasattr(self, "_persist_library_ui_state"):
+                self._persist_library_ui_state()
             return True
+
+        # Stash before select — update_quality_options opens the clip synchronously.
+        if hasattr(self, "_stash_pending_open_seek"):
+            self._stash_pending_open_seek(clip_path, seek_sec)
+        elif seek_sec is not None and float(seek_sec) > 0:
+            key = (
+                self._norm_clip_path_key(clip_path)
+                if hasattr(self, "_norm_clip_path_key")
+                else os.path.normcase(os.path.normpath(clip_path))
+            )
+            self._pending_open_seek = (key, float(seek_sec))
+        else:
+            self._pending_open_seek = None
+        if self._select_clip_path(clip_path, play=play):
+            if hasattr(self, "_persist_library_ui_state"):
+                self._persist_library_ui_state()
+            return True
+        self._pending_open_seek = None
+        if hasattr(self, "_open_seek_timer_armed"):
+            self._open_seek_timer_armed = False
         steempeg_warning(
             self.ui,
             "Source clip",
@@ -1487,6 +1550,42 @@ class RenderedLibraryMixin:
             "Make sure its folder is still in your Clips Manager scan list.",
         )
         return False
+
+    def _show_clips_panel_for_source_jump(self) -> None:
+        """Switch to Clips without grid relayout, sort, or selection restore.
+
+        Open related clip already knows the target path — a full ``set_library_panel``
+        freezes the UI on large libraries (doItemsLayout + restore + sort) before
+        play/seek even starts.
+        """
+        self._ensure_library_tab("clips")
+        old_mode = getattr(self, "_library_panel_mode", "clips")
+        if old_mode == "clips":
+            return
+        if old_mode in self._library_tabs:
+            self._stash_library_tab_selection(old_mode)
+            self._stash_sort_for_panel(old_mode)
+        self._library_panel_mode = "clips"
+        for key, tab in self._library_tabs.items():
+            tab.set_active(key == "clips")
+        if hasattr(self, "library_stack"):
+            self.library_stack.setCurrentIndex(self._library_stack_index_for("clips"))
+        self._clear_rendered_selection_visual()
+        self._clear_screenshots_selection_visual()
+        # Keep existing list/grid visibility — do not call set_view_mode (relayout).
+        self._sync_library_view_toggle_for_mode()
+        self._sync_sort_combo_for_panel()
+        self._restore_sort_for_panel("clips")
+        self._update_library_count_label()
+        self._sync_library_mode_chrome()
+        self._sync_library_footer_for_mode()
+        if hasattr(self, "update_final_setup") and not (
+            hasattr(self, "_is_previewing_rendered_media")
+            and self._is_previewing_rendered_media()
+        ):
+            self.update_final_setup()
+            if hasattr(self, "_update_start_button_label"):
+                self._update_start_button_label()
 
     def wrap_library_views_in_stack(self, views_layout: QVBoxLayout):
         """Move clips table/grid into page 0 of a stacked widget."""
@@ -2725,9 +2824,87 @@ class RenderedLibraryMixin:
         )
         return hint_suggests_related_clip(hint)
 
+    def _open_related_clip_from_screenshot(
+        self,
+        clip_path: str,
+        screenshot_path: str,
+        *,
+        source: str = "",
+        app_id: str = "",
+        game_name: str = "",
+        hint=None,
+    ) -> bool:
+        """Open a library clip and seek to the screenshot's capture time when known."""
+        from steempeg.core.screenshot_clip_link import related_clip_seek_offset_sec
+
+        clip_dur = None
+        if hasattr(self, "current_clip_duration_sec"):
+            try:
+                cand = float(getattr(self, "current_clip_duration_sec", 0) or 0)
+                if (
+                    cand > 0
+                    and hasattr(self, "_is_clip_actively_previewing")
+                    and self._is_clip_actively_previewing(clip_path)
+                ):
+                    clip_dur = cand
+            except (TypeError, ValueError):
+                clip_dur = None
+        if clip_dur is None:
+            # Library duration cell — avoid probing MPD on the UI thread.
+            table = getattr(getattr(self, "ui", None), "table_clips", None)
+            if table is not None:
+                from steempeg.core.screenshot_clip_link import parse_library_duration_sec
+
+                want = os.path.normcase(os.path.normpath(clip_path))
+                for row in range(table.rowCount()):
+                    cell = table.item(row, 0)
+                    if cell is None:
+                        continue
+                    row_path = cell.data(Qt.ItemDataRole.UserRole)
+                    if not row_path:
+                        continue
+                    if os.path.normcase(os.path.normpath(str(row_path))) != want:
+                        continue
+                    dur_item = table.item(row, 3)
+                    if dur_item is not None:
+                        clip_dur = parse_library_duration_sec(dur_item.text())
+                    break
+
+        seek_sec = related_clip_seek_offset_sec(
+            screenshot_path,
+            clip_path,
+            source=source,
+            app_id=app_id,
+            game_name=game_name,
+            hint=hint,
+            clip_duration_sec=clip_dur,
+        )
+        from steempeg.core.steam_screenshots import clip_media_start_local
+
+        media_start = clip_media_start_local(clip_path)
+        shot_s = "—"
+        if hint is not None and getattr(hint, "steam_shot_local", None) is not None:
+            shot_s = hint.steam_shot_local.isoformat(sep=" ", timespec="seconds")
+        logging.info(
+            "Open related clip %s ← %s media_start=%s shot_time=%s seek_sec=%s "
+            "(library_dur=%s timeline=%s tt_ms=%s)",
+            os.path.basename(clip_path),
+            os.path.basename(screenshot_path),
+            media_start.isoformat(sep=" ", timespec="seconds") if media_start else "—",
+            shot_s,
+            f"{seek_sec:.2f}" if seek_sec is not None else "None",
+            f"{clip_dur:.2f}" if clip_dur is not None else "None",
+            getattr(hint, "steam_timeline_id", "") or "—",
+            getattr(hint, "steam_timeline_time_ms", None),
+        )
+        return self.open_source_clip(clip_path, play=True, seek_sec=seek_sec)
+
     def _on_screenshot_open_related_clip(self, path: str) -> None:
-        """Resolve screenshot → clip, switch to Clips, load preview."""
-        from steempeg.core.screenshot_clip_link import resolve_related_clip_paths
+        """Resolve screenshot → clip, switch to Clips, load preview at capture time."""
+        from steempeg.core.screenshot_clip_link import (
+            collect_screenshot_clip_hint,
+            resolve_related_clip_paths,
+        )
         from steempeg.ui.message_dialog import steempeg_information
 
         if not path or not os.path.isfile(path):
@@ -2736,6 +2913,46 @@ class RenderedLibraryMixin:
         source = str(item.data(_SHOT_SOURCE_ROLE) or "") if item else ""
         app_id = str(item.data(_SHOT_APP_ID_ROLE) or "") if item else ""
         game = str(item.data(_SHOT_GAME_ROLE) or "") if item else ""
+        hint = collect_screenshot_clip_hint(
+            path, source=source, app_id=app_id, game_name=game
+        )
+        # Sidecar / known folder: skip building LibraryClipRef for every table row.
+        if hint.clip_path and self._is_valid_clip_path(hint.clip_path):
+            self._open_related_clip_from_screenshot(
+                hint.clip_path,
+                path,
+                source=source,
+                app_id=app_id,
+                game_name=game,
+                hint=hint,
+            )
+            return
+        if hint.clip_folder:
+            by_name = ""
+            table = getattr(getattr(self, "ui", None), "table_clips", None)
+            want = hint.clip_folder.strip().casefold()
+            if table is not None and want:
+                for row in range(table.rowCount()):
+                    cell = table.item(row, 0)
+                    if cell is None:
+                        continue
+                    row_path = cell.data(Qt.ItemDataRole.UserRole)
+                    if not row_path:
+                        continue
+                    if os.path.basename(str(row_path)).casefold() == want:
+                        by_name = os.path.normpath(str(row_path))
+                        break
+            if by_name and self._is_valid_clip_path(by_name):
+                self._open_related_clip_from_screenshot(
+                    by_name,
+                    path,
+                    source=source,
+                    app_id=app_id,
+                    game_name=game,
+                    hint=hint,
+                )
+                return
+
         matches = resolve_related_clip_paths(
             path,
             self._library_clip_refs_for_screenshot_link(),
@@ -2751,12 +2968,21 @@ class RenderedLibraryMixin:
                 "Related clip",
                 "No related clip was found for this screenshot.\n\n"
                 "Steempeg shots need a clip link (new captures store it) or a "
-                "single matching game in Clips Manager. Steam shots match when "
-                "their capture time falls inside a library clip for that game.",
+                "single matching game in Clips Manager. Steam shots match only "
+                "when a library clip's media window actually contains that "
+                "moment (Steam may still have the shot on a timeline that was "
+                "never saved as a clip).",
             )
             return
         if len(matches) == 1:
-            self.open_source_clip(matches[0], play=True)
+            self._open_related_clip_from_screenshot(
+                matches[0],
+                path,
+                source=source,
+                app_id=app_id,
+                game_name=game,
+                hint=hint,
+            )
             return
 
         # Ambiguous: let Emily pick (same pattern as multi Steam screenshot files).
@@ -2769,7 +2995,9 @@ class RenderedLibraryMixin:
             label = os.path.basename(clip_path)
             action = pick.addAction(f"🎮  {label}")
             action.triggered.connect(
-                lambda _checked=False, p=clip_path: self.open_source_clip(p, play=True)
+                lambda _checked=False, p=clip_path: self._open_related_clip_from_screenshot(
+                    p, path, source=source, app_id=app_id, game_name=game, hint=hint
+                )
             )
         pick.exec(QCursor.pos())
 

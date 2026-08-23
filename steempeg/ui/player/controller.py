@@ -317,6 +317,8 @@ class PlayerMixin:
         self._current_mpd_abs_path = None
         self._is_switching = False
         self._awaiting_first_frame = False
+        self._pending_open_seek = None
+        self._open_seek_timer_armed = False
 
         if hasattr(self, 'player') and self.player:
             self.player.pause = True
@@ -632,7 +634,11 @@ class PlayerMixin:
 
     def _ignore_playback_stall(self, seconds=0.5):
         """Suppress stall detection briefly after seeks or clip switches."""
-        self._playback_ignore_stall_until = time.time() + seconds
+        until = time.time() + seconds
+        self._playback_ignore_stall_until = until
+        # update_ui_from_vlc gates on this (not the stall timer) — keep both in sync
+        # so a related-clip seek is not immediately overwritten by a stale eof latch.
+        self._ignore_vlc_until = until
         self._playback_last_time_pos = None
         self._playback_stall_since = None
         self._playback_recover_at = None
@@ -2272,6 +2278,113 @@ class PlayerMixin:
         if hasattr(self, "update_final_setup"):
             self.update_final_setup(trim_only=True)
 
+    def _deferred_apply_open_seek(self, attempts: int = 0) -> None:
+        """Seek after Open related clip once MPV has duration + a playable first frame.
+
+        Waits for a known duration before clamping — seeking with duration 0 / stale
+        canvas length was clamping huge offsets (or EOF latches) to the end on the
+        second open of the same screenshot.
+        """
+        pending = getattr(self, "_pending_open_seek", None)
+        if not pending:
+            self._open_seek_timer_armed = False
+            return
+        try:
+            want_key = pending[0]
+            seek_sec = float(pending[1])
+            seek_gen = pending[2] if len(pending) > 2 else None
+        except (TypeError, ValueError, IndexError):
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
+            return
+        if seek_gen is not None and seek_gen != getattr(self, "_open_seek_gen", 0):
+            # Superseded by a newer Open related clip request.
+            self._open_seek_timer_armed = False
+            return
+        preview_key = self._norm_clip_path_key(
+            getattr(self, "_preview_clip_path", None)
+        )
+        if want_key != preview_key:
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
+            return
+        if (
+            getattr(self, "_is_switching", False)
+            or getattr(self, "_awaiting_first_frame", False)
+            or not self._mpv_has_media()
+        ):
+            if attempts < 60:
+                QTimer.singleShot(
+                    50, lambda a=attempts + 1: self._deferred_apply_open_seek(a)
+                )
+            else:
+                logging.debug("Open seek abandoned (player not ready)")
+                self._pending_open_seek = None
+                self._open_seek_timer_armed = False
+            return
+
+        if seek_sec <= 0:
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
+            return
+
+        # Prefer a known duration so we never slam to EOF on a bad/unknown length.
+        dur = self._playback_duration_sec()
+        if dur is None or dur <= 0:
+            if attempts < 60:
+                QTimer.singleShot(
+                    50, lambda a=attempts + 1: self._deferred_apply_open_seek(a)
+                )
+            else:
+                logging.debug("Open seek abandoned (duration unknown)")
+                self._pending_open_seek = None
+                self._open_seek_timer_armed = False
+            return
+
+        target = max(0.0, float(seek_sec))
+        # Guard against ms-treated-as-sec (and wall-clock blowups): past EOF by a
+        # wide margin is not a valid capture offset — skip instead of clamp-to-end.
+        if target > float(dur) + 2.0:
+            # Classic unit mixup: value looks like milliseconds of a short-ish clip.
+            as_sec = target / 1000.0
+            if 0.0 <= as_sec <= float(dur) + 1.0:
+                logging.info(
+                    "Open seek %.2f looked like ms — using %.2fs", target, as_sec
+                )
+                target = as_sec
+            else:
+                logging.warning(
+                    "Open seek %.2fs past duration %.2fs — skipping (not clamping to end)",
+                    target,
+                    dur,
+                )
+                self._pending_open_seek = None
+                self._open_seek_timer_armed = False
+                return
+        target = min(target, max(0.0, float(dur) - 0.05))
+        if target <= 0:
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
+            return
+
+        self._pending_open_seek = None
+        self._open_seek_timer_armed = False
+        # Keep timeline length in sync before force_jump (stale 0 / prior clip).
+        if hasattr(self, "custom_timeline"):
+            try:
+                self.custom_timeline.set_duration(int(float(dur) * 1000))
+            except Exception:
+                pass
+        self._ignore_playback_stall(1.0)
+        target_ms = int(target * 1000)
+        timeline = getattr(self, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "force_jump"):
+            timeline.force_jump(target_ms)
+            logging.info("Related-clip seek to %.2fs (dur=%.2fs)", target, dur)
+            return
+        if self._safe_mpv_seek(target):
+            logging.info("Related-clip seek to %.2fs (dur=%.2fs)", target, dur)
+
     def _deactivate_trim_ui(self):
         """Turn off trim mode on the timeline and reset its button/border chrome."""
         if not hasattr(self, 'custom_timeline'):
@@ -2515,10 +2628,15 @@ class PlayerMixin:
 
         if hasattr(self, "custom_timeline"):
             try:
+                # Drop stale length so deferred related-clip seek cannot force_jump
+                # against the previous clip's duration (clamp-to-end on reopen).
+                self.custom_timeline.set_duration(0)
                 self.custom_timeline.set_vlc_time(0, False)
-                self.custom_timeline.force_jump(0)
             except Exception:
                 pass
+        # Duration will be re-applied when the new media reports length.
+        if hasattr(self, "current_clip_duration_sec"):
+            self.current_clip_duration_sec = 0.0
 
         return self._media_switch_gen
 
@@ -2531,10 +2649,20 @@ class PlayerMixin:
         self._is_switching = False
         if hasattr(self, "clear_clip_open_loading"):
             self.clear_clip_open_loading()
-        if getattr(self, "_pending_trim_restore", None):
+        has_trim = bool(getattr(self, "_pending_trim_restore", None))
+        if has_trim:
             QTimer.singleShot(50, self._deferred_apply_trim_restore)
         elif hasattr(self, "_loading_queue_job"):
             self._loading_queue_job = False
+        # Related-clip screenshot seek — after first frame (and after trim restore).
+        # Arm once: reveal + 800ms safety both call finish; don't stack seek chains.
+        if getattr(self, "_pending_open_seek", None) and not getattr(
+            self, "_open_seek_timer_armed", False
+        ):
+            self._open_seek_timer_armed = True
+            QTimer.singleShot(
+                150 if has_trim else 50, self._deferred_apply_open_seek
+            )
 
     def _set_timeline_batch_thumbs_busy(self, busy: bool) -> None:
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
@@ -2885,6 +3013,77 @@ class PlayerMixin:
         except Exception:
             return str(path)
 
+    def _is_clip_actively_previewing(self, clip_path: str) -> bool:
+        """True when this Steam clip folder is already loaded and seekable."""
+        if not clip_path:
+            return False
+        if getattr(self, "_rendered_media_path", None):
+            return False
+        if getattr(self, "_is_switching", False) or getattr(
+            self, "_awaiting_first_frame", False
+        ):
+            return False
+        want = self._norm_clip_path_key(clip_path)
+        have = self._norm_clip_path_key(getattr(self, "_preview_clip_path", None))
+        if not want or want != have:
+            return False
+        return bool(self._mpv_has_media())
+
+    def _stash_pending_open_seek(self, clip_path: str, seek_sec: float | None) -> None:
+        """Queue a related-clip seek for after the next preview first-frame."""
+        if seek_sec is None or float(seek_sec) <= 0:
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
+            return
+        key = self._norm_clip_path_key(clip_path)
+        gen = int(getattr(self, "_open_seek_gen", 0)) + 1
+        self._open_seek_gen = gen
+        self._pending_open_seek = (key, float(seek_sec), gen)
+        self._open_seek_timer_armed = False
+
+    def _seek_active_clip_to_sec(self, seek_sec: float) -> bool:
+        """Seek the already-loaded preview without remounting MPV (second Open related)."""
+        if seek_sec is None or float(seek_sec) <= 0:
+            return False
+        if not self._mpv_has_media():
+            return False
+        if getattr(self, "_is_switching", False) or getattr(
+            self, "_awaiting_first_frame", False
+        ):
+            return False
+        dur = self._playback_duration_sec()
+        target = float(seek_sec)
+        if dur is not None and dur > 0:
+            if target > float(dur) + 2.0:
+                as_sec = target / 1000.0
+                if 0.0 <= as_sec <= float(dur) + 1.0:
+                    target = as_sec
+                else:
+                    logging.warning(
+                        "Active-clip seek %.2fs past duration %.2fs — skipped",
+                        target,
+                        dur,
+                    )
+                    return False
+            target = min(target, max(0.0, float(dur) - 0.05))
+        if target <= 0:
+            return False
+        if hasattr(self, "custom_timeline") and dur and dur > 0:
+            try:
+                self.custom_timeline.set_duration(int(float(dur) * 1000))
+            except Exception:
+                pass
+        self._ignore_playback_stall(1.0)
+        timeline = getattr(self, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "force_jump"):
+            timeline.force_jump(int(target * 1000))
+            logging.info("Related-clip seek (active) to %.2fs", target)
+            return True
+        ok = self._safe_mpv_seek(target)
+        if ok:
+            logging.info("Related-clip seek (active) to %.2fs", target)
+        return ok
+
     def clear_clip_open_loading(self) -> None:
         """Hide open-spinner on library cards and queue rows."""
         self._opening_clip_path = None
@@ -3061,7 +3260,20 @@ class PlayerMixin:
             logging.warning("Ignored invalid clip preview path: %s", clip_path)
             return
 
+        # Drop a stale related-clip seek if this open is for a different folder.
+        pending_seek = getattr(self, "_pending_open_seek", None)
+        if pending_seek:
+            want_key = self._norm_clip_path_key(clip_path)
+            try:
+                if pending_seek[0] != want_key:
+                    self._pending_open_seek = None
+                    self._open_seek_timer_armed = False
+            except (TypeError, IndexError):
+                self._pending_open_seek = None
+                self._open_seek_timer_armed = False
+
         # Spam-click while this same open is already in flight — don't restart MPV/remux.
+        # Pending related-clip seek (if any) is kept and applied when finish fires.
         want = self._norm_clip_path_key(clip_path)
         opening = self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
         if (
@@ -3158,6 +3370,8 @@ class PlayerMixin:
         if not all_mpds:
             logging.warning("No MPD found for clip: %s", clip_path)
             self._is_switching = False
+            self._pending_open_seek = None
+            self._open_seek_timer_armed = False
             if hasattr(self, "clear_clip_open_loading"):
                 self.clear_clip_open_loading()
             return
