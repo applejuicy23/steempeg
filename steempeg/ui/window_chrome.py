@@ -397,6 +397,7 @@ class SteempegTitleBar(QWidget):
     settings_requested = Signal()
     check_updates_requested = Signal()
     update_available_clicked = Signal()
+    hide_update_available_requested = Signal()
 
     def __init__(self, window: QWidget, *, title: str, subtitle: str = "", parent=None):
         super().__init__(parent)
@@ -517,7 +518,17 @@ class SteempegTitleBar(QWidget):
         shell_tools.hide()
         root.addWidget(shell_tools)
 
-        # Compact Health-style chip; hidden until a silent check finds a newer release.
+        # Compact Health-style plaque; hidden until a silent check finds a newer release.
+        # Chip opens Update Center; checkbox permanently dismisses the plaque only.
+        from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+
+        self._update_available_plaque = QWidget()
+        self._update_available_plaque.setObjectName("TitleBarUpdateAvailablePlaque")
+        self._update_available_plaque.setFixedHeight(22)
+        plaque_lay = QHBoxLayout(self._update_available_plaque)
+        plaque_lay.setContentsMargins(0, 0, 0, 0)
+        plaque_lay.setSpacing(6)
+
         self.btn_update_available = QPushButton("Update Available")
         self.btn_update_available.setObjectName("TitleBarUpdateAvailable")
         self.btn_update_available.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -527,9 +538,32 @@ class SteempegTitleBar(QWidget):
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
         self.btn_update_available.clicked.connect(self.update_available_clicked.emit)
-        self.btn_update_available.hide()
+
+        self.chk_never_show_update_available = SteempegCheckBox(
+            "Never show again",
+            font_size=10,
+            label_color=COLOR_VERSION_NEW,
+        )
+        self.chk_never_show_update_available.setObjectName(
+            "TitleBarNeverShowUpdateAvailable"
+        )
+        self.chk_never_show_update_available.setFixedHeight(20)
+        self.chk_never_show_update_available.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.chk_never_show_update_available.setToolTip(
+            "Hide the Update Available badge permanently. "
+            "Check for updates and Update Center still work."
+        )
+        self.chk_never_show_update_available.toggled.connect(
+            self._on_never_show_update_available_toggled
+        )
+
+        plaque_lay.addWidget(self.btn_update_available, 0, Qt.AlignmentFlag.AlignVCenter)
+        plaque_lay.addWidget(
+            self.chk_never_show_update_available, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        self._update_available_plaque.hide()
         root.addSpacing(8)
-        root.addWidget(self.btn_update_available, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addWidget(self._update_available_plaque, 0, Qt.AlignmentFlag.AlignVCenter)
 
         root.addStretch(1)
 
@@ -758,6 +792,11 @@ class SteempegTitleBar(QWidget):
             """
         )
 
+    def _on_never_show_update_available_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        self.hide_update_available_requested.emit()
+
     def set_bar_color(self, bg_color: str) -> None:
         """Re-tint the title bar background (used by the experimental themes)."""
         self._apply_bar_style(bg_color)
@@ -769,11 +808,20 @@ class SteempegTitleBar(QWidget):
             tools.setVisible(bool(visible))
 
     def set_update_available(self, available: bool, *, version: str | None = None) -> None:
-        """Show/hide the compact Update available chip next to the version."""
+        """Show/hide the compact Update available plaque next to the version."""
+        plaque = getattr(self, "_update_available_plaque", None)
         btn = self.btn_update_available
+        chk = getattr(self, "chk_never_show_update_available", None)
         if not available:
-            btn.hide()
+            if plaque is not None:
+                plaque.hide()
+            else:
+                btn.hide()
             btn.setToolTip("")
+            if chk is not None:
+                chk.blockSignals(True)
+                chk.setChecked(False)
+                chk.blockSignals(False)
             return
         label = "Update Available"
         if version:
@@ -802,7 +850,17 @@ class SteempegTitleBar(QWidget):
         # layout width would lock the chip across the caption drag strip).
         hint_w = max(btn.sizeHint().width(), 96)
         btn.setFixedWidth(min(hint_w, 160))
-        btn.show()
+        if chk is not None:
+            chk.blockSignals(True)
+            chk.setChecked(False)
+            chk.blockSignals(False)
+            if hasattr(chk, "_label_color_override"):
+                chk._label_color_override = color
+                chk.update()
+        if plaque is not None:
+            plaque.show()
+        else:
+            btn.show()
 
     def reset_traffic_lights(self) -> None:
         """Repaint window controls after maximize/DWM refresh (sticky hover / missed paint)."""

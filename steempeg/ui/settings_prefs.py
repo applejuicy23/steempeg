@@ -60,6 +60,9 @@ KEY_UPDATE_CHECK_INTERVAL = "update_check_interval"
 KEY_LAST_UPDATE_CHECK_TS = "last_update_check_ts"
 # Legacy boolean — migrated once into KEY_UPDATE_CHECK_INTERVAL.
 KEY_CHECK_UPDATES_ON_STARTUP = "check_updates_on_startup"
+# Title-bar «Update Available» plaque — silent badge only; Update Center stays.
+KEY_HIDE_UPDATE_AVAILABLE_BADGE = "hide_update_available_badge"
+DEFAULT_HIDE_UPDATE_AVAILABLE_BADGE = False
 
 UPDATE_INTERVAL_OFF = "off"
 UPDATE_INTERVAL_EVERY_LAUNCH = "every_launch"
@@ -459,6 +462,38 @@ def stamp_last_update_check(app, *, ts: float | None = None) -> None:
     if not hasattr(app, "save_user_settings"):
         return
     app.save_user_settings(KEY_LAST_UPDATE_CHECK_TS, float(time.time() if ts is None else ts))
+
+
+def normalize_hide_update_available_badge(value: object | None) -> bool:
+    if value is None:
+        return DEFAULT_HIDE_UPDATE_AVAILABLE_BADGE
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_HIDE_UPDATE_AVAILABLE_BADGE
+
+
+def load_hide_update_available_badge(settings: dict | None) -> bool:
+    return normalize_hide_update_available_badge(
+        (settings or {}).get(
+            KEY_HIDE_UPDATE_AVAILABLE_BADGE, DEFAULT_HIDE_UPDATE_AVAILABLE_BADGE
+        )
+    )
+
+
+def save_hide_update_available_badge(app, hide: bool) -> None:
+    if not hasattr(app, "save_user_settings"):
+        return
+    app.save_user_settings(
+        KEY_HIDE_UPDATE_AVAILABLE_BADGE,
+        normalize_hide_update_available_badge(hide),
+    )
 
 
 # ----- Update Center: Keep when updating -----

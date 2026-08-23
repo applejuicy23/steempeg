@@ -144,6 +144,7 @@ from steempeg.ui.settings_prefs import (
     KEY_SCREENSHOTS_FOLDER,
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
+    KEY_HIDE_UPDATE_AVAILABLE_BADGE,
     KEY_UPDATE_CHECK_INTERVAL,
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
@@ -170,6 +171,7 @@ from steempeg.ui.settings_prefs import (
     load_display_timezone,
     load_ffmpeg_log_level,
     load_hwdec_preview,
+    load_hide_update_available_badge,
     load_marker_trim_offset_ms,
     load_markers_on_strip,
     load_media_cache_limit_gb,
@@ -183,6 +185,7 @@ from steempeg.ui.settings_prefs import (
     normalize_desktop_render_layout,
     normalize_display_timezone,
     normalize_export_folder,
+    normalize_hide_update_available_badge,
     normalize_hwdec_preview,
     normalize_log_level,
     normalize_marker_trim_offset_ms,
@@ -388,6 +391,17 @@ class SettingsDialog(SteempegDialog):
         upd_row.addWidget(self._combo_update_interval, 1)
         g.addLayout(upd_row)
         g.addWidget(self._hint("Quiet badge only: never installs without you."))
+        self._chk_hide_update_available = SteempegCheckBox(
+            "Never show Update Available badge"
+        )
+        self._chk_hide_update_available.setChecked(
+            load_hide_update_available_badge(settings)
+        )
+        self._chk_hide_update_available.setToolTip(
+            "Hides the title-bar Update Available plaque. "
+            "Check for updates and Update Center still work."
+        )
+        g.addWidget(self._chk_hide_update_available)
 
         g.addWidget(self._section("Export"))
         export_row = QHBoxLayout()
@@ -1902,6 +1916,14 @@ class SettingsDialog(SteempegDialog):
             self._combo_update_interval.currentData()
         )
         pending[KEY_UPDATE_CHECK_INTERVAL] = interval
+        hide_badge = normalize_hide_update_available_badge(
+            self._chk_hide_update_available.isChecked()
+        )
+        pending[KEY_HIDE_UPDATE_AVAILABLE_BADGE] = hide_badge
+        if hasattr(self._app, "apply_hide_update_available_badge"):
+            deferred.append(
+                lambda h=hide_badge: self._app.apply_hide_update_available_badge(h)
+            )
 
         requested = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         folder, fell_back = ensure_usable_export_folder(requested)

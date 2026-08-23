@@ -73,7 +73,7 @@ class UpdaterMixin:
                 # Spinning purple update arrows (badge-sized) while the label
                 # shows "Checking for updates..." — suppress queue badge like Loading.
                 self._update_check_busy = True
-                self.set_status("Checking for updates...")
+            self.set_status("Checking for updates...")
             self._open_update_center()
         except Exception as e:
             logging.error(f"UPDATER: Critical exception: {e}")
@@ -135,10 +135,59 @@ class UpdaterMixin:
     def _set_title_bar_update_available(
         self, available: bool, *, version: str | None = None
     ) -> None:
+        if available:
+            self._last_update_available_version = version
+            try:
+                from steempeg.ui.settings_prefs import load_hide_update_available_badge
+
+                settings = {}
+                if hasattr(self, "load_user_settings"):
+                    settings = self.load_user_settings() or {}
+                if load_hide_update_available_badge(settings):
+                    available = False
+            except Exception:
+                logging.exception("UPDATER: failed reading hide_update_available_badge")
         tb = getattr(self.ui, "title_bar", None)
         if tb is None or not hasattr(tb, "set_update_available"):
             return
         tb.set_update_available(available, version=version)
+
+    def _on_hide_update_available_badge(self) -> None:
+        """Plaque «Never show again» — persist and hide immediately."""
+        try:
+            from steempeg.ui.settings_prefs import save_hide_update_available_badge
+
+            save_hide_update_available_badge(self, True)
+        except Exception:
+            logging.exception("UPDATER: failed saving hide_update_available_badge")
+        self._set_title_bar_update_available(False)
+
+    def apply_hide_update_available_badge(self, hide: bool | None = None) -> None:
+        """Refresh title-bar plaque visibility from prefs (Update Center unchanged)."""
+        try:
+            from steempeg.ui.settings_prefs import load_hide_update_available_badge
+
+            if hide is None:
+                settings = {}
+                if hasattr(self, "load_user_settings"):
+                    settings = self.load_user_settings() or {}
+                hide = load_hide_update_available_badge(settings)
+            else:
+                hide = bool(hide)
+        except Exception:
+            logging.exception("UPDATER: failed applying hide_update_available_badge")
+            return
+        if hide:
+            tb = getattr(self.ui, "title_bar", None)
+            if tb is not None and hasattr(tb, "set_update_available"):
+                tb.set_update_available(False)
+            return
+        version = getattr(self, "_last_update_available_version", None)
+        if version:
+            # Bypass the hide gate briefly: caller already decided hide is False.
+            tb = getattr(self.ui, "title_bar", None)
+            if tb is not None and hasattr(tb, "set_update_available"):
+                tb.set_update_available(True, version=version)
 
     def _wire_title_bar_about_updates(self) -> None:
         tb = getattr(self.ui, "title_bar", None)
@@ -155,6 +204,10 @@ class UpdaterMixin:
             tb.check_updates_requested.connect(self.check_for_updates)
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
+        if hasattr(tb, "hide_update_available_requested"):
+            tb.hide_update_available_requested.connect(
+                self._on_hide_update_available_badge
+            )
 
     def _open_update_center(self):
         exe_dir = get_install_root()
