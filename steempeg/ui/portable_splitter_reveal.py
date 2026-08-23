@@ -4,9 +4,9 @@ Like a Portable middle hide-until-hover was killed after it caused whole-UI lag
 (cursor polls / stylesheet thrash) and broke SplitH/V cursors. Keep this module
 as a thin paint helper so call sites stay stable.
 
-Like a Portable now has **no** middle handle at all — only left/right side
-splitters paint; the player↔dash seam is a fixed air gap (see
-``PORTABLE_LIKE_MIDDLE_GAP``).
+Like a Portable hides the middle handle by default (fixed air gap via
+``PORTABLE_LIKE_MIDDLE_GAP``). Settings can opt in to restore the player↔dash
+splitter handle and drag snap.
 """
 from __future__ import annotations
 
@@ -33,6 +33,26 @@ def _desktop_portable_like(app) -> bool:
     return False
 
 
+def _portable_like_hides_middle_handle(app) -> bool:
+    if not _desktop_portable_like(app):
+        return False
+    check = getattr(app, "_portable_like_middle_splitter_enabled", None)
+    if callable(check):
+        try:
+            return not bool(check())
+        except Exception:
+            return True
+    from steempeg.ui.settings_prefs import load_portable_like_middle_splitter
+
+    settings = {}
+    if hasattr(app, "load_user_settings"):
+        try:
+            settings = app.load_user_settings() or {}
+        except Exception:
+            settings = {}
+    return not load_portable_like_middle_splitter(settings)
+
+
 def sync_portable_splitter_reveal(app) -> None:
     """No-op reveal: tear down any live controller and paint always-on handles."""
     _kill_reveal_controller(app)
@@ -40,10 +60,10 @@ def sync_portable_splitter_reveal(app) -> None:
 
 
 def paint_desktop_splitter_handles(app) -> None:
-    """Always-visible side handles; hide middle handle in Like a Portable."""
+    """Always-visible side handles; hide middle handle when pref is off."""
     _clear_handle_widget_styles(app)
     _apply_visible_splitter_styles(app)
-    if _desktop_portable_like(app):
+    if _portable_like_hides_middle_handle(app):
         _hide_middle_handle(app)
     else:
         _restore_handle_cursors(app, names=_SHELL_SPLITTER_NAMES)
@@ -157,13 +177,13 @@ def _apply_visible_splitter_styles(app) -> None:
     shell = f"background-color: {dark};"
     h_qss = f"QSplitter {{ {shell} }} {_visible_handle_qss(vertical=False)}"
     v_qss = _visible_handle_qss(vertical=True)
-    portable_like = _desktop_portable_like(app)
+    hide_middle = _portable_like_hides_middle_handle(app)
 
     for name, splitter in _iter_shell_splitters(app):
         try:
             splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             if name == _MIDDLE_SPLITTER_NAME:
-                if portable_like:
+                if hide_middle:
                     # No painted bar — gap comes from layout margins only.
                     splitter.setStyleSheet(
                         f"QSplitter {{ {shell} }} "

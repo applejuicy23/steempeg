@@ -47,6 +47,9 @@ DESKTOP_RENDER_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
     (DESKTOP_RENDER_LIKE_A_PORTABLE, "Like a Portable"),
 )
 
+KEY_PORTABLE_LIKE_MIDDLE_SPLITTER = "portable_like_middle_splitter"
+DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER = False
+
 # ----- Permanent export folder -----
 
 KEY_PERMANENT_EXPORT_FOLDER = "permanent_export_folder"
@@ -128,6 +131,27 @@ def normalize_desktop_render_layout(value: object | None) -> str:
 def load_desktop_render_layout(settings: dict | None = None) -> str:
     return normalize_desktop_render_layout(
         (settings or {}).get(KEY_DESKTOP_RENDER_LAYOUT, DEFAULT_DESKTOP_RENDER_LAYOUT)
+    )
+
+
+def normalize_portable_like_middle_splitter(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER
+
+
+def load_portable_like_middle_splitter(settings: dict | None) -> bool:
+    return normalize_portable_like_middle_splitter(
+        (settings or {}).get(
+            KEY_PORTABLE_LIKE_MIDDLE_SPLITTER, DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER
+        )
     )
 
 
