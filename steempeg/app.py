@@ -3968,6 +3968,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._refresh_player_footer_chrome()
         if hasattr(self, "apply_desktop_render_layout"):
             self.apply_desktop_render_layout()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
         if hasattr(self, "_restore_library_ui_state"):
             self._restore_library_ui_state()
             # Second restore runs under the startup settle veil (post-maximize),
