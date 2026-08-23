@@ -5,10 +5,15 @@ Steam saves screenshots under::
     <Steam>/userdata/<steam_id>/760/remote/<app_id>/screenshots/
 
 Filenames look like ``20260711152410_1.jpg`` (local ``YYYYMMDDHHMMSS`` + index).
+
+``screenshots.vdf`` (``userdata/<id>/760/screenshots.vdf``) also stores
+``timelineid`` + ``timelinetime`` (ms into that recording) — the reliable
+signal for Open related clip.
 """
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -24,6 +29,9 @@ _STEAM_ID_RE = re.compile(r"^\d{5,}$")
 _CLIP_DT_RE = re.compile(r"^(?:clip|fg|bg)_(\d+)_(\d{8})_(\d{6})$", re.IGNORECASE)
 _JSON_DT_RE = re.compile(r"(\d{8})_(\d{6})")
 _SCREENSHOT_NAME_RE = re.compile(r"^(\d{14})_(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
+_VDF_FIELD_RE = re.compile(r'"([^"]+)"\s+"([^"]*)"')
+# basename → {timeline_id, timeline_time_ms, creation, app_id}
+_VDF_CACHE: dict[str, tuple[float, dict[str, dict]]] = {}
 
 
 def steam_screenshots_dir(
@@ -134,7 +142,11 @@ def resolve_steam_id_for_clip(clip_path: str, library_roots: list[str] | None = 
 
 
 def clip_folder_start_local(clip_path: str) -> datetime | None:
-    """UTC start time from ``fg_<app>_<date>_<time>`` → local timezone."""
+    """UTC timestamp from the folder name → local timezone.
+
+    Note: Steam ``clip_*`` folder names are often near the *end* of the saved
+    segment. Prefer :func:`clip_media_start_local` for playhead / overlap math.
+    """
     utc = clip_folder_start_utc(clip_path)
     if utc is None:
         return None
@@ -142,7 +154,7 @@ def clip_folder_start_local(clip_path: str) -> datetime | None:
 
 
 def clip_folder_start_utc(clip_path: str) -> datetime | None:
-    """Recording start from clip folder name (UTC, as Steam stores it)."""
+    """Timestamp encoded in ``clip|fg|bg_<app>_<date>_<time>`` (UTC)."""
     if not clip_path:
         return None
     name = os.path.basename(os.path.normpath(clip_path))
@@ -152,6 +164,239 @@ def clip_folder_start_utc(clip_path: str) -> datetime | None:
     try:
         dt_utc = datetime.strptime(f"{match.group(2)}_{match.group(3)}", "%Y%m%d_%H%M%S")
         return dt_utc.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def nested_recording_folder(clip_path: str) -> str | None:
+    """Nested ``video/fg_*`` / ``video/bg_*`` segment under a clip folder.
+
+    Steam saves ``clip_<app>_<utc>`` with media under ``video/fg_*``. The clip
+    folder timestamp is frequently ≈ media end (fg_start + duration); the
+    nested ``fg_``/``bg_`` name is the actual recording start.
+    """
+    if not clip_path:
+        return None
+    norm = os.path.normpath(clip_path)
+    base = os.path.basename(norm)
+    lower = base.lower()
+    # Already pointing at a recording segment.
+    if _CLIP_DT_RE.match(base) and lower.startswith(("fg_", "bg_")):
+        return norm
+    video = os.path.join(norm, "video")
+    if not os.path.isdir(video):
+        return None
+    try:
+        names = os.listdir(video)
+    except OSError:
+        return None
+    candidates: list[str] = []
+    for name in names:
+        if not name.lower().startswith(("fg_", "bg_")):
+            continue
+        if not _CLIP_DT_RE.match(name):
+            continue
+        candidates.append(os.path.join(video, name))
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    def _start_key(path: str) -> datetime:
+        return clip_folder_start_utc(path) or datetime.max.replace(tzinfo=timezone.utc)
+
+    candidates.sort(key=_start_key)
+    return candidates[0]
+
+
+def clip_media_start_utc(clip_path: str) -> datetime | None:
+    """Wall-clock start of playable media (nested fg/bg when present)."""
+    nested = nested_recording_folder(clip_path)
+    if nested:
+        started = clip_folder_start_utc(nested)
+        if started is not None:
+            return started
+    return clip_folder_start_utc(clip_path)
+
+
+def clip_media_start_local(clip_path: str) -> datetime | None:
+    """Local timezone media start for screenshot ↔ clip matching and seek."""
+    utc = clip_media_start_utc(clip_path)
+    if utc is None:
+        return None
+    return utc.astimezone()
+
+
+def steam_id_from_screenshot_path(file_path: str) -> str:
+    """``…/userdata/<steam_id>/760/remote/<app>/screenshots/…`` → steam_id."""
+    parts = os.path.normpath(file_path or "").replace("\\", "/").split("/")
+    for i, part in enumerate(parts):
+        if part.casefold() == "userdata" and i + 1 < len(parts):
+            candidate = parts[i + 1]
+            if _STEAM_ID_RE.match(candidate):
+                return candidate
+    return ""
+
+
+def screenshots_vdf_path(
+    steam_id: str,
+    *,
+    steam_path: str | None = None,
+) -> str:
+    root = os.path.normpath(steam_path or get_steam_path())
+    return os.path.join(root, "userdata", str(steam_id), "760", "screenshots.vdf")
+
+
+def _parse_screenshots_vdf(vdf_path: str) -> dict[str, dict]:
+    """Map screenshot basename → meta from Steam ``screenshots.vdf``."""
+    out: dict[str, dict] = {}
+    try:
+        text = open(vdf_path, encoding="utf-8", errors="replace").read()
+    except OSError as exc:
+        logging.debug("Could not read screenshots.vdf %s: %s", vdf_path, exc)
+        return out
+
+    # Entries are brace blocks with "filename" / "timelineid" / "timelinetime".
+    pos = 0
+    while True:
+        fn_idx = text.find('"filename"', pos)
+        if fn_idx < 0:
+            break
+        # Bound the entry: walk back to the nearest "{" before filename, then
+        # take a fixed window (entries are small).
+        brace = text.rfind("{", 0, fn_idx)
+        if brace < 0:
+            pos = fn_idx + 10
+            continue
+        block = text[brace : brace + 1200]
+        fields = dict(_VDF_FIELD_RE.findall(block))
+        rel = (fields.get("filename") or "").replace("\\", "/")
+        base = os.path.basename(rel)
+        if not base:
+            pos = fn_idx + 10
+            continue
+        timeline_id = (fields.get("timelineid") or "").strip()
+        timeline_time_ms: int | None = None
+        raw_tt = fields.get("timelinetime")
+        if raw_tt is not None and str(raw_tt).strip() != "":
+            try:
+                timeline_time_ms = int(float(raw_tt))
+            except (TypeError, ValueError):
+                timeline_time_ms = None
+        creation: int | None = None
+        raw_c = fields.get("creation")
+        if raw_c is not None and str(raw_c).strip() != "":
+            try:
+                creation = int(float(raw_c))
+            except (TypeError, ValueError):
+                creation = None
+        app_id = (fields.get("gameid") or "").strip()
+        if not app_id and "/" in rel:
+            app_id = rel.split("/", 1)[0]
+        out[base.casefold()] = {
+            "filename": base,
+            "timeline_id": timeline_id,
+            "timeline_time_ms": timeline_time_ms,
+            "creation": creation,
+            "app_id": app_id,
+        }
+        pos = fn_idx + 10
+    return out
+
+
+def load_screenshots_vdf_index(
+    steam_id: str,
+    *,
+    steam_path: str | None = None,
+) -> dict[str, dict]:
+    """Cached basename → VDF meta for one Steam user."""
+    if not steam_id:
+        return {}
+    path = screenshots_vdf_path(steam_id, steam_path=steam_path)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {}
+    cached = _VDF_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    index = _parse_screenshots_vdf(path)
+    _VDF_CACHE[path] = (mtime, index)
+    return index
+
+
+def lookup_steam_screenshot_vdf(file_path: str) -> dict | None:
+    """Return VDF meta for a Steam screenshot file, or ``None``."""
+    if not file_path:
+        return None
+    steam_id = steam_id_from_screenshot_path(file_path)
+    if not steam_id:
+        return None
+    index = load_screenshots_vdf_index(steam_id)
+    if not index:
+        return None
+    return index.get(os.path.basename(file_path).casefold())
+
+
+def clip_has_timeline(clip_path: str, timeline_id: str) -> bool:
+    """True when ``clip_path/timelines/<timeline_id>.json`` exists."""
+    tid = (timeline_id or "").strip()
+    if not clip_path or not tid:
+        return False
+    return os.path.isfile(os.path.join(clip_path, "timelines", f"{tid}.json"))
+
+
+def clip_timeline_offset_ms(clip_path: str, timeline_id: str = "") -> int | None:
+    """Ms from timeline JSON start to playable media start (same math as the player).
+
+    Both Steam timeline and ``fg_*`` names are UTC wall-clock stamps; subtract
+    as naive datetimes (timezone cancels).
+    """
+    if not clip_path:
+        return None
+    tid = (timeline_id or "").strip()
+    if not tid:
+        # Prefer the clip's own timelines/*.json when id not provided.
+        timelines = os.path.join(clip_path, "timelines")
+        if os.path.isdir(timelines):
+            try:
+                for name in os.listdir(timelines):
+                    if name.lower().startswith("timeline_") and name.lower().endswith(
+                        ".json"
+                    ):
+                        tid = os.path.splitext(name)[0]
+                        break
+            except OSError:
+                tid = ""
+    if not tid:
+        return None
+
+    nested = nested_recording_folder(clip_path)
+    video_name = os.path.basename(nested or clip_path)
+    json_match = _JSON_DT_RE.search(tid)
+    video_match = _JSON_DT_RE.search(video_name)
+    if not json_match or not video_match:
+        return None
+    try:
+        json_dt = datetime.strptime(
+            json_match.group(1) + json_match.group(2), "%Y%m%d%H%M%S"
+        )
+        video_dt = datetime.strptime(
+            video_match.group(1) + video_match.group(2), "%Y%m%d%H%M%S"
+        )
+    except ValueError:
+        return None
+    return int((video_dt - json_dt).total_seconds() * 1000)
+
+
+def timeline_id_start_utc(timeline_id: str) -> datetime | None:
+    """UTC start encoded in ``timeline_<app><YYYYMMDD>_<HHMMSS>``."""
+    match = _JSON_DT_RE.search(timeline_id or "")
+    if not match:
+        return None
+    try:
+        dt = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
+        return dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 
@@ -192,7 +437,8 @@ def marker_shot_times(
         out.append(_naive_local(shot_utc.astimezone()))
     if clip_path and marker_time_ms is not None:
         delta = timedelta(milliseconds=float(marker_time_ms))
-        utc = clip_folder_start_utc(clip_path)
+        # Playhead is relative to media start (nested fg/bg), not clip folder name.
+        utc = clip_media_start_utc(clip_path)
         if utc is not None:
             out.append(utc.astimezone() + delta)
             out.append(_naive_local(utc.astimezone() + delta))
