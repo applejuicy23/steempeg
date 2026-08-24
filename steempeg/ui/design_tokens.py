@@ -63,12 +63,12 @@ STYLE_PANEL_HEADING = (
     "background: transparent;"
 )
 
-# Canonical hover tip chrome — match Portable title-bar «Check for updates»
-# (sampled: bg ≈ #2c2b2e, text ≈ #dcdde2). One style for Desktop + Portable
-# + every platform; apply on QApplication. Bold ink — Emily's preferred weight.
-TOOLTIP_BG = "#2c2b2e"
-TOOLTIP_BORDER = "#5a5a5a"
-TOOLTIP_FG = "#dcdde2"
+# Canonical hover tip chrome — theme-aware (synced from ``ui_theme``).
+# Default: light plate + dark ink. TrueDark / OLED: near-black + light ink.
+# Apply on QApplication via ``apply_app_tooltip_style``. Bold ink.
+TOOLTIP_BG = "#f0f0f0"
+TOOLTIP_BORDER = "#c8c8c8"
+TOOLTIP_FG = "#1a1a1a"
 STYLE_TOOLTIP = (
     f"QToolTip {{"
     f" background-color: {TOOLTIP_BG};"
@@ -82,17 +82,38 @@ STYLE_TOOLTIP = (
     f"}}"
 )
 
+_TOOLTIP_QSS_RE = None
+
+
+def _strip_tooltip_qss(qss: str) -> str:
+    """Remove any QToolTip { … } block so theme refresh can re-append current tokens."""
+    global _TOOLTIP_QSS_RE
+    import re
+
+    if _TOOLTIP_QSS_RE is None:
+        _TOOLTIP_QSS_RE = re.compile(r"QToolTip\s*\{[^}]*\}", re.DOTALL)
+    return _TOOLTIP_QSS_RE.sub("", qss or "").rstrip()
+
 
 def with_tooltip_style(qss: str = "") -> str:
     """Append canonical tip chrome to a widget-local stylesheet.
 
     Widgets with their own ``setStyleSheet`` often get a native black Windows tip
     instead of the app-level QToolTip rules. Include STYLE_TOOLTIP in that sheet.
+    Always replaces any existing QToolTip block so theme switches stay current.
     """
-    body = (qss or "").rstrip()
-    if "QToolTip" in body:
-        return body
+    body = _strip_tooltip_qss(qss or "")
     return f"{body}\n{STYLE_TOOLTIP}" if body else STYLE_TOOLTIP
+
+
+def reattach_tooltip_style(widget) -> None:
+    """Re-bake current ``STYLE_TOOLTIP`` onto a widget that already has local QSS."""
+    if widget is None:
+        return
+    try:
+        widget.setStyleSheet(with_tooltip_style(widget.styleSheet() or ""))
+    except RuntimeError:
+        pass
 
 
 def dialog_scroll_stylesheet(bg: str | None = None) -> str:
@@ -131,7 +152,7 @@ def apply_dialog_scroll_bg(scroll, color: str | None = None) -> None:
 # Trim / Cancel — same language as portable Render (dark fill + bright border).
 # Gold idle / red cancel; hover brightens fill + border like ``_RENDER_STYLE``.
 # Fill sits closer to the bright border than earlier eclipse-dark gold/red.
-STYLE_TRIM_BUTTON = with_tooltip_style(
+_TRIM_BUTTON_BODY = (
     "QPushButton {"
     "background-color: #957a35; color: #ffffff;"
     "border: 2px solid #cfa94a; border-radius: 15px;"
@@ -141,8 +162,7 @@ STYLE_TRIM_BUTTON = with_tooltip_style(
     "QPushButton:pressed { background-color: #6b5520; }"
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
-
-STYLE_TRIM_CANCEL_BUTTON = with_tooltip_style(
+_TRIM_CANCEL_BUTTON_BODY = (
     "QPushButton {"
     "background-color: #a52c2c; color: #ffffff;"
     "border: 2px solid #ff4444; border-radius: 15px;"
@@ -152,6 +172,14 @@ STYLE_TRIM_CANCEL_BUTTON = with_tooltip_style(
     "QPushButton:pressed { background-color: #6e1a1a; }"
     "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
 )
+STYLE_TRIM_BUTTON = with_tooltip_style(_TRIM_BUTTON_BODY)
+STYLE_TRIM_CANCEL_BUTTON = with_tooltip_style(_TRIM_CANCEL_BUTTON_BODY)
+
+
+def _rebuild_trim_button_styles() -> None:
+    global STYLE_TRIM_BUTTON, STYLE_TRIM_CANCEL_BUTTON
+    STYLE_TRIM_BUTTON = with_tooltip_style(_TRIM_BUTTON_BODY)
+    STYLE_TRIM_CANCEL_BUTTON = with_tooltip_style(_TRIM_CANCEL_BUTTON_BODY)
 
 
 def apply_app_tooltip_style(app=None) -> None:
@@ -234,7 +262,7 @@ def sync_from_ui_theme(palette) -> None:
     """Push active :class:`~steempeg.ui.ui_theme.UiThemePalette` into module tokens."""
     global BG_SHELL, BG_TITLE_BAR, BG_PLAYER_CANVAS, BG_CARD, BG_SETTINGS_PANEL
     global BORDER_SUBTLE, BORDER_DEFAULT, BORDER_CARD
-    global TOOLTIP_BG, TOOLTIP_BORDER, STYLE_TOOLTIP
+    global TOOLTIP_BG, TOOLTIP_BORDER, TOOLTIP_FG, STYLE_TOOLTIP
 
     BG_SHELL = palette.bg_shell
     BG_TITLE_BAR = palette.chrome_title_bar
@@ -246,15 +274,23 @@ def sync_from_ui_theme(palette) -> None:
     BORDER_CARD = palette.border_card
     TOOLTIP_BG = palette.tooltip_bg
     TOOLTIP_BORDER = palette.tooltip_border
-    STYLE_TOOLTIP = (
-        f"QToolTip {{"
-        f" background-color: {TOOLTIP_BG};"
-        f" color: {TOOLTIP_FG};"
-        f" border: 1px solid {TOOLTIP_BORDER};"
-        f" border-radius: 6px;"
-        f" padding: 5px 9px;"
-        f" font-family: 'Segoe UI', {FONT_APP};"
-        f" font-size: 12px;"
-        f" font-weight: bold;"
-        f"}}"
-    )
+    TOOLTIP_FG = palette.tooltip_fg
+    # Prefer ui_theme builder so QSS stays one source of truth.
+    try:
+        from steempeg.ui import ui_theme as ut
+
+        STYLE_TOOLTIP = ut.tooltip_stylesheet()
+    except Exception:
+        STYLE_TOOLTIP = (
+            f"QToolTip {{"
+            f" background-color: {TOOLTIP_BG};"
+            f" color: {TOOLTIP_FG};"
+            f" border: 1px solid {TOOLTIP_BORDER};"
+            f" border-radius: 6px;"
+            f" padding: 5px 9px;"
+            f" font-family: 'Segoe UI', {FONT_APP};"
+            f" font-size: 12px;"
+            f" font-weight: bold;"
+            f"}}"
+        )
+    _rebuild_trim_button_styles()

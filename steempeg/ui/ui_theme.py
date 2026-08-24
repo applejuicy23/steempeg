@@ -43,6 +43,7 @@ class UiThemePalette:
     border_subtle: str
     tooltip_bg: str
     tooltip_border: str
+    tooltip_fg: str
     neo_nav_hover_bg: str
     neo_nav_checked_bg: str
     neo_nav_idle: str
@@ -85,8 +86,10 @@ _PALETTE_DEFAULT = UiThemePalette(
     border_panel="#353535",
     border_default="#444444",
     border_subtle="#000000",
-    tooltip_bg="#2c2b2e",
-    tooltip_border="#5a5a5a",
+    # Light tip plate — readable on dark chrome (matches classic Windows light tip).
+    tooltip_bg="#f0f0f0",
+    tooltip_border="#c8c8c8",
+    tooltip_fg="#1a1a1a",
     neo_nav_hover_bg="#383838",
     neo_nav_checked_bg="#252525",
     neo_nav_idle="#a0a0a0",
@@ -129,8 +132,10 @@ _PALETTE_TRUE_DARK = UiThemePalette(
     border_panel="#262626",
     border_default="#333333",
     border_subtle="#000000",
-    tooltip_bg="#252525",
-    tooltip_border="#444444",
+    # Near-black tip — TrueDark (not mid-gray #252525).
+    tooltip_bg="#0a0a0a",
+    tooltip_border="#222222",
+    tooltip_fg="#e8e8e8",
     neo_nav_hover_bg="#252525",
     neo_nav_checked_bg="#1a1a1a",
     neo_nav_idle="#909090",
@@ -173,8 +178,10 @@ _PALETTE_TRUE_DARK_OLED = UiThemePalette(
     border_panel="#222222",
     border_default="#333333",
     border_subtle="#000000",
-    tooltip_bg="#1a1a1a",
-    tooltip_border="#333333",
+    # Pure black tip for OLED.
+    tooltip_bg="#000000",
+    tooltip_border="#141414",
+    tooltip_fg="#e8e8e8",
     neo_nav_hover_bg="#1a1a1a",
     neo_nav_checked_bg="#111111",
     neo_nav_idle="#888888",
@@ -322,29 +329,87 @@ def portable_render_save_bar_stylesheet() -> str:
     )
 
 
-def player_header_stylesheet() -> str:
-    """Player title bar — seam radii (Reunited) or full panel radius (Fractured)."""
+def player_chrome_border_color() -> str:
+    """Subtle 1px outline for player chrome — same edge as cards / panels.
+
+    Reuses ``border_card`` in every theme (Default ``#383838``, TrueDark
+    ``#262626``, OLED ``#222222``). Avoid ``border_default`` — that token is
+    louder (``#333333`` on dark themes) and reads too bright on the player ring.
+    """
+    return _active.border_card
+
+
+def player_header_stylesheet(*, force_outline: bool | None = None) -> str:
+    """Player title bar — panel radius on header chrome (Reunited + Fractured).
+
+    ``force_outline=False`` hides edges (theatre / fullscreen). Outline pref
+    ``without_lines`` also hides; ``chrome_only`` closes the header as its own
+    plate so sides never rely on the video plane.
+    """
     from steempeg.ui.layout_defaults import PLAYER_LAYOUT_PANEL_RADIUS_PX
     from steempeg.ui.player_layout import PLAYER_LAYOUT_FRACTURED, get_player_layout
+    from steempeg.ui.player_outline import (
+        PLAYER_OUTLINE_CHROME_ONLY,
+        get_player_outline,
+        player_outline_shows_chrome,
+    )
 
     p = _active
+    show = player_outline_shows_chrome() if force_outline is None else bool(force_outline)
+    edge = player_chrome_border_color() if show else p.bg_player_header
+    fractured = get_player_layout() == PLAYER_LAYOUT_FRACTURED
     r = PLAYER_LAYOUT_PANEL_RADIUS_PX
-    if get_player_layout() == PLAYER_LAYOUT_FRACTURED:
+    chrome_only = get_player_outline() == PLAYER_OUTLINE_CHROME_ONLY
+    # Closed plate when Fractured, chrome-only, or lines are off (invisible edge).
+    closed_plate = fractured or chrome_only or not show
+    if closed_plate:
         return f"""
-        QFrame {{
+        QFrame#playerHeaderFrame {{
             background-color: {p.bg_player_header};
+            border: 1px solid {edge};
             border-radius: {r}px;
         }}
     """
+    # Reunited + with lines: top + sides only — canvas sides + footer close the box.
     return f"""
-        QFrame {{
+        QFrame#playerHeaderFrame {{
             background-color: {p.bg_player_header};
+            border: 1px solid {edge};
+            border-bottom: none;
             border-top-left-radius: {r}px;
             border-top-right-radius: {r}px;
             border-bottom-left-radius: 0px;
             border-bottom-right-radius: 0px;
         }}
     """
+
+
+def player_video_wrapper_stylesheet(
+    *,
+    background: str = "transparent",
+    chrome_outline: bool | None = None,
+) -> str:
+    """Video canvas wrapper — Reunited side borders close the chrome outline.
+
+    Immersive paths pass ``chrome_outline=False`` (black fill, no border).
+    Outline pref ``chrome_only`` / ``without_lines`` also suppress video sides.
+    """
+    from steempeg.ui.player_layout import PLAYER_LAYOUT_FRACTURED, get_player_layout
+    from steempeg.ui.player_outline import player_outline_wraps_video
+
+    if chrome_outline is None:
+        chrome_outline = (
+            get_player_layout() != PLAYER_LAYOUT_FRACTURED
+            and player_outline_wraps_video()
+        )
+    if not chrome_outline:
+        return f"background-color: {background}; border: none;"
+    edge = player_chrome_border_color()
+    return (
+        f"background-color: {background}; "
+        f"border-left: 1px solid {edge}; border-right: 1px solid {edge}; "
+        f"border-top: none; border-bottom: none;"
+    )
 
 
 def player_placeholder_canvas_stylesheet() -> str:
@@ -825,28 +890,43 @@ def neo_tab_page_stylesheet(object_name: str) -> str:
     return f"QWidget#{object_name} {{ background-color: {p.bg_settings_panel}; border: none; }}"
 
 
-def player_footer_stylesheet() -> str:
-    """Player HUD — seam radii (Reunited) or full panel radius (Fractured).
+def player_footer_stylesheet(*, force_outline: bool | None = None) -> str:
+    """Player HUD — panel radius on footer chrome (Reunited + Fractured).
 
-    Do not add ``border: none`` here: Qt QSS then skips clipping the fill to
-    ``border-radius``, which squares off #HudFrame.
+    Keep a real ``border`` (not ``border: none``): Qt QSS then clips the fill to
+    ``border-radius``. Reunited + with-lines uses no top edge so header/canvas/footer
+    read as one outlined block; Fractured / chrome-only / without-lines get a closed
+    plate (invisible edge when lines are off).
     """
     from steempeg.ui.layout_defaults import PLAYER_LAYOUT_PANEL_RADIUS_PX
     from steempeg.ui.player_layout import PLAYER_LAYOUT_FRACTURED, get_player_layout
+    from steempeg.ui.player_outline import (
+        PLAYER_OUTLINE_CHROME_ONLY,
+        get_player_outline,
+        player_outline_shows_chrome,
+    )
 
     p = _active
-    r = PLAYER_LAYOUT_PANEL_RADIUS_PX
     footer_bg = p.bg_player_footer
-    if get_player_layout() == PLAYER_LAYOUT_FRACTURED:
+    show = player_outline_shows_chrome() if force_outline is None else bool(force_outline)
+    edge = player_chrome_border_color() if show else footer_bg
+    fractured = get_player_layout() == PLAYER_LAYOUT_FRACTURED
+    r = PLAYER_LAYOUT_PANEL_RADIUS_PX
+    chrome_only = get_player_outline() == PLAYER_OUTLINE_CHROME_ONLY
+    closed_plate = fractured or chrome_only or not show
+    if closed_plate:
         return f"""
         #HudFrame {{
             background-color: {footer_bg};
+            border: 1px solid {edge};
             border-radius: {r}px;
         }}
     """
     return f"""
         #HudFrame {{
             background-color: {footer_bg};
+            border: 1px solid {edge};
+            border-top: none;
             border-top-left-radius: 0px;
             border-top-right-radius: 0px;
             border-bottom-left-radius: {r}px;
@@ -1141,8 +1221,46 @@ def health_menu_stylesheet() -> str:
     )
 
 
+def tooltip_stylesheet() -> str:
+    """Canonical QToolTip chrome for the active theme.
+
+    Default: light plate + dark ink. TrueDark / OLED: near-black + light ink.
+    Mirrored into ``design_tokens.STYLE_TOOLTIP`` via ``sync_from_ui_theme``.
+    """
+    p = _active
+    return (
+        "QToolTip {"
+        f" background-color: {p.tooltip_bg};"
+        f" color: {p.tooltip_fg};"
+        f" border: 1px solid {p.tooltip_border};"
+        " border-radius: 6px;"
+        " padding: 5px 9px;"
+        f" font-family: 'Segoe UI', {tok.FONT_APP};"
+        " font-size: 12px;"
+        " font-weight: bold;"
+        "}"
+    )
+
+
+def floating_tooltip_label_stylesheet() -> str:
+    """QLabel-as-ToolTip chrome (timeline scrub tip) — same tokens as QToolTip."""
+    p = _active
+    return (
+        "QLabel {"
+        f" background-color: {p.tooltip_bg};"
+        f" color: {p.tooltip_fg};"
+        f" border: 1px solid {p.tooltip_border};"
+        " border-radius: 6px;"
+        " padding: 5px 9px;"
+        f" font-family: {tok.FONT_APP};"
+        " font-size: 12px;"
+        " font-weight: bold;"
+        "}"
+    )
+
+
 def clip_info_popup_colors() -> tuple[str, str, str, str]:
-    """Clip info popover plate + body text — Default tooltip gray; TrueDark elevated.
+    """Clip info popover plate + body text — Default mid plate; TrueDark elevated.
 
     Returns ``(bg, border, value_fg, muted_fg)``.
     """
@@ -1881,6 +1999,31 @@ def render_error_dialog_stylesheet() -> str:
     QLabel#ErrorDesc {{
         color: {c["error_desc"]};
         font-size: 13px;
+    }}
+    QLabel#ErrorHint {{
+        color: {c["text"]};
+        font-size: 13px;
+        font-weight: bold;
+    }}
+    QPushButton#ErrorLogToggle {{
+        background: transparent;
+        color: {c["dim"]};
+        border: none;
+        border-radius: 0;
+        padding: 0;
+        font-weight: normal;
+        font-size: 12px;
+        min-height: 0;
+        text-align: left;
+    }}
+    QPushButton#ErrorLogToggle:hover {{
+        background: transparent;
+        color: {c["text"]};
+        border: none;
+    }}
+    QPushButton#ErrorLogToggle:pressed {{
+        background: transparent;
+        border: none;
     }}
     QTextEdit {{
         background-color: {c["log_bg"]};
