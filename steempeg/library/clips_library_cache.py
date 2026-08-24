@@ -1,10 +1,12 @@
-"""Persist the Clips Manager row list between sessions (Skip startup).
+"""Persist the Clips Manager row list between sessions (Skip / Smart Launch).
 
 This is a UI snapshot — not a health recheck. Skip restores these rows as-is;
+Smart Launch restores them when a cheap roots fingerprint still matches.
 Refresh rebuilds them via a real folder scan.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from datetime import datetime
@@ -16,10 +18,101 @@ from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.library.scan import (
     ScannedClip,
     clip_folder_recorded_at,
+    collect_clip_roots,
 )
 
 CACHE_FILENAME = "clips_library_cache.json"
 CACHE_VERSION = 1
+FINGERPRINT_VERSION = 1
+
+
+def _root_mtime_ns(path: str) -> int:
+    try:
+        st = os.stat(path)
+        return int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000)))
+    except OSError:
+        return 0
+
+
+def compute_library_roots_fingerprint(library_roots: list[str] | None) -> dict[str, Any]:
+    """Cheap change detector for Smart Launch — no ffprobe, no deep DASH walks.
+
+    Per configured root: directory mtime + count/digest of shallow clip folder
+    names from ``collect_clip_roots`` (listdir of root / clips / video only).
+    """
+    roots_out: list[dict[str, Any]] = []
+    for raw in library_roots or []:
+        root = os.path.normpath(str(raw or "").strip())
+        if not root:
+            continue
+        if not os.path.isdir(root):
+            roots_out.append(
+                {
+                    "path": os.path.normcase(root),
+                    "mtime_ns": 0,
+                    "count": 0,
+                    "names_digest": "",
+                }
+            )
+            continue
+        names: list[str] = []
+        try:
+            for clip_path in sorted(collect_clip_roots(root)):
+                names.append(os.path.basename(clip_path).lower())
+        except OSError:
+            names = []
+        digest = hashlib.sha256("\0".join(names).encode("utf-8", "replace")).hexdigest()
+        roots_out.append(
+            {
+                "path": os.path.normcase(root),
+                "mtime_ns": _root_mtime_ns(root),
+                "count": len(names),
+                "names_digest": digest,
+            }
+        )
+    roots_out.sort(key=lambda r: str(r.get("path") or ""))
+    return {"version": FINGERPRINT_VERSION, "roots": roots_out}
+
+
+def fingerprints_match(stored: object | None, live: object | None) -> bool:
+    """True when both fingerprints describe the same library roots snapshot."""
+    if not isinstance(stored, dict) or not isinstance(live, dict):
+        return False
+    if int(stored.get("version") or 0) != FINGERPRINT_VERSION:
+        return False
+    if int(live.get("version") or 0) != FINGERPRINT_VERSION:
+        return False
+    a = stored.get("roots")
+    b = live.get("roots")
+    if not isinstance(a, list) or not isinstance(b, list) or len(a) != len(b):
+        return False
+    for left, right in zip(a, b):
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        if str(left.get("path") or "") != str(right.get("path") or ""):
+            return False
+        if int(left.get("mtime_ns") or 0) != int(right.get("mtime_ns") or 0):
+            return False
+        if int(left.get("count") or 0) != int(right.get("count") or 0):
+            return False
+        if str(left.get("names_digest") or "") != str(right.get("names_digest") or ""):
+            return False
+    return True
+
+
+def library_fingerprint_unchanged(
+    cache_dir: str | None,
+    library_roots: list[str] | None,
+) -> bool:
+    """Compare live roots fingerprint to the one stored with the session snapshot."""
+    payload = load_clips_library_cache(cache_dir)
+    stored = payload.get("fingerprint")
+    if not stored:
+        return False
+    live = compute_library_roots_fingerprint(library_roots)
+    if not live.get("roots"):
+        return False
+    return fingerprints_match(stored, live)
 
 
 def clips_library_cache_path(cache_dir: str | None) -> str:
