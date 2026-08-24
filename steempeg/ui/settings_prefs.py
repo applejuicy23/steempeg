@@ -704,14 +704,16 @@ def load_markers_on_strip(settings: dict | None) -> bool:
 
 KEY_STARTUP_LIBRARY_SCAN = "startup_library_scan"
 
+SCAN_SMART = "smart"
 SCAN_FULL = "full"
 SCAN_QUICK = "quick"
 SCAN_CACHE = "cache"
-DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_QUICK
+DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_SMART
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
+    (SCAN_SMART, "Smart Launch, cache when unchanged"),
     (SCAN_QUICK, "Quick, folders + cached health"),
-    (SCAN_FULL, "Full, folders + ffprobe health"),
+    (SCAN_FULL, "Full, folders + ffprobe + Steam icons/names"),
     (SCAN_CACHE, "Skip, instant last session"),
 )
 
@@ -719,6 +721,8 @@ STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
 def normalize_startup_library_scan(value: object | None) -> str:
     text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
+        "smart_launch": SCAN_SMART,
+        "auto": SCAN_SMART,
         "fast": SCAN_QUICK,
         "incremental": SCAN_QUICK,
         "cached_health": SCAN_QUICK,
@@ -731,7 +735,7 @@ def normalize_startup_library_scan(value: object | None) -> str:
         "from_cache": SCAN_CACHE,
         "no_scan": SCAN_CACHE,
     }
-    if text in (SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
+    if text in (SCAN_SMART, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
         return text
     return aliases.get(text, DEFAULT_STARTUP_LIBRARY_SCAN)
 
@@ -1049,3 +1053,18 @@ def set_markers_on_strip(enabled: object | None) -> bool:
     global _runtime_markers_on_strip
     _runtime_markers_on_strip = normalize_markers_on_strip(enabled)
     return _runtime_markers_on_strip
+
+
+# Player chrome outline — runtime in player_outline.py; re-export for Settings.
+from steempeg.ui.player_outline import (  # noqa: E402
+    KEY_PLAYER_OUTLINE,
+    PLAYER_OUTLINE_CHROME_ONLY,
+    PLAYER_OUTLINE_DEFAULT,
+    PLAYER_OUTLINE_LABELS,
+    PLAYER_OUTLINE_WITH_LINES,
+    PLAYER_OUTLINE_WITHOUT_LINES,
+    get_player_outline,
+    load_player_outline_from_settings,
+    normalize_player_outline,
+    set_player_outline,
+)
