@@ -176,10 +176,13 @@ class RenderMixin:
             folder = os.path.dirname(mpd_path)
             init_a = os.path.join(folder, "init-stream1.m4s")
             if os.path.isfile(init_a) and os.path.getsize(init_a) > 100:
+                # Stop at the first audio chunk — full listdir on long clips is laggy.
                 try:
-                    for entry in os.listdir(folder):
-                        if entry.startswith("chunk-stream1-") and entry.endswith(".m4s"):
-                            return True
+                    with os.scandir(folder) as entries:
+                        for entry in entries:
+                            name = entry.name
+                            if name.startswith("chunk-stream1-") and name.endswith(".m4s"):
+                                return True
                 except OSError:
                     pass
             try:
@@ -191,13 +194,26 @@ class RenderMixin:
         return False
 
     def get_all_mpd_paths(self, clip_path):
+        # One select/open calls this from quality populate + preview — cache the
+        # walk/repair result for the same folder so the UI thread does not pay twice.
+        norm = os.path.normpath(clip_path) if clip_path else ""
+        cached = getattr(self, "_mpd_paths_memo", None)
+        if (
+            isinstance(cached, tuple)
+            and len(cached) == 2
+            and cached[0] == norm
+            and isinstance(cached[1], list)
+        ):
+            return list(cached[1])
+
         paths = discovery.find_mpd_paths(clip_path)
-        if paths:
-            return paths
-        # Force-play salvage: a clip with no scanner-visible manifest but a built
-        # session_salvage.mpd is playable/renderable through that salvage manifest.
-        salvaged = getattr(self, "_salvaged_clips", {}).get(os.path.normpath(clip_path))
-        return list(salvaged) if salvaged else []
+        if not paths:
+            # Force-play salvage: a clip with no scanner-visible manifest but a built
+            # session_salvage.mpd is playable/renderable through that salvage manifest.
+            salvaged = getattr(self, "_salvaged_clips", {}).get(norm)
+            paths = list(salvaged) if salvaged else []
+        self._mpd_paths_memo = (norm, list(paths))
+        return list(paths)
 
     def fix_steam_manifest(self, mpd_path):
         return repair.fix_steam_manifest(mpd_path)
@@ -1683,20 +1699,23 @@ class RenderMixin:
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
         self._queue_library_preview_diversion = True
-        self._populate_quality_options_for_clip(clip_path)
-        self._apply_export_session_state(trim_restore, silent=True)
         self._apply_header_from_table_row(selected_row)
 
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
+        # Play first — Source Info XML / folder size must not block first frame.
         self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
-        self.update_final_setup()
-        self.refresh_render_queue_panel()
+        self._schedule_quality_populate_after_open(clip_path, trim_restore)
+        # Selection only — never inflate Render Queue from a library click.
+        self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):
-            self._sync_library_mode_chrome()
-        if hasattr(self, "_persist_library_ui_state"):
+            if not getattr(self, "_render_dock_visible", False):
+                self._sync_library_mode_chrome()
+        if hasattr(self, "_schedule_persist_library_ui_state"):
+            self._schedule_persist_library_ui_state()
+        elif hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
         if not getattr(self, "_is_rendering", False):
             self.update_status_indicator("Ready", "ready")
@@ -3224,45 +3243,22 @@ class RenderMixin:
         else:
             self.ui.source_label.setText("Source:\n" + "\n".join(unique_source_dirs))
 
-        orig_audio_bitrate = self.get_audio_bitrate_from_mpd(all_mpds[0]) if all_mpds else 192
-        self.current_orig_audio_bitrate = orig_audio_bitrate
-
-        if hasattr(self.ui, "combo_audio_bitrate"):
-            self.ui.combo_audio_bitrate.blockSignals(True)
-            self.ui.combo_audio_bitrate.clear()
-            bitrates = [
-                (320, "320 kbps (Best Quality)"),
-                (256, "256 kbps (High Quality)"),
-                (192, "192 kbps (Good Quality)"),
-                (128, "128 kbps (Standard)"),
-                (64, "64 kbps (Bad)"),
-                (32, "32 kbps (Very bad)"),
-            ]
-            self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
-            for val, text in bitrates:
-                self.ui.combo_audio_bitrate.addItem(text)
-                idx = self.ui.combo_audio_bitrate.count() - 1
-                if val > orig_audio_bitrate + 15:
-                    set_combo_item_enabled(
-                        self.ui.combo_audio_bitrate,
-                        idx,
-                        False,
-                        tooltip=f"Source audio is {orig_audio_bitrate} kbps — cannot increase.",
-                    )
-            self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
-            self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
-            self.ui.combo_audio_bitrate.blockSignals(False)
-
         unique_resolutions = set()
         max_height = 0
         self.current_orig_bitrate = 0
+        self.current_orig_audio_bitrate = 192
+        size_label_path = ""
 
         for mpd_path in all_mpds:
             try:
                 with open(mpd_path, "r", encoding="utf-8") as file:
                     content = file.read()
                     clip_full_path = os.path.dirname(mpd_path)
-                    size_str, duration_str = self.get_clip_size_and_duration(clip_full_path, content)
+                    # Duration from XML only — folder_size walk deferred (thousands of chunks).
+                    size_str, duration_str = self.get_clip_size_and_duration(
+                        clip_full_path, content, measure_size=False
+                    )
+                    size_label_path = clip_full_path
                     if hasattr(self.ui, "label_size"):
                         self.ui.label_size.setText(f"Size: {size_str}")
                     if hasattr(self.ui, "label_duration"):
@@ -3289,14 +3285,16 @@ class RenderMixin:
                     if fps_match:
                         self.current_orig_fps = int(fps_match.group(1))
                     else:
-                        self.current_orig_fps = self.get_fps_from_mpd(mpd_path)
+                        # Prefer XML; do not spawn ffprobe on the select path.
+                        self.current_orig_fps = getattr(self, "current_orig_fps", 60) or 60
 
                     if hasattr(self.ui, "label_fps"):
                         self.ui.label_fps.setText(f"FPS: {self.current_orig_fps}")
 
                     height_match = re.search(r'\bheight="(\d+)"', content)
                     width_match = re.search(r'\bwidth="(\d+)"', content)
-                    peak_mbps = mpd.get_video_bitrate_mbps(mpd_path)
+                    # Manifest bandwidth only — no chunk glob / ffprobe on UI thread.
+                    peak_mbps = mpd.peak_video_mbps_from_content(content)
                     if peak_mbps > self.current_orig_bitrate:
                         self.current_orig_bitrate = peak_mbps
 
@@ -3306,8 +3304,44 @@ class RenderMixin:
                         unique_resolutions.add(f"{w}x{h}")
                         if h > max_height:
                             max_height = h
+
+                    # Audio bitrate from first readable AdaptationSet (no ffprobe).
+                    if all_mpds and mpd_path == all_mpds[0]:
+                        orig_audio_bitrate = mpd.audio_bitrate_kbps_from_content(content)
+                        self.current_orig_audio_bitrate = orig_audio_bitrate
             except Exception:
                 pass
+
+        if size_label_path and hasattr(self, "_schedule_clip_folder_size_label"):
+            self._schedule_clip_folder_size_label(size_label_path)
+
+        # Rebuild audio combo once we know Original kbps from XML.
+        orig_audio_bitrate = int(getattr(self, "current_orig_audio_bitrate", 192) or 192)
+        if hasattr(self.ui, "combo_audio_bitrate"):
+            self.ui.combo_audio_bitrate.blockSignals(True)
+            self.ui.combo_audio_bitrate.clear()
+            bitrates = [
+                (320, "320 kbps (Best Quality)"),
+                (256, "256 kbps (High Quality)"),
+                (192, "192 kbps (Good Quality)"),
+                (128, "128 kbps (Standard)"),
+                (64, "64 kbps (Bad)"),
+                (32, "32 kbps (Very bad)"),
+            ]
+            self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
+            for val, text in bitrates:
+                self.ui.combo_audio_bitrate.addItem(text)
+                idx = self.ui.combo_audio_bitrate.count() - 1
+                if val > orig_audio_bitrate + 15:
+                    set_combo_item_enabled(
+                        self.ui.combo_audio_bitrate,
+                        idx,
+                        False,
+                        tooltip=f"Source audio is {orig_audio_bitrate} kbps — cannot increase.",
+                    )
+            self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
+            self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
+            self.ui.combo_audio_bitrate.blockSignals(False)
 
         if hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(40)
@@ -3452,16 +3486,29 @@ class RenderMixin:
             selected_rows = {
                 idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()
             }
-            self.grid_clips.blockSignals(True)
-            for i in range(self.grid_clips.count()):
-                item = self.grid_clips.item(i)
-                row = item.data(Qt.UserRole)
-                item.setSelected(row in selected_rows)
-                if row == selected_row:
-                    self.grid_clips.scrollToItem(item)
-            self.grid_clips.blockSignals(False)
-            if hasattr(self, '_sync_grid_card_visuals'):
-                self._sync_grid_card_visuals()
+            grid_rows = {
+                item.data(Qt.UserRole)
+                for item in self.grid_clips.selectedItems()
+                if item.data(Qt.UserRole) is not None
+            }
+            # Grid-originated selects already mirrored the table — skip a full
+            # setSelected walk (O(n) on large libraries) on every open.
+            if grid_rows != selected_rows:
+                self.grid_clips.blockSignals(True)
+                for i in range(self.grid_clips.count()):
+                    item = self.grid_clips.item(i)
+                    row = item.data(Qt.UserRole)
+                    item.setSelected(row in selected_rows)
+                    if row == selected_row:
+                        self.grid_clips.scrollToItem(item)
+                self.grid_clips.blockSignals(False)
+                if hasattr(self, '_sync_grid_card_visuals'):
+                    self._sync_grid_card_visuals()
+            elif selected_row >= 0:
+                for item in self.grid_clips.selectedItems():
+                    if item.data(Qt.UserRole) == selected_row:
+                        self.grid_clips.scrollToItem(item)
+                        break
 
         # Multi-select (Ctrl/Shift) builds a SET — don't thrash the preview on every click.
         from PySide6.QtWidgets import QApplication
@@ -3499,11 +3546,6 @@ class RenderMixin:
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
         session = self._session_state_for_clip(clip_path)
-        self._populate_quality_options_for_clip(clip_path)
-        # Export/settings only here — trim/markers restore after the new clip's
-        # duration is known (generate_and_play_preview trim_restore). Applying trim
-        # against the previous clip's timeline length made the yellow bar "stick".
-        self._apply_export_session_state(session, silent=True)
 
         game_item = self.ui.table_clips.item(selected_row, 0)
         game_name = game_item.text()
@@ -3530,13 +3572,61 @@ class RenderMixin:
         self._set_player_header_game_icon(clip_path=clip_path)
 
         self._selected_queue_job_id = None
-        self.update_playback_badge()
+        # Play first — Source Info / quality populate deferred off the open stack.
         self.generate_and_play_preview(clip_path, trim_restore=session)
+        self._schedule_quality_populate_after_open(clip_path, session)
         self._update_start_button_label()
-        if hasattr(self, "_sync_library_mode_chrome"):
-            self._sync_library_mode_chrome()
-        if hasattr(self, "_persist_library_ui_state"):
+        if hasattr(self, "_schedule_persist_library_ui_state"):
+            self._schedule_persist_library_ui_state()
+        elif hasattr(self, "_persist_library_ui_state"):
             self._persist_library_ui_state()
+
+    def _schedule_quality_populate_after_open(
+        self, clip_path: str, session=None
+    ) -> None:
+        """Fill Source Info / quality combos after first frame (keeps open responsive)."""
+        self._clips_quality_gen = getattr(self, "_clips_quality_gen", 0) + 1
+        gen = self._clips_quality_gen
+        self._pending_quality_populate = (gen, clip_path, session)
+        # Already revealed / idle — flush on next tick; otherwise finish does it.
+        if not getattr(self, "_awaiting_first_frame", False) and not getattr(
+            self, "_is_switching", False
+        ):
+            QTimer.singleShot(
+                0,
+                lambda g=getattr(self, "_media_switch_gen", 0): self._flush_deferred_clip_open_work(
+                    g
+                )
+                if hasattr(self, "_flush_deferred_clip_open_work")
+                else None,
+            )
+
+    def _run_quality_populate_after_open(self, gen: int, clip_path: str, session) -> None:
+        if gen != getattr(self, "_clips_quality_gen", 0):
+            return
+        want = (
+            self._norm_clip_path_key(clip_path)
+            if hasattr(self, "_norm_clip_path_key")
+            else os.path.normpath(clip_path or "")
+        )
+        active = getattr(self, "_preview_clip_path", None)
+        active_key = (
+            self._norm_clip_path_key(active)
+            if active and hasattr(self, "_norm_clip_path_key")
+            else (os.path.normpath(active) if active else "")
+        )
+        if want and active_key and want != active_key:
+            return
+        self._populate_quality_options_for_clip(clip_path)
+        if session is not None:
+            # Export/settings only — trim/markers restore after duration is known.
+            self._apply_export_session_state(session, silent=True)
+        self.update_final_setup()
+        if hasattr(self, "update_playback_badge"):
+            self.update_playback_badge()
+        # Duration is known now — start timeline thumbs if play deferred them.
+        if hasattr(self, "_maybe_start_thumbs_after_quality"):
+            self._maybe_start_thumbs_after_quality(clip_path)
 
     def fit_settings_tab_to_page(self, idx=None):
         """ Keep the scroll content as tall as the CURRENT settings page only.
@@ -5303,25 +5393,28 @@ class RenderMixin:
             self._selected_queue_job_id = job_id
             self._preview_clip_path = job.clip_path
             session = self._session_state_for_clip(job.clip_path)
-            self._apply_export_session_state(session, silent=True)
             self._apply_header_from_job(job)
+            if hasattr(self, "set_player_header_clip_controls_visible"):
+                self.set_player_header_clip_controls_visible(True)
+            # Start playback before Source Info XML / size work.
+            self.generate_and_play_preview(job.clip_path, trim_restore=session)
             self._populate_quality_options_for_clip(
                 job.clip_path, preserve_ui_selection=False,
             )
+            self._apply_export_session_state(session, silent=True)
             apply_job_settings_to_ui(self, job.settings)
-            if hasattr(self, "set_player_header_clip_controls_visible"):
-                self.set_player_header_clip_controls_visible(True)
-            self.generate_and_play_preview(job.clip_path, trim_restore=session)
             self.update_final_setup()
         except Exception:
             self._loading_queue_job = False
             raise
         self._highlight_clip_in_library(job.clip_path)
-        self.refresh_render_queue_panel()
+        # Card/list selection only — do not force the Render Queue pane open.
+        self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):
-            self._sync_library_mode_chrome()
+            if not getattr(self, "_render_dock_visible", False):
+                self._sync_library_mode_chrome()
         # Queue selection must refresh Ready badge + neo binding chrome.
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
@@ -6085,17 +6178,12 @@ class RenderMixin:
         self._sync_portable_queue_header_controls()
 
     def _sync_portable_queue_header_controls(self) -> None:
-        # Queue # circles on ClipCards — desktop + portable (not portable-only).
-        if hasattr(self, "refresh_clip_queue_badges"):
-            try:
-                self.refresh_clip_queue_badges()
-            except Exception:
-                pass
-        elif hasattr(self, "refresh_portable_clip_queue_badges"):
-            try:
-                self.refresh_portable_clip_queue_badges()
-            except Exception:
-                pass
+        # Queue # circles on ClipCards — desktop + portable (not portable-like).
+        # Debounce: full grid walk on every Preview/Healthy paint freezes footer clicks.
+        if hasattr(self, "refresh_clip_queue_badges") or hasattr(
+            self, "refresh_portable_clip_queue_badges"
+        ):
+            self._schedule_refresh_clip_queue_badges()
         if not getattr(self, "_portable_shell", False):
             return
         try:
@@ -6111,6 +6199,28 @@ class RenderMixin:
             sync_portable_render_button(self)
         except Exception:
             pass
+
+    def _schedule_refresh_clip_queue_badges(self, delay_ms: int = 80) -> None:
+        timer = getattr(self, "_queue_badge_refresh_timer", None)
+        if timer is None:
+            timer = QTimer(getattr(self, "ui", None))
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._run_scheduled_clip_queue_badge_refresh)
+            self._queue_badge_refresh_timer = timer
+        timer.start(max(0, int(delay_ms)))
+
+    def _run_scheduled_clip_queue_badge_refresh(self) -> None:
+        if hasattr(self, "refresh_clip_queue_badges"):
+            try:
+                self.refresh_clip_queue_badges()
+                return
+            except Exception:
+                pass
+        if hasattr(self, "refresh_portable_clip_queue_badges"):
+            try:
+                self.refresh_portable_clip_queue_badges()
+            except Exception:
+                pass
 
     def _apply_header_from_job(self, job):
         if not job or not hasattr(self, "custom_text_label"):
@@ -6248,16 +6358,26 @@ class RenderMixin:
             if not had_jobs:
                 # Fresh jobs — clear any prior user-collapse and open once.
                 self._queue_user_collapsed = False
-            # Re-open when shut unless the user explicitly dragged it closed.
-            # (Theatre collapse does not set the flag, so exit restores the dock.)
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(True)
+            # Auto-open only when jobs first appear, or when the pane is shut
+            # without a user-collapse latch (theatre exit safety). Never reopen
+            # on routine refreshes (clip select, progress ticks, Leave/Resume).
             # Scrap ≤48 counts as shut — closed panes often sit at PANE_FREED (1).
             should_open = (
                 sizes[1] <= 48
                 and not bool(getattr(self, "_queue_user_collapsed", False))
                 and not bool(getattr(self, "_splitter_dragging", False))
+                and (
+                    not had_jobs
+                    or bool(getattr(self, "_queue_splitter_restore_open", False))
+                )
             )
             if should_open and hasattr(self, "_open_queue_in_right_splitter"):
                 self._open_queue_in_right_splitter()
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(True)
+            self._queue_splitter_restore_open = False
         else:
             self.render_queue_panel.show()
             if bool(getattr(self, "_queue_user_collapsed", False)) or (
@@ -6661,13 +6781,14 @@ class RenderMixin:
         auto_continue_seconds: int = 10,
     ) -> bool:
         """Frameless FFmpeg error dialog. Returns True to continue queue, False to stop."""
+        from steempeg.render.ffmpeg_error_hints import classify_ffmpeg_error
         from steempeg.ui import ui_theme as ut
 
         dialog = QDialog(self.ui)
         dialog.setObjectName("SteempegRenderErrorDialog")
         dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        dialog.setFixedSize(780, 420)
+        dialog.setFixedSize(780, 460)
 
         shell = QWidget(dialog)
         shell.setObjectName("RenderErrorShell")
@@ -6693,27 +6814,29 @@ class RenderMixin:
         main_layout.addWidget(pic_label)
 
         content_layout = QVBoxLayout()
-        content_layout.setSpacing(15)
+        content_layout.setSpacing(12)
 
         title_layout = QVBoxLayout()
-        title_layout.setSpacing(2)
+        title_layout.setSpacing(4)
 
+        hint = classify_ffmpeg_error(error_msg)
+        title_lbl = QLabel("Render Failed")
+        title_lbl.setObjectName("ErrorTitle")
+        hint_lbl = QLabel(hint.message)
+        hint_lbl.setObjectName("ErrorHint")
+        hint_lbl.setWordWrap(True)
+        title_layout.addWidget(title_lbl)
+        title_layout.addWidget(hint_lbl)
+
+        desc_lbl = None
         if batch_continue:
-            title_text = "Render Failed"
-            desc_text = (
+            desc_lbl = QLabel(
                 "FFmpeg crashed while processing this clip. "
                 f"Auto-continuing in {auto_continue_seconds} s..."
             )
-        else:
-            title_text = "Render Failed"
-            desc_text = "FFmpeg encountered a critical error during processing."
-
-        title_lbl = QLabel(title_text)
-        title_lbl.setObjectName("ErrorTitle")
-        desc_lbl = QLabel(desc_text)
-        desc_lbl.setObjectName("ErrorDesc")
-        title_layout.addWidget(title_lbl)
-        title_layout.addWidget(desc_lbl)
+            desc_lbl.setObjectName("ErrorDesc")
+            desc_lbl.setWordWrap(True)
+            title_layout.addWidget(desc_lbl)
         content_layout.addLayout(title_layout)
 
         text_edit = QTextEdit()
@@ -6728,7 +6851,23 @@ class RenderMixin:
         ensure_steempg_vertical_scrollbar(
             text_edit, chrome=error_dialog_scrollbar_chrome()
         )
-        content_layout.addWidget(text_edit)
+
+        log_toggle = QPushButton("Hide FFmpeg log")
+        log_toggle.setObjectName("ErrorLogToggle")
+        log_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        log_toggle.setFlat(True)
+        log_visible = [True]
+
+        def toggle_log() -> None:
+            log_visible[0] = not log_visible[0]
+            text_edit.setVisible(log_visible[0])
+            log_toggle.setText(
+                "Hide FFmpeg log" if log_visible[0] else "Show FFmpeg log"
+            )
+
+        log_toggle.clicked.connect(toggle_log)
+        content_layout.addWidget(log_toggle)
+        content_layout.addWidget(text_edit, 1)
 
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -6760,6 +6899,8 @@ class RenderMixin:
             btn_continue.setCursor(Qt.CursorShape.PointingHandCursor)
 
             def tick():
+                if desc_lbl is None:
+                    return
                 remaining[0] -= 1
                 if remaining[0] > 0:
                     desc_lbl.setText(
