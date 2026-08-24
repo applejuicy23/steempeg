@@ -141,10 +141,9 @@ class PreviewSniperWorker(QThread):
         self.base_dir = ""
         self.init_filename = ""
         self.chunk_template = ""
-        if self.isRunning():
-            if not self.wait(800):
-                self.terminate()
-                self.wait(200)
+        # Do not wait/terminate on the UI thread during clip switches — ffmpeg
+        # was already killed above; the worker exits on its next loop check.
+
 
     def pause_hover(self, background_window_sec: float = _BACKGROUND_WARM_WINDOW_SEC) -> None:
         """Leave the strip: keep warming ±window for a wall-clock budget, then idle.
@@ -798,15 +797,16 @@ class ThumbnailBatchThread(QThread):
         _ensure_thumb_dir(self.thumb_dir)
 
     def stop(self):
-        """Stop ffmpeg and end the batch thread without leaving a zombie process."""
+        """Cancel ffmpeg/batch work without blocking the UI thread.
+
+        Clip open used to ``wait(3000)`` here on every switch — that froze the
+        main window after ``mpv.play`` (audio running, card stuck at ~70%).
+        Kill the process tree and let the QThread exit in the background.
+        """
         self._cancelled = True
         if self.process:
             _kill_process_tree(self.process, label="batch-thumbs")
             self.process = None
-        if self.isRunning():
-            if not self.wait(3000):
-                self.terminate()
-                self.wait(500)
 
     def _emit_if_current(self) -> None:
         if self._cancelled:

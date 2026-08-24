@@ -801,27 +801,49 @@ class PlayerMixin:
     def _reveal_video_when_ready(self):
         """Swap the placeholder for the live mpv surface once the first frame exists.
 
-        Polls mpv's time_pos (a real position means a frame is decoded) and waits out
-        any cache buffering, with a hard deadline so a hidden/idle surface can never
-        leave us stuck on the placeholder forever.
+        Polls mpv's decoded frame width (preferred) or an advancing time_pos
+        (audio often starts first). Hard deadline so a hidden/idle surface can
+        never leave us stuck on the placeholder — or a ClipCard ~70% spinner —
+        forever while the UI thread is busy.
         """
         if not getattr(self, '_awaiting_first_frame', False):
             return
+        switch_gen = getattr(self, "_preview_switch_gen", None)
+        if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
 
-        # "width" (the decoded frame's pixel width) is only set once mpv has actually
-        # decoded the first frame — the precise moment it's safe to show the surface.
-        # We deliberately do NOT gate on buffering: cache-buffering-state often reads
-        # non-zero even on healthy playback, which would stall the reveal for the full
-        # deadline and cause a visible poster blink on every load.
+        # "width" is set once mpv has decoded a video frame — safest reveal.
+        # time_pos advancing means demux/decode is alive (often audio-first on
+        # DASH); drop the card overlay then so we never sit on a stuck 70% while
+        # sound already plays behind a blank stack page.
         ready = False
+        playback_alive = False
         try:
             if self.player.width:
                 ready = True
         except Exception:
             ready = True  # never get wedged on a transient property error
 
+        if not ready:
+            try:
+                pos = self.player.time_pos
+                if pos is not None and float(pos) >= 0.0:
+                    playback_alive = True
+            except Exception:
+                playback_alive = False
+
+        if playback_alive and getattr(self, "_clip_open_loading_hosts", None):
+            # Overlay tracks "open", not "surface visible" — hide as soon as
+            # media is actually playing so we never sit on a stuck ~70% while
+            # sound already plays. Keep _opening_clip_path for spam-click guards.
+            self._hide_clip_open_loading_hosts()
+            self._clip_open_load_pct = 100
+
         if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
-            if hasattr(self, "update_clip_open_loading_progress"):
+            if (
+                hasattr(self, "update_clip_open_loading_progress")
+                and getattr(self, "_clip_open_loading_hosts", None)
+            ):
                 buf = self._clip_open_mpv_buffer_percent()
                 if buf is not None:
                     pct = 70 + int(buf * 0.25)
@@ -836,11 +858,18 @@ class PlayerMixin:
             QTimer.singleShot(16, self._reveal_video_when_ready)
             return
 
+        # Deadline hit with audio-only so far — still show the surface rather
+        # than leave a blank page under a playing soundtrack.
+        if not ready and playback_alive:
+            ready = True
+        if not ready and time.time() >= getattr(self, '_first_frame_deadline', 0):
+            ready = True
+
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
         # Switching gate can clear as soon as the new picture is visible.
-        self._finish_preview_switch(getattr(self, "_preview_switch_gen", None))
+        self._finish_preview_switch(switch_gen)
         if hasattr(self, '_maybe_offer_salvage_verification'):
             self._maybe_offer_salvage_verification()
 
@@ -1032,8 +1061,8 @@ class PlayerMixin:
             return
 
         if getattr(self, 'is_fullscreen', False):
-            self.toggle_fullscreen() 
-            
+            self.toggle_fullscreen()
+
         self.is_theater = not getattr(self, 'is_theater', False)
 
         # Capture the real (expanded) splitter sizes the moment we enter theatre,
@@ -1050,30 +1079,40 @@ class PlayerMixin:
         if hasattr(self.ui, 'main_splitter'):
             self._set_splitter_handle_visible(self.ui.main_splitter, not self.is_theater)
 
-        if hasattr(self, 'bottom_v_wrap'):
-            self.bottom_v_wrap.setVisible(not self.is_theater)
+        # Exit: honour Screenshots / rendered-preview dock rules (don't force-show
+        # neo+dash then hide them a tick later — that double-laid-out the shell).
+        if self.is_theater:
+            dock_visible = False
+            self._render_dock_visible = False
+        else:
+            dock_visible = True
+            if hasattr(self, "_should_show_render_dock"):
+                try:
+                    dock_visible = bool(self._should_show_render_dock())
+                except Exception:
+                    dock_visible = True
+            self._render_dock_visible = dock_visible
 
-        # Hiding new settings panels
+        if hasattr(self, 'bottom_v_wrap'):
+            self.bottom_v_wrap.setVisible(dock_visible)
+
         if hasattr(self.ui, 'settings_tabs'):
-            self.ui.settings_tabs.setVisible(not self.is_theater)
+            self.ui.settings_tabs.setVisible(dock_visible)
         if hasattr(self, 'neo_wrapper'):
-            self.neo_wrapper.setVisible(not self.is_theater)
-            
-        # Hiding the new render block
+            self.neo_wrapper.setVisible(dock_visible)
+
         if hasattr(self.ui, 'btn_start'):
             bottom_wrapper = self.ui.btn_start.parentWidget()
             if bottom_wrapper and "Splitter" not in type(bottom_wrapper).__name__ and bottom_wrapper.objectName() != "centralwidget":
-                bottom_wrapper.setVisible(not self.is_theater)
+                bottom_wrapper.setVisible(dock_visible)
         if hasattr(self, 'render_dashboard'):
-            self.render_dashboard.setVisible(not self.is_theater)
-        # Keep the queue widget mapped (do not hide()) — QSplitter drops the
-        # player|queue handle when a child is hidden, and exit cannot always
-        # recreate it cleanly. Collapse width instead.
+            self.render_dashboard.setVisible(dock_visible)
+        if hasattr(self, 'render_queue_panel'):
+            self.render_queue_panel.setVisible(not self.is_theater)
         if hasattr(self, 'right_h_splitter') and self.is_theater:
             sizes = self.right_h_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else 1
             self.right_h_splitter.setSizes([total, 0])
-            self._clamp_queue_panel_for_immersive(True)
             # Remember original handle geometry so we can restore the exact
             # same thickness as the left splitter (it is not always equal to
             # QUEUE_SPLITTER_GUTTER).
@@ -1086,24 +1125,40 @@ class PlayerMixin:
             # Collapse the queue splitter handle itself — otherwise a thick dark
             # strip remains on the right and breaks symmetry with the left edge.
             self._hide_right_h_splitter_handle()
-        elif hasattr(self, 'right_h_splitter') and not self.is_theater:
-            self._clamp_queue_panel_for_immersive(False)
 
         footer = getattr(self, "_footer_mega_pill", None)
         if footer is not None:
             footer.setVisible(not self.is_theater)
-            
+
         if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(not self.is_theater)
         if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(not self.is_theater)
         if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.setVisible(not self.is_theater)
 
-        # Set the background to black and remove the 10px splitter offset.
         if hasattr(self, 'video_wrapper'):
-            bg_color = "black" if self.is_theater else "transparent"
-            self.video_wrapper.setStyleSheet(f"background-color: {bg_color}; border: none;")
-            
+            if self.is_theater:
+                self.video_wrapper.setStyleSheet("background-color: black; border: none;")
+            else:
+                try:
+                    from steempeg.ui import ui_theme as ut
+
+                    self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
+                except Exception:
+                    self.video_wrapper.setStyleSheet(
+                        "background-color: transparent; border: none;"
+                    )
+
+        # Player↔dock gap: 10px only when the bottom dock is actually shown.
         if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
-            margin_bottom = 0 if self.is_theater else 10
+            portable_like = False
+            if hasattr(self, "_desktop_render_layout_is_portable_like"):
+                try:
+                    portable_like = bool(self._desktop_render_layout_is_portable_like())
+                except Exception:
+                    portable_like = False
+            if self.is_theater or portable_like:
+                margin_bottom = 0
+            else:
+                margin_bottom = 10 if dock_visible else 0
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
 
         # Player top inset + right margin: in theatre keep a symmetric right inset
@@ -1123,22 +1178,6 @@ class PlayerMixin:
 
         # Restore the queue splitter handle after leaving theatre (we zeroed it on enter).
         if hasattr(self, 'right_h_splitter') and not self.is_theater:
-            # Prefer the snapshot taken before theatre collapse (expanded panes).
-            if hasattr(self, '_pre_theater_main_sizes') and hasattr(self.ui, 'main_splitter'):
-                try:
-                    self.ui.main_splitter.setSizes(list(self._pre_theater_main_sizes))
-                except Exception:
-                    pass
-            if hasattr(self, '_pre_theater_v_sizes') and hasattr(self, 'main_v_splitter'):
-                try:
-                    self.main_v_splitter.setSizes(list(self._pre_theater_v_sizes))
-                except Exception:
-                    pass
-            if hasattr(self, '_pre_theater_h_sizes'):
-                try:
-                    self.right_h_splitter.setSizes(list(self._pre_theater_h_sizes))
-                except Exception:
-                    pass
             # Restore the original handle width/visibility instead of hardcoding
             # constants; otherwise theatre toggling can make the right handle
             # thicker than the left.
@@ -1165,7 +1204,7 @@ class PlayerMixin:
             elif self.is_theater:
                 icon_path = get_resource_path("theatremodeclosed.png")
                 if not os.path.exists(icon_path): icon_path = get_resource_path("theatremodeclosed.jpg")
-                
+
                 if os.path.exists(icon_path):
                     self.btn_theater.setIcon(QIcon(icon_path))
                 else:
@@ -1184,19 +1223,8 @@ class PlayerMixin:
 
         if not self.is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
             self._sync_queue_splitter_visibility()
-        # Exit-only: library chrome + splitter paint. Running them on enter
-        # restyles every handle mid-collapse (Like a Portable felt ragged).
-        if not self.is_theater:
-            if hasattr(self, '_sync_library_mode_chrome'):
-                self._sync_library_mode_chrome()
-            try:
-                from steempeg.ui.portable_splitter_reveal import (
-                    ensure_right_h_handle_chrome,
-                )
-
-                ensure_right_h_handle_chrome(self)
-            except Exception:
-                pass
+        if hasattr(self, '_sync_library_mode_chrome'):
+            self._sync_library_mode_chrome()
 
     def _save_splitter_sizes(self, splitter, attr_name):
         if splitter is None:
@@ -1330,6 +1358,16 @@ class PlayerMixin:
         if hasattr(self, 'right_h_splitter') and hasattr(self, '_immersive_h_splitter_sizes'):
             self.right_h_splitter.setSizes(self._immersive_h_splitter_sizes)
         if not is_theater and hasattr(self, '_sync_queue_splitter_visibility'):
+            # Immersive exit restores pre-collapse sizes; allow one reopen pass
+            # if that snapshot had the queue open and the user had not collapsed.
+            imm_h = getattr(self, '_immersive_h_splitter_sizes', None)
+            if (
+                imm_h is not None
+                and len(imm_h) >= 2
+                and int(imm_h[1]) > 48
+                and not bool(getattr(self, '_queue_user_collapsed', False))
+            ):
+                self._queue_splitter_restore_open = True
             self._sync_queue_splitter_visibility()
 
     def _immersive_screen_geometry(self):
@@ -1681,7 +1719,9 @@ class PlayerMixin:
             margin_bottom = 0 if is_t else 10
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
         if hasattr(self, 'video_wrapper'):
-            self.video_wrapper.setStyleSheet("background-color: transparent; border: none;")
+            from steempeg.ui import ui_theme as ut
+
+            self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
 
         main_layout = self.ui.layout()
         if main_layout and hasattr(self, 'original_main_margins'):
@@ -1945,7 +1985,13 @@ class PlayerMixin:
                 
             # Set the background to black (removes gray bars at the edges of the video)
             if hasattr(self, 'video_wrapper'):
-                self.video_wrapper.setStyleSheet("background-color: black; border: none;")
+                from steempeg.ui import ui_theme as ut
+
+                self.video_wrapper.setStyleSheet(
+                    ut.player_video_wrapper_stylesheet(
+                        background="black", chrome_outline=False
+                    )
+                )
 
             # Idle fullscreen: keep the native mpv HWND parked so it cannot cover
             # the "Please select a clip…" placeholder with an empty gray surface.
@@ -2663,6 +2709,8 @@ class PlayerMixin:
             QTimer.singleShot(
                 150 if has_trim else 50, self._deferred_apply_open_seek
             )
+        # Timeline markers / Source Info after first paint — never race the reveal.
+        self._flush_deferred_clip_open_work(switch_gen)
 
     def _set_timeline_batch_thumbs_busy(self, busy: bool) -> None:
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
@@ -2859,6 +2907,36 @@ class PlayerMixin:
             self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
         self.thumb_thread.finished_generation.connect(self._on_timeline_thumb_batch_done)
         self.thumb_thread.start()
+
+    def _maybe_start_thumbs_after_quality(self, clip_path: str) -> None:
+        """Kick timeline batch once Source Info has duration (open path defers it)."""
+        if self._norm_clip_path_key(clip_path) != self._norm_clip_path_key(
+            getattr(self, "_preview_clip_path", None)
+        ):
+            return
+        if getattr(self, "_awaiting_first_frame", False) or getattr(
+            self, "_is_switching", False
+        ):
+            return
+        clip_dur = float(getattr(self, "current_clip_duration_sec", 0) or 0)
+        if clip_dur < 1.0:
+            return
+        play_path = getattr(self, "_current_play_abs_path", None) or getattr(
+            self, "_current_mpd_abs_path", None
+        )
+        abs_path = getattr(self, "_current_mpd_abs_path", None) or play_path
+        if not play_path:
+            return
+        from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
+
+        thumb_src = play_path
+        if (
+            host_libmpv_needs_mpd_bridge()
+            and abs_path
+            and str(abs_path).lower().endswith(".mpd")
+        ):
+            thumb_src = abs_path
+        self._start_timeline_thumb_batch(thumb_src, clip_dur)
 
     def schedule_play_media_file(self, file_path: str, delay_ms: int = 220):
         """Debounce rendered-file preview so rapid grid clicks don't wedge MPV."""
@@ -3089,6 +3167,20 @@ class PlayerMixin:
         self._opening_clip_path = None
         self._clip_open_play_t0 = None
         self._clip_open_load_pct = -1
+        self._hide_clip_open_loading_hosts()
+
+    def _hide_clip_open_loading_hosts(self) -> None:
+        """Drop card/queue spinners without clearing the in-flight open path."""
+        hosts = getattr(self, "_clip_open_loading_hosts", None)
+        self._clip_open_loading_hosts = None
+        if hosts:
+            for host in hosts:
+                try:
+                    if hasattr(host, "set_loading"):
+                        host.set_loading(False)
+                except RuntimeError:
+                    pass
+            return
         grid = getattr(self, "grid_clips", None)
         if grid is not None:
             try:
@@ -3140,6 +3232,7 @@ class PlayerMixin:
         # clear_clip_open_loading nulls this — restore so in-flight open is trackable.
         if clip_path:
             self._opening_clip_path = clip_path
+        hosts: list = []
         if key:
             grid = getattr(self, "grid_clips", None)
             if grid is not None:
@@ -3154,6 +3247,7 @@ class PlayerMixin:
                         card = grid.itemWidget(item)
                         if card is not None and hasattr(card, "set_loading"):
                             card.set_loading(True, percent=0 if percent is None else percent)
+                            hosts.append(card)
                         break
                 except RuntimeError:
                     pass
@@ -3166,6 +3260,7 @@ class PlayerMixin:
                     if getattr(card, "_job_id", None) == jid and hasattr(card, "set_loading"):
                         try:
                             card.set_loading(True, percent=0 if percent is None else percent)
+                            hosts.append(card)
                         except RuntimeError:
                             pass
             sidebar = getattr(self, "_portable_queue_sidebar", None)
@@ -3174,8 +3269,10 @@ class PlayerMixin:
                 if row is not None and hasattr(row, "set_loading"):
                     try:
                         row.set_loading(True, percent=0 if percent is None else percent)
+                        hosts.append(row)
                     except RuntimeError:
                         pass
+        self._clip_open_loading_hosts = hosts or None
 
     def update_clip_open_loading_progress(self, percent: int | None) -> None:
         """Update % on whichever card is currently showing the open spinner."""
@@ -3186,6 +3283,21 @@ class PlayerMixin:
         if pct < last:
             return
         self._clip_open_load_pct = pct
+        hosts = getattr(self, "_clip_open_loading_hosts", None)
+        if hosts:
+            alive = []
+            for host in hosts:
+                try:
+                    if hasattr(host, "is_loading") and not host.is_loading():
+                        continue
+                    if hasattr(host, "set_loading_progress"):
+                        host.set_loading_progress(pct)
+                    alive.append(host)
+                except RuntimeError:
+                    continue
+            self._clip_open_loading_hosts = alive or None
+            return
+        # Fallback: full scan (hosts unset / rebuilt mid-open).
         grid = getattr(self, "grid_clips", None)
         if grid is not None:
             try:
@@ -3246,8 +3358,6 @@ class PlayerMixin:
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
-        if hasattr(self, "_sync_library_mode_chrome"):
-            self._sync_library_mode_chrome()
         if clip_path is None:
             if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
                 return
@@ -3290,9 +3400,11 @@ class PlayerMixin:
 
         self._opening_clip_path = clip_path
         self._preview_clip_path = clip_path
-        # Raw clip is active now — re-show dash/settings even if Screenshots tab hid them.
+        # Raw clip is active now — re-show dash/settings only when dock was hidden
+        # (Screenshots / rendered-only). Skip geometry churn while already open.
         if hasattr(self, "_sync_library_mode_chrome"):
-            self._sync_library_mode_chrome()
+            if not getattr(self, "_render_dock_visible", False):
+                self._sync_library_mode_chrome()
         self.set_clip_open_loading(
             clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
         )
@@ -3380,7 +3492,6 @@ class PlayerMixin:
         abs_path = os.path.abspath(mpd_path).replace("\\", "/")
 
         # Linux: libmpv cannot demux Steam .mpd — remux to cached .mkv (or use cache).
-        # Start remux ASAP so it overlaps timeline JSON work below.
         from steempeg.core.dash.mpd_playback import (
             existing_playback_cache_for_play,
             host_libmpv_needs_mpd_bridge,
@@ -3399,7 +3510,96 @@ class PlayerMixin:
         if not pending_remux:
             self._nudge_clip_open_loading(48)
 
-        # STEP 2: AUTO-SEARCH JSON TIMELINE
+        # Cheap chrome before play — markers / health / badge follow after mpv.play.
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            self.set_player_header_clip_controls_visible(True)
+        if hasattr(self, 'custom_timeline'):
+            self.custom_timeline.setEnabled(True)
+
+        # 3. Open media ASAP — timeline JSON walks must not block first frame.
+        logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
+        if pending_remux:
+            self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
+            return
+
+        play_path = early_play_path
+        if play_path != abs_path:
+            logging.info("MPV play via DASH remux cache: %s", play_path)
+        self._start_clip_playback(switch_gen, abs_path, play_path, clip_path)
+        # Markers / health after first frame — do not race the reveal timer.
+        self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
+
+    def _defer_preview_post_open_work(
+        self, switch_gen: int, clip_path: str, mpd_path: str
+    ) -> None:
+        """Queue timeline/health work until the open surface is revealed."""
+        self._preview_post_open_gen = getattr(self, "_preview_post_open_gen", 0) + 1
+        self._pending_preview_post_open = (
+            self._preview_post_open_gen,
+            switch_gen,
+            clip_path,
+            mpd_path,
+        )
+        # Remux path may already have revealed; flush on next tick if idle.
+        if not getattr(self, "_awaiting_first_frame", False) and not getattr(
+            self, "_is_switching", False
+        ):
+            QTimer.singleShot(0, lambda g=switch_gen: self._flush_deferred_clip_open_work(g))
+
+    def _flush_deferred_clip_open_work(self, switch_gen: int | None = None) -> None:
+        """Run post-open + quality populate after first paint (keeps open responsive)."""
+        if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        pending_post = getattr(self, "_pending_preview_post_open", None)
+        if pending_post:
+            self._pending_preview_post_open = None
+            post_gen, sg, clip_path, mpd_path = pending_post
+            QTimer.singleShot(
+                0,
+                lambda g=post_gen, s=sg, p=clip_path, m=mpd_path: self._run_preview_post_open_work(
+                    g, s, p, m
+                ),
+            )
+        pending_quality = getattr(self, "_pending_quality_populate", None)
+        if pending_quality and hasattr(self, "_run_quality_populate_after_open"):
+            self._pending_quality_populate = None
+            q_gen, clip_path, session = pending_quality
+            QTimer.singleShot(
+                0,
+                lambda g=q_gen, p=clip_path, s=session: self._run_quality_populate_after_open(
+                    g, p, s
+                ),
+            )
+        pending_thumbs = getattr(self, "_pending_timeline_thumbs", None)
+        if pending_thumbs:
+            self._pending_timeline_thumbs = None
+            sg, thumb_src, clip_dur = pending_thumbs
+            if sg == getattr(self, "_media_switch_gen", 0):
+                QTimer.singleShot(
+                    0,
+                    lambda src=thumb_src, dur=clip_dur: self._start_timeline_thumb_batch(
+                        src, dur
+                    ),
+                )
+
+    def _schedule_preview_post_open_work(
+        self, switch_gen: int, clip_path: str, mpd_path: str
+    ) -> None:
+        """Compat: queue post-open work (same as defer)."""
+        self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
+
+    def _run_preview_post_open_work(
+        self, post_gen: int, switch_gen: int, clip_path: str, mpd_path: str
+    ) -> None:
+        if post_gen != getattr(self, "_preview_post_open_gen", 0):
+            return
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        if self._norm_clip_path_key(clip_path) != self._norm_clip_path_key(
+            getattr(self, "_preview_clip_path", None)
+        ):
+            return
+
         offset_ms = 0
 
         def find_json_in_dir(directory):
@@ -3410,41 +3610,24 @@ class PlayerMixin:
             except OSError:
                 names = []
             # Prefer real Steam timeline_*.json over our steempeg_timeline.json.
+            # Stay in the clip folder only — no recursive walk on the open path.
             for name in names:
                 if name.startswith("timeline_") and name.endswith(".json"):
                     return os.path.join(directory, name)
             if "steempeg_timeline.json" in names:
                 return os.path.join(directory, "steempeg_timeline.json")
-            for root_dir, _dirs, files in os.walk(directory):
-                for file in files:
-                    if file.startswith("timeline_") and file.endswith(".json"):
-                        return os.path.join(root_dir, file)
-            for root_dir, _dirs, files in os.walk(directory):
-                if "steempeg_timeline.json" in files:
-                    return os.path.join(root_dir, "steempeg_timeline.json")
-            for root_dir, _dirs, files in os.walk(directory):
-                for file in files:
-                    if (
-                        file.endswith(".json")
-                        and "settings" not in file
-                        and "game" not in file
-                    ):
-                        return os.path.join(root_dir, file)
             return None
 
-        # 1. Search strictly within the clip's own folder!
         json_path = find_json_in_dir(clip_path)
-
-        # 2. If the clip is in the standard Steam folder (video/fg_123), look in the adjacent folder: timelines/fg_123.
         if not json_path:
             parent_dir = os.path.dirname(clip_path)
             if os.path.basename(parent_dir).lower() == "video":
                 timelines_dir = os.path.join(os.path.dirname(parent_dir), "timelines")
                 clip_folder_name = os.path.basename(clip_path)
-                json_path = find_json_in_dir(os.path.join(timelines_dir, clip_folder_name))
+                json_path = find_json_in_dir(
+                    os.path.join(timelines_dir, clip_folder_name)
+                )
 
-        # 3. No Steam timeline → create steempeg_timeline.json in the clip folder
-        #    (Healthy / Issues / Cured / Dead salvage — same for all).
         from steempeg.core.clip_markers_cache import (
             ensure_steempeg_timeline_json,
             is_steam_timeline_json,
@@ -3461,8 +3644,7 @@ class PlayerMixin:
             if created:
                 json_path = created
 
-        # 4. Passing to the Engine
-        if hasattr(self, 'custom_timeline'):
+        if hasattr(self, "custom_timeline"):
             self.custom_timeline.canvas.rendered_media_path = None
             cache_dir = getattr(self, "cache_dir", None)
             if json_path:
@@ -3471,8 +3653,8 @@ class PlayerMixin:
                 json_name = os.path.basename(json_path)
                 video_folder_name = os.path.basename(os.path.dirname(mpd_path))
 
-                json_match = re.search(r'(\d{8})_(\d{6})', json_name)
-                video_match = re.search(r'(\d{8})_(\d{6})', video_folder_name)
+                json_match = re.search(r"(\d{8})_(\d{6})", json_name)
+                video_match = re.search(r"(\d{8})_(\d{6})", video_folder_name)
 
                 if json_match and video_match:
                     try:
@@ -3489,7 +3671,6 @@ class PlayerMixin:
 
                 logging.debug("Timeline offset: %d ms", offset_ms)
                 canvas = self.custom_timeline.canvas
-                # Our file is SoT for usermarkers — skip cache merge to avoid dupes.
                 use_cache = is_steam_timeline_json(json_path)
                 canvas.load_timeline_json(
                     json_path,
@@ -3504,7 +3685,6 @@ class PlayerMixin:
                         app_id,
                         on_ready=canvas.update,
                     )
-
             else:
                 logging.debug("No timeline JSON for clip: %s", clip_path)
                 canvas = self.custom_timeline.canvas
@@ -3513,30 +3693,10 @@ class PlayerMixin:
                     cache_dir=cache_dir,
                 )
 
-        if not pending_remux:
-            self._nudge_clip_open_loading(58)
-
-
-        # 3. PREPARE THE CANVAS
-        # Blank page already shown at switch start; keep awaiting first frame.
-        if hasattr(self, "set_player_header_clip_controls_visible"):
-            self.set_player_header_clip_controls_visible(True)
-        if hasattr(self, 'update_playback_badge'):
+        if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
-        if hasattr(self, 'update_clip_health_button'):
+        if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
-        if hasattr(self, 'custom_timeline'): 
-            self.custom_timeline.setEnabled(True)
-
-        # 4. Open media. Cold remux finishes via _on_clip_remux_finished.
-        logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
-        if pending_remux:
-            return
-
-        play_path = early_play_path
-        if play_path != abs_path:
-            logging.info("MPV play via DASH remux cache: %s", play_path)
-        self._start_clip_playback(switch_gen, abs_path, play_path, clip_path)
 
     def _prefetch_clip_playback_media(self, clip_path: str) -> None:
         """Warm Linux DASH remux cache early without starting playback."""
@@ -3802,10 +3962,7 @@ class PlayerMixin:
         self._first_frame_deadline = time.time() + 0.6
         QTimer.singleShot(30, self._reveal_video_when_ready)
 
-        # --- BACKGROUND THUMBNAIL BATCH GENERATION (THE MATRIX 2.0) ---
-        if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
-            self.thumb_thread.stop()
-
+        # Timeline thumbs after first paint — never wait on ffmpeg batch stop here.
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
         if clip_dur >= 1.0:
             from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
@@ -3813,10 +3970,11 @@ class PlayerMixin:
             thumb_src = play_path
             if host_libmpv_needs_mpd_bridge() and abs_path.lower().endswith(".mpd"):
                 thumb_src = abs_path
-            self._start_timeline_thumb_batch(thumb_src, clip_dur)
+            self._pending_timeline_thumbs = (switch_gen, thumb_src, clip_dur)
         elif hasattr(self, 'custom_timeline'):
             self.custom_timeline.thumb_dir = None
             self._set_timeline_batch_thumbs_busy(False)
+            self._pending_timeline_thumbs = None
         
         # Safety: if first-frame reveal never fires, still drop the switching gate.
         QTimer.singleShot(800, lambda g=switch_gen: self._finish_preview_switch(g))

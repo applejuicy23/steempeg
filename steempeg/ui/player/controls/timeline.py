@@ -108,9 +108,11 @@ class TimelineCanvas(QWidget):
         super().__init__(parent)
         self.duration_ms = 0
         self.setMouseTracking(True)
-        
-        if 'ThumbnailPreviewWidget' in globals():
-            self.preview_widget = ThumbnailPreviewWidget()
+
+        # Parent to the canvas so the Tool window is owned by the player HWND.
+        # A parentless Qt.ToolTip often stacks *under* the native mpv surface in
+        # Portable theatre (and fullscreen HUD), so hover previews look "dead".
+        self.preview_widget = ThumbnailPreviewWidget(self)
 
         self.visual_ms = 0.0  
         self.target_ms = 0.0  
@@ -165,18 +167,17 @@ class TimelineCanvas(QWidget):
         self.current_preview_pixmap = None
         self._thumb_dir_media_path = ""
         self._batch_thumbs_busy = False
-        if 'PreviewSniperWorker' in globals():
-            self.sniper = PreviewSniperWorker()
-            self.sniper.preview_ready.connect(self.on_preview_ready)
-            
-            self.sniper_timer = QTimer(self)
-            self.sniper_timer.setSingleShot(True)
-            self.sniper_timer.timeout.connect(self.trigger_sniper)
+        self.sniper = PreviewSniperWorker()
+        self.sniper.preview_ready.connect(self.on_preview_ready)
 
-            # Debounce leave: brief edge flicker shouldn't restart background warm.
-            self._sniper_leave_timer = QTimer(self)
-            self._sniper_leave_timer.setSingleShot(True)
-            self._sniper_leave_timer.timeout.connect(self._start_sniper_background_warm)
+        self.sniper_timer = QTimer(self)
+        self.sniper_timer.setSingleShot(True)
+        self.sniper_timer.timeout.connect(self.trigger_sniper)
+
+        # Debounce leave: brief edge flicker shouldn't restart background warm.
+        self._sniper_leave_timer = QTimer(self)
+        self._sniper_leave_timer.setSingleShot(True)
+        self._sniper_leave_timer.timeout.connect(self._start_sniper_background_warm)
         self.pending_sec = -1
         self._hover_preview_bucket = -1
 
@@ -193,23 +194,18 @@ class TimelineCanvas(QWidget):
         self.marker_store = MarkerIconStore()
         
         # NEW FLOATING TOOLTIP (Will reside beneath the scrollbar)
-        from steempeg.ui import design_tokens as tok
+        from steempeg.ui import ui_theme as ut
 
-        self.text_tooltip = QLabel()
-        self.text_tooltip.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
-        self.text_tooltip.setStyleSheet(
-            f"QLabel {{"
-            f" background-color: {tok.TOOLTIP_BG};"
-            f" color: {tok.TOOLTIP_FG};"
-            f" border: 1px solid {tok.TOOLTIP_BORDER};"
-            f" border-radius: 6px;"
-            f" padding: 5px 9px;"
-            f" font-family: {tok.FONT_APP};"
-            f" font-size: 12px;"
-            f" font-weight: bold;"
-            f"}}"
+        self.text_tooltip = QLabel(self)
+        self.text_tooltip.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.NoDropShadowWindowHint
         )
+        self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.text_tooltip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
         self.text_tooltip.hide()
 
         # Strip + ruler from Settings S/M/L (Large = class defaults above; track stays).
@@ -283,6 +279,18 @@ class TimelineCanvas(QWidget):
         )
         self.setMinimumHeight(self._CANVAS_H)
         self.update()
+
+    def apply_tooltip_theme(self) -> None:
+        """Re-tint the floating scrub tip after Default ↔ TrueDark switch."""
+        tip = getattr(self, "text_tooltip", None)
+        if tip is None:
+            return
+        try:
+            from steempeg.ui import ui_theme as ut
+
+            tip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
+        except RuntimeError:
+            pass
 
     def _markers_on_strip(self) -> bool:
         """True when Settings → Visual → Markers on the strip is enabled."""
@@ -722,6 +730,30 @@ class TimelineCanvas(QWidget):
             self.sniper_timer.stop()
         if hasattr(self, "preview_widget"):
             self.preview_widget.hide()
+
+    def _preview_anchor(self) -> QWidget:
+        """Scroll host used to pin the hover thumb above the strip."""
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                return w
+            w = w.parentWidget()
+        return self
+
+    def _place_hover_preview(self, global_x: float) -> None:
+        pw = getattr(self, "preview_widget", None)
+        if pw is None:
+            return
+        pw.adjustSize()
+        anchor = self._preview_anchor()
+        top_left = anchor.mapToGlobal(anchor.rect().topLeft())
+        target_x = int(global_x) - (pw.width() // 2)
+        target_y = top_left.y() - pw.height() - 5
+        min_x = top_left.x()
+        max_x = min_x + max(0, anchor.width() - pw.width())
+        pw.move(max(min_x, min(target_x, max_x)), target_y)
+        pw.show()
+        pw.raise_()
 
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0:
@@ -1665,15 +1697,7 @@ class TimelineCanvas(QWidget):
                     elif hasattr(self, 'sniper_timer'):
                         self.sniper_timer.start(100)
 
-                if self.parentWidget() and self.parentWidget().parentWidget():
-                    target_x = event.globalPosition().x() - (self.preview_widget.width() // 2)
-                    target_y = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).y() - self.preview_widget.height() - 5
-                    
-                    min_x = self.parentWidget().parentWidget().mapToGlobal(self.parentWidget().parentWidget().rect().topLeft()).x()
-                    max_x = min_x + self.parentWidget().parentWidget().width() - self.preview_widget.width()
-                    clamped_x = max(min_x, min(target_x, max_x))
-                    self.preview_widget.move(clamped_x, target_y)
-                    self.preview_widget.show()
+                self._place_hover_preview(event.globalPosition().x())
         
         if self.drag_state == 'none':
             self.update() 
@@ -1722,6 +1746,11 @@ class TimelineCanvas(QWidget):
         # Popup grab (context menu) synthesizes Leave even while the cursor is
         # still over this canvas — keep marker hover so selection/RMB stay alive.
         if getattr(self, "_context_menu_open", False):
+            super().leaveEvent(event)
+            return
+        # Native mpv / floating Tool chrome can synthesize Leave while the cursor
+        # is still on the strip (common in Portable theatre). Don't tear down.
+        if self.rect().contains(self.mapFromGlobal(QCursor.pos())):
             super().leaveEvent(event)
             return
         self.is_hovering = False
@@ -1873,6 +1902,7 @@ class CustomTimelineWidget(QScrollArea):
         super().__init__(parent)
         
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMouseTracking(True)
         overview = TimelineOverviewScrollBar(Qt.Orientation.Horizontal, self)
         self.setHorizontalScrollBar(overview)
 
@@ -1881,6 +1911,9 @@ class CustomTimelineWidget(QScrollArea):
         self.canvas._overview_bar = overview
         self.setWidget(self.canvas)
         self.setWidgetResizable(False)
+        vp = self.viewport()
+        if vp is not None:
+            vp.setMouseTracking(True)
         
         self.canvas.pause_requested.connect(self.pause_requested.emit)
         self.canvas.seek_requested.connect(self.seek_requested.emit)
@@ -1987,6 +2020,12 @@ class CustomTimelineWidget(QScrollArea):
             overview.refresh_caret()
         elif overview is not None and overview.isVisible():
             overview.update()
+
+    def apply_tooltip_theme(self) -> None:
+        """Re-tint canvas floating scrub tip for the active UI theme."""
+        canvas = getattr(self, "canvas", None)
+        if canvas is not None and hasattr(canvas, "apply_tooltip_theme"):
+            canvas.apply_tooltip_theme()
 
     def set_zoom_state(self, zoom_level: float, scroll_x: int = 0) -> None:
         """Restore timeline zoom/scroll without wheel interaction (per-clip session)."""
@@ -2100,6 +2139,14 @@ class CustomTimelineWidget(QScrollArea):
     @property
     def visual_ms(self): return self.canvas.visual_ms
     @property
+    def preview_widget(self):
+        return getattr(self.canvas, "preview_widget", None)
+
+    @property
+    def sniper(self):
+        return getattr(self.canvas, "sniper", None)
+
+    @property
     def thumb_dir(self): return getattr(self.canvas, 'thumb_dir', None)
     @thumb_dir.setter
     def thumb_dir(self, val):
@@ -2210,7 +2257,15 @@ class ThumbnailPreviewWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Qt.ToolTip (not Tool) is killed by QToolTip.hideText() and often stacks
+        # under the native mpv HWND in Portable theatre. Tool + stays-on-top keeps
+        # the same hover UX without those traps.
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -2245,6 +2300,7 @@ class ThumbnailPreviewWidget(QWidget):
         self.frame_layout.addWidget(self._thumb_host)
         self.frame_layout.addWidget(self.time_label)
         self.layout.addWidget(self.frame)
+        self.adjustSize()
         self.hide()
 
     def hideEvent(self, event):
