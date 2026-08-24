@@ -45,6 +45,26 @@ def clip_folder_recorded_at(clip_path: str | None) -> datetime | None:
     return None
 
 
+def clip_folder_default_sort_key(clip_path: str | None) -> float:
+    """Stable newest-first key for Default sort / discovery.
+
+    Prefer the Steam recording stamp in the folder name (does not drift when
+    antivirus, posters, or Steam touch the directory). Fall back to filesystem
+    mtime only for non-Steam / unstamped folders.
+    """
+    if not clip_path:
+        return 0.0
+    dt = clip_folder_recorded_at(clip_path)
+    if dt is not None:
+        return float(dt.timestamp())
+    try:
+        if os.path.exists(clip_path):
+            return float(os.path.getmtime(clip_path))
+    except OSError:
+        pass
+    return 0.0
+
+
 @dataclass
 class ScannedClip:
     full_path: str
@@ -207,8 +227,10 @@ def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
 
     sorted_folders = sorted(
         list(folders_to_check),
-        key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0,
-        reverse=True,
+        key=lambda x: (
+            -clip_folder_default_sort_key(x),
+            os.path.normcase(os.path.normpath(x)),
+        ),
     )
     sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
 
@@ -266,8 +288,10 @@ def discover_clip_paths_from_health_cache(
 
     sorted_folders = sorted(
         existing,
-        key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0,
-        reverse=True,
+        key=lambda x: (
+            -clip_folder_default_sort_key(x),
+            os.path.normcase(os.path.normpath(x)),
+        ),
     )
     sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
 
