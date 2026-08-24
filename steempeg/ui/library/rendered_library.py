@@ -560,6 +560,7 @@ class RenderedLibraryMixin:
                     card = self.grid_clips.itemWidget(item)
                     if card is not None and hasattr(card, "set_selected"):
                         card.set_selected(False)
+        self._clips_visual_selected_rows = set()
 
     def _clear_rendered_selection_visual(self) -> None:
         if hasattr(self, "table_rendered"):
@@ -741,7 +742,8 @@ class RenderedLibraryMixin:
             self._clear_clips_selection_visual()
             self._clear_screenshots_selection_visual()
             self._ensure_rendered_widgets()
-            self._apply_rendered_view_mode()
+            # Tab flip: show list/grid only — doItemsLayout freezes large shelves.
+            self._apply_rendered_view_mode(relayout=False)
         elif mode == "screenshots":
             self._clear_clips_selection_visual()
             self._clear_rendered_selection_visual()
@@ -752,15 +754,20 @@ class RenderedLibraryMixin:
                 self.refresh_screenshots_library(force=False)
             else:
                 self._schedule_screenshots_viewport_refresh(50)
-            # IconMode wrap can stay at 2 cols after hide/show unless we reflow
-            # after the stack page has a real width.
-            self._schedule_screenshots_grid_reflow(0)
+            # Hide/show can leave a stale IconMode wrap at the same width —
+            # force one deferred reflow (not two).
+            self._screenshots_last_reflow_w = None
             self._schedule_screenshots_grid_reflow(50)
         else:
             self._clear_rendered_selection_visual()
             self._clear_screenshots_selection_visual()
             if hasattr(self, "grid_clips"):
-                self.set_view_mode(self._clips_view_mode)
+                # Same as Open related: keep cards where they are; no full relayout.
+                from steempeg.ui.library.controller import LibraryMixin
+
+                LibraryMixin.set_view_mode(
+                    self, getattr(self, "_clips_view_mode", "grid"), relayout=False
+                )
         self._sync_library_view_toggle_for_mode()
         self._sync_sort_combo_for_panel()
         if old_mode != mode:
@@ -784,10 +791,15 @@ class RenderedLibraryMixin:
         if hasattr(self, "update_final_setup") and not (
             hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media()
         ):
-            self.update_final_setup()
+            # Defer summary rebuild — sync update_final_setup on every tab flip
+            # fights splitter glue and feels like UI-thread lag.
+            if hasattr(self, "_schedule_update_final_setup"):
+                self._schedule_update_final_setup(0)
+            else:
+                self.update_final_setup()
             if hasattr(self, "_update_start_button_label"):
                 self._update_start_button_label()
-        self._persist_library_ui_state()
+        self._schedule_persist_library_ui_state()
 
     def _library_stack_index_for(self, mode: str) -> int:
         if not hasattr(self, "library_stack"):
@@ -935,11 +947,6 @@ class RenderedLibraryMixin:
                     ):
                         saved = getattr(self, "_render_dock_saved_sizes", None)
                         if portable_like and hasattr(
-                            self, "_reapply_portable_like_middle_gap"
-                        ):
-                            self._portable_like_dash_closed = False
-                            self._reapply_portable_like_middle_gap()
-                        elif portable_like and hasattr(
                             self, "_glue_portable_like_dash_open"
                         ):
                             self._portable_like_dash_closed = False
@@ -991,12 +998,7 @@ class RenderedLibraryMixin:
                     self._pin_dash_queue_header_buttons()
                 except Exception:
                     pass
-            if hasattr(self, "_reapply_portable_like_middle_gap"):
-                try:
-                    self._reapply_portable_like_middle_gap()
-                except Exception:
-                    pass
-            elif hasattr(self, "_glue_portable_like_dash_open"):
+            if hasattr(self, "_glue_portable_like_dash_open"):
                 try:
                     self._glue_portable_like_dash_open()
                 except Exception:
@@ -1205,6 +1207,20 @@ class RenderedLibraryMixin:
             payload["rendered_tab_open"],
             payload["library_panel_mode"],
         )
+
+    def _schedule_persist_library_ui_state(self, delay_ms: int = 180) -> None:
+        """Debounce library_ui.json + settings writes off the click/tab stack."""
+        if getattr(self, "_restoring_library_state", False):
+            return
+        if not getattr(self, "_library_ui_persist_ready", False):
+            return
+        timer = getattr(self, "_library_ui_persist_timer", None)
+        if timer is None:
+            timer = QTimer(getattr(self, "ui", None))
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._persist_library_ui_state)
+            self._library_ui_persist_timer = timer
+        timer.start(max(0, int(delay_ms)))
 
     def _library_filter_memory_payload(self) -> dict:
         """Filter-memory keys for ``library_ui.json`` (omit = cleared / all-on)."""
@@ -1919,6 +1935,19 @@ class RenderedLibraryMixin:
         # Reserve scrollbar gutter before measuring wrap width (AlwaysOn when needed).
         sync_screenshots_vertical_scrollbar(grid)
 
+        vp_w = int(grid.viewport().width()) if grid.viewport() is not None else 0
+        last_w = getattr(self, "_screenshots_last_reflow_w", None)
+        # Same width + already laid out → skip doItemsLayout (huge on 8k shelves).
+        if (
+            last_w is not None
+            and last_w == vp_w
+            and vp_w > 0
+            and grid.count() > 0
+        ):
+            if hasattr(self, "_schedule_screenshots_viewport_refresh"):
+                self._schedule_screenshots_viewport_refresh(0)
+            return
+
         bar = grid.verticalScrollBar()
         scroll_val = int(bar.value()) if bar is not None else 0
 
@@ -1936,6 +1965,7 @@ class RenderedLibraryMixin:
             grid.doItemsLayout()
         except Exception:
             pass
+        self._screenshots_last_reflow_w = vp_w
 
         # Column count may change overflow → keep AlwaysOn/Off in sync.
         sync_screenshots_vertical_scrollbar(grid)
@@ -3088,9 +3118,10 @@ class RenderedLibraryMixin:
         folder = self._screenshots_folder_path()
         if not force and getattr(self, "_screenshots_scanned_folder", None) == folder:
             if self.grid_screenshots.count() > 0:
-                self._apply_screenshots_filters()
+                # Tab flip only — filters already applied; re-walking 8k rows to
+                # setHidden is pure UI lag.
                 self._update_library_count_label()
-                self._schedule_screenshots_viewport_refresh(0)
+                self._schedule_screenshots_viewport_refresh(50)
                 return
 
         self._stop_steam_screenshots_scan()
@@ -3104,6 +3135,7 @@ class RenderedLibraryMixin:
         self.grid_screenshots.clear()
         self._screenshot_items_by_path = {}
         self._screenshot_seen_paths = set()
+        self._screenshots_last_reflow_w = None
 
         steempeg_rows = self._collect_steempeg_screenshot_rows(folder)
         steempeg_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
@@ -4483,7 +4515,7 @@ class RenderedLibraryMixin:
         else:
             _set(visible, "Clips")
 
-    def _apply_rendered_view_mode(self):
+    def _apply_rendered_view_mode(self, *, relayout: bool = True):
         mode = getattr(self, "_rendered_view_mode", "grid")
         if mode == "list":
             self.grid_rendered.hide()
@@ -4491,7 +4523,8 @@ class RenderedLibraryMixin:
         else:
             self.table_rendered.hide()
             self.grid_rendered.show()
-            self.grid_rendered.doItemsLayout()
+            if relayout:
+                self.grid_rendered.doItemsLayout()
 
         chrome = getattr(self, "view_mode_chrome", None)
         if chrome is not None:
@@ -5102,13 +5135,13 @@ class RenderedLibraryMixin:
             return
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             self._rendered_view_mode = mode
-            self._apply_rendered_view_mode()
-            self._persist_library_ui_state()
+            self._apply_rendered_view_mode(relayout=True)
+            self._schedule_persist_library_ui_state()
             return
         self._clips_view_mode = mode
         from steempeg.ui.library.controller import LibraryMixin
-        LibraryMixin.set_view_mode(self, mode)
-        self._persist_library_ui_state()
+        LibraryMixin.set_view_mode(self, mode, relayout=True)
+        self._schedule_persist_library_ui_state()
 
     def _sync_library_view_toggle_for_mode(self) -> None:
         """Screenshots: Grid-only in the RQ track shell. Clips/Rendered: both segments."""

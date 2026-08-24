@@ -44,7 +44,7 @@ from steempeg.ui.library.refresh_workers import (
     SteamIconsRefreshWorker,
     SteamNamesRefreshWorker,
 )
-from steempeg.library.scan import ScannedClip
+from steempeg.library.scan import ScannedClip, clip_folder_default_sort_key
 from steempeg.library.clips_library_cache import (
     clear_clips_library_cache,
     clips_from_library_cache,
@@ -429,7 +429,28 @@ class LibraryMixin:
                 return True
         return False
 
-    def refresh_steam_icons(self):
+    def _start_startup_steam_meta_refresh(self) -> None:
+        """Full launch: refresh Steam icons then names after the clips list is up.
+
+        Same workers as Refresh ▾ — background QThreads so the UI stays usable.
+        Quiet: status/logs only, no modal dialogs.
+        """
+        if self._refresh_menu_busy():
+            QTimer.singleShot(500, self._start_startup_steam_meta_refresh)
+            return
+        app_ids = sorted(self._collect_library_app_ids())
+        if not app_ids:
+            logging.info(
+                "Startup Full: no library app ids for Steam icons/names refresh"
+            )
+            return
+        logging.info(
+            "Startup Full: refreshing %d game icon(s) then name(s) from Steam",
+            len(app_ids),
+        )
+        self.refresh_steam_icons(quiet=True, chain_names=True)
+
+    def refresh_steam_icons(self, *, quiet: bool = False, chain_names: bool = False):
         """Re-download game icons for every app id in the current library list."""
         if self._refresh_menu_busy():
             if hasattr(self, "set_status"):
@@ -438,6 +459,8 @@ class LibraryMixin:
         app_ids = sorted(self._collect_library_app_ids())
         if not app_ids:
             return
+        self._steam_refresh_quiet = bool(quiet)
+        self._steam_refresh_chain_names = bool(chain_names)
         self.game_icons_cache.clear()
         if hasattr(self, "set_status"):
             self.set_status(f"Refreshing game icons from Steam (0/{len(app_ids)})…")
@@ -455,6 +478,10 @@ class LibraryMixin:
 
     def _on_steam_icons_finished(self, payload: dict) -> None:
         self._steam_icons_worker = None
+        quiet = bool(getattr(self, "_steam_refresh_quiet", False))
+        chain = bool(getattr(self, "_steam_refresh_chain_names", False))
+        self._steam_refresh_quiet = False
+        self._steam_refresh_chain_names = False
         updated = int(payload.get("updated") or 0)
         total = int(payload.get("total") or 0)
 
@@ -474,9 +501,14 @@ class LibraryMixin:
         msg = f"Refreshed {updated} of {total} game icon(s) from Steam."
         if hasattr(self, "set_status"):
             self.set_status(msg)
-        steempeg_information(self.ui, "Game icons", msg)
+        if quiet:
+            logging.info("%s", msg)
+        else:
+            steempeg_information(self.ui, "Game icons", msg)
+        if chain:
+            QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
 
-    def refresh_steam_names(self):
+    def refresh_steam_names(self, *, quiet: bool = False):
         """Re-fetch game names from Steam for every app id in the library list."""
         if self._refresh_menu_busy():
             if hasattr(self, "set_status"):
@@ -485,6 +517,8 @@ class LibraryMixin:
         app_ids = sorted(self._collect_library_app_ids())
         if not app_ids:
             return
+        self._steam_refresh_quiet = bool(quiet)
+        self._steam_refresh_chain_names = False
         if hasattr(self, "set_status"):
             self.set_status(f"Refreshing game names from Steam (0/{len(app_ids)})…")
 
@@ -501,6 +535,9 @@ class LibraryMixin:
 
     def _on_steam_names_finished(self, payload: dict) -> None:
         self._steam_names_worker = None
+        quiet = bool(getattr(self, "_steam_refresh_quiet", False))
+        self._steam_refresh_quiet = False
+        self._steam_refresh_chain_names = False
         names = payload.get("names") or {}
         for app_id, name in names.items():
             self.game_names_cache[app_id] = name
@@ -531,7 +568,10 @@ class LibraryMixin:
         msg = f"Refreshed {updated} of {total} game name(s) from Steam."
         if hasattr(self, "set_status"):
             self.set_status(msg)
-        steempeg_information(self.ui, "Game names", msg)
+        if quiet:
+            logging.info("%s", msg)
+        else:
+            steempeg_information(self.ui, "Game names", msg)
 
     def recheck_clip_health(self):
         """Full health pass for listed clips (ffprobe when needed). Off the UI thread."""
@@ -683,11 +723,21 @@ class LibraryMixin:
         steempeg_information(self.ui, "Clip health re-check", body)
 
     def _on_refresh_worker_failed(self, message: str) -> None:
+        quiet = bool(getattr(self, "_steam_refresh_quiet", False))
+        chain = bool(getattr(self, "_steam_refresh_chain_names", False))
+        self._steam_refresh_quiet = False
+        self._steam_refresh_chain_names = False
         self._health_recheck_worker = None
         self._steam_icons_worker = None
         self._steam_names_worker = None
         if hasattr(self, "set_status"):
             self.set_status(f"Refresh failed: {message}")
+        if quiet:
+            logging.warning("Startup Steam refresh failed: %s", message)
+            # Icons failed mid-Full chain — still try names.
+            if chain:
+                QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
+            return
         steempeg_information(
             self.ui,
             "Refresh failed",
@@ -908,22 +958,35 @@ class LibraryMixin:
 
         norm = os.path.normpath(clip_path)
         table = self.ui.table_clips
-        for row in range(table.rowCount()):
-            item = table.item(row, 0)
+
+        def _report_from_item(item):
             if not item:
-                continue
+                return None
             row_path = item.data(Qt.UserRole)
-            if row_path and os.path.normpath(row_path) == norm:
-                level = item.data(_CLIP_HEALTH_ROLE)
-                issues_raw = item.data(_CLIP_HEALTH_ISSUES_ROLE) or ""
-                if level:
-                    issues = [line for line in issues_raw.split("\n") if line]
-                    try:
-                        enum_level = health.ClipHealth(level)
-                    except ValueError:
-                        enum_level = health.ClipHealth.DEAD
-                    return health.ClipHealthReport(enum_level, issues)
-                break
+            if not row_path or os.path.normpath(row_path) != norm:
+                return None
+            level = item.data(_CLIP_HEALTH_ROLE)
+            issues_raw = item.data(_CLIP_HEALTH_ISSUES_ROLE) or ""
+            if not level:
+                return None
+            issues = [line for line in issues_raw.split("\n") if line]
+            try:
+                enum_level = health.ClipHealth(level)
+            except ValueError:
+                enum_level = health.ClipHealth.DEAD
+            return health.ClipHealthReport(enum_level, issues)
+
+        # Hot path: current row matches nearly every select/open.
+        row = table.currentRow()
+        if row >= 0:
+            hit = _report_from_item(table.item(row, 0))
+            if hit is not None:
+                return hit
+
+        for row in range(table.rowCount()):
+            hit = _report_from_item(table.item(row, 0))
+            if hit is not None:
+                return hit
         return health.assess_clip_health(clip_path)
 
     def get_clip_display_health_report(self, clip_path) -> health.ClipHealthReport:
@@ -1781,12 +1844,21 @@ class LibraryMixin:
             selected_rows = {
                 idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()
             }
+        prev = getattr(self, "_clips_visual_selected_rows", None)
+        if prev == selected_rows:
+            return
+        # Only restyle cards that entered or left selection — full-grid paint
+        # is noticeable on large libraries during select / tab restore.
+        changed = selected_rows if prev is None else (prev | selected_rows)
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
+            row = item.data(Qt.UserRole)
+            if row not in changed:
+                continue
             card = self.grid_clips.itemWidget(item)
             if isinstance(card, ClipCard):
-                row = item.data(Qt.UserRole)
                 card.set_selected(row in selected_rows)
+        self._clips_visual_selected_rows = set(selected_rows)
 
     def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
         """Mirror multi-selection from the grid into the list."""
@@ -1873,6 +1945,29 @@ class LibraryMixin:
     def _cancel_pending_clips_preview(self) -> None:
         """Bump the open-generation token and clear any card open-spinner."""
         self._clips_preview_gen = getattr(self, "_clips_preview_gen", 0) + 1
+        self._clips_quality_gen = getattr(self, "_clips_quality_gen", 0) + 1
+        self._preview_post_open_gen = getattr(self, "_preview_post_open_gen", 0) + 1
+        self._clip_size_label_gen = getattr(self, "_clip_size_label_gen", 0) + 1
+        # Invalidate in-flight MPV/remux/reveal work from a superseded click.
+        self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
+        self._pending_preview_post_open = None
+        self._pending_quality_populate = None
+        self._pending_timeline_thumbs = None
+        self._awaiting_first_frame = False
+        progressive = getattr(self, "_progressive_remux", None)
+        if progressive is not None:
+            try:
+                _gen, job = progressive
+                if hasattr(job, "abort"):
+                    job.abort()
+            except Exception:
+                pass
+            self._progressive_remux = None
+        if hasattr(self, "_stop_timeline_thumb_batch"):
+            try:
+                self._stop_timeline_thumb_batch()
+            except Exception:
+                pass
         if hasattr(self, "clear_clip_open_loading"):
             self.clear_clip_open_loading()
 
@@ -3501,8 +3596,8 @@ class LibraryMixin:
 
         self.ui.table_clips.setSortingEnabled(True)
         self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
-        # Snapshot order is already the last-session order — never re-stat W: via
-        # Default sort's getmtime (that alone made Skip feel like a rescan).
+        # Snapshot order is already the last-session order — never re-apply
+        # Default sort on Skip restore (that alone made Skip feel like a rescan).
         snapshot_restore = bool(getattr(self, "_scan_snapshot_restore", False))
         if not snapshot_restore:
             LibraryMixin.apply_sorting(self)
@@ -3512,11 +3607,15 @@ class LibraryMixin:
                 self.fast_sync_grid()
 
         quiet_append = bool(getattr(self, "_scan_append_new_only", False))
+        do_steam_meta = bool(getattr(self, "_startup_refresh_steam_meta", False))
         if quiet_append:
             # CLIP often appears after FG for the same Steam session — drop the loser.
             self._purge_inferior_session_siblings()
         if not quiet_append and not snapshot_restore:
-            self._backfill_missing_game_icons()
+            # Full startup will re-download all icons shortly — skip the
+            # missing-only backfill (would race / duplicate CDN work).
+            if not do_steam_meta:
+                self._backfill_missing_game_icons()
             self._schedule_clip_poster_backfill()
 
         self._persist_clips_library_snapshot()
@@ -3547,6 +3646,11 @@ class LibraryMixin:
                 self.update_status_indicator("Clips loaded — scanning rendered files…", "busy", scan_phase="search")
 
         self._maybe_start_deferred_rendered_scan()
+
+        if do_steam_meta:
+            self._startup_refresh_steam_meta = False
+            # List is up; icons then names follow on background workers.
+            QTimer.singleShot(0, self._start_startup_steam_meta_refresh)
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
         if (
@@ -3596,6 +3700,7 @@ class LibraryMixin:
         if generation != getattr(self, "_scan_generation", 0):
             return
         self._library_scan_worker = None
+        self._startup_refresh_steam_meta = False
         logging.error("Library scan failed: %s", message)
         self._clips_scan_active = False
         self._sync_library_scan_interaction_lock(busy=False)
@@ -3630,11 +3735,17 @@ class LibraryMixin:
             pass
         return ""
 
-    def restore_clips_from_session_cache(self, *, append_new: bool = True) -> bool:
-        """Skip startup: paint last session JSON immediately — no disk recheck.
+    def restore_clips_from_session_cache(
+        self,
+        *,
+        append_new: bool = True,
+        require_exists: bool = False,
+    ) -> bool:
+        """Skip / Smart Launch: paint last session JSON immediately.
 
-        No ``isdir`` / ``getmtime`` on library roots, no Restoring progress, no
-        worker. Duration / new-clip top-ups happen silently afterward.
+        No deep library walk and no ffprobe. ``require_exists`` drops rows whose
+        folders are gone (Smart Launch when the fingerprint changed). Duration /
+        new-clip top-ups happen silently afterward when ``append_new``.
         """
         if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
             return False
@@ -3645,13 +3756,17 @@ class LibraryMixin:
         if not library_roots:
             return False
 
-        # JSON only — never touch W:/Steam paths here.
+        # JSON first — Smart Launch may optionally recheck existence per row.
         clips = clips_from_library_cache(
             getattr(self, "cache_dir", None),
             library_roots=library_roots,
-            require_exists=False,
+            require_exists=bool(require_exists),
         )
         if not clips:
+            # Seed is a no-I/O Skip fallback. Smart Launch (changed) must not
+            # resurrect health-cache ghosts — fall through to Quick instead.
+            if require_exists:
+                return False
             self._ensure_clip_health_cache()
             clips = seed_clips_from_health_cache(
                 getattr(self, "cache_dir", None),
@@ -3676,6 +3791,7 @@ class LibraryMixin:
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
         self._preview_clip_path = None
+        self._clips_visual_selected_rows = set()
         if hasattr(self, "_clear_clips_selection_visual"):
             self._clear_clips_selection_visual()
 
@@ -3721,7 +3837,7 @@ class LibraryMixin:
             self, "preload_render_history"
         ):
             self._startup_library_scan_active = False
-            # Quiet — Skip already shows Ready; announcing "Loading render history…"
+            # Quiet — Skip/Smart already shows Ready; announcing "Loading render history…"
             # made startup feel like another 1–3s prepare after the window opened.
             self.preload_render_history(announce=False)
         elif hasattr(self, "update_status_indicator"):
@@ -3731,7 +3847,12 @@ class LibraryMixin:
             self.sync_library_filter_view()
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
-        logging.info("Skip: painted %d clips from session snapshot", len(clips))
+        logging.info(
+            "Library snapshot: painted %d clips (append_new=%s, require_exists=%s)",
+            len(clips),
+            want_append,
+            bool(require_exists),
+        )
 
         # Snapshot rewrite is not needed before first paint — defer off the
         # critical path (same for duration / poster top-ups below).
@@ -3994,10 +4115,13 @@ class LibraryMixin:
         )
         worker.start()
     
-    def get_clip_size_and_duration(self, clip_path, mpd_content):
-        # total size of the clip folder
-        size_mb = discovery.folder_size_bytes(clip_path) / (1024 * 1024)
-        size_str = f"{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"{size_mb:.1f} MB"
+    def get_clip_size_and_duration(self, clip_path, mpd_content, *, measure_size: bool = True):
+        # Duration from XML is cheap; full folder walks block clip-open on long recordings.
+        if measure_size:
+            size_mb = discovery.folder_size_bytes(clip_path) / (1024 * 1024)
+            size_str = f"{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"{size_mb:.1f} MB"
+        else:
+            size_str = "…"
 
         # duration: the parsing lives in mpd.py now, the display formatting stays here
         seconds = mpd.parse_duration_seconds(mpd_content)
@@ -4013,6 +4137,54 @@ class LibraryMixin:
 
         self.current_clip_duration_str = duration_str
         return size_str, duration_str
+
+    def _schedule_clip_folder_size_label(self, clip_path: str) -> None:
+        """Measure folder size off the UI thread (can walk thousands of chunks)."""
+        if not clip_path:
+            return
+        self._clip_size_label_gen = getattr(self, "_clip_size_label_gen", 0) + 1
+        gen = self._clip_size_label_gen
+        import threading
+
+        def _worker():
+            try:
+                size_mb = discovery.folder_size_bytes(clip_path) / (1024 * 1024)
+            except OSError:
+                return
+            size_str = (
+                f"{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"{size_mb:.1f} MB"
+            )
+            QTimer.singleShot(
+                0,
+                lambda g=gen, p=clip_path, s=size_str: self._apply_clip_folder_size_str(
+                    g, p, s
+                ),
+            )
+
+        threading.Thread(
+            target=_worker, name="steempeg-clip-size", daemon=True
+        ).start()
+
+    def _apply_clip_folder_size_str(self, gen: int, clip_path: str, size_str: str) -> None:
+        if gen != getattr(self, "_clip_size_label_gen", 0):
+            return
+        want = (
+            self._norm_clip_path_key(clip_path)
+            if hasattr(self, "_norm_clip_path_key")
+            else os.path.normpath(clip_path)
+        )
+        active = getattr(self, "_preview_clip_path", None) or getattr(
+            self, "_last_export_clip_path", None
+        )
+        active_key = (
+            self._norm_clip_path_key(active)
+            if active and hasattr(self, "_norm_clip_path_key")
+            else (os.path.normpath(active) if active else "")
+        )
+        if want and active_key and want != active_key:
+            return
+        if hasattr(self.ui, "label_size"):
+            self.ui.label_size.setText(f"Size: {size_str}")
     
 
     
@@ -4031,6 +4203,7 @@ class LibraryMixin:
         # Items get destroyed below — drop the stale Shift anchor or range-select breaks.
         self._grid_anchor_item = None
         self._grid_anchor_index = -1
+        self._clips_visual_selected_rows = set()
         self.grid_clips.clear()
 
         for row in range(self.ui.table_clips.rowCount()):
@@ -4233,12 +4406,13 @@ class LibraryMixin:
         def get_sort_key(data):
             r = data['table_items']
             
-            if sort_idx == 0: 
-                # Read the actual modification date of the folder containing the clip
-                clip_path = r[0].data(Qt.UserRole)
-                if clip_path and os.path.exists(clip_path):
-                    return os.path.getmtime(clip_path)
-                return 0
+            if sort_idx == 0:
+                # Steam folder stamp (stable across Refresh); FS mtime only as fallback.
+                clip_path = r[0].data(Qt.UserRole) if r[0] else ""
+                return (
+                    clip_folder_default_sort_key(clip_path),
+                    os.path.normcase(os.path.normpath(str(clip_path or ""))),
+                )
                 
             if sort_idx in (1, 2): # GAME NAME
                 txt = r[0].text().lower() if r[0] else ""
@@ -4281,12 +4455,43 @@ class LibraryMixin:
 
        
         reverse = sort_idx in (0, 2, 4, 6, 8, 10, 12)
-        all_data.sort(key=get_sort_key, reverse=reverse)
+        if sort_idx == 0:
+            # Newest stamp first, then stable path (avoid reverse=True flipping the path).
+            def default_order(data):
+                stamp, path_key = get_sort_key(data)
+                return (-float(stamp), path_key)
+
+            all_data.sort(key=default_order)
+        else:
+            all_data.sort(key=get_sort_key, reverse=reverse)
         
         for new_row, data in enumerate(all_data):
             for col, item in enumerate(data['table_items']):
                 table.setItem(new_row, col, item)
             table.setRowHidden(new_row, data['hidden'])
+
+        # Keep session snapshot rows aligned with the visible table order.
+        rows = getattr(self, "_library_clip_rows", None)
+        if rows:
+            by_path = {os.path.normpath(r.full_path): r for r in rows}
+            ordered: list[ScannedClip] = []
+            seen: set[str] = set()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                path = item.data(Qt.UserRole) if item else None
+                if not path:
+                    continue
+                key = os.path.normpath(str(path))
+                stored = by_path.get(key)
+                if stored is not None and key not in seen:
+                    ordered.append(stored)
+                    seen.add(key)
+            for stored in rows:
+                key = os.path.normpath(stored.full_path)
+                if key not in seen:
+                    ordered.append(stored)
+                    seen.add(key)
+            self._library_clip_rows = ordered
             
         table.blockSignals(False)
         table.setUpdatesEnabled(True)
@@ -4702,7 +4907,7 @@ class LibraryMixin:
             self.game_icons_cache.pop(app_id, None)
         return icon
 
-    def set_view_mode(self, mode):
+    def set_view_mode(self, mode, *, relayout: bool = True):
         if mode == "list":
             self.grid_clips.hide()
             self.ui.table_clips.show()
@@ -4710,8 +4915,10 @@ class LibraryMixin:
             self.ui.table_clips.hide()
             self.grid_clips.show()
 
-            # HARD GEOMETRY RECALCULATION (Pictures won't fly away anymore!)
-            self.grid_clips.doItemsLayout()
+            # HARD GEOMETRY RECALCULATION — only when the user flips List↔Grid
+            # or geometry truly changed. Tab switches must not pay doItemsLayout.
+            if relayout:
+                self.grid_clips.doItemsLayout()
 
             if self.grid_clips.selectedItems():
                 self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])
