@@ -414,6 +414,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             )
             from steempeg.ui.player_header_layout import load_header_layout_from_settings
             from steempeg.ui.player_layout import load_player_layout_from_settings
+            from steempeg.ui.player_outline import load_player_outline_from_settings
             from steempeg.ui.player_header_size import (
                 KEY_PLAYER_HEADER_SIZE,
                 KEY_PLAYER_HEADER_SIZE_REV,
@@ -441,6 +442,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             load_clip_card_style_from_settings(_settings0)
             load_header_layout_from_settings(_settings0)
             load_player_layout_from_settings(_settings0)
+            load_player_outline_from_settings(_settings0)
             if migrate_player_header_size_in_settings(_settings0):
                 if KEY_PLAYER_HEADER_SIZE in _settings0:
                     self.save_user_settings(
@@ -675,7 +677,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 COMFORT as _DENSITY_COMFORT,
                 toolbar_mega_pill_style,
             )
-            from steempeg.ui.layout_defaults import DEFAULT_LIBRARY_VIEW
+            from steempeg.ui.layout_defaults import (
+                DEFAULT_LIBRARY_VIEW,
+                LIBRARY_FOOTER_GAP,
+                LIBRARY_TAB_TO_TOOLBAR_SPACING,
+            )
             from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
 
             mega_top_pill.setStyleSheet(
@@ -797,7 +803,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             # 5. Putting It All Together
             self.left_master_layout = qtw.QVBoxLayout()
             self.left_master_layout.setContentsMargins(0, 0, 0, 0)
-            self.left_master_layout.setSpacing(5)
+            self.left_master_layout.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
 
             self.left_master_layout.addLayout(cm_row)
             self.left_master_layout.addLayout(top_bar_layout)
@@ -805,6 +811,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
             # Insert our new mega-block back into the SAVED old layout.
             if original_parent_layout:
+                # Pin clips ↔ About footer gap (same token as player↔dash air).
+                original_parent_layout.setSpacing(LIBRARY_FOOTER_GAP)
                 if original_idx != -1: 
                     original_parent_layout.insertLayout(original_idx, self.left_master_layout)
                 else: 
@@ -1690,10 +1698,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         # 2: Taming MPV Player and creating a Border Wrapper
         from PySide6.QtWidgets import QFrame, QStackedLayout, QVBoxLayout, QLabel, QSizePolicy
-        
+        from steempeg.ui import ui_theme as ut
+
         # --- 1. FAKE BLACK BACKGROUND (Fills the entire space) ---
         self.video_wrapper = QFrame()
-        self.video_wrapper.setStyleSheet("background-color: transparent; border: none;") 
+        self.video_wrapper.setObjectName("playerVideoWrapper")
+        self.video_wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
         self.video_wrapper.installEventFilter(self)
         
         parent_layout = self.ui.video_container.parentWidget().layout()
@@ -1704,8 +1715,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         wrapper_layout.setContentsMargins(0, 0, 0, 0)
         
         # --- 2. LIVE VIDEO CONTAINER (Strictly 16:9) ---
-        from steempeg.ui import ui_theme as ut
-
         self.aspect_frame = QFrame()
         # Default 3px transparent border to prevent video flickering during cropping.
         self.aspect_frame.setStyleSheet("background-color: #000000; border: none; border-radius: 0px;")
@@ -1773,17 +1782,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.design_tokens import with_tooltip_style
 
         self.player_header_frame = QFrame()
+        self.player_header_frame.setObjectName("playerHeaderFrame")
+        self.player_header_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.player_header_frame.setStyleSheet(ut.player_header_stylesheet())
         from steempeg.ui.ui_density import COMFORT as _HDR_COMFORT
 
-        from steempeg.ui.layout_defaults import PLAYER_HEADER_CANVAS_GAP
+        from steempeg.ui.layout_defaults import (
+            PLAYER_HEADER_CANVAS_GAP,
+            PLAYER_HEADER_FRAME_BORDER_V,
+        )
 
-        # Fixed height = filled header (chips + pads) + painted canvas gap; empty placeholder must match.
+        # Fixed height = filled header (chips + pads) + painted canvas gap + QSS
+        # border room; empty placeholder must match.
         _hdr_min_h = max(
             int(_HDR_COMFORT.header_chip) + 2 * int(_HDR_COMFORT.header_pad_v),
             int(_HDR_COMFORT.header_min_h),
             int(_HDR_COMFORT.header_icon) + 2 * int(_HDR_COMFORT.header_pad_v),
-        ) + PLAYER_HEADER_CANVAS_GAP
+        ) + PLAYER_HEADER_CANVAS_GAP + int(PLAYER_HEADER_FRAME_BORDER_V)
         self.player_header_frame.setFixedHeight(_hdr_min_h)
         self.player_header_frame.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -2602,12 +2617,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.ui.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
                 self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
                 self.install_splitter_rules()
+                try:
+                    from steempeg.ui.splitter_telemetry import install_splitter_telemetry
+
+                    install_splitter_telemetry(self)
+                except Exception:
+                    logging.debug("splitter telemetry install skipped", exc_info=True)
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
                     self._update_start_button_label()
-                    # Persisted jobs should open on launch — not wait for a clip click.
-                    self._queue_user_collapsed = False
+                    # Restore last-session open/closed — do not force open yet.
+                    # Geometry settle (_ensure_startup_queue_open) applies width.
+                    self._restore_queue_panel_collapsed_from_settings()
                     self.refresh_render_queue_panel(sync_splitter=True)
 
                 # Shared Desktop/Portable panel snapshot (render_export_settings).
@@ -3371,6 +3393,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             logging.exception("Player layout apply failed for %s", get_player_layout())
             return get_player_layout()
 
+    def refresh_player_outline_mode(self, mode: str | None = None) -> str:
+        """Apply Settings → Visual player outline without restart."""
+        from steempeg.ui.layout_defaults import apply_player_layout_mode
+        from steempeg.ui.player_outline import get_player_outline, set_player_outline
+
+        if mode is not None:
+            set_player_outline(mode)
+        try:
+            apply_player_layout_mode(self)
+        except Exception:
+            logging.exception("Player outline apply failed for %s", get_player_outline())
+        return get_player_outline()
+
     def refresh_timeline_strip_size(self, size: str | None = None) -> str:
         """Apply Settings → Visual timeline strip S/M/L without restart."""
         from steempeg.ui.timeline_strip_size import (
@@ -3545,6 +3580,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         self._apply_dark_shell()
         self._refresh_ui_theme_surfaces(preview=preview)
+        # App-level tip chrome (and palette ToolTipBase/Text) — also during live preview.
+        try:
+            apply_app_tooltip_style()
+        except Exception:
+            pass
 
         if preview:
             return
@@ -3739,7 +3779,37 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         header = getattr(self, "player_header_frame", None)
         if header is not None:
-            header.setStyleSheet(ut.player_header_stylesheet())
+            from steempeg.ui.player_outline import player_outline_immersive
+
+            immersive = player_outline_immersive(self)
+            header.setStyleSheet(
+                ut.player_header_stylesheet(
+                    force_outline=False if immersive else None
+                )
+            )
+
+        vw = getattr(self, "video_wrapper", None)
+        if vw is not None:
+            from steempeg.ui.player_outline import player_outline_immersive
+
+            immersive = player_outline_immersive(self)
+            portable_theatre = bool(
+                getattr(self, "_portable_shell", False)
+                and getattr(self, "is_theater", False)
+            )
+            if immersive:
+                vw.setStyleSheet(
+                    ut.player_video_wrapper_stylesheet(
+                        background="black",
+                        chrome_outline=False,
+                    )
+                )
+            elif portable_theatre:
+                vw.setStyleSheet(
+                    ut.player_video_wrapper_stylesheet(background="black")
+                )
+            else:
+                vw.setStyleSheet(ut.player_video_wrapper_stylesheet())
 
         placeholder = getattr(self, "placeholder_frame", None)
         if placeholder is not None:
@@ -3862,9 +3932,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         hud = getattr(self, "player_footer_frame", None)
         if hud is not None:
+            from steempeg.ui.player_outline import player_outline_immersive
+
+            immersive = player_outline_immersive(self)
             hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             hud.setStyleSheet(
-                with_tooltip_style(ut.player_footer_stylesheet() + _PLAYBACK_BUTTONS_QSS)
+                with_tooltip_style(
+                    ut.player_footer_stylesheet(
+                        force_outline=False if immersive else None
+                    )
+                    + _PLAYBACK_BUTTONS_QSS
+                )
             )
 
         self._refresh_player_footer_chrome(dense)
@@ -3911,6 +3989,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def _refresh_player_footer_chrome(self, dense=None) -> None:
         """Re-tint volume/speed round buttons and footer pill clusters."""
         from steempeg.ui import ui_theme as ut
+        from steempeg.ui.design_tokens import (
+            STYLE_TRIM_BUTTON,
+            STYLE_TRIM_CANCEL_BUTTON,
+            reattach_tooltip_style,
+            with_tooltip_style,
+        )
         from steempeg.ui.ui_density import COMFORT
 
         if dense is None:
@@ -3929,6 +4013,77 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if frame is not None:
                 frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 frame.setStyleSheet(ut.player_chrome_pill_stylesheet(radius=chip_r))
+
+        # Local QSS embeds QToolTip — re-bake after theme switch.
+        _pill_inner = with_tooltip_style(
+            "QPushButton { background: transparent; border-radius: 20px; border: none; }\n"
+            "QPushButton:hover { background: rgba(255, 255, 255, 40); }"
+        )
+        _pill_pressed = with_tooltip_style(
+            "QPushButton { background: transparent; border-radius: 20px; border: none; }\n"
+            "QPushButton:hover { background: rgba(255, 255, 255, 40); }\n"
+            "QPushButton:pressed { background: rgba(255, 255, 255, 60); }"
+        )
+        for attr in ("btn_theater", "btn_fullscreen"):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                try:
+                    btn.setStyleSheet(_pill_inner)
+                except RuntimeError:
+                    pass
+        for attr in (
+            "btn_clipcut1",
+            "btn_clipcut2",
+            "btn_clipcutback",
+            "btn_screenshot",
+            "btn_marker_settings",
+        ):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                try:
+                    btn.setStyleSheet(_pill_pressed)
+                except RuntimeError:
+                    pass
+        for attr in ("btn_add_marker",):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                try:
+                    btn.setStyleSheet(_pill_inner)
+                except RuntimeError:
+                    pass
+
+        btn_trim = getattr(self, "btn_trim", None)
+        if btn_trim is not None:
+            try:
+                tl = getattr(self, "custom_timeline", None)
+                cancel = bool(tl is not None and getattr(tl, "is_trim_mode", False))
+                if not cancel:
+                    cancel = "cancel" in (btn_trim.text() or "").strip().lower()
+                btn_trim.setStyleSheet(
+                    STYLE_TRIM_CANCEL_BUTTON if cancel else STYLE_TRIM_BUTTON
+                )
+            except RuntimeError:
+                pass
+
+        info = getattr(self, "btn_player_header_info", None)
+        if info is not None:
+            reattach_tooltip_style(info)
+
+        help_btn = getattr(getattr(self, "ui", None), "btn_preset_help", None)
+        if help_btn is not None:
+            reattach_tooltip_style(help_btn)
+
+        tl = getattr(self, "custom_timeline", None)
+        if tl is not None and hasattr(tl, "apply_tooltip_theme"):
+            try:
+                tl.apply_tooltip_theme()
+            except Exception:
+                pass
+
+        for attr in ("btn_add_clip", "btn_portable_render", "btn_render"):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                reattach_tooltip_style(btn)
 
     def _apply_dark_shell(self):
         """Paint every major shell widget dark so unsettled layout never flashes white."""
@@ -3982,11 +4137,47 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._ensure_startup_queue_open()
         self._start_startup_scans_after_restore()
 
+    def _persist_queue_panel_open(self, open_: bool) -> None:
+        """Remember Render Queue open/closed (always, even when full layout recall is off)."""
+        if hasattr(self, "save_layout_setting"):
+            self.save_layout_setting("queue_panel_open", bool(open_))
+
+    def _restore_queue_panel_collapsed_from_settings(self) -> None:
+        """Seed ``_queue_user_collapsed`` from last session before splitter sync."""
+        jobs = getattr(self, "render_queue", None)
+        if jobs is None or len(jobs) == 0:
+            self._queue_user_collapsed = False
+            self._queue_sync_had_jobs = False
+            return
+        # Jobs already exist from disk — not a fresh enqueue this session.
+        self._queue_sync_had_jobs = True
+        saved = None
+        if hasattr(self, "get_layout_setting"):
+            saved = self.get_layout_setting("queue_panel_open", None)
+        if saved is None:
+            # Legacy installs: open when jobs exist (previous always-open behavior).
+            self._queue_user_collapsed = False
+            return
+        self._queue_user_collapsed = not bool(saved)
+
+    def _queue_panel_should_open_on_startup(self) -> bool:
+        """True when last session left Render Queue open (or legacy: jobs exist)."""
+        jobs = getattr(self, "render_queue", None)
+        if jobs is None or len(jobs) == 0:
+            return False
+        saved = None
+        if hasattr(self, "get_layout_setting"):
+            saved = self.get_layout_setting("queue_panel_open", None)
+        if saved is None:
+            return True
+        return bool(saved)
+
     def _ensure_startup_queue_open(self) -> None:
-        """Open Render Queue when jobs exist — re-apply after geometry settles.
+        """Restore Render Queue open/closed after geometry settles.
 
         Early open against a fake splitter total stretches to ~half the column
-        once the window maximizes; always re-apply the saved pixel width here.
+        once the window maximizes; always re-apply the saved pixel width here
+        when the pane should be open.
         """
         if getattr(self, "_portable_shell", False):
             return
@@ -3994,6 +4185,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         jobs = getattr(self, "render_queue", None)
         if jobs is None or len(jobs) == 0:
+            return
+        # Mark had-jobs so a later refresh does not treat this as a fresh enqueue.
+        self._queue_sync_had_jobs = True
+        if not self._queue_panel_should_open_on_startup():
+            self._queue_user_collapsed = True
+            rhs = getattr(self, "right_h_splitter", None)
+            if rhs is not None:
+                total = sum(rhs.sizes()) or int(rhs.width() or 0) or 1
+                rhs.setSizes([max(int(total), 1), 0])
+            if hasattr(self, "sync_queue_minimum"):
+                self.sync_queue_minimum()
             return
         self._queue_user_collapsed = False
         panel = getattr(self, "render_queue_panel", None)
@@ -4017,78 +4219,158 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.settings_prefs import (
             SCAN_CACHE,
             SCAN_FULL,
+            SCAN_SMART,
             load_startup_library_scan,
         )
 
         mode = load_startup_library_scan(settings)
 
-        def _start():
-            # Clips first; Rendered is deferred until clips finishes.
-            if mode == SCAN_CACHE:
-                logging.info("Startup library scan: Skip (session snapshot)")
-                self._defer_rendered_scan_until_clips_done = False
-                restored_clips = False
-                if getattr(self, "clips_folders", None):
-                    self._startup_library_scan_active = True
-                    if hasattr(self, "restore_clips_from_session_cache"):
-                        restored_clips = bool(
-                            self.restore_clips_from_session_cache(append_new=True)
-                        )
-                # Paint Rendered from last session JSON (no export-folder walk).
-                restored_rendered = False
-                if hasattr(self, "restore_rendered_from_session_cache"):
-                    restored_rendered = bool(
-                        self.restore_rendered_from_session_cache()
+        def _restore_session_side_libraries(*, restored_clips: bool) -> None:
+            """Paint Rendered + Screenshots from session JSON (Skip / Smart)."""
+            restored_rendered = False
+            if hasattr(self, "restore_rendered_from_session_cache"):
+                restored_rendered = bool(self.restore_rendered_from_session_cache())
+            restored_shots = False
+            if hasattr(self, "restore_screenshots_from_session_cache"):
+                # Defer past showMaximized — sync paint of a unified Steam
+                # shelf (thousands of cards) blocked the window for minutes.
+                # Startup settle veil stays up past this tick so chrome does
+                # not flash while placeholders land.
+                def _restore_shots():
+                    nonlocal restored_shots
+                    restored_shots = bool(
+                        self.restore_screenshots_from_session_cache()
                     )
-                restored_shots = False
-                if hasattr(self, "restore_screenshots_from_session_cache"):
-                    # Defer past showMaximized — sync paint of a unified Steam
-                    # shelf (thousands of cards) blocked the window for minutes.
-                    # Startup settle veil stays up past this tick so chrome does
-                    # not flash while placeholders land.
-                    def _restore_shots():
-                        nonlocal restored_shots
-                        restored_shots = bool(
-                            self.restore_screenshots_from_session_cache()
-                        )
-                        if (
-                            not restored_clips
-                            and restored_shots
-                            and hasattr(self, "update_status_indicator")
-                            and not getattr(self, "_startup_library_scan_active", False)
-                        ):
-                            self.update_status_indicator("Ready", "ready")
+                    if (
+                        not restored_clips
+                        and restored_shots
+                        and hasattr(self, "update_status_indicator")
+                        and not getattr(self, "_startup_library_scan_active", False)
+                    ):
+                        self.update_status_indicator("Ready", "ready")
 
-                    QTimer.singleShot(300, _restore_shots)
-                # Clips restore clears startup + Ready itself when it succeeds.
-                if not restored_clips:
-                    self._startup_library_scan_active = False
-                    if hasattr(self, "update_status_indicator"):
-                        if restored_rendered or restored_shots:
-                            self.update_status_indicator("Ready", "ready")
-                        elif getattr(self, "clips_folders", None):
-                            self.update_status_indicator(
-                                "Ready — no library snapshot", "ready"
-                            )
-                        else:
-                            self.update_status_indicator(
-                                "Ready — no library folders", "ready"
-                            )
+                QTimer.singleShot(300, _restore_shots)
+            # Clips restore clears startup + Ready itself when it succeeds.
+            if not restored_clips:
+                self._startup_library_scan_active = False
+                if hasattr(self, "update_status_indicator"):
+                    if restored_rendered or restored_shots:
+                        self.update_status_indicator("Ready", "ready")
+                    elif getattr(self, "clips_folders", None):
+                        self.update_status_indicator(
+                            "Ready — no library snapshot", "ready"
+                        )
+                    else:
+                        self.update_status_indicator(
+                            "Ready — no library folders", "ready"
+                        )
+
+        def _start_cache_style(*, append_new: bool, require_exists: bool, label: str) -> bool:
+            logging.info("Startup library scan: %s", label)
+            self._defer_rendered_scan_until_clips_done = False
+            restored_clips = False
+            if getattr(self, "clips_folders", None):
+                self._startup_library_scan_active = True
+                if hasattr(self, "restore_clips_from_session_cache"):
+                    restored_clips = bool(
+                        self.restore_clips_from_session_cache(
+                            append_new=append_new,
+                            require_exists=require_exists,
+                        )
+                    )
+            _restore_session_side_libraries(restored_clips=restored_clips)
+            return restored_clips
+
+        def _start():
+            # Clips first; Rendered is deferred until clips finishes (Quick/Full).
+            if mode == SCAN_CACHE:
+                _start_cache_style(
+                    append_new=True,
+                    require_exists=False,
+                    label="Skip (session snapshot)",
+                )
                 return
+
+            if mode == SCAN_SMART:
+                from steempeg.library.clips_library_cache import (
+                    library_fingerprint_unchanged,
+                )
+
+                roots = list(getattr(self, "clips_folders", None) or [])
+                unchanged = False
+                if roots:
+                    try:
+                        unchanged = library_fingerprint_unchanged(
+                            getattr(self, "cache_dir", None),
+                            roots,
+                        )
+                    except Exception:
+                        logging.debug(
+                            "Smart Launch fingerprint check failed",
+                            exc_info=True,
+                        )
+                        unchanged = False
+
+                if unchanged:
+                    _start_cache_style(
+                        append_new=False,
+                        require_exists=False,
+                        label="Smart Launch (unchanged — session snapshot)",
+                    )
+                    return
+
+                # Fingerprint missing/corrupt or roots changed: paint cache first,
+                # drop gone folders, then quietly append only new clip paths.
+                restored = False
+                if roots and hasattr(self, "restore_clips_from_session_cache"):
+                    restored = _start_cache_style(
+                        append_new=True,
+                        require_exists=True,
+                        label="Smart Launch (changed — snapshot + incremental)",
+                    )
+                if restored:
+                    return
+
+                logging.info(
+                    "Startup library scan: Smart Launch (no snapshot — Quick)"
+                )
+                if roots:
+                    self._startup_library_scan_active = True
+                    self._defer_rendered_scan_until_clips_done = True
+                    self.scan_clips(fast=True)
+                elif hasattr(self, "scan_rendered_outputs"):
+                    self.scan_rendered_outputs()
+                if hasattr(self, "restore_screenshots_from_session_cache"):
+                    QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
+                return
+
+            # Full: after folders + ffprobe, also refresh Steam icons/names
+            # (same as Refresh ▾) once the list is painted — see library controller.
+            self._startup_refresh_steam_meta = mode == SCAN_FULL
             if getattr(self, "clips_folders", None):
                 self._startup_library_scan_active = True
                 self._defer_rendered_scan_until_clips_done = True
+                if mode == SCAN_FULL:
+                    logging.info(
+                        "Startup library scan: Full "
+                        "(folders + ffprobe + Steam icons/names)"
+                    )
+                else:
+                    logging.info(
+                        "Startup library scan: Quick (folders + cached health)"
+                    )
                 self.scan_clips(fast=(mode != SCAN_FULL))
             elif hasattr(self, "scan_rendered_outputs"):
+                self._startup_refresh_steam_meta = False
                 self.scan_rendered_outputs()
             # Screenshots: after show + processEvents settle (not singleShot(0)).
             if hasattr(self, "restore_screenshots_from_session_cache"):
                 QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
 
-        # Skip: paint synchronously while the window is still hidden so the first
-        # frame is already Ready (no post-show "Loading render history…").
+        # Skip / Smart: paint synchronously while the window is still hidden so the
+        # first frame is already Ready (no post-show "Loading render history…").
         # Quick/Full: defer one tick so maximize geometry can settle first.
-        if mode == SCAN_CACHE:
+        if mode in (SCAN_CACHE, SCAN_SMART):
             _start()
         else:
             QTimer.singleShot(0, _start)
@@ -4331,6 +4613,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             jobs = getattr(self, "render_queue", None)
             if jobs is not None and len(jobs) > 0:
                 self._queue_user_collapsed = True
+            if hasattr(self, "_persist_queue_panel_open"):
+                self._persist_queue_panel_open(False)
             # Player scrap with the queue already shut → finish the kiss. Zeroing
             # the whole column instead used to take the right handle down with
             # it, leaving no way to pull the queue back out.
@@ -4342,6 +4626,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
 
         self._queue_user_collapsed = False
+        if hasattr(self, "_persist_queue_panel_open"):
+            self._persist_queue_panel_open(True)
         # Player scrap between Clips handle and Queue handle → complete the kiss.
         if 0 < player_w < 48:
             rhs.setSizes([0, max(int(total), 1)])
@@ -5519,18 +5805,23 @@ def main():
             begin_startup_settle,
             kick_startup_settle_after_show,
         )
-        from steempeg.ui.settings_prefs import SCAN_CACHE, load_startup_library_scan
+        from steempeg.ui.settings_prefs import (
+            SCAN_CACHE,
+            SCAN_SMART,
+            load_startup_library_scan,
+        )
 
-        # Skip: opaque veil covers post-maximize chrome thrash (crooked footer /
-        # Ready badge). Quick/Full: settle pass only — no «Preparing workspace…»
-        # flash (that thrash was mainly a Skip-path issue).
+        # Skip / Smart: opaque veil covers post-maximize chrome thrash (crooked
+        # footer / Ready badge). Quick/Full: settle pass only — no «Preparing
+        # workspace…» flash (that thrash was mainly a cache-path issue).
         _settle_settings = {}
         if hasattr(window, "load_user_settings"):
             try:
                 _settle_settings = window.load_user_settings() or {}
             except Exception:
                 _settle_settings = {}
-        _use_settle_veil = load_startup_library_scan(_settle_settings) == SCAN_CACHE
+        _settle_mode = load_startup_library_scan(_settle_settings)
+        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART)
         begin_startup_settle(window, use_veil=_use_settle_veil)
         window._sync_startup_layout()
         try:
