@@ -1059,11 +1059,49 @@ class DevModeDialog(SteempegDialog):
 
         btn_ffmpeg_err = QPushButton("Simulate FFmpeg error dialog")
         btn_ffmpeg_err.setToolTip(
-            "Show the Render Failed window with sample FFmpeg log text "
-            "(for TrueDark / theme visual checks — no real encode)."
+            "Show the Render Failed window with sample FFmpeg logs "
+            "(cycles disk full / OOM / encoder / permission / … — "
+            "TrueDark / theme visual checks, no real encode)."
         )
         btn_ffmpeg_err.clicked.connect(self._simulate_ffmpeg_error_dialog)
         lay.addWidget(btn_ffmpeg_err)
+
+        # -- Splitter movement telemetry (layout debugging) --
+        g_split = QGroupBox("Splitter movement telemetry")
+        g_split_lay = QVBoxLayout(g_split)
+        g_split_lay.addWidget(
+            QLabel(
+                "Opt-in layout debug for main / right-h / main-v splitters. "
+                "Logs sizes, callers, and blockers to the session steempeg_*.log "
+                "([splitter-tel]). Off = no hooks."
+            )
+        )
+        self._chk_splitter_tel = QCheckBox("Track splitter movement")
+        self._chk_splitter_tel.setToolTip(
+            "Wrap setSizes + splitterMoved on tracked splitters. "
+            "Persists as dev_splitter_telemetry in settings.json."
+        )
+        self._chk_splitter_tel_overlay = QCheckBox("On-screen overlay (last events)")
+        self._chk_splitter_tel_overlay.setToolTip(
+            "Floating corner readout. Persists as "
+            "dev_splitter_telemetry_overlay in settings.json."
+        )
+        tel_row = QHBoxLayout()
+        btn_dump = QPushButton("Dump snapshot now")
+        btn_dump.setToolTip("One-shot log of current sizes / mins / blockers.")
+        btn_dump.clicked.connect(self._dump_splitter_telemetry)
+        tel_row.addWidget(btn_dump)
+        tel_row.addStretch()
+        g_split_lay.addWidget(self._chk_splitter_tel)
+        g_split_lay.addWidget(self._chk_splitter_tel_overlay)
+        g_split_lay.addLayout(tel_row)
+        lay.addWidget(g_split)
+
+        self._chk_splitter_tel.toggled.connect(self._on_splitter_tel_toggled)
+        self._chk_splitter_tel_overlay.toggled.connect(
+            self._on_splitter_tel_overlay_toggled
+        )
+        self._sync_splitter_tel_checkboxes()
 
         self._tools_log = QPlainTextEdit()
         self._tools_log.setReadOnly(True)
@@ -1237,44 +1275,104 @@ class DevModeDialog(SteempegDialog):
             lambda: self._tools_log.appendPlainText("\n— System Info complete —"))
         self._system_worker.start()
 
-    def _simulate_ffmpeg_error_dialog(self):
-        """Open the real Render Failed chrome with sample FFmpeg soup (theme QA)."""
-        host = None
+    def _resolve_app_host(self):
+        """Walk parents for MainWindow._app_host (SteempegApp)."""
         parent = self.parent()
         while parent is not None:
             host = getattr(parent, "_app_host", None)
             if host is not None:
-                break
+                return host
             parent = parent.parent() if hasattr(parent, "parent") else None
+        return None
+
+    def _sync_splitter_tel_checkboxes(self) -> None:
+        from steempeg.ui.splitter_telemetry import get_splitter_telemetry
+
+        ctl = get_splitter_telemetry()
+        host = self._resolve_app_host()
+        if host is not None:
+            ctl.attach_host(host)
+        for chk, val in (
+            (self._chk_splitter_tel, ctl.enabled),
+            (self._chk_splitter_tel_overlay, ctl.overlay_enabled),
+        ):
+            chk.blockSignals(True)
+            chk.setChecked(bool(val))
+            chk.blockSignals(False)
+
+    def _on_splitter_tel_toggled(self, checked: bool) -> None:
+        from steempeg.ui.splitter_telemetry import get_splitter_telemetry
+
+        host = self._resolve_app_host()
+        ctl = get_splitter_telemetry()
+        if host is not None:
+            ctl.attach_host(host)
+        ctl.set_enabled(
+            bool(checked),
+            overlay=self._chk_splitter_tel_overlay.isChecked(),
+            persist=True,
+        )
+        self._tools_log.appendPlainText(
+            "Splitter telemetry "
+            + ("ON — drag handles / open RQ / theater; see [splitter-tel] in logs."
+               if checked
+               else "OFF.")
+        )
+
+    def _on_splitter_tel_overlay_toggled(self, checked: bool) -> None:
+        from steempeg.ui.splitter_telemetry import get_splitter_telemetry
+
+        ctl = get_splitter_telemetry()
+        host = self._resolve_app_host()
+        if host is not None:
+            ctl.attach_host(host)
+        ctl.set_overlay(bool(checked), persist=True)
+        self._tools_log.appendPlainText(
+            "Splitter telemetry overlay " + ("ON." if checked else "OFF.")
+        )
+
+    def _dump_splitter_telemetry(self) -> None:
+        from steempeg.ui.splitter_telemetry import get_splitter_telemetry
+
+        host = self._resolve_app_host()
+        ctl = get_splitter_telemetry()
+        if host is not None:
+            ctl.attach_host(host)
+        was_on = ctl.enabled
+        if not was_on:
+            # Temporarily arm so dump lines are emitted + ring updated.
+            ctl.set_enabled(True, overlay=ctl.overlay_enabled, persist=False)
+        try:
+            text = ctl.dump_snapshot("manual_dump")
+            self._tools_log.appendPlainText(text)
+            self._tools_log.appendPlainText(
+                "(also written to session steempeg_*.log as [splitter-tel])"
+            )
+        finally:
+            if not was_on:
+                ctl.set_enabled(False, overlay=ctl.overlay_enabled, persist=False)
+
+    def _simulate_ffmpeg_error_dialog(self):
+        """Open the real Render Failed chrome with classified sample logs (theme QA)."""
+        from steempeg.render.ffmpeg_error_hints import (
+            classify_ffmpeg_error,
+            next_simulate_sample,
+        )
+
+        host = self._resolve_app_host()
         if host is None or not hasattr(host, "_show_steempeg_render_error_dialog"):
             self._tools_log.appendPlainText(
                 "ERROR: Could not reach the render controller to show the FFmpeg error dialog."
             )
             return
 
-        sample = (
-            "ffmpeg version N-118201-g7f3a9c2 Copyright (c) 2000-2026 the FFmpeg developers\n"
-            "  built with gcc 14.2.0 (Rev1, Built by MSYS2 project)\n"
-            "  configuration: --enable-gpl --enable-libx264 --enable-libx265\n"
-            "Input #0, concat, from 'C:/Users/emily/AppData/Local/Temp/steempeg_concat.txt':\n"
-            "  Duration: 00:03:42.18, start: 0.000000, bitrate: 18420 kb/s\n"
-            "  Stream #0:0: Video: h264 (High), yuv420p, 1920x1080, 60 fps\n"
-            "  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo, fltp\n"
-            "Stream mapping:\n"
-            "  Stream #0:0 -> #0:0 (h264 (native) -> h264 (libx264))\n"
-            "  Stream #0:1 -> #0:1 (aac (native) -> aac (native))\n"
-            "[libx264 @ 000001a4f2c0] Error while opening encoder: Cannot allocate memory\n"
-            "Error initializing output stream 0:0 -- Error while opening encoder for "
-            "output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, "
-            "width or height\n"
-            "[out#0/mp4 @ 000001a4f880] Error opening encoder: Cannot allocate memory\n"
-            "Error opening output file C:/Records/clip_export.mp4.\n"
-            "Error opening output files: Cannot allocate memory\n"
-            "Conversion failed!\n"
-            "\n"
-            "os error: NOT ENOUGH MEMORY / ENOSPC (disk full or pagefile exhausted)\n"
+        idx = int(getattr(self, "_ffmpeg_err_sim_index", 0) or 0)
+        next_idx, kind, sample = next_simulate_sample(idx)
+        self._ffmpeg_err_sim_index = next_idx
+        hint = classify_ffmpeg_error(sample)
+        self._tools_log.appendPlainText(
+            f"Showing simulated FFmpeg error dialog ({kind} → {hint.message!r})…"
         )
-        self._tools_log.appendPlainText("Showing simulated FFmpeg error dialog…")
         try:
             host._show_steempeg_render_error_dialog(sample)
         except Exception as exc:

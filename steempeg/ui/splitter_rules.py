@@ -138,6 +138,17 @@ class SplitterRulesMixin:
     def _begin_splitter_drag(self, side: str) -> None:
         self._splitter_drag_side = side
         self._splitter_dragging = True
+        try:
+            from steempeg.ui.splitter_telemetry import get_splitter_telemetry, splitter_reason
+
+            with splitter_reason(f"drag_begin:{side}"):
+                get_splitter_telemetry().note(
+                    "drag_begin",
+                    detail=f"side={side}",
+                    splitter_name="main_splitter" if side == LEFT else "right_h_splitter",
+                )
+        except Exception:
+            pass
         if not self._splitter_rules_active():
             return
         if side == RIGHT:
@@ -160,6 +171,35 @@ class SplitterRulesMixin:
         self._right_drag_mode = ""
         self._sync_kiss_flag()
         self.sync_queue_minimum()
+        try:
+            from steempeg.ui.splitter_telemetry import get_splitter_telemetry, splitter_reason
+
+            with splitter_reason(f"drag_end:{side}"):
+                get_splitter_telemetry().note(
+                    "drag_end",
+                    detail=f"side={side}",
+                    splitter_name="main_splitter" if side == LEFT else "right_h_splitter",
+                )
+        except Exception:
+            pass
+        # Custom right-handle drags can shut the queue without Qt's snap timer
+        # seeing a "user collapse" — latch + persist so clip select cannot reopen.
+        if side == RIGHT and self._splitter_rules_active():
+            sizes = self.right_h_splitter.sizes()
+            if len(sizes) < 2:
+                return
+            queue_w = int(sizes[1])
+            jobs = getattr(self, "render_queue", None)
+            has_jobs = jobs is not None and len(jobs) > 0
+            if queue_w <= PANE_SCRAP_WIDTH:
+                if has_jobs:
+                    self._queue_user_collapsed = True
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(False)
+            else:
+                self._queue_user_collapsed = False
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(True)
 
     def _sync_kiss_flag(self) -> None:
         """Match the hysteresis flag to the sizes the drag actually left.
