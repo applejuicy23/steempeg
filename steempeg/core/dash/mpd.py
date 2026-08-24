@@ -64,6 +64,37 @@ def _video_bandwidths_from_content(content: str) -> list[int]:
     return bws
 
 
+_AUDIO_REP_BW = re.compile(
+    r'<Representation\b[^>]*\bbandwidth="(\d+)"[^>]*\bmimeType="audio/',
+    re.IGNORECASE,
+)
+_AUDIO_REP_BW_ALT = re.compile(
+    r'<Representation\b[^>]*\bmimeType="audio/[^"]*"[^>]*\bbandwidth="(\d+)"',
+    re.IGNORECASE,
+)
+
+
+def peak_video_mbps_from_content(content: str, default: float = 0.0) -> float:
+    """Peak video Mbps from already-loaded MPD XML — no disk chunk walk / ffprobe."""
+    bws = _video_bandwidths_from_content(content or "")
+    if bws:
+        return max(bws) / 1_000_000.0
+    all_bws = [int(b) for b in re.findall(r'\bbandwidth="(\d+)"', content or "")]
+    if all_bws:
+        return max(all_bws) / 1_000_000.0
+    return default
+
+
+def audio_bitrate_kbps_from_content(content: str, default: int = 192) -> int:
+    """Audio Representation bandwidth in kbps from MPD XML (no ffprobe)."""
+    text = content or ""
+    bws = [int(m.group(1)) for m in _AUDIO_REP_BW.finditer(text)]
+    bws.extend(int(m.group(1)) for m in _AUDIO_REP_BW_ALT.finditer(text))
+    if not bws:
+        return default
+    return max(1, max(bws) // 1000)
+
+
 def _video_segment_bytes(folder_path: str) -> int:
     """Total bytes of stream0 (video) init + chunks on disk."""
     total = 0
