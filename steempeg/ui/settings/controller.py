@@ -21,13 +21,23 @@ class SettingsMixin:
         cache.write_json(self.json_cache_path, self.game_names_cache)
 
     def load_user_settings(self):
-        return cache.read_json(os.path.join(self.cache_dir, "settings.json"))
+        memo = getattr(self, "_user_settings_memo", None)
+        if isinstance(memo, dict):
+            return memo
+        path = os.path.join(self.cache_dir, "settings.json")
+        loaded = cache.read_json(path)
+        memo = loaded if isinstance(loaded, dict) else {}
+        self._user_settings_memo = memo
+        return memo
 
     def save_user_settings(self, key, value):
         """Merge one key into settings.json without clobbering on read failure."""
         path = os.path.join(self.cache_dir, "settings.json")
         settings: dict = {}
-        if os.path.isfile(path):
+        memo = getattr(self, "_user_settings_memo", None)
+        if isinstance(memo, dict):
+            settings = memo
+        elif os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     loaded = json.load(fh)
@@ -55,6 +65,7 @@ class SettingsMixin:
                 return
             settings = loaded
         settings[key] = value
+        self._user_settings_memo = settings
         cache.write_json(path, settings)
 
     def save_user_settings_batch(self, updates: dict) -> None:
@@ -63,7 +74,10 @@ class SettingsMixin:
             return
         path = os.path.join(self.cache_dir, "settings.json")
         settings: dict = {}
-        if os.path.isfile(path):
+        memo = getattr(self, "_user_settings_memo", None)
+        if isinstance(memo, dict):
+            settings = memo
+        elif os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     loaded = json.load(fh)
@@ -88,6 +102,7 @@ class SettingsMixin:
                 return
             settings = loaded
         settings.update(updates)
+        self._user_settings_memo = settings
         cache.write_json(path, settings)
 
     def _layout_remember_enabled(self) -> bool:
@@ -95,9 +110,9 @@ class SettingsMixin:
         return REMEMBER_LAYOUT_BETWEEN_SESSIONS
 
     # Always persist these even when REMEMBER_LAYOUT_BETWEEN_SESSIONS is False.
-    # (Queue width + Desktop player↔settings vertical dock.)
+    # (Queue width/open + Desktop player↔settings vertical dock.)
     _ALWAYS_REMEMBER_LAYOUT_KEYS = frozenset(
-        {"queue_panel_width", "main_v_splitter_sizes"}
+        {"queue_panel_width", "queue_panel_open", "main_v_splitter_sizes"}
     )
 
     def get_layout_setting(self, key: str, default):

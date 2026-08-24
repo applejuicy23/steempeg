@@ -427,8 +427,11 @@ class LifecycleMixin:
             self.save_layout_setting("main_splitter_sizes", self.ui.main_splitter.sizes())
         if hasattr(self, "right_h_splitter"):
             sizes = self.right_h_splitter.sizes()
-            if len(sizes) >= 2 and sizes[1] > 0:
-                self.save_layout_setting("queue_panel_width", sizes[1])
+            if len(sizes) >= 2:
+                open_w = int(sizes[1])
+                if open_w > 48:
+                    self.save_layout_setting("queue_panel_width", open_w)
+                self.save_layout_setting("queue_panel_open", open_w > 48)
         # Desktop player↔settings dock — never write Like a Portable glue heights.
         if hasattr(self, "main_v_splitter"):
             portable_like = False
