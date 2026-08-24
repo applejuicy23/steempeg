@@ -30,33 +30,20 @@ _ADD_CLIP_COLOR = "#8e7cc3"
 _ADD_CLIP_TEXT = "#d4c8f5"
 _ADD_CLIP_ICON = 18
 
-# Local QSS without QToolTip → Windows paints a native black tip; wrap both.
-_ADD_CLIP_STYLE = with_tooltip_style(
-    "QPushButton {"
-    f"background-color: rgba(142, 124, 195, 0.22);"
-    f"color: {_ADD_CLIP_TEXT};"
-    f"border: 2px solid {_ADD_CLIP_COLOR};"
-    "border-radius: 8px;"
-    "font-weight: bold;"
-    "font-size: 13px;"
-    "padding: 2px 10px 2px 8px;"
-    f"font-family: {tok.FONT_APP};"
-    "}"
-    "QPushButton:hover { background-color: rgba(142, 124, 195, 0.35); }"
-    "QPushButton:pressed { background-color: rgba(142, 124, 195, 0.48); }"
-)
+# Local QSS without QToolTip → Windows paints a native black tip; wrap on apply.
+def _render_style_qss() -> str:
+    return with_tooltip_style(
+        # Same pill language as Trim — rounded ends, bold label; flag emoji for now.
+        "QPushButton {"
+        "background-color: #2e6b32; color: #ffffff;"
+        "border: 2px solid #3e8e41; border-radius: 15px;"
+        "padding: 0 12px; font-weight: bold;"
+        "}"
+        "QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }"
+        "QPushButton:pressed { background-color: #235226; }"
+        "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
+    )
 
-_RENDER_STYLE = with_tooltip_style(
-    # Same pill language as Trim — rounded ends, bold label; flag emoji for now.
-    "QPushButton {"
-    "background-color: #2e6b32; color: #ffffff;"
-    "border: 2px solid #3e8e41; border-radius: 15px;"
-    "padding: 0 12px; font-weight: bold;"
-    "}"
-    "QPushButton:hover { background-color: #3e8e41; border: 2px solid #57c75b; }"
-    "QPushButton:pressed { background-color: #235226; }"
-    "QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }"
-)
 
 _SCAN_RING_SIZE = 28
 _SCAN_RING_COLOR = QColor(_ADD_CLIP_COLOR)
@@ -770,7 +757,7 @@ def _style_portable_render_button(btn: QPushButton, *, pending: int = 0, has_cli
         btn.setText(f"🚩 Queue ({pending})")
     else:
         btn.setText("🚩 Render")
-    btn.setStyleSheet(_RENDER_STYLE)
+    btn.setStyleSheet(_render_style_qss())
     btn.setFixedHeight(30)
     btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)

@@ -1,9 +1,11 @@
 """Player column chrome layout preference (Settings → Visual → Player layout).
 
 * ``reunited`` — unified flush stack (header + canvas + footer), 0px gaps,
-  4px painted header→canvas breathing room, seam border radii.
+  4px painted header→canvas breathing room, 6px outer corner radius when outlines on.
 * ``fractured`` — separated header / canvas / footer with 8px column spacing,
   full 6px corner radius on header and footer, no header canvas gap.
+
+Outline borders are a separate pref (``player_outline``); this controls spacing.
 """
 from __future__ import annotations
 

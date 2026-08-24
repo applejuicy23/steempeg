@@ -58,6 +58,14 @@ from steempeg.ui.player_layout import (
     normalize_player_layout,
     set_player_layout,
 )
+from steempeg.ui.player_outline import (
+    KEY_PLAYER_OUTLINE,
+    PLAYER_OUTLINE_DEFAULT,
+    PLAYER_OUTLINE_LABELS,
+    get_player_outline,
+    normalize_player_outline,
+    set_player_outline,
+)
 from steempeg.ui.player_header_size import (
     KEY_PLAYER_HEADER_SIZE,
     KEY_PLAYER_HEADER_SIZE_REV,
@@ -709,10 +717,10 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(player_layout_row)
         v.addWidget(
             self._hint(
-                "Reunited: unified flush player stack (header, canvas, footer). "
-                "Fractured: separated panels with visible gaps between header, "
-                "video, and controls. Combo previews live; Save persists. "
-                "Cancel restores the last saved layout."
+                "Panel spacing only. Reunited: flush stack (header, canvas, footer). "
+                "Fractured: gaps between those panels. "
+                "Outline borders are controlled separately below. "
+                "Combo previews live; Save persists. Cancel restores the last saved layout."
             )
         )
         self._player_layout_preview_timer = QTimer(self)
@@ -720,6 +728,42 @@ class SettingsDialog(SteempegDialog):
         self._player_layout_preview_timer.setInterval(200)
         self._player_layout_preview_timer.timeout.connect(self._apply_player_layout_preview)
         self._combo_player_layout.currentIndexChanged.connect(self._preview_player_layout)
+
+        outline_row = QHBoxLayout()
+        outline_row.setSpacing(8)
+        outline_lbl = QLabel("Outline")
+        outline_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_player_outline = QComboBox()
+        for value, label in PLAYER_OUTLINE_LABELS:
+            self._combo_player_outline.addItem(label, value)
+        cur_player_outline = normalize_player_outline(
+            settings.get(KEY_PLAYER_OUTLINE, PLAYER_OUTLINE_DEFAULT)
+        )
+        self._committed_player_outline = cur_player_outline
+        oidx = self._combo_player_outline.findData(cur_player_outline)
+        self._combo_player_outline.setCurrentIndex(max(0, oidx))
+        outline_row.addWidget(outline_lbl)
+        outline_row.addWidget(self._combo_player_outline, 1)
+        v.addLayout(outline_row)
+        v.addWidget(
+            self._hint(
+                "With lines: stock chrome borders (Reunited seam box or Fractured "
+                "panel frames). Without lines: no player outline. "
+                "With lines, not wrapping the video: header and footer keep borders; "
+                "the video plane stays flush. Desktop theatre and fullscreen hide "
+                "outlines; Portable keeps this setting. Combo previews live; Save "
+                "persists. Cancel restores the last saved outline."
+            )
+        )
+        self._player_outline_preview_timer = QTimer(self)
+        self._player_outline_preview_timer.setSingleShot(True)
+        self._player_outline_preview_timer.setInterval(200)
+        self._player_outline_preview_timer.timeout.connect(
+            self._apply_player_outline_preview
+        )
+        self._combo_player_outline.currentIndexChanged.connect(
+            self._preview_player_outline
+        )
 
         v.addWidget(self._section("Player timeline"))
         strip_row = QHBoxLayout()
@@ -952,8 +996,9 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
-                "Quick rescans folders using cached health (default). "
-                "Full re-runs ffprobe. "
+                "Smart Launch skips a full folder pass when clip roots look unchanged. "
+                "Quick always rescans with cached health. "
+                "Full re-runs ffprobe and refreshes game icons/names from Steam. "
                 "Skip paints last session’s list instantly (no folder I/O). "
                 "Refresh rebuilds the whole library."
             )
@@ -1660,6 +1705,26 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Player layout refresh failed for %s", layout)
 
+    def _preview_player_outline(self, *_args) -> None:
+        self._player_outline_preview_timer.start()
+
+    def _apply_player_outline_preview(self) -> None:
+        import logging
+
+        mode = normalize_player_outline(self._combo_player_outline.currentData())
+        set_player_outline(mode)
+        logging.info("Player outline preview → %s", mode)
+        self._refresh_player_outline(mode)
+
+    def _refresh_player_outline(self, mode: str) -> None:
+        if hasattr(self._app, "refresh_player_outline_mode"):
+            try:
+                self._app.refresh_player_outline_mode(mode)
+            except Exception:
+                import logging
+
+                logging.exception("Player outline refresh failed for %s", mode)
+
     def _preview_timeline_strip(self, *_args) -> None:
         self._timeline_strip_preview_timer.start()
 
@@ -1817,6 +1882,23 @@ class SettingsDialog(SteempegDialog):
         logging.info("Player layout cancelled → restored %s", committed)
         self._refresh_player_layout(committed)
 
+    def _restore_player_outline_on_cancel(self) -> None:
+        """Undo live player outline preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_player_outline_preview_timer", None) is not None:
+            self._player_outline_preview_timer.stop()
+        committed = normalize_player_outline(
+            getattr(self, "_committed_player_outline", PLAYER_OUTLINE_DEFAULT)
+        )
+        live = get_player_outline()
+        combo = normalize_player_outline(self._combo_player_outline.currentData())
+        if live == committed and combo == committed:
+            return
+        set_player_outline(committed)
+        logging.info("Player outline cancelled → restored %s", committed)
+        self._refresh_player_outline(committed)
+
     def _restore_timeline_strip_on_cancel(self) -> None:
         """Undo live timeline strip size preview that was never Saved."""
         import logging
@@ -1877,6 +1959,7 @@ class SettingsDialog(SteempegDialog):
         self._restore_header_layout_on_cancel()
         self._restore_header_size_on_cancel()
         self._restore_player_layout_on_cancel()
+        self._restore_player_outline_on_cancel()
         self._restore_timeline_strip_on_cancel()
         self._restore_markers_on_strip_on_cancel()
         self._restore_player_boost_on_cancel()
@@ -1889,6 +1972,7 @@ class SettingsDialog(SteempegDialog):
             "_header_layout_preview_timer",
             "_header_size_preview_timer",
             "_player_layout_preview_timer",
+            "_player_outline_preview_timer",
             "_timeline_strip_preview_timer",
             "_player_boost_preview_timer",
         ):
@@ -2025,6 +2109,15 @@ class SettingsDialog(SteempegDialog):
         if player_layout != self._committed_player_layout:
             deferred.append(lambda l=player_layout: self._refresh_player_layout(l))
         self._committed_player_layout = player_layout
+
+        player_outline = normalize_player_outline(
+            self._combo_player_outline.currentData()
+        )
+        pending[KEY_PLAYER_OUTLINE] = player_outline
+        set_player_outline(player_outline)
+        if player_outline != self._committed_player_outline:
+            deferred.append(lambda m=player_outline: self._refresh_player_outline(m))
+        self._committed_player_outline = player_outline
 
         strip_size = normalize_timeline_strip_size(self._combo_timeline_strip.currentData())
         pending[KEY_TIMELINE_STRIP_SIZE] = strip_size

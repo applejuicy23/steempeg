@@ -71,6 +71,9 @@ RIGHT_PANEL_BOTTOM_INSET = 0
 RIGHT_PANEL_PLAYER_TOP_INSET = 0
 QUEUE_SPLITTER_GUTTER = 10
 LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
+# Clips Manager elevated panel ↔ About/Updates/Settings footer (verticalLayout_left).
+# Matches Qt PM_LayoutVerticalSpacing on Windows; pin explicitly so player↔dash can mirror it.
+LIBRARY_FOOTER_GAP = 6
 # Queue list sits flush with the left footer (mega_pill); player column keeps RIGHT_PANEL_BOTTOM_INSET.
 RENDER_QUEUE_BOTTOM_INSET = 0
 
@@ -78,11 +81,16 @@ RENDER_QUEUE_BOTTOM_INSET = 0
 # Reunited (default): 0 spacing, 4px header canvas gap. Fractured: 8px / 0px.
 PLAYER_COLUMN_SPACING = 0
 PLAYER_HEADER_CANVAS_GAP = 4
+# QSS 1px outline is drawn inside the fixed-height frame; reserve both edges so
+# Healthy / Preview / gear / close plaques are not clipped (Reunited top-only
+# still needs the extra px — content box shrinks either way).
+PLAYER_HEADER_FRAME_BORDER_V = 2
 
 PLAYER_LAYOUT_COLUMN_SPACING_REUNITED = 0
 PLAYER_LAYOUT_COLUMN_SPACING_FRACTURED = 8
 PLAYER_LAYOUT_HEADER_CANVAS_GAP_REUNITED = 4
 PLAYER_LAYOUT_HEADER_CANVAS_GAP_FRACTURED = 0
+# Header/footer corner radius (Reunited outer corners + Fractured panel plates).
 PLAYER_LAYOUT_PANEL_RADIUS_PX = 6
 
 
@@ -104,12 +112,76 @@ def sync_player_layout_constants(mode: str) -> str:
     return applied
 
 
-def apply_player_layout_mode(app, mode: str | None = None) -> str:
-    """Apply Settings → Visual player layout (Reunited / Fractured) to the shell."""
+def _apply_player_chrome_stylesheets(app, *, immersive: bool, video_bg: str | None) -> None:
+    """Header / video / footer QSS only — no density or pill rebake."""
+    from PySide6.QtCore import Qt
+
     from steempeg.ui import ui_theme as ut
     from steempeg.ui.design_tokens import with_tooltip_style
+
+    header = getattr(app, "player_header_frame", None)
+    if header is not None:
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        header.setStyleSheet(
+            ut.player_header_stylesheet(force_outline=False if immersive else None)
+        )
+
+    vw = getattr(app, "video_wrapper", None)
+    if vw is not None:
+        # Reunited + with-lines: side borders close the chrome outline.
+        # Desktop theatre / fullscreen: borderless black fill.
+        # Portable theatre: black fill, but outline sides still follow the pref.
+        vw.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        if immersive:
+            vw.setStyleSheet(
+                ut.player_video_wrapper_stylesheet(
+                    background="black", chrome_outline=False
+                )
+            )
+        elif video_bg is not None:
+            vw.setStyleSheet(
+                ut.player_video_wrapper_stylesheet(background=video_bg)
+            )
+        else:
+            vw.setStyleSheet(ut.player_video_wrapper_stylesheet())
+
+    hud = getattr(app, "player_footer_frame", None)
+    if hud is not None:
+        extra = ""
+        try:
+            from steempeg.app import _PLAYBACK_BUTTONS_QSS
+
+            extra = _PLAYBACK_BUTTONS_QSS
+        except Exception:
+            pass
+        hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hud.setStyleSheet(
+            with_tooltip_style(
+                ut.player_footer_stylesheet(
+                    force_outline=False if immersive else None
+                )
+                + extra
+            )
+        )
+
+
+def restore_player_chrome_after_immersive(app) -> None:
+    """Fast outline restore after desktop theatre exit (skip density / footer pills)."""
+    from steempeg.ui.player_outline import player_outline_immersive
+
+    immersive = player_outline_immersive(app)
+    portable = bool(getattr(app, "_portable_shell", False))
+    video_bg = "black" if immersive or (
+        portable and getattr(app, "is_theater", False)
+    ) else None
+    _apply_player_chrome_stylesheets(app, immersive=immersive, video_bg=video_bg)
+
+
+def apply_player_layout_mode(app, mode: str | None = None) -> str:
+    """Apply Settings → Visual player layout (Reunited / Fractured) to the shell."""
     from steempeg.ui.player_header_layout import apply_player_header_density
     from steempeg.ui.player_layout import get_player_layout, set_player_layout
+    from steempeg.ui.player_outline import player_outline_immersive
 
     applied = set_player_layout(mode if mode is not None else get_player_layout())
 
@@ -125,23 +197,15 @@ def apply_player_layout_mode(app, mode: str | None = None) -> str:
     except Exception:
         pass
 
-    header = getattr(app, "player_header_frame", None)
-    if header is not None:
-        header.setStyleSheet(ut.player_header_stylesheet())
+    immersive = player_outline_immersive(app)
+    # Portable keeps is_theater but still paints outline prefs; only the video
+    # plane uses a black fill (same as desktop theatre stage).
+    portable = bool(getattr(app, "_portable_shell", False))
+    video_bg = "black" if immersive or (
+        portable and getattr(app, "is_theater", False)
+    ) else None
 
-    hud = getattr(app, "player_footer_frame", None)
-    if hud is not None:
-        from PySide6.QtCore import Qt
-
-        extra = ""
-        try:
-            from steempeg.app import _PLAYBACK_BUTTONS_QSS
-
-            extra = _PLAYBACK_BUTTONS_QSS
-        except Exception:
-            pass
-        hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        hud.setStyleSheet(with_tooltip_style(ut.player_footer_stylesheet() + extra))
+    _apply_player_chrome_stylesheets(app, immersive=immersive, video_bg=video_bg)
 
     refresh = getattr(app, "_refresh_player_footer_chrome", None)
     if callable(refresh):
@@ -153,12 +217,13 @@ def apply_player_layout_mode(app, mode: str | None = None) -> str:
     return applied
 
 # Vertical splitter (player ↔ neo/dash) — keep in sync with app.py + render_controller.
-# Was 10+10; that read as a thick dark band under the timeline. Stay tight but not glued.
-MAIN_V_SPLIT_TOP_PAD = 4  # top_v_wrap bottom margin (below player footer)
-MAIN_V_SPLIT_BOTTOM_PAD = 4  # bottom_v_wrap top margin (above neo / dash)
+# Was 10+10 (thick dark band), then 4+4 (too tight vs left footer). Match LIBRARY_FOOTER_GAP.
+MAIN_V_SPLIT_TOP_PAD = LIBRARY_FOOTER_GAP  # top_v_wrap bottom margin (below player footer)
+MAIN_V_SPLIT_BOTTOM_PAD = LIBRARY_FOOTER_GAP  # bottom_v_wrap top margin (above neo / dash)
 DESKTOP_BOTTOM_PANE_SPACING = 6  # neo ↔ Start/Pause/Cancel dash (Desktop only)
-# Like a Portable: no middle handle — air gap matches title bar ↔ player header.
-PORTABLE_LIKE_MIDDLE_GAP = PLAYER_LAYOUT_HEADER_CANVAS_GAP_REUNITED
+# Like a Portable, middle handle OFF: margin air gap (= clips ↔ About footer).
+# Middle handle ON: pads zeroed; handle is the seam (see render_controller).
+PORTABLE_LIKE_MIDDLE_GAP = LIBRARY_FOOTER_GAP
 
 # Source Info stat grid width — right edge of settings-tab content ("red line").
 SETTINGS_STAT_COL_W = 210

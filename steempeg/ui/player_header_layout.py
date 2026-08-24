@@ -1100,7 +1100,10 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     # Always the filled-state height (icon/chips + pads). Empty placeholder must
     # not shrink when status/actions/info are hidden — Fixed sizeHint otherwise
     # collapses to icon+label only and looks thinner than a selected clip.
-    from steempeg.ui.layout_defaults import PLAYER_HEADER_CANVAS_GAP
+    from steempeg.ui.layout_defaults import (
+        PLAYER_HEADER_CANVAS_GAP,
+        PLAYER_HEADER_FRAME_BORDER_V,
+    )
 
     min_h = max(chip + 2 * pad_v, int(dense.header_min_h), icon_px + 2 * pad_v)
     content_h = max(icon_px, chip)
@@ -1110,7 +1113,9 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
         lay.setContentsMargins(pad_h, pad_v, pad_h, pad_v + PLAYER_HEADER_CANVAS_GAP)
         lay.setSpacing(max(6, pad_h))
 
-    header.setFixedHeight(min_h + PLAYER_HEADER_CANVAS_GAP)
+    header.setFixedHeight(
+        min_h + PLAYER_HEADER_CANVAS_GAP + int(PLAYER_HEADER_FRAME_BORDER_V)
+    )
     header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     title = getattr(app, "player_header_title", None)
