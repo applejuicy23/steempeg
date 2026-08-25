@@ -124,7 +124,11 @@ def _short_bitrate(settings: RenderJobSettings) -> str:
 
 
 def format_job_preset(settings: RenderJobSettings) -> str:
-    """One compact line for queue cards: preset · fps · bitrate · codec."""
+    """One compact line for queue cards: preset · fps · bitrate · codec.
+
+    Uses a middle-dot `` · `` between fields (queue cards). The bottom dash
+    strip remaps this to wide ``  •  `` bullets via ``format_dash_job_summary``.
+    """
     if settings.audio_only:
         audio = (settings.audio_format or "Audio").strip()
         br = (settings.audio_bitrate_text or "").strip()
@@ -162,6 +166,17 @@ def format_job_preset(settings: RenderJobSettings) -> str:
         parts.append("muted")
 
     return " · ".join(parts) if parts else "—"
+
+
+def format_dash_job_summary(game_name: str, settings: RenderJobSettings | None) -> str:
+    """Bottom Ready-strip line — same wide ``  •  `` bullets as open-clip dash."""
+    name = (game_name or "").strip() or "Steam Clip"
+    if settings is None:
+        return name
+    preset = format_job_preset(settings)
+    # Queue cards keep middots; dash always uses the classic bullet spacing.
+    preset = preset.replace(" · ", "  •  ")
+    return f"{name}  •  {preset}"
 
 
 def format_job_datetime_line(job: RenderJob) -> str:
