@@ -5,16 +5,20 @@ from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import arrow_icon, load_icon
 
 # Match RefreshButton (refresh_button.py): 13px bold, pill radius 14, #444 border.
-_PLAY_LABEL_FONT = QFont("Segoe UI")
-_PLAY_LABEL_FONT.setPixelSize(13)
-_PLAY_LABEL_FONT.setBold(True)
 
-_PLAY_SPLIT_STYLE = """
+
+def _play_label_font() -> QFont:
+    return tok.ui_qfont(pixel_size=13, weight=QFont.Weight.Bold)
+
+
+def _play_split_style() -> str:
+    return """
     QPushButton#PlayMain {
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
         font-size: 13px;
         font-weight: bold;
         background-color: #383838;
@@ -47,7 +51,7 @@ _PLAY_SPLIT_STYLE = """
         border-bottom-left-radius: 0px;
         border-top-right-radius: 14px;
         border-bottom-right-radius: 14px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
         font-size: 12px;
         font-weight: bold;
         min-width: 28px;
@@ -75,7 +79,7 @@ _PLAY_SPLIT_STYLE = """
     QLabel#PlayText {
         background: transparent;
         border: none;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
         font-size: 13px;
         font-weight: bold;
         color: #ffffff;
@@ -84,7 +88,7 @@ _PLAY_SPLIT_STYLE = """
         background: transparent;
         border: none;
     }
-"""
+""".replace("<<FONT>>", tok.FONT_APP)
 
 
 class _PlayMainButton(QPushButton):
@@ -117,7 +121,7 @@ class PlayVideoSplitButton(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setStyleSheet(_PLAY_SPLIT_STYLE)
+        self.setStyleSheet(_play_split_style())
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -143,7 +147,7 @@ class PlayVideoSplitButton(QWidget):
 
         play_label = QLabel("Play video")
         play_label.setObjectName("PlayText")
-        play_label.setFont(_PLAY_LABEL_FONT)
+        play_label.setFont(_play_label_font())
         play_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         main_inner.addWidget(play_icon)

@@ -24,20 +24,15 @@ KEY_PLAYER_HEADER_LAYOUT = "player_header_layout"
 # Same stack Large / construction use — pin in QSS, QFont, and rich-text HTML.
 # Qt rich text often ignores QLabel stylesheet ``font-family`` when spans set
 # ``font-size``; omitting family made Medium/Small fall back to a different face.
-# Keep rich-text family to a single Segoe token (full stack lives on QFont/QSS) —
+# Keep rich-text family to a single preferred face (full stack lives on QFont/QSS) —
 # comma-lists in QTextDocument CSS have been flaky across Qt builds.
-_HEADER_TITLE_FONT_CSS = "font-family: 'Segoe UI'; font-weight: 700;"
-_HEADER_CHIP_FONT_CSS = f"font-family: {tok.FONT_APP};"
+def _header_title_font_css() -> str:
+    """Live preferred family for rich-text / QSS header titles."""
+    return f"font-family: '{tok.FONT_FAMILIES[0]}'; font-weight: 700;"
 
-# QFont family list matching FONT_APP (no CSS quotes / generic sans-serif).
-_HEADER_FONT_FAMILIES: tuple[str, ...] = (
-    "Segoe UI",
-    "Noto Sans",
-    "Twemoji",
-    "Noto Emoji",
-    "DejaVu Sans",
-    "Arial",
-)
+
+def _header_chip_font_css() -> str:
+    return f"font-family: {tok.FONT_APP};"
 
 HEADER_LAYOUT_STEEMPEG_UI = "steempeg_ui"
 HEADER_LAYOUT_STEAM_LIKE = "steam_like"
@@ -99,21 +94,13 @@ def player_header_font_px(app) -> int:
 def player_header_title_qfont(font_px: int | None = None) -> QFont:
     """Bold Segoe stack matching Large / construction — pixel size only varies."""
     px = max(11, int(font_px or COMFORT.header_font))
-    font = QFont()
-    font.setFamilies(list(_HEADER_FONT_FAMILIES))
-    font.setPixelSize(px)
-    font.setWeight(QFont.Weight.Bold)
-    return font
+    return tok.ui_qfont(pixel_size=px, weight=QFont.Weight.Bold)
 
 
 def player_header_chip_qfont(font_px: int | None = None) -> QFont:
     """Bold Segoe stack for header status / portable chips — size only varies."""
     px = max(11, int(font_px or COMFORT.header_font))
-    font = QFont()
-    font.setFamilies(list(_HEADER_FONT_FAMILIES))
-    font.setPixelSize(px)
-    font.setWeight(QFont.Weight.Bold)
-    return font
+    return tok.ui_qfont(pixel_size=px, weight=QFont.Weight.Bold)
 
 
 def set_header_layout(layout: object | None) -> str:
@@ -232,7 +219,7 @@ def format_player_header_html(
     # Family must be in the span or Medium/Small can resolve a different face.
     # Single Segoe token in HTML; full stack stays on QFont / QSS.
     _title_style = (
-        f"color:#ffffff; font-size:{fs}px; {_HEADER_TITLE_FONT_CSS} "
+        f"color:#ffffff; font-size:{fs}px; {_header_title_font_css()} "
         "vertical-align:middle;"
     )
     title_html = f'<span style="{_title_style}">{_esc(title_plain)}</span>'
@@ -272,7 +259,7 @@ def format_player_header_html(
     # Classic SteempegUI: bold gray meta (same face/weight as the game title).
     # ``Game • 11 May 2026 at 02:28 PM · 3m 36s``
     meta_style = (
-        f"color:#888888; font-size:{fs}px; {_HEADER_TITLE_FONT_CSS} "
+        f"color:#888888; font-size:{fs}px; {_header_title_font_css()} "
         "vertical-align:middle;"
     )
     title_sep = f'<span style="{meta_style}">{_TITLE_SEP}</span>'
@@ -1127,7 +1114,7 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
         # QFont pins the document default; stylesheet backs non-rich fallbacks.
         label.setFont(player_header_title_qfont(font_px))
         label.setStyleSheet(
-            f"color: white; font-size: {font_px}px; {_HEADER_TITLE_FONT_CSS}"
+            f"color: white; font-size: {font_px}px; {_header_title_font_css()}"
             "background: transparent; border: none;"
         )
 
@@ -1198,7 +1185,7 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
 
     chip_qss_tail = (
-        f"border-radius: 8px; padding: 0px; {_HEADER_CHIP_FONT_CSS}"
+        f"border-radius: 8px; padding: 0px; {_header_chip_font_css()}"
     )
     preview = getattr(app, "btn_preview_settings", None)
     if _widget_alive(preview):

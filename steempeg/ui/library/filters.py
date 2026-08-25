@@ -4,6 +4,7 @@ DateGroup and TimeGroup are small composite pickers built from BlockCombo; Filte
 is the popup itself. It receives the owning application via gather_statistics(app_window)
 rather than importing it, so this module stays free of any back-reference to the app.
 """
+from steempeg.ui import design_tokens as tok
 import os
 import re
 import tempfile
@@ -211,7 +212,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                     background: transparent;
                     font-size: 13px;
                     font-weight: bold;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
+                    font-family: {tok.FONT_APP};
                 }
             """)
             cap_layout = QVBoxLayout(capsule)
@@ -403,7 +404,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 color: #ffffff;
                 border: 2px solid #444444;
                 border-radius: 8px;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-family: <<FONT>>;
                 font-weight: bold;
                 font-size: 13px;
                 padding: 4px 10px;
@@ -457,7 +458,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             QCalendarWidget QToolButton { color: white; background-color: #383838; border-radius: 4px; padding: 2px; }
             QCalendarWidget QToolButton:hover { background-color: #6b5a8e; }
             QCalendarWidget QAbstractItemView:enabled { color: white; background-color: #252525; selection-background-color: #6b5a8e; selection-color: white; border-radius: 4px; }
-        """
+        """.replace("<<FONT>>", tok.FONT_APP)
 
         smart_input_style = raw_style.replace("UP_ARROW_PATH", up_path).replace("DOWN_ARROW_PATH", down_path)
         self._filter_date_arrow_up = up_path
@@ -535,7 +536,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-family: <<FONT>>;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -545,7 +546,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
             QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
             QPushButton::menu-indicator { image: none; }
-        """
+        """.replace("<<FONT>>", tok.FONT_APP)
         
         # Style for Clear
         clear_style = unified_table_style.replace("color: #ffffff;", "color: #ff7777;").replace("#6b5a8e", "#e05555").replace("#b29ae7", "#ff7777")
@@ -1122,7 +1123,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             normal = f"""
                 QComboBox {{ background: {field_bg}; color: white; border: 1px solid {field_border};
                     border-radius: 6px; padding: {bc_pad}; font-weight: bold; font-size: {bc_font}px;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
+                    font-family: {tok.FONT_APP};
                     min-height: {min_h}px; max-height: {min_h + 4}px; }}
                 QLineEdit {{ background: transparent; color: white; border: none;
                     selection-background-color: #b29ae7; selection-color: black; padding: 0px; margin: 0px; }}
@@ -1167,7 +1168,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             color: #aaaaaa;
             border: 2px solid #444444;
             border-radius: 10px;
-            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            font-family: <<FONT>>;
             font-weight: bold;
             font-size: 13px;
             padding: 4px 12px;
@@ -1187,7 +1188,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             background-color: #3a324a;
             border: 2px solid #b29ae7;
         }
-    """
+    """.replace("<<FONT>>", tok.FONT_APP)
 
     def set_content_max_height(self, max_px: int, *, relayout: bool = True) -> None:
         """Size Games + pick stack vs 3-col.

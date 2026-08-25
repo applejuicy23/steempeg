@@ -29,11 +29,11 @@ _FIELD_STYLE = """
     QLineEdit, QTextEdit, QComboBox {
         background-color: #2d2d2d; color: #f0f0f0; border: 1px solid #555;
         border-radius: 6px; padding: 6px 8px; font-size: 12px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus { border-color: #6b5a8e; }
     QComboBox::drop-down { border: none; width: 22px; }
-""" + COMBO_POPUP_ITEM_RULES
+""".replace("<<FONT>>", tok.FONT_APP) + COMBO_POPUP_ITEM_RULES
 
 _LABEL_STYLE = (
     f"color: {tok.TEXT_MUTED}; font-size: 11px; font-weight: 600; "

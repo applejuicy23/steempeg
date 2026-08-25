@@ -2,6 +2,7 @@
 
 Used for the date and time pickers in the filter panel.
 """
+from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QCompleter
 
@@ -28,10 +29,10 @@ class BlockCombo(QComboBox):
         self.lineEdit().editingFinished.connect(self.auto_pad_zero)
 
         self.style_normal = """
-            QComboBox { background: #1e1e1e; color: white; border: 1px solid #333; border-radius: 6px; padding: 0px; font-weight: bold; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; }
+            QComboBox { background: #1e1e1e; color: white; border: 1px solid #333; border-radius: 6px; padding: 0px; font-weight: bold; font-family: <<FONT>>; }
             QLineEdit { background: transparent; color: white; border: none; selection-background-color: #b29ae7; selection-color: black; padding: 0px; margin: 0px; }
             QComboBox::drop-down { border: none; width: 0px; }
-        """ + COMBO_POPUP_ITEM_RULES
+        """.replace("<<FONT>>", tok.FONT_APP) + COMBO_POPUP_ITEM_RULES
         self.style_error = self.style_normal.replace(
             "border: 1px solid #333;", "border: 2px solid #ff4444;"
         )

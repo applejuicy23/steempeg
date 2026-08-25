@@ -8,9 +8,10 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
-_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+_FONT = f"{tok.FONT_FAMILY_CSS};"
 _MIME_JOB_ID = "application/x-steempeg-queue-job"
 
 _LIST_THUMB_W = 128

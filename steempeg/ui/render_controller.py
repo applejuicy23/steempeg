@@ -5,6 +5,7 @@ bitrate options, validating custom input, running the export thread and reportin
 results. They run on the application instance and reach its widgets and state
 through self.
 """
+from steempeg.ui import design_tokens as tok
 import json
 import logging
 import os
@@ -1142,7 +1143,7 @@ class RenderMixin:
         dot.setStyleSheet(
             f"background-color: {color}; color: {ink}; border-radius: {radius}px; "
             f"font-size: {font}px; font-weight: 800; "
-            f"font-family: 'Segoe UI', Arial, sans-serif;"
+            f"font-family: {tok.FONT_APP};"
         )
         self._status_indicator_color = color
 
@@ -1200,7 +1201,7 @@ class RenderMixin:
                     strip.status_label.setText(label)
                     strip.status_label.setStyleSheet(
                         f"color: {color}; font-size: 14px; font-weight: bold; "
-                        f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                        f"font-family: {tok.FONT_APP};"
                     )
                     strip.status_label.setToolTip(tip)
                 if hasattr(strip, "sync_game_header"):
@@ -2039,7 +2040,7 @@ class RenderMixin:
         style = getattr(self, "_dash_btn_style_render_settings", None)
         if not style:
             style = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
                 "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
@@ -2048,8 +2049,13 @@ class RenderMixin:
             )
             self._dash_btn_style_render_settings = style
 
-        def _fmt(template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px") -> str:
-            return template.format(font=font, radius=radius, pad=pad)
+        fmt = getattr(self, "_fmt_dash_btn", None)
+        if callable(fmt):
+            qss = fmt(style)
+        else:
+            qss = style.replace("<<FONT>>", tok.FONT_APP).format(
+                font=12, radius=8, pad="6px 14px"
+            )
 
         btn = QPushButton()
         btn.setObjectName("btn_render_settings")
@@ -2062,7 +2068,7 @@ class RenderMixin:
         btn.setDefault(False)
         btn.setFixedHeight(36)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setStyleSheet(_fmt(style))
+        btn.setStyleSheet(qss)
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
         self._sync_dash_render_settings_button()
@@ -4414,7 +4420,7 @@ class RenderMixin:
         lay.setSpacing(8)
 
         title = QLabel("Original preset warning")
-        title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';")
+        title.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px; font-family: " + tok.FONT_APP + ";")
         body = QLabel(
             "Original uses fast stream copy / block merge without re-encoding.\n\n"
             "If Steam DASH chunks are slightly broken, the output duration can be wrong "
@@ -4423,7 +4429,7 @@ class RenderMixin:
         )
         body.setWordWrap(True)
         body.setFixedWidth(320)
-        body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';")
+        body.setStyleSheet("color: #c8c8c8; font-size: 11px; font-family: " + tok.FONT_APP + ";")
 
         chk = SteempegCheckBox("Don't show this again")
         chk.setChecked(bool(btn.property("warning_dismissed")))
@@ -5082,7 +5088,7 @@ class RenderMixin:
         tip = QLabel(f"Rename “{current}”")
         tip.setStyleSheet(
             "color: #cfcfcf; background: transparent; font-size: 12px;"
-            " font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+            f" font-family: {tok.FONT_APP};"
         )
         tip.setWordWrap(True)
         root.addWidget(tip)
@@ -5714,7 +5720,7 @@ class RenderMixin:
                 f" background-color: #5a4b7a; color: #ffffff; border: 2px solid #8e7cc3;"
                 f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
                 " font-weight: bold;"
-                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                " font-family: " + tok.FONT_APP + ";"
                 "}"
                 "QPushButton:hover { background-color: #6b5a8e; border: 2px solid #b29ae7; }"
                 "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"
@@ -5742,7 +5748,7 @@ class RenderMixin:
                     f" background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;"
                     f" border-radius: {radius}px; padding: {pad}; font-size: {font}px;"
                     " font-weight: bold;"
-                    " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                    " font-family: " + tok.FONT_APP + ";"
                     "}"
                     "QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }"
                     "QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }"

@@ -37,7 +37,7 @@ def combo_popup_item_rules(dense: UiDensity | None = None) -> str:
         outline: none;
         selection-background-color: transparent;
         selection-color: {c.popup_sel_fg};
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
     }}
     QComboBox QAbstractItemView::item {{
         min-height: {h}px;
@@ -120,14 +120,30 @@ def apply_dark_combo_popup(
 
 
 # Default comfort popup (backward-compatible import for static QSS builders).
-COMBO_POPUP_ITEM_RULES = combo_popup_item_rules(COMFORT)
+# Must stay live: Settings → UI font rebuilds FONT_APP; a frozen import-time
+# string would keep the old face after Save.
+class _LiveComboPopupRules:
+    def __str__(self) -> str:
+        return combo_popup_item_rules(COMFORT)
 
-SETTINGS_COMBO_FIELD_RULES = """
+    def __add__(self, other) -> str:
+        return str(self) + str(other)
+
+    def __radd__(self, other) -> str:
+        return str(other) + str(self)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self), spec)
+
+
+COMBO_POPUP_ITEM_RULES = _LiveComboPopupRules()
+
+SETTINGS_COMBO_FIELD_RULES_TEMPLATE = """
     QComboBox, QLineEdit {
         background-color: #383838; color: #ffffff;
         border: 2px solid #4a4a4a; border-radius: 12px;
         padding: 7px 10px; font-size: 13px; font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
     }
     QComboBox:hover, QLineEdit:hover { border: 2px solid #6b5a8e; }
     QComboBox:disabled, QLineEdit:disabled {
@@ -146,6 +162,24 @@ SETTINGS_COMBO_FIELD_RULES = """
         border-top: 6px solid #cccccc;
     }
 """
+
+
+class _LiveSettingsComboFieldRules:
+    def __str__(self) -> str:
+        return SETTINGS_COMBO_FIELD_RULES_TEMPLATE.replace("<<FONT>>", tok.FONT_APP)
+
+    def __add__(self, other) -> str:
+        return str(self) + str(other)
+
+    def __radd__(self, other) -> str:
+        return str(other) + str(self)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self), spec)
+
+
+SETTINGS_COMBO_FIELD_RULES = _LiveSettingsComboFieldRules()
+
 
 def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
     """Render-settings combo/line-edit chrome scaled for compact windows.
@@ -172,7 +206,7 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
         background-color: {field_bg}; color: #ffffff;
         border: 2px solid {field_border}; border-radius: 12px;
         padding: 7px 10px; font-size: 13px; font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
     }}
     QComboBox:hover, QLineEdit:hover {{ border: 2px solid #6b5a8e; }}
     QComboBox:disabled, QLineEdit:disabled {{
@@ -203,7 +237,7 @@ def settings_combo_field_rules(dense: UiDensity | None = None) -> str:
         background-color: {field_bg}; color: #ffffff;
         border: {border}px solid {field_border}; border-radius: {radius}px;
         padding: {pad}; font-size: {font}px; font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         min-height: {min_h}px;
     }}
     QComboBox:hover, QLineEdit:hover {{ border: {border}px solid #6b5a8e; }}
@@ -239,7 +273,7 @@ def compact_combo_popup_item_rules() -> str:
         outline: none;
         selection-background-color: transparent;
         selection-color: {c.popup_sel_fg};
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-weight: normal;
     }}
     QComboBox QAbstractItemView::item {{
@@ -277,7 +311,7 @@ def compact_combo_popup_item_rules() -> str:
 
 COMPACT_COMBO_POPUP_ITEM_RULES = compact_combo_popup_item_rules()
 
-COMPACT_COMBO_RULES = """
+_COMPACT_COMBO_RULES_TEMPLATE = """
     QComboBox {
         background-color: #383838;
         color: #ffffff;
@@ -285,7 +319,7 @@ COMPACT_COMBO_RULES = """
         border-radius: 8px;
         padding: 4px 10px;
         font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: <<FONT>>;
         font-size: 13px;
         min-height: 24px;
     }
@@ -298,6 +332,23 @@ COMPACT_COMBO_RULES = """
     }
     QComboBox::drop-down { border: none; padding-right: 5px; background: transparent; }
 """
+
+
+class _LiveCompactComboRules:
+    def __str__(self) -> str:
+        return _COMPACT_COMBO_RULES_TEMPLATE.replace("<<FONT>>", tok.FONT_APP)
+
+    def __add__(self, other) -> str:
+        return str(self) + str(other)
+
+    def __radd__(self, other) -> str:
+        return str(other) + str(self)
+
+    def __format__(self, spec: str) -> str:
+        return format(str(self), spec)
+
+
+COMPACT_COMBO_RULES = _LiveCompactComboRules()
 
 
 def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
@@ -327,7 +378,7 @@ def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
         border-radius: {radius}px;
         padding: {pad};
         font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: {font}px;
         min-height: {min_h}px;
     }}
@@ -344,7 +395,7 @@ def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
     QComboBox::drop-down {{ border: none; padding-right: 5px; background: transparent; }}
 """
     if d.scale >= 0.85:
-        return COMPACT_COMBO_RULES
+        return str(COMPACT_COMBO_RULES)
     font = int(d.footer_font)
     pad = d.combo_pad
     min_h = max(18, int(d.combo_min_h))
@@ -358,7 +409,7 @@ def compact_combo_field_rules(dense: UiDensity | None = None) -> str:
         border-radius: {radius}px;
         padding: {pad};
         font-weight: bold;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: {font}px;
         min-height: {min_h}px;
     }}

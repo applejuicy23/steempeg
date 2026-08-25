@@ -256,16 +256,22 @@ class TimelineCanvas(QWidget):
         # Provisional Y so scroller rebuild has a track height; finalize after head size.
         self._TRACK_Y = self._marker_track_y()
         self._ruler_font = QFont()
-        self._ruler_font.setFamilies(
-            [
-                "Segoe UI",
-                "Noto Sans",
-                "Twemoji",
-                "Noto Emoji",
-                "DejaVu Sans",
-                "Arial",
-            ]
-        )
+        try:
+            from steempeg.ui.design_tokens import FONT_FAMILIES
+
+            self._ruler_font.setFamilies(list(FONT_FAMILIES))
+        except Exception:
+            self._ruler_font.setFamilies(
+                [
+                    "Segoe UI",
+                    "Liberation Sans",
+                    "Noto Sans",
+                    "Twemoji",
+                    "Noto Emoji",
+                    "DejaVu Sans",
+                    "Arial",
+                ]
+            )
         self._ruler_font.setPointSize(max(6, int(self._RULER_FONT_PT)))
         self._ruler_font.setWeight(QFont.Weight.DemiBold)
         self._rebuild_playhead_scroller()

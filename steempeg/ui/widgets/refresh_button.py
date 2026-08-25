@@ -1,4 +1,5 @@
 """Refresh clips library: main rescan + dropdown for heavier maintenance actions."""
+from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
@@ -16,7 +17,7 @@ def _refresh_style(dense: UiDensity) -> str:
     menu_max = 28 if dense.compact else 32
     return f"""
     QPushButton#RefreshMain {{
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: {dense.footer_font}px;
         font-weight: bold;
         background-color: #383838;
@@ -49,7 +50,7 @@ def _refresh_style(dense: UiDensity) -> str:
         border-bottom-left-radius: 0px;
         border-top-right-radius: {r}px;
         border-bottom-right-radius: {r}px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: 12px;
         font-weight: bold;
         min-width: {menu_w}px;

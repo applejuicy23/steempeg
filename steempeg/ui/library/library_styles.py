@@ -73,7 +73,7 @@ def library_table_stylesheet() -> str:
         border-bottom: 1px solid {row_border};
         color: #d1d1d1;
         font-size: 13px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
     }}
     QTableWidget::item:hover {{
         background-color: {row_hover};

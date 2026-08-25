@@ -35,9 +35,9 @@ def _round_btn_style(size: int = 40) -> str:
 
 
 def _drag_value_font() -> QFont:
-    font = QFont("Segoe UI", 9)
-    font.setBold(True)
-    return font
+    from PySide6.QtGui import QFont as _QF
+
+    return tok.ui_qfont(9, weight=_QF.Weight.Bold)
 
 
 class SpeedControlWidget(QWidget):

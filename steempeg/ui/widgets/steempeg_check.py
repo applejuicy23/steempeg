@@ -1,6 +1,8 @@
 """Purple square checkbox with animated checkmark (Render Queue dialog style)."""
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
+
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QCheckBox
@@ -136,8 +138,7 @@ class SteempegCheckBox(QCheckBox):
                 p.drawLine(int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1]))
                 p.drawLine(int(p2[0]), int(p2[1]), int(p3[0]), int(p3[1]))
 
-        font = QFont("Segoe UI")
-        font.setPixelSize(self._font_size)
+        font = tok.ui_qfont(pixel_size=self._font_size)
         if self._label_bold:
             font.setWeight(QFont.Weight.Bold)
         elif self._accent_label:

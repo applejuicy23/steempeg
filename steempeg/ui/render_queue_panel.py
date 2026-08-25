@@ -1,6 +1,7 @@
 """Right-side render queue panel — list or grid job cards with status colours."""
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
 import os
 
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize, QTimer
@@ -699,20 +700,19 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.setIconSize(QSize(16, 16))
         self._btn_clear.setFixedHeight(32)
         self._btn_clear.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._btn_clear.setStyleSheet("""
-            QPushButton {
+        self._btn_clear.setStyleSheet(f"""
+            QPushButton {{
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
                 border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-            }
-            QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-            QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-            QPushButton:disabled { background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }
+                font-family: {tok.FONT_APP};
+            }}
+            QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}
+            QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}
+            QPushButton:disabled {{ background-color: #262626; color: #5a5a5a; border: 2px solid #333333; }}
         """)
-        _clear_font = self._btn_clear.font()
-        _clear_font.setFamily("Segoe UI")
-        _clear_font.setBold(True)
-        _clear_font.setPixelSize(13)
+        from PySide6.QtGui import QFont as _QF
+
+        _clear_font = tok.ui_qfont(pixel_size=13, weight=_QF.Weight.Bold)
         self._btn_clear.setFont(_clear_font)
         self._btn_clear.clicked.connect(self.clear_queue_requested.emit)
 
@@ -1003,7 +1003,7 @@ class RenderQueuePanel(QWidget):
                 background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
                 border-radius: {clear_r}px; padding: 2px 10px; font-size: {dense.footer_font}px;
                 font-weight: bold;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-family: {tok.FONT_APP};
             }}
             QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}
             QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}

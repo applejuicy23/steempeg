@@ -493,7 +493,7 @@ def footer_button_stylesheet(dense) -> str:
             color: #ffffff;
             border: 2px solid {p.button_secondary_border};
             border-radius: {r}px;
-            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            font-family: {tok.FONT_APP};
             font-weight: bold;
             font-size: {dense.footer_font}px;
             padding: {dense.footer_pad};
@@ -539,7 +539,7 @@ def split_footer_composite_stylesheet(dense, variant: str) -> str:
         side_max = 28 if dense.compact else 32
     return f"""
     QPushButton#{main_name} {{
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: {dense.footer_font}px;
         font-weight: bold;
         background-color: {p.button_secondary_bg};
@@ -572,7 +572,7 @@ def split_footer_composite_stylesheet(dense, variant: str) -> str:
         border-bottom-left-radius: 0px;
         border-top-right-radius: {r}px;
         border-bottom-right-radius: {r}px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: {side_text_size}px;
         font-weight: bold;
         min-width: {side_min}px;
@@ -639,7 +639,7 @@ def toolbar_text_button_stylesheet(*, radius: int = 6, font_px: int = 13, height
             padding: {pad_v}px 12px;
             font-size: {font_px}px;
             font-weight: bold;
-            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            font-family: {tok.FONT_APP};
         }}
         QPushButton:hover {{
             background-color: {p.button_secondary_hover_bg};
@@ -684,7 +684,7 @@ def library_tab_stylesheet(
         border: none;
         font-weight: bold;
         font-size: {font_px}px;
-        font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
     }}
     """
 
@@ -1284,7 +1284,7 @@ def settings_dialog_tabs_stylesheet() -> str:
     QTabBar::tab {{
         background: {tab_bg}; color: #aaa; padding: 8px 14px; margin-right: 4px;
         border-top-left-radius: 6px; border-top-right-radius: 6px;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
+        font-family: {tok.FONT_APP};
         font-size: 12px; font-weight: bold;
     }}
     QTabBar::tab:selected {{ background: #4a3d66; color: #fff; }}
@@ -1292,7 +1292,7 @@ def settings_dialog_tabs_stylesheet() -> str:
 """
 
 
-_MENU_FONT = "'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif"
+
 
 
 @dataclass(frozen=True)
@@ -1368,7 +1368,7 @@ def menu_stylesheet(
         color: {mc.fg};
         border: {mc.border_width}px solid {mc.border};
         border-radius: 8px;
-        font-family: {_MENU_FONT};
+        font-family: {tok.FONT_APP};
         font-size: {font_size};
         font-weight: {font_weight};
         padding: {menu_padding};
@@ -1423,7 +1423,7 @@ def tooltip_stylesheet() -> str:
         f" border: 1px solid {p.tooltip_border};"
         " border-radius: 6px;"
         " padding: 5px 9px;"
-        f" font-family: 'Segoe UI', {tok.FONT_APP};"
+        f" font-family: {tok.FONT_APP};"
         " font-size: 12px;"
         " font-weight: bold;"
         "}"
@@ -1562,7 +1562,7 @@ def folders_menu_stylesheet() -> str:
     }}
     QLabel#FolderRowLabel {{
         color: {row_label};
-        font-family: {_MENU_FONT};
+        font-family: {tok.FONT_APP};
         font-size: 13px;
         font-weight: bold;
         background: transparent;
@@ -1689,7 +1689,7 @@ def filter_menu_capsule_stylesheet(*, radius: int, title_font: int) -> str:
             background: transparent;
             font-size: {title_font}px;
             font-weight: bold;
-            font-family: {_MENU_FONT};
+            font-family: {tok.FONT_APP};
         }}
     """
 
@@ -1724,7 +1724,7 @@ def filter_chip_button_stylesheet(
             color: {idle_fg};
             border: {border}px solid {brd};
             border-radius: {radius}px;
-            font-family: {_MENU_FONT};
+            font-family: {tok.FONT_APP};
             font-weight: bold;
             font-size: {font}px;
             padding: {pad_v}px {pad_h}px;
@@ -1772,7 +1772,7 @@ def filter_action_button_stylesheet(
             color: #ffffff;
             border: {border}px solid {brd};
             border-radius: {radius}px;
-            font-family: {_MENU_FONT};
+            font-family: {tok.FONT_APP};
             font-weight: bold;
             font-size: {font}px;
             padding: {pad_v}px {pad_h}px;
@@ -1824,7 +1824,7 @@ def filter_date_time_input_stylesheet(
             color: #ffffff;
             border: {border}px solid {brd};
             border-radius: {radius}px;
-            font-family: {_MENU_FONT};
+            font-family: {tok.FONT_APP};
             font-weight: bold;
             font-size: {font}px;
             padding: {pad_v}px {pad_h}px;

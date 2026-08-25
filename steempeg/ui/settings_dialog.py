@@ -6,6 +6,7 @@ import os
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -23,6 +24,14 @@ from PySide6.QtWidgets import (
 
 from steempeg.ui.icon_assets import title_bar_info_pixmap
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.design_tokens import (
+    KEY_UI_FONT,
+    UI_FONT_DEFAULT,
+    UI_FONT_LABELS,
+    apply_ui_font_preference,
+    normalize_ui_font,
+    ui_font_preference_supported,
+)
 from steempeg.ui.icon_shape import (
     ICON_SHAPE_DEFAULT,
     ICON_SHAPE_LABELS,
@@ -566,6 +575,33 @@ class SettingsDialog(SteempegDialog):
                 "slightly elevated cards. Save applies; Cancel keeps the last saved theme."
             )
         )
+
+        # Linux-only: Windows stays classic Segoe with no UI font setting.
+        self._combo_ui_font = None
+        self._committed_ui_font = UI_FONT_DEFAULT
+        if ui_font_preference_supported():
+            font_row = QHBoxLayout()
+            font_row.setSpacing(8)
+            font_lbl = QLabel("UI font")
+            font_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+            self._combo_ui_font = QComboBox()
+            for value, label in UI_FONT_LABELS:
+                self._combo_ui_font.addItem(label, value)
+            cur_font = normalize_ui_font(settings.get(KEY_UI_FONT, UI_FONT_DEFAULT))
+            self._committed_ui_font = cur_font
+            fidx = self._combo_ui_font.findData(cur_font)
+            self._combo_ui_font.setCurrentIndex(max(0, fidx))
+            font_row.addWidget(font_lbl)
+            font_row.addWidget(self._combo_ui_font, 1)
+            v.addLayout(font_row)
+            v.addWidget(
+                self._hint(
+                    "Auto uses real Segoe UI files if present, otherwise bundled "
+                    "Selawik (OFL). Selawik vs System default should look clearly "
+                    "different after Save. Fontconfig aliases that only substitute "
+                    "Adwaita/Noto do not count as Segoe. Cancel keeps the last saved font."
+                )
+            )
 
         v.addWidget(self._section("Game icons"))
         shape_row = QHBoxLayout()
@@ -1600,6 +1636,27 @@ class SettingsDialog(SteempegDialog):
         logging.info("UI theme cancelled → restored %s", committed)
         self._refresh_ui_theme(committed)
 
+    def _refresh_ui_font(self, pref: str) -> None:
+        if not ui_font_preference_supported():
+            return
+        apply_ui_font_preference(pref, app=QApplication.instance())
+        live = normalize_ui_theme(get_ui_theme())
+        self._refresh_ui_theme(live)
+
+    def _restore_ui_font_on_cancel(self) -> None:
+        if not ui_font_preference_supported() or self._combo_ui_font is None:
+            return
+        committed = normalize_ui_font(
+            getattr(self, "_committed_ui_font", UI_FONT_DEFAULT)
+        )
+        combo = normalize_ui_font(self._combo_ui_font.currentData())
+        if combo == committed:
+            return
+        import logging
+
+        logging.info("UI font cancelled → restored %s", committed)
+        self._refresh_ui_font(committed)
+
     def _preview_icon_shape(self, *_args) -> None:
         """Debounced live preview (not persisted until Save)."""
         self._icon_shape_preview_timer.start()
@@ -1954,6 +2011,7 @@ class SettingsDialog(SteempegDialog):
 
     def reject(self) -> None:
         self._restore_ui_theme_on_cancel()
+        self._restore_ui_font_on_cancel()
         self._restore_icon_shape_on_cancel()
         self._restore_clip_card_style_on_cancel()
         self._restore_header_layout_on_cancel()
@@ -2072,6 +2130,21 @@ class SettingsDialog(SteempegDialog):
         elif ui_theme != opened_theme:
             logging.info("UI theme persisted → %s (already live)", ui_theme)
         self._committed_ui_theme = ui_theme
+
+        ui_font = normalize_ui_font(
+            self._combo_ui_font.currentData()
+            if self._combo_ui_font is not None
+            else getattr(self, "_committed_ui_font", UI_FONT_DEFAULT)
+        )
+        if ui_font_preference_supported() and self._combo_ui_font is not None:
+            pending[KEY_UI_FONT] = ui_font
+            opened_font = normalize_ui_font(
+                getattr(self, "_committed_ui_font", UI_FONT_DEFAULT)
+            )
+            if ui_font != opened_font:
+                logging.info("UI font applied → %s", ui_font)
+                deferred.append(lambda f=ui_font: self._refresh_ui_font(f))
+            self._committed_ui_font = ui_font
 
         shape = normalize_icon_shape(self._combo_icon_shape.currentData())
         pending[KEY_GAME_ICON_SHAPE] = shape

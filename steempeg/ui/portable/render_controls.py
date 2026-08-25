@@ -1,6 +1,7 @@
 """Compact portable render control strip — progress + Start / Pause / Cancel / Logs."""
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
 import os
 
 from PySide6.QtCore import Qt, QPoint, QSize
@@ -19,11 +20,9 @@ from steempeg.infra.paths import get_resource_path
 from steempeg.ui import ui_theme as ut
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
-_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
-
 # Same templates as desktop render dashboard (app.py), compact padding.
 _DASH_START = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #2e6b32; color: #ffffff; "
     "border: 2px solid #3e8e41; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #3e8e41; border: 2px solid #57c75b; }}"
@@ -31,7 +30,7 @@ _DASH_START = (
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_PAUSE = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #8c7314; color: #ffffff; "
     "border: 2px solid #a88b11; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #a88b11; border: 2px solid #c9a716; }}"
@@ -39,7 +38,7 @@ _DASH_PAUSE = (
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_CANCEL = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #8a2525; color: #ffffff; "
     "border: 2px solid #a82e2e; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #a82e2e; border: 2px solid #cc3939; }}"
@@ -47,7 +46,7 @@ _DASH_CANCEL = (
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_LEAVE = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #383838; color: #e0e0e0; "
     "border: 2px solid #4a4a4a; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}"
@@ -55,7 +54,7 @@ _DASH_LEAVE = (
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_RESUME = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
     "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
@@ -63,7 +62,7 @@ _DASH_RESUME = (
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
 )
 _DASH_LOGS = (
-    "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+    "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #383838; color: #ffffff; "
     "border: 2px solid #444444; border-radius: {radius}px; padding: {pad}; }}"
     "QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}"
@@ -89,8 +88,14 @@ _STATUS_ROW_H = 24
 _GAME_ICON = 24
 
 
+def _font_css() -> str:
+    return "font-family: " + tok.FONT_APP + ";"
+
+
 def _fmt_dash(template: str, *, font: int = 13, radius: int = 8, pad: str = "6px 12px") -> str:
-    return template.format(font=font, radius=radius, pad=pad)
+    return template.replace("<<FONT>>", tok.FONT_APP).format(
+        font=font, radius=radius, pad=pad
+    )
 
 
 class PortableRenderControlStrip(QFrame):
@@ -131,7 +136,7 @@ class PortableRenderControlStrip(QFrame):
 
         self.game_label = QLabel("Select a clip…")
         self.game_label.setStyleSheet(
-            f"color: #e0e0e0; font-size: 14px; font-weight: bold; {_FONT}"
+            f"color: #e0e0e0; font-size: 14px; font-weight: bold; {_font_css()}"
         )
         self.game_label.setMinimumWidth(0)
         self.game_label.setSizePolicy(
@@ -149,7 +154,7 @@ class PortableRenderControlStrip(QFrame):
 
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet(
-            f"color: {_STATUS_COLORS['ready']}; font-size: 14px; font-weight: bold; {_FONT}"
+            f"color: {_STATUS_COLORS['ready']}; font-size: 14px; font-weight: bold; {_font_css()}"
         )
         self.status_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
@@ -186,7 +191,7 @@ class PortableRenderControlStrip(QFrame):
         self.pct_label.setFixedWidth(_PCT_COL)
         self.pct_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pct_label.setStyleSheet(
-            f"color: #ffffff; font-size: 13px; font-weight: bold; {_FONT}"
+            f"color: #ffffff; font-size: 13px; font-weight: bold; {_font_css()}"
         )
         progress_row.addWidget(self.pct_label, 0)
         root.addLayout(progress_row)
@@ -384,7 +389,7 @@ class PortableRenderControlStrip(QFrame):
         display = (text or "Ready").strip() or "Ready"
         self.status_label.setText(display)
         self.status_label.setStyleSheet(
-            f"color: {color}; font-size: 14px; font-weight: bold; {_FONT}"
+            f"color: {color}; font-size: 14px; font-weight: bold; {_font_css()}"
         )
         self.status_label.setToolTip(display)
         # Update-check owns spinning arrows; library scan owns the wave dots.

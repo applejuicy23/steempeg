@@ -13,6 +13,7 @@ keeps working untouched — we only expose the edit + warning icon on `ui`.
 """
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
 import re
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
@@ -50,9 +51,10 @@ from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.gradient_slider import GradientSlider
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 
-_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+def _font_css() -> str:
+    return "font-family: " + tok.FONT_APP + ";"
 # Match Video Settings combo text (see combo_chrome.SETTINGS_COMBO_FIELD_RULES + app.py).
-_FONT_COMBO = _FONT + " font-size: 13px; font-weight: bold;"
+_FONT_COMBO = _font_css() + " font-size: 13px; font-weight: bold;"
 # Video/Audio: two combos + warn slots must fit inside SETTINGS_CONTENT_WIDTH (Source Info).
 _GRID_H = 16
 _WARN_GAP = 8
@@ -61,13 +63,13 @@ _WARN_RESERVE = _WARN_GAP + _WARN_SLOT  # 24 — spacing + icon column after eac
 _COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H - 2 * _WARN_RESERVE) // 2  # 291
 # Two export-tab combos side-by-side (no warn slots) must fit inside SETTINGS_CONTENT_WIDTH.
 _EXPORT_COMBO_W = (SETTINGS_CONTENT_WIDTH - _GRID_H) // 2
-_FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _FONT
-_TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _FONT
-_TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _FONT
+_FIELD_LABEL_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; " + _font_css()
+_TOGGLE_LABEL_QSS = "color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; " + _font_css()
+_TITLE_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; " + _font_css()
 _PATHBOX_QSS = ("QLabel { background-color: #353535; border-radius: 10px; padding: 8px 12px;"
                 " color: #b29ae7; font-size: 11px; font-weight: bold; font-family: 'Consolas', monospace; }")
-_STAT_CAP_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; border: none; " + _FONT
-_STAT_VAL_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; border: none; " + _FONT
+_STAT_CAP_QSS = "color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; border: none; " + _font_css()
+_STAT_VAL_QSS = "color: #ffffff; font-size: 15px; font-weight: bold; background: transparent; border: none; " + _font_css()
 _STAT_FRAME_QSS = "QFrame { background-color: #303030; border: 1px solid #3a3a3a; border-radius: 12px; }"
 
 # The overlay chip blends into the combo body and leaves the drop-down arrow uncovered.
@@ -105,10 +107,10 @@ def _summary_card_qss() -> str:
 
     return ut.render_settings_plate_stylesheet(radius=14, object_name="summaryCard")
 _CUSTOM_EDIT_QSS = ("QLineEdit { background: transparent; border: none; color: #ffffff;"
-                    " font-size: 12px; font-weight: bold; " + _FONT + " }"
+                    " font-size: 12px; font-weight: bold; " + _font_css() + " }"
                     " QLineEdit:hover, QLineEdit:focus { border: none; background: transparent; }")
 _GEAR_QSS = "color: #b29ae7; background: transparent; font-size: 13px;"
-_UNIT_QSS = "color: #8a8a8a; background: transparent; font-size: 11px; font-weight: bold; " + _FONT
+_UNIT_QSS = "color: #8a8a8a; background: transparent; font-size: 11px; font-weight: bold; " + _font_css()
 
 
 class SourcePathsBox(QWidget):
@@ -116,12 +118,12 @@ class SourcePathsBox(QWidget):
     copy button on the right. render_controller calls set_sources([...]) with full
     directory paths; legacy setText() resets/placeholders are still handled."""
 
-    _CAP_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _FONT
+    _CAP_QSS = "color: #8a8a8a; font-size: 11px; font-weight: bold; background: transparent; " + _font_css()
     _ROW_QSS = "QFrame#srcRow { background-color: #252525; border-radius: 10px; }"
     _PATH_QSS = ("color: #b29ae7; font-size: 11px; font-weight: bold;"
                  " font-family: 'Consolas', monospace; background: transparent; border: none;")
     _MSG_QSS = ("color: #8a8a8a; font-size: 11px; font-weight: bold;"
-                " background: transparent; border: none; " + _FONT)
+                " background: transparent; border: none; " + _font_css())
     _COPY_QSS = ("QPushButton { background: transparent; border: none; border-radius: 6px; }"
                  " QPushButton:hover { background: rgba(255, 255, 255, 28); }"
                  " QPushButton:pressed { background: rgba(255, 255, 255, 45); }")
@@ -287,10 +289,10 @@ class SummaryLabel(QWidget):
     # Match post-density comfort sizes (settings_title_font 15 → keys 13 / values 15).
     # Hardcoding the pre-density 12px made first paint look wrong until a window resize
     # re-ran apply_settings_panel_density — and every setText/_rebuild wiped that fix.
-    _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 13px; " + _FONT
+    _KEY_QSS = "color: #8a8a8a; background: transparent; font-size: 13px; " + _font_css()
     _VAL_QSS = (
         "color: #ffffff; background: transparent; font-size: 15px; font-weight: bold; "
-        + _FONT
+        + _font_css()
     )
 
     def __init__(self):
@@ -313,11 +315,11 @@ class SummaryLabel(QWidget):
         key_px = max(9, title - 2)
         val_px = max(10, title)
         self._key_qss = (
-            f"color: #8a8a8a; background: transparent; font-size: {key_px}px; {_FONT}"
+            f"color: #8a8a8a; background: transparent; font-size: {key_px}px; {_font_css()}"
         )
         self._val_qss = (
             f"color: #ffffff; background: transparent; font-size: {val_px}px; "
-            f"font-weight: bold; {_FONT}"
+            f"font-weight: bold; {_font_css()}"
         )
         if self._plain is not None or self._pairs:
             self._rebuild()
@@ -577,7 +579,7 @@ def _quality_field(ui, label, combo):
     help_btn.setFlat(True)
     help_btn.setCursor(Qt.PointingHandCursor)
     help_btn.setStyleSheet(
-        "QPushButton { background: transparent; border: none; padding: 0; " + _FONT + " }"
+        "QPushButton { background: transparent; border: none; padding: 0; " + _font_css() + " }"
         " QPushButton:hover { background-color: rgba(240, 192, 0, 0.12); border-radius: 3px; }"
     )
     help_btn.setToolTip(
@@ -907,7 +909,7 @@ def restyle_export_page(ui):
     card_box.setSpacing(10)
     cap = QLabel("Final Render Details")
     cap.setStyleSheet(
-        "color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; " + _FONT
+        "color: #b29ae7; background: transparent; font-size: 11px; font-weight: bold; " + _font_css()
     )
     card_box.addWidget(cap)
     card_box.addWidget(summary)
@@ -1181,7 +1183,7 @@ def apply_settings_panel_density(ui, dense) -> None:
     for title in root.findChildren(QLabel, "settingsPageTitle"):
         title.setStyleSheet(
             f"color: #ffffff; font-size: {title_font}px; font-weight: bold; "
-            f"background: transparent; {_FONT}"
+            f"background: transparent; {_font_css()}"
         )
 
     from steempeg.ui.icon_assets import neo_page_title_icon
@@ -1234,7 +1236,7 @@ def apply_settings_panel_density(ui, dense) -> None:
     )
 
     combo_qss = settings_panel_stylesheet(
-        f"QComboBox {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+        f"QComboBox {{ font-family: {tok.FONT_APP};"
         f" font-size: {field_font}px; font-weight: bold; }}",
         dense=dense,
     )
@@ -1242,7 +1244,7 @@ def apply_settings_panel_density(ui, dense) -> None:
         combo.setStyleSheet(combo_qss)
         apply_dark_combo_popup(combo, dense=dense)
         fnt = combo.font()
-        fnt.setFamily("Segoe UI")
+        fnt = tok.pin_ui_font(fnt)
         fnt.setBold(True)
         fnt.setPixelSize(field_font)
         combo.setFont(fnt)
@@ -1270,7 +1272,7 @@ def apply_settings_panel_density(ui, dense) -> None:
         fname.setFixedHeight(line_h)
         fname.setTextMargins(0, 0, 0, 0)
         fnt = fname.font()
-        fnt.setFamily("Segoe UI")
+        fnt = tok.pin_ui_font(fnt)
         fnt.setBold(True)
         fnt.setPixelSize(field_font)
         fname.setFont(fnt)
@@ -1288,7 +1290,7 @@ def apply_settings_panel_density(ui, dense) -> None:
             )
         )
         fnt = dest.font()
-        fnt.setFamily("Segoe UI")
+        fnt = tok.pin_ui_font(fnt)
         fnt.setBold(True)
         fnt.setPixelSize(field_font)
         dest.setFont(fnt)
@@ -1305,13 +1307,13 @@ def apply_settings_panel_density(ui, dense) -> None:
         btn.setStyleSheet(
             f"QPushButton {{ background-color: {bg}; color: {fg};"
             f" border: {border}px solid {brd}; border-radius: {btn_r}px;"
-            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-family: {tok.FONT_APP};"
             f" font-weight: bold; font-size: {field_font}px; padding: 0px {ph}px; }}"
             f" QPushButton:hover {{ background-color: {hover_bg}; border: {border}px solid {hover_brd}; }}"
             f" QPushButton:pressed {{ background-color: {pressed_bg}; border: {border}px solid {hover_brd}; }}"
         )
         fnt = btn.font()
-        fnt.setFamily("Segoe UI")
+        fnt = tok.pin_ui_font(fnt)
         fnt.setBold(True)
         fnt.setPixelSize(field_font)
         btn.setFont(fnt)
@@ -1355,7 +1357,7 @@ class PresetListRow(QWidget):
     _ICON_BTN = (
         "QPushButton {"
         " background: transparent; color: #c8c8c8; border: none; border-radius: 6px;"
-        f" font-weight: bold; font-size: 13px; padding: 0px; {_FONT}"
+        f" font-weight: bold; font-size: 13px; padding: 0px; {_font_css()}"
         "}"
         " QPushButton:hover { background-color: rgba(255,255,255,0.08); color: #ffffff; }"
         " QPushButton:pressed { background-color: rgba(255,255,255,0.14); }"
@@ -1363,11 +1365,11 @@ class PresetListRow(QWidget):
     # Apply ▾ split chrome resolved in __init__ from active theme tokens.
     _NAME_QSS = (
         f"QLabel {{ color: #f0f0f0; background: transparent; font-size: 13px;"
-        f" font-weight: bold; {_FONT} }}"
+        f" font-weight: bold; {_font_css()} }}"
     )
     _DETAIL_QSS = (
         f"QLabel {{ color: #b0b0b0; background: transparent; font-size: 11px;"
-        f" {_FONT} }}"
+        f" {_font_css()} }}"
     )
 
     def __init__(
@@ -1612,7 +1614,7 @@ def restyle_presets_page(ui, app) -> None:
         btn.setStyleSheet(
             f"QPushButton {{ background-color: {bg}; color: {fg};"
             f" border: 2px solid {border}; border-radius: 12px;"
-            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            f" font-family: {tok.FONT_APP};"
             f" font-weight: bold; font-size: 12px; padding: 0px 10px; }}"
             f" QPushButton:hover {{ background-color: {hover_bg}; border: 2px solid {hover_border}; }}"
             f" QPushButton:pressed {{ background-color: {pressed_bg}; border: 2px solid {hover_border}; }}"
@@ -1620,7 +1622,7 @@ def restyle_presets_page(ui, app) -> None:
             f" background-color: #2a2a2a; }}"
         )
         fnt = btn.font()
-        fnt.setFamily("Segoe UI")
+        fnt = tok.pin_ui_font(fnt)
         fnt.setBold(True)
         fnt.setPixelSize(12)
         btn.setFont(fnt)
@@ -1675,7 +1677,7 @@ def restyle_presets_page(ui, app) -> None:
     status = QLabel("")
     status.setObjectName("preset_status_label")
     status.setWordWrap(True)
-    status.setStyleSheet(f"color: #9a9a9a; background: transparent; font-size: 11px; {_FONT}")
+    status.setStyleSheet(f"color: #9a9a9a; background: transparent; font-size: 11px; {_font_css()}")
     ui.preset_status_label = status
     root.addWidget(status)
 

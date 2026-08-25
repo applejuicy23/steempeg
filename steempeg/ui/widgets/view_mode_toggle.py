@@ -12,6 +12,7 @@ between track and count.
 """
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
@@ -25,7 +26,8 @@ from steempeg.ui.ui_density import (
     view_toggle_track_style,
 )
 
-_FONT = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+def _font_css() -> str:
+    return "font-family: " + tok.FONT_APP + ";"
 
 
 def format_view_count(value) -> str:
@@ -194,7 +196,7 @@ class ViewModeChrome(QObject):
         for btn in (self.btn_view_grid, self.btn_view_list):
             btn.setMinimumHeight(h)
             fnt = btn.font()
-            fnt.setFamily("Segoe UI")
+            fnt = tok.pin_ui_font(fnt)
             fnt.setBold(True)
             fnt.setPixelSize(font_px)
             btn.setFont(fnt)
@@ -213,12 +215,12 @@ class ViewModeChrome(QObject):
         d = self._density
         lbl.setStyleSheet(
             f"color: #777777; font-weight: bold; font-size: {d.toolbar_label_font}px;"
-            f" border: none; background: transparent; {_FONT}"
+            f" border: none; background: transparent; {_font_css()}"
         )
 
     def _apply_count_style(self, lbl: QLabel) -> None:
         d = self._density
         lbl.setStyleSheet(
             f"color: #888888; font-weight: bold; font-size: {d.toolbar_label_font}px;"
-            f" border: none; background: transparent; {_FONT}"
+            f" border: none; background: transparent; {_font_css()}"
         )

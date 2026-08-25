@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
@@ -219,16 +220,16 @@ def _ensure_startup_settle_veil(app) -> None:
     title = QLabel("Steempeg", veil)
     title.setAlignment(Qt.AlignmentFlag.AlignCenter)
     title.setStyleSheet(
-        "font-size: 22px; font-weight: 600; color: #e8e8e8;"
-        "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+        f"font-size: 22px; font-weight: 600; color: #e8e8e8;"
+        f"font-family: {tok.FONT_APP};"
     )
     lay.addWidget(title)
 
     hint = QLabel("Preparing workspace…", veil)
     hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
     hint.setStyleSheet(
-        "font-size: 13px; color: #858585;"
-        "font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;"
+        f"font-size: 13px; color: #858585;"
+        f"font-family: {tok.FONT_APP};"
     )
     lay.addWidget(hint)
     lay.addStretch(1)

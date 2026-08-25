@@ -115,10 +115,12 @@ class _LibraryScanRing(QWidget):
             label = f"{int(self._pct)}"
 
         painter.setPen(_SCAN_RING_TEXT)
-        font = QFont("Segoe UI")
-        font.setBold(True)
-        # Same face as Choose a Clip (bold Segoe); slightly smaller so digits fit.
-        font.setPixelSize(9 if len(label) <= 2 else 8)
+        from PySide6.QtGui import QFont as _QF
+
+        # Same face as Choose a Clip (bold UI stack); slightly smaller so digits fit.
+        font = tok.ui_qfont(
+            pixel_size=(9 if len(label) <= 2 else 8), weight=_QF.Weight.Bold
+        )
         painter.setFont(font)
         painter.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), label)
         painter.end()

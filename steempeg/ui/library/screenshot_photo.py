@@ -31,6 +31,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
 
 # ClipCard accent family
@@ -392,11 +393,10 @@ class ScreenshotPhoto(QWidget):
 
         # Match ClipCard title/date faces (13px bold / 11px meta) with real padding
         # so text doesn't glue to the image edge or the card bottom.
-        title_font = QFont("Segoe UI")
-        title_font.setPixelSize(13)
-        title_font.setBold(True)
-        meta_font = QFont("Segoe UI")
-        meta_font.setPixelSize(11)
+        from PySide6.QtGui import QFont as _QF
+
+        title_font = tok.ui_qfont(pixel_size=13, weight=_QF.Weight.Bold)
+        meta_font = tok.ui_qfont(pixel_size=11)
         fm_title = QFontMetrics(title_font)
         fm_meta = QFontMetrics(meta_font)
 

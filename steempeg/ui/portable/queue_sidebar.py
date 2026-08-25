@@ -25,6 +25,7 @@ from steempeg.render.queue_display import (
     format_job_preset,
     format_job_trim,
 )
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.queue_card_shared import (
     STATUS_BORDER_IDLE,
     _FONT,
@@ -559,8 +560,7 @@ class PortableQueueSidebar(QWidget):
 
         self._title = QLabel("Queue")
         self._title.setStyleSheet(
-            f"color: #ffffff; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', "
-            f"'Noto Emoji', Arial, sans-serif; font-size: {_HEADER_FONT}px; "
+            f"color: #ffffff; font-family: {tok.FONT_APP}; font-size: {_HEADER_FONT}px; "
             f"font-weight: bold; background: transparent;"
         )
         head_lay.addWidget(self._title, 1, Qt.AlignmentFlag.AlignVCenter)

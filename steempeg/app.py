@@ -1,4 +1,5 @@
 from steempeg.version import APP_VERSION_STR
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.main_window import MainWindow
 from steempeg.infra.logging import global_exception_handler, setup_logging, session_timestamp, mpv_log_path, prune_old_logs
 from steempeg.infra import paths
@@ -481,7 +482,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self, "restore_salvage_verified_clips"):
             self.restore_salvage_verified_clips()
 
-        # Apply the saved UI theme now that settings are reachable.
+        # Apply saved UI font then theme (theme QSS reads FONT_APP).
+        # UI font preference is Linux-only; Windows stays classic Segoe-first.
+        try:
+            from steempeg.ui.design_tokens import (
+                KEY_UI_FONT,
+                apply_ui_font_preference,
+                ui_font_preference_supported,
+            )
+
+            if ui_font_preference_supported():
+                apply_ui_font_preference(
+                    self.load_user_settings().get(KEY_UI_FONT),
+                    app=QApplication.instance(),
+                )
+            else:
+                apply_ui_font_preference(app=QApplication.instance())
+        except Exception:
+            pass
         from steempeg.ui.ui_theme import KEY_UI_THEME, UI_THEME_DEFAULT, normalize_ui_theme
 
         saved_ui = normalize_ui_theme(
@@ -500,34 +518,34 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.table_clips.viewport().setFocusPolicy(Qt.NoFocus)
 
             # GUI TABLE
-            self.ui.table_clips.setStyleSheet("""
-                QTableWidget { 
+            self.ui.table_clips.setStyleSheet(f"""
+                QTableWidget {{ 
                     background: transparent; 
                     border: none; 
                     outline: none; 
-                }
-                QTableWidget::item { 
+                }}
+                QTableWidget::item {{ 
                     padding: 4px 12px; 
                     border-bottom: 1px solid #282828; 
                     color: #e0e0e0; 
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', sans-serif;
+                    font-family: {tok.FONT_APP};
                     font-size: 13px;
                     font-weight: 600; 
-                }
-                QTableWidget::item:hover { 
+                }}
+                QTableWidget::item:hover {{ 
                     background-color: #303030; 
-                }
-                QTableWidget::item:selected { 
+                }}
+                QTableWidget::item:selected {{ 
                     background-color: #3a2e54; 
                     color: #ffffff; 
-                }
+                }}
                 
                 
-                QHeaderView {
+                QHeaderView {{
                     background-color: transparent;
                     border: none;
-                }
-                QHeaderView::section {
+                }}
+                QHeaderView::section {{
                     background-color: #2a2a2a; 
                     color: #999999;
                     padding: 6px 14px;
@@ -537,20 +555,20 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     margin-bottom: 6px; 
                     font-size: 12px;
                     font-weight: bold;
-                }
-                QHeaderView::section:hover {
+                }}
+                QHeaderView::section:hover {{
                     background-color: #353535;
                     color: #ffffff;
                     border: 1px solid #555555;
-                }
-                QHeaderView::section:checked, QHeaderView::section:pressed {
+                }}
+                QHeaderView::section:checked, QHeaderView::section:pressed {{
                     background-color: #3a2e54; 
                     color: #b29ae7;
                     border: 1px solid #6b5a8e;
-                }
-                QHeaderView::up-arrow, QHeaderView::down-arrow {
+                }}
+                QHeaderView::up-arrow, QHeaderView::down-arrow {{
                     width: 0px; height: 0px;
-                }
+                }}
             """)
             self.ui.table_clips.setSelectionBehavior(QAbstractItemView.SelectRows)
             self.ui.table_clips.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -577,13 +595,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
             
             # 2. Enter Bold Text
+            from steempeg.ui.design_tokens import ui_qfont
             from PySide6.QtGui import QFont
-            custom_font = QFont()
-            custom_font.setFamilies(
-                ["Segoe UI", "Noto Sans", "Twemoji", "Noto Emoji", "Noto Color Emoji", "DejaVu Sans"]
-            )
-            custom_font.setPointSize(10)
-            custom_font.setWeight(QFont.DemiBold)
+
+            custom_font = ui_qfont(10, weight=QFont.Weight.DemiBold)
             self.ui.table_clips.setFont(custom_font)
             
             header.setSectionResizeMode(0, QHeaderView.Stretch)         
@@ -828,7 +843,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # 1. Create a text label (like the one in View)
         lbl_sorting = QLabel("Sorting")
         self._lbl_sorting = lbl_sorting
-        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; font-size: 13px;")
+        lbl_sorting.setStyleSheet("color: #888888; font-weight: bold; font-family: " + tok.FONT_APP + "; font-size: 13px;")
 
         # 2. Creating a stylish sorting dropdown list
         self.combo_sort = QComboBox()
@@ -856,12 +871,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.combo_sort.addItem(QIcon(get_resource_path("lettersort2.png")), "Folder (Z - A)")
         self.combo_sort.setMaxVisibleItems(14)
 
-        # Same face as Refresh: Segoe UI bold 13. QSS alone does not reliably
+        # Same face as Refresh: bold UI stack 13px. QSS alone does not reliably
         # style a non-editable combo's painted text, so set it on the widget.
-        _sort_font = self.combo_sort.font()
-        _sort_font.setFamily("Segoe UI")
-        _sort_font.setBold(True)
-        _sort_font.setPixelSize(13)
+        from PySide6.QtGui import QFont as _QF
+        from steempeg.ui.design_tokens import pin_ui_font
+
+        _sort_font = pin_ui_font(
+            self.combo_sort.font(), pixel_size=13, weight=_QF.Weight.Bold
+        )
         self.combo_sort.setFont(_sort_font)
 
         # The compact field stays narrow, but the popup must be wide enough for the
@@ -910,7 +927,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'settings_tabs'):
             from PySide6.QtWidgets import QPushButton, QWidget, QHBoxLayout, QVBoxLayout, QFrame, QScrollArea, QSizePolicy
             from PySide6.QtCore import QObject, QEvent
-            from steempeg.ui import design_tokens as tok
 
             # Hierarchy: nav/card face (BG_CARD) → curved divider → settings (BG_SETTINGS_PANEL).
             _neo_card = tok.BG_CARD
@@ -1198,7 +1214,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'settings_tabs'):
             from PySide6.QtWidgets import QComboBox as _QComboBox
             _combo_qss = settings_panel_stylesheet(
-                "QComboBox { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                "QComboBox { font-family: " + tok.FONT_APP + ";"
                 " font-size: 13px; font-weight: bold; }"
             )
             for _combo in self.ui.settings_tabs.findChildren(_QComboBox):
@@ -1263,13 +1279,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QSizePolicy
         
         # --- CIRCLE AND BUTTON STYLES ---
-        pill_style = """
-            QFrame { 
+        pill_style = f"""
+            QFrame {{ 
                 background-color: #2d2d2d; 
                 border-radius: 16px; 
                 border: 1px solid #383838;
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-            }
+                font-family: {tok.FONT_APP};
+            }}
         """
         
         unified_table_style = """
@@ -1278,7 +1294,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-family: <<FONT>>;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -1292,7 +1308,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 background-color: #383838; color: #ffffff; border: 2px solid #444444; outline: none;
             }
             QPushButton::menu-indicator { image: none; }
-        """
+        """.replace("<<FONT>>", tok.FONT_APP)
 
         # 1. CREATE ONE COMMON MEGA-CAPSULATE
         mega_pill = QFrame()
@@ -1401,7 +1417,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             # Logs / Start / Pause / Cancel — density reapplies font + padding later.
             self._dash_btn_style_logs = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #383838; color: #ffffff; "
                 "border: 2px solid #444444; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #404040; border: 2px solid #6b5a8e; }}"
@@ -1410,7 +1426,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton::menu-indicator {{ image: none; }}"
             )
             self._dash_btn_style_start = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #2e6b32; color: #ffffff; "
                 "border: 2px solid #3e8e41; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #3e8e41; border: 2px solid #57c75b; }}"
@@ -1418,7 +1434,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
             )
             self._dash_btn_style_pause = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #8c7314; color: #ffffff; "
                 "border: 2px solid #a88b11; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #a88b11; border: 2px solid #c9a716; }}"
@@ -1427,7 +1443,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton::menu-indicator {{ image: none; }}"
             )
             self._dash_btn_style_cancel = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #8a2525; color: #ffffff; "
                 "border: 2px solid #a82e2e; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #a82e2e; border: 2px solid #cc3939; }}"
@@ -1436,7 +1452,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton::menu-indicator {{ image: none; }}"
             )
             self._dash_btn_style_render_settings = (
-                "QPushButton {{ font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; "
+                "QPushButton {{ font-family: <<FONT>>; "
                 "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
                 "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
                 "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
@@ -1444,22 +1460,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
             )
 
-            def _fmt_dash_btn(template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px") -> str:
-                return template.format(font=font, radius=radius, pad=pad)
-
             # FORCE INJECT STYLES DIRECTLY INTO BUTTONS
             if hasattr(self.ui, 'btn_start'): 
-                self.ui.btn_start.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_start))
+                self.ui.btn_start.setStyleSheet(self._fmt_dash_btn(self._dash_btn_style_start))
                 self.ui.btn_start.setMinimumSize(0, 0)
             elif hasattr(self.ui, 'btn_render'): 
-                self.ui.btn_render.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_start))
+                self.ui.btn_render.setStyleSheet(self._fmt_dash_btn(self._dash_btn_style_start))
                 
             if hasattr(self.ui, 'btn_pause'): 
-                self.ui.btn_pause.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_pause))
+                self.ui.btn_pause.setStyleSheet(self._fmt_dash_btn(self._dash_btn_style_pause))
                 self.ui.btn_pause.setMinimumSize(0, 0)
                 
             if hasattr(self.ui, 'btn_cancel'): 
-                self.ui.btn_cancel.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_cancel))
+                self.ui.btn_cancel.setStyleSheet(self._fmt_dash_btn(self._dash_btn_style_cancel))
                 self.ui.btn_cancel.setMinimumSize(0, 0)
 
             if hasattr(self, "_apply_desktop_dash_render_icons"):
@@ -1468,7 +1481,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self._update_start_button_label()
                 
             if hasattr(self.ui, 'btn_logs'): 
-                self.ui.btn_logs.setStyleSheet(_fmt_dash_btn(self._dash_btn_style_logs))
+                self.ui.btn_logs.setStyleSheet(self._fmt_dash_btn(self._dash_btn_style_logs))
                 self.ui.btn_logs.setMinimumSize(0, 0)
 
             # 2. Remove Padding from the Parent Element for Perfect Width Symmetry
@@ -1492,7 +1505,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             dash_layout.setContentsMargins(18, 16, 18, 16)
             dash_layout.setSpacing(12)
 
-            _status_font = "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            _status_font = "font-family: " + tok.FONT_APP + ";"
 
             header_block = qtw.QVBoxLayout()
             header_block.setSpacing(12)
@@ -1653,7 +1666,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     old_style = btn.styleSheet()
                     
                     # 2. Hardcode the 13px font, just like on the Refresh button!
-                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; font-size: 13px; font-weight: bold; }")
+                    btn.setStyleSheet(old_style + "\nQPushButton { font-family: " + tok.FONT_APP + "; font-size: 13px; font-weight: bold; }")
                     
                     btn_row.addWidget(btn)
                     if btn_name == "btn_start" and not getattr(self, "_portable_shell", False):
@@ -1735,8 +1748,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         place_layout = QVBoxLayout(self.placeholder_frame)
         place_layout.setContentsMargins(24, 24, 24, 24)
         place_layout.setAlignment(Qt.AlignCenter)
-
-        from steempeg.ui import design_tokens as tok
 
         self.place_card = QFrame()
         self.place_card.setObjectName("playerPlaceholderCard")
@@ -1985,7 +1996,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         _HEADER_CHIP = (
             "border-radius: 8px;"
             "padding: 0px;"
-            "font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+            "font-family: " + tok.FONT_APP + ";"
         )
 
         self.btn_preview_settings = QPushButton()
@@ -3137,7 +3148,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         heading_font = player_header_title_qfont(player_header_font_px(self))
         heading_qss = (
             f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
-            " font-family: 'Segoe UI'; background: transparent;"
+            f" font-family: {tok.FONT_APP}; background: transparent;"
         )
         heading = QLabel("Clip info")
         heading.setFont(heading_font)
@@ -3640,6 +3651,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         except Exception:
             pass
 
+    @staticmethod
+    def _fmt_dash_btn(
+        template: str, *, font: int = 12, radius: int = 8, pad: str = "6px 14px"
+    ) -> str:
+        # Replace <<FONT>> before .format — raw placeholder makes Qt drop the whole QSS.
+        return template.replace("<<FONT>>", tok.FONT_APP).format(
+            font=font, radius=radius, pad=pad
+        )
+
     def _refresh_dash_secondary_button_styles(self, dense) -> None:
         """Logs + Leave (non-deferred) — secondary button family in dark themes."""
         from steempeg.ui import ui_theme as ut
@@ -3660,7 +3680,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 template = getattr(self, "_dash_btn_style_logs", None)
                 if template:
                     btn_logs.setStyleSheet(
-                        template.format(font=font, radius=radius, pad=pad)
+                        self._fmt_dash_btn(template, font=font, radius=radius, pad=pad)
                     )
 
         leave_btn = getattr(self, "_btn_queue_leave_resume", None)
@@ -4843,7 +4863,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         return f"""
             QPushButton {{
                 background-color: #383838; color: #ffffff; border: 2px solid #444444;
-                border-radius: {dense.footer_radius}px; font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                border-radius: {dense.footer_radius}px; font-family: {tok.FONT_APP};
                 font-weight: bold; font-size: {dense.footer_font}px; padding: {dense.footer_pad};
                 min-height: {dense.footer_min_h}px; outline: none;
             }}
@@ -5008,9 +5028,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
             apply_dark_combo_popup(combo, dense=dense)
             fnt = combo.font()
-            fnt.setFamily("Segoe UI")
-            fnt.setBold(True)
-            fnt.setPixelSize(int(dense.footer_font))  # match Refresh
+            from steempeg.ui.design_tokens import pin_ui_font
+            from PySide6.QtGui import QFont as _QF
+
+            fnt = pin_ui_font(
+                fnt, pixel_size=int(dense.footer_font), weight=_QF.Weight.Bold
+            )
             combo.setFont(fnt)
             if hasattr(self, "_sync_sort_combo_for_panel"):
                 self._sync_sort_combo_for_panel()
@@ -5240,7 +5263,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 f"border-radius: {dash_r}px; }}"
                 f"QFrame#renderDashboard QLabel {{ border: none; background: transparent; }}"
             )
-        _status_font = "font-family: 'Segoe UI', Arial, sans-serif;"
+        _status_font = "font-family: " + tok.FONT_APP + ";"
         bottom_text = getattr(self, "bottom_text_label", None)
         if bottom_text is not None:
             bottom_text.setStyleSheet(
@@ -5320,7 +5343,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             btn.setFixedHeight(dense.dash_btn_h)
             if template:
                 btn.setStyleSheet(
-                    template.format(font=font, radius=radius, pad=pad)
+                    self._fmt_dash_btn(template, font=font, radius=radius, pad=pad)
                 )
         self._refresh_dash_secondary_button_styles(dense)
         settings_btn = getattr(self, "btn_render_settings", None)
@@ -5328,7 +5351,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if settings_btn is not None and settings_style:
             settings_btn.setFixedHeight(dense.dash_btn_h)
             settings_btn.setStyleSheet(
-                settings_style.format(font=font, radius=radius, pad=pad)
+                self._fmt_dash_btn(settings_style, font=font, radius=radius, pad=pad)
             )
         if hasattr(self, "_sync_queue_scheme_chrome"):
             self._sync_queue_scheme_chrome()
@@ -5645,24 +5668,12 @@ def main():
     if sys.platform != "win32" and os.environ.get("STEEMPEG_KEEP_CONSOLE", "0") == "1":
         print(f"[steempeg] Qt platform={app.platformName()!r}", flush=True)
 
-    # Color emoji fallbacks. Prefer Twemoji over Noto Color Emoji: Bazzite's
-    # Noto is COLRv1, which Qt will pick then paint as blank (📁🎬 etc. vanish).
+    # Linux: UI + color-emoji stack (Auto/Selawik/System via apply_ui_font_preference).
+    # Windows: classic Segoe-first only — ui_font preference is ignored.
     try:
-        from PySide6.QtGui import QFont
+        from steempeg.ui.design_tokens import apply_ui_font_preference
 
-        _ui_font = QFont()
-        _ui_font.setFamilies(
-            [
-                "Segoe UI",
-                "Noto Sans",
-                "Twemoji",
-                "Noto Emoji",
-                "Noto Color Emoji",
-                "DejaVu Sans",
-            ]
-        )
-        _ui_font.setPointSize(10)
-        app.setFont(_ui_font)
+        apply_ui_font_preference(app=app)
     except Exception:
         pass
 

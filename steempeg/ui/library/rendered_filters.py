@@ -1,4 +1,5 @@
 """Filter popup for the rendered media library (games + file types only)."""
+from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
@@ -59,7 +60,7 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
                     background: transparent;
                     font-size: 13px;
                     font-weight: bold;
-                    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji';
+                    font-family: {tok.FONT_APP};
                 }
             """)
             cap_layout = QVBoxLayout(capsule)
@@ -107,7 +108,7 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
                 color: #ffffff; 
                 border: 2px solid #444444; 
                 border-radius: 14px; 
-                font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+                font-family: <<FONT>>;
                 font-weight: bold; 
                 font-size: 13px; 
                 padding: 4px 12px; 
@@ -117,7 +118,7 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
             QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
             QPushButton:disabled { background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }
             QPushButton::menu-indicator { image: none; }
-        """
+        """.replace("<<FONT>>", tok.FONT_APP)
         clear_style = unified_table_style.replace(
             "color: #ffffff;", "color: #ff7777;"
         ).replace("#6b5a8e", "#e05555").replace("#b29ae7", "#ff7777")
@@ -222,7 +223,7 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
             color: #aaaaaa;
             border: 2px solid #444444;
             border-radius: 10px;
-            font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
+            font-family: <<FONT>>;
             font-weight: bold;
             font-size: 13px;
             padding: 4px 12px;
@@ -242,7 +243,7 @@ class RenderedFilterMenu(PillPaintDragMixin, QWidget):
             background-color: #3a324a;
             border: 2px solid #b29ae7;
         }
-    """
+    """.replace("<<FONT>>", tok.FONT_APP)
 
     def _flow_inner_width(self) -> int:
         # popup − outer inset − container margins − capsule margins

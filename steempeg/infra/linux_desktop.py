@@ -50,10 +50,165 @@ def _is_gtk_session() -> bool:
     )
 
 
+_SELAWIK_FILES = (
+    "selawk.ttf",
+    "selawkb.ttf",
+    "selawkl.ttf",
+    "selawksb.ttf",
+    "selawksl.ttf",
+    "LICENSE.txt",
+)
+
+
+def user_selawik_fonts_dir() -> Path:
+    return Path.home() / ".local" / "share" / "fonts" / "steempeg"
+
+
+def bundled_selawik_dir() -> Path | None:
+    try:
+        from steempeg.infra.paths import get_resource_path
+
+        sample = Path(get_resource_path("fonts/selawik/selawk.ttf"))
+    except Exception:
+        return None
+    if sample.is_file():
+        return sample.parent
+    return None
+
+
+def install_selawik_user_fonts() -> Path | None:
+    """Copy bundled Selawik into the user fonts dir + ``fc-cache`` (Linux only).
+
+    Idempotent: skips copy when size/mtime already match. Writes under
+    ``~/.local/share/fonts/steempeg/`` — never ``/usr``. Steam Deck / Bazzite OK.
+    Skip with ``STEEMPEG_SKIP_SELAWIK_INSTALL=1``. No-op on Windows.
+    """
+    if not sys.platform.startswith("linux"):
+        return None
+    if (os.environ.get("STEEMPEG_SKIP_SELAWIK_INSTALL") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return None
+    src_dir = bundled_selawik_dir()
+    if src_dir is None:
+        logging.debug("Linux fonts: bundled Selawik missing")
+        return None
+    dest = user_selawik_fonts_dir()
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logging.debug("Linux fonts: could not create %s", dest, exc_info=True)
+        return None
+
+    copied = False
+    for name in _SELAWIK_FILES:
+        src = src_dir / name
+        if not src.is_file():
+            continue
+        dst = dest / name
+        try:
+            need = (
+                not dst.is_file()
+                or src.stat().st_size != dst.stat().st_size
+                or src.stat().st_mtime > dst.stat().st_mtime
+            )
+            if need:
+                shutil.copy2(src, dst)
+                copied = True
+        except OSError:
+            logging.debug("Linux fonts: copy %s failed", name, exc_info=True)
+
+    if copied:
+        try:
+            import subprocess
+
+            subprocess.run(
+                ["fc-cache", "-f", str(dest)],
+                check=False,
+                capture_output=True,
+                timeout=30,
+            )
+            logging.info("Linux fonts: installed Selawik → %s", dest)
+        except Exception:
+            logging.debug("Linux fonts: fc-cache failed", exc_info=True)
+    return dest
+
+
+def _fontconfig_xml(extra_dirs: list[Path]) -> str:
+    dir_lines = "\n".join(f"  <dir>{p}</dir>" for p in extra_dirs)
+    return f"""\
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+{dir_lines}
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <!-- Qt paints COLRv1 Noto Color Emoji as blank; prefer CBDT Twemoji, then mono. -->
+  <selectfont>
+    <rejectfont>
+      <glob>*Noto-COLRv1*</glob>
+      <glob>*NotoColorEmoji*</glob>
+    </rejectfont>
+  </selectfont>
+  <alias binding="strong">
+    <family>emoji</family>
+    <prefer>
+      <family>Twemoji</family>
+      <family>Noto Emoji</family>
+      <family>Segoe UI Emoji</family>
+    </prefer>
+  </alias>
+</fontconfig>
+"""
+
+
+def _install_emoji_fontconfig(extra_font_dirs: list[Path] | None = None) -> None:
+    """Process-local fontconfig: colorful Twemoji over blank COLRv1 Noto Color Emoji.
+
+    Only sets ``FONTCONFIG_FILE`` when unset so users can override. Safe on Steam
+    Deck when Twemoji is missing — falls through to mono Noto Emoji instead of
+    empty COLRv1 glyphs. Extra dirs (Selawik user install) are listed first.
+    """
+    if (os.environ.get("FONTCONFIG_FILE") or "").strip():
+        return
+    if (os.environ.get("STEEMPEG_SKIP_EMOJI_FONTCONFIG") or "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return
+    body = _fontconfig_xml(list(extra_font_dirs or []))
+    candidates = [
+        Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "steempeg",
+        Path("/tmp") / f"steempeg-fc-{os.getuid()}",
+    ]
+    for conf_dir in candidates:
+        try:
+            conf_dir.mkdir(parents=True, exist_ok=True)
+            conf = conf_dir / "fonts.conf"
+            if not conf.is_file() or conf.read_text(encoding="utf-8") != body:
+                conf.write_text(body, encoding="utf-8")
+            os.environ["FONTCONFIG_FILE"] = str(conf)
+            return
+        except OSError:
+            continue
+    logging.debug("Linux fontconfig: emoji conf write failed")
+
+
 def prepare_linux_qt_environment() -> None:
     """Call before ``QApplication`` — env, argv, GLib filter, optional detach."""
-    if sys.platform == "win32":
+    if not sys.platform.startswith("linux"):
         return
+
+    selawik_dir = install_selawik_user_fonts()
+    extra: list[Path] = []
+    bundled = bundled_selawik_dir()
+    if bundled is not None:
+        extra.append(bundled)
+    if selawik_dir is not None:
+        extra.append(selawik_dir)
+    _install_emoji_fontconfig(extra)
 
     # Portable PySide only ships Fusion/Windows. Kvantum from a KDE session
     # (or leftover env after switching to GNOME) just prints a warning.
@@ -88,7 +243,7 @@ def prepare_linux_qt_environment() -> None:
 
 def apply_linux_qt_app(app) -> None:
     """Call right after ``QApplication`` exists."""
-    if sys.platform == "win32":
+    if not sys.platform.startswith("linux"):
         return
     try:
         app.setStyle("Fusion")

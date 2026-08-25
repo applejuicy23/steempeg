@@ -1,6 +1,8 @@
 """Rendered media library — preview exported .mp4/.mp3/etc. from output folders."""
 from __future__ import annotations
 
+from steempeg.ui import design_tokens as tok
+
 import logging
 import os
 import re
@@ -1645,7 +1647,7 @@ class RenderedLibraryMixin:
         self.table_rendered.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table_rendered.verticalHeader().setDefaultSectionSize(46)
         self.table_rendered.setIconSize(QSize(26, 26))
-        self.table_rendered.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self.table_rendered.setFont(tok.ui_qfont(10, weight=QFont.Weight.DemiBold))
         header = self.table_rendered.horizontalHeader()
         header.setHighlightSections(False)
         header.setSectionsClickable(False)

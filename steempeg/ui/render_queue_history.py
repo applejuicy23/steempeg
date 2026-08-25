@@ -136,9 +136,8 @@ class RenderQueueHistoryDialog(SteempegDialog):
         btn_clear.setIcon(load_icon("clear.png", 16))
         btn_clear.setIconSize(QSize(16, 16))
         btn_clear.setStyleSheet(_PILL_BTN_STYLE)
-        clear_font = QFont("Segoe UI")
-        clear_font.setBold(True)
-        clear_font.setPixelSize(13)
+        from PySide6.QtGui import QFont as _QF
+        clear_font = tok.ui_qfont(pixel_size=13, weight=_QF.Weight.Bold)
         btn_clear.setFont(clear_font)
         btn_clear.clicked.connect(self._confirm_clear)
         self._btn_clear = btn_clear
@@ -309,7 +308,7 @@ class RenderQueueHistoryDialog(SteempegDialog):
         text = QLabel(status_lbl)
         text.setStyleSheet(
             f"color: {color}; font-size: 10px; font-weight: 600; "
-            f"font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; background: transparent;"
+            f"font-family: {tok.FONT_APP}; background: transparent;"
         )
         row.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)
