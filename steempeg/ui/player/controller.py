@@ -536,8 +536,16 @@ class PlayerMixin:
 
     def close_current_clip(self):
         """ Completely destroys the current clip and clears the interface. """
-        if getattr(self, '_is_switching', False):
-            return
+        # Explicit Close must always work — a stuck switch gate (or Dead export
+        # that never finished opening) used to no-op the X forever.
+        if getattr(self, "_is_switching", False) or getattr(
+            self, "_awaiting_first_frame", False
+        ):
+            if hasattr(self, "_clear_preview_switch_gates"):
+                self._clear_preview_switch_gates()
+            else:
+                self._is_switching = False
+                self._awaiting_first_frame = False
 
         self._clear_player_surface()
         # NOTE: clearSelection() leaves the *current* index intact, so the badge's
@@ -681,11 +689,14 @@ class PlayerMixin:
 
 
     def _ignore_playback_stall(self, seconds=0.5):
-        """Suppress stall detection briefly after seeks or clip switches."""
+        """Suppress stall / stale-EOF handling briefly after seeks or clip switches.
+
+        Playhead updates keep running — only EOF latch and stall overlay grace
+        use this window (freezing the whole UI timer used to park the scrubber
+        at 0 then teleport when grace ended).
+        """
         until = time.time() + seconds
         self._playback_ignore_stall_until = until
-        # update_ui_from_vlc gates on this (not the stall timer) — keep both in sync
-        # so a related-clip seek is not immediately overwritten by a stale eof latch.
         self._ignore_vlc_until = until
         self._playback_last_time_pos = None
         self._playback_stall_since = None
@@ -695,13 +706,27 @@ class PlayerMixin:
         overlay = getattr(self, '_buffering_overlay', None)
         if overlay is None:
             from steempeg.ui.player.buffering_overlay import BufferingOverlay
-            # Parent to the main shell (not mpv) so Dialog sheets stack above it.
-            host = getattr(self, "ui", None)
-            overlay = BufferingOverlay(parent=host)
+            # Unowned Tool on Windows — parenting to the shell made every Buffering
+            # flicker re-stack Steempeg over Explorer / browser tabs.
+            overlay = BufferingOverlay(parent=None)
             self._buffering_overlay = overlay
         return overlay
 
     def _set_playback_loading(self, active, message="Buffering…"):
+        # Windows: never mount the floating Buffering Tool while MPV is alive.
+        # Owned/transient Tools (and even “unowned” ones Qt re-parents) re-stack
+        # the Steempeg shell over Explorer / Zen whenever the pill flickers on
+        # stall — only with a clip open. v46 used a child overlay (no Z steal).
+        if sys.platform == "win32":
+            overlay = getattr(self, '_buffering_overlay', None)
+            if overlay is not None:
+                try:
+                    overlay.hide_loading()
+                except RuntimeError:
+                    pass
+            self._playback_loading_active = False
+            self._playback_recover_at = None
+            return
         # Render the indicator in a SEPARATE top-level tool window, never as a Qt
         # child over the native mpv surface — that overlap was the root cause of the
         # splitter stutter. A floating window composites independently and is safe.
@@ -1683,6 +1708,8 @@ class PlayerMixin:
             # Dark pill like the FS HUD strip. Do NOT use WA_TranslucentBackground —
             # on Windows that drops QLabel stylesheet fills (text-only ghost).
             # Rounded corners via setMask, same pattern as align_fullscreen_hud.
+            from steempeg.ui import ui_theme as ut
+
             font_px = 15
             hint = QLabel("Press ESC to exit full screen")
             hint.setWindowFlags(
@@ -1693,17 +1720,7 @@ class PlayerMixin:
             )
             hint.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
             hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            hint.setStyleSheet(
-                "QLabel {"
-                " background-color: #1e1e1e;"
-                " color: #eeeeee;"
-                " padding: 12px 28px;"
-                " border: none;"
-                f" font-size: {font_px}px;"
-                " font-weight: bold;"
-                " font-family: " + tok.FONT_APP + ";"
-                "}"
-            )
+            hint.setStyleSheet(ut.immersive_esc_hint_stylesheet(font_px=font_px))
             font = hint.font()
             font = tok.pin_ui_font(font)
             font.setBold(True)
@@ -1711,6 +1728,18 @@ class PlayerMixin:
             hint.setFont(font)
             self._immersive_esc_hint = hint
         return self._immersive_esc_hint
+
+    def _refresh_immersive_esc_hint_chrome(self) -> None:
+        """Restyle the ESC pill after Default ↔ TrueDark (cached QLabel)."""
+        hint = getattr(self, "_immersive_esc_hint", None)
+        if hint is None:
+            return
+        try:
+            from steempeg.ui import ui_theme as ut
+
+            hint.setStyleSheet(ut.immersive_esc_hint_stylesheet(font_px=15))
+        except RuntimeError:
+            pass
 
     def _position_immersive_esc_hint(self):
         hint = getattr(self, '_immersive_esc_hint', None)
@@ -1729,6 +1758,7 @@ class PlayerMixin:
 
     def _show_immersive_esc_hint(self):
         hint = self._get_immersive_esc_hint()
+        self._refresh_immersive_esc_hint_chrome()
         self._position_immersive_esc_hint()
 
         effect = hint.graphicsEffect()
@@ -2221,7 +2251,7 @@ class PlayerMixin:
     def hide_floating_overlays(self) -> None:
         """Hide Tool/ToolTip chrome that does not follow main-window minimize.
 
-        Buffering pill and screenshot toast are separate always-on-top windows so
+        Buffering pill and screenshot toast are separate top-level windows so
         they don't recompose over mpv — but that also means they linger on the
         desktop when the shell is minimized. Call this from MainWindow state/hide.
         """
@@ -2231,6 +2261,21 @@ class PlayerMixin:
         self._playback_loading_active = False
         self._playback_recover_at = None
         self._hide_screenshot_toast()
+        # Timeline hover Tools are owned by the shell — hide on focus loss so a
+        # leftover tip cannot re-stack Steempeg over Explorer.
+        tl = getattr(self, "custom_timeline", None)
+        if tl is not None:
+            try:
+                pw = getattr(tl, "preview_widget", None)
+                if pw is not None:
+                    pw.hide()
+                tip = getattr(getattr(tl, "canvas", None), "text_tooltip", None)
+                if tip is None:
+                    tip = getattr(tl, "text_tooltip", None)
+                if tip is not None:
+                    tip.hide()
+            except RuntimeError:
+                pass
 
     def _main_shell_is_minimized(self) -> bool:
         ui = getattr(self, "ui", None)
@@ -2241,11 +2286,23 @@ class PlayerMixin:
 
     def hide_hud_on_minimize(self, state):
 
-        # The buffering pill is an always-on-top tool window; hide it whenever the
-        # app loses focus so it never floats over other applications. It re-shows on
-        # the next buffering tick if playback is still stalling.
+        # Floating Tools (Buffering / toast) must die the instant we lose focus —
+        # otherwise a late show() mid Explorer-open re-stacks Steempeg on top.
         if state != Qt.ApplicationState.ApplicationActive:
             self.hide_floating_overlays()
+            overlay = getattr(self, "_buffering_overlay", None)
+            if overlay is not None and hasattr(overlay, "note_foreground_lost"):
+                try:
+                    overlay.note_foreground_lost()
+                except RuntimeError:
+                    pass
+            if sys.platform == "win32":
+                try:
+                    from steempeg.infra.window_focus import on_shell_lost_foreground
+
+                    on_shell_lost_foreground(self.ui)
+                except Exception:
+                    pass
 
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
@@ -2796,7 +2853,16 @@ class PlayerMixin:
                 # Drop stale length so deferred related-clip seek cannot force_jump
                 # against the previous clip's duration (clamp-to-end on reopen).
                 self.custom_timeline.set_duration(0)
-                self.custom_timeline.set_vlc_time(0, False)
+                # Hard-reset the stick — set_vlc_time alone used to no-op while
+                # paused (1 FPS pause fix) and left the playhead at the old end.
+                canvas = getattr(self.custom_timeline, "canvas", None)
+                if canvas is not None:
+                    canvas.visual_ms = 0.0
+                    canvas.target_ms = 0.0
+                    canvas.is_playing = False
+                    canvas.vlc_last_update_time = time.time()
+                else:
+                    self.custom_timeline.set_vlc_time(0, False)
             except Exception:
                 pass
         # Duration will be re-applied when the new media reports length.
@@ -3160,9 +3226,15 @@ class PlayerMixin:
                 self._preview_clip_path = file_path
                 self._rendered_media_path = file_path
                 self._active_play_media_path = None
+                # Stuck open-gates must not swallow Close on the next click.
+                self._is_switching = False
+                self._awaiting_first_frame = False
                 self._clear_player_surface()
                 if hasattr(self, "_reset_player_placeholder_default"):
                     self._reset_player_placeholder_default()
+                # Keep header close (X) — poster is idle but this export is still selected.
+                if hasattr(self, "set_player_header_clip_controls_visible"):
+                    self.set_player_header_clip_controls_visible(True)
                 if hasattr(self, "update_clip_health_button"):
                     self.update_clip_health_button()
                 detail = (
@@ -3626,11 +3698,14 @@ class PlayerMixin:
                 self._selected_queue_job_id = None
                 if hasattr(self, "clear_clip_open_loading"):
                     self.clear_clip_open_loading()
+                self._is_switching = False
+                self._awaiting_first_frame = False
                 self._clear_player_surface()
                 if hasattr(self, '_reset_player_placeholder_default'):
                     self._reset_player_placeholder_default()
+                # Keep Close — user must be able to dismiss a Dead / blocked clip.
                 if hasattr(self, "set_player_header_clip_controls_visible"):
-                    self.set_player_header_clip_controls_visible(False)
+                    self.set_player_header_clip_controls_visible(True)
                 if hasattr(self.ui, 'btn_start'):
                     if hasattr(self, "_sync_start_render_enabled"):
                         self._sync_start_render_enabled()
@@ -4225,9 +4300,9 @@ class PlayerMixin:
         if hasattr(self, 'custom_timeline') and not self.custom_timeline.isEnabled():
             return
 
-        # Safe check to prevent jumpiness after seeking
-        if time.time() < getattr(self, '_ignore_vlc_until', 0):
-            return
+        # After seek / clip switch: still drive the playhead, but skip EOF latch
+        # so a stale eof_reached cannot pause / snap to end over the new seek.
+        ignoring_stale = time.time() < getattr(self, '_ignore_vlc_until', 0)
 
         try:
             duration_sec = self._playback_duration_sec()
@@ -4253,13 +4328,14 @@ class PlayerMixin:
             
             # MPV sometimes returns None for time_pos at the exact moment the video ends
             if time_sec is None:
-                if getattr(self.player, 'eof_reached', False):
+                if getattr(self.player, 'eof_reached', False) and not ignoring_stale:
                     time_sec = duration_sec 
                 else:
                     return
                     
-            current_ms = int(time_sec * 1000)
-            current_ms = max(0, min(current_ms, duration_ms if duration_ms > 0 else max_ms))
+            # Keep sub-ms for smooth extrapolation (int trunc made 16ms polls stair-step).
+            current_ms = float(time_sec) * 1000.0
+            current_ms = max(0.0, min(current_ms, float(duration_ms) if duration_ms > 0 else float(max_ms)))
 
             if hasattr(self, "_record_salvage_playback_evidence"):
                 self._record_salvage_playback_evidence()
@@ -4276,10 +4352,10 @@ class PlayerMixin:
                 or (duration_ms > 0 and current_ms >= duration_ms - end_slop)
             )
 
-            if at_end:
+            if at_end and not ignoring_stale:
                 # Snap to true end so the scrubber fills the purple bar (lost when
                 # we switched from rewind-to-0 to pause-at-EOF in 39.3).
-                current_ms = duration_ms if duration_ms > 0 else current_ms
+                current_ms = float(duration_ms) if duration_ms > 0 else current_ms
                 restarting = bool(getattr(self, "_restart_from_eof", False))
                 if restarting and duration_ms > 0 and current_ms < duration_ms - end_slop:
                     self._restart_from_eof = False
@@ -4303,13 +4379,14 @@ class PlayerMixin:
                         canvas.visual_ms = float(duration_ms)
                         canvas.target_ms = float(duration_ms)
                         canvas.vlc_last_update_time = time.time()
-            else:
+            elif not ignoring_stale:
                 self._eof_rewind_pending = 0
                 self._restart_from_eof = False
 
             is_playing = not self.player.pause
 
-            # Send the data to our smooth custom timeline
+            # Send the data to our smooth custom timeline (even during seek grace —
+            # freezing here left the stick at 0 until grace ended, then teleported).
             if hasattr(self, 'custom_timeline'):
                 self.custom_timeline.set_duration(duration_ms)
                 self.custom_timeline.set_vlc_time(current_ms, is_playing)
@@ -4815,6 +4892,13 @@ class PlayerMixin:
 
         toast = self._screenshot_toast
         toast.adjustSize()
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                detach_tool_ownership(toast)
+            except Exception:
+                pass
 
         # Anchor just above the camera button so it never spills off the bottom edge.
         anchor = getattr(self, 'btn_screenshot', None) or self.ui
@@ -4827,8 +4911,25 @@ class PlayerMixin:
             x = geo.x() + (geo.width() - toast.width()) // 2
             y = geo.y() + geo.height() - toast.height() - 40
         toast.move(max(0, x), max(0, y))
-        toast.show()
-        toast.raise_()
+        # Do not raise_() — owned/transient Tools re-stack the Steempeg shell over
+        # Explorer. Show without activating; ownership already detached above.
+        toast.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                toast.createWinId()
+                hwnd = int(toast.winId())
+                if hwnd:
+                    ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+                    if not toast.isVisible():
+                        toast.setVisible(True)
+                else:
+                    toast.show()
+            except Exception:
+                toast.show()
+        else:
+            toast.show()
         self._install_screenshot_toast_clickaway()
         self._screenshot_toast_timer.start(5000)
 
