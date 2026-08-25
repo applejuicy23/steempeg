@@ -17,8 +17,9 @@ _log = logging.getLogger(__name__)
 class DesktopRenderSettingsDialog(SteempegDialog):
     """Non-modal window that borrows the docked neo export panel.
 
-    Minimize / maximize in the title bar; closing (or toggling the dash button)
-    returns neo to the main shell (hidden again while Like a Portable).
+    Minimize in the title bar (no maximize — keep a fixed usable size). Closing
+    (or toggling the dash button) returns neo to the main shell (hidden again
+    while Like a Portable).
     """
 
     def __init__(self, app, parent=None):
@@ -27,7 +28,7 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             "Render Settings",
             parent or getattr(app, "ui", None),
             show_minimize=True,
-            show_maximize=True,
+            show_maximize=False,
             content_margins=(12, 10, 12, 12),
             **theme,
         )
@@ -271,11 +272,8 @@ def toggle_desktop_render_settings(app) -> None:
             app._sync_dash_render_settings_button()
         except Exception:
             pass
-    if hasattr(app, "update_status_indicator"):
-        try:
-            app.update_status_indicator("Ready", "ready")
-        except Exception:
-            pass
+    # Do not touch update_status_indicator here — forcing "Ready" zeroed the
+    # encode progress strip on every open (rapid toggle made it obvious).
 
 
 def close_desktop_render_settings(app) -> None:
