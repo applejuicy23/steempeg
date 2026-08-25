@@ -9,9 +9,16 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt, QPoint, QRectF, QSize, Signal
+from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
+    QWidget,
+)
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
@@ -146,19 +153,63 @@ class _DialogTitleBar(QWidget):
         )
 
     def _toggle_maximize(self) -> None:
+        """Snap frameless dialogs to the work area (and restore).
+
+        ``QWidget.showMaximized()`` is a no-op (or worse) for translucent
+        frameless dialogs — they lack ``WS_MAXIMIZEBOX`` on Windows, and on
+        Linux/NVIDIA XWayland native maximize is avoided for the main shell.
+        Match ``win32_window_command(..., "maximize_toggle")`` Linux path.
+        """
         dlg = self._dialog
-        if dlg.isMaximized():
-            dlg.showNormal()
-            if self.btn_maximize is not None:
-                self.btn_maximize.setToolTip("Maximize")
-                self.btn_maximize._glyph = "maximize"
-                self.btn_maximize.update()
+        screen = dlg.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        geo = dlg.geometry()
+        nearly_max = (
+            abs(geo.x() - avail.x()) <= 16
+            and abs(geo.y() - avail.y()) <= 16
+            and abs(geo.width() - avail.width()) <= 48
+            and abs(geo.height() - avail.height()) <= 48
+        )
+        if dlg.isMaximized() or nearly_max:
+            if dlg.isMaximized():
+                dlg.showNormal()
+            restore = getattr(dlg, "_dialog_restore_geometry", None)
+            if isinstance(restore, QRect) and restore.isValid():
+                dlg.setGeometry(restore)
+            else:
+                dlg.setGeometry(avail.adjusted(80, 60, -80, -60))
         else:
-            dlg.showMaximized()
-            if self.btn_maximize is not None:
-                self.btn_maximize.setToolTip("Restore")
-                self.btn_maximize._glyph = "restore"
-                self.btn_maximize.update()
+            dlg._dialog_restore_geometry = QRect(geo)
+            if dlg.isMaximized():
+                dlg.showNormal()
+            dlg.setGeometry(avail)
+        self._sync_maximize_button()
+
+    def _sync_maximize_button(self) -> None:
+        if self.btn_maximize is None:
+            return
+        dlg = self._dialog
+        maximized = dlg.isMaximized()
+        if not maximized:
+            screen = dlg.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                geo = dlg.geometry()
+                maximized = (
+                    abs(geo.x() - avail.x()) <= 16
+                    and abs(geo.y() - avail.y()) <= 16
+                    and abs(geo.width() - avail.width()) <= 48
+                    and abs(geo.height() - avail.height()) <= 48
+                )
+        if maximized:
+            self.btn_maximize.setToolTip("Restore")
+            self.btn_maximize._glyph = "restore"
+        else:
+            self.btn_maximize.setToolTip("Maximize")
+            self.btn_maximize._glyph = "maximize"
+        self.btn_maximize.update()
 
     # --- Drag the frameless dialog by its title bar -----------------------
     def mousePressEvent(self, event):
@@ -352,7 +403,7 @@ class SteempegDialog(QDialog):
         bar = getattr(self, "_title_bar", None)
         if bar is None:
             return
-        for attr in ("btn_close", "btn_minimize"):
+        for attr in ("btn_close", "btn_minimize", "btn_maximize"):
             btn = getattr(bar, attr, None)
             if btn is not None and hasattr(btn, "_set_hovered"):
                 btn._set_hovered(False)
