@@ -6,6 +6,10 @@ file). User markers go to ``<cache>/clip_markers/<key>.json``.
 When a clip has **no** Steam timeline JSON (common for Cured / salvage / odd
 folders), we create ``steempeg_timeline.json`` inside the clip folder and write
 user markers there — same for every health state, not only Cured.
+
+Steam may keep the JSON in the clip root, under ``<clip>/timelines/``, or in a
+sibling library ``timelines/`` folder named from ``clip.pb`` — see
+``find_clip_timeline_json``.
 """
 from __future__ import annotations
 
@@ -13,12 +17,17 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Any
 
 _log = logging.getLogger(__name__)
 
 # Lives in the clip folder; not named timeline_* so Steam's own search stays clean.
 STEEMPEG_TIMELINE_NAME = "steempeg_timeline.json"
+
+# Steam clip.pb embeds the timeline basename (no extension), e.g.
+# timeline_73020260521_204100 (app+date digits, then _HHMMSS).
+_CLIP_PB_TIMELINE_RE = re.compile(rb"timeline_\d+_\d+")
 
 
 def _norm_key_path(path: str | None) -> str:
@@ -54,6 +63,125 @@ def steempeg_timeline_path(clip_path: str | None) -> str | None:
     return os.path.join(root, STEEMPEG_TIMELINE_NAME)
 
 
+def _clip_folder(clip_path: str | None) -> str | None:
+    if not clip_path:
+        return None
+    root = clip_path
+    try:
+        if os.path.isfile(root):
+            root = os.path.dirname(root)
+    except OSError:
+        pass
+    if not root or not os.path.isdir(root):
+        return None
+    return root
+
+
+def timeline_basename_from_clip_pb(clip_path: str | None) -> str | None:
+    """Return ``timeline_….json`` named in ``clip.pb``, or None."""
+    root = _clip_folder(clip_path)
+    if not root:
+        return None
+    pb_path = os.path.join(root, "clip.pb")
+    if not os.path.isfile(pb_path):
+        return None
+    try:
+        with open(pb_path, "rb") as f:
+            # clip.pb is tiny; cap read so odd files cannot stall open.
+            blob = f.read(65536)
+    except OSError:
+        return None
+    match = _CLIP_PB_TIMELINE_RE.search(blob)
+    if not match:
+        return None
+    try:
+        stem = match.group(0).decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    return f"{stem}.json"
+
+
+def _steam_timeline_in_dir(
+    directory: str | None, *, prefer_name: str | None = None
+) -> str | None:
+    """First ``timeline_*.json`` in *directory* (optional exact basename first)."""
+    if not directory or not os.path.isdir(directory):
+        return None
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    if prefer_name and prefer_name in names:
+        path = os.path.join(directory, prefer_name)
+        if os.path.isfile(path):
+            return path
+    for name in names:
+        if name.startswith("timeline_") and name.endswith(".json"):
+            path = os.path.join(directory, name)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+def find_steam_timeline_json(clip_path: str | None) -> str | None:
+    """Locate Steam's ``timeline_*.json`` for a clip folder (never steempeg)."""
+    root = _clip_folder(clip_path)
+    if not root:
+        return None
+
+    prefer = timeline_basename_from_clip_pb(root)
+
+    # 1) Clip root (classic Steam userdata layout).
+    found = _steam_timeline_in_dir(root, prefer_name=prefer)
+    if found:
+        return found
+
+    # 2) Nested <clip>/timelines/ (mirrored / multi-library Game Recording trees).
+    found = _steam_timeline_in_dir(
+        os.path.join(root, "timelines"), prefer_name=prefer
+    )
+    if found:
+        return found
+
+    # 3) clip.pb name in parent / grandparent timelines/ (flat library store).
+    if prefer:
+        parent = os.path.dirname(root)
+        candidates = [
+            os.path.join(parent, "timelines", prefer),
+            os.path.join(os.path.dirname(parent), "timelines", prefer),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+
+    # 4) Legacy …/video/<clip> → …/timelines/<clip>/.
+    parent = os.path.dirname(root)
+    if os.path.basename(parent).lower() == "video":
+        found = _steam_timeline_in_dir(
+            os.path.join(os.path.dirname(parent), "timelines", os.path.basename(root)),
+            prefer_name=prefer,
+        )
+        if found:
+            return found
+
+    return None
+
+
+def find_clip_timeline_json(clip_path: str | None) -> str | None:
+    """Resolve Steam timeline JSON, else ``steempeg_timeline.json``.
+
+    Always prefers a real Steam ``timeline_*.json`` over an empty or partial
+    Steempeg sidecar in the clip root (that sidecar must not shadow Steam).
+    """
+    steam = find_steam_timeline_json(clip_path)
+    if steam:
+        return steam
+    steempeg = steempeg_timeline_path(clip_path)
+    if steempeg and os.path.isfile(steempeg):
+        return steempeg
+    return None
+
+
 def _read_timeline_entries(path: str) -> list[dict]:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -83,7 +211,12 @@ def ensure_steempeg_timeline_json(
     """Create ``steempeg_timeline.json`` in the clip folder if missing.
 
     Migrates any prior ``clip_markers`` cache entries into the new file once.
+    Does nothing when a Steam ``timeline_*.json`` is already discoverable —
+    creating an empty sidecar would shadow markers on older loaders.
     """
+    if find_steam_timeline_json(clip_path):
+        return None
+
     path = steempeg_timeline_path(clip_path)
     if not path:
         return None

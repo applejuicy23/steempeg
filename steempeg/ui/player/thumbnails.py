@@ -802,6 +802,10 @@ class ThumbnailBatchThread(QThread):
         Clip open used to ``wait(3000)`` here on every switch — that froze the
         main window after ``mpv.play`` (audio running, card stuck at ~70%).
         Kill the process tree and let the QThread exit in the background.
+
+        Callers must keep a strong reference to this QThread until ``finished``
+        (see ``PlayerMixin._stop_timeline_thumb_batch``) — dropping a
+        running QThread aborts in Qt6Core on Windows.
         """
         self._cancelled = True
         if self.process:

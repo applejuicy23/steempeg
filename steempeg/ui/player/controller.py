@@ -870,6 +870,9 @@ class PlayerMixin:
             self.video_stack.setCurrentWidget(self.ui.video_container)
         # Switching gate can clear as soon as the new picture is visible.
         self._finish_preview_switch(switch_gen)
+        clip = getattr(self, "_preview_clip_path", None)
+        if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
+            self._maybe_start_thumbs_after_quality(clip)
         if hasattr(self, '_maybe_offer_salvage_verification'):
             self._maybe_offer_salvage_verification()
 
@@ -2645,6 +2648,7 @@ class PlayerMixin:
     def _begin_preview_switch(self) -> int:
         """Pause MPV and stop background workers before loading another file."""
         self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
+        self._stop_timeline_markers_worker()
         self._clear_timeline_clip_overlays()
 
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
@@ -2709,7 +2713,7 @@ class PlayerMixin:
             QTimer.singleShot(
                 150 if has_trim else 50, self._deferred_apply_open_seek
             )
-        # Timeline markers / Source Info after first paint — never race the reveal.
+        # Health badge / quality populate after first paint — markers load in parallel.
         self._flush_deferred_clip_open_work(switch_gen)
 
     def _set_timeline_batch_thumbs_busy(self, busy: bool) -> None:
@@ -2805,6 +2809,11 @@ class PlayerMixin:
         self.current_clip_duration_sec = float(duration_sec)
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.set_duration(int(duration_sec * 1000))
+        # Steam clip: MPV/XML may report length after the open stack deferred thumbs.
+        if not getattr(self, "_rendered_media_path", None):
+            clip = getattr(self, "_preview_clip_path", None)
+            if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
+                self._maybe_start_thumbs_after_quality(clip)
 
     def _poll_rendered_media_duration(self, file_path: str, switch_gen: int, attempt: int = 0) -> None:
         """MPV often reports duration a few hundred ms after play — poll before hover preview."""
@@ -2856,6 +2865,16 @@ class PlayerMixin:
                     self._start_timeline_thumb_batch(abs_path, resolved)
             self._is_switching = False
 
+    def _reap_timeline_thumb_thread(self, thread) -> None:
+        """Drop a finished batch thread from the keep-alive list (safe to GC)."""
+        dying = getattr(self, "_dying_thumb_threads", None)
+        if not dying:
+            return
+        try:
+            dying.remove(thread)
+        except ValueError:
+            pass
+
     def _stop_timeline_thumb_batch(self) -> None:
         thread = getattr(self, "thumb_thread", None)
         if not thread:
@@ -2865,6 +2884,23 @@ class PlayerMixin:
         except (TypeError, RuntimeError):
             pass
         thread.stop()
+        # Non-blocking cancel must NOT drop the only Python ref while QThread is
+        # still running — Qt aborts in Qt6Core (0xc0000409 / BEX64) on destroy.
+        # Keep a strong ref until finished; see ThumbnailBatchThread.stop().
+        dying = getattr(self, "_dying_thumb_threads", None)
+        if dying is None:
+            dying = []
+            self._dying_thumb_threads = dying
+        if thread not in dying:
+            dying.append(thread)
+            try:
+                thread.finished.connect(
+                    lambda t=thread: self._reap_timeline_thumb_thread(t)
+                )
+            except (TypeError, RuntimeError):
+                pass
+        if not thread.isRunning():
+            self._reap_timeline_thumb_thread(thread)
         self.thumb_thread = None
         self._set_timeline_batch_thumbs_busy(False)
 
@@ -2890,6 +2926,11 @@ class PlayerMixin:
             return
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.thumb_dir = thumb_dir
+            expected_src = getattr(sender, "mpd_path", "") or ""
+            if expected_src and hasattr(self.custom_timeline, "canvas"):
+                self.custom_timeline.canvas._thumb_dir_media_path = (
+                    PreviewSniperWorker._norm_media_path(expected_src)
+                )
         self._set_timeline_batch_thumbs_busy(False)
 
     def _start_timeline_thumb_batch(self, abs_path: str, duration_sec: float) -> None:
@@ -2905,6 +2946,10 @@ class PlayerMixin:
         self.thumb_thread = ThumbnailBatchThread(abs_path, duration_sec, interval=3)
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.thumb_dir = self.thumb_thread.thumb_dir
+            if hasattr(self.custom_timeline, "canvas"):
+                self.custom_timeline.canvas._thumb_dir_media_path = (
+                    PreviewSniperWorker._norm_media_path(abs_path)
+                )
         self.thumb_thread.finished_generation.connect(self._on_timeline_thumb_batch_done)
         self.thumb_thread.start()
 
@@ -2914,9 +2959,7 @@ class PlayerMixin:
             getattr(self, "_preview_clip_path", None)
         ):
             return
-        if getattr(self, "_awaiting_first_frame", False) or getattr(
-            self, "_is_switching", False
-        ):
+        if getattr(self, "_is_switching", False):
             return
         clip_dur = float(getattr(self, "current_clip_duration_sec", 0) or 0)
         if clip_dur < 1.0:
@@ -3073,7 +3116,7 @@ class PlayerMixin:
         QTimer.singleShot(30, self._reveal_video_when_ready)
 
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
-            self.thumb_thread.stop()
+            self._stop_timeline_thumb_batch()
 
         QTimer.singleShot(80, lambda: self._poll_rendered_media_duration(file_path, switch_gen))
 
@@ -3510,14 +3553,15 @@ class PlayerMixin:
         if not pending_remux:
             self._nudge_clip_open_loading(48)
 
-        # Cheap chrome before play — markers / health / badge follow after mpv.play.
+        # Cheap chrome before play — markers load in parallel; health badge after reveal.
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         if hasattr(self, 'custom_timeline'):
             self.custom_timeline.setEnabled(True)
 
-        # 3. Open media ASAP — timeline JSON walks must not block first frame.
+        # 3. Open media ASAP — timeline JSON discovery runs off-thread in parallel.
         logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
+        self._start_timeline_markers_load_early(switch_gen, clip_path, mpd_path)
         if pending_remux:
             self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
             return
@@ -3526,13 +3570,13 @@ class PlayerMixin:
         if play_path != abs_path:
             logging.info("MPV play via DASH remux cache: %s", play_path)
         self._start_clip_playback(switch_gen, abs_path, play_path, clip_path)
-        # Markers / health after first frame — do not race the reveal timer.
+        # Health badge after first frame — markers already loading above.
         self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
 
     def _defer_preview_post_open_work(
         self, switch_gen: int, clip_path: str, mpd_path: str
     ) -> None:
-        """Queue timeline/health work until the open surface is revealed."""
+        """Queue health badge / quality work until the open surface is revealed."""
         self._preview_post_open_gen = getattr(self, "_preview_post_open_gen", 0) + 1
         self._pending_preview_post_open = (
             self._preview_post_open_gen,
@@ -3546,8 +3590,102 @@ class PlayerMixin:
         ):
             QTimer.singleShot(0, lambda g=switch_gen: self._flush_deferred_clip_open_work(g))
 
+    def _stop_timeline_markers_worker(self, *, invalidate: bool = True) -> None:
+        """Cancel an in-flight timeline JSON discovery for a superseded clip open."""
+        if invalidate:
+            self._timeline_markers_load_gen = getattr(self, "_timeline_markers_load_gen", 0) + 1
+        worker = getattr(self, "_timeline_markers_worker", None)
+        if worker is None:
+            return
+        try:
+            worker.requestInterruption()
+        except Exception:
+            pass
+        if worker.isRunning():
+            try:
+                worker.wait(50)
+            except Exception:
+                pass
+        self._timeline_markers_worker = None
+
+    def _start_timeline_markers_load_early(
+        self, switch_gen: int, clip_path: str, mpd_path: str
+    ) -> None:
+        """Discover timeline JSON in parallel with MPV open — apply as soon as ready."""
+        self._stop_timeline_markers_worker(invalidate=True)
+        load_gen = getattr(self, "_timeline_markers_load_gen", 0)
+
+        from steempeg.ui.player.timeline_markers_worker import TimelineMarkersLoadWorker
+
+        worker = TimelineMarkersLoadWorker(
+            clip_path,
+            mpd_path,
+            getattr(self, "cache_dir", None),
+        )
+        self._timeline_markers_worker = worker
+
+        def _on_done(result: object, lg=load_gen, sg=switch_gen) -> None:
+            if lg != getattr(self, "_timeline_markers_load_gen", 0):
+                return
+            if sg != getattr(self, "_media_switch_gen", 0):
+                return
+            self._apply_timeline_markers_load_result(result, switch_gen=sg)
+
+        def _release(w=worker) -> None:
+            if getattr(self, "_timeline_markers_worker", None) is w:
+                self._timeline_markers_worker = None
+
+        worker.finished_load.connect(_on_done)
+        worker.finished.connect(_release)
+        worker.start()
+
+    def _apply_timeline_markers_load_result(
+        self, result: object, *, switch_gen: int
+    ) -> None:
+        if not isinstance(result, dict):
+            return
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        clip_path = result.get("clip_path")
+        if self._norm_clip_path_key(clip_path) != self._norm_clip_path_key(
+            getattr(self, "_preview_clip_path", None)
+        ):
+            return
+        if not hasattr(self, "custom_timeline"):
+            return
+
+        canvas = self.custom_timeline.canvas
+        canvas.rendered_media_path = None
+        cache_dir = getattr(self, "cache_dir", None)
+        json_path = result.get("json_path")
+        offset_ms = int(result.get("offset_ms") or 0)
+
+        if json_path:
+            logging.debug("Timeline JSON: %s", json_path)
+            logging.debug("Timeline offset: %d ms", offset_ms)
+            use_cache = bool(result.get("use_cache"))
+            canvas.load_timeline_json(
+                json_path,
+                offset_ms,
+                clip_path=clip_path,
+                cache_dir=cache_dir if use_cache else None,
+                merge_marker_cache=use_cache,
+            )
+            app_id = canvas.current_app_id
+            if app_id:
+                canvas.marker_store.prefetch(
+                    app_id,
+                    on_ready=canvas.update,
+                )
+        else:
+            logging.debug("No timeline JSON for clip: %s", clip_path)
+            canvas.load_steempeg_markers_only(
+                clip_path=clip_path,
+                cache_dir=cache_dir,
+            )
+
     def _flush_deferred_clip_open_work(self, switch_gen: int | None = None) -> None:
-        """Run post-open + quality populate after first paint (keeps open responsive)."""
+        """Run health badge / quality populate after first paint (keeps open responsive)."""
         if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
             return
         pending_post = getattr(self, "_pending_preview_post_open", None)
@@ -3599,99 +3737,6 @@ class PlayerMixin:
             getattr(self, "_preview_clip_path", None)
         ):
             return
-
-        offset_ms = 0
-
-        def find_json_in_dir(directory):
-            if not directory or not os.path.isdir(directory):
-                return None
-            try:
-                names = os.listdir(directory)
-            except OSError:
-                names = []
-            # Prefer real Steam timeline_*.json over our steempeg_timeline.json.
-            # Stay in the clip folder only — no recursive walk on the open path.
-            for name in names:
-                if name.startswith("timeline_") and name.endswith(".json"):
-                    return os.path.join(directory, name)
-            if "steempeg_timeline.json" in names:
-                return os.path.join(directory, "steempeg_timeline.json")
-            return None
-
-        json_path = find_json_in_dir(clip_path)
-        if not json_path:
-            parent_dir = os.path.dirname(clip_path)
-            if os.path.basename(parent_dir).lower() == "video":
-                timelines_dir = os.path.join(os.path.dirname(parent_dir), "timelines")
-                clip_folder_name = os.path.basename(clip_path)
-                json_path = find_json_in_dir(
-                    os.path.join(timelines_dir, clip_folder_name)
-                )
-
-        from steempeg.core.clip_markers_cache import (
-            ensure_steempeg_timeline_json,
-            is_steam_timeline_json,
-            is_steempeg_timeline_json,
-        )
-
-        if not json_path or (
-            not is_steam_timeline_json(json_path)
-            and not is_steempeg_timeline_json(json_path)
-        ):
-            created = ensure_steempeg_timeline_json(
-                clip_path, cache_dir=getattr(self, "cache_dir", None)
-            )
-            if created:
-                json_path = created
-
-        if hasattr(self, "custom_timeline"):
-            self.custom_timeline.canvas.rendered_media_path = None
-            cache_dir = getattr(self, "cache_dir", None)
-            if json_path:
-                logging.debug("Timeline JSON: %s", json_path)
-
-                json_name = os.path.basename(json_path)
-                video_folder_name = os.path.basename(os.path.dirname(mpd_path))
-
-                json_match = re.search(r"(\d{8})_(\d{6})", json_name)
-                video_match = re.search(r"(\d{8})_(\d{6})", video_folder_name)
-
-                if json_match and video_match:
-                    try:
-                        j_str = json_match.group(1) + json_match.group(2)
-                        v_str = video_match.group(1) + video_match.group(2)
-
-                        json_dt = datetime.strptime(j_str, "%Y%m%d%H%M%S")
-                        video_dt = datetime.strptime(v_str, "%Y%m%d%H%M%S")
-
-                        offset_ms = int((video_dt - json_dt).total_seconds() * 1000)
-                    except Exception as e:
-                        logging.debug("Timeline offset calc failed: %s", e)
-                        offset_ms = 0
-
-                logging.debug("Timeline offset: %d ms", offset_ms)
-                canvas = self.custom_timeline.canvas
-                use_cache = is_steam_timeline_json(json_path)
-                canvas.load_timeline_json(
-                    json_path,
-                    offset_ms,
-                    clip_path=clip_path,
-                    cache_dir=cache_dir if use_cache else None,
-                    merge_marker_cache=use_cache,
-                )
-                app_id = canvas.current_app_id
-                if app_id:
-                    canvas.marker_store.prefetch(
-                        app_id,
-                        on_ready=canvas.update,
-                    )
-            else:
-                logging.debug("No timeline JSON for clip: %s", clip_path)
-                canvas = self.custom_timeline.canvas
-                canvas.load_steempeg_markers_only(
-                    clip_path=clip_path,
-                    cache_dir=cache_dir,
-                )
 
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
@@ -3964,6 +4009,21 @@ class PlayerMixin:
 
         # Timeline thumbs after first paint — never wait on ffmpeg batch stop here.
         clip_dur = float(getattr(self, 'current_clip_duration_sec', 0) or 0)
+        if clip_dur < 1.0 and abs_path.lower().endswith(".mpd"):
+            try:
+                from steempeg.core.dash import mpd
+
+                with open(abs_path, "r", encoding="utf-8") as mpd_file:
+                    seeded = mpd.parse_duration_seconds(mpd_file.read())
+                if is_sane_media_duration(seeded) and float(seeded) >= 1.0:
+                    clip_dur = float(seeded)
+                    self.current_clip_duration_sec = clip_dur
+                    if hasattr(self, "custom_timeline"):
+                        self.custom_timeline.set_duration(int(clip_dur * 1000))
+            except OSError:
+                pass
+            except Exception as exc:
+                logging.debug("MPD duration seed failed for %s: %s", abs_path, exc)
         if clip_dur >= 1.0:
             from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
 

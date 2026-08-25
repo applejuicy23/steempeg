@@ -1947,6 +1947,7 @@ class LibraryMixin:
         self._clips_preview_gen = getattr(self, "_clips_preview_gen", 0) + 1
         self._clips_quality_gen = getattr(self, "_clips_quality_gen", 0) + 1
         self._preview_post_open_gen = getattr(self, "_preview_post_open_gen", 0) + 1
+        self._timeline_markers_load_gen = getattr(self, "_timeline_markers_load_gen", 0) + 1
         self._clip_size_label_gen = getattr(self, "_clip_size_label_gen", 0) + 1
         # Invalidate in-flight MPV/remux/reveal work from a superseded click.
         self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
@@ -1966,6 +1967,11 @@ class LibraryMixin:
         if hasattr(self, "_stop_timeline_thumb_batch"):
             try:
                 self._stop_timeline_thumb_batch()
+            except Exception:
+                pass
+        if hasattr(self, "_stop_timeline_markers_worker"):
+            try:
+                self._stop_timeline_markers_worker()
             except Exception:
                 pass
         if hasattr(self, "clear_clip_open_loading"):
@@ -4154,8 +4160,11 @@ class LibraryMixin:
             size_str = (
                 f"{size_mb / 1024:.2f} GB" if size_mb >= 1000 else f"{size_mb:.1f} MB"
             )
+            # Context ``self`` (main thread) — bare singleShot from this worker
+            # would run the label update on the wrong thread and never paint.
             QTimer.singleShot(
                 0,
+                self,
                 lambda g=gen, p=clip_path, s=size_str: self._apply_clip_folder_size_str(
                     g, p, s
                 ),
