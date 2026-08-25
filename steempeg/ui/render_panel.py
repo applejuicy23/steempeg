@@ -1115,6 +1115,55 @@ def apply_render_panel_theme_chrome(ui) -> None:
         target.setStyleSheet(_target_readout_qss())
 
     apply_presets_tab_theme_chrome(ui)
+    _retint_render_settings_combos(ui)
+
+
+def _retint_render_settings_combos(ui) -> None:
+    """Re-apply Video/Audio/Export combo QSS for the active UI theme.
+
+    Density apply memoizes on size only, and floating Render Settings theme
+    chrome used to skip density entirely — Default ``#383838`` faces stuck
+    after switching to TrueDark / OLED.
+    """
+    from steempeg.ui.ui_density import COMFORT
+    from steempeg.ui.widgets.combo_chrome import (
+        apply_dark_combo_popup,
+        settings_panel_stylesheet,
+    )
+
+    dense = getattr(ui, "_settings_panel_dense", None) or COMFORT
+    field_font = int(dense.footer_font)
+    tabs = getattr(ui, "settings_tabs", None)
+    root = tabs if tabs is not None else ui
+    combo_qss = settings_panel_stylesheet(
+        f"QComboBox {{ font-family: {tok.FONT_APP};"
+        f" font-size: {field_font}px; font-weight: bold; }}",
+        dense=dense,
+    )
+    for combo in root.findChildren(QComboBox):
+        combo.setStyleSheet(combo_qss)
+        apply_dark_combo_popup(combo, dense=dense)
+
+    border = 1 if dense.compact else 2
+    pad_v = 7 if dense.scale >= 0.85 else 3
+    line_h = max(int(dense.combo_min_h), field_font + pad_v * 2 + border * 2 + 2)
+    btn_r = max(8, int(dense.footer_radius) - 4) if dense.compact else 12
+    ph = 12 if dense.scale >= 0.85 else 8
+    fname = getattr(ui, "input_filename", None)
+    if fname is not None:
+        fname.setStyleSheet(
+            ut.settings_density_line_edit_stylesheet(
+                border=border, btn_r=btn_r, field_font=field_font, ph=ph
+            )
+        )
+    dest = getattr(ui, "destination_button", None)
+    if dest is not None:
+        dest.setStyleSheet(
+            ut.settings_density_push_button_stylesheet(
+                border=border, btn_r=btn_r, field_font=field_font, ph=ph
+            )
+        )
+        dest.setFixedHeight(line_h)
 
 
 def apply_presets_tab_theme_chrome(ui) -> None:
@@ -1155,10 +1204,13 @@ def apply_settings_panel_density(ui, dense) -> None:
         int(getattr(dense, "neo_nav_icon", 16) or 16),
         int(getattr(dense, "combo_min_h", 0) or 0),
         int(getattr(dense, "footer_radius", 0) or 0),
+        # Theme tokens feed combo/line-edit QSS — must invalidate on TrueDark switch.
+        ut.get_ui_theme(),
     )
     if getattr(ui, "_settings_panel_density_key", None) == memo_key:
         return
     ui._settings_panel_density_key = memo_key
+    ui._settings_panel_dense = dense
 
     tabs = getattr(ui, "settings_tabs", None)
     root = tabs if tabs is not None else ui
@@ -1259,8 +1311,6 @@ def apply_settings_panel_density(ui, dense) -> None:
     ph = 12 if dense.scale >= 0.85 else 8
     fname = getattr(ui, "input_filename", None)
     if fname is not None:
-        from steempeg.ui import ui_theme as ut
-
         # Same trick as Save as…: vertical centering from fixed height only.
         # QSS padding-top/bottom + setFixedHeight pushes glyphs onto the floor
         # (underscores / descenders clipped).
@@ -1279,8 +1329,6 @@ def apply_settings_panel_density(ui, dense) -> None:
 
     dest = getattr(ui, "destination_button", None)
     if dest is not None:
-        from steempeg.ui import ui_theme as ut
-
         dest.setFixedHeight(line_h)
         # Horizontal pad only — vertical centering comes from fixed height.
         # Avoid min-height + vertical padding fighting setFixedHeight (crushed label).
