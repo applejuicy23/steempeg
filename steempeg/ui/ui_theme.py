@@ -1447,6 +1447,26 @@ def floating_tooltip_label_stylesheet() -> str:
     )
 
 
+def immersive_esc_hint_stylesheet(*, font_px: int = 15) -> str:
+    """Fullscreen «Press ESC…» pill — dark on video; TrueDark/OLED near-black."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, fg = "#1e1e1e", "#eeeeee"
+    else:
+        bg, fg = p.tooltip_bg, p.tooltip_fg
+    return (
+        "QLabel {"
+        f" background-color: {bg};"
+        f" color: {fg};"
+        " padding: 12px 28px;"
+        " border: none;"
+        f" font-size: {font_px}px;"
+        " font-weight: bold;"
+        f" font-family: {tok.FONT_APP};"
+        "}"
+    )
+
+
 def timeline_hover_preview_colors() -> tuple[str, str, str, str]:
     """Floating timeline hover thumb chrome — Default mid plate; TrueDark tip tokens.
 
@@ -2095,7 +2115,7 @@ def presets_apply_split_stylesheet() -> str:
 
 
 def _frameless_card_dialog_colors() -> dict[str, str]:
-    """Shared face colors for About / FFmpeg error frameless cards.
+    """Shared face colors for About / Report / FFmpeg error frameless cards.
 
     Default keeps the shipped #202020 family. TrueDark / OLED follow active
     elevated-card tokens so the windows match the shell (not the old lighter plate).
@@ -2218,6 +2238,65 @@ def about_dialog_stylesheet() -> str:
         border: 1px solid #b29ae7;
     }}
     QPushButton#AboutUpdateBtn:pressed {{
+        background-color: {c["accent_pressed_bg"]};
+    }}
+"""
+
+
+def report_dialog_stylesheet() -> str:
+    """Report-a-bug frameless card — same TrueDark tokens as About / FFmpeg error."""
+    c = _frameless_card_dialog_colors()
+    return f"""
+    QWidget#ReportCard {{
+        background-color: {c["card_bg"]};
+        border: 1px solid {c["card_border"]};
+        border-radius: 8px;
+    }}
+    QLabel {{ background: transparent; color: {c["text"]}; font-size: 12px; }}
+    QLabel#ReportTitle {{
+        color: {c["title"]};
+        font-size: 18px;
+        font-weight: bold;
+    }}
+    QLabel#ReportHint {{ color: {c["dim"]}; font-size: 11px; }}
+    QTextEdit {{
+        background-color: {c["log_bg"]};
+        color: #eeeeee;
+        border: 1px solid {c["log_border"]};
+        border-radius: 6px;
+        padding: 8px;
+        font-size: 12px;
+        selection-background-color: #6b5a8e;
+        selection-color: #ffffff;
+    }}
+    QPushButton {{
+        background-color: {c["btn_bg"]};
+        color: white;
+        border: 1px solid {c["btn_border"]};
+        border-radius: 16px;
+        padding: 6px 18px;
+        font-weight: bold;
+        font-size: 12px;
+        min-height: 30px;
+        outline: none;
+    }}
+    QPushButton:hover {{
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid {c["btn_hover_border"]};
+    }}
+    QPushButton:pressed {{
+        background-color: {c["btn_pressed_bg"]};
+    }}
+    QPushButton#ReportPrimary {{
+        background-color: {c["accent_bg"]};
+        border: 1px solid {c["accent_border"]};
+        color: {c["accent_fg"]};
+    }}
+    QPushButton#ReportPrimary:hover {{
+        background-color: {c["accent_hover_bg"]};
+        border: 1px solid #b29ae7;
+    }}
+    QPushButton#ReportPrimary:pressed {{
         background-color: {c["accent_pressed_bg"]};
     }}
 """

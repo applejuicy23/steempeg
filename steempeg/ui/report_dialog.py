@@ -22,48 +22,9 @@ from steempeg.infra.reports import (
     github_issue_body,
 )
 from steempeg.version import APP_VERSION_STR
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.message_dialog import steempeg_critical, steempeg_information
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
-
-
-_REPORT_DIALOG_STYLE = """
-    QWidget#ReportCard {
-        background-color: #202020;
-        border: 1px solid #444444;
-        border-radius: 8px;
-    }
-    QLabel#ReportTitle { color: #b29ae7; font-size: 18px; font-weight: bold; }
-    QLabel#ReportHint { color: #888888; font-size: 11px; }
-    QLabel { background: transparent; color: #dddddd; font-size: 12px; }
-    QTextEdit {
-        background-color: #2a2a2a;
-        color: #eeeeee;
-        border: 1px solid #555555;
-        border-radius: 6px;
-        padding: 8px;
-        font-size: 12px;
-    }
-    QPushButton {
-        background-color: #333333;
-        color: white;
-        border: 1px solid #555555;
-        border-radius: 16px;
-        padding: 6px 18px;
-        font-weight: bold;
-        font-size: 12px;
-        min-height: 30px;
-    }
-    QPushButton:hover { background-color: #444444; border: 1px solid #777777; }
-    QPushButton:pressed { background-color: #222222; }
-    QPushButton#ReportPrimary {
-        background-color: #3a324a;
-        border: 1px solid #6b5a8e;
-    }
-    QPushButton#ReportPrimary:hover {
-        background-color: #4a3f5c;
-        border: 1px solid #b29ae7;
-    }
-"""
 
 
 def show_report_dialog(app):
@@ -72,12 +33,14 @@ def show_report_dialog(app):
     app._report_dialog_open = True
 
     dialog = QDialog(app.ui)
+    dialog.setObjectName("SteempegReportDialog")
     dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     from steempeg.ui.ui_density import scaled_dialog_size
 
     dialog.setFixedSize(*scaled_dialog_size(560, 460, parent=app.ui))
-    dialog.setStyleSheet(_REPORT_DIALOG_STYLE)
+    # TrueDark / OLED via shared frameless card tokens (same family as About).
+    dialog.setStyleSheet(ut.report_dialog_stylesheet())
 
     shell = QVBoxLayout(dialog)
     shell.setContentsMargins(0, 0, 0, 0)
