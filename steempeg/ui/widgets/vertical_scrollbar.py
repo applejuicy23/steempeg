@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QRect, QRectF
-from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QScrollBar, QStyle, QStyleOptionSlider, QWidget
+from PySide6.QtGui import QColor, QPainter, QMouseEvent
+from PySide6.QtWidgets import QScrollBar, QWidget
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,8 @@ class VerticalScrollbarChrome:
     margin_right: int = 2
     margin_top: int = 4
     margin_bottom: int = 4
-    min_thumb_extent: int = 30
+    # Keep grab-able even when the document is huge (Screenshots × thousands).
+    min_thumb_extent: int = 40
 
 
 def _library_chrome() -> VerticalScrollbarChrome:
@@ -41,6 +42,7 @@ def _library_chrome() -> VerticalScrollbarChrome:
         margin_right=2,
         margin_top=4,
         margin_bottom=4,
+        min_thumb_extent=40,
     )
 
 
@@ -55,6 +57,7 @@ def settings_scrollbar_chrome() -> VerticalScrollbarChrome:
         margin_right=5,
         margin_top=15,
         margin_bottom=15,
+        min_thumb_extent=36,
     )
 
 
@@ -77,7 +80,7 @@ def filters_games_scrollbar_chrome() -> VerticalScrollbarChrome:
         margin_right=2,
         margin_top=2,
         margin_bottom=2,
-        min_thumb_extent=24,
+        min_thumb_extent=28,
     )
 
 
@@ -95,12 +98,17 @@ def error_dialog_scrollbar_chrome() -> VerticalScrollbarChrome:
         margin_right=2,
         margin_top=2,
         margin_bottom=2,
-        min_thumb_extent=20,
+        min_thumb_extent=28,
     )
 
 
 class SteempegVerticalScrollBar(QScrollBar):
-    """Rounded capsule vertical scrollbar (TimelineOverviewScrollBar vertical twin)."""
+    """Rounded capsule vertical scrollbar (TimelineOverviewScrollBar vertical twin).
+
+    Own hit-testing: Qt's native slider shrinks to 1–2px with huge lists (8k
+    Screenshots), so paint + drag/click use a floor ``min_thumb_extent``. Track
+    click jumps to that position (scroll-to-here); LMB or RMB can drag.
+    """
 
     def __init__(
         self,
@@ -111,8 +119,12 @@ class SteempegVerticalScrollBar(QScrollBar):
     ):
         super().__init__(orientation, parent)
         self._chrome = chrome or _library_chrome()
+        self._press_grab_offset = 0
+        self._dragging = False
         self.setMouseTracking(True)
         self.setFixedWidth(self._chrome.width)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        # Hide native chrome — we paint + handle mouse ourselves.
         self.setStyleSheet(
             "QScrollBar:vertical { background: transparent; border: none; }"
             " QScrollBar::handle:vertical { background: transparent; border: none; }"
@@ -144,34 +156,118 @@ class SteempegVerticalScrollBar(QScrollBar):
             -c.margin_bottom,
         )
 
-    def _thumb_rect(self, groove: QRect) -> QRect:
-        opt = QStyleOptionSlider()
-        self.initStyleOption(opt)
-        thumb = self.style().subControlRect(
-            QStyle.ComplexControl.CC_ScrollBar,
-            opt,
-            QStyle.SubControl.SC_ScrollBarSlider,
-            self,
-        )
-        if thumb.width() > 1 and thumb.height() > 1:
-            return QRect(groove.left(), thumb.y(), groove.width(), thumb.height())
-
+    def _thumb_metrics(self, groove: QRect) -> tuple[int, int]:
+        """Return (thumb_h, usable_travel) for the painted / hit thumb."""
         gmin, gmax = int(self.minimum()), int(self.maximum())
         page = max(1, int(self.pageStep()))
         span = gmax - gmin
         gh = max(1, groove.height())
         if span <= 0:
-            return QRect(groove.left(), groove.top(), groove.width(), gh)
+            return gh, 0
         thumb_h = max(
-            self._chrome.min_thumb_extent,
+            int(self._chrome.min_thumb_extent),
             int(round(gh * page / float(span + page))),
         )
         thumb_h = min(thumb_h, gh)
         usable = max(0, gh - thumb_h)
+        return thumb_h, usable
+
+    def _thumb_rect(self, groove: QRect | None = None) -> QRect:
+        groove = groove if groove is not None else self._groove_rect()
+        gmin, gmax = int(self.minimum()), int(self.maximum())
+        span = gmax - gmin
+        thumb_h, usable = self._thumb_metrics(groove)
+        if span <= 0 or usable <= 0:
+            return QRect(groove.left(), groove.top(), groove.width(), thumb_h)
         y = groove.top() + int(
             round(usable * (int(self.value()) - gmin) / float(span))
         )
         return QRect(groove.left(), y, groove.width(), thumb_h)
+
+    def _value_for_thumb_top(self, thumb_top: int, groove: QRect | None = None) -> int:
+        groove = groove if groove is not None else self._groove_rect()
+        gmin, gmax = int(self.minimum()), int(self.maximum())
+        span = gmax - gmin
+        _thumb_h, usable = self._thumb_metrics(groove)
+        if span <= 0 or usable <= 0:
+            return gmin
+        rel = max(0, min(usable, int(thumb_top) - groove.top()))
+        return gmin + int(round(span * rel / float(usable)))
+
+    def _value_for_click_y(self, y: int, groove: QRect | None = None) -> int:
+        """Map a track click so the thumb centers on ``y`` (scroll-to-here)."""
+        groove = groove if groove is not None else self._groove_rect()
+        thumb_h, _usable = self._thumb_metrics(groove)
+        return self._value_for_thumb_top(int(y) - thumb_h // 2, groove)
+
+    def _is_scroll_button(self, button: Qt.MouseButton) -> bool:
+        return button in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.MiddleButton,
+        )
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if self.orientation() != Qt.Orientation.Vertical or not self._is_scroll_button(
+            event.button()
+        ):
+            super().mousePressEvent(event)
+            return
+
+        pos = event.position().toPoint()
+        groove = self._groove_rect()
+        # Widen hit box to the full bar width — margins are paint-only.
+        hit_groove = QRect(0, groove.top(), self.width(), groove.height())
+        if not hit_groove.contains(pos) and not groove.contains(pos):
+            event.accept()
+            return
+
+        thumb = self._thumb_rect(groove)
+        # Slightly taller grab slop so a near-miss still starts a drag.
+        grab = thumb.adjusted(0, -4, 0, 4)
+        grab.setLeft(0)
+        grab.setWidth(self.width())
+
+        if grab.contains(pos):
+            self._dragging = True
+            self._press_grab_offset = pos.y() - thumb.top()
+            self.setSliderDown(True)
+        else:
+            # Track click → jump thumb to this spot, then allow drag.
+            self.setValue(self._value_for_click_y(pos.y(), groove))
+            thumb = self._thumb_rect(groove)
+            self._dragging = True
+            self._press_grab_offset = pos.y() - thumb.top()
+            self.setSliderDown(True)
+        self.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.orientation() != Qt.Orientation.Vertical:
+            super().mouseMoveEvent(event)
+            return
+        if self._dragging and self.isSliderDown():
+            groove = self._groove_rect()
+            thumb_top = int(event.position().y()) - self._press_grab_offset
+            self.setValue(self._value_for_thumb_top(thumb_top, groove))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+        self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if self.orientation() != Qt.Orientation.Vertical or not self._is_scroll_button(
+            event.button()
+        ):
+            super().mouseReleaseEvent(event)
+            return
+        if self._dragging:
+            self._dragging = False
+            self.setSliderDown(False)
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
         groove = self._groove_rect()
