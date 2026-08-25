@@ -132,10 +132,11 @@ class TimelineCanvas(QWidget):
         self.drag_state = 'none'
         self.last_frame_time = time.time()
         
-        # 60 FPS Engine
+        # 60 FPS Engine — PreciseTimer so high-Hz monitors don't cluster ticks.
         self.fps_timer = QTimer(self)
+        self.fps_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.fps_timer.timeout.connect(self.process_60fps_frame)
-        self.fps_timer.start(16) 
+        self.fps_timer.start(16)
         
         # Colors
         self.track_color = QColor(255, 255, 255, 40)
@@ -197,10 +198,12 @@ class TimelineCanvas(QWidget):
         from steempeg.ui import ui_theme as ut
 
         self.text_tooltip = QLabel(self)
+        # No WindowStaysOnTopHint — owned TOPMOST Tools yank the Steempeg shell
+        # over Explorer / browser when the tip shows. Tool alone still stacks
+        # above the shell (incl. native mpv) without promoting other apps under us.
         self.text_tooltip.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.NoDropShadowWindowHint
         )
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -760,8 +763,9 @@ class TimelineCanvas(QWidget):
         min_x = top_left.x()
         max_x = min_x + max(0, anchor.width() - pw.width())
         pw.move(max(min_x, min(target_x, max_x)), target_y)
+        # No raise_() — owned Tool raise re-stacks the Steempeg shell over Explorer.
+        pw.setAttribute(Qt.WA_ShowWithoutActivating, True)
         pw.show()
-        pw.raise_()
 
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0:
@@ -855,19 +859,33 @@ class TimelineCanvas(QWidget):
 
     def set_duration(self, duration_ms):
         self.duration_ms = max(0, int(duration_ms))
+        # Clip switch clears duration to 0 — also park the stick so a stale
+        # visual_ms from the previous clip cannot clamp to "end of bar".
+        if self.duration_ms <= 0:
+            self.visual_ms = 0.0
+            self.target_ms = 0.0
+            self.vlc_last_update_time = time.time()
 
     def set_vlc_time(self, vlc_ms, is_playing):
         was_playing = self.is_playing
         self.is_playing = bool(is_playing)
         if self.drag_state == 'playhead':
             return
+        # Scrub / force_jump owns the stick briefly — don't let lagging PTS fight it.
+        if time.time() < getattr(self, "user_seek_lock_time", 0):
+            return
         vlc_ms = float(vlc_ms)
         speed = max(float(self.playback_speed) or 1.0, 1e-6)
 
         if was_playing and not self.is_playing:
             # Pause: freeze where wall-clock extrapolation left the playhead.
-            # Do not snap back to the last decoded-frame PTS (stale for seconds at 1 FPS).
-            self.target_ms = float(self.visual_ms)
+            # Clip switch also hits this path with vlc_ms=0 — honor the reset
+            # or the stick stays at the previous clip's end.
+            if vlc_ms <= 1.0:
+                self.target_ms = vlc_ms
+                self.visual_ms = vlc_ms
+            else:
+                self.target_ms = float(self.visual_ms)
             self.vlc_last_update_time = time.time()
         elif not was_playing and self.is_playing:
             # Resume: keep continuity by backdating the sample clock by the lead
@@ -875,15 +893,38 @@ class TimelineCanvas(QWidget):
             lead_ms = max(0.0, float(self.visual_ms) - vlc_ms)
             self.target_ms = vlc_ms
             self.vlc_last_update_time = time.time() - (lead_ms / 1000.0) / speed
-        elif self.is_playing and vlc_ms != self.target_ms:
-            # New mpv sample while playing — re-anchor; extrapolation fills gaps.
-            self.target_ms = vlc_ms
-            self.vlc_last_update_time = time.time()
-        elif not self.is_playing and abs(vlc_ms - self.target_ms) > 500:
-            # Seek / external jump while paused (ignore flat low-FPS PTS repeats).
-            self.target_ms = vlc_ms
-            self.visual_ms = vlc_ms
-            self.vlc_last_update_time = time.time()
+        elif self.is_playing and abs(vlc_ms - self.target_ms) > 0.5:
+            # New mpv sample while playing. Never yank the stick *backward* onto a
+            # coarse PTS — at 1 FPS the stick legitimately leads the last frame by
+            # up to ~1s; a hard re-sync looked like stutter every frame boundary.
+            visual = float(self.visual_ms)
+            if vlc_ms - visual > 400.0:
+                # Seek / skip ahead of the stick — snap up.
+                self.target_ms = vlc_ms
+                self.visual_ms = vlc_ms
+                self.vlc_last_update_time = time.time()
+            else:
+                # Preserve wall-clock lead past the last decoded PTS.
+                lead_ms = max(0.0, visual - vlc_ms)
+                self.target_ms = vlc_ms
+                self.vlc_last_update_time = time.time() - (lead_ms / 1000.0) / speed
+        elif not self.is_playing:
+            # Paused: ignore only the 1 FPS "PTS behind frozen stick" case.
+            # Always honor clip-switch resets (0) and real seeks / force_jump.
+            visual = float(self.visual_ms)
+            if vlc_ms <= 1.0:
+                self.target_ms = vlc_ms
+                self.visual_ms = vlc_ms
+                self.vlc_last_update_time = time.time()
+            elif vlc_ms + 80.0 < visual and (visual - vlc_ms) <= 1500.0:
+                # Lagging frame PTS under a frozen mid-clip stick — keep stick.
+                self.target_ms = visual
+            elif abs(vlc_ms - visual) > 2.0:
+                self.target_ms = vlc_ms
+                self.visual_ms = vlc_ms
+                self.vlc_last_update_time = time.time()
+            else:
+                self.target_ms = visual
 
     def enable_trim_mode(self):
         if self.duration_ms <= 0: return
@@ -2267,13 +2308,12 @@ class ThumbnailPreviewWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # Qt.ToolTip (not Tool) is killed by QToolTip.hideText() and often stacks
-        # under the native mpv HWND in Portable theatre. Tool + stays-on-top keeps
-        # the same hover UX without those traps.
+        # Qt.ToolTip is killed by QToolTip.hideText() and often stacks under the
+        # native mpv HWND. Tool (no StaysOnTop) stays above the shell without
+        # yanking Steempeg over Explorer when the tip appears.
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating)
