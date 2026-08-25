@@ -349,7 +349,7 @@ class LibraryMixin:
         return ids
 
     def setup_refresh_menu(self):
-        """Attach the Refresh ▾ dropdown (Refresh all + Clips-only Steam extras)."""
+        """Attach the Refresh ▾ dropdown (this section + Clips-only Steam extras)."""
         btn = getattr(self, "btn_refresh", None)
         if btn is None or not hasattr(btn, "menu_btn"):
             return
@@ -363,11 +363,19 @@ class LibraryMixin:
             menu.setStyleSheet(ut.library_menu_stylesheet())
             mode = getattr(self, "_library_panel_mode", "clips")
 
-            action_all = menu.addAction("🔄  Refresh all")
-            action_all.setToolTip(
-                "Rescan Clips Manager, Rendered videos, and Screenshots."
-            )
-            action_all.triggered.connect(self.refresh_all_libraries)
+            if mode == "rendered":
+                section_label = "🔄  Refresh Rendered videos"
+                section_tip = "Rescan the Records / export folder only."
+            elif mode == "screenshots":
+                section_label = "🔄  Refresh Screenshots"
+                section_tip = "Rescan the Screenshots folder only."
+            else:
+                section_label = "🔄  Refresh Clips Manager"
+                section_tip = "Rescan Clips Manager folders only."
+
+            action_section = menu.addAction(section_label)
+            action_section.setToolTip(section_tip)
+            action_section.triggered.connect(self.refresh_active_library_section)
 
             if mode == "clips":
                 menu.addSeparator()
@@ -404,13 +412,30 @@ class LibraryMixin:
 
         btn.menu_btn.clicked.connect(_show_menu)
 
+    def refresh_active_library_section(self) -> None:
+        """Rescan only the active library tab (Clips / Rendered / Screenshots)."""
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "rendered":
+            if hasattr(self, "set_status"):
+                self.set_status("Refreshing Rendered videos…")
+            if hasattr(self, "refresh_rendered_library"):
+                self.refresh_rendered_library()
+            return
+        if mode == "screenshots":
+            if hasattr(self, "set_status"):
+                self.set_status("Refreshing Screenshots…")
+            if hasattr(self, "refresh_screenshots_library"):
+                self.refresh_screenshots_library(force=True)
+            return
+        if hasattr(self, "set_status"):
+            self.set_status("Refreshing Clips Manager…")
+        LibraryMixin.refresh_library(self)
+
     def refresh_all_libraries(self) -> None:
         """Rescan every library panel (Clips + Rendered + Screenshots)."""
         if hasattr(self, "set_status"):
             self.set_status("Refreshing all libraries…")
         # Clips — always (even if another tab is active).
-        from steempeg.ui.library.controller import LibraryMixin
-
         LibraryMixin.refresh_library(self)
         if hasattr(self, "refresh_rendered_library"):
             self.refresh_rendered_library()
@@ -2140,6 +2165,9 @@ class LibraryMixin:
             else:
                 # Already the open clip — ignore the click (no reload) unless the
                 # first-frame / switching gate is stuck (Linux rapid-switch hang).
+                # Queue encode must not count as «open»: it used to stamp
+                # ``_preview_clip_path`` while the idle poster stayed up, so this
+                # guard swallowed every re-click until a queue card was activated.
                 clip_path = item.data(Qt.UserRole + 1)
                 if (
                     update_preview
@@ -2150,6 +2178,19 @@ class LibraryMixin:
                         getattr(self, "_preview_clip_path", None)
                     )
                 ):
+                    really_open = False
+                    if hasattr(self, "_is_clip_actively_previewing"):
+                        try:
+                            really_open = bool(
+                                self._is_clip_actively_previewing(clip_path)
+                            )
+                        except Exception:
+                            really_open = False
+                    elif hasattr(self, "_player_has_open_clip"):
+                        try:
+                            really_open = bool(self._player_has_open_clip())
+                        except Exception:
+                            really_open = False
                     stuck = bool(
                         getattr(self, "_is_switching", False)
                         or getattr(self, "_awaiting_first_frame", False)
@@ -2166,7 +2207,7 @@ class LibraryMixin:
                             self._is_switching = False
                             self._awaiting_first_frame = False
                         # Fall through to reload so timeline/thumbs recover.
-                    else:
+                    elif really_open:
                         logging.debug(
                             "Same-clip click ignored (already previewing): %s",
                             clip_path,
@@ -2177,6 +2218,12 @@ class LibraryMixin:
                         if hasattr(self, "_sync_grid_card_visuals"):
                             self._sync_grid_card_visuals()
                         return
+                    else:
+                        logging.info(
+                            "Same-clip path stamped but player idle — opening: %s",
+                            clip_path,
+                        )
+                        # Fall through to open for real.
                 grid.clearSelection()
                 item.setSelected(True)
 

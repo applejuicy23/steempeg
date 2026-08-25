@@ -1,4 +1,4 @@
-"""Refresh clips library: main rescan + dropdown for heavier maintenance actions."""
+"""Refresh libraries: main button rescans all tabs; ▾ offers this-section + extras."""
 from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
