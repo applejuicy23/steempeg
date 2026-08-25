@@ -14,7 +14,19 @@ import sys
 import ctypes
 from ctypes import POINTER, cast, wintypes
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractNativeEventFilter,
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -63,6 +75,8 @@ _WM_NCCALCSIZE = 0x0083
 _WM_NCHITTEST = 0x0084
 _WM_NCLBUTTONDOWN = 0x00A1
 _WM_SYSCOMMAND = 0x0112
+_WM_SYSKEYDOWN = 0x0104
+_VK_F4 = 0x73
 
 _SC_CLOSE = 0xF060
 _SC_MINIMIZE = 0xF020
@@ -1548,6 +1562,81 @@ def win32_window_command(window: QWidget, action: str) -> None:
         ctypes.windll.user32.SendMessageW(hwnd, _WM_SYSCOMMAND, cmd, 0)
 
 
+class _AltF4NativeCloseFilter(QAbstractNativeEventFilter):
+    """Close the Steempeg shell on Alt+F4 even when focus is on a native child.
+
+    Embedded mpv (``wid=``) lives in its own HWND. Windows delivers Alt+F4 to that
+    child; DefWindowProc does not SC_CLOSE the top-level parent, so the shortcut
+    appears dead. Catch SYSKEYDOWN F4 for our HWND tree and close the shell.
+    """
+
+    def __init__(self, window: QWidget):
+        super().__init__()
+        self._window = window
+
+    def nativeEventFilter(self, eventType, message):  # noqa: N802
+        if os.name != "nt":
+            return False
+        et = _native_event_type_bytes(eventType)
+        if et not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
+            return False
+        try:
+            addr = int(message) if not hasattr(message, "__int__") else int(message.__int__())
+            msg = _MSG.from_address(addr)
+        except (TypeError, ValueError):
+            return False
+
+        if msg.message != _WM_SYSKEYDOWN or int(msg.wParam) != _VK_F4:
+            return False
+        # lParam bit 29 = context code (1 when Alt is down for SYSKEY*).
+        if not ((int(msg.lParam) >> 29) & 1):
+            return False
+
+        window = self._window
+        try:
+            if window is None or not window.isVisible():
+                return False
+        except RuntimeError:
+            return False
+
+        # Modal / popup dialogs own Alt+F4 while open.
+        if QApplication.activeModalWidget() is not None:
+            return False
+        if QApplication.activePopupWidget() is not None:
+            return False
+        active = QApplication.activeWindow()
+        if active is not None and active is not window:
+            return False
+
+        try:
+            hwnd_main = int(window.winId())
+        except RuntimeError:
+            return False
+        hwnd = int(msg.hwnd) if msg.hwnd else 0
+        if hwnd != hwnd_main and not bool(
+            ctypes.windll.user32.IsChild(hwnd_main, hwnd)
+        ):
+            return False
+
+        # Defer out of the native filter — close re-enters the event loop.
+        QTimer.singleShot(0, window.close)
+        return True
+
+
+def install_alt_f4_close(window: QWidget) -> None:
+    """Install a process-wide native filter so Alt+F4 closes *window*."""
+    if os.name != "nt":
+        return
+    if getattr(window, "_alt_f4_native_filter", None) is not None:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    filt = _AltF4NativeCloseFilter(window)
+    app.installNativeEventFilter(filt)
+    window._alt_f4_native_filter = filt
+
+
 def enable_frameless(window: QWidget) -> None:
     """Keep all native window styles, then trigger a frame recalc so our
     WM_NCCALCSIZE handler removes the *painted* caption. Preserves Snap/animations."""
@@ -1563,6 +1652,7 @@ def enable_frameless(window: QWidget) -> None:
         _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED,
     )
     refresh_dwm_chrome(window)
+    install_alt_f4_close(window)
 
 
 def ensure_startup_maximized(window: QWidget) -> None:

@@ -25,6 +25,28 @@ class FullscreenEventFilter(QObject):
                     self.app_instance.custom_timeline.preview_widget.hide()
 
         # GLOBAL KEYBOARD INTERCEPTION (WORKS EVERYWHERE)
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
+            # Alt+F4: close the main shell. Needed when Windows does not map the
+            # combo to SC_CLOSE (custom chrome / focus on a Qt child without a
+            # system menu). Win32 native filter covers embedded mpv HWNDs.
+            if (
+                event.key() == Qt.Key.Key_F4
+                and event.modifiers() & Qt.KeyboardModifier.AltModifier
+            ):
+                if QApplication.activeModalWidget() is not None:
+                    return False
+                if QApplication.activePopupWidget() is not None:
+                    return False
+                ui = getattr(self.app_instance, "ui", None)
+                if ui is not None and QApplication.activeWindow() not in (None, ui):
+                    return False
+                if event.type() == QEvent.Type.ShortcutOverride:
+                    event.accept()
+                    return True
+                if ui is not None:
+                    ui.close()
+                    return True
+
         if event.type() == QEvent.Type.KeyPress:
             # 1. SPACE: Play / Pause
             if event.key() == Qt.Key_Space:
