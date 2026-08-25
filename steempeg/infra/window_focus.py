@@ -20,7 +20,14 @@ _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _SWP_NOSIZE = 0x0001
 _SWP_NOMOVE = 0x0002
+_SWP_NOZORDER = 0x0004
+_SWP_NOACTIVATE = 0x0010
 _SWP_SHOWWINDOW = 0x0040
+_SWP_FRAMECHANGED = 0x0020
+_SWP_NOOWNERZORDER = 0x0200
+_GWL_EXSTYLE = -20
+_WS_EX_TOPMOST = 0x00000008
+_WS_EX_NOACTIVATE = 0x08000000
 
 
 def _pid_from_instance_lock() -> int | None:
@@ -103,17 +110,63 @@ def _pick_main_hwnd(hwnds: list[int]) -> int | None:
     return scored[0][1]
 
 
-def _topmost_flash(hwnd: int) -> None:
-    """Brief TOPMOST → NOTOPMOST so Windows allows SetForegroundWindow.
+def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
+    """Ensure *hwnd* is not permanently always-on-top.
 
-    Does not leave the window always-on-top.
+    The brief TOPMOST flash used to steal focus can leave ``WS_EX_TOPMOST`` set
+    (especially with custom DWM/NCCALCSIZE chrome), which buries Explorer and
+    every other app under Steempeg until restart.
+
+    Default path is style-only (``SWP_NOZORDER``): never bump Steempeg over
+    browser tabs / Explorer. MPV focus flicker used to hit ActivationChange →
+    ``HWND_NOTOPMOST``, which demotes out of the topmost band *and* parks the
+    shell at the top of the normal Z-order — exactly the "tabs hide under
+    Steempeg while video plays" bug.
+
+    Pass ``reshuffle_z=True`` only after an intentional TOPMOST flash (startup /
+    toast raise), where staying foreground among normal windows is desired.
     """
     import ctypes
 
     user32 = ctypes.windll.user32
-    flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_SHOWWINDOW
-    user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags)
-    user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+    try:
+        ex = int(user32.GetWindowLongW(hwnd, _GWL_EXSTYLE))
+        if not (ex & _WS_EX_TOPMOST):
+            return
+        user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex & ~_WS_EX_TOPMOST)
+        if reshuffle_z:
+            flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        else:
+            flags = (
+                _SWP_NOMOVE
+                | _SWP_NOSIZE
+                | _SWP_NOZORDER
+                | _SWP_NOOWNERZORDER
+                | _SWP_NOACTIVATE
+                | _SWP_FRAMECHANGED
+            )
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
+    except Exception as exc:
+        _log.debug("clear_topmost failed hwnd=%s: %s", hwnd, exc)
+
+
+def _topmost_flash(hwnd: int) -> None:
+    """Brief TOPMOST → NOTOPMOST so Windows allows SetForegroundWindow.
+
+    Always clears topmost in ``finally`` so a failed second hop cannot leave the
+    shell always-on-top over Explorer / other apps.
+    """
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    # Do not use SWP_SHOWWINDOW here — it can race with maximize/chrome and
+    # leave WS_EX_TOPMOST stuck after the NOTOPMOST hop.
+    flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
+    try:
+        user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags)
+    finally:
+        _clear_topmost(hwnd, reshuffle_z=True)
 
 
 def _force_foreground(hwnd: int) -> None:
@@ -130,7 +183,9 @@ def _force_foreground(hwnd: int) -> None:
 
     foreground = user32.GetForegroundWindow()
     if foreground == hwnd:
-        user32.BringWindowToTop(hwnd)
+        # Already front — only strip a stuck TOPMOST bit; do not BringWindowToTop
+        # (that re-stacks Steempeg over other apps on every no-op raise).
+        _clear_topmost(hwnd)
         return
 
     pid_fore = wintypes.DWORD()
@@ -164,6 +219,108 @@ def _force_foreground(hwnd: int) -> None:
             user32.AttachThreadInput(tid_cur, tid_target, False)
         if attached_fore:
             user32.AttachThreadInput(tid_cur, tid_fore, False)
+        # Never leave the shell in the always-on-top band. Style-only clear —
+        # HWND_NOTOPMOST reshuffle here used to park Steempeg over Explorer after
+        # every raise attempt (including no-ops).
+        _clear_topmost(hwnd, reshuffle_z=False)
+
+
+def clear_widget_topmost(widget) -> bool:
+    """Strip stuck always-on-top from a Qt top-level widget (Windows)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        _clear_topmost(hwnd)
+        return True
+    except Exception as exc:
+        _log.debug("clear_widget_topmost failed: %s", exc)
+        return False
+
+
+_GWLP_HWNDPARENT = -8
+
+
+def detach_tool_ownership(widget) -> None:
+    """Ensure a Qt Tool is not owned / transient-parented to the Steempeg shell.
+
+    Owned Tools re-stack their owner on every ``show()`` (Explorer / browser get
+    buried under Steempeg). Qt often assigns a transient parent even when
+    ``QWidget(None)`` — clear both the Win32 owner and Qt transient link.
+    """
+    if sys.platform != "win32" or widget is None:
+        return
+    try:
+        widget.createWinId()
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        # Drop Win32 owner (GWLP_HWNDPARENT). Ignore failures on exotic HWNDs.
+        try:
+            user32.SetWindowLongPtrW(hwnd, _GWLP_HWNDPARENT, 0)
+        except Exception:
+            try:
+                user32.SetWindowLongW(hwnd, _GWLP_HWNDPARENT, 0)
+            except Exception:
+                pass
+        try:
+            wh = widget.windowHandle()
+            if wh is not None and wh.transientParent() is not None:
+                wh.setTransientParent(None)
+        except Exception:
+            pass
+    except Exception as exc:
+        _log.debug("detach_tool_ownership failed: %s", exc)
+
+
+def on_shell_lost_foreground(widget) -> None:
+    """Call when Steempeg is no longer the OS foreground app.
+
+    Strips a stuck ``WS_EX_TOPMOST`` *without* ``HWND_NOTOPMOST`` reshuffle (that
+    would park Steempeg on top of Explorer again).
+    """
+    clear_widget_topmost(widget)
+
+
+def mark_embed_noactivate(widget) -> bool:
+    """Tag an embedded video HWND so it cannot activate the Steempeg shell.
+
+    libmpv ``wid=`` paints into a native child. On Windows that child can still
+    yank activation (and Z-order) toward the owner while frames present — which
+    matches «Explorer hides only while a clip is open».
+    """
+    if sys.platform != "win32" or widget is None:
+        return False
+    try:
+        import ctypes
+
+        widget.createWinId()
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        user32 = ctypes.windll.user32
+        ex = int(user32.GetWindowLongW(hwnd, _GWL_EXSTYLE))
+        if ex & _WS_EX_NOACTIVATE:
+            return True
+        user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex | _WS_EX_NOACTIVATE)
+        flags = (
+            _SWP_NOMOVE
+            | _SWP_NOSIZE
+            | _SWP_NOZORDER
+            | _SWP_NOOWNERZORDER
+            | _SWP_NOACTIVATE
+            | _SWP_FRAMECHANGED
+        )
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
+        return True
+    except Exception as exc:
+        _log.debug("mark_embed_noactivate failed: %s", exc)
+        return False
 
 
 def force_widget_foreground(widget) -> bool:
