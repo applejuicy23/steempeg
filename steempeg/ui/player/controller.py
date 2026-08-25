@@ -5,6 +5,7 @@ volume and speed, the timeline and trim controls, fullscreen/theatre mode,
 screenshots and markers. They run on the application instance and reach its widgets
 and player through self.
 """
+from steempeg.ui import design_tokens as tok
 import json
 import logging
 import os
@@ -217,10 +218,10 @@ class PlayerMixin:
             wid = None
             if not external and hasattr(self, "mpv_screen") and self.mpv_screen is not None:
                 try:
-                    wrapper = getattr(self, "mpv_wrapper", None)
-                    if wrapper is not None and hasattr(wrapper, "prepare_native_embed"):
-                        wrapper.prepare_native_embed()
-                    self.mpv_screen.show()
+                    # First create must not grab winId while the stack is on
+                    # video_blank_frame — that parks the native child to 0x0 and
+                    # NVIDIA/XWayland keeps a black surface while audio plays.
+                    self._prepare_linux_embed_for_wid()
                     wid = int(self.mpv_screen.winId())
                 except Exception as exc:
                     logging.warning("Linux mpv wid unavailable: %s", exc)
@@ -304,6 +305,53 @@ class PlayerMixin:
             return True
         self._linux_mpv_vo_attached = True
         return True
+
+    def _prepare_linux_embed_for_wid(self) -> None:
+        """Map ``video_container`` and give the native child a real size before winId.
+
+        Open paths park the embed under ``video_blank_frame`` (0x0 + hide). Creating
+        libmpv there on NVIDIA/XWayland yields a black surface for the whole first
+        clip even though mpv reports frames — the next loadfile reconfig "fixes" it.
+        """
+        if sys.platform == "win32":
+            return
+        stack = getattr(self, "video_stack", None)
+        container = getattr(getattr(self, "ui", None), "video_container", None)
+        if stack is not None and container is not None:
+            try:
+                if stack.currentWidget() is not container:
+                    stack.setCurrentWidget(container)
+            except Exception:
+                pass
+        wrapper = getattr(self, "mpv_wrapper", None)
+        if wrapper is not None:
+            try:
+                if hasattr(wrapper, "prepare_native_embed"):
+                    wrapper.prepare_native_embed()
+                wrapper._last_video_rect = None
+                if hasattr(wrapper, "update_geometry"):
+                    wrapper.update_geometry()
+            except Exception:
+                pass
+        screen = getattr(self, "mpv_screen", None)
+        if screen is not None:
+            try:
+                screen.show()
+            except Exception:
+                pass
+
+    def _kick_linux_embed_surface(self) -> None:
+        """Re-apply embed geometry after the stack shows ``video_container``."""
+        if sys.platform == "win32":
+            return
+        wrapper = getattr(self, "mpv_wrapper", None)
+        if wrapper is None or not hasattr(wrapper, "update_geometry"):
+            return
+        try:
+            wrapper._last_video_rect = None
+            wrapper.update_geometry()
+        except Exception as exc:
+            logging.debug("Linux embed surface kick failed: %s", exc)
 
     def _clear_player_surface(self):
         """Stop mpv and return the player area to the empty placeholder.
@@ -798,6 +846,61 @@ class PlayerMixin:
         except Exception:
             pass
 
+    def _clear_preview_switch_gates(self) -> None:
+        """Drop spam-click / first-frame gates (never leave these stuck)."""
+        self._is_switching = False
+        self._awaiting_first_frame = False
+
+    def _arm_preview_switch_watchdog(self, switch_gen: int) -> None:
+        """Hard timeout so a missed first-frame reveal cannot ignore clicks forever.
+
+        Linux remux/DASH opens are where guards have stuck in the wild; Windows
+        gets a shorter shared watchdog that is still past the soft 800ms finish.
+        """
+        delay_ms = 2500 if sys.platform != "win32" else 1500
+        QTimer.singleShot(
+            delay_ms, lambda g=switch_gen: self._preview_switch_watchdog_fire(g)
+        )
+
+    def _preview_switch_watchdog_fire(self, switch_gen: int) -> None:
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
+        stuck_switch = bool(getattr(self, "_is_switching", False))
+        stuck_await = bool(getattr(self, "_awaiting_first_frame", False))
+        if not stuck_switch and not stuck_await:
+            return
+        mpv_alive = False
+        try:
+            mpv_alive = bool(self._mpv_has_media())
+        except Exception:
+            mpv_alive = False
+        logging.warning(
+            "Preview switch watchdog: clearing stuck gates "
+            "(switching=%s awaiting=%s mpv_media=%s gen=%s)",
+            stuck_switch,
+            stuck_await,
+            mpv_alive,
+            switch_gen,
+        )
+        # Prefer the normal reveal path when mpv already has media so timeline
+        # thumbs / deferred chrome still run.
+        if stuck_await:
+            self._first_frame_deadline = 0
+            self._reveal_video_when_ready()
+        if getattr(self, "_is_switching", False) or getattr(
+            self, "_awaiting_first_frame", False
+        ):
+            if hasattr(self, "video_stack") and hasattr(self.ui, "video_container"):
+                try:
+                    self.video_stack.setCurrentWidget(self.ui.video_container)
+                except Exception:
+                    pass
+            self._kick_linux_embed_surface()
+            self._finish_preview_switch(switch_gen)
+            clip = getattr(self, "_preview_clip_path", None)
+            if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
+                self._maybe_start_thumbs_after_quality(clip)
+
     def _reveal_video_when_ready(self):
         """Swap the placeholder for the live mpv surface once the first frame exists.
 
@@ -819,18 +922,27 @@ class PlayerMixin:
         ready = False
         playback_alive = False
         try:
-            if self.player.width:
+            if self.player and self.player.width:
                 ready = True
         except Exception:
             ready = True  # never get wedged on a transient property error
 
         if not ready:
             try:
-                pos = self.player.time_pos
+                pos = self.player.time_pos if self.player else None
                 if pos is not None and float(pos) >= 0.0:
                     playback_alive = True
             except Exception:
                 playback_alive = False
+
+        # Linux: if demux already reports a path and play is underway, treat as
+        # alive even when width/time_pos lag — unblocks chrome after remux cache hits.
+        if not ready and not playback_alive and sys.platform != "win32":
+            try:
+                if self._mpv_has_media() and not getattr(self.player, "pause", True):
+                    playback_alive = True
+            except Exception:
+                pass
 
         if playback_alive and getattr(self, "_clip_open_loading_hosts", None):
             # Overlay tracks "open", not "surface visible" — hide as soon as
@@ -868,6 +980,9 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
+        self._kick_linux_embed_surface()
+        if sys.platform != "win32":
+            QTimer.singleShot(0, self._kick_linux_embed_surface)
         # Switching gate can clear as soon as the new picture is visible.
         self._finish_preview_switch(switch_gen)
         clip = getattr(self, "_preview_clip_path", None)
@@ -1586,11 +1701,11 @@ class PlayerMixin:
                 " border: none;"
                 f" font-size: {font_px}px;"
                 " font-weight: bold;"
-                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;"
+                " font-family: " + tok.FONT_APP + ";"
                 "}"
             )
             font = hint.font()
-            font.setFamily("Segoe UI")
+            font = tok.pin_ui_font(font)
             font.setBold(True)
             font.setPixelSize(font_px)
             hint.setFont(font)
@@ -2694,9 +2809,26 @@ class PlayerMixin:
         """Clear the switching gate and apply deferred trim once duration is ready."""
         if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
             return
+        was_awaiting = bool(getattr(self, "_awaiting_first_frame", False))
+        # Soft 800ms finish (and watchdog) must clear BOTH gates — awaiting alone
+        # still blocks seeks, same-clip spam guards, and related-clip open.
+        self._awaiting_first_frame = False
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.setEnabled(True)
         self._is_switching = False
+        if was_awaiting:
+            logging.debug(
+                "Preview switch finished while first-frame still pending (gen=%s)",
+                switch_gen,
+            )
+            if hasattr(self, "video_stack") and hasattr(self.ui, "video_container"):
+                try:
+                    self.video_stack.setCurrentWidget(self.ui.video_container)
+                except Exception:
+                    pass
+            self._kick_linux_embed_surface()
+            if sys.platform != "win32":
+                QTimer.singleShot(0, self._kick_linux_embed_surface)
         if hasattr(self, "clear_clip_open_loading"):
             self.clear_clip_open_loading()
         has_trim = bool(getattr(self, "_pending_trim_restore", None))
@@ -2848,7 +2980,7 @@ class PlayerMixin:
                 self._start_timeline_thumb_batch(abs_path, duration_sec)
             if hasattr(self, "custom_timeline"):
                 self.custom_timeline.setEnabled(True)
-            self._is_switching = False
+            self._clear_preview_switch_gates()
             if hasattr(self.ui, "btn_play"):
                 self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
             return
@@ -2863,7 +2995,7 @@ class PlayerMixin:
                 if ext not in RENDERED_AUDIO_EXTS:
                     abs_path = os.path.abspath(file_path).replace("\\", "/")
                     self._start_timeline_thumb_batch(abs_path, resolved)
-            self._is_switching = False
+            self._clear_preview_switch_gates()
 
     def _reap_timeline_thumb_thread(self, thread) -> None:
         """Drop a finished batch thread from the keep-alive list (safe to GC)."""
@@ -3006,9 +3138,13 @@ class PlayerMixin:
         # Mirrors Clips Manager skip-reopen of the current clip.
         if (
             not getattr(self, "_is_switching", False)
+            and not getattr(self, "_awaiting_first_frame", False)
             and self._norm_clip_path_key(file_path)
             == self._norm_clip_path_key(getattr(self, "_active_play_media_path", None))
         ):
+            logging.debug(
+                "Rendered play skipped (already open): %s", file_path
+            )
             self._preview_clip_path = file_path
             self._rendered_media_path = file_path
             return
@@ -3046,6 +3182,7 @@ class PlayerMixin:
         from steempeg.core.rendered_media import load_markers_sidecar, markers_to_canvas
 
         switch_gen = self._begin_preview_switch()
+        self._preview_switch_gen = switch_gen
         self._is_switching = True
         self._force_pause = False
         self.current_clip_duration_sec = 0
@@ -3104,7 +3241,7 @@ class PlayerMixin:
             self.player.pause = False
         except Exception as exc:
             logging.error("MPV play file failed for %s: %s", abs_path, exc)
-            self._is_switching = False
+            self._clear_preview_switch_gates()
             return
 
         QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
@@ -3114,6 +3251,10 @@ class PlayerMixin:
 
         self._first_frame_deadline = time.time() + 0.6
         QTimer.singleShot(30, self._reveal_video_when_ready)
+        # Soft finish + hard watchdog — rendered path previously lacked both, so a
+        # stale _preview_switch_gen from a prior Steam open could leave awaiting stuck.
+        QTimer.singleShot(800, lambda g=switch_gen: self._finish_preview_switch(g))
+        self._arm_preview_switch_watchdog(switch_gen)
 
         if hasattr(self, "thumb_thread") and self.thumb_thread and self.thumb_thread.isRunning():
             self._stop_timeline_thumb_batch()
@@ -3439,6 +3580,13 @@ class PlayerMixin:
                 or getattr(self, "_awaiting_first_frame", False)
             )
         ):
+            logging.info(
+                "Preview skipped (open already in flight): %s "
+                "(switching=%s awaiting=%s)",
+                clip_path,
+                bool(getattr(self, "_is_switching", False)),
+                bool(getattr(self, "_awaiting_first_frame", False)),
+            )
             return
 
         self._opening_clip_path = clip_path
@@ -3524,7 +3672,7 @@ class PlayerMixin:
         all_mpds = [mpd_override] if mpd_override else self.get_all_mpd_paths(clip_path)
         if not all_mpds:
             logging.warning("No MPD found for clip: %s", clip_path)
-            self._is_switching = False
+            self._clear_preview_switch_gates()
             self._pending_open_seek = None
             self._open_seek_timer_armed = False
             if hasattr(self, "clear_clip_open_loading"):
@@ -3818,7 +3966,7 @@ class PlayerMixin:
 
                 need, _free = remux_disk_plan(abs_path)
                 if not ensure_linux_disk_for_remux(self.ui, need_bytes=need):
-                    self._is_switching = False
+                    self._clear_preview_switch_gates()
                     if hasattr(self, "clear_clip_open_loading"):
                         self.clear_clip_open_loading()
                     return
@@ -3829,7 +3977,7 @@ class PlayerMixin:
             started = start_remux_job(abs_path)
         except Exception as exc:
             logging.error("DASH remux start failed for %s: %s", abs_path, exc)
-            self._is_switching = False
+            self._clear_preview_switch_gates()
             if hasattr(self, "clear_clip_open_loading"):
                 self.clear_clip_open_loading()
             try:
@@ -3857,7 +4005,7 @@ class PlayerMixin:
             if switch_gen != getattr(self, "_media_switch_gen", 0):
                 return
             if err_text:
-                self._is_switching = False
+                self._clear_preview_switch_gates()
                 try:
                     from steempeg.infra.disk_space import looks_like_disk_full_error
                     from steempeg.ui.disk_space_warning import warn_linux_disk_remux_blocked
@@ -3974,7 +4122,7 @@ class PlayerMixin:
 
         try:
             if not self._ensure_linux_mpv_vo():
-                self._is_switching = False
+                self._clear_preview_switch_gates()
                 return
             self.player.play(play_path)
             self.player.pause = False
@@ -3983,14 +4131,14 @@ class PlayerMixin:
             self._discard_dead_linux_mpv()
             try:
                 if not self._ensure_linux_mpv_vo():
-                    self._is_switching = False
+                    self._clear_preview_switch_gates()
                     return
                 self.player.play(play_path)
                 self.player.pause = False
             except Exception as exc2:
                 logging.error("MPV play failed for %s: %s", play_path, exc2)
                 self._discard_dead_linux_mpv()
-                self._is_switching = False
+                self._clear_preview_switch_gates()
                 return
 
         self._clip_open_play_t0 = time.time()
@@ -4036,8 +4184,10 @@ class PlayerMixin:
             self._set_timeline_batch_thumbs_busy(False)
             self._pending_timeline_thumbs = None
         
-        # Safety: if first-frame reveal never fires, still drop the switching gate.
+        # Soft finish clears switching; finish now also clears awaiting.
         QTimer.singleShot(800, lambda g=switch_gen: self._finish_preview_switch(g))
+        # Hard watchdog — Linux remux-cache opens have left both gates stuck.
+        self._arm_preview_switch_watchdog(switch_gen)
 
         if hasattr(self, '_maybe_offer_salvage_verification'):
             QTimer.singleShot(600, self._maybe_offer_salvage_verification)
@@ -4624,7 +4774,7 @@ class PlayerMixin:
                 "QFrame#screenshotToast { background-color: #1f1f1f; border: 1px solid #6b5a8e;"
                 " border-radius: 10px; }"
                 " QLabel { color: #e8e8e8; background: transparent; font-size: 12px;"
-                " font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif; }"
+                " font-family: " + tok.FONT_APP + "; }"
                 " QPushButton { background-color: #4a3f63; color: #ffffff; border: none;"
                 " border-radius: 7px; padding: 5px 12px; font-weight: bold; font-size: 11px; }"
                 " QPushButton:hover { background-color: #6b5a8e; }"

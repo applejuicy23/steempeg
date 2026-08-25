@@ -1168,7 +1168,7 @@ class LibraryMixin:
         title_lbl = QLabel(display.label)
         title_lbl.setStyleSheet(
             f"color: {display.color}; font-weight: bold; font-size: 13px;"
-            f" font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji'; background: transparent;"
+            f" font-family: {tok.FONT_APP}; background: transparent;"
         )
         title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
         title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
@@ -1225,7 +1225,7 @@ class LibraryMixin:
         title_lbl = QLabel(display.label)
         title_lbl.setStyleSheet(
             f"color: {display.color}; font-weight: bold; font-size: 13px;"
-            f" font-family: 'Segoe UI'; background: transparent;"
+            f" font-family: {tok.FONT_APP}; background: transparent;"
         )
         title_row.addWidget(title_icon, 0, Qt.AlignVCenter)
         title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
@@ -1954,6 +1954,9 @@ class LibraryMixin:
         self._pending_preview_post_open = None
         self._pending_quality_populate = None
         self._pending_timeline_thumbs = None
+        # Bumping media gen orphans the soft 800ms finish — clear BOTH gates here
+        # or a cancelled rapid switch leaves _is_switching stuck and ignores clicks.
+        self._is_switching = False
         self._awaiting_first_frame = False
         progressive = getattr(self, "_progressive_remux", None)
         if progressive is not None:
@@ -2135,7 +2138,8 @@ class LibraryMixin:
                     if row_item and not row_item.isHidden():
                         row_item.setSelected(True)
             else:
-                # Already the open clip — ignore the click (no reload).
+                # Already the open clip — ignore the click (no reload) unless the
+                # first-frame / switching gate is stuck (Linux rapid-switch hang).
                 clip_path = item.data(Qt.UserRole + 1)
                 if (
                     update_preview
@@ -2146,12 +2150,33 @@ class LibraryMixin:
                         getattr(self, "_preview_clip_path", None)
                     )
                 ):
-                    item.setSelected(True)
-                    grid.blockSignals(False)
-                    self._grid_select_in_progress = False
-                    if hasattr(self, "_sync_grid_card_visuals"):
-                        self._sync_grid_card_visuals()
-                    return
+                    stuck = bool(
+                        getattr(self, "_is_switching", False)
+                        or getattr(self, "_awaiting_first_frame", False)
+                    )
+                    if stuck:
+                        logging.info(
+                            "Same-clip re-click while switch stuck — "
+                            "clearing gates and reopening: %s",
+                            clip_path,
+                        )
+                        if hasattr(self, "_clear_preview_switch_gates"):
+                            self._clear_preview_switch_gates()
+                        else:
+                            self._is_switching = False
+                            self._awaiting_first_frame = False
+                        # Fall through to reload so timeline/thumbs recover.
+                    else:
+                        logging.debug(
+                            "Same-clip click ignored (already previewing): %s",
+                            clip_path,
+                        )
+                        item.setSelected(True)
+                        grid.blockSignals(False)
+                        self._grid_select_in_progress = False
+                        if hasattr(self, "_sync_grid_card_visuals"):
+                            self._sync_grid_card_visuals()
+                        return
                 grid.clearSelection()
                 item.setSelected(True)
 
@@ -2513,7 +2538,7 @@ class LibraryMixin:
         display = path if len(path) <= 42 else "…" + path[-41:]
         label = QLabel(prefix + display)
         label.setObjectName("FolderRowLabel")
-        label.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        label.setFont(tok.ui_qfont(13, weight=QFont.Weight.Bold))
         tip = "Main folder\n" if is_main else ""
         steam_id = steam_id_from_clips_folder(path)
         if steam_id:
