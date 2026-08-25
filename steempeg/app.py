@@ -1553,7 +1553,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     unknown_pix = shaped_game_icon_pixmap(QPixmap(unknown), 24, ICON_SHAPE_CIRCLE)
                     self.bottom_icon_label.setStyleSheet("background: transparent; border: none;")
                     apply_square_icon(self.bottom_icon_label, unknown_pix, 24)
-                    self.bottom_text_label.setText("Select a clip to begin...")
+                    self.bottom_text_label.setText("Select a clip to continue...")
 
                     if hasattr(self, 'custom_icon_label') and hasattr(self, 'custom_text_label'):
                         self.custom_icon_label.setStyleSheet("background: transparent; border: none;")
@@ -1569,7 +1569,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         apply_square_icon(self.custom_icon_label, hdr_pix, hdr_px)
                         set_player_header_game_text(
                             self,
-                            "Select a clip to preview...",
+                            "Choose a clip to preview...",
                             placeholder=True,
                         )
 
@@ -2733,6 +2733,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.player["af"] = "rubberband"
             except Exception as exc:
                 logging.warning("mpv rubberband af unavailable: %s", exc)
+            # Embedded wid= HWND must not activate the shell when it eats input —
+            # otherwise opening Explorer while a clip plays can leave Steempeg on top.
+            try:
+                from steempeg.infra.window_focus import mark_embed_noactivate
+
+                mark_embed_noactivate(self.mpv_screen)
+            except Exception:
+                logging.debug("mpv embed noactivate failed", exc_info=True)
             self._init_preview_quality()
             self._apply_saved_preview_quality_to_player()
         else:
@@ -3966,6 +3974,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             )
 
         self._refresh_player_footer_chrome(dense)
+
+        if hasattr(self, "_refresh_immersive_esc_hint_chrome"):
+            try:
+                self._refresh_immersive_esc_hint_chrome()
+            except Exception:
+                pass
 
         from steempeg.ui.render_panel import (
             apply_render_panel_theme_chrome,
@@ -5738,8 +5752,12 @@ def main():
         from PySide6.QtCore import Qt
         if sys.platform == "win32":
             # Custom Win32 chrome: keep native frame styles, hide painted caption later.
+            # WindowSystemMenuHint keeps Alt+F4 / Alt+Space wired to the shell HWND.
+            # NonModal: QDialog defaults must not keep the shell above other apps.
+            window.ui.setWindowModality(Qt.WindowModality.NonModal)
             window.ui.setWindowFlags(
                 Qt.WindowType.Window
+                | Qt.WindowType.WindowSystemMenuHint
                 | Qt.WindowType.WindowMinimizeButtonHint
                 | Qt.WindowType.WindowMaximizeButtonHint
                 | Qt.WindowType.WindowCloseButtonHint
@@ -5902,6 +5920,19 @@ def main():
         # foreground after first paint (launcher / terminal may still hold focus).
         _bring_main_to_front()
         QTimer.singleShot(0, _bring_main_to_front)
+        # Belt-and-suspenders: strip any stuck WS_EX_TOPMOST after the startup
+        # focus flashes settle (otherwise Explorer stays under Steempeg).
+        if sys.platform == "win32":
+            def _clear_startup_topmost():
+                try:
+                    from steempeg.infra.window_focus import clear_widget_topmost
+
+                    clear_widget_topmost(window.ui)
+                except Exception:
+                    pass
+
+            QTimer.singleShot(100, _clear_startup_topmost)
+            QTimer.singleShot(500, _clear_startup_topmost)
         if ui_shell == UI_SHELL_PORTABLE:
             # Theatre under the veil; one late re-assert after settle reveal.
             window.apply_portable_theatre_shell()
