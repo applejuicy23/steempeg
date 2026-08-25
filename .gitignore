@@ -35,6 +35,7 @@ Thumbs.db
 # --- Local dev scaffolding (dismantled during refactor) ---
 pacher.py
 docs/ROADMAP.md
+docs/linux-known-issues.md
 steempeg/.footer_lane_experiment_archive.py
 steempeg/.footer_lane_experiment_archive.diff
 steempeg/.footer_lane_experiment_notes.md
