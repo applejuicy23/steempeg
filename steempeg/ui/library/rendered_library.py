@@ -864,20 +864,20 @@ class RenderedLibraryMixin:
             # Keep the ▾ split on every tab (hiding it made Refresh stretch weirdly).
             if hasattr(refresh, "set_menu_visible"):
                 refresh.set_menu_visible(True)
-            if mode == "rendered":
-                refresh.main_btn.setToolTip(
-                    "Rescan Rendered videos / Records folder only"
-                )
-            elif mode == "screenshots":
-                refresh.main_btn.setToolTip("Rescan the Screenshots folder only")
-            else:
-                refresh.main_btn.setToolTip(
-                    "Rescan Clips Manager only (use ▾ → Refresh all for everything)"
-                )
+            refresh.main_btn.setToolTip(
+                "Rescan Clips Manager, Rendered videos, and Screenshots"
+            )
             if hasattr(refresh, "menu_btn"):
-                refresh.menu_btn.setToolTip(
-                    "Refresh all libraries… (and Clips Steam tools when on Clips)"
-                )
+                if mode == "rendered":
+                    refresh.menu_btn.setToolTip(
+                        "Refresh Rendered videos only… (and health re-check)"
+                    )
+                elif mode == "screenshots":
+                    refresh.menu_btn.setToolTip("Refresh Screenshots only…")
+                else:
+                    refresh.menu_btn.setToolTip(
+                        "Refresh Clips Manager only… (and Steam icons / names / health)"
+                    )
 
     def _sync_library_mode_chrome(self):
         """Hide export settings while previewing finished media, not only on the tab."""
@@ -4355,7 +4355,9 @@ class RenderedLibraryMixin:
             row,
             health_color=None,
             round_icon=is_unknown,
-            on_left_click=lambda ev, grid_item=item: self._rendered_grid_select_item(grid_item, ev),
+            on_left_click=lambda ev, grid_item=item: self._defer_rendered_grid_select_item(
+                grid_item, ev
+            ),
             on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
         )
         self.grid_rendered.setItemWidget(item, card)
@@ -4702,6 +4704,83 @@ class RenderedLibraryMixin:
                 table.setCurrentCell(rows[0], 0)
         table.blockSignals(False)
 
+    def _cancel_pending_rendered_preview(self) -> None:
+        """Bump the open-generation token and stop any debounced export play."""
+        self._rendered_preview_gen = getattr(self, "_rendered_preview_gen", 0) + 1
+        timer = getattr(self, "_rendered_play_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
+        self._pending_rendered_play_path = None
+
+    def _schedule_rendered_selection_preview(self) -> None:
+        """Open the selected export after press anim + purple-ring chrome.
+
+        Same idea as Clips Manager ``_schedule_clips_selection_preview``: header /
+        MPV work must not run on the mouse-press stack or the same tick as the
+        press scale paint.
+        """
+        multi = getattr(
+            self,
+            "_MULTI_SELECT_MODIFIERS",
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier
+            | Qt.KeyboardModifier.AltModifier,
+        )
+        if QApplication.keyboardModifiers() & multi:
+            if hasattr(self, "update_playback_badge"):
+                self.update_playback_badge()
+            return
+        self._rendered_preview_gen = getattr(self, "_rendered_preview_gen", 0) + 1
+        gen = self._rendered_preview_gen
+        delay_ms = max(16, int(tok.CARD_PRESS_DURATION_MS))
+        QTimer.singleShot(delay_ms, lambda g=gen: self._run_rendered_selection_preview(g))
+
+    def _run_rendered_selection_preview(self, gen: int) -> None:
+        if gen != getattr(self, "_rendered_preview_gen", 0):
+            return
+        if getattr(self, "_library_panel_mode", "clips") != "rendered":
+            return
+        if hasattr(self, "update_rendered_selection"):
+            self.update_rendered_selection()
+
+    def _defer_rendered_grid_select_item(self, item, event=None) -> None:
+        """Schedule rendered-grid selection off the ClipCard mouse-press stack.
+
+        Press anim + first paint must finish returning before table sync /
+        purple ring / export open. Capture modifiers now — keys may be released
+        before the timer fires.
+        """
+        if hasattr(self, "_event_modifiers"):
+            mods = self._event_modifiers(event)
+        else:
+            mods = QApplication.keyboardModifiers()
+            if event is not None:
+                mods |= event.modifiers()
+        self._rendered_card_select_gen = getattr(self, "_rendered_card_select_gen", 0) + 1
+        self._cancel_pending_rendered_preview()
+        gen = self._rendered_card_select_gen
+        QTimer.singleShot(
+            0,
+            lambda g=gen, it=item, m=mods: self._run_deferred_rendered_grid_select(
+                g, it, m
+            ),
+        )
+
+    def _run_deferred_rendered_grid_select(self, gen: int, item, mods) -> None:
+        if gen != getattr(self, "_rendered_card_select_gen", 0):
+            return
+        try:
+            if item is None or not hasattr(self, "grid_rendered") or self.grid_rendered is None:
+                return
+            # Drop stale callbacks after a library rebuild destroyed the item.
+            _ = item.data(Qt.ItemDataRole.UserRole)
+        except RuntimeError:
+            return
+        self._rendered_grid_select_item(item, mods=mods)
+
     def _publish_rendered_grid_selection(self, *, update_preview: bool = True) -> None:
         if getattr(self, "_library_panel_mode", "clips") != "rendered":
             return
@@ -4711,15 +4790,31 @@ class RenderedLibraryMixin:
         if not self.grid_rendered.selectedItems():
             self._sync_rendered_table_from_grid_selection()
             self._sync_rendered_grid_card_visuals()
+            self._cancel_pending_rendered_preview()
             return
         self._sync_rendered_table_from_grid_selection(keep_current_cell=not update_preview)
+        # Selection chrome first — do not wait on header / MPV open.
         self._sync_rendered_grid_card_visuals()
+        if hasattr(self, "grid_rendered") and self.grid_rendered is not None:
+            try:
+                self.grid_rendered.viewport().repaint()
+            except RuntimeError:
+                pass
         if update_preview and hasattr(self, "update_rendered_selection"):
-            self.update_rendered_selection()
+            self._schedule_rendered_selection_preview()
+        else:
+            self._cancel_pending_rendered_preview()
 
-    def _rendered_grid_select_item(self, item, event=None, *, force_single: bool = False) -> None:
+    def _rendered_grid_select_item(
+        self, item, event=None, *, force_single: bool = False, mods=None
+    ) -> None:
         grid = self.grid_rendered
-        mods = self._event_modifiers(event)
+        if mods is None:
+            mods = (
+                self._event_modifiers(event)
+                if hasattr(self, "_event_modifiers")
+                else QApplication.keyboardModifiers()
+            )
         if force_single:
             mods = Qt.NoModifier
 
@@ -4781,9 +4876,11 @@ class RenderedLibraryMixin:
         pos = event.position().toPoint()
         item = self.grid_rendered.itemAt(pos)
         if item is None:
+            # Empty space keeps the current selection (same as Clips Manager).
             return True
 
-        self._rendered_grid_select_item(item, event)
+        # Same deferred path as ClipCard — never open on the press stack.
+        self._defer_rendered_grid_select_item(item, event)
         return True
 
     def _on_rendered_grid_selection_changed(self):
@@ -5223,12 +5320,5 @@ class RenderedLibraryMixin:
         LibraryMixin.show_filter_menu(self)
 
     def refresh_library(self):
-        mode = getattr(self, "_library_panel_mode", "clips")
-        if mode == "rendered":
-            self.refresh_rendered_library()
-            return
-        if mode == "screenshots":
-            self.refresh_screenshots_library(force=True)
-            return
-        from steempeg.ui.library.controller import LibraryMixin
-        LibraryMixin.refresh_library(self)
+        """Main Refresh button: rescan every library tab."""
+        self.refresh_all_libraries()
