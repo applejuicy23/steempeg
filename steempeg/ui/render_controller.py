@@ -2798,8 +2798,15 @@ class RenderMixin:
             return
 
         # --- Like a Portable ---
-        if not floating:
-            self._park_neo_away_from_dock()
+        # Floating Render Settings already owns neo — do NOT re-glue / setSizes the
+        # main v-splitter here. That was the 1–2s open lag (neo borrow + full dock
+        # sync × N). Dash geometry stays as-is until settings close.
+        if floating:
+            if hw is not None and hasattr(hw, "set_suppressed"):
+                hw.set_suppressed(True)
+            return
+
+        self._park_neo_away_from_dock()
         self._ensure_dash_in_bottom_wrap()
 
         dash = getattr(self, "render_dashboard", None)
@@ -2846,8 +2853,6 @@ class RenderMixin:
         from steempeg.ui.desktop_render_settings import toggle_desktop_render_settings
 
         toggle_desktop_render_settings(self)
-        self._sync_dash_render_settings_button()
-        self._sync_portable_like_dock_chrome()
 
     def focus_export_settings_panel(self) -> None:
         """Open Export Settings — Portable sheet, floating window, or neo Export tab."""
@@ -3247,8 +3252,6 @@ class RenderMixin:
         max_height = 0
         self.current_orig_bitrate = 0
         self.current_orig_audio_bitrate = 192
-        size_label_path = ""
-
         for mpd_path in all_mpds:
             try:
                 with open(mpd_path, "r", encoding="utf-8") as file:
@@ -3258,7 +3261,6 @@ class RenderMixin:
                     size_str, duration_str = self.get_clip_size_and_duration(
                         clip_full_path, content, measure_size=False
                     )
-                    size_label_path = clip_full_path
                     if hasattr(self.ui, "label_size"):
                         self.ui.label_size.setText(f"Size: {size_str}")
                     if hasattr(self.ui, "label_duration"):
@@ -3312,8 +3314,8 @@ class RenderMixin:
             except Exception:
                 pass
 
-        if size_label_path and hasattr(self, "_schedule_clip_folder_size_label"):
-            self._schedule_clip_folder_size_label(size_label_path)
+        if clip_path and hasattr(self, "_schedule_clip_folder_size_label"):
+            self._schedule_clip_folder_size_label(clip_path)
 
         # Rebuild audio combo once we know Original kbps from XML.
         orig_audio_bitrate = int(getattr(self, "current_orig_audio_bitrate", 192) or 192)
@@ -4906,6 +4908,8 @@ class RenderMixin:
         return text
 
     def refresh_export_presets_list(self) -> None:
+        import json
+
         from PySide6.QtWidgets import QListWidgetItem
 
         from steempeg.render.export_presets import (
@@ -4913,6 +4917,7 @@ class RenderMixin:
             get_preset_settings,
             list_preset_names,
             load_favourite_names,
+            load_presets_map,
         )
         from steempeg.ui.render_panel import PresetListRow
 
@@ -4921,12 +4926,30 @@ class RenderMixin:
             return
         selected = self._list_selected_export_preset_name()
         search = self._export_preset_search_text()
-        names = list_preset_names(self.load_user_settings, search=search)
+        # Fingerprint before widget rebuild — open paths call this every show.
+        presets_map = load_presets_map(self.load_user_settings)
         fav_set = set(load_favourite_names(self.load_user_settings))
         expanded = self._export_preset_expanded_names()
-        # Drop expand state for presets that no longer exist.
-        known = set(list_preset_names(self.load_user_settings, search=""))
+        known = set(presets_map.keys())
         expanded.intersection_update(known)
+        names = list_preset_names(self.load_user_settings, search=search)
+        try:
+            presets_blob = json.dumps(presets_map, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            presets_blob = repr(presets_map)
+        fp = (
+            search,
+            selected,
+            tuple(names),
+            frozenset(fav_set),
+            frozenset(expanded),
+            presets_blob,
+        )
+        if getattr(self, "_export_presets_list_fp", None) == fp and lst.count() == len(
+            names
+        ):
+            return
+        self._export_presets_list_fp = fp
 
         lst.blockSignals(True)
         lst.clear()
@@ -5404,6 +5427,8 @@ class RenderMixin:
             self._apply_export_session_state(session, silent=True)
             apply_job_settings_to_ui(self, job.settings)
             self.update_final_setup()
+            if hasattr(self, "_maybe_start_thumbs_after_quality"):
+                self._maybe_start_thumbs_after_quality(job.clip_path)
         except Exception:
             self._loading_queue_job = False
             raise

@@ -79,13 +79,9 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             pass
         self._title_bar.close_requested.connect(self.close_and_return)
 
-        if hasattr(app, "_sync_portable_like_dock_chrome"):
-            try:
-                app._sync_portable_like_dock_chrome()
-            except Exception:
-                pass
-        # Belt-and-suspenders: if chrome sync still yanked neo (legacy visibility
-        # gate), put it back so this window is never empty black.
+        # Do NOT call _sync_portable_like_dock_chrome here — with this dialog
+        # registered as floating it used to still re-glue the main splitter
+        # (1–2s lag). Neo is already borrowed into this window.
         self._reclaim_neo_into_dialog()
 
     def _reclaim_neo_into_dialog(self) -> None:
@@ -139,11 +135,9 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 app._sync_dash_render_settings_button()
             except Exception:
                 pass
-        if hasattr(app, "_sync_portable_like_dock_chrome"):
-            try:
-                app._sync_portable_like_dock_chrome()
-            except Exception:
-                pass
+        # Light close: neo already in garage — only re-glue dash. Full dock sync
+        # (setSizes + middle-gap + spacer walk) was the 1–2s close lag.
+        self._light_portable_like_after_settings_close(app)
 
     def _return_neo(self) -> None:
         if self._returned or self._neo is None:
@@ -202,11 +196,39 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 app._sync_dash_render_settings_button()
             except Exception:
                 pass
-        if hasattr(app, "_sync_portable_like_dock_chrome"):
-            try:
-                app._sync_portable_like_dock_chrome()
-            except Exception:
-                pass
+        self._light_portable_like_after_settings_close(app)
+
+    @staticmethod
+    def _light_portable_like_after_settings_close(app) -> None:
+        """Park neo + glue dash without a full portable-like dock rebuild."""
+        try:
+            if hasattr(app, "_desktop_render_layout_is_portable_like"):
+                if not app._desktop_render_layout_is_portable_like():
+                    if hasattr(app, "_sync_portable_like_dock_chrome"):
+                        app._sync_portable_like_dock_chrome()
+                    return
+            if hasattr(app, "_park_neo_away_from_dock"):
+                app._park_neo_away_from_dock()
+            if hasattr(app, "_glue_portable_like_dash_open"):
+                app._glue_portable_like_dash_open()
+            elif hasattr(app, "_reapply_portable_like_middle_gap"):
+                app._reapply_portable_like_middle_gap()
+        except Exception:
+            _log.exception("Light portable-like restore after Render Settings failed")
+            if hasattr(app, "_sync_portable_like_dock_chrome"):
+                try:
+                    app._sync_portable_like_dock_chrome()
+                except Exception:
+                    pass
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Re-tint dialog shell when UI theme changes while window is open."""
+        super().apply_ui_theme_chrome()
+        from steempeg.ui.render_panel import apply_render_panel_theme_chrome
+
+        ui = getattr(self._app, "ui", None)
+        if ui is not None:
+            apply_render_panel_theme_chrome(ui)
 
 
 def toggle_desktop_render_settings(app) -> None:
@@ -241,6 +263,7 @@ def toggle_desktop_render_settings(app) -> None:
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
+    # One reclaim only — no post-show dock sync (that re-glued the shell).
     if hasattr(dlg, "_reclaim_neo_into_dialog"):
         dlg._reclaim_neo_into_dialog()
     if hasattr(app, "_sync_dash_render_settings_button"):
@@ -248,13 +271,6 @@ def toggle_desktop_render_settings(app) -> None:
             app._sync_dash_render_settings_button()
         except Exception:
             pass
-    if hasattr(app, "_sync_portable_like_dock_chrome"):
-        try:
-            app._sync_portable_like_dock_chrome()
-        except Exception:
-            pass
-    if hasattr(dlg, "_reclaim_neo_into_dialog"):
-        dlg._reclaim_neo_into_dialog()
     if hasattr(app, "update_status_indicator"):
         try:
             app.update_status_indicator("Ready", "ready")
