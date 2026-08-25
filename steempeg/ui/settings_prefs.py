@@ -176,6 +176,12 @@ def apply_default_render_tab(app, tab: object | None = None) -> int:
     if count <= 0:
         return -1
     idx = max(0, min(idx, count - 1))
+    # Skip no-op tab switches — setCurrentIndex still forces a layout pass.
+    if tabs.currentIndex() == idx:
+        buttons = getattr(app, "neo_nav_buttons", None) or []
+        if idx < len(buttons) and not buttons[idx].isChecked():
+            buttons[idx].setChecked(True)
+        return idx
     tabs.setCurrentIndex(idx)
     buttons = getattr(app, "neo_nav_buttons", None) or []
     if idx < len(buttons):

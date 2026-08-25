@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from steempeg.render.queue import RenderJobSettings
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
-from steempeg.ui.message_dialog import _BTN_SECONDARY, dialog_theme
+from steempeg.ui.message_dialog import dialog_theme
 from steempeg.ui.portable.render_controls import PortableRenderControlStrip
 from steempeg.ui.render_job_builder import apply_job_settings_to_ui, snapshot_settings_from_ui
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -533,9 +533,10 @@ class PortableRenderSettingsDialog(SteempegDialog):
         footer_lay.setContentsMargins(12, 10, 12, 12)
         footer_lay.setSpacing(8)
 
+        sec_btn = ut.settings_dialog_secondary_button_stylesheet()
         btn_choose = QPushButton("Choose a Clip")
         btn_choose.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_choose.setStyleSheet(_BTN_SECONDARY)
+        btn_choose.setStyleSheet(sec_btn)
         btn_choose.setToolTip("Open Clips Manager without closing Render settings")
         btn_choose.clicked.connect(self._on_choose_clip)
         footer_lay.addWidget(btn_choose, 0)
@@ -544,7 +545,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
 
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setStyleSheet(_BTN_SECONDARY)
+        btn_save.setStyleSheet(sec_btn)
         btn_save.clicked.connect(self._on_save)
         footer_lay.addWidget(btn_save)
         self.content_layout.addWidget(footer, 0)
@@ -672,8 +673,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
         if save_bar is not None:
             try:
                 save_bar.setStyleSheet(ut.portable_render_save_bar_stylesheet())
+                sec = ut.settings_dialog_secondary_button_stylesheet()
                 for btn in save_bar.findChildren(QPushButton):
-                    btn.setStyleSheet(_BTN_SECONDARY)
+                    btn.setStyleSheet(sec)
             except Exception:
                 pass
 

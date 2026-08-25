@@ -30,6 +30,7 @@ from steempeg.infra.paths import (
 )
 from steempeg.services import marker_prefs as mprefs
 from steempeg.ui import design_tokens as tok
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.icon_utils import apply_square_icon
 from steempeg.ui.marker_icons import (
     class_display_pixmap,
@@ -38,13 +39,10 @@ from steempeg.ui.marker_icons import (
     tint_pixmap,
 )
 from steempeg.ui.message_dialog import (
-    _BTN_DANGER,
-    _BTN_PRIMARY,
-    _BTN_SECONDARY,
     dialog_theme,
     steempeg_question,
 )
-from steempeg.ui.widgets.combo_chrome import COMBO_POPUP_ITEM_RULES
+from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
@@ -56,77 +54,6 @@ _HINT = (
     f"color: {tok.TEXT_MUTED}; font-size: 12px; background: transparent; "
     f"font-family: {tok.FONT_APP};"
 )
-_FIELD = """
-    QLineEdit, QComboBox {
-        background-color: #2d2d2d; color: #f0f0f0; border: 1px solid #555;
-        border-radius: 6px; padding: 6px 10px; font-size: 13px;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-        min-height: 30px;
-        selection-background-color: #3a3a3a;
-        selection-color: #f0f0f0;
-    }
-    QLineEdit:focus, QComboBox:focus { border-color: #6b5a8e; }
-    QComboBox:on { background-color: #2d2d2d; color: #f0f0f0; }
-    QComboBox::drop-down { border: none; width: 24px; }
-""" + COMBO_POPUP_ITEM_RULES
-_LIST = """
-    QListWidget {
-        background-color: #242424; border: 1px solid #444; border-radius: 8px;
-        color: #eee; font-size: 13px; outline: none;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-    }
-    QListWidget::item {
-        padding: 6px 8px; margin: 2px 4px; border-radius: 6px;
-        min-height: 22px;
-    }
-    QListWidget::item:selected { background-color: #3a3a3a; color: #ffffff; }
-    QListWidget::item:hover:!selected { background-color: #333; }
-"""
-# Class rows use setItemWidget — item padding must stay 0 or the pin icons drift.
-_CLASS_LIST = """
-    QListWidget {
-        background-color: #242424; border: 1px solid #444; border-radius: 8px;
-        color: #eee; font-size: 13px; outline: none;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-    }
-    QListWidget::item {
-        padding: 0px; margin: 2px 4px; border-radius: 6px;
-    }
-    QListWidget::item:selected { background-color: #3a3a3a; }
-    QListWidget::item:hover:!selected { background-color: #333; }
-"""
-_MARKER_HOST = """
-    QScrollArea {
-        background-color: #242424; border: none;
-    }
-    QScrollArea > QWidget {
-        background-color: #242424;
-    }
-    QWidget#markerListInner {
-        background-color: #242424; border: 1px solid #444; border-radius: 8px;
-    }
-"""
-_PICK_ROW = """
-    QFrame#mkPick {
-        background: transparent; border-radius: 6px;
-    }
-    QFrame#mkPick:hover {
-        background-color: #333;
-    }
-    QFrame#mkPick QLabel {
-        color: #e8e8e8; font-size: 13px; background: transparent;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-    }
-"""
-_PICK_ROW_SEL = """
-    QFrame#mkPick {
-        background-color: #3a3a3a; border-radius: 6px;
-    }
-    QFrame#mkPick QLabel {
-        color: #ffffff; font-size: 13px; background: transparent;
-        font-family: 'Segoe UI', 'Noto Sans', Arial, sans-serif;
-    }
-"""
 _ICON_BTN = """
     QPushButton {
         background: transparent; border: none; color: #ccc;
@@ -137,19 +64,26 @@ _ICON_BTN = """
 _CLASS_ROW_H = 36
 _CLASS_ICON = 22
 _SHOT_EXPAND_AT = 5
-_TABS = f"""
+
+
+def _marker_tabs_stylesheet() -> str:
+    p = ut.active_palette()
+    tab_bg = "#2a2a2a" if p.name == ut.UI_THEME_DEFAULT else p.bg_elevated
+    tab_hover = "#353535" if p.name == ut.UI_THEME_DEFAULT else p.neo_nav_hover_bg
+    return f"""
     QTabWidget {{ background-color: {tok.BG_SHELL}; border: none; }}
     QTabWidget > QStackedWidget {{ background-color: {tok.BG_SHELL}; }}
     QTabWidget::pane {{
-        border: 1px solid #444; border-radius: 8px; background-color: {tok.BG_SHELL};
+        border: 1px solid {p.border_default}; border-radius: 8px;
+        background-color: {tok.BG_SHELL};
     }}
     QTabBar::tab {{
-        background: #2a2a2a; color: #aaa; padding: 8px 16px; margin-right: 4px;
+        background: {tab_bg}; color: #aaa; padding: 8px 16px; margin-right: 4px;
         border-top-left-radius: 6px; border-top-right-radius: 6px;
-        font-family: 'Segoe UI', Arial; font-size: 12px; font-weight: bold;
+        font-family: {tok.FONT_APP}; font-size: 12px; font-weight: bold;
     }}
     QTabBar::tab:selected {{ background: #4a3d66; color: #fff; }}
-    QTabBar::tab:hover:!selected {{ background: #353535; color: #ddd; }}
+    QTabBar::tab:hover:!selected {{ background: {tab_hover}; color: #ddd; }}
 """
 
 
@@ -174,7 +108,7 @@ class _MarkerPickRow(QFrame):
         self._key = row_id
         self.setObjectName("mkPick")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(_PICK_ROW)
+        self.setStyleSheet(ut.marker_settings_pick_row_stylesheet())
         if tip:
             self.setToolTip(tip)
         lay = QHBoxLayout(self)
@@ -196,7 +130,7 @@ class _MarkerPickRow(QFrame):
         lay.addWidget(self._lbl, 1, Qt.AlignmentFlag.AlignVCenter)
 
     def set_selected(self, selected: bool) -> None:
-        self.setStyleSheet(_PICK_ROW_SEL if selected else _PICK_ROW)
+        self.setStyleSheet(ut.marker_settings_pick_row_stylesheet(selected=selected))
 
     def set_label(self, text: str) -> None:
         self._lbl.setText(text)
@@ -226,7 +160,7 @@ class _ScreenshotGroup(QWidget):
 
         header = QFrame()
         header.setObjectName("mkPick")
-        header.setStyleSheet(_PICK_ROW)
+        header.setStyleSheet(ut.marker_settings_pick_row_stylesheet())
         h = QHBoxLayout(header)
         h.setContentsMargins(8, 6, 8, 6)
         h.setSpacing(6)
@@ -376,7 +310,7 @@ class MarkerSettingsDialog(SteempegDialog):
         root.addWidget(intro)
 
         self._tabs = QTabWidget()
-        self._tabs.setStyleSheet(_TABS)
+        self._tabs.setStyleSheet(_marker_tabs_stylesheet())
         self._tabs.addTab(self._build_markers_tab(), "On clip")
         if self._is_cs2_clip:
             self._tabs.addTab(self._build_cs2_tab(), "CS2")
@@ -385,18 +319,15 @@ class MarkerSettingsDialog(SteempegDialog):
 
         foot = QHBoxLayout()
         btn_reset_steam = QPushButton("Reset game markers")
-        btn_reset_steam.setStyleSheet(_BTN_SECONDARY)
         btn_reset_steam.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset_steam.clicked.connect(self._reset_steam)
         btn_reset_all = QPushButton("Reset all")
-        btn_reset_all.setStyleSheet(_BTN_DANGER)
         btn_reset_all.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset_all.clicked.connect(self._reset_all)
         foot.addWidget(btn_reset_steam)
         foot.addWidget(btn_reset_all)
         foot.addStretch(1)
         btn_close = QPushButton("Close")
-        btn_close.setStyleSheet(_BTN_PRIMARY)
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.accept)
         foot.addWidget(btn_close)
@@ -405,6 +336,91 @@ class MarkerSettingsDialog(SteempegDialog):
         self._reload_classes()
         self._repopulate_markers()
         self._reload_class_combo()
+        self._apply_marker_form_chrome()
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Live-retint when Settings switches UI theme while Marker Settings is open."""
+        super().apply_ui_theme_chrome()
+        self._apply_marker_form_chrome()
+
+    def _apply_marker_form_chrome(self) -> None:
+        """Re-bake tabs, fields, lists, and footer actions from active tokens."""
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
+
+        field_qss = ut.marker_settings_field_stylesheet()
+        list_qss = ut.marker_settings_list_stylesheet()
+        class_list_qss = ut.marker_settings_list_stylesheet(item_padding="0px")
+        host_qss = ut.marker_settings_list_host_stylesheet()
+        preview_qss = ut.marker_settings_preview_plate_stylesheet()
+        primary = ut.update_center_btn_primary_stylesheet()
+        secondary = ut.settings_dialog_secondary_button_stylesheet()
+        danger = ut.dialog_btn_danger_stylesheet()
+
+        if hasattr(self, "_tabs"):
+            self._tabs.setStyleSheet(_marker_tabs_stylesheet())
+        for scroll in self.findChildren(QScrollArea):
+            inner = scroll.widget()
+            if inner is not None:
+                inner.setStyleSheet(f"background-color: {tok.BG_SHELL};")
+            tok.apply_dialog_scroll_bg(scroll, tok.BG_SHELL)
+            scroll.setStyleSheet(
+                tok.dialog_scroll_stylesheet(tok.BG_SHELL) + LIBRARY_SCROLLBAR_VERTICAL
+            )
+            install_library_vertical_scrollbar(scroll)
+        if hasattr(self, "_marker_scroll"):
+            self._marker_scroll.setStyleSheet(host_qss + LIBRARY_SCROLLBAR_VERTICAL)
+            tok.apply_dialog_scroll_bg(
+                self._marker_scroll, ut.active_palette().bg_elevated
+            )
+        if hasattr(self, "_class_list"):
+            self._class_list.setStyleSheet(class_list_qss)
+        for edit in self.findChildren(QLineEdit):
+            edit.setStyleSheet(field_qss)
+        for combo in self.findChildren(QComboBox):
+            combo.setStyleSheet(field_qss)
+            apply_dark_combo_popup(combo)
+        for preview in (
+            getattr(self, "_mk_preview", None),
+            getattr(self, "_mk_shot_preview", None),
+        ):
+            if preview is not None:
+                extra = " color: #888;" if preview is getattr(self, "_mk_shot_preview", None) else ""
+                preview.setStyleSheet(preview_qss + extra)
+        from steempeg.ui.window_chrome import _TrafficLight
+
+        for btn in self.findChildren(QPushButton):
+            # Title-bar traffic lights are QPushButtons — never restyle them as
+            # form buttons (idle becomes a gray square; hover restores via
+            # _TrafficLight._apply_style).
+            if isinstance(btn, _TrafficLight):
+                btn._apply_style()
+                continue
+            if btn.styleSheet().strip() == _ICON_BTN.strip():
+                continue
+            label = (btn.text() or "").strip().lower()
+            if label in ("close", "+ create"):
+                btn.setStyleSheet(primary)
+            elif "delete" in label or label == "reset all":
+                btn.setStyleSheet(danger)
+            else:
+                btn.setStyleSheet(secondary)
+        for rid, pick in getattr(self, "_pick_rows", {}).items():
+            pick.setStyleSheet(
+                ut.marker_settings_pick_row_stylesheet(
+                    selected=(rid == getattr(self, "_selected_row_id", None))
+                )
+            )
+        shot_group = getattr(self, "_shot_group", None)
+        if shot_group is not None:
+            for pick in getattr(shot_group, "_pick_rows", []):
+                pick.setStyleSheet(
+                    ut.marker_settings_pick_row_stylesheet(
+                        selected=(pick._row_id == getattr(self, "_selected_row_id", None))
+                    )
+                )
 
     def _build_cs2_tab(self) -> QWidget:
         page = QWidget()
@@ -444,7 +460,6 @@ class MarkerSettingsDialog(SteempegDialog):
         left = QVBoxLayout()
         left.addWidget(self._section("Class list"))
         self._class_list = QListWidget()
-        self._class_list.setStyleSheet(_CLASS_LIST)
         self._class_list.setMinimumWidth(200)
         self._class_list.setMinimumHeight(220)
         self._class_list.setSpacing(0)
@@ -452,10 +467,8 @@ class MarkerSettingsDialog(SteempegDialog):
         left.addWidget(self._class_list, 1)
         btn_row = QHBoxLayout()
         btn_add = QPushButton("+ Create")
-        btn_add.setStyleSheet(_BTN_PRIMARY)
         btn_add.clicked.connect(self._add_class)
         btn_del = QPushButton("Delete")
-        btn_del.setStyleSheet(_BTN_DANGER)
         btn_del.clicked.connect(self._delete_class)
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_del)
@@ -474,13 +487,11 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addWidget(QLabel("Name"))
         self._cls_name = QLineEdit()
         self._cls_name.setPlaceholderText("e.g. Clutches")
-        self._cls_name.setStyleSheet(_FIELD)
         self._cls_name.editingFinished.connect(self._save_class_fields)
         ed.addWidget(self._cls_name)
 
         color_row = QHBoxLayout()
         self._cls_color_btn = QPushButton("Pick color…")
-        self._cls_color_btn.setStyleSheet(_BTN_SECONDARY)
         self._cls_color_btn.clicked.connect(self._pick_class_color)
         self._cls_color_swatch = QLabel()
         self._cls_color_swatch.setFixedSize(32, 32)
@@ -488,7 +499,6 @@ class MarkerSettingsDialog(SteempegDialog):
         self._cls_color_clear.setToolTip(
             "Group-only class — members keep default colors (no tint)."
         )
-        self._cls_color_clear.setStyleSheet(_BTN_SECONDARY)
         self._cls_color_clear.clicked.connect(self._clear_class_color)
         color_row.addWidget(self._cls_color_btn)
         color_row.addWidget(self._cls_color_swatch)
@@ -499,10 +509,8 @@ class MarkerSettingsDialog(SteempegDialog):
 
         icon_row = QHBoxLayout()
         self._cls_icon_btn = QPushButton("Class icon…")
-        self._cls_icon_btn.setStyleSheet(_BTN_SECONDARY)
         self._cls_icon_btn.clicked.connect(self._pick_class_icon)
         self._cls_icon_clear = QPushButton("Remove")
-        self._cls_icon_clear.setStyleSheet(_BTN_SECONDARY)
         self._cls_icon_clear.clicked.connect(self._clear_class_icon)
         icon_row.addWidget(self._cls_icon_btn)
         icon_row.addWidget(self._cls_icon_clear)
@@ -561,13 +569,15 @@ class MarkerSettingsDialog(SteempegDialog):
         )
         self._marker_scroll.setMinimumWidth(220)
         self._marker_scroll.setMinimumHeight(240)
-        tok.apply_dialog_scroll_bg(self._marker_scroll, "#242424")
+        tok.apply_dialog_scroll_bg(self._marker_scroll, tok.BG_SHELL)
         from steempeg.ui.library.library_styles import (
             LIBRARY_SCROLLBAR_VERTICAL,
             install_library_vertical_scrollbar,
         )
 
-        self._marker_scroll.setStyleSheet(_MARKER_HOST + LIBRARY_SCROLLBAR_VERTICAL)
+        self._marker_scroll.setStyleSheet(
+            ut.marker_settings_list_host_stylesheet() + LIBRARY_SCROLLBAR_VERTICAL
+        )
         install_library_vertical_scrollbar(self._marker_scroll)
         self._marker_list_inner = QWidget()
         self._marker_list_inner.setObjectName("markerListInner")
@@ -594,9 +604,6 @@ class MarkerSettingsDialog(SteempegDialog):
         prev_row = QHBoxLayout()
         self._mk_preview = QLabel()
         self._mk_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._mk_preview.setStyleSheet(
-            "background: #1a1a1a; border-radius: 8px; border: 1px solid #555;"
-        )
         apply_square_icon(self._mk_preview, None, 48)
         self._mk_id_lbl = QLabel("")
         self._mk_id_lbl.setWordWrap(True)
@@ -616,13 +623,11 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addWidget(QLabel("Label (optional)"))
         self._mk_label = QLineEdit()
         self._mk_label.setPlaceholderText("How to show in tooltips")
-        self._mk_label.setStyleSheet(_FIELD)
         self._mk_label.editingFinished.connect(self._save_marker_fields)
         ed.addWidget(self._mk_label)
 
         ed.addWidget(QLabel("Class"))
         self._mk_class = QComboBox()
-        self._mk_class.setStyleSheet(_FIELD)
         from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 
         apply_dark_combo_popup(self._mk_class)
@@ -641,10 +646,8 @@ class MarkerSettingsDialog(SteempegDialog):
 
         icon_row = QHBoxLayout()
         self._mk_icon_btn = QPushButton("Custom icon…")
-        self._mk_icon_btn.setStyleSheet(_BTN_SECONDARY)
         self._mk_icon_btn.clicked.connect(self._pick_marker_icon)
         self._mk_icon_clear = QPushButton("Remove")
-        self._mk_icon_clear.setStyleSheet(_BTN_SECONDARY)
         self._mk_icon_clear.clicked.connect(self._clear_marker_icon)
         icon_row.addWidget(self._mk_icon_btn)
         icon_row.addWidget(self._mk_icon_clear)
@@ -662,9 +665,6 @@ class MarkerSettingsDialog(SteempegDialog):
         self._mk_shot_preview = QLabel()
         self._mk_shot_preview.setFixedSize(120, 68)
         self._mk_shot_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._mk_shot_preview.setStyleSheet(
-            "background: #1a1a1a; border-radius: 8px; border: 1px solid #555; color: #888;"
-        )
         self._mk_shot_preview.setScaledContents(False)
         path_body.addWidget(self._mk_shot_preview, 0, Qt.AlignmentFlag.AlignTop)
 
@@ -679,10 +679,8 @@ class MarkerSettingsDialog(SteempegDialog):
         path_col.addWidget(self._mk_path_lbl)
         path_btns = QHBoxLayout()
         self._mk_path_open = QPushButton("Open file")
-        self._mk_path_open.setStyleSheet(_BTN_SECONDARY)
         self._mk_path_open.clicked.connect(self._open_selected_screenshot)
         self._mk_path_folder = QPushButton("Open folder")
-        self._mk_path_folder.setStyleSheet(_BTN_SECONDARY)
         self._mk_path_folder.clicked.connect(self._open_selected_screenshot_folder)
         path_btns.addWidget(self._mk_path_open)
         path_btns.addWidget(self._mk_path_folder)
@@ -695,7 +693,6 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addWidget(self._mk_path_section)
 
         self._mk_reset_btn = QPushButton("Reset this marker")
-        self._mk_reset_btn.setStyleSheet(_BTN_SECONDARY)
         self._mk_reset_btn.clicked.connect(self._reset_one_marker)
         ed.addWidget(self._mk_reset_btn)
         ed.addStretch(1)

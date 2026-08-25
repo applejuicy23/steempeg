@@ -222,7 +222,7 @@ class SourcePathsBox(QWidget):
         path_field.setReadOnly(True)
         path_field.setFrame(False)
         path_field.setCursorPosition(0)
-        path_field.setStyleSheet(self._PATH_QSS)
+        path_field.setStyleSheet(ut.render_settings_source_path_field_stylesheet())
         path_field.setMinimumWidth(0)
         path_field.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h.addWidget(path_field, 1)
@@ -967,9 +967,7 @@ def restyle_export_page(ui):
     if loc_label is not None:
         path_row = QFrame()
         path_row.setObjectName("outputPathRow")
-        path_row.setStyleSheet(
-            "QFrame#outputPathRow { background-color: #252525; border-radius: 10px; }"
-        )
+        path_row.setStyleSheet(ut.render_settings_output_path_row_stylesheet())
         path_row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         path_row.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
         path_layout = QHBoxLayout(path_row)
@@ -982,10 +980,7 @@ def restyle_export_page(ui):
             loc_label.deleteLater()
             loc_label = smart_label
             ui.label_location = smart_label
-        loc_label.setStyleSheet(
-            "background: transparent; border: none; color: #b29ae7; font-size: 11px;"
-            " font-weight: bold; font-family: 'Consolas', monospace;"
-        )
+        loc_label.setStyleSheet(ut.render_settings_output_path_label_stylesheet())
         loc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         path_layout.addWidget(loc_label, 1)
         ui.output_path_row = path_row
@@ -1094,6 +1089,21 @@ def apply_render_panel_theme_chrome(ui) -> None:
     for row in root.findChildren(QFrame, "srcRow"):
         row.setStyleSheet(row_qss)
 
+    path_row_qss = ut.render_settings_output_path_row_stylesheet()
+    path_label_qss = ut.render_settings_output_path_label_stylesheet()
+    for path_row in root.findChildren(QFrame, "outputPathRow"):
+        path_row.setStyleSheet(path_row_qss)
+    loc = getattr(ui, "label_location", None)
+    if loc is not None:
+        loc.setStyleSheet(path_label_qss)
+
+    # Source path read-only fields inside srcRow widgets.
+    path_field_qss = ut.render_settings_source_path_field_stylesheet()
+    for field in root.findChildren(QLineEdit):
+        parent_row = field.parent()
+        if parent_row is not None and parent_row.objectName() == "srcRow":
+            field.setStyleSheet(path_field_qss)
+
     overlay_qss = _overlay_qss()
     for overlay in root.findChildren(QFrame, "customOverlay"):
         overlay.setStyleSheet(overlay_qss)
@@ -1130,6 +1140,23 @@ def apply_settings_panel_density(ui, dense) -> None:
     value_font = max(10, title_font)
     # Same face as RefreshButton: Segoe UI bold + footer_font.
     field_font = int(dense.footer_font)
+    memo_key = (
+        content_w,
+        combo_w,
+        stat_w,
+        export_w,
+        title_font,
+        field_font,
+        margins,
+        bool(getattr(dense, "compact", False)),
+        float(getattr(dense, "scale", 1.0) or 1.0),
+        int(getattr(dense, "neo_nav_icon", 16) or 16),
+        int(getattr(dense, "combo_min_h", 0) or 0),
+        int(getattr(dense, "footer_radius", 0) or 0),
+    )
+    if getattr(ui, "_settings_panel_density_key", None) == memo_key:
+        return
+    ui._settings_panel_density_key = memo_key
 
     tabs = getattr(ui, "settings_tabs", None)
     root = tabs if tabs is not None else ui

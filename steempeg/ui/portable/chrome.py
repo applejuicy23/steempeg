@@ -997,6 +997,24 @@ def dispose_portable_sheets(app) -> None:
     app._portable_sheets_warm = False
     app._portable_render_strip = None
     app._portable_queue_sidebar = None
+    # Density memos belong to this portable session — clear so Desktop re-entry
+    # and the next portable session re-apply cleanly.
+    for attr in (
+        "_portable_shell_density_key",
+        "_portable_shell_comfort_applied",
+        "_portable_sheet_compact",
+    ):
+        if hasattr(app, attr):
+            try:
+                delattr(app, attr)
+            except Exception:
+                pass
+    ui = getattr(app, "ui", None)
+    if ui is not None and hasattr(ui, "_settings_panel_density_key"):
+        try:
+            delattr(ui, "_settings_panel_density_key")
+        except Exception:
+            pass
     garage = getattr(app, "_portable_sheet_garage", None)
     if garage is not None:
         try:
@@ -1077,14 +1095,31 @@ def _apply_portable_shell_density(app) -> None:
     from steempeg.ui.render_panel import apply_settings_panel_density
     from steempeg.ui.ui_density import COMFORT
 
-    app._ui_density = COMFORT
-    if hasattr(app, "_apply_ui_density"):
-        try:
-            app._apply_ui_density(COMFORT)
-        except Exception:
-            _log.exception("Portable comfort density apply failed")
+    dense = portable_settings_density(app)
+    memo_key = (
+        int(dense.settings_content_w),
+        int(dense.settings_combo_w),
+        int(dense.settings_stat_w),
+        dense.settings_page_margin,
+    )
+    if getattr(app, "_portable_shell_density_key", None) == memo_key:
+        return
+    app._portable_shell_density_key = memo_key
 
-    apply_settings_panel_density(ui, portable_settings_density(app))
+    # Full library/player/queue comfort pass once per portable session — not on
+    # every settings-column width tweak (that re-styles the whole shell).
+    if not getattr(app, "_portable_shell_comfort_applied", False):
+        app._ui_density = COMFORT
+        if hasattr(app, "_apply_ui_density"):
+            try:
+                app._apply_ui_density(COMFORT)
+            except Exception:
+                _log.exception("Portable comfort density apply failed")
+        app._portable_shell_comfort_applied = True
+    else:
+        app._ui_density = COMFORT
+
+    apply_settings_panel_density(ui, dense)
 
 
 def _dispose_portable_render_sheet(app) -> None:

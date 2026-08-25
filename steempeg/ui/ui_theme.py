@@ -997,6 +997,194 @@ def render_settings_source_row_stylesheet() -> str:
     return f"QFrame#srcRow {{ background-color: {bg}; border-radius: 10px; }}"
 
 
+def render_settings_output_path_row_stylesheet() -> str:
+    """Export tab destination directory chip — dark plate in TrueDark."""
+    return render_settings_source_row_stylesheet().replace("srcRow", "outputPathRow")
+
+
+def render_settings_output_path_label_stylesheet(*, font_px: int = 11) -> str:
+    """Monospace export destination path ink."""
+    return (
+        f"background: transparent; border: none; color: #b29ae7; font-size: {font_px}px;"
+        f" font-weight: bold; font-family: 'Consolas', monospace;"
+    )
+
+
+def render_settings_source_path_field_stylesheet(*, font_px: int = 11) -> str:
+    """Read-only source path field on Source Info rows."""
+    return (
+        f"color: #b29ae7; font-size: {font_px}px; font-weight: bold;"
+        f" font-family: 'Consolas', monospace; background: transparent; border: none;"
+    )
+
+
+def portable_queue_empty_panel_stylesheet() -> str:
+    """Portable queue empty-state card."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border = "#262229", "#3d3d45"
+    else:
+        bg, border = p.bg_elevated, p.border_card
+    return (
+        f"QFrame#portableQueueEmptyPanel {{"
+        f" background-color: {bg}; border: 1px solid {border}; border-radius: 18px; }}"
+    )
+
+
+def portable_queue_row_stylesheet(
+    *,
+    selected: bool,
+    border: str,
+    border_w: int,
+    idle_border: str,
+) -> str:
+    """Portable Render sheet queue card chrome."""
+    from steempeg.ui.queue_card_shared import STATUS_BORDER_READY
+
+    ready = border == STATUS_BORDER_READY and not selected
+    bg = queue_job_card_face(selected=selected, ready_tint=ready)
+    hover = "#7a6aa8" if border == idle_border and not selected else border
+    return f"""
+QFrame#portableQueueRow {{
+    background-color: {bg};
+    border: {border_w}px solid {border};
+    border-radius: 10px;
+}}
+QFrame#portableQueueRow:hover {{
+    border-color: {hover};
+}}
+QFrame#portableQueueRow QLabel {{
+    background: transparent;
+    border: none;
+    font-family: {tok.FONT_APP};
+}}
+"""
+
+
+def marker_settings_field_stylesheet() -> str:
+    """Marker Settings inputs — combo face tokens on dark themes."""
+    from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
+
+    c = combo_chrome_colors()
+    return f"""
+    QLineEdit, QComboBox {{
+        background-color: {c.field_bg}; color: #f0f0f0; border: 1px solid {c.field_border};
+        border-radius: 6px; padding: 6px 10px; font-size: 13px;
+        font-family: {tok.FONT_APP};
+        min-height: 30px;
+        selection-background-color: {c.popup_sel_bg};
+        selection-color: {c.popup_sel_fg};
+    }}
+    QLineEdit:focus, QComboBox:focus {{ border-color: #6b5a8e; }}
+    QComboBox:on {{ background-color: {c.field_bg}; color: #f0f0f0; }}
+    QComboBox::drop-down {{ border: none; width: 24px; }}
+""" + combo_popup_item_rules()
+
+
+def marker_settings_list_stylesheet(*, item_padding: str = "6px 8px") -> str:
+    """Marker Settings QListWidget plates."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        bg, border, hover, sel = "#242424", "#444444", "#333", "#3a3a3a"
+    else:
+        bg = p.bg_elevated
+        border = p.border_card
+        hover = p.neo_nav_hover_bg
+        sel = "#3a3a3a"
+    return f"""
+    QListWidget {{
+        background-color: {bg}; border: 1px solid {border}; border-radius: 8px;
+        color: #eee; font-size: 13px; outline: none;
+        font-family: {tok.FONT_APP};
+    }}
+    QListWidget::item {{
+        padding: {item_padding}; margin: 2px 4px; border-radius: 6px;
+        min-height: 22px;
+    }}
+    QListWidget::item:selected {{ background-color: {sel}; color: #ffffff; }}
+    QListWidget::item:hover:!selected {{ background-color: {hover}; }}
+"""
+
+
+def marker_settings_list_host_stylesheet() -> str:
+    """On-clip marker picker scroll host."""
+    p = _active
+    bg = "#242424" if p.name == UI_THEME_DEFAULT else p.bg_elevated
+    border = "#444444" if p.name == UI_THEME_DEFAULT else p.border_card
+    return f"""
+    QScrollArea {{
+        background-color: {bg}; border: none;
+    }}
+    QScrollArea > QWidget {{
+        background-color: {bg};
+    }}
+    QWidget#markerListInner {{
+        background-color: {bg}; border: 1px solid {border}; border-radius: 8px;
+    }}
+"""
+
+
+def marker_settings_pick_row_stylesheet(*, selected: bool = False) -> str:
+    """Selectable marker row in the On clip list."""
+    p = _active
+    if selected:
+        bg = "#3a3a3a" if p.name == UI_THEME_DEFAULT else p.neo_nav_checked_bg
+        fg = "#ffffff"
+    else:
+        bg = "transparent"
+        fg = "#e8e8e8"
+    hover = p.neo_nav_hover_bg if p.name != UI_THEME_DEFAULT else "#333333"
+    if selected:
+        return f"""
+    QFrame#mkPick {{
+        background-color: {bg}; border-radius: 6px;
+    }}
+    QFrame#mkPick QLabel {{
+        color: {fg}; font-size: 13px; background: transparent;
+        font-family: {tok.FONT_APP};
+    }}
+"""
+    return f"""
+    QFrame#mkPick {{
+        background: transparent; border-radius: 6px;
+    }}
+    QFrame#mkPick:hover {{
+        background-color: {hover};
+    }}
+    QFrame#mkPick QLabel {{
+        color: {fg}; font-size: 13px; background: transparent;
+        font-family: {tok.FONT_APP};
+    }}
+"""
+
+
+def marker_settings_preview_plate_stylesheet() -> str:
+    """Marker icon / screenshot preview wells."""
+    p = _active
+    bg = "#1a1a1a" if p.name == UI_THEME_DEFAULT else p.bg_clip_card_plate
+    border = "#555555" if p.name == UI_THEME_DEFAULT else p.border_card
+    return f"background: {bg}; border-radius: 8px; border: 1px solid {border};"
+
+
+def dialog_btn_danger_stylesheet() -> str:
+    """Steempeg modal danger actions — theme-aware disabled plate."""
+    p = _active
+    dis_bg = "#2a1818" if p.name == UI_THEME_DEFAULT else p.button_disabled_bg
+    dis_border = "#444444" if p.name == UI_THEME_DEFAULT else p.button_disabled_border
+    return f"""
+    QPushButton {{
+        background-color: #3a2222; color: #ff8a8a; border: 2px solid #8b3a3a;
+        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
+        font-family: {tok.FONT_APP};
+    }}
+    QPushButton:hover {{ background-color: #522828; color: #ffb3b3; border-color: #c44; }}
+    QPushButton:pressed {{ background-color: #2a1818; }}
+    QPushButton:disabled {{
+        background-color: {dis_bg}; color: #666; border-color: {dis_border};
+    }}
+"""
+
+
 def render_settings_target_readout_stylesheet() -> str:
     """Video Settings target-size readout chip."""
     p = _active
@@ -1255,6 +1443,59 @@ def floating_tooltip_label_stylesheet() -> str:
         f" font-family: {tok.FONT_APP};"
         " font-size: 12px;"
         " font-weight: bold;"
+        "}"
+    )
+
+
+def timeline_hover_preview_colors() -> tuple[str, str, str, str]:
+    """Floating timeline hover thumb chrome — Default mid plate; TrueDark tip tokens.
+
+    Returns ``(frame_bg, border, time_bg, time_fg)``. Digits stay light on the dark
+    preview plate in every theme (Default's light ``tooltip_*`` plate is for text tips).
+    """
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        return p.bg_timeline_strip, p.border_card, p.bg_player_header, "#ffffff"
+    return p.tooltip_bg, p.tooltip_border, p.bg_elevated, p.tooltip_fg
+
+
+def timeline_hover_preview_frame_stylesheet() -> str:
+    """Outer frame around the hover thumb + timestamp row (1px themed edge)."""
+    frame_bg, border, _, _ = timeline_hover_preview_colors()
+    return (
+        "QFrame {"
+        f" background-color: {frame_bg};"
+        f" border: 1px solid {border};"
+        " border-radius: 5px;"
+        "}"
+    )
+
+
+def timeline_hover_preview_time_stylesheet(*, in_trim: bool = False) -> str:
+    """Timestamp digits under the hover thumb — Segoe/app chrome, not default tip font."""
+    _, _, _, time_fg = timeline_hover_preview_colors()
+    fg = "#ffcc00" if in_trim else time_fg
+    return (
+        "QLabel {"
+        " background: transparent;"
+        " border: none;"
+        " padding: 0px;"
+        f" color: {fg};"
+        f" font-family: {tok.FONT_APP};"
+        " font-size: 13px;"
+        " font-weight: bold;"
+        "}"
+    )
+
+
+def timeline_hover_preview_time_row_stylesheet() -> str:
+    """Plate behind scissors + timestamp when the tip is in the yellow trim zone."""
+    _, _, time_bg, _ = timeline_hover_preview_colors()
+    return (
+        "QWidget {"
+        f" background-color: {time_bg};"
+        " border: none;"
+        " border-radius: 3px;"
         "}"
     )
 
@@ -1890,8 +2131,8 @@ def _frameless_card_dialog_colors() -> dict[str, str]:
             "log_border": "#333333",
         }
     return {
-        "card_bg": p.bg_elevated,
-        "card_border": p.border_default,
+        "card_bg": p.bg_shell,
+        "card_border": p.border_card,
         "title": "#b29ae7",
         "dim": "#888888",
         "text": "#e0e0e0",

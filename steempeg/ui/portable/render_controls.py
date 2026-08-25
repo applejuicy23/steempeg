@@ -102,7 +102,9 @@ class PortableRenderControlStrip(QFrame):
         self._state = "ready"
         self.setObjectName("portableRenderStrip")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.apply_ui_theme_chrome()
+        # Panel chrome only — buttons are styled after they exist (apply_ui_theme_chrome
+        # calls _apply_button_chrome, which needs btn_start et al.).
+        self.setStyleSheet(ut.portable_render_strip_stylesheet())
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         root = QVBoxLayout(self)
@@ -194,13 +196,11 @@ class PortableRenderControlStrip(QFrame):
         btn_row.setSpacing(8)
 
         self.btn_start = QPushButton("🚩 Start")
-        self.btn_start.setStyleSheet(_fmt_dash(_DASH_START))
         self.btn_start.clicked.connect(self._on_start)
 
         # Leave / Resume — sits beside Start / Start Queue (N); purple while deferred.
         self.btn_leave = QPushButton(" Leave")
         self.btn_leave.setObjectName("portableQueueLeaveResume")
-        self.btn_leave.setStyleSheet(_fmt_dash(_DASH_LEAVE))
         self.btn_leave.setToolTip(
             "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
         )
@@ -214,17 +214,14 @@ class PortableRenderControlStrip(QFrame):
         self.btn_resume = self.btn_leave
 
         self.btn_pause = QPushButton("Pause")
-        self.btn_pause.setStyleSheet(_fmt_dash(_DASH_PAUSE))
         self.btn_pause.setEnabled(False)
         self.btn_pause.clicked.connect(self._on_pause)
 
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setStyleSheet(_fmt_dash(_DASH_CANCEL))
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._on_cancel)
 
         self.btn_logs = QPushButton("Logs")
-        self.btn_logs.setStyleSheet(_fmt_dash(_DASH_LOGS))
         self.btn_logs.clicked.connect(self._on_logs)
 
         for btn in (
@@ -240,12 +237,40 @@ class PortableRenderControlStrip(QFrame):
             btn_row.addWidget(btn)
 
         root.addLayout(btn_row)
+        self._apply_button_chrome()
         self.sync_game_header()
         self.sync_from_app()
 
+    def _dash_fmt(self, template: str) -> str:
+        return _fmt_dash(template, font=13, radius=8, pad="6px 12px")
+
+    def _apply_button_chrome(self) -> None:
+        """Semantic greens/yellows/reds stay; secondary actions follow active theme."""
+        if not hasattr(self, "btn_start"):
+            return
+        self.btn_start.setStyleSheet(self._dash_fmt(_DASH_START))
+        self.btn_pause.setStyleSheet(self._dash_fmt(_DASH_PAUSE))
+        self.btn_cancel.setStyleSheet(self._dash_fmt(_DASH_CANCEL))
+        sec = ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
+        self.btn_logs.setStyleSheet(sec)
+        btn = getattr(self, "btn_leave", None) or getattr(self, "btn_resume", None)
+        if btn is not None and btn.isVisible():
+            deferred = " Resume" in (btn.text() or "")
+            if deferred:
+                btn.setStyleSheet(self._dash_fmt(_DASH_RESUME))
+            else:
+                btn.setStyleSheet(
+                    ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
+                )
+        elif btn is not None:
+            btn.setStyleSheet(
+                ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
+            )
+
     def apply_ui_theme_chrome(self) -> None:
-        """Default mid-gray strip → pure black on TrueDark / OLED."""
+        """Default mid-gray strip → TrueDark elevated tokens + action buttons."""
         self.setStyleSheet(ut.portable_render_strip_stylesheet())
+        self._apply_button_chrome()
 
     def sync_game_header(self) -> None:
         """Compact game icon + name — queue-first when Render Queue has jobs."""
@@ -288,6 +313,11 @@ class PortableRenderControlStrip(QFrame):
                 title = plain_header_title(custom_text.text() or "")
                 if title and "select a clip" not in title.lower():
                     name = title
+
+        header_fp = (name or "", icon_path or "")
+        if getattr(self, "_game_header_fp", None) == header_fp:
+            return
+        self._game_header_fp = header_fp
 
         from PySide6.QtGui import QPixmap
 
@@ -430,26 +460,6 @@ class PortableRenderControlStrip(QFrame):
         start_on = bool(start_desktop is not None and start_desktop.isEnabled())
         deferred = bool(getattr(app, "_queue_scheme_deferred", False))
 
-        if rendering:
-            self.btn_start.setEnabled(False)
-            self.btn_pause.setEnabled(True)
-            self.btn_cancel.setEnabled(True)
-            pause_desktop = getattr(getattr(app, "ui", None), "btn_pause", None)
-            if pause_desktop is not None:
-                self.btn_pause.setText(pause_desktop.text() or "Pause")
-            else:
-                self.btn_pause.setText("Pause")
-        else:
-            self.btn_start.setEnabled(
-                start_on or has_clip or (pending > 0 and not deferred)
-            )
-            self.btn_pause.setEnabled(False)
-            self.btn_cancel.setEnabled(False)
-            self.btn_pause.setText("Pause")
-            if pending > 0 and not deferred:
-                self.btn_start.setText(f"🚩 Start Queue ({pending})")
-            else:
-                self.btn_start.setText("🚩 Start")
         has_jobs = False
         if hasattr(app, "render_queue"):
             try:
@@ -457,6 +467,46 @@ class PortableRenderControlStrip(QFrame):
             except Exception:
                 has_jobs = pending > 0
         busy = rendering or bool(getattr(app, "_queue_batch_active", False))
+        pause_text = "Pause"
+        if rendering:
+            pause_desktop = getattr(getattr(app, "ui", None), "btn_pause", None)
+            if pause_desktop is not None:
+                pause_text = pause_desktop.text() or "Pause"
+        if pending > 0 and not deferred and not rendering:
+            start_text = f"🚩 Start Queue ({pending})"
+        else:
+            start_text = "🚩 Start"
+        start_enabled = (
+            start_on or has_clip or (pending > 0 and not deferred)
+        ) and not rendering
+
+        fp = (
+            rendering,
+            pending,
+            has_clip,
+            start_on,
+            deferred,
+            has_jobs,
+            busy,
+            start_enabled,
+            start_text,
+            pause_text,
+        )
+        if getattr(self, "_strip_sync_fp", None) == fp:
+            return
+        self._strip_sync_fp = fp
+
+        if rendering:
+            self.btn_start.setEnabled(False)
+            self.btn_pause.setEnabled(True)
+            self.btn_cancel.setEnabled(True)
+            self.btn_pause.setText(pause_text)
+        else:
+            self.btn_start.setEnabled(start_enabled)
+            self.btn_pause.setEnabled(False)
+            self.btn_cancel.setEnabled(False)
+            self.btn_pause.setText("Pause")
+            self.btn_start.setText(start_text)
         self.sync_queue_leave_resume(
             deferred=deferred and has_jobs,
             has_jobs=has_jobs,
@@ -501,7 +551,7 @@ class PortableRenderControlStrip(QFrame):
         if deferred:
             btn.setText(" Resume")
             btn.setToolTip("Return to queue mode with the same jobs and order")
-            btn.setStyleSheet(_fmt_dash(_DASH_RESUME))
+            btn.setStyleSheet(self._dash_fmt(_DASH_RESUME))
             resume_icon = get_resource_path("resume.png")
             if resume_icon and os.path.isfile(resume_icon):
                 btn.setIcon(QIcon(resume_icon))
@@ -511,7 +561,9 @@ class PortableRenderControlStrip(QFrame):
             btn.setToolTip(
                 "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
             )
-            btn.setStyleSheet(_fmt_dash(_DASH_LEAVE))
+            btn.setStyleSheet(
+                ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
+            )
             leave_icon = get_resource_path("exit.png")
             if leave_icon and os.path.isfile(leave_icon):
                 btn.setIcon(QIcon(leave_icon))

@@ -27,12 +27,11 @@ from steempeg.render.queue_display import (
 )
 from steempeg.ui.queue_card_shared import (
     STATUS_BORDER_IDLE,
-    STATUS_CARD_BG,
-    STATUS_CARD_BG_SELECTED,
     _FONT,
     queue_menu_stylesheet,
     build_queue_thumb_strip,
     job_can_remove,
+    queue_card_idle_border,
     set_game_icon_label,
     status_border_for_job,
     status_dot_style,
@@ -63,8 +62,11 @@ _REMOVE_TEXT_PAD = _REMOVE_SIZE + _REMOVE_INSET
 # Same typeface as desktop Refresh / Choose Folder (Segoe UI bold + footer_font).
 _HEADER_FONT = int(COMFORT.footer_font)
 _HEADER_RADIUS = int(COMFORT.footer_radius)
-_HEADER_PAD = COMFORT.footer_pad
 _HEADER_MIN_H = int(COMFORT.footer_min_h)
+_HEADER_ICON = 16
+# ~28px chip — matches pre–TrueDark portable header + footer family.
+_HEADER_CHIP_H = max(28, int(_HEADER_MIN_H) + 4)
+_HEADER_ACTIONS_SP = 4  # History | Clear | Add cluster (tighter than title gap)
 
 # Hidden sink so discarded queue rows never become top-level X11 windows.
 _DISPOSE_SINK: QWidget | None = None
@@ -121,86 +123,66 @@ QPushButton#portableQueueRemoveBtn:hover {
 }
 """
 
-_BTN_ADD = f"""
-QPushButton#portableQueueAdd {{
-    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    font-size: {_HEADER_FONT}px;
-    font-weight: bold;
-    background-color: #383838;
-    color: #ffffff;
-    border: 2px solid #444444;
-    border-radius: {_HEADER_RADIUS}px;
-    padding: {_HEADER_PAD};
-    min-height: {_HEADER_MIN_H}px;
-}}
-QPushButton#portableQueueAdd:hover {{
-    background-color: #404040;
-    border: 2px solid #6b5a8e;
-}}
-QPushButton#portableQueueAdd:pressed {{
-    background-color: #3a324a;
-    border: 2px solid #b29ae7;
-}}
-QPushButton#portableQueueAdd:disabled {{
-    background-color: #262626;
-    color: #555555;
-    border: 2px solid #333333;
-}}
-"""
-
-_BTN_HISTORY = f"""
-QPushButton#portableQueueHistory {{
-    background-color: #383838;
-    border: 2px solid #444444;
-    border-radius: 8px;
-    padding: 4px;
-}}
-QPushButton#portableQueueHistory:hover {{
-    background-color: #404040;
-    border: 2px solid #6b5a8e;
-}}
-QPushButton#portableQueueHistory:pressed {{
-    background-color: #3a324a;
-    border: 2px solid #b29ae7;
-}}
-"""
-
-_BTN_CLEAR = f"""
-QPushButton#portableQueueClear {{
-    font-family: 'Segoe UI', 'Noto Sans', 'Twemoji', 'Noto Emoji', Arial, sans-serif;
-    font-size: {_HEADER_FONT}px;
-    font-weight: bold;
-    background-color: #383838;
-    color: #e0e0e0;
-    border: 2px solid #4a4a4a;
-    border-radius: 8px;
-    padding: 4px 10px 4px 8px;
-    min-height: {_HEADER_MIN_H}px;
-}}
-QPushButton#portableQueueClear:hover {{
-    background-color: #404040;
-    color: #ffffff;
-    border: 2px solid #6b5a8e;
-}}
-QPushButton#portableQueueClear:pressed {{
-    background-color: #3a324a;
-    border: 2px solid #b29ae7;
-}}
-QPushButton#portableQueueClear:disabled {{
-    background-color: #262626;
-    color: #5a5a5a;
-    border: 2px solid #333333;
-}}
-"""
-
-_EMPTY_PANEL_STYLE = (
-    "QFrame#portableQueueEmptyPanel {"
-    " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
-)
-
 _EMPTY_TITLE = "Here is empty!"
 # Explicit <br> (not word-wrap) so Qt doesn't squash the hint under layout pressure.
 _EMPTY_HINT = "Add current clip.<br>or queue from"
+
+
+def _queue_header_btn_styles() -> tuple[str, str, str, int]:
+    """History icon, Clear label, Add label — theme-aware secondary family."""
+    chip_h = _HEADER_CHIP_H
+    hist = ut.toolbar_icon_button_stylesheet(radius=8, height=chip_h)
+    # Clear carries a 16px icon — pad to icon height, not font, inside fixed chip_h.
+    clear_pad_v = max(2, (chip_h - _HEADER_ICON - 4) // 2)
+    clear = ut.dash_secondary_button_stylesheet(
+        font=_HEADER_FONT,
+        radius=8,
+        pad=f"{clear_pad_v}px 10px {clear_pad_v}px 8px",
+    )
+    add = ut.toolbar_text_button_stylesheet(
+        radius=_HEADER_RADIUS, font_px=_HEADER_FONT, height=chip_h
+    )
+    return hist, clear, add, chip_h
+
+
+def _pin_queue_header_buttons(
+    sidebar: "PortableQueueSidebar",
+    *,
+    btn_hist: str,
+    btn_clear: str,
+    btn_add: str,
+    chip_h: int,
+) -> None:
+    """Lock History / Clear / Add to chip height — layout cannot squash them."""
+    header = sidebar.findChild(QFrame, "portableQueueHeader")
+    if header is not None:
+        head_lay = header.layout()
+        if head_lay is not None:
+            head_lay.setSpacing(6)
+        header.setMinimumHeight(chip_h + 20)  # head_lay top/bottom margins (10+10)
+    if hasattr(sidebar, "_btn_history"):
+        sidebar._btn_history.setStyleSheet(btn_hist)
+        sidebar._btn_history.setFixedSize(chip_h, chip_h)
+        sidebar._btn_history.setMinimumSize(chip_h, chip_h)
+        sidebar._btn_history.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        sidebar._btn_history.setIconSize(QSize(_HEADER_ICON, _HEADER_ICON))
+    if hasattr(sidebar, "_btn_clear"):
+        sidebar._btn_clear.setStyleSheet(btn_clear)
+        sidebar._btn_clear.setFixedHeight(chip_h)
+        sidebar._btn_clear.setMinimumHeight(chip_h)
+        sidebar._btn_clear.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        sidebar._btn_clear.setIconSize(QSize(_HEADER_ICON, _HEADER_ICON))
+    if hasattr(sidebar, "_btn_add"):
+        sidebar._btn_add.setStyleSheet(btn_add)
+        sidebar._btn_add.setFixedHeight(chip_h)
+        sidebar._btn_add.setMinimumHeight(chip_h)
+        sidebar._btn_add.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
 
 
 def _queue_cache_dir(app) -> str:
@@ -208,24 +190,13 @@ def _queue_cache_dir(app) -> str:
 
 
 def _row_stylesheet(*, selected: bool, border: str, border_w: int) -> str:
-    bg = STATUS_CARD_BG_SELECTED if selected else STATUS_CARD_BG
-    # Hover keeps the status color visible (slightly brighter purple only on idle gray).
-    hover = "#7a6aa8" if border == STATUS_BORDER_IDLE and not selected else border
-    return f"""
-QFrame#portableQueueRow {{
-    background-color: {bg};
-    border: {border_w}px solid {border};
-    border-radius: 10px;
-}}
-QFrame#portableQueueRow:hover {{
-    border-color: {hover};
-}}
-QFrame#portableQueueRow QLabel {{
-    background: transparent;
-    border: none;
-    {_FONT}
-}}
-"""
+    idle = queue_card_idle_border()
+    return ut.portable_queue_row_stylesheet(
+        selected=selected,
+        border=border,
+        border_w=border_w,
+        idle_border=idle,
+    )
 
 
 class _PortableQueueRow(QFrame):
@@ -569,7 +540,7 @@ class PortableQueueSidebar(QWidget):
         header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         head_lay = QHBoxLayout(header)
         head_lay.setContentsMargins(12, 10, 12, 10)
-        head_lay.setSpacing(8)
+        head_lay.setSpacing(6)
 
         self._title_icon = QLabel()
         self._title_icon.setFixedSize(_QUEUE_ICON, _QUEUE_ICON)
@@ -594,47 +565,50 @@ class PortableQueueSidebar(QWidget):
         )
         head_lay.addWidget(self._title, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        # History + Clear — same pair as the desktop queue toolbar (left of Add).
-        hist_h = max(28, int(_HEADER_MIN_H) + 4)
+        # History + Clear + Add — tighter cluster (desktop queue toolbar family).
+        actions = QWidget()
+        actions.setObjectName("portableQueueHeaderActions")
+        actions.setStyleSheet("background: transparent;")
+        actions_lay = QHBoxLayout(actions)
+        actions_lay.setContentsMargins(0, 0, 0, 0)
+        actions_lay.setSpacing(_HEADER_ACTIONS_SP)
+
+        btn_hist, btn_clear, btn_add, chip_h = _queue_header_btn_styles()
         self._btn_history = QPushButton()
         self._btn_history.setObjectName("portableQueueHistory")
-        self._btn_history.setFixedSize(hist_h, hist_h)
         self._btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_history.setToolTip("Render History — past batches and exports")
-        self._btn_history.setStyleSheet(_BTN_HISTORY)
         hist_icon = get_resource_path("history.png")
         if hist_icon and os.path.isfile(hist_icon):
             self._btn_history.setIcon(QIcon(hist_icon))
-            self._btn_history.setIconSize(QSize(16, 16))
         else:
             self._btn_history.setText("⏱")
         self._btn_history.clicked.connect(self._on_history)
-        head_lay.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions_lay.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self._btn_clear = QPushButton(" Clear")
         self._btn_clear.setObjectName("portableQueueClear")
         self._btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_clear.setToolTip("Clear the render queue")
-        self._btn_clear.setStyleSheet(_BTN_CLEAR)
-        self._btn_clear.setFixedHeight(hist_h)
-        self._btn_clear.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         clear_icon = get_resource_path("clear.png")
         if clear_icon and os.path.isfile(clear_icon):
             self._btn_clear.setIcon(QIcon(clear_icon))
-            self._btn_clear.setIconSize(QSize(16, 16))
         self._btn_clear.clicked.connect(self._on_clear)
-        head_lay.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions_lay.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Heavy plus (U+FF0B fullwidth) reads bolder than ASCII "+" at the same px size.
         self._btn_add = QPushButton("Add ＋")
         self._btn_add.setObjectName("portableQueueAdd")
         self._btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_add.setStyleSheet(_BTN_ADD)
-        self._btn_add.setFixedHeight(hist_h)
         self._btn_add.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._btn_add.setToolTip("Add the current clip to the queue")
         self._btn_add.clicked.connect(self._on_add_current)
-        head_lay.addWidget(self._btn_add, 0, Qt.AlignmentFlag.AlignVCenter)
+        actions_lay.addWidget(self._btn_add, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        _pin_queue_header_buttons(
+            self, btn_hist=btn_hist, btn_clear=btn_clear, btn_add=btn_add, chip_h=chip_h
+        )
+        head_lay.addWidget(actions, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header, 0)
 
         # --- List panel: clip cards only ---
@@ -687,7 +661,7 @@ class PortableQueueSidebar(QWidget):
 
         panel = QFrame()
         panel.setObjectName("portableQueueEmptyPanel")
-        panel.setStyleSheet(_EMPTY_PANEL_STYLE)
+        panel.setStyleSheet(ut.portable_queue_empty_panel_stylesheet())
         panel.setMaximumWidth(280)
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         panel_lay = QVBoxLayout(panel)
@@ -742,14 +716,28 @@ class PortableQueueSidebar(QWidget):
         if compact is not None:
             self._compact = bool(compact)
         if width is not None and int(width) > 0:
-            self.setFixedWidth(int(width))
+            want = int(width)
+        else:
+            want = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
+        if self.minimumWidth() == want and self.maximumWidth() == want:
             return
-        rail_w = _SIDEBAR_W_COMPACT if self._compact else _SIDEBAR_W_SPACIOUS
-        self.setFixedWidth(rail_w)
+        self.setFixedWidth(want)
 
     def apply_ui_theme_chrome(self) -> None:
-        """Default mid-gray Queue rail → pure black on TrueDark / OLED."""
+        """Default mid-gray Queue rail → TrueDark elevated tokens + buttons/cards."""
         self.setStyleSheet(ut.portable_queue_panel_stylesheet())
+        btn_hist, btn_clear, btn_add, chip_h = _queue_header_btn_styles()
+        _pin_queue_header_buttons(
+            self, btn_hist=btn_hist, btn_clear=btn_clear, btn_add=btn_add, chip_h=chip_h
+        )
+        empty = getattr(self, "_empty_center", None)
+        if empty is not None:
+            panel = empty.findChild(QFrame, "portableQueueEmptyPanel")
+            if panel is not None:
+                panel.setStyleSheet(ut.portable_queue_empty_panel_stylesheet())
+        jobs = self._jobs_snapshot()
+        if jobs:
+            self._sync_row_chrome(jobs)
 
     def _jobs_snapshot(self) -> list[RenderJob]:
         return list(getattr(getattr(self._app, "render_queue", None), "jobs", []) or [])
@@ -857,6 +845,26 @@ class PortableQueueSidebar(QWidget):
         """
         jobs = self._jobs_snapshot()
         self._sync_selection_ids(jobs)
+        # Cheap reopen skip: same ids + statuses + selection → chrome already current.
+        fp = (
+            tuple(
+                (
+                    j.id,
+                    getattr(getattr(j, "status", None), "value", getattr(j, "status", None)),
+                    int(getattr(j, "queue_index", 0) or 0),
+                )
+                for j in jobs
+            ),
+            frozenset(self._selected_ids),
+            getattr(self._app, "_selected_queue_job_id", None),
+            bool(self._empty_hint_dismissed),
+        )
+        if getattr(self, "_queue_refresh_fp", None) == fp and (
+            (not jobs and not self._row_ids)
+            or (jobs and self._row_ids == [j.id for j in jobs])
+        ):
+            return
+        self._queue_refresh_fp = fp
         self._sync_title(jobs)
         job_ids = [j.id for j in jobs]
         existing_ids = list(self._row_ids)
@@ -871,9 +879,15 @@ class PortableQueueSidebar(QWidget):
         self._sync_empty_visibility(jobs)
 
         if existing_ids == job_ids and existing_ids:
-            self._sync_row_chrome(jobs)
-            self._sync_add_enabled()
-            return
+            if len(self._rows) != len(job_ids):
+                # ids tracked but widgets missing (e.g. row create failed mid-refresh)
+                self._clear_job_rows()
+                existing_ids = []
+            else:
+                self._sync_row_chrome(jobs)
+                self._relayout_scroll_body()
+                self._sync_add_enabled()
+                return
 
         if self._ids_are_prefix(existing_ids, job_ids):
             grew_from_empty = not existing_ids
