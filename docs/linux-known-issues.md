@@ -22,3 +22,11 @@ Short notes for desktop Linux / SteamOS.
 ## Fixed (earlier)
 
 - Screenshots open (session env + kde-open5), fullscreen over taskbar, preview vo=gpu — see commit `1cf8419` / v44 Linux pack.
+
+---
+
+## v47 (fixed locally — verify)
+
+- **Rapid clip-switch hang:** Remux-cache preview could leave `_is_switching` / `_awaiting_first_frame` stuck so clicks did nothing while mpv kept playing. Soft finish + cancel + watchdog now clear both gates; same-clip spam paths log.
+- **First-clip black preview (NVIDIA/XWayland):** First session open (e.g. CS2 HEVC remux) could play audio while the embed stayed black; switching clips forced a VO reconfig and looked fine. Cause: libmpv created under ``video_blank_frame`` (parked 0×0 wid). Fix: map ``video_container`` + real geometry before first ``winId()``, and re-kick geometry on reveal.
+- **Settings → UI font (Linux-only):** Widget code called `QFont("Segoe UI")` / `setFamily("Segoe UI")` (fontconfig alias → Adwaita/Noto), and System mode used bare `QFont()` which copies the current app font. Fixed: real-Segoe detection, in-process Selawik via `addApplicationFont`, `pin_ui_font` / live `FONT_APP` in QSS; System picks a real desktop sans. **Windows:** no UI font combo; classic Segoe only.
