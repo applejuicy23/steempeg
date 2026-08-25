@@ -12,6 +12,11 @@ is ON and the L/R splitters squeeze the player column:
 When both pills sit on the shared bottom row, markers share the same Y as
 the trim-tool circles. Markers alone under theater/fs stay anchored to that
 cluster.
+
+Portable shell (``_portable_shell``): markers always inline on the footer row;
+trim tools use the same width/crowding drop-below rule as desktop (narrow shell
+or crowded right rail). Desktop compressed width keeps the adaptive two-step
+squeeze above.
 """
 from __future__ import annotations
 
@@ -24,6 +29,10 @@ _DROP_GAP_PX = 10
 _TIMER_CUSHION_PX = 100
 # Gap between trim tools and Trim / marker cluster when markers are stacked.
 _TRIM_LEFT_NUDGE_PX = 28
+
+
+def _is_portable_shell(app) -> bool:
+    return bool(getattr(app, "_portable_shell", False))
 
 
 def sync_trim_tools_placement(app) -> None:
@@ -122,12 +131,12 @@ def _usable_right_half(app) -> int:
 
 
 def _should_drop_below(app) -> bool:
-    """Tight width / crowded right rail → tools under Trim (Desktop + Portable).
+    """Tight width / crowded right rail → tools under Trim.
 
-    First compress step when Trim is ON: when the right chrome would collide
-    with the centered ``00:00 / 00:00`` timer, drop the Trim tools pill below
-    the Trim button. Markers already stacked below are excluded from packed
-    width so tools can still decide independently.
+    First compress step when Trim is ON — drop tools when the window is narrow
+    or the right chrome would collide with the centered timer. Markers already
+    stacked below are excluded from packed width so tools can still decide
+    independently. Portable uses the same rule; markers never stack there.
     """
     ui = getattr(app, "ui", None)
     win_w = int(ui.width()) if ui is not None else 0
@@ -152,9 +161,13 @@ def _should_drop_below(app) -> bool:
 def _should_stack_markers(app) -> bool:
     """Stack markers only after tools have already relieved the rail.
 
-    Second compress step: ignore trim-tools width (they sit under Trim or are
-    hidden) so markers do not drop earlier than the tools pill.
+    Portable: never stack — markers stay inline. Desktop second compress
+    step: ignore trim-tools width (they sit under Trim or are hidden) so
+    markers do not drop earlier than the tools pill.
     """
+    if _is_portable_shell(app):
+        return False
+
     ui = getattr(app, "ui", None)
     win_w = int(ui.width()) if ui is not None else 0
     if win_w <= _NARROW_SHELL_W:

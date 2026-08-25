@@ -281,14 +281,16 @@ class TimelineCanvas(QWidget):
         self.update()
 
     def apply_tooltip_theme(self) -> None:
-        """Re-tint the floating scrub tip after Default ↔ TrueDark switch."""
-        tip = getattr(self, "text_tooltip", None)
-        if tip is None:
-            return
+        """Re-tint floating scrub tip + hover preview after Default ↔ TrueDark switch."""
         try:
             from steempeg.ui import ui_theme as ut
 
-            tip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
+            tip = getattr(self, "text_tooltip", None)
+            if tip is not None:
+                tip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
+            pw = getattr(self, "preview_widget", None)
+            if pw is not None and hasattr(pw, "apply_theme"):
+                pw.apply_theme()
         except RuntimeError:
             pass
 
@@ -2252,8 +2254,10 @@ class PreviewSpinnerOverlay(QWidget):
 # --- FLOATING TIMELINE PREVIEW WIDGET ---
 class ThumbnailPreviewWidget(QWidget):
     """A floating tooltip-like widget that shows a video frame and time on hover."""
-    _THUMB_W = 160
-    _THUMB_H = 90
+    # Slightly larger than the classic 160×90 tip for 2K readability (v47 polish).
+    _THUMB_W = 192
+    _THUMB_H = 108
+    _TRIM_ICON_PX = 14
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2270,38 +2274,87 @@ class ThumbnailPreviewWidget(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
 
+        self._in_trim = False
+        self._trim_icon_pm = self._load_trim_icon()
+
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
         self.frame = QFrame()
-        self.frame.setStyleSheet("QFrame { background-color: #181818; border: 1px solid #333; border-radius: 6px; }")
         self.frame_layout = QVBoxLayout(self.frame)
-        self.frame_layout.setContentsMargins(4, 4, 4, 4)
-        self.frame_layout.setSpacing(4)
+        self.frame_layout.setContentsMargins(3, 3, 3, 3)
+        self.frame_layout.setSpacing(3)
 
         self._thumb_host = QWidget()
         self._thumb_host.setFixedSize(self._THUMB_W, self._THUMB_H)
 
         self.img_label = QLabel(self._thumb_host)
         self.img_label.setGeometry(0, 0, self._THUMB_W, self._THUMB_H)
-        self.img_label.setStyleSheet("background-color: #000000; border-radius: 4px;")
+        self.img_label.setStyleSheet("background-color: #000000; border-radius: 3px;")
         self.img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._loading_overlay = PreviewSpinnerOverlay(self._thumb_host)
         self._loading_overlay.setGeometry(0, 0, self._THUMB_W, self._THUMB_H)
 
+        self._time_row = QWidget()
+        time_row_layout = QHBoxLayout(self._time_row)
+        time_row_layout.setContentsMargins(4, 1, 4, 1)
+        time_row_layout.setSpacing(4)
+
+        self._scissors = QLabel()
+        self._scissors.setFixedSize(self._TRIM_ICON_PX, self._TRIM_ICON_PX)
+        self._scissors.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._scissors.setStyleSheet("background: transparent; border: none;")
+        if self._trim_icon_pm is not None and not self._trim_icon_pm.isNull():
+            self._scissors.setPixmap(self._trim_icon_pm)
+        self._scissors.hide()
+
         self.time_label = QLabel("00:00")
         self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.time_label.setStyleSheet(
-            "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
-            "color: white; font-weight: bold; font-size: 11px;"
-        )
+        self.time_label.setStyleSheet("background: transparent; border: none;")
+
+        time_row_layout.addStretch(1)
+        time_row_layout.addWidget(self._scissors, 0, Qt.AlignmentFlag.AlignVCenter)
+        time_row_layout.addWidget(self.time_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        time_row_layout.addStretch(1)
 
         self.frame_layout.addWidget(self._thumb_host)
-        self.frame_layout.addWidget(self.time_label)
+        self.frame_layout.addWidget(self._time_row)
         self.layout.addWidget(self.frame)
+        self.apply_theme()
         self.adjustSize()
         self.hide()
+
+    @classmethod
+    def _load_trim_icon(cls) -> QPixmap | None:
+        try:
+            path = get_resource_path("trim_icon.png")
+            if not path or not os.path.exists(path):
+                return None
+            pm = QPixmap(path)
+            if pm.isNull():
+                return None
+            return pm.scaled(
+                cls._TRIM_ICON_PX,
+                cls._TRIM_ICON_PX,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        except Exception:
+            return None
+
+    def apply_theme(self) -> None:
+        """Re-tint frame + timestamp after Default ↔ TrueDark switch."""
+        try:
+            from steempeg.ui import ui_theme as ut
+
+            self.frame.setStyleSheet(ut.timeline_hover_preview_frame_stylesheet())
+            self._time_row.setStyleSheet(ut.timeline_hover_preview_time_row_stylesheet())
+            self.time_label.setStyleSheet(
+                ut.timeline_hover_preview_time_stylesheet(in_trim=self._in_trim)
+            )
+        except Exception:
+            pass
 
     def hideEvent(self, event):
         self._loading_overlay.stop()
@@ -2313,17 +2366,20 @@ class ThumbnailPreviewWidget(QWidget):
         self.img_label.setPixmap(QPixmap())
 
     def update_time_display(self, time_str, is_in_trim):
+        self._in_trim = bool(is_in_trim)
         self.time_label.setText(time_str)
-        if is_in_trim:
+        try:
+            from steempeg.ui import ui_theme as ut
+
             self.time_label.setStyleSheet(
-                "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
-                "color: #ffcc00; font-weight: bold; font-size: 11px;"
+                ut.timeline_hover_preview_time_stylesheet(in_trim=self._in_trim)
             )
+        except Exception:
+            pass
+        if self._in_trim and self._trim_icon_pm is not None and not self._trim_icon_pm.isNull():
+            self._scissors.show()
         else:
-            self.time_label.setStyleSheet(
-                "background-color: #2d2d2d; border-radius: 4px; padding: 2px; "
-                "color: white; font-weight: bold; font-size: 11px;"
-            )
+            self._scissors.hide()
 
     def _apply_pixmap(self, pixmap):
         if pixmap is not None and not pixmap.isNull():
