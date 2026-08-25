@@ -102,7 +102,7 @@ from steempeg.render.queue import (
     resolve_job_game_icon_path,
     save_queue_to_file,
 )
-from steempeg.render.queue_display import format_job_preset
+from steempeg.render.queue_display import format_dash_job_summary
 from steempeg.render.queue_history import (
     _utc_now_iso,
     append_batch,
@@ -762,8 +762,17 @@ class RenderMixin:
             return
         if getattr(self, "_update_check_busy", False) and scan_phase is None and state == "ready":
             return
+        # Live encode: never let a stray Ready (e.g. old Render Settings open path)
+        # wipe Part N% / the progress strip.
+        if (
+            scan_phase is None
+            and state == "ready"
+            and getattr(self, "_is_rendering", False)
+        ):
+            return
 
         # Queue owns the idle Ready cluster: numbered coloured badge, not plain green.
+        # Digit = next-to-render only (never the selected clip).
         if (
             scan_phase is None
             and state in ("ready", "success")
@@ -787,9 +796,8 @@ class RenderMixin:
         queue_index = None
         job = None
         if self._queue_is_active():
-            # Badge tracks the status-strip job (queue head / active render), not
-            # an arbitrary library preview that may disagree with the number.
-            job = self._status_strip_context_job()
+            # Badge tracks next-to-render / live encode — not library selection.
+            job = self._dash_ready_queue_job()
             if job is not None:
                 queue_index = int(getattr(job, "queue_index", 0) or 0) or None
                 if state in ("rendering", "busy") and job.status == JobStatus.RENDERING:
@@ -1148,10 +1156,11 @@ class RenderMixin:
         self._status_indicator_color = color
 
     def _sync_dash_queue_status_chrome(self) -> bool:
-        """Drive Ready cluster + left summary from the status-strip job.
+        """Drive Ready cluster + left summary from the **next-to-render** job.
 
-        True = queue owns the chrome (badge number and game line agree).
-        Applies to Desktop dash and Portable Render strip (queue-first rules).
+        True = queue owns the chrome. Digit and game line follow queue head /
+        live encode — never the ClipCard or queue-row selection (that only
+        updates the player-header ``In queue (N)`` plaque).
         """
         # Do not stamp a numbered queue badge over Loading N/M / search / update-check.
         if (
@@ -1160,7 +1169,7 @@ class RenderMixin:
             or getattr(self, "_update_check_busy", False)
         ):
             return False
-        if not self._queue_owns_identity_chrome():
+        if not self._queue_is_active():
             return False
         job = self._status_strip_context_job()
         if job is None:
@@ -1280,6 +1289,29 @@ class RenderMixin:
             return False
         return not bool(getattr(self, "_queue_library_preview_diversion", False))
 
+    def _player_has_open_clip(self) -> bool:
+        """True when the player is showing real media (not the idle poster).
+
+        Steam DASH previews only set ``_preview_clip_path`` (not
+        ``_active_play_media_path``, which is for flat rendered files). After
+        first frame, awaiting clears — so the idle-poster check is the
+        authority: queue encode may stamp a path without leaving the poster.
+        """
+        if hasattr(self, "_is_player_idle_placeholder"):
+            try:
+                if self._is_player_idle_placeholder():
+                    return False
+            except RuntimeError:
+                return False
+        if getattr(self, "_active_play_media_path", None):
+            return True
+        if getattr(self, "_preview_clip_path", None):
+            return True
+        # Mid-open: blank stack while first frame arrives (poster already left).
+        if getattr(self, "_awaiting_first_frame", False):
+            return True
+        return False
+
     def _apply_player_idle_chrome(self) -> None:
         """Idle player header + center placeholder (Steempeg logo, no queue bleed)."""
         if hasattr(self, "_reset_player_placeholder_default"):
@@ -1310,9 +1342,14 @@ class RenderMixin:
             apply_square_icon(self.custom_icon_label, hdr_pix, hdr_px)
             set_player_header_game_text(
                 self,
-                "Select a clip to preview...",
+                "Choose a clip to preview...",
                 placeholder=True,
             )
+        if hasattr(self, "set_player_header_clip_controls_visible"):
+            try:
+                self.set_player_header_clip_controls_visible(False)
+            except Exception:
+                pass
 
     def _refresh_clip_queue_badges_safe(self) -> None:
         """Refresh ClipCard queue # circles; no-op if the mixin is absent."""
@@ -1322,30 +1359,61 @@ class RenderMixin:
             except Exception:
                 logging.debug("refresh_clip_queue_badges failed", exc_info=True)
 
-    def _sync_queue_player_and_dash_chrome(self) -> None:
-        """Dash follows queue head; player header only when a clip is open.
+    def _idle_dash_after_queue_work(self) -> bool:
+        """True when dash should drop queue-job leftovers (Unknown / game line).
 
-        After Leave (deferred) or library diversion, never stamp queue Ready /
-        queue-job identity — restore clip-driven or idle chrome instead.
-        Also refreshes ClipCard queue # circles (hide on Leave, restore on Resume).
+        While encode is live or jobs are still pending, the strip may follow the
+        queue head. After the batch finishes with nothing open in the player,
+        show Select-a-clip instead of a stale completed-job summary.
         """
-        if not self._queue_owns_identity_chrome():
-            if getattr(self, "_preview_clip_path", None):
+        if self._player_has_open_clip():
+            return False
+        if getattr(self, "_is_rendering", False):
+            return False
+        if self._queue_pending_count() > 0:
+            return False
+        return True
+
+    def _sync_queue_player_and_dash_chrome(self) -> None:
+        """Split chrome: header = open clip; dash = Render Queue while active.
+
+        Library diversion must not wipe the playing clip's logo / name / close /
+        quality, and must not replace the Ready+#N strip with Select-a-clip.
+        """
+        open_clip = self._player_has_open_clip()
+        # Dead / blocked export sits on the idle poster but still owns header chrome.
+        bound_dead_export = bool(
+            not open_clip and getattr(self, "_rendered_media_path", None)
+        )
+
+        if open_clip or bound_dead_export:
+            # Header always follows the media on screen (or the selected dead export).
+            if open_clip and self._queue_owns_identity_chrome():
+                if not self._sync_player_header_to_queue_context():
+                    self._restore_header_from_library_selection()
+            elif open_clip:
                 self._restore_header_from_library_selection()
-            else:
-                self._apply_player_idle_chrome()
-                if hasattr(self, "reset_bottom_summary"):
-                    self.reset_bottom_summary()
-            # Leave / diversion: clear yellow membership circles with the rest of
-            # queue chrome (Resume / active path restores them below too).
-            self._refresh_clip_queue_badges_safe()
-            return
-        if getattr(self, "_preview_clip_path", None):
-            self._sync_player_header_to_queue_context()
+            if hasattr(self, "set_player_header_clip_controls_visible"):
+                try:
+                    self.set_player_header_clip_controls_visible(True)
+                except Exception:
+                    pass
         else:
             self._apply_player_idle_chrome()
-            self._sync_dash_queue_status_chrome()
+
+        # Dash / Ready cluster: queue-first whenever RQ owns Start (incl. diversion).
+        if self._queue_is_active():
+            if not self._sync_dash_queue_status_chrome():
+                if not open_clip and self._idle_dash_after_queue_work():
+                    if hasattr(self, "reset_bottom_summary"):
+                        self.reset_bottom_summary()
+        elif not open_clip:
+            if hasattr(self, "reset_bottom_summary"):
+                self.reset_bottom_summary()
+
         self._refresh_clip_queue_badges_safe()
+        if hasattr(self, "update_playback_badge"):
+            self.update_playback_badge()
 
     def _queue_drives_start_cta(self) -> bool:
         """True when Start should batch-render pending queue jobs."""
@@ -1387,13 +1455,14 @@ class RenderMixin:
         # Playing a clip that is not queued — don't advertise Ready #1.
         return None
 
-    def _status_strip_context_job(self):
-        """Job that owns the footer status strip (name/stats + numbered badge).
+    def _dash_ready_queue_job(self):
+        """Job for the Ready cluster digit + left summary — next to render only.
 
-        When queue identity chrome is on, idle/filling queue follows the first
-        pending job (queue head) so the badge number and game line agree.
+        The circle must stay on whatever will encode next (or the live encode),
+        never the library / queue-card selection. Selection only drives the
+        player-header ``In queue (N)`` plaque via ``_focused_queue_job_for_badge``.
         """
-        if not self._queue_owns_identity_chrome():
+        if not self._queue_is_active():
             return None
         active = getattr(self, "_active_render_job", None)
         if active is not None:
@@ -1403,22 +1472,26 @@ class RenderMixin:
         pending = self.render_queue.next_queued()
         if pending is not None:
             return pending
-        # Finished / inactive queue still listed — selection may update context.
-        selected_id = getattr(self, "_selected_queue_job_id", None)
-        if selected_id:
-            job = self.render_queue.get(selected_id)
-            if job is not None:
-                return job
         jobs = list(getattr(self.render_queue, "jobs", None) or [])
         return jobs[0] if jobs else None
 
+    def _status_strip_context_job(self):
+        """Job that owns the footer Ready strip (name/stats + numbered badge).
+
+        Always the next-to-render / live encode job — selecting another ClipCard
+        or queue row must not change the Ready # digit (that belongs on
+        ``In queue (N)`` only).
+        """
+        return self._dash_ready_queue_job()
+
     def _apply_status_strip_summary(self, job) -> None:
-        """Left dash line (icon + game · preset) for the status-strip job."""
+        """Left dash line (icon + game • preset) for the status-strip job."""
         if job is None or not hasattr(self, "bottom_text_label"):
             return
         game_name = (getattr(job, "game_name", "") or "").strip() or "Steam Clip"
-        preset = format_job_preset(job.settings) if getattr(job, "settings", None) else "—"
-        self.bottom_text_label.setText(f"{game_name}  •  {preset}")
+        self.bottom_text_label.setText(
+            format_dash_job_summary(game_name, getattr(job, "settings", None))
+        )
 
         cache_dir = getattr(self, "cache_dir", "") or ""
         target_icon = resolve_job_game_icon_path(cache_dir, job)
@@ -3971,7 +4044,8 @@ class RenderMixin:
         if getattr(self, "_bulk_settings_apply", False) and not trim_only:
             return
         clip_path = self._active_preview_clip_path()
-        if not clip_path:
+        # Queue encode stamps preview path without opening media — treat as idle.
+        if not clip_path or not self._player_has_open_clip():
             self._sync_queue_player_and_dash_chrome()
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
@@ -4138,7 +4212,9 @@ class RenderMixin:
             video_bitrate_display = f"{clean_mbps} Mbps ({res_str})"
         elif "Custom" in bitrate_text:
             val = self._resolved_custom_video_mbps()
-            video_bitrate_display = f"⚙️ {val * fps_multiplier:.1f} Mbps"
+            # Effective Mbps after FPS scale — use _fmt_mbps so sub-1 values
+            # (e.g. 0.1 @ 1 FPS → ~0.002) do not collapse to "0.0".
+            video_bitrate_display = f"⚙️ {_fmt_mbps(val * fps_multiplier)} Mbps"
         elif "Original" in bitrate_text:
             # Original = stream copy: show the source Mbps only — "Original" is already
             # in the quality label; the bottom summary must not repeat "Original copy".
@@ -4152,8 +4228,8 @@ class RenderMixin:
             )
         else:
             match = re.search(r'-\s*([\d.]+)\s*Mbps', bitrate_text)
-            if match: 
-                video_bitrate_display = f"{float(match.group(1)):.1f} Mbps"
+            if match:
+                video_bitrate_display = f"{_fmt_mbps(float(match.group(1)))} Mbps"
 
         # Parse Audio Bitrate for UI
         if audio_format in ("FLAC", "WAV", "Copy"):
@@ -4286,7 +4362,9 @@ class RenderMixin:
             place_icon = logo_path if os.path.exists(logo_path) else unknown_icon_path
 
         if strip_job is not None:
-            text_part = f"{game_name}  •  {format_job_preset(strip_job.settings)}"
+            text_part = format_dash_job_summary(
+                game_name, getattr(strip_job, "settings", None)
+            )
         elif audio_only:
             text_part = f"{game_name}  •  AUDIO ONLY: {audio_format} {audio_bitrate_clean}"
         elif mute_audio:
@@ -6010,7 +6088,7 @@ class RenderMixin:
 
         N in ``In queue (N)`` is a 1-based ``queue_index``. When the open clip is
         queued more than once, the chip cycles those indices (~1s, same as ClipCard).
-        Footer Ready+#N stays queue-head via ``_status_strip_context_job``.
+        Footer Ready+#N is next-to-render via ``_dash_ready_queue_job`` (not this).
         """
         def _same(a, b) -> bool:
             if not a or not b:
@@ -6038,9 +6116,7 @@ class RenderMixin:
 
     def _playback_badge_for_context(self):
         clip_path = self._current_header_clip_path()
-        if not clip_path:
-            # No open clip → no Queue plank (desktop sidebar / portable chip cover totals).
-            return None, None
+        idle = not self._player_has_open_clip()
 
         def _same_clip(a, b) -> bool:
             if not a or not b:
@@ -6052,24 +6128,37 @@ class RenderMixin:
         is_rendering = bool(getattr(self, "_is_rendering", False))
         deferred = not self._queue_is_active()
 
-        # Live encode → orange Rendering plaque next to Healthy, even after Leave.
-        # Deferred must not hide this; encode continues while Resume is shown.
+        # Live encode → orange Rendering plaque next to Healthy, even after Leave
+        # and even when the header is idle «Choose a clip…» (queue stamp only).
         if is_rendering:
             active = getattr(self, "_active_render_job", None)
             if active is not None:
-                if _same_clip(getattr(active, "clip_path", None), clip_path):
+                if idle or _same_clip(getattr(active, "clip_path", None), clip_path):
                     return (
                         STATUS_HEADER_LABELS[JobStatus.RENDERING],
                         STATUS_COLORS[JobStatus.RENDERING],
                     )
-                # Header may already follow the live job (selected id) while
-                # preview path briefly lags — still show Rendering.
                 selected_id = getattr(self, "_selected_queue_job_id", None)
                 if selected_id and selected_id == getattr(active, "id", None):
                     return (
                         STATUS_HEADER_LABELS[JobStatus.RENDERING],
                         STATUS_COLORS[JobStatus.RENDERING],
                     )
+
+        # Idle after export: keep Completed plaque without inventing a game title.
+        if idle:
+            remembered = getattr(self, "_completed_plaque_clip_path", None)
+            if remembered:
+                return (
+                    STATUS_HEADER_LABELS[JobStatus.COMPLETED],
+                    STATUS_COLORS[JobStatus.COMPLETED],
+                )
+            if not clip_path:
+                return None, None
+
+        if not clip_path:
+            # No open clip → no Queue plank (desktop sidebar / portable chip cover totals).
+            return None, None
 
         job = self._focused_queue_job_for_badge(clip_path)
 
@@ -6492,11 +6581,17 @@ class RenderMixin:
             return
         self._batch_current += 1
         self._selected_queue_job_id = job.id
-        # Keep preview path in sync with the job being encoded — otherwise
-        # ``_playback_badge_for_context`` compares against a stale clip and
-        # suppresses the orange Rendering plaque next to Healthy.
-        self._preview_clip_path = job.clip_path
-        self._apply_header_from_job(job)
+        # Only bind preview path when a clip is actually open. Stamping the path
+        # on an idle player made Clips Manager treat the card as «already
+        # previewing» and refuse to open anything until a queue card was clicked.
+        # Rendering / Completed plaques use ``_active_render_job`` /
+        # ``_completed_plaque_clip_path`` instead.
+        if self._player_has_open_clip():
+            self._preview_clip_path = job.clip_path
+            self._apply_header_from_job(job)
+        else:
+            self._apply_player_idle_chrome()
+            self._sync_dash_queue_status_chrome()
         self.refresh_render_queue_panel()
         self.update_playback_badge()
         job.refresh_output_path()
@@ -6737,6 +6832,20 @@ class RenderMixin:
         elif not success:
             play_system_sound(SystemSound.ERROR)
 
+    def _release_idle_queue_preview_stamp(self) -> None:
+        """Drop queue-only preview binding when the player never opened a clip.
+
+        Batch encode may leave ``_selected_queue_job_id`` / a stale
+        ``_preview_clip_path`` without media on screen — that blocked library
+        opens via the same-clip click guard.
+        """
+        if self._player_has_open_clip():
+            return
+        self._preview_clip_path = None
+        if hasattr(self, "_opening_clip_path"):
+            self._opening_clip_path = None
+        self._clear_queue_selection()
+
     def _finish_queue_batch(self) -> None:
         self._queue_batch_active = False
         self._restore_render_performance_prefs()
@@ -6749,6 +6858,7 @@ class RenderMixin:
             self.ui.btn_pause.setEnabled(False)
             self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
+        self._release_idle_queue_preview_stamp()
         self.refresh_render_queue_panel()
         self._queue_library_preview_diversion = False
         self._sync_queue_player_and_dash_chrome()
@@ -6756,6 +6866,11 @@ class RenderMixin:
         self._persist_render_queue()
         self._archive_batch_to_history(cancelled=False)
         self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "update_final_setup"):
+            try:
+                self.update_final_setup()
+            except Exception:
+                pass
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
 
@@ -6795,12 +6910,20 @@ class RenderMixin:
             self.ui.btn_pause.setEnabled(False)
             self._set_desktop_pause_label("Pause")
         self._update_start_button_label()
+        self._release_idle_queue_preview_stamp()
         self.refresh_render_queue_panel()
+        self._queue_library_preview_diversion = False
+        self._sync_queue_player_and_dash_chrome()
         self.update_playback_badge()
         if cancelled:
             self.update_status_indicator("Cancelled", "cancelled")
             steempeg_information(self.ui, "Cancelled", "Queue render was cancelled.")
         self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "update_final_setup"):
+            try:
+                self.update_final_setup()
+            except Exception:
+                pass
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
 
