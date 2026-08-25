@@ -1356,6 +1356,31 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 names.append(w.property("raw_name"))
         return names
 
+    def _heal_all_off_pills(self, layout) -> bool:
+        """If pills exist but none are checked, turn them all on.
+
+        Stale ``saved_filter_state`` (renamed games, moved library roots, old
+        type labels like ``🎬 Clip`` vs FG/BG) can reopen with every chip off —
+        which made Apply Filters show ``(0)`` while the chips still listed
+        games/folders. Return True when a heal ran.
+        """
+        if layout.count() == 0:
+            return False
+        any_on = False
+        widgets = []
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if w is None:
+                continue
+            widgets.append(w)
+            if w.isChecked():
+                any_on = True
+        if not widgets or any_on:
+            return False
+        for w in widgets:
+            w.setChecked(True)
+        return True
+
     def _compute_stats(self, games=None, types=None):
         table = self.app.ui.table_clips
         unique_types = set()
@@ -1466,8 +1491,11 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 for p in saved_state["folders"]
                 if p
             }
-            for root in roots:
-                self._folder_checked_memory[root] = os.path.normcase(root) in saved
+            # Stale paths (moved Steam library / different drive letter) would
+            # otherwise leave every Folders chip off → Apply Filters (0).
+            if any(os.path.normcase(root) in saved for root in roots):
+                for root in roots:
+                    self._folder_checked_memory[root] = os.path.normcase(root) in saved
 
         for root in roots:
             label = _folder_pill_label(root)
@@ -1484,6 +1512,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             btn.clicked.connect(self._on_folder_toggled)
             self._wire_pill_paint_button(btn)
             self.folders_layout.addWidget(btn)
+        if self._heal_all_off_pills(self.folders_layout):
+            self._sync_folder_memory()
 
     def _configured_library_roots(self):
         roots = getattr(getattr(self, "app", None), "clips_folders", None) or []
@@ -1646,12 +1676,17 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 item.widget().deleteLater()
 
         saved_state = getattr(self.app, 'saved_filter_state', None)
+        saved_games = None
+        if saved_state and saved_state.get('active') and saved_state.get('games'):
+            saved_set = {str(n).strip() for n in saved_state['games'] if str(n).strip()}
+            if saved_set & set(unique_games):
+                saved_games = saved_set
         for name, icon in unique_games.items():
             short_name = name[:14] + '...' if len(name) > 14 else name
             btn = QPushButton(icon, f" {short_name}")
             btn.setCheckable(True)
-            if saved_state and saved_state.get('active') and saved_state.get('games'):
-                btn.setChecked(name in saved_state['games'])
+            if saved_games is not None:
+                btn.setChecked(name in saved_games)
             else:
                 btn.setChecked(True)
             btn.setCursor(Qt.PointingHandCursor)
@@ -1660,15 +1695,23 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             btn.clicked.connect(self._on_game_toggled)
             self._wire_pill_paint_button(btn)
             self.games_layout.addWidget(btn)
+        self._heal_all_off_pills(self.games_layout)
 
         # Seed the type memory: only honor a non-empty saved list on an active filter.
+        # Ignore stale labels that no longer exist in the library (e.g. old "🎬 Clip").
         if (
             saved_state
             and saved_state.get('active')
             and saved_state.get('types')
         ):
-            saved_types = set(saved_state['types'])
-            self._type_checked_memory = {t: (t in saved_types) for t in full_stats['types']}
+            saved_types = {str(t).strip() for t in saved_state['types'] if str(t).strip()}
+            current_types = set(full_stats['types'])
+            if saved_types & current_types:
+                self._type_checked_memory = {
+                    t: (t in saved_types) for t in full_stats['types']
+                }
+            else:
+                self._type_checked_memory = {t: True for t in full_stats['types']}
         else:
             self._type_checked_memory = {t: True for t in full_stats['types']}
 
@@ -1715,6 +1758,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
+        # Stale health labels → every chip off → Apply Filters (0).
+        self._heal_all_off_pills(self.health_layout)
 
         self._sync_cured_health_pill()
 
@@ -1728,6 +1773,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.input_max_dur.timeChanged.connect(self.update_live_count)
 
         self._refresh_cascade_after_games()
+        # Cascade may rebuild types; heal again if stale type labels wiped them.
+        self._ensure_types_checked_if_none()
         self.update_live_count()
 
     def clear_filters(self):
