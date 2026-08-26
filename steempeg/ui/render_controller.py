@@ -67,8 +67,11 @@ from steempeg.ui.icon_assets import (
     LOADING_WAVE_TICK_MS,
     UPDATE_ARROWS_DEG_PER_TICK,
     UPDATE_ARROWS_TICK_MS,
+    canceled_badge_icon,
     completed_badge_icon,
+    error_badge_icon,
     loading_wave_frame,
+    paused_badge_icon,
     rendering_badge_icon,
     update_arrows_spin_frame,
     warning_pixmap,
@@ -131,6 +134,13 @@ from steempeg.ui.message_dialog import (
     steempeg_question,
     steempeg_warning,
 )
+
+# Player-header status plaques (siblings to In queue / Rendering / Completed).
+PAUSED_BADGE_TEXT = "Paused"
+PAUSED_BADGE_COLOR = "#ffcc00"
+CANCELED_BADGE_TEXT = "Canceled"
+CANCELED_BADGE_COLOR = "#ff6b6b"  # distinct from Error #ff4444
+ERROR_BADGE_COLOR = STATUS_COLORS[JobStatus.ERROR]
 
 
 def _source_vbitrate_label(mbps: float) -> str:
@@ -6083,6 +6093,15 @@ class RenderMixin:
             except RuntimeError:
                 pass
 
+    def _encode_is_paused(self) -> bool:
+        """True while dash Pause has suspended the live encode thread."""
+        if bool(getattr(self, "_encode_paused", False)):
+            return True
+        thread = getattr(self, "render_thread", None)
+        if thread is not None and thread.isRunning():
+            return bool(getattr(thread, "is_paused", False))
+        return False
+
     def _focused_queue_job_for_badge(self, clip_path=None):
         """Queue job for the In-queue header chip (selected card, else clip match).
 
@@ -6125,28 +6144,38 @@ class RenderMixin:
                 os.path.normpath(b)
             )
 
+        # Canceled dialog open → plaque stays until OK.
+        if bool(getattr(self, "_canceled_plaque_active", False)):
+            return CANCELED_BADGE_TEXT, CANCELED_BADGE_COLOR
+
         is_rendering = bool(getattr(self, "_is_rendering", False))
         deferred = not self._queue_is_active()
 
-        # Live encode → orange Rendering plaque next to Healthy, even after Leave
-        # and even when the header is idle «Choose a clip…» (queue stamp only).
+        def _live_encode_plaque():
+            """Rendering or yellow Paused when dash Pause suspended the encode."""
+            if self._encode_is_paused():
+                return PAUSED_BADGE_TEXT, PAUSED_BADGE_COLOR
+            return (
+                STATUS_HEADER_LABELS[JobStatus.RENDERING],
+                STATUS_COLORS[JobStatus.RENDERING],
+            )
+
+        # Live encode → orange Rendering (or yellow Paused) next to Healthy, even
+        # after Leave and even when the header is idle «Choose a clip…».
         if is_rendering:
             active = getattr(self, "_active_render_job", None)
             if active is not None:
                 if idle or _same_clip(getattr(active, "clip_path", None), clip_path):
-                    return (
-                        STATUS_HEADER_LABELS[JobStatus.RENDERING],
-                        STATUS_COLORS[JobStatus.RENDERING],
-                    )
+                    return _live_encode_plaque()
                 selected_id = getattr(self, "_selected_queue_job_id", None)
                 if selected_id and selected_id == getattr(active, "id", None):
-                    return (
-                        STATUS_HEADER_LABELS[JobStatus.RENDERING],
-                        STATUS_COLORS[JobStatus.RENDERING],
-                    )
+                    return _live_encode_plaque()
 
-        # Idle after export: keep Completed plaque without inventing a game title.
+        # Idle after export / fail: keep Completed or Error without inventing a title.
         if idle:
+            err_path = getattr(self, "_error_plaque_clip_path", None)
+            if err_path:
+                return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
             remembered = getattr(self, "_completed_plaque_clip_path", None)
             if remembered:
                 return (
@@ -6161,6 +6190,13 @@ class RenderMixin:
             return None, None
 
         job = self._focused_queue_job_for_badge(clip_path)
+
+        # Error — queue job or single-render latch (same idea as Completed).
+        err_path = getattr(self, "_error_plaque_clip_path", None)
+        if err_path and _same_clip(err_path, clip_path):
+            return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
+        if job is not None and job.status == JobStatus.ERROR:
+            return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
 
         # Completed — always, including normal Start Render and Leave/deferred.
         # Single-clip exports never land a COMPLETED row in render_queue, so we
@@ -6197,8 +6233,10 @@ class RenderMixin:
 
         if job:
             if job.status == JobStatus.ERROR:
-                return STATUS_HEADER_LABELS[JobStatus.ERROR], STATUS_COLORS[JobStatus.ERROR]
+                return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
             if job.status == JobStatus.RENDERING:
+                if self._encode_is_paused():
+                    return PAUSED_BADGE_TEXT, PAUSED_BADGE_COLOR
                 return STATUS_HEADER_LABELS[JobStatus.RENDERING], STATUS_COLORS[JobStatus.RENDERING]
             return (
                 self._in_queue_label_for_clip(clip_path)
@@ -6254,6 +6292,20 @@ class RenderMixin:
             # Static tinted cube left of “Rendering” (mirrors Healthy icon+text).
             badge.setText(f" {label}")
             badge.setIcon(rendering_badge_icon(color, icon_px))
+            badge.setIconSize(QSize(icon_px, icon_px))
+        elif low == "paused":
+            # Same pauserender bars as the dash Pause button, yellow plaque tint.
+            badge.setText(f" {label}")
+            badge.setIcon(paused_badge_icon(color, icon_px))
+            badge.setIconSize(QSize(icon_px, icon_px))
+        elif low == "canceled":
+            badge.setText(f" {label}")
+            badge.setIcon(canceled_badge_icon(color, icon_px))
+            badge.setIconSize(QSize(icon_px, icon_px))
+        elif low == "error":
+            # Untinted issue.png — already a yellow warning triangle.
+            badge.setText(f" {label}")
+            badge.setIcon(error_badge_icon(icon_px))
             badge.setIconSize(QSize(icon_px, icon_px))
         elif low == "completed":
             badge.setIcon(completed_badge_icon(color, icon_px))
@@ -6735,9 +6787,11 @@ class RenderMixin:
             label = "Initializing..."
         # Bind strip context before the Ready cluster paints so name + badge agree.
         self._is_rendering = True
+        self._encode_paused = False
         self._active_render_job = job
-        # New encode supersedes any prior Completed plaque for this session.
+        # New encode supersedes any prior Completed / Error plaque for this session.
         self._completed_plaque_clip_path = None
+        self._error_plaque_clip_path = None
         # Mark this job only — find_by_clip_path would hit an earlier duplicate of the same clip.
         live = self.render_queue.get(getattr(job, "id", "")) or job
         live.status = JobStatus.RENDERING
@@ -6917,7 +6971,9 @@ class RenderMixin:
         self.update_playback_badge()
         if cancelled:
             self.update_status_indicator("Cancelled", "cancelled")
-            steempeg_information(self.ui, "Cancelled", "Queue render was cancelled.")
+            self._show_canceled_information(
+                "Cancelled", "Queue render was cancelled."
+            )
         self.update_status_indicator("Ready", "ready")
         if hasattr(self, "update_final_setup"):
             try:
@@ -6926,6 +6982,16 @@ class RenderMixin:
                 pass
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
+
+    def _show_canceled_information(self, title: str, message: str) -> None:
+        """Show cancel dialog with Canceled plaque until OK."""
+        self._canceled_plaque_active = True
+        try:
+            self.update_playback_badge()
+            steempeg_information(self.ui, title, message)
+        finally:
+            self._canceled_plaque_active = False
+            self.update_playback_badge()
 
     def _show_steempeg_render_error_dialog(
         self,
@@ -7133,7 +7199,8 @@ class RenderMixin:
         logging.info("User Paused/Resumed rendering")
         if getattr(self, "render_thread", None) and self.render_thread.isRunning():
             is_paused = self.render_thread.toggle_pause()
-            
+            self._encode_paused = bool(is_paused)
+
             # Change the button text depending on the status
             if is_paused:
                 if hasattr(self.ui, 'btn_pause'): self._set_desktop_pause_label("Resume")
@@ -7141,6 +7208,7 @@ class RenderMixin:
             else:
                 if hasattr(self.ui, 'btn_pause'): self._set_desktop_pause_label("Pause")
                 self.update_status_indicator("Processing...", "rendering")
+            self.update_playback_badge()
 
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
@@ -7154,11 +7222,15 @@ class RenderMixin:
             # Remember for normal-mode / deferred Completed plaque (job may not
             # live in render_queue after a single Start Render).
             self._completed_plaque_clip_path = getattr(active_job, "clip_path", None)
+            self._error_plaque_clip_path = None
         elif not success:
             # Cancel / error: drop a stale Completed from a prior export.
             self._completed_plaque_clip_path = None
+            if "cancelled by user" not in (error_msg or "").lower():
+                self._error_plaque_clip_path = getattr(active_job, "clip_path", None)
 
         self._is_rendering = False
+        self._encode_paused = False
         self._active_render_job = None
         self.refresh_render_queue_panel()
         self.update_playback_badge()
@@ -7174,6 +7246,7 @@ class RenderMixin:
                 self.process_next_in_queue()
                 return
             if "cancelled by user" in (error_msg or "").lower():
+                self._error_plaque_clip_path = None
                 self._stop_queue_batch(cancelled=True)
                 return
             short = (error_msg or "FFmpeg error").strip().splitlines()[0][:80]
@@ -7184,8 +7257,12 @@ class RenderMixin:
                 body=f"{game}: {short}",
             )
             if self._prompt_batch_continue_after_error(error_msg or ""):
+                # Continue → drop Error plaque; failed job stays ERROR in the list.
+                self._error_plaque_clip_path = None
+                self.update_playback_badge()
                 self.process_next_in_queue()
             else:
+                # Stop queue → keep Error plaque on the failed clip.
                 self._stop_queue_batch()
             return
 
@@ -7223,8 +7300,9 @@ class RenderMixin:
 
         elif "cancelled by user" in error_msg.lower():
             logging.warning("=== RENDER CANCELED ===")
+            self._error_plaque_clip_path = None
             self.update_status_indicator("Cancelled", "cancelled")
-            steempeg_information(self.ui, "Cancelled", "Render was cancelled.")
+            self._show_canceled_information("Cancelled", "Render was cancelled.")
             self.update_status_indicator("Ready", "ready")
 
         else:
@@ -7237,6 +7315,7 @@ class RenderMixin:
                 title="Render failed",
                 body=f"{game}: {short}",
             )
+            self.update_playback_badge()
             self._show_steempeg_render_error_dialog(error_msg or "")
             self.update_status_indicator("Ready", "ready")
 
