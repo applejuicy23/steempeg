@@ -4,6 +4,9 @@ Size matches the classic Screenshots grid (~160×90 image + caption).
 Chrome borrows ClipCard: footer bar, purple hover/selection ring, press scale,
 inline source logo in the meta row (Steam vs Steempeg), and a persistent
 «just opened» accent — without the large 254×184 clip cards.
+
+Steempeg-shot cards get a light purple wash + thin idle ring so they read on a
+dense grid; Steam-shot cards stay neutral gray. Folder filter chips are untouched.
 """
 from __future__ import annotations
 
@@ -39,6 +42,11 @@ _ACCENT = QColor("#b29ae7")
 _ACCENT_HOVER = QColor("#7a6aa8")
 _ACCENT_OPENED = QColor("#d4c4f5")
 _IDLE_BORDER = QColor("#444444")
+# Steempeg-shot idle identity (not selection — keep selection ring dominant).
+_STEEMPEG_IDLE_BORDER = QColor("#8b7ab8")
+_STEEMPEG_META_FG = QColor("#b29ae7")
+_STEEMPEG_IMG_WASH = QColor(178, 154, 231, 18)  # #b29ae7 @ ~7%
+_STEEMPEG_FOOTER_WASH = QColor(178, 154, 231, 36)  # footer a bit stronger
 
 
 def _photo_chrome() -> tuple[QColor, QColor, QColor]:
@@ -367,6 +375,8 @@ class ScreenshotPhoto(QWidget):
         flat.addRect(QRectF(img.left(), img.bottom() - _RADIUS, img.width(), _RADIUS))
         img_path = img_path.united(flat)
 
+        is_steempeg = self._source != "steam"
+
         p.save()
         p.setClipPath(img_path.intersected(card))
         p.fillRect(img, img_bg)
@@ -380,6 +390,9 @@ class ScreenshotPhoto(QWidget):
             x = int(round(img.left() + (img.width() - target.width()) / 2))
             y = int(round(img.top() + (img.height() - target.height()) / 2))
             p.drawPixmap(x, y, target)
+        # Light purple veil over the thumb — readable on a dense grid, not a fill.
+        if is_steempeg:
+            p.fillRect(img, _STEEMPEG_IMG_WASH)
         p.restore()
 
         # --- ClipCard footer ---
@@ -389,7 +402,10 @@ class ScreenshotPhoto(QWidget):
         top_sq = QPainterPath()
         top_sq.addRect(QRectF(foot.left(), foot.top(), foot.width(), _RADIUS))
         foot_path = foot_path.united(top_sq)
-        p.fillPath(foot_path.intersected(card), footer_bg)
+        foot_clip = foot_path.intersected(card)
+        p.fillPath(foot_clip, footer_bg)
+        if is_steempeg:
+            p.fillPath(foot_clip, _STEEMPEG_FOOTER_WASH)
 
         # Match ClipCard title/date faces (13px bold / 11px meta) with real padding
         # so text doesn't glue to the image edge or the card bottom.
@@ -450,7 +466,7 @@ class ScreenshotPhoto(QWidget):
                 meta_rect.height(),
             )
             p.setFont(meta_font)
-            p.setPen(_META_FG)
+            p.setPen(_STEEMPEG_META_FG if is_steempeg else _META_FG)
             p.drawText(
                 meta_draw,
                 int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
@@ -480,6 +496,9 @@ class ScreenshotPhoto(QWidget):
             border, width = _ACCENT, 3.0
         elif self._hovered:
             border, width = _ACCENT_HOVER, 2.0
+        elif is_steempeg:
+            # Thin purple ring — source cue without competing with selection.
+            border, width = _STEEMPEG_IDLE_BORDER, 1.5
         else:
             # Soft idle ring — photo float, but still reads as a card.
             border, width = idle_border, 1.0
