@@ -3338,6 +3338,12 @@ class PlayerMixin:
             self._clear_preview_switch_gates()
             return
 
+        try:
+            from steempeg.ui.player import preview_quality as pq
+
+            pq.reset_source_height_cache()
+        except Exception:
+            pass
         QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
@@ -4241,6 +4247,12 @@ class PlayerMixin:
         self._clip_open_play_t0 = time.time()
         self._nudge_clip_open_loading(70)
 
+        try:
+            from steempeg.ui.player import preview_quality as pq
+
+            pq.reset_source_height_cache()
+        except Exception:
+            pass
         QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
 
         # Keep the timeline interpolation in sync with mpv's current rate from the start
@@ -4987,31 +4999,40 @@ class PlayerMixin:
 
         preset_id = pq.normalize_quality_id(getattr(self, "_preview_quality_id", pq.DEFAULT_QUALITY))
         player = getattr(self, "player", None)
-        if (
-            player
-            and preset_id != pq.DEFAULT_QUALITY
-            and pq.source_height(player) <= 0
-            and retry < 20
-        ):
-            QTimer.singleShot(80, lambda: self._apply_saved_preview_quality_to_player(retry + 1))
+        if preset_id == pq.DEFAULT_QUALITY:
+            pq.apply_mpv_preview_quality(player, preset_id)
             return
-        if not pq.apply_mpv_preview_quality(player, preset_id):
-            self._preview_quality_id = pq.DEFAULT_QUALITY
-            if hasattr(self, "save_user_settings"):
-                self.save_user_settings(pq.SETTINGS_KEY, pq.DEFAULT_QUALITY)
+        if not player:
+            return
+        ok = pq.apply_mpv_preview_quality(player, preset_id)
+        if ok:
+            return
+        # Height unknown / filter not ready yet — retry, do not wipe the setting.
+        if retry < 25:
+            QTimer.singleShot(100, lambda: self._apply_saved_preview_quality_to_player(retry + 1))
 
     def set_preview_quality(self, preset_id: str, *, persist: bool = True) -> None:
         from steempeg.ui.player import preview_quality as pq
 
         preset_id = pq.normalize_quality_id(preset_id)
-        if preset_id == getattr(self, "_preview_quality_id", None):
-            return
+        # Always re-apply from true decode height (cached), never from post-vf size.
         self._preview_quality_id = preset_id
-        if not pq.apply_mpv_preview_quality(getattr(self, "player", None), preset_id):
-            self._preview_quality_id = pq.DEFAULT_QUALITY
-            preset_id = pq.DEFAULT_QUALITY
+        ok = pq.apply_mpv_preview_quality(getattr(self, "player", None), preset_id)
+        if not ok and preset_id != pq.DEFAULT_QUALITY:
+            # Defer once playback/dec-params settle — keep menu selection.
+            QTimer.singleShot(120, lambda p=preset_id: self._retry_preview_quality(p))
         if persist:
             self.save_user_settings(pq.SETTINGS_KEY, preset_id)
+
+    def _retry_preview_quality(self, preset_id: str, retry: int = 0) -> None:
+        from steempeg.ui.player import preview_quality as pq
+
+        if pq.normalize_quality_id(getattr(self, "_preview_quality_id", "")) != preset_id:
+            return
+        if pq.apply_mpv_preview_quality(getattr(self, "player", None), preset_id):
+            return
+        if retry < 15:
+            QTimer.singleShot(100, lambda: self._retry_preview_quality(preset_id, retry + 1))
 
     def show_preview_quality_menu(self) -> None:
         if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
