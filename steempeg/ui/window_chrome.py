@@ -144,6 +144,9 @@ class _TrafficLight(QPushButton):
         self.setFixedSize(13, 13)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Hover* events still fire on an inactive top-level (enter/leave often do not
+        # until the shell is clicked again — missing glyphs after Alt-Tab / restore).
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setText("")
         self._apply_style()
 
@@ -168,6 +171,23 @@ class _TrafficLight(QPushButton):
         self._apply_style()
         self.update()
 
+    def _sync_hover_from_cursor(self) -> None:
+        try:
+            local = self.mapFromGlobal(QCursor.pos())
+            self._set_hovered(self.rect().contains(local))
+        except RuntimeError:
+            self._set_hovered(False)
+
+    def event(self, event):  # noqa: N802
+        et = event.type()
+        if et == QEvent.Type.HoverEnter:
+            self._set_hovered(True)
+        elif et == QEvent.Type.HoverLeave:
+            self._set_hovered(False)
+        elif et == QEvent.Type.HoverMove and not self._hovered:
+            self._set_hovered(True)
+        return super().event(event)
+
     def enterEvent(self, event):
         self._set_hovered(True)
         super().enterEvent(event)
@@ -183,9 +203,9 @@ class _TrafficLight(QPushButton):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Park/unpark (portable warm sheets) often leaves underMouse() true on Windows
-        # even when the pointer is elsewhere — never trust it on first map.
-        self._set_hovered(False)
+        # Park/unpark + minimize restore: underMouse/enter can lie — sync from cursor
+        # after the widget is mapped (leaveEvent may have been skipped too).
+        QTimer.singleShot(0, self._sync_hover_from_cursor)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -1028,8 +1048,12 @@ def _linux_restore_target_geometry(window: QWidget) -> QRect:
     return screen.availableGeometry().adjusted(80, 60, -80, -60)
 
 
-def _linux_refresh_traffic_lights(window: QWidget) -> None:
-    """Re-sync traffic-light hover after a shell-level mouse grab (drag/resize)."""
+def refresh_traffic_lights_under_cursor(window: QWidget) -> None:
+    """Re-sync traffic-light hover from the global cursor.
+
+    Used after title-bar drag/resize grabs, minimize restore, and activation —
+    enter/leave are easy to miss while the shell is inactive.
+    """
     tb = getattr(window, "title_bar", None)
     if tb is None:
         return
@@ -1044,6 +1068,11 @@ def _linux_refresh_traffic_lights(window: QWidget) -> None:
             hovered = False
         if hasattr(btn, "_set_hovered"):
             btn._set_hovered(hovered)
+
+
+def _linux_refresh_traffic_lights(window: QWidget) -> None:
+    """Re-sync traffic-light hover after a shell-level mouse grab (drag/resize)."""
+    refresh_traffic_lights_under_cursor(window)
 
 
 def _linux_snap_title_drag_to_top(window: QWidget) -> None:
