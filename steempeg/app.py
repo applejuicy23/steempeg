@@ -81,13 +81,17 @@ def _is_enabled_setting(value) -> bool:
 
 
 def _force_native_window_icon(widget, ico_path):
-    """Push the .ico onto the realized HWND via WM_SETICON.
+    """Push the .ico onto the realized HWND via WM_SETICON (+ class icons).
 
     Qt's setWindowIcon is not always enough on first launch: Windows caches the
     taskbar button icon per AppUserModelID, and on a cold cache the button shows
     the generic icon until a later run warms it up (the "icon only appears on the
     2nd/3rd launch" bug). Re-applying the icon directly to the native window after
     it is shown populates that cache immediately, on the very first launch.
+
+    Dev launches under ``python.exe`` are worse: a later FRAMECHANGED (frameless
+    chrome) makes Explorer fall back to the host process icon (blank document).
+    Setting both WM_SETICON and the window-class HICON after chrome settle fixes it.
     """
     if os.name != 'nt' or not ico_path or not os.path.exists(ico_path):
         return
@@ -110,16 +114,31 @@ def _force_native_window_icon(widget, ico_path):
         ICON_SMALL, ICON_BIG = 0, 1
         IMAGE_ICON = 1
         LR_LOADFROMFILE = 0x00000010
+        GCLP_HICON = -14
+        GCLP_HICONSM = -34
 
         hwnd = int(widget.winId())
-        # Big source (256) gives the taskbar a crisp downscale at any DPI; small
-        # (32) feeds the title-bar / small taskbar icon.
+        # Prefer exact sizes; fall back to the ico's default face if LoadImage fails.
         big = user32.LoadImageW(None, ico_path, IMAGE_ICON, 256, 256, LR_LOADFROMFILE)
+        if not big:
+            big = user32.LoadImageW(None, ico_path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE)
         small = user32.LoadImageW(None, ico_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        if not small:
+            small = big
         if big:
             user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
         if small:
             user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+        # Class icons survive FRAMECHANGED better than per-window WM_SETICON alone
+        # when the process is still python.exe / pythonw.exe.
+        set_class = getattr(user32, "SetClassLongPtrW", None) or getattr(
+            user32, "SetClassLongW", None
+        )
+        if set_class is not None:
+            if big:
+                set_class(hwnd, GCLP_HICON, big)
+            if small:
+                set_class(hwnd, GCLP_HICONSM, small)
     except Exception:
         pass
 
@@ -5833,8 +5852,10 @@ def main():
         if sys.platform == "win32":
             from steempeg.ui.window_chrome import enable_frameless
 
-            _force_native_window_icon(window.ui, icon_path)
+            # Frameless FRAMECHANGED first — then stamp the icon so Explorer does
+            # not fall back to the python.exe blank-document taskbar face.
             enable_frameless(window.ui)
+            _force_native_window_icon(window.ui, icon_path)
 
         # Finish density / library restore / Skip paint WHILE STILL HIDDEN.
         # Showing first painted an empty "0 Clips" shell that then jumped —
@@ -5998,9 +6019,7 @@ def main():
         def _apply_custom_shell_native():
             from steempeg.ui.window_chrome import ensure_startup_maximized
 
-            _force_native_window_icon(window.ui, icon_path)
-            # Frameless already applied pre-show; only re-assert maximize if
-            # FRAMECHANGED dropped it — avoid a hide/show flash.
+            # Maximize / FRAMECHANGED can wipe WM_SETICON — re-stamp after.
             ensure_startup_maximized(window.ui)
             _force_native_window_icon(window.ui, icon_path)
             tb = getattr(window.ui, "title_bar", None)
@@ -6016,6 +6035,7 @@ def main():
         from steempeg.ui.window_chrome import ensure_startup_maximized as _ensure_max
 
         QTimer.singleShot(450, lambda: _ensure_max(window.ui))
+        QTimer.singleShot(500, lambda: _force_native_window_icon(window.ui, icon_path))
         if args.updated_from:
             QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
 
