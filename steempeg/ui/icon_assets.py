@@ -324,6 +324,49 @@ def rendering_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
     return _icon_from_pixmap(rendering_status_pixmap(color, size))
 
 
+def paused_status_pixmap(color: str | QColor, size: int = 22) -> QPixmap:
+    """Tinted ``pauserender.png`` bars for the Paused plaque (same master as dash Pause)."""
+    return _status_glyph_pixmap("pauserender.png", color, size)
+
+
+def paused_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
+    """Player-header Paused plaque icon (left of “Paused” text)."""
+    return _icon_from_pixmap(paused_status_pixmap(color, size))
+
+
+def error_badge_icon(size: int = 18) -> QIcon:
+    """Player-header Error plaque — untinted ``issue.png`` (already yellow triangle)."""
+    import os
+
+    from steempeg.infra.paths import get_resource_path
+
+    path = get_resource_path("issue.png")
+    if not path or not os.path.isfile(path):
+        return QIcon()
+    pix = QPixmap(path)
+    if pix.isNull():
+        return QIcon()
+    edge = max(1, int(size))
+    if pix.width() != edge or pix.height() != edge:
+        pix = pix.scaled(
+            edge,
+            edge,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    return _icon_from_pixmap(pix)
+
+
+def canceled_status_pixmap(color: str | QColor, size: int = 22) -> QPixmap:
+    """Tinted ``cancel.png`` X for the Canceled plaque."""
+    return _status_glyph_pixmap("cancel.png", color, size)
+
+
+def canceled_badge_icon(color: str | QColor, size: int = 18) -> QIcon:
+    """Player-header Canceled plaque icon (left of “Canceled” text)."""
+    return _icon_from_pixmap(canceled_status_pixmap(color, size))
+
+
 def loading_wave_frame(
     color: str | QColor,
     width: int,
