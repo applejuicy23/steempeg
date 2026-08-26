@@ -4611,7 +4611,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         return bottom <= dash_h + 48
 
     def _on_right_h_splitter_moved(self, _pos: int = 0, _index: int = 0) -> None:
-        """Debounced snap: collapse queue / player scraps after drag ends."""
+        """Debounced snap: collapse queue / player scraps after drag ends.
+
+        Never arm the timer while a handle drag is live — mid-hold free→close→reopen
+        used to get ``sync_queue_minimum`` floor slapped on after 100ms pauses
+        («свиток» then sudden min-open). Snap is scheduled from drag-end instead.
+        """
+        if getattr(self, "_splitter_dragging", False):
+            return
         timer = getattr(self, "_right_h_snap_timer", None)
         if timer is None:
             from PySide6.QtCore import QTimer
@@ -4625,6 +4632,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
     def _snap_right_h_splitter_after_drag(self) -> None:
         """Finish a near-kiss: zero scrap panes. Never inflate the player back."""
+        if getattr(self, "_splitter_dragging", False):
+            return
         rhs = getattr(self, "right_h_splitter", None)
         panel = getattr(self, "render_queue_panel", None)
         if rhs is None or panel is None:

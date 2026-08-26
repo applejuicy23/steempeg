@@ -138,6 +138,10 @@ class SplitterRulesMixin:
     def _begin_splitter_drag(self, side: str) -> None:
         self._splitter_drag_side = side
         self._splitter_dragging = True
+        # Kill a snap armed by a prior splitterMoved — it must not fire mid-hold.
+        timer = getattr(self, "_right_h_snap_timer", None)
+        if timer is not None:
+            timer.stop()
         try:
             from steempeg.ui.splitter_telemetry import get_splitter_telemetry, splitter_reason
 
@@ -200,6 +204,10 @@ class SplitterRulesMixin:
                 self._queue_user_collapsed = False
                 if hasattr(self, "_persist_queue_panel_open"):
                     self._persist_queue_panel_open(True)
+            # Mid-drag no longer arms the snap timer; schedule scrap cleanup +
+            # width persist now that the button is up.
+            if hasattr(self, "_on_right_h_splitter_moved"):
+                self._on_right_h_splitter_moved()
 
     def _sync_kiss_flag(self) -> None:
         """Match the hysteresis flag to the sizes the drag actually left.
