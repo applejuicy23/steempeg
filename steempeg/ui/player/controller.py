@@ -1337,6 +1337,28 @@ class PlayerMixin:
                 restored_visible = True
             self._set_splitter_handle_visible(self.right_h_splitter, bool(restored_visible))
 
+            # Theatre forced the queue to 0; that is not a user collapse. Mirror
+            # fullscreen's _exit_immersive_layout restore latch so sync reopens
+            # the pane when it was open before theatre.
+            pre_h = getattr(self, "_pre_theater_h_sizes", None)
+            was_open = (
+                isinstance(pre_h, (list, tuple))
+                and len(pre_h) >= 2
+                and int(pre_h[1]) > 48
+            )
+            if was_open:
+                self._queue_user_collapsed = False
+                self._queue_splitter_restore_open = True
+                try:
+                    self.right_h_splitter.setSizes([int(x) for x in pre_h])
+                except Exception:
+                    pass
+                if hasattr(self, "_persist_queue_panel_open"):
+                    try:
+                        self._persist_queue_panel_open(True)
+                    except Exception:
+                        pass
+
         # Theatre keeps the normal content padding (only true fullscreen goes flush).
         restore_content_insets(self.ui)
 
