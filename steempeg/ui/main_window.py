@@ -19,6 +19,7 @@ from steempeg.ui.window_chrome import (
     install_title_bar,
     poke_frame,
     refresh_dwm_chrome,
+    refresh_traffic_lights_under_cursor,
     soft_full_redraw,
 )
 
@@ -57,6 +58,7 @@ class MainWindow(_WindowBase):
             if tb is not None:
                 tb.sync_window_state()
                 QTimer.singleShot(0, tb.reset_traffic_lights)
+                QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
             # Windows re-adds the native caption on maximize/restore — re-trigger
             # WM_NCCALCSIZE so our frameless client area stays caption-free.
             poke_frame(self)
@@ -72,6 +74,10 @@ class MainWindow(_WindowBase):
                 host, "hide_floating_overlays"
             ):
                 host.hide_floating_overlays()
+        elif event.type() == QEvent.Type.ActivationChange:
+            # Inactive shell often skips enter/leave on the dots until click —
+            # re-evaluate under the cursor when focus returns (or is lost).
+            QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
         super().changeEvent(event)
 
     def hideEvent(self, event):
@@ -85,6 +91,7 @@ class MainWindow(_WindowBase):
         host = self._app_host
         if host is not None and hasattr(host, "on_main_window_resized"):
             host.on_main_window_resized()
+        QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
         super().showEvent(event)
 
     def resizeEvent(self, event):
@@ -111,6 +118,7 @@ class MainWindow(_WindowBase):
             tb = getattr(self, "title_bar", None)
             if tb is not None and hasattr(tb, "reset_traffic_lights"):
                 tb.reset_traffic_lights()
+            refresh_traffic_lights_under_cursor(self)
         finally:
             # Clear on next tick so any late resize from RedrawWindow is ignored.
             QTimer.singleShot(0, self._end_dwm_redraw)
