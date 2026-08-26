@@ -14,7 +14,7 @@ import time
 
 import PySide6.QtWidgets as qtw
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -1099,29 +1099,50 @@ class TimelineCanvas(QWidget):
 
         painter.setPen(QPen(QColor(255, 255, 255, 180), float(self._TICK_PEN_W)))
         painter.setFont(self._ruler_font)
+        fm = QFontMetrics(self._ruler_font)
 
         ruler_y = track_y + track_height + self._RULER_GAP
 
-        current_sec = start_sec
-        while current_sec <= end_sec:
-            x = self.ms_to_x(current_sec * 1000)
+        # Major = labeled. Old `step>=60 → every minute` flooded long clips with
+        # overlapping "1:10:00" strings; keep majors on a sparse cadence, then
+        # still skip a label if it would collide with the previous one.
+        if step >= 1:
+            major_every = max(int(round(step * 5)), int(round(step)))
+        else:
+            major_every = max(step * 5.0, step)
+
+        last_label_right = -10**9
+        label_gap = 10
+
+        current_sec = float(start_sec)
+        while current_sec <= end_sec + 1e-6:
+            x = self.ms_to_x(current_sec * 1000.0)
             x_pix = round(x)
-            is_major = (current_sec % max(10, step * 5) == 0) or (step >= 60 and current_sec % 60 == 0)
+            if step >= 1:
+                is_major = int(round(current_sec)) % int(major_every) == 0
+            else:
+                # Half-second (etc.) grid: label on major_every boundaries.
+                is_major = abs(round(current_sec / major_every) * major_every - current_sec) < 1e-6
 
             if is_major:
                 tick_bot = int(ruler_y + self._MAJOR_TICK_H)
                 painter.drawLine(x_pix, int(ruler_y), x_pix, tick_bot)
 
-                h = int(current_sec // 3600)
-                m = int((current_sec % 3600) // 60)
-                s = int(current_sec % 60)
+                sec_i = int(round(current_sec))
+                h = sec_i // 3600
+                m = (sec_i % 3600) // 60
+                s = sec_i % 60
 
                 if h > 0:
                     time_str = f"{h}:{m:02d}:{s:02d}"
                 else:
                     time_str = f"{m}:{s:02d}"
 
-                painter.drawText(x_pix + 3, tick_bot, time_str)
+                label_x = x_pix + 3
+                text_w = int(fm.horizontalAdvance(time_str))
+                if label_x >= last_label_right + label_gap:
+                    painter.drawText(label_x, tick_bot, time_str)
+                    last_label_right = label_x + text_w
             else:
                 painter.drawLine(x_pix, int(ruler_y), x_pix, int(ruler_y + self._MINOR_TICK_H))
 
