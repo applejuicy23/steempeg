@@ -81,13 +81,14 @@ def _short_preset(settings: RenderJobSettings) -> str:
 
 
 def _short_fps(settings: RenderJobSettings) -> str:
+    """``60 FPS`` / ``30 FPS`` — same casing as the open-clip dash strip."""
     fps = (settings.fps_text or "").strip()
     if not fps:
         return ""
     if settings.custom_fps is not None and "Custom" in fps:
-        return f"{settings.custom_fps} fps"
+        return f"{settings.custom_fps} FPS"
     match = re.search(r"(\d+)", fps)
-    return f"{match.group(1)} fps" if match else ""
+    return f"{match.group(1)} FPS" if match else ""
 
 
 def _short_bitrate_original(settings: RenderJobSettings) -> str:
@@ -124,10 +125,10 @@ def _short_bitrate(settings: RenderJobSettings) -> str:
 
 
 def format_job_preset(settings: RenderJobSettings) -> str:
-    """One compact line for queue cards: preset · fps · bitrate · codec.
+    """One compact line: ``Original, 60 FPS · bitrate · codec``.
 
-    Uses a middle-dot `` · `` between fields (queue cards). The bottom dash
-    strip remaps this to wide ``  •  `` bullets via ``format_dash_job_summary``.
+    Quality + FPS stay one comma field (matches open-clip dash). Middots separate
+    the remaining fields; ``format_dash_job_summary`` remaps them to ``  •  ``.
     """
     if settings.audio_only:
         audio = (settings.audio_format or "Audio").strip()
@@ -144,11 +145,13 @@ def format_job_preset(settings: RenderJobSettings) -> str:
 
     parts: list[str] = []
     preset = _short_preset(settings)
-    if preset:
-        parts.append(preset)
-
     fps = _short_fps(settings)
-    if fps:
+    if preset and fps:
+        # Same shape as update_final_setup: "Original, 60 FPS" / "1440p, 60 FPS".
+        parts.append(f"{preset}, {fps}")
+    elif preset:
+        parts.append(preset)
+    elif fps:
         parts.append(fps)
 
     if is_original:
