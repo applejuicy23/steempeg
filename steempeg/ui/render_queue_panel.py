@@ -600,11 +600,16 @@ class _QueueScrollContent(QWidget):
     QScrollArea(widgetResizable=True) sizes its widget from ``minimumSizeHint``.
     A VBox of Preferred/Minimum children reports a compressed minHint, so Qt
     shrinks rows toward ``minimumHeight`` before the scrollbar grows. Matching
-    minHint to sizeHint keeps natural card height and scrolls instead.
+    minHint **height** to sizeHint keeps natural card height and scrolls instead.
+
+    Width stays unconstrained (0): elevating width from sizeHint (~card chrome /
+    Fixed 280 grid) inflated the horizontal content floor and fought the right
+    splitter open→kiss drag (Stage B).
     """
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 — Qt override
-        return self.sizeHint()
+        hint = self.sizeHint()
+        return QSize(0, max(0, int(hint.height())))
 
 
 class QueueListHost(_QueueScrollContent):

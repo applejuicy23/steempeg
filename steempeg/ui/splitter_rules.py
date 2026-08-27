@@ -38,9 +38,14 @@ back out always reopens the player column at its floor.
 A collapsed pane is pinned by a one-pixel explicit minimum (see ``PANE_FREED``),
 without which the outer splitter re-inflates the block and the kiss springs
 back. Qt reads that minimum as licence to regrow the pane a pixel at a time, so
-any drag that *starts* from a collapse is driven here too — including the right
-handle, which otherwise runs on plain Qt. Collapsed panes pop open at their
+Any drag that *starts* from a collapse is driven here too — including the right
+handle, which otherwise used to creep. Collapsed panes pop open at their
 floor in one step; they never creep.
+
+Stage B also drives the right handle when **both panes are already open**
+(open→kiss). Native Qt alone fights live content minimums (player-header title
+elide soft-min + queue card sizeHints) and twitches the player column; the left
+handle never had that problem because its drag was always custom.
 
 Either handle can undo a kiss — but only out of slack its own neighbour can
 actually spare, and a neighbour already down to its own floor has none. Reopening
@@ -118,6 +123,7 @@ class SplitterRulesMixin:
         self._splitter_dragging = False
         self._splitter_handle_watchers = []
         self._frozen_queue_width = 0
+        self._frozen_player_floor = 0
         self._right_drag_mode = ""
         self._watch_splitter_handle(getattr(ui, "main_splitter", None), LEFT)
         self._watch_splitter_handle(getattr(self, "right_h_splitter", None), RIGHT)
@@ -159,6 +165,9 @@ class SplitterRulesMixin:
             # Latched once: mid-drag a pane stops being collapsed, and the rule
             # must not change while the button is still down.
             self._right_drag_mode = self._right_drag_mode_for_state()
+            # Freeze the content floor so header elide / queue cards cannot
+            # renegotiate the kiss threshold every pixel (Stage B).
+            self._frozen_player_floor = self._player_column_floor()
             return
         sizes = self.right_h_splitter.sizes()
         # Freeze the wall now. Reading it live lets the queue balloon while the
@@ -172,6 +181,7 @@ class SplitterRulesMixin:
             self._splitter_drag_side = None
         self._splitter_dragging = False
         self._frozen_queue_width = 0
+        self._frozen_player_floor = 0
         self._right_drag_mode = ""
         self._sync_kiss_flag()
         self.sync_queue_minimum()
@@ -184,6 +194,21 @@ class SplitterRulesMixin:
                     detail=f"side={side}",
                     splitter_name="main_splitter" if side == LEFT else "right_h_splitter",
                 )
+        except Exception:
+            pass
+        # Header soft-min / elide was paused mid-drag — settle once geometry is final.
+        try:
+            from steempeg.ui.player_header_layout import (
+                get_header_layout,
+                HEADER_LAYOUT_STEAM_LIKE,
+                sync_centered_title_width,
+                sync_header_center_mirror,
+            )
+
+            if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
+                sync_header_center_mirror(self)
+            else:
+                sync_centered_title_width(self)
         except Exception:
             pass
         # Custom right-handle drags can shut the queue without Qt's snap timer
@@ -212,8 +237,8 @@ class SplitterRulesMixin:
     def _sync_kiss_flag(self) -> None:
         """Match the hysteresis flag to the sizes the drag actually left.
 
-        Drags that start with both panes open run on plain Qt, so a collapse made
-        that way never went through the hysteresis and would otherwise be missed.
+        Open→kiss is custom (Stage B), but still re-read sizes so a release that
+        landed on scrap / freed never leaves the flag stale.
         """
         if not self._splitter_rules_active():
             return
@@ -250,8 +275,10 @@ class SplitterRulesMixin:
                 return self._drag_right_from_kiss(global_x, grab_offset)
             if mode == REOPEN_QUEUE:
                 return self._reopen_queue_pane(global_x, grab_offset)
-            # Both panes open: nothing to snap, Qt divides them as it always has.
-            return False
+            # Stage B: both panes open — drive open→kiss ourselves. Native Qt
+            # fights live content mins (header elide + queue cards) and twitches
+            # the player column; left→kiss never had this because it is custom.
+            return self._drag_right_both_open(global_x, grab_offset)
         queue_w = int(getattr(self, "_frozen_queue_width", 0))
         main = self.ui.main_splitter
         main_total = sum(main.sizes()) or main.width()
@@ -305,8 +332,12 @@ class SplitterRulesMixin:
         """Narrowest the player column renders at — its own content minimum.
 
         Read from the size hint, which the explicit minimum never changes, so
-        it stays honest while the column is collapsed.
+        it stays honest while the column is collapsed. Mid-drag prefer the
+        value frozen on press so Resize/elide cannot move the kiss threshold.
         """
+        frozen = int(getattr(self, "_frozen_player_floor", 0) or 0)
+        if frozen > 0 and getattr(self, "_splitter_dragging", False):
+            return frozen
         return max(int(self.ui.right_panel.minimumSizeHint().width()), 1)
 
     def _scaled_player_floor(self, room: int, neighbour_floor: int) -> int:
@@ -406,10 +437,19 @@ class SplitterRulesMixin:
         if len(sizes) >= 2 and int(sizes[1]) <= PANE_FREED:
             # Nothing but the handle is left, so the queue comes out of Clips.
             return self._pull_queue_out_of_clips(global_x, grab_offset)
+        return self._drag_right_player_vs_queue(global_x, grab_offset)
+
+    def _drag_right_both_open(self, global_x: int, grab_offset: int) -> bool:
+        """Both panes open: same hysteresis as from-kiss (Stage B open→kiss)."""
+        return self._drag_right_player_vs_queue(global_x, grab_offset)
+
+    def _drag_right_player_vs_queue(self, global_x: int, grab_offset: int) -> bool:
+        """Divide player | queue with kiss hysteresis; swallow native moveSplitter."""
         room, pointer = self._right_column_room(global_x, grab_offset)
         if room <= 0:
             return False
-        floor = self._scaled_player_floor(room, self._queue_pane_floor())
+        # Layout floor (not content hint) — cards must not inflate the neighbour.
+        floor = self._scaled_player_floor(room, self._queue_layout_floor())
         if floor <= 0:
             # Mirror of the left handle at the verge: the queue is a stone's throw
             # from its own floor, so it either holds the room or shuts and takes

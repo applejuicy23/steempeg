@@ -661,6 +661,10 @@ class _HeaderCenterSyncFilter(QObject):
             app = self.parent()
             if app is None:
                 return False
+            # Mid-splitter-drag: elide + soft minWidth feedback fights the right
+            # handle open→kiss path and twitches the player column (Stage B).
+            if bool(getattr(app, "_splitter_dragging", False)):
+                return False
             try:
                 if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
                     sync_header_center_mirror(app)
