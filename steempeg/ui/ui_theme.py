@@ -2053,6 +2053,32 @@ def presets_list_widget_stylesheet() -> str:
     )
 
 
+def presets_apply_solo_stylesheet() -> str:
+    """Standalone Apply pill (Standard ladder rows — no ▾ half)."""
+    p = _active
+    return f"""
+    QPushButton#PresetApplySolo {{
+        font-family: {tok.FONT_APP};
+        font-size: 11px;
+        font-weight: bold;
+        background-color: {p.button_secondary_bg};
+        color: #ffffff;
+        border: 2px solid {p.button_secondary_border};
+        border-radius: 12px;
+        padding: 0px 12px;
+        min-height: 22px;
+    }}
+    QPushButton#PresetApplySolo:hover {{
+        background-color: {p.button_secondary_hover_bg};
+        border: 2px solid #6b5a8e;
+    }}
+    QPushButton#PresetApplySolo:pressed {{
+        background-color: {p.button_secondary_pressed_bg};
+        border: 2px solid #b29ae7;
+    }}
+    """
+
+
 def presets_apply_split_stylesheet() -> str:
     """Preset row Apply ▾ split — matches RefreshButton secondary family."""
     p = _active
