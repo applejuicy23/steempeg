@@ -51,6 +51,7 @@ from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import (
     UPDATE_ARROWS_DEG_PER_TICK,
     UPDATE_ARROWS_TICK_MS,
+    title_bar_dev_icons,
     title_bar_info_icons,
     title_bar_settings_icons,
     title_bar_update_pixmap,
@@ -430,6 +431,7 @@ class SteempegTitleBar(QWidget):
     about_requested = Signal()
     settings_requested = Signal()
     check_updates_requested = Signal()
+    dev_requested = Signal()
     update_available_clicked = Signal()
     hide_update_available_requested = Signal()
 
@@ -601,6 +603,15 @@ class SteempegTitleBar(QWidget):
 
         root.addStretch(1)
 
+        self._dev_icon_idle, self._dev_icon_hot = title_bar_dev_icons(_icon_px)
+        self.btn_title_dev = _shell_icon_btn(
+            "TitleBarDev", self._dev_icon_idle, "Developer Tools"
+        )
+        self.btn_title_dev.clicked.connect(self.dev_requested.emit)
+        self.btn_title_dev.hide()
+        root.addWidget(self.btn_title_dev, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addSpacing(8)
+
         controls = QHBoxLayout()
         # Gap ≈ diameter of the 13px dots — matches the airier Linux/macOS-style look;
         # 8 felt packed on Windows DPI.
@@ -632,6 +643,11 @@ class SteempegTitleBar(QWidget):
                 getattr(self, "_settings_icon_idle", None),
                 getattr(self, "_settings_icon_hot", None),
             ),
+            (
+                getattr(self, "btn_title_dev", None),
+                getattr(self, "_dev_icon_idle", None),
+                getattr(self, "_dev_icon_hot", None),
+            ),
         )
         for btn, idle, hot in pairs:
             if btn is None or watched is not btn or idle is None or hot is None:
@@ -661,6 +677,10 @@ class SteempegTitleBar(QWidget):
             (
                 getattr(self, "btn_title_settings", None),
                 getattr(self, "_settings_icon_idle", None),
+            ),
+            (
+                getattr(self, "btn_title_dev", None),
+                getattr(self, "_dev_icon_idle", None),
             ),
         )
         for btn, idle in pairs:
@@ -800,6 +820,7 @@ class SteempegTitleBar(QWidget):
             }}
             QPushButton#TitleBarAboutInfo,
             QPushButton#TitleBarSettings,
+            QPushButton#TitleBarDev,
             QPushButton#TitleBarCheckUpdates {{
                 background: transparent;
                 border: none;
@@ -808,12 +829,14 @@ class SteempegTitleBar(QWidget):
                 text-align: center;
             }}
             QPushButton#TitleBarAboutInfo:hover,
-            QPushButton#TitleBarSettings:hover {{
+            QPushButton#TitleBarSettings:hover,
+            QPushButton#TitleBarDev:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
             QPushButton#TitleBarAboutInfo:pressed,
-            QPushButton#TitleBarSettings:pressed {{
+            QPushButton#TitleBarSettings:pressed,
+            QPushButton#TitleBarDev:pressed {{
                 background-color: rgba(255, 255, 255, 0.12);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
@@ -840,6 +863,12 @@ class SteempegTitleBar(QWidget):
         tools = getattr(self, "_shell_tools", None)
         if tools is not None:
             tools.setVisible(bool(visible))
+
+    def set_dev_button_visible(self, visible: bool) -> None:
+        """Show portable title-bar Dev (</>) next to the traffic lights."""
+        btn = getattr(self, "btn_title_dev", None)
+        if btn is not None:
+            btn.setVisible(bool(visible))
 
     def set_update_available(self, available: bool, *, version: str | None = None) -> None:
         """Show/hide the compact Update available plaque next to the version."""

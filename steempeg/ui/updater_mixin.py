@@ -202,6 +202,8 @@ class UpdaterMixin:
             tb.settings_requested.connect(self.show_settings_dialog)
         if hasattr(tb, "check_updates_requested"):
             tb.check_updates_requested.connect(self.check_for_updates)
+        if hasattr(tb, "dev_requested"):
+            tb.dev_requested.connect(self.show_dev_dialog)
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
         if hasattr(tb, "hide_update_available_requested"):
