@@ -1078,6 +1078,8 @@ class LibraryMixin:
                 if os.path.exists(clip_path):
                     shutil.rmtree(clip_path)
                     logging.info(f"Deleted dead clip folder: {clip_path}")
+                    if hasattr(self, "_on_queue_source_removed"):
+                        self._on_queue_source_removed(clip_path)
             except Exception as exc:
                 logging.error(f"Failed to delete dead clip {clip_path}: {exc}")
                 failed.append(os.path.basename(clip_path))
@@ -2335,6 +2337,8 @@ class LibraryMixin:
 
             shutil.rmtree(clip_path)
             logging.info(f"Deleted clip folder: {clip_path}")
+            if hasattr(self, "_on_queue_source_removed"):
+                self._on_queue_source_removed(clip_path)
             norm = os.path.normpath(clip_path)
             if hasattr(self, "_clear_salvage_verified"):
                 self._clear_salvage_verified(clip_path)
