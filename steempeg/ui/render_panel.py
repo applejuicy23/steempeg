@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtGui import QFont, QGuiApplication, QIcon
 
 from steempeg.ui.icon_assets import arrow_icon, warning_icon
 from steempeg.ui import ui_theme as ut
@@ -1575,6 +1575,86 @@ class PresetListRow(QWidget):
         return self.sizeHint()
 
 
+class StandardPresetRow(QWidget):
+    """Read-only Standard quality ladder row — Apply only (immutable)."""
+
+    _NAME_QSS = (
+        f"QLabel {{ color: #e8e8e8; background: transparent; font-size: 13px;"
+        f" font-weight: bold; {_font_css()} }}"
+    )
+    _HINT_QSS = (
+        f"QLabel {{ color: #888888; background: transparent; font-size: 11px;"
+        f" {_font_css()} }}"
+    )
+
+    def __init__(self, label: str, *, on_apply, parent=None):
+        super().__init__(parent)
+        self._label = label
+        self.setObjectName("StandardPresetRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("QWidget#StandardPresetRow { background: transparent; }")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 4, 6, 4)
+        row.setSpacing(8)
+
+        name_col = QVBoxLayout()
+        name_col.setContentsMargins(0, 0, 0, 0)
+        name_col.setSpacing(0)
+        name_lbl = QLabel(label)
+        name_lbl.setStyleSheet(self._NAME_QSS)
+        name_col.addWidget(name_lbl)
+        if "Target File Size" in (label or ""):
+            hint_text = "Built-in · custom-standard"
+        else:
+            hint_text = "Built-in · not editable"
+        hint = QLabel(hint_text)
+        hint.setStyleSheet(self._HINT_QSS)
+        name_col.addWidget(hint)
+        row.addLayout(name_col, 1)
+
+        # Solo pill — not PresetApplyMain (that QSS is the left half of Apply ▾
+        # and looks like the button floated off / cut open without the menu).
+        apply_btn = QPushButton("Apply")
+        apply_btn.setObjectName("PresetApplySolo")
+        apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        apply_btn.setFixedHeight(26)
+        apply_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        apply_btn.setStyleSheet(ut.presets_apply_solo_stylesheet())
+        apply_btn.setToolTip("Apply this standard quality to Video Settings")
+        apply_btn.clicked.connect(lambda *_: on_apply(label))
+        row.addWidget(apply_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def preferred_size_hint(self) -> QSize:
+        self.ensurePolished()
+        return self.sizeHint()
+
+
+class PresetSectionHeader(QWidget):
+    """Section caption inside the presets list (Standard / Custom)."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("PresetSectionHeader")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(6, 10, 6, 2)
+        # Title-case purple caption — same language as Quality Preset combo.
+        display = (title or "").strip().title()
+        lbl = QLabel(display)
+        lbl.setFont(tok.ui_qfont(11, weight=QFont.Weight.Bold))
+        lbl.setStyleSheet(
+            "QLabel { color: #b29ae7; background: transparent; }"
+        )
+        lay.addWidget(lbl)
+        lay.addStretch(1)
+
+    def preferred_size_hint(self) -> QSize:
+        self.ensurePolished()
+        return self.sizeHint()
+
+
 def restyle_presets_page(ui, app) -> None:
     """Presets tab: create strip + searchable expandable list (row actions)."""
     from steempeg.ui.design_tokens import with_tooltip_style
@@ -1608,7 +1688,7 @@ def restyle_presets_page(ui, app) -> None:
     title_row.setContentsMargins(0, 0, 0, 0)
     title_row.setSpacing(8)
     title_row.addWidget(_page_title_icon_label(4), 0, Qt.AlignmentFlag.AlignVCenter)
-    title_row.addWidget(_page_title("Export presets"), 0, Qt.AlignmentFlag.AlignVCenter)
+    title_row.addWidget(_page_title("Presets"), 0, Qt.AlignmentFlag.AlignVCenter)
     info_btn = QPushButton()
     info_btn.setObjectName("preset_help_info")
     info_btn.setIcon(info_icon(14))
@@ -1618,10 +1698,11 @@ def restyle_presets_page(ui, app) -> None:
     info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
     info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     info_btn.setToolTip(
-        "Set Video, Audio, and Export first — then Save as new.\n"
-        "Star a row to pin favourites at the top. Expand a row to see what's inside.\n"
-        "Use Apply on a row, or ▾ for Update / Rename / Duplicate / Delete.\n"
-        "Right-click a queue job → Apply preset for per-job recipes."
+        "Standard — built-in quality ladder (immutable).\n"
+        "Custom — your saved Video / Audio / Export recipes.\n"
+        "Apply from here or pick either kind in Video Settings → Quality Preset.\n"
+        "Star Custom rows to pin favourites. Expand a Custom row for details.\n"
+        "▾ on Custom: Update / Rename / Duplicate / Delete."
     )
     info_btn.setStyleSheet(
         with_tooltip_style(
@@ -1701,7 +1782,7 @@ def restyle_presets_page(ui, app) -> None:
     name_lay.addLayout(create_row)
     root.addWidget(_content_width_wrap(name_block))
 
-    list_cap = QLabel("Saved presets")
+    list_cap = QLabel("Standard & Custom")
     list_cap.setStyleSheet(_FIELD_LABEL_QSS)
     root.addWidget(list_cap)
 
