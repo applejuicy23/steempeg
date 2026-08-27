@@ -2395,18 +2395,11 @@ class ThumbnailPreviewWidget(QWidget):
     @classmethod
     def _load_trim_icon(cls) -> QPixmap | None:
         try:
-            path = get_resource_path("trim_icon.png")
-            if not path or not os.path.exists(path):
-                return None
-            pm = QPixmap(path)
-            if pm.isNull():
-                return None
-            return pm.scaled(
-                cls._TRIM_ICON_PX,
-                cls._TRIM_ICON_PX,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            from steempeg.ui.icon_assets import tinted_pixmap
+
+            # Match trim-zone timestamp (#ffcc00 in timeline_hover_preview_time_stylesheet).
+            pm = tinted_pixmap("trim_icon.png", "#ffcc00", cls._TRIM_ICON_PX)
+            return pm if not pm.isNull() else None
         except Exception:
             return None
 
