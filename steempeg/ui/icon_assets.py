@@ -219,6 +219,23 @@ def title_bar_settings_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     return idle, hot
 
 
+def title_bar_dev_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
+    """Tinted dev.png (</>) for the portable title-bar Dev control."""
+    return tinted_pixmap("dev.png", color, size)
+
+
+def title_bar_dev_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Idle + hot icons for the title-bar Dev button."""
+    idle = _icon_from_pixmap(title_bar_dev_pixmap("#b8b8b8", size))
+    hot = _icon_from_pixmap(title_bar_dev_pixmap("#e8e8e8", size))
+    return idle, hot
+
+
+def footer_dev_icon(size: int = 16) -> QIcon:
+    """White </> for the desktop library-footer Dev button."""
+    return _icon_from_pixmap(title_bar_dev_pixmap("#ffffff", size))
+
+
 # Same cadence as portable title-bar Updates button (_TitleBarUpdateButton).
 UPDATE_ARROWS_TICK_MS = 16
 UPDATE_ARROWS_DEG_PER_TICK = 7.5  # clockwise (top moves left→right)
