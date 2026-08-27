@@ -113,6 +113,7 @@ _BASE_ASSETS = (
     "linux.png",
     "steamdeck.png",
     "update.png",
+    "dev.png",
     "sourceinfo.png",
     "videosettings.png",
     "audiosettings.png",
