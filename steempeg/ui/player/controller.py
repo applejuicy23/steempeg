@@ -1187,6 +1187,8 @@ class PlayerMixin:
         )
         if tb is not None and hasattr(tb, "set_shell_tools_visible"):
             tb.set_shell_tools_visible(True)
+        if hasattr(self, "_refresh_dev_button_visibility"):
+            self._refresh_dev_button_visibility()
         if getattr(self, "is_fullscreen", False):
             return
         if not getattr(self, "is_theater", False):
@@ -3029,6 +3031,15 @@ class PlayerMixin:
         self.current_clip_duration_sec = float(duration_sec)
         if hasattr(self, "custom_timeline"):
             self.custom_timeline.set_duration(int(duration_sec * 1000))
+        # Target File Size may have been picked before duration arrived — finish the plan.
+        try:
+            q = ""
+            if hasattr(self, "ui") and hasattr(self.ui, "combo_quality"):
+                q = self.ui.combo_quality.currentText() or ""
+            if "Target File Size" in q and hasattr(self, "setup_dynamic_slider"):
+                self.setup_dynamic_slider()
+        except Exception:
+            pass
         # Steam clip: MPV/XML may report length after the open stack deferred thumbs.
         if not getattr(self, "_rendered_media_path", None):
             clip = getattr(self, "_preview_clip_path", None)
