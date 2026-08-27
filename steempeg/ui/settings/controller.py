@@ -30,13 +30,13 @@ class SettingsMixin:
         self._user_settings_memo = memo
         return memo
 
-    def save_user_settings(self, key, value):
+    def save_user_settings(self, key, value) -> bool:
         """Merge one key into settings.json without clobbering on read failure."""
         path = os.path.join(self.cache_dir, "settings.json")
         settings: dict = {}
         memo = getattr(self, "_user_settings_memo", None)
         if isinstance(memo, dict):
-            settings = memo
+            settings = dict(memo)
         elif os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
@@ -47,7 +47,7 @@ class SettingsMixin:
                     key,
                     path,
                 )
-                return
+                return False
             except OSError as exc:
                 _log.error(
                     "Refusing to save %r: could not read settings.json (%s): %s",
@@ -55,28 +55,31 @@ class SettingsMixin:
                     path,
                     exc,
                 )
-                return
+                return False
             if not isinstance(loaded, dict):
                 _log.error(
                     "Refusing to save %r: settings.json root is not an object (%s)",
                     key,
                     path,
                 )
-                return
+                return False
             settings = loaded
         settings[key] = value
         self._user_settings_memo = settings
-        cache.write_json(path, settings)
+        if not cache.write_json(path, settings):
+            _log.error("Could not write settings.json (%s)", path)
+            return False
+        return True
 
-    def save_user_settings_batch(self, updates: dict) -> None:
+    def save_user_settings_batch(self, updates: dict) -> bool:
         """Merge many keys into settings.json with a single read/write."""
         if not updates:
-            return
+            return True
         path = os.path.join(self.cache_dir, "settings.json")
         settings: dict = {}
         memo = getattr(self, "_user_settings_memo", None)
         if isinstance(memo, dict):
-            settings = memo
+            settings = dict(memo)
         elif os.path.isfile(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
@@ -86,24 +89,27 @@ class SettingsMixin:
                     "Refusing batch save: settings.json is invalid JSON (%s)",
                     path,
                 )
-                return
+                return False
             except OSError as exc:
                 _log.error(
                     "Refusing batch save: could not read settings.json (%s): %s",
                     path,
                     exc,
                 )
-                return
+                return False
             if not isinstance(loaded, dict):
                 _log.error(
                     "Refusing batch save: settings.json root is not an object (%s)",
                     path,
                 )
-                return
+                return False
             settings = loaded
         settings.update(updates)
         self._user_settings_memo = settings
-        cache.write_json(path, settings)
+        if not cache.write_json(path, settings):
+            _log.error("Could not write settings.json (%s)", path)
+            return False
+        return True
 
     def _layout_remember_enabled(self) -> bool:
         from steempeg.ui.layout_defaults import REMEMBER_LAYOUT_BETWEEN_SESSIONS

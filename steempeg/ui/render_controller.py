@@ -1897,20 +1897,21 @@ class RenderMixin:
         except Exception as exc:
             logging.debug("Rendered companion meta not saved: %s", exc)
 
-    def _show_batch_complete_dialog(self) -> None:
+    def _show_batch_complete_dialog(self, jobs=None) -> None:
         from steempeg.ui.batch_complete_dialog import BatchCompleteChoice, BatchCompleteDialog
         from steempeg.ui import design_tokens as tok
 
-        jobs = list(self.render_queue.jobs)
+        jobs = list(jobs if jobs is not None else self.render_queue.jobs)
         if not jobs:
             return
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
         always_clear = bool(
             self.load_user_settings().get("always_clear_render_queue_after_batch", True)
         )
+        parent = self.ui.window() if hasattr(self.ui, "window") else self.ui
         dlg = BatchCompleteDialog(
             jobs,
-            parent=self.ui,
+            parent=parent,
             bar_color=theme["title_bar"],
             bg_color=theme["app_bg"],
             always_clear_queue=always_clear,
@@ -1918,13 +1919,15 @@ class RenderMixin:
         dlg.open_output_requested.connect(self.open_rendered_file)
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
         dlg.open_source_clip_requested.connect(self.open_source_clip)
+        if always_clear:
+            self._clear_render_queue_silent()
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
         self.save_user_settings("always_clear_render_queue_after_batch", dlg.always_clear_queue())
         if not accepted:
             return
         if dlg.choice() == BatchCompleteChoice.OPEN_HISTORY:
             self.show_render_queue_history()
-        elif dlg.choice() == BatchCompleteChoice.OK and dlg.always_clear_queue():
+        elif dlg.always_clear_queue():
             self._clear_render_queue_silent()
 
     def _show_render_complete_dialog(self, job, output_file: str) -> None:
@@ -6038,6 +6041,7 @@ class RenderMixin:
         selected_id = getattr(self, "_selected_queue_job_id", None)
         was_selected = selected_id in ids
         removed_any = False
+        removed_jobs: list = []
         for job_id in ids:
             job = self.render_queue.get(job_id)
             if not job:
@@ -6046,16 +6050,17 @@ class RenderMixin:
                 continue
             if self.render_queue.remove(job_id):
                 removed_any = True
+                removed_jobs.append(job)
         if not removed_any:
             return
+        for job in removed_jobs:
+            self._maybe_clear_export_plaque_for_job(job)
         if not self.render_queue:
             self._on_queue_became_empty()
             return
         if was_selected:
             nxt = self.render_queue.jobs[0]
             self.activate_queue_job(nxt.id)
-            self._persist_render_queue_async()
-            return
         sidebar = getattr(self, "_portable_queue_sidebar", None)
         portable_visible = False
         if sidebar is not None:
@@ -6079,6 +6084,7 @@ class RenderMixin:
         else:
             self.refresh_render_queue_panel()
             self._sync_start_render_enabled()
+            self.update_playback_badge()
         self._persist_render_queue_async()
 
     def toggle_render_queue_scheme(self) -> None:
@@ -6352,7 +6358,31 @@ class RenderMixin:
         if not len(self.render_queue):
             return
         self.render_queue.clear()
+        self._completed_plaque_clip_path = None
+        self._error_plaque_clip_path = None
         self._on_queue_became_empty()
+
+    def _maybe_clear_export_plaque_for_job(self, job) -> None:
+        """Drop Completed/Error header plaques when their queue row goes away."""
+        if job is None:
+            return
+        if job.status not in (JobStatus.COMPLETED, JobStatus.ERROR):
+            return
+        clip_path = getattr(job, "clip_path", None)
+        if not clip_path:
+            return
+
+        def _same(a, b) -> bool:
+            if not a or not b:
+                return False
+            return os.path.normcase(os.path.normpath(a)) == os.path.normcase(
+                os.path.normpath(b)
+            )
+
+        if _same(getattr(self, "_completed_plaque_clip_path", None), clip_path):
+            self._completed_plaque_clip_path = None
+        if _same(getattr(self, "_error_plaque_clip_path", None), clip_path):
+            self._error_plaque_clip_path = None
 
     def reorder_queue_job(self, source_id: str, target_id: str) -> None:
         if getattr(self, "_queue_batch_active", False):
@@ -7469,7 +7499,7 @@ class RenderMixin:
                 body=f"{done} ok · {failed} failed",
             )
 
-        self._show_batch_complete_dialog()
+        self._show_batch_complete_dialog(jobs=jobs)
 
     def _stop_queue_batch(self, cancelled: bool = False) -> None:
         self._archive_batch_to_history(cancelled=cancelled)

@@ -309,13 +309,16 @@ def restore_portable_neo_chrome(app) -> None:
             pass
 
 
-def persist_render_settings(app) -> None:
+def persist_render_settings(app) -> bool:
     """Snapshot export panel into settings.json (shared by Desktop and Portable)."""
     try:
         data = asdict(snapshot_settings_from_ui(app))
-        app.save_user_settings(RENDER_SETTINGS_KEY, data)
+        if not hasattr(app, "save_user_settings"):
+            return False
+        return bool(app.save_user_settings(RENDER_SETTINGS_KEY, data))
     except Exception:
         _log.exception("Failed to persist render settings")
+        return False
 
 
 def restore_render_settings(app) -> None:
@@ -737,7 +740,16 @@ class PortableRenderSettingsDialog(SteempegDialog):
         mark_portable_render_sheet_closed(self._app)
 
     def _on_save(self) -> None:
-        persist_render_settings(self._app)
+        from steempeg.ui.message_dialog import steempeg_warning
+
+        if not persist_render_settings(self._app):
+            steempeg_warning(
+                self,
+                "Settings not saved",
+                "Could not save render settings.",
+                detail="Check that the Steempeg cache folder is writable, then try again.",
+            )
+            return
         # Persist edits onto the selected queue job when applicable.
         if hasattr(self._app, "_sync_active_queue_job_from_ui"):
             try:

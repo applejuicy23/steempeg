@@ -42,13 +42,17 @@ def load_ui_shell() -> str | None:
     return None
 
 
-def save_ui_shell(shell: str) -> None:
+def save_ui_shell(shell: str, app=None) -> bool:
     if shell not in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
-        return
+        return False
+    if app is not None and hasattr(app, "save_user_settings"):
+        return bool(app.save_user_settings(UI_SHELL_KEY, shell))
     path = _settings_path()
     data = cache.read_json(path)
+    if not isinstance(data, dict):
+        data = {}
     data[UI_SHELL_KEY] = shell
-    cache.write_json(path, data)
+    return cache.write_json(path, data)
 
 
 def load_ask_ui_shell() -> bool:
@@ -59,11 +63,15 @@ def load_ask_ui_shell() -> bool:
     return bool(data.get(UI_SHELL_ASK_KEY))
 
 
-def save_ask_ui_shell(ask: bool) -> None:
+def save_ask_ui_shell(ask: bool, app=None) -> bool:
+    if app is not None and hasattr(app, "save_user_settings"):
+        return bool(app.save_user_settings(UI_SHELL_ASK_KEY, bool(ask)))
     path = _settings_path()
     data = cache.read_json(path)
+    if not isinstance(data, dict):
+        data = {}
     data[UI_SHELL_ASK_KEY] = bool(ask)
-    cache.write_json(path, data)
+    return cache.write_json(path, data)
 
 
 def is_steamdeck_build() -> bool:

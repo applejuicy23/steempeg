@@ -18,11 +18,12 @@ def read_json(path, default=None):
         return default
 
 
-def write_json(path, data):
-    """Write `data` to `path` as pretty UTF-8 JSON. Best-effort (errors ignored)."""
+def write_json(path, data) -> bool:
+    """Write `data` to `path` as pretty UTF-8 JSON. Returns False on I/O failure."""
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)   # make sure the folder exists
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
+        return True
     except OSError:
-        pass
+        return False

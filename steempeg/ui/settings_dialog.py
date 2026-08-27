@@ -1559,9 +1559,9 @@ class SettingsDialog(SteempegDialog):
         # even if the user forgot Save.
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
-            save_ui_shell(shell)
+            save_ui_shell(shell, app)
         if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
-            save_ask_ui_shell(self._chk_ask_shell.isChecked())
+            save_ask_ui_shell(self._chk_ask_shell.isChecked(), app)
         # Flush queue + panel before relaunch so the other shell sees the same state.
         app = self._app
         if hasattr(app, "_persist_render_queue"):
@@ -2333,10 +2333,25 @@ class SettingsDialog(SteempegDialog):
             pending[UI_SHELL_ASK_KEY] = False
 
         if hasattr(self._app, "save_user_settings_batch"):
-            self._app.save_user_settings_batch(pending)
+            saved = self._app.save_user_settings_batch(pending)
         else:
+            saved = True
             for key, value in pending.items():
-                self._save_setting(key, value)
+                if hasattr(self._app, "save_user_settings"):
+                    if not self._app.save_user_settings(key, value):
+                        saved = False
+                else:
+                    self._save_setting(key, value)
+        if not saved:
+            from steempeg.ui.message_dialog import steempeg_warning
+
+            steempeg_warning(
+                self,
+                "Settings not saved",
+                "Could not write settings.json.",
+                detail="Check that the Steempeg cache folder is writable, then try again.",
+            )
+            return None
 
         merged = dict(prev)
         merged.update(pending)
@@ -2360,6 +2375,8 @@ class SettingsDialog(SteempegDialog):
         import time
 
         deferred = self._persist_settings()
+        if deferred is None:
+            return
         self.accept()
         if not deferred:
             return
