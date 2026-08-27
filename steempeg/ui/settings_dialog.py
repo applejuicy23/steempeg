@@ -147,7 +147,9 @@ from steempeg.ui.settings_prefs import (
     KEY_CONFIRM_BEFORE_DELETE,
     KEY_DATE_FORMAT,
     KEY_DEFAULT_RENDER_TAB,
+    KEY_DECK_CONTROLS,
     KEY_DESKTOP_RENDER_LAYOUT,
+    KEY_DEV_MODE,
     KEY_DISPLAY_TIMEZONE,
     KEY_FFMPEG_LOG_LEVEL,
     KEY_HWDEC_PREVIEW,
@@ -184,6 +186,8 @@ from steempeg.ui.settings_prefs import (
     load_confirm_before_delete,
     load_date_format,
     load_default_render_tab,
+    load_deck_controls,
+    load_dev_mode,
     load_desktop_render_layout,
     load_display_timezone,
     load_ffmpeg_log_level,
@@ -198,7 +202,8 @@ from steempeg.ui.settings_prefs import (
     load_startup_library_scan,
     load_test_new_fullscreen,
     normalize_clock_format,
-    normalize_date_format,
+    normalize_deck_controls,
+    normalize_dev_mode,
     normalize_desktop_render_layout,
     normalize_display_timezone,
     normalize_export_folder,
@@ -1221,6 +1226,30 @@ class SettingsDialog(SteempegDialog):
                 "Off if hardware decode glitches."
             )
         )
+
+        a.addWidget(self._section("Dev tools"))
+        self._chk_dev_mode = SteempegCheckBox("Developer mode")
+        self._chk_dev_mode.setChecked(load_dev_mode(settings))
+        self._chk_dev_mode.setToolTip(
+            "Show the Dev footer/title-bar button and Developer Tools dialog."
+        )
+        a.addWidget(self._chk_dev_mode)
+        self._chk_deck_controls = SteempegCheckBox(
+            "Deck gamepad controls (experimental)"
+        )
+        self._chk_deck_controls.setChecked(load_deck_controls(settings))
+        self._chk_deck_controls.setToolTip(
+            "View / Menu / ABXY / D-pad / shoulders in Portable. "
+            "Also enabled automatically when Developer mode is on."
+        )
+        a.addWidget(self._chk_deck_controls)
+        a.addWidget(
+            self._hint(
+                "Raw v49 mapping — test with Dev Mode → Deck pad or a real controller. "
+                "Off by default on Desktop."
+            )
+        )
+
         a.addStretch(1)
         tabs.addTab(_scroll_settings_tab(advanced), "Advanced")
 
@@ -2286,6 +2315,13 @@ class SettingsDialog(SteempegDialog):
             self._app.screenshots_dir = shots
 
         pending[KEY_HWDEC_PREVIEW] = normalize_hwdec_preview(self._combo_hwdec.currentData())
+
+        dev_mode = normalize_dev_mode(self._chk_dev_mode.isChecked())
+        deck_controls = normalize_deck_controls(self._chk_deck_controls.isChecked())
+        pending[KEY_DEV_MODE] = dev_mode
+        pending[KEY_DECK_CONTROLS] = deck_controls
+        if hasattr(self._app, "_refresh_dev_button_visibility"):
+            deferred.append(self._app._refresh_dev_button_visibility)
 
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
