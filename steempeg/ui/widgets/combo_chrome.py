@@ -1,8 +1,9 @@
 """Shared QComboBox popup styling — selected item outline + visible disabled rows."""
 from __future__ import annotations
 
-from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QComboBox
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
@@ -10,6 +11,51 @@ from steempeg.ui.ui_density import COMFORT, UiDensity
 # Force light ink — Windows light OS theme otherwise paints near-black Text
 # on our dark custom popup (QSS alone is not always enough).
 _POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
+_SECTION_FG = QColor("#b29ae7")  # Presets tab Standard / Custom caption
+
+
+class QualitySectionHeaderDelegate(QStyledItemDelegate):
+    """Paint Quality Preset section rows (Standard / Custom) in Presets purple."""
+
+    _HEADER_H = 20  # tight caption — not a full combo row
+
+    def sizeHint(self, option, index):
+        meta = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(meta, dict) and meta.get("kind") == "header":
+            base = super().sizeHint(option, index)
+            return base.__class__(base.width(), self._HEADER_H)
+        return super().sizeHint(option, index)
+
+    def paint(self, painter, option, index):
+        meta = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(meta, dict) and meta.get("kind") == "header":
+            painter.save()
+            # Flat caption — no disabled grey plate / border.
+            text = index.data(Qt.ItemDataRole.DisplayRole) or ""
+            # Same stack as Presets section captions (Segoe UI / bold).
+            font = tok.ui_qfont(11, weight=QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.setPen(_SECTION_FG)
+            pad = 8
+            painter.drawText(
+                option.rect.adjusted(pad, 0, -pad, 0),
+                int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                str(text),
+            )
+            painter.restore()
+            return
+        super().paint(painter, option, index)
+
+
+def install_quality_section_header_delegate(combo: QComboBox) -> None:
+    """One-shot: purple Standard / Custom captions in the Quality Preset popup."""
+    if combo is None:
+        return
+    if getattr(combo, "_steempeg_quality_header_delegate", None) is not None:
+        return
+    delegate = QualitySectionHeaderDelegate(combo)
+    combo.setItemDelegate(delegate)
+    combo._steempeg_quality_header_delegate = delegate
 
 
 def _combo_colors():

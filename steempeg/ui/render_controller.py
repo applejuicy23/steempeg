@@ -3460,26 +3460,10 @@ class RenderMixin:
         self.current_orig_height = max_height
 
         if hasattr(self.ui, "combo_quality"):
-            from steempeg.render.quality_presets import build_quality_presets
-
-            # Only list presets the clip can actually use — no greyed-out upscales.
-            self.all_qualities = build_quality_presets(max_height)
-            self.ui.combo_quality.clear()
-            if max_height > 0:
-                self.ui.combo_quality.addItem(f"Original (Lossless, {max_height}p)")
-            else:
-                self.ui.combo_quality.addItem("Original (Lossless)")
-            for preset_name, _preset_height in self.all_qualities:
-                self.ui.combo_quality.addItem(preset_name)
-            self.ui.combo_quality.setCurrentIndex(0)
-            self.ui.combo_quality.insertSeparator(self.ui.combo_quality.count())
-            self.ui.combo_quality.addItem("🎯 Target File Size...")
-            # Fit popup to every row (Original…Target) so Target File Size is
-            # visible without scrolling; scrollbar only if the list grows past that.
-            self.ui.combo_quality.setMaxVisibleItems(
-                max(1, self.ui.combo_quality.count())
+            self._rebuild_quality_preset_combo(
+                max_height=max_height,
+                preserve_text=current_quality if preserve_ui_selection else "",
             )
-            self.update_bitrate_options()
 
         if hasattr(self.ui, "combo_fps"):
             self.ui.combo_fps.clear()
@@ -3510,10 +3494,6 @@ class RenderMixin:
             self.ui.combo_fps.addItem("⚙️ Custom FPS...")
             self.ui.combo_fps.setCurrentIndex(0)
 
-        if preserve_ui_selection and current_quality and hasattr(self.ui, "combo_quality"):
-            index = find_enabled_combo_text(self.ui.combo_quality, current_quality)
-            if index >= 0:
-                self.ui.combo_quality.setCurrentIndex(index)
         if preserve_ui_selection and current_fps and hasattr(self.ui, "combo_fps"):
             index = find_enabled_combo_text(self.ui.combo_fps, current_fps)
             if index >= 0:
@@ -3532,6 +3512,245 @@ class RenderMixin:
         self.refresh_output_format_availability()
         if hasattr(self, "refresh_player_header_info"):
             self.refresh_player_header_info(has_clip=True)
+
+    def _quality_combo_item_meta(self, index: int = -1) -> dict:
+        """UserRole payload for a Quality Preset combo row."""
+        combo = getattr(self.ui, "combo_quality", None)
+        if combo is None:
+            return {}
+        idx = int(index) if index is not None and int(index) >= 0 else combo.currentIndex()
+        if idx < 0 or idx >= combo.count():
+            return {}
+        raw = combo.itemData(idx, Qt.ItemDataRole.UserRole)
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def _add_quality_combo_item(
+        self,
+        text: str,
+        *,
+        kind: str,
+        name: str = "",
+        height: int | None = None,
+        enabled: bool = True,
+    ) -> int:
+        from steempeg.render.quality_presets import quality_item_meta
+        from steempeg.ui.widgets.combo_chrome import set_combo_item_enabled
+
+        combo = self.ui.combo_quality
+        combo.addItem(text)
+        idx = combo.count() - 1
+        combo.setItemData(
+            idx,
+            quality_item_meta(kind=kind, name=name, height=height),
+            Qt.ItemDataRole.UserRole,
+        )
+        if not enabled:
+            set_combo_item_enabled(combo, idx, False)
+        if kind == "header":
+            from PySide6.QtCore import QSize
+
+            # Beat popup QSS min-height so captions stay tight.
+            combo.setItemData(idx, QSize(0, 20), Qt.ItemDataRole.SizeHintRole)
+        return idx
+
+    def _rebuild_quality_preset_combo(
+        self, *, max_height: int = 0, preserve_text: str = ""
+    ) -> None:
+        """Fill Video Settings Quality Preset: Standard ladder + Custom recipes.
+
+        Standard resolution rows are capped to the source height — never offer
+        2160p/4320p (or any taller step) when the clip is e.g. 1440p. Missing
+        height must not expand to the full Goddess ladder (that was the bug).
+        """
+        from steempeg.render.export_presets import list_preset_names, load_favourite_names
+        from steempeg.render.quality_presets import (
+            KIND_CUSTOM,
+            KIND_HEADER,
+            KIND_STANDARD,
+            KIND_TARGET,
+            TARGET_FILE_SIZE_LABEL,
+            build_quality_presets,
+            original_quality_label,
+        )
+        from steempeg.ui.widgets.combo_chrome import install_quality_section_header_delegate
+        from steempeg.ui.widgets.quality_preset_dual_popup import (
+            install_quality_preset_dual_popup,
+        )
+
+        combo = getattr(self.ui, "combo_quality", None)
+        if combo is None:
+            return
+
+        install_quality_section_header_delegate(combo)
+        install_quality_preset_dual_popup(combo)
+
+        want = (preserve_text or "").strip()
+        want_custom = ""
+        # If the live selection is a Custom row, keep that recipe selected.
+        cur_meta = self._quality_combo_item_meta()
+        if cur_meta.get("kind") == KIND_CUSTOM and cur_meta.get("name"):
+            want_custom = str(cur_meta.get("name") or "")
+
+        # Prefer explicit arg, else last known clip height.
+        src_h = int(max_height or 0) or int(
+            getattr(self, "current_orig_height", 0) or 0
+        )
+        # Unknown source → conservative 1080 ladder (same as populate fallback),
+        # never ``None`` (that used to dump 4320p/2160p for every clip).
+        ladder_h = src_h if src_h > 0 else 1080
+
+        combo.blockSignals(True)
+        combo.clear()
+        self.all_qualities = build_quality_presets(ladder_h)
+
+        self._add_quality_combo_item(
+            "Standard",
+            kind=KIND_HEADER,
+            enabled=False,
+        )
+        orig = original_quality_label(src_h if src_h > 0 else None)
+        self._add_quality_combo_item(orig, kind=KIND_STANDARD, name="original")
+        for preset_name, preset_height in self.all_qualities:
+            self._add_quality_combo_item(
+                preset_name,
+                kind=KIND_STANDARD,
+                name=preset_name,
+                height=preset_height,
+            )
+
+        # Custom column: Target (built-in hybrid) + saved recipes.
+        self._add_quality_combo_item(
+            "Custom",
+            kind=KIND_HEADER,
+            enabled=False,
+        )
+        self._add_quality_combo_item(
+            TARGET_FILE_SIZE_LABEL,
+            kind=KIND_TARGET,
+            name="target",
+        )
+
+        custom_names: list[str] = []
+        try:
+            custom_names = list_preset_names(self.load_user_settings)
+            fav_set = set(load_favourite_names(self.load_user_settings))
+        except Exception:
+            custom_names = []
+            fav_set = set()
+
+        for name in custom_names:
+            label = f"★ {name}" if name in fav_set else name
+            self._add_quality_combo_item(
+                label,
+                kind=KIND_CUSTOM,
+                name=name,
+            )
+
+        # Restore selection: prefer Custom recipe, else matching Standard text.
+        # Drop preserved labels taller than the source (stale 4320p after a 1440 clip).
+        restored = False
+        if want_custom:
+            for i in range(combo.count()):
+                meta = combo.itemData(i, Qt.ItemDataRole.UserRole)
+                if (
+                    isinstance(meta, dict)
+                    and meta.get("kind") == KIND_CUSTOM
+                    and meta.get("name") == want_custom
+                ):
+                    combo.setCurrentIndex(i)
+                    restored = True
+                    break
+        if not restored and want:
+            index = find_enabled_combo_text(combo, want)
+            if index >= 0:
+                meta = combo.itemData(index, Qt.ItemDataRole.UserRole)
+                row_h = (
+                    int(meta.get("height") or 0)
+                    if isinstance(meta, dict)
+                    else 0
+                )
+                if row_h <= 0 or src_h <= 0 or row_h <= src_h:
+                    combo.setCurrentIndex(index)
+                    restored = True
+        if not restored:
+            # First enabled Standard row (skip header).
+            for i in range(combo.count()):
+                meta = combo.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(meta, dict) and meta.get("kind") == KIND_STANDARD:
+                    combo.setCurrentIndex(i)
+                    break
+
+        combo.setMaxVisibleItems(max(8, min(24, combo.count())))
+        combo.blockSignals(False)
+        self.update_bitrate_options()
+        self.on_quality_mode_changed(combo.currentText())
+
+    def on_quality_preset_combo_changed(self, text: str = "") -> None:
+        """Video Settings Quality Preset: Standard ladder vs apply Custom recipe."""
+        if getattr(self, "_bulk_settings_apply", False):
+            return
+        if getattr(self, "_quality_combo_applying_custom", False):
+            return
+        meta = self._quality_combo_item_meta()
+        kind = str(meta.get("kind") or "")
+        if kind == "header":
+            return
+        if kind == "custom":
+            name = str(meta.get("name") or "").strip()
+            if not name:
+                return
+            self._quality_combo_applying_custom = True
+            try:
+                self.apply_export_preset_to_panel(name)
+            finally:
+                self._quality_combo_applying_custom = False
+            return
+        # Standard / Target — leave custom-canon mode (checkmark drops).
+        self._clear_active_custom_preset()
+        self.update_bitrate_options()
+        self.on_quality_mode_changed(text or self.ui.combo_quality.currentText())
+
+    def apply_standard_quality_to_panel(self, label: str) -> None:
+        """Presets manager → Apply a Standard ladder row onto Video Settings."""
+        from steempeg.render.quality_presets import KIND_STANDARD, KIND_TARGET
+
+        label = (label or "").strip()
+        if not label:
+            return
+        self._clear_active_custom_preset()
+        combo = getattr(self.ui, "combo_quality", None)
+        if combo is None:
+            return
+        # Ensure combo has current ladder (may be empty before first clip).
+        if combo.count() <= 0:
+            self._rebuild_quality_preset_combo(
+                max_height=int(getattr(self, "current_orig_height", 0) or 0),
+            )
+        for i in range(combo.count()):
+            meta = combo.itemData(i, Qt.ItemDataRole.UserRole)
+            if not isinstance(meta, dict):
+                continue
+            if meta.get("kind") not in (KIND_STANDARD, KIND_TARGET):
+                continue
+            if combo.itemText(i) == label:
+                combo.setCurrentIndex(i)
+                self.on_quality_preset_combo_changed(label)
+                self._set_preset_status(f"Applied standard “{label}” to Video Settings.")
+                return
+        # Fallback: set by text match (Original height suffix may differ).
+        idx = find_enabled_combo_text(combo, label)
+        if idx < 0 and label.startswith("Original"):
+            for i in range(combo.count()):
+                meta = combo.itemData(i, Qt.ItemDataRole.UserRole)
+                if isinstance(meta, dict) and meta.get("name") == "original":
+                    idx = i
+                    break
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+            self.on_quality_preset_combo_changed(combo.itemText(idx))
+            self._set_preset_status(
+                f"Applied standard “{combo.itemText(idx)}” to Video Settings."
+            )
 
     def update_quality_options(self):
         """ Reads the clip's XML data and prepares the UI for the render settings """
@@ -3766,7 +3985,12 @@ class RenderMixin:
     def update_bitrate_options(self):
         """ Refreshes lists, applies FPS math visually, and freezes settings if Original is selected. """
         if not hasattr(self.ui, 'combo_bitrate') or not hasattr(self.ui, 'combo_quality'):
-            return 
+            return
+        # Custom recipe rows apply via on_quality_preset_combo_changed — don't
+        # treat the display name as a ladder quality string.
+        meta = self._quality_combo_item_meta()
+        if meta.get("kind") == "custom":
+            return
             
         # --- SAVE CURRENT SELECTION (so it doesn't get lost when changing FPS) ---
         current_selection = self.ui.combo_bitrate.currentText()
@@ -4053,6 +4277,8 @@ class RenderMixin:
         """Dynamically updates the Detailed Summary, Size, and Save Path."""
         if getattr(self, "_bulk_settings_apply", False) and not trim_only:
             return
+        if not trim_only:
+            self._revalidate_active_custom_preset()
         clip_path = self._active_preview_clip_path()
         # Queue encode stamps preview path without opening media — treat as idle.
         if not clip_path or not self._player_has_open_clip():
@@ -4457,7 +4683,7 @@ class RenderMixin:
     def on_quality_mode_changed(self, text):
         """ Hides or shows the slider and target inputs depending on the mode """
         self._last_quality_text = text
-        is_target_mode = "Target File Size" in text
+        is_target_mode = "Target File Size" in (text or "")
 
         if hasattr(self.ui, 'size_slider'):
             self.ui.size_slider.setVisible(is_target_mode)
@@ -4466,12 +4692,28 @@ class RenderMixin:
             self.size_container.setVisible(is_target_mode)
             
         if is_target_mode:
+            self._ensure_fps_combo_for_target()
             self.setup_dynamic_slider()
         self._sync_original_audio_controls()
         self.refresh_output_format_availability()
         # Skip summary rebuild during bulk preset/job apply — caller runs it once.
         if is_target_mode and not getattr(self, "_bulk_settings_apply", False):
             self.update_final_setup()
+
+    def _ensure_fps_combo_for_target(self) -> None:
+        """Target mode needs a usable FPS row (blank combo broke the size plan)."""
+        combo = getattr(self.ui, "combo_fps", None)
+        if combo is None:
+            return
+        if combo.count() > 0 and (combo.currentText() or "").strip():
+            return
+        fps_val = int(getattr(self, "current_orig_fps", 60) or 60)
+        combo.blockSignals(True)
+        if combo.count() <= 0:
+            combo.addItem(f"{fps_val} FPS (Original)")
+        combo.setCurrentIndex(0)
+        combo.setEnabled(True)
+        combo.blockSignals(False)
 
     def init_original_help_state(self) -> None:
         """Apply the saved 'don't show again' preference to the Original warning icon."""
@@ -4580,31 +4822,62 @@ class RenderMixin:
     
     def setup_dynamic_slider(self):
         """ Generates strict slider steps and adds Lossless & Custom modes """
-        duration = self.get_effective_duration() 
-        if duration <= 0: return
-            
+        duration = float(self.get_effective_duration() or 0)
+        if duration <= 0:
+            duration = float(getattr(self, "current_clip_duration_sec", 0) or 0)
+        if duration <= 0:
+            # Still no duration — don't leave the Designer "Target Size" stub,
+            # and don't leave dynamic_stops unset (slider moves would crash).
+            self.dynamic_stops = [10, 25, 50, 100, -1]
+            if hasattr(self.ui, "size_slider"):
+                self.ui.size_slider.blockSignals(True)
+                self.ui.size_slider.setMinimum(0)
+                self.ui.size_slider.setMaximum(len(self.dynamic_stops) - 1)
+                self.ui.size_slider.setValue(0)
+                self.ui.size_slider.blockSignals(False)
+            if hasattr(self.ui, "label_target_size"):
+                self.ui.label_target_size.setText(
+                    "Target: <b>— MB</b><br>"
+                    "Quality: <span style='color:#aaaaaa'><b>"
+                    "Need clip duration — open a clip / wait for load"
+                    "</b></span>"
+                )
+            return
+
         # Dynamically calculate the maximum MB for the current trimmed duration
-        orig_mb = (getattr(self, 'current_orig_bitrate', 10) * duration) / 8 
-        if orig_mb < 1: orig_mb = 1
-        
+        orig_mb = (getattr(self, 'current_orig_bitrate', 10) * duration) / 8
+        if orig_mb < 1:
+            orig_mb = 1
+
         anchors = [10, 25, 50, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000]
         self.dynamic_stops = [size for size in anchors if size < orig_mb]
-        
-        self.dynamic_stops.append(int(orig_mb)) # Lossless
-        self.dynamic_stops.append(-1) # Custom
-        
+
+        self.dynamic_stops.append(int(orig_mb))  # Lossless
+        self.dynamic_stops.append(-1)  # Custom
+
         self.ui.size_slider.blockSignals(True)
         self.ui.size_slider.setMinimum(0)
         self.ui.size_slider.setMaximum(len(self.dynamic_stops) - 1)
         # Always snap to the new Lossless value when the trim changes
-        self.ui.size_slider.setValue(len(self.dynamic_stops) - 2) 
+        self.ui.size_slider.setValue(len(self.dynamic_stops) - 2)
         self.ui.size_slider.blockSignals(False)
-        
+
         self.on_slider_moved(self.ui.size_slider.value())
 
     def calculate_strict_target(self, target_mb, is_lossless=False, is_custom=False):
         """Read the controls, run the bitrate math, show the result."""
-        duration = self.get_effective_duration()
+        duration = float(self.get_effective_duration() or 0)
+        if duration <= 0:
+            duration = float(getattr(self, "current_clip_duration_sec", 0) or 0)
+        if duration <= 0:
+            if hasattr(self.ui, "label_target_size"):
+                self.ui.label_target_size.setText(
+                    f"Target: <b>{int(target_mb)} MB</b><br>"
+                    "Quality: <span style='color:#aaaaaa'><b>"
+                    "Need clip duration — open a clip / wait for load"
+                    "</b></span>"
+                )
+            return
 
         # --- read inputs from the UI ---
         orig_video_mbps = getattr(self, 'current_orig_bitrate', 10)
@@ -4616,7 +4889,7 @@ class RenderMixin:
         if fps is None:
             try:
                 fps = int(re.search(r'(\d+)', fps_text).group(1))
-            except (AttributeError, ValueError):
+            except (AttributeError, ValueError, TypeError):
                 fps = getattr(self, 'current_orig_fps', 60)
 
         # --- run the pure math ---
@@ -4625,6 +4898,13 @@ class RenderMixin:
                                     is_lossless=is_lossless, is_custom=is_custom,
                                     native_height=native_height)
         if plan is None:
+            if hasattr(self.ui, "label_target_size"):
+                self.ui.label_target_size.setText(
+                    f"Target: <b>{int(target_mb)} MB</b><br>"
+                    "Quality: <span style='color:#aaaaaa'><b>"
+                    "Could not plan bitrate — check duration / FPS"
+                    "</b></span>"
+                )
             return
 
         # --- show the result ---
@@ -4640,8 +4920,17 @@ class RenderMixin:
 
     def on_slider_moved(self, index):
         """ Handles slider logic and reveals custom input if needed """
-        target_mb = self.dynamic_stops[index]
-        
+        stops = getattr(self, "dynamic_stops", None)
+        if not stops:
+            return
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return
+        if index < 0 or index >= len(stops):
+            return
+        target_mb = stops[index]
+
         if target_mb == -1:
             self.input_custom_size.show()
             if self.input_custom_size.text():
@@ -4650,8 +4939,8 @@ class RenderMixin:
                 self.ui.label_target_size.setText("Target: <b>--- MB</b> (Type specific size)<br>Quality: <span style='color:#aaaaaa'><b>Waiting for input...</b></span>")
         else:
             self.input_custom_size.hide()
-            if hasattr(self, 'warn_size'): self.warn_size.hide() 
-            self.calculate_strict_target(target_mb, is_lossless=(index == len(self.dynamic_stops) - 2))
+            if hasattr(self, 'warn_size'): self.warn_size.hide()
+            self.calculate_strict_target(target_mb, is_lossless=(index == len(stops) - 2))
 
     def validate_custom_fps(self, text):
         """ Validates FPS input and shows warning icon if boundaries are exceeded """
@@ -4994,7 +5283,11 @@ class RenderMixin:
         item = lst.currentItem()
         raw = item.data(Qt.ItemDataRole.UserRole)
         if raw:
-            return str(raw).strip()
+            text = str(raw).strip()
+            # Section / Standard rows are not Custom recipes.
+            if text.startswith("__"):
+                return ""
+            return text
         # Fallback for plain text rows (strip favourite star prefix).
         text = (item.text() or "").strip()
         if text.startswith("★ "):
@@ -5013,20 +5306,41 @@ class RenderMixin:
             load_favourite_names,
             load_presets_map,
         )
-        from steempeg.ui.render_panel import PresetListRow
+        from steempeg.render.quality_presets import (
+            TARGET_FILE_SIZE_LABEL,
+            build_quality_presets,
+            original_quality_label,
+        )
+        from steempeg.ui.render_panel import (
+            PresetListRow,
+            PresetSectionHeader,
+            StandardPresetRow,
+        )
 
         lst = getattr(self.ui, "preset_list", None)
         if lst is None:
             return
         selected = self._list_selected_export_preset_name()
-        search = self._export_preset_search_text()
+        search_raw = self._export_preset_search_text()
+        search = search_raw.lower()
         # Fingerprint before widget rebuild — open paths call this every show.
         presets_map = load_presets_map(self.load_user_settings)
         fav_set = set(load_favourite_names(self.load_user_settings))
         expanded = self._export_preset_expanded_names()
         known = set(presets_map.keys())
         expanded.intersection_update(known)
-        names = list_preset_names(self.load_user_settings, search=search)
+        names = list_preset_names(self.load_user_settings, search=search_raw)
+        max_h = int(getattr(self, "current_orig_height", 0) or 0)
+        standard_labels = [original_quality_label(max_h if max_h > 0 else None)]
+        ladder_h = max_h if max_h > 0 else 1080
+        standard_labels.extend(
+            label for label, _h in build_quality_presets(ladder_h)
+        )
+        # Target lives under Custom (built-in hybrid) — not in the Standard ladder.
+        show_target = True
+        if search:
+            standard_labels = [s for s in standard_labels if search in s.lower()]
+            show_target = search in TARGET_FILE_SIZE_LABEL.lower()
         try:
             presets_blob = json.dumps(presets_map, sort_keys=True, default=str)
         except (TypeError, ValueError):
@@ -5034,21 +5348,61 @@ class RenderMixin:
         fp = (
             search,
             selected,
+            tuple(standard_labels),
+            show_target,
             tuple(names),
             frozenset(fav_set),
             frozenset(expanded),
             presets_blob,
+            max_h,
         )
-        if getattr(self, "_export_presets_list_fp", None) == fp and lst.count() == len(
-            names
+        expected_rows = (
+            2 + len(standard_labels) + (1 if show_target else 0) + len(names)
+        )
+        if (
+            getattr(self, "_export_presets_list_fp", None) == fp
+            and lst.count() == expected_rows
         ):
             return
         self._export_presets_list_fp = fp
 
         lst.blockSignals(True)
         lst.clear()
+
+        def _add_section(title: str) -> None:
+            item = QListWidgetItem()
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setData(Qt.ItemDataRole.UserRole, f"__section__:{title}")
+            header = PresetSectionHeader(title)
+            lst.addItem(item)
+            lst.setItemWidget(item, header)
+            item.setSizeHint(header.preferred_size_hint())
+
+        def _add_standard(label: str) -> None:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, f"__standard__:{label}")
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
+            row = StandardPresetRow(
+                label,
+                on_apply=self.apply_standard_quality_to_panel,
+            )
+            lst.addItem(item)
+            lst.setItemWidget(item, row)
+            item.setSizeHint(row.preferred_size_hint())
+
+        _add_section("Standard")
+        for label in standard_labels:
+            _add_standard(label)
+
+        _add_section("Custom")
+        if show_target:
+            _add_standard(TARGET_FILE_SIZE_LABEL)
         for name in names:
-            summary = format_preset_summary(get_preset_settings(name, self.load_user_settings))
+            summary = format_preset_summary(
+                get_preset_settings(name, self.load_user_settings)
+            )
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, name)
             item.setToolTip(summary)
@@ -5071,7 +5425,7 @@ class RenderMixin:
             item.setSizeHint(row.preferred_size_hint())
         lst.blockSignals(False)
 
-        if selected:
+        if selected and not str(selected).startswith("__"):
             for i in range(lst.count()):
                 it = lst.item(i)
                 if it is not None and it.data(Qt.ItemDataRole.UserRole) == selected:
@@ -5079,6 +5433,17 @@ class RenderMixin:
                     break
 
         self._sync_export_preset_selection_chrome()
+        # Keep Video Settings Custom section in sync (not on expand-only rebuilds).
+        quality_fp = (tuple(names), frozenset(fav_set), max_h)
+        if getattr(self, "_quality_combo_custom_fp", None) != quality_fp:
+            self._quality_combo_custom_fp = quality_fp
+            preserve = ""
+            if hasattr(self.ui, "combo_quality"):
+                preserve = self.ui.combo_quality.currentText()
+            self._rebuild_quality_preset_combo(
+                max_height=max_h,
+                preserve_text=preserve,
+            )
 
     def _toggle_export_preset_row_expanded(self, name: str) -> None:
         key = (name or "").strip()
@@ -5403,9 +5768,74 @@ class RenderMixin:
             return
         self._select_export_preset_by_name(preset_name)
         # One summary rebuild at the end — not once per combo signal.
-        apply_job_settings_to_ui(self, settings, refresh_summary=True)
+        self._applying_export_preset = True
+        try:
+            apply_job_settings_to_ui(self, settings, refresh_summary=True)
+            # Explicit apply only — never auto-check from matching UI by accident.
+            self._set_active_custom_preset(preset_name)
+        finally:
+            self._applying_export_preset = False
         self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
         self._persist_render_settings_quiet()
+
+    # --- Active Custom preset checkmark (Quality Preset combo) ---------------
+
+    def _custom_preset_canon_fp(self, settings) -> tuple:
+        """Fingerprint of recipe fields — ignore clip path / basename drift."""
+        from steempeg.render.export_presets import settings_to_preset_dict
+
+        data = settings_to_preset_dict(settings)
+        for key in ("save_dir", "output_basename"):
+            data.pop(key, None)
+        return tuple(sorted((str(k), repr(v)) for k, v in data.items()))
+
+    def _set_active_custom_preset(self, name: str | None) -> None:
+        """Mark a Custom recipe as the live canon (shows ✓ in the dual popup)."""
+        key = " ".join((name or "").strip().split())
+        self._active_custom_preset_name = key or None
+        self._active_custom_preset_fp = None
+        combo = getattr(self.ui, "combo_quality", None)
+        if combo is not None:
+            combo._steempeg_active_custom_preset = key or None
+        if not key:
+            return
+        try:
+            from steempeg.ui.render_job_builder import snapshot_settings_from_ui
+
+            self._active_custom_preset_fp = self._custom_preset_canon_fp(
+                snapshot_settings_from_ui(self)
+            )
+        except Exception:
+            self._active_custom_preset_fp = None
+
+    def _clear_active_custom_preset(self) -> None:
+        if not getattr(self, "_active_custom_preset_name", None):
+            return
+        self._set_active_custom_preset(None)
+
+    def _revalidate_active_custom_preset(self) -> None:
+        """Drop ✓ when the panel drifts from the explicitly applied Custom recipe."""
+        if getattr(self, "_applying_export_preset", False):
+            return
+        if getattr(self, "_bulk_settings_apply", False):
+            return
+        if getattr(self, "_quality_combo_applying_custom", False):
+            return
+        name = getattr(self, "_active_custom_preset_name", None)
+        if not name:
+            return
+        want = getattr(self, "_active_custom_preset_fp", None)
+        if want is None:
+            self._clear_active_custom_preset()
+            return
+        try:
+            from steempeg.ui.render_job_builder import snapshot_settings_from_ui
+
+            live = self._custom_preset_canon_fp(snapshot_settings_from_ui(self))
+        except Exception:
+            return
+        if live != want:
+            self._clear_active_custom_preset()
 
     def delete_export_preset_from_ui(self, name: str | None = None) -> None:
         from steempeg.render.export_presets import delete_preset
@@ -6442,6 +6872,98 @@ class RenderMixin:
             target.status = JobStatus.ERROR
             target.error_message = (error_msg or "")[:240]
 
+    def _queue_source_unavailable_reason(self, clip_path: str) -> str | None:
+        """Why this clip cannot encode now — missing folder or uncured Dead."""
+        if not clip_path or not os.path.isdir(clip_path):
+            return "Source clip folder is missing."
+        if hasattr(self, "get_clip_health_report"):
+            try:
+                report = self.get_clip_health_report(clip_path)
+            except Exception:
+                report = None
+            if report is not None and report.level == health.ClipHealth.DEAD:
+                cured = hasattr(self, "_is_clip_cured") and self._is_clip_cured(clip_path)
+                if not cured:
+                    return "Source clip is Dead and cannot be rendered."
+        return None
+
+    def _fail_queue_job(
+        self, job, message: str, *, batch_mode: bool, notify: bool = True
+    ) -> None:
+        """Mark a queue job ERROR (visible failed) without removing it."""
+        if job is None:
+            return
+        live = self.render_queue.get(getattr(job, "id", "")) or job
+        live.status = JobStatus.ERROR
+        live.error_message = (message or "Source clip unavailable.")[:240]
+        self._completed_plaque_clip_path = None
+        self._error_plaque_clip_path = getattr(live, "clip_path", None)
+        logging.warning(
+            "Queue job ERROR (source unavailable): %s — %s",
+            getattr(live, "clip_path", ""),
+            live.error_message,
+        )
+        self.refresh_render_queue_panel()
+        self.update_playback_badge()
+        if hasattr(self, "_persist_render_queue"):
+            self._persist_render_queue()
+        if batch_mode:
+            if getattr(self, "_queue_batch_active", False):
+                self.process_next_in_queue()
+            return
+        if notify:
+            steempeg_warning(
+                self.ui,
+                "Cannot render",
+                live.error_message,
+            )
+
+    def _abort_active_render_as_error(self, message: str) -> bool:
+        """Kill the running encode so finish lands as ERROR, not user-cancel."""
+        msg = (message or "Source clip folder is missing.").strip()
+        thread = getattr(self, "render_thread", None)
+        if thread is None or not thread.isRunning():
+            return False
+        self._pending_render_error_override = msg
+        # Do not latch batch cancel — that would stop the queue as a user Cancel.
+        logging.warning("Aborting active render as ERROR: %s", msg)
+        try:
+            thread.cancel()
+        except Exception:
+            logging.exception("Failed to cancel render thread for source abort")
+        return True
+
+    def _on_queue_source_removed(self, clip_path: str) -> None:
+        """Clip deleted / gone: fail matching QUEUED jobs; abort active encode."""
+        if not clip_path or not hasattr(self, "render_queue"):
+            return
+        norm = os.path.normpath(clip_path)
+        reason = "Source clip folder is missing."
+        active = getattr(self, "_active_render_job", None)
+        if (
+            active is not None
+            and os.path.normpath(getattr(active, "clip_path", "") or "") == norm
+            and bool(getattr(self, "_is_rendering", False))
+        ):
+            self._abort_active_render_as_error(reason)
+
+        touched = False
+        for job in list(self.render_queue.jobs):
+            if os.path.normpath(getattr(job, "clip_path", "") or "") != norm:
+                continue
+            if job.status == JobStatus.QUEUED:
+                job.status = JobStatus.ERROR
+                job.error_message = reason[:240]
+                touched = True
+        if touched:
+            logging.warning(
+                "Marked queued job(s) ERROR — source removed: %s", clip_path
+            )
+            self.refresh_render_queue_panel()
+            self.update_playback_badge()
+            if hasattr(self, "_persist_render_queue"):
+                self._persist_render_queue()
+
     def _clear_queue_selection(self) -> None:
         """Clear the active queue card highlight when preview leaves the queue."""
         self._selected_queue_job_id = None
@@ -6744,6 +7266,11 @@ class RenderMixin:
                 self.process_next_in_queue()
             return
 
+        unavailable = self._queue_source_unavailable_reason(clip_path)
+        if unavailable:
+            self._fail_queue_job(job, unavailable, batch_mode=batch_mode)
+            return
+
         # Catch deleted / unwritable destinations before ffmpeg opens the output.
         safe_dir = resolve_app_export_folder(
             self,
@@ -6768,9 +7295,11 @@ class RenderMixin:
 
         params = resolve_render_params(job, ffmpeg_exe)
         if params is None:
-            steempeg_warning(self.ui, "Error", "session.mpd files not found inside this clip!")
-            if batch_mode:
-                self._stop_queue_batch()
+            self._fail_queue_job(
+                job,
+                "No playable session.mpd found for this clip.",
+                batch_mode=batch_mode,
+            )
             return
 
         if not batch_mode:
@@ -6789,6 +7318,7 @@ class RenderMixin:
         self._is_rendering = True
         self._encode_paused = False
         self._active_render_job = job
+        self._pending_render_error_override = None
         # New encode supersedes any prior Completed / Error plaque for this session.
         self._completed_plaque_clip_path = None
         self._error_plaque_clip_path = None
@@ -7022,6 +7552,7 @@ class RenderMixin:
         main_layout = QHBoxLayout(shell)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         pic_label = QLabel()
         pixmap = QPixmap(get_resource_path("saderror.png"))
@@ -7031,10 +7562,11 @@ class RenderMixin:
             pic_label.setText("Sad pic\nnot found =(")
             pic_label.setStyleSheet("color: gray; font-size: 12px;")
         pic_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        main_layout.addWidget(pic_label)
+        main_layout.addWidget(pic_label, 0, Qt.AlignmentFlag.AlignTop)
 
         content_layout = QVBoxLayout()
         content_layout.setSpacing(12)
+        content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title_layout = QVBoxLayout()
         title_layout.setSpacing(4)
@@ -7078,6 +7610,15 @@ class RenderMixin:
         log_toggle.setFlat(True)
         log_visible = [True]
 
+        # Stretch host keeps the button row pinned to the same baseline whether
+        # the log is shown or hidden (only the log pane empties).
+        log_host = QWidget()
+        log_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        log_host_layout = QVBoxLayout(log_host)
+        log_host_layout.setContentsMargins(0, 0, 0, 0)
+        log_host_layout.setSpacing(0)
+        log_host_layout.addWidget(text_edit)
+
         def toggle_log() -> None:
             log_visible[0] = not log_visible[0]
             text_edit.setVisible(log_visible[0])
@@ -7086,8 +7627,8 @@ class RenderMixin:
             )
 
         log_toggle.clicked.connect(toggle_log)
-        content_layout.addWidget(log_toggle)
-        content_layout.addWidget(text_edit, 1)
+        content_layout.addWidget(log_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        content_layout.addWidget(log_host, 1)
 
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
@@ -7151,7 +7692,7 @@ class RenderMixin:
             btn_layout.addWidget(btn_ok)
 
         content_layout.addLayout(btn_layout)
-        main_layout.addLayout(content_layout)
+        main_layout.addLayout(content_layout, 1)
 
         # Soft rounding via stylesheet only — QRegion masks look jagged.
         dialog.setStyleSheet(
@@ -7212,6 +7753,15 @@ class RenderMixin:
 
     def on_render_finished(self, success, error_msg, output_file):
         """ Fires when the background rendering thread exits. """
+        # Source-gone abort kills FFmpeg via cancel(); remap to ERROR so the job
+        # is not quietly put back to QUEUED like a user Cancel.
+        override = getattr(self, "_pending_render_error_override", None)
+        if override:
+            self._pending_render_error_override = None
+            if not success:
+                success = False
+                error_msg = override
+
         active_job = getattr(self, "_active_render_job", None)
         if active_job:
             self._sync_queue_job_render_status(
