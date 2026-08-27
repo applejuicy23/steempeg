@@ -954,6 +954,66 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
     return bool((settings or {}).get(KEY_TEST_NEW_FULLSCREEN))
 
 
+# ----- Dev tools (Advanced tab) -----
+
+KEY_DEV_MODE = "dev_mode"
+KEY_DECK_CONTROLS = "deck_controls"
+DEFAULT_DEV_MODE = False
+DEFAULT_DECK_CONTROLS = False
+
+
+def normalize_dev_mode(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_DEV_MODE
+
+
+def load_dev_mode(settings: dict | None) -> bool:
+    return normalize_dev_mode((settings or {}).get(KEY_DEV_MODE, DEFAULT_DEV_MODE))
+
+
+def normalize_deck_controls(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_DECK_CONTROLS
+
+
+def load_deck_controls(settings: dict | None) -> bool:
+    return normalize_deck_controls(
+        (settings or {}).get(KEY_DECK_CONTROLS, DEFAULT_DECK_CONTROLS)
+    )
+
+
+def deck_controls_enabled(settings: dict | None = None, *, app=None) -> bool:
+    """Deck / Dev-pad actions — explicit opt-in or Developer mode (QA)."""
+    if settings is None:
+        settings = {}
+        if app is not None and hasattr(app, "load_user_settings"):
+            try:
+                settings = app.load_user_settings() or {}
+            except Exception:
+                settings = {}
+    if load_deck_controls(settings):
+        return True
+    if load_dev_mode(settings):
+        return True
+    return False
+
+
 def normalize_screenshots_folder(value: object | None) -> str:
     return str(value or "").strip().replace("\\", "/")
 

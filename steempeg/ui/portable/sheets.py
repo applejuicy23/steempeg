@@ -610,6 +610,9 @@ class PortableRenderSettingsDialog(SteempegDialog):
             self._hw.set_suppressed(True)
         self._app._portable_queue_sidebar = self._queue
         self._app._portable_render_strip = self._strip
+        from steempeg.input.deck_navigation import reset_render_deck_focus
+
+        reset_render_deck_focus(self._app)
         # Keep footprint in sync when the user resized the shell after prewarm.
         compact = bool(getattr(self, "_sheet_compact", True))
         self._app._portable_sheet_compact = compact
@@ -1127,6 +1130,8 @@ class PortableClipPickerDialog(SteempegDialog):
 
     def _on_pick(self) -> None:
         if not self._armed:
+            return
+        if getattr(self._app, "_deck_grid_nav_active", False):
             return
         mods = QApplication.keyboardModifiers()
         # Ctrl/Alt/Shift+LMB builds a multi-selection (context menu / queue) —
