@@ -825,6 +825,7 @@ class DevModeDialog(SteempegDialog):
 
         tabs.addTab(self._build_render_qa_tab(), "Render QA")
         tabs.addTab(self._build_tools_tab(), "Tools")
+        tabs.addTab(self._build_deck_pad_tab(), "Deck pad")
 
     # ── Render QA Tab ────────────────────────────────────────────────────────
 
@@ -1108,6 +1109,81 @@ class DevModeDialog(SteempegDialog):
         self._tools_log.setMaximumBlockCount(5000)
         lay.addWidget(self._tools_log, 1)
 
+        return page
+
+    def _build_deck_pad_tab(self) -> QWidget:
+        """Virtual Steam Deck face — taps feed ``steempeg.input.gamepad`` bus."""
+        from steempeg.input.gamepad import DeckButton, OS_ONLY_BUTTONS, gamepad_bus
+
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setSpacing(10)
+
+        tip = QLabel(
+            "Emulate Deck buttons into the same bus as a real pad.\n"
+            "Enable Settings → Advanced → Dev tools → Deck gamepad controls (or Developer mode).\n"
+            "View → Choose a Clip · Menu → Render · Y → Trim · A → Play / confirm / activate.\n"
+            "B → close sheet · X → Add to queue · D-pad → cards / tabs / focus.\n"
+            "Render: L2 = Queue rail · R2 = settings · ▲▼ jobs or controls.\n"
+            "STEAM / QAM stay locked (SteamOS only). Prefer Portable shell when testing."
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color: #b0b0b0;")
+        lay.addWidget(tip)
+
+        def _mk(label: str, btn: DeckButton, *, enabled: bool = True) -> QPushButton:
+            b = QPushButton(label)
+            b.setMinimumHeight(36)
+            b.setEnabled(enabled)
+            if enabled:
+                b.clicked.connect(lambda *_: gamepad_bus().tap(btn))
+            else:
+                b.setToolTip("SteamOS overlay — not bound in Steempeg")
+            return b
+
+        # Left cluster
+        g_left = QGroupBox("Left")
+        left = QVBoxLayout(g_left)
+        left.addWidget(_mk("View", DeckButton.VIEW))
+        dpad = QHBoxLayout()
+        dpad.addWidget(_mk("◀", DeckButton.DPAD_LEFT))
+        dpad_mid = QVBoxLayout()
+        dpad_mid.addWidget(_mk("▲", DeckButton.DPAD_UP))
+        dpad_mid.addWidget(_mk("▼", DeckButton.DPAD_DOWN))
+        dpad.addLayout(dpad_mid)
+        dpad.addWidget(_mk("▶", DeckButton.DPAD_RIGHT))
+        left.addLayout(dpad)
+        left.addWidget(_mk("L1", DeckButton.L1))
+        left.addWidget(_mk("L2", DeckButton.L2))
+        left.addWidget(
+            _mk("STEAM (OS)", DeckButton.STEAM, enabled=False)
+        )
+        lay.addWidget(g_left)
+
+        # Right cluster
+        g_right = QGroupBox("Right")
+        right = QVBoxLayout(g_right)
+        right.addWidget(_mk("Menu ☰ → Render", DeckButton.MENU))
+        face = QHBoxLayout()
+        face_mid = QVBoxLayout()
+        face_mid.addWidget(_mk("Y → Trim", DeckButton.Y))
+        face_row = QHBoxLayout()
+        face_row.addWidget(_mk("X → Queue", DeckButton.X))
+        face_row.addWidget(_mk("B → Back", DeckButton.B))
+        face_mid.addLayout(face_row)
+        face_mid.addWidget(_mk("A → Play", DeckButton.A))
+        face.addLayout(face_mid)
+        right.addLayout(face)
+        right.addWidget(_mk("R1", DeckButton.R1))
+        right.addWidget(_mk("R2", DeckButton.R2))
+        right.addWidget(
+            _mk("QAM … (OS)", DeckButton.QAM, enabled=False)
+        )
+        lay.addWidget(g_right)
+
+        # Silence unused import lint if any
+        _ = OS_ONLY_BUTTONS
+        lay.addStretch(1)
         return page
 
     # ── Slots ────────────────────────────────────────────────────────────────
