@@ -204,10 +204,7 @@ QSlider#slider_timeline::handle:horizontal:hover {
 
 class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def _refresh_dev_button_visibility(self) -> None:
-        """Show/hide footer Dev button from cache/settings.json dev_mode."""
-        btn_dev = getattr(getattr(self, "ui", None), "btn_dev", None)
-        if btn_dev is None:
-            return
+        """Show/hide Dev entry points from cache/settings.json dev_mode."""
         enabled = False
         try:
             settings = self.load_user_settings() or {}
@@ -215,7 +212,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 enabled = _is_enabled_setting(settings.get("dev_mode", False))
         except Exception:
             enabled = False
-        btn_dev.setVisible(enabled)
+        portable = bool(getattr(self, "_portable_shell", False))
+        btn_dev = getattr(getattr(self, "ui", None), "btn_dev", None)
+        if btn_dev is not None:
+            btn_dev.setVisible(enabled and not portable)
+        tb = getattr(getattr(self, "ui", None), "title_bar", None)
+        if tb is not None and hasattr(tb, "set_dev_button_visible"):
+            tb.set_dev_button_visible(enabled and portable)
 
     def _apply_playback_button_styles(self):
         """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
@@ -1246,7 +1249,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.populate_output_format_combos()
         # Update the bitrate list when changing resolution
         if hasattr(self.ui, 'combo_quality'):
-            self.ui.combo_quality.currentTextChanged.connect(self.update_bitrate_options) 
+            self.ui.combo_quality.currentTextChanged.connect(self.on_quality_preset_combo_changed) 
         
         # 4. BINDING BUTTONS TO FUNCTIONS
         # --- UI INJECTION: COPY BUTTONS ---
@@ -1397,9 +1400,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         bottom_row.addWidget(btn_settings, 1)
 
         # Dev Mode button (hidden unless dev_mode is true in settings.json)
+        from steempeg.ui.icon_assets import footer_dev_icon
+
         btn_dev = QPushButton("Dev")
         btn_dev.setObjectName("btn_dev")
         btn_dev.setToolTip("Developer Tools")
+        _dev_icon_px = 16
+        btn_dev.setIcon(footer_dev_icon(_dev_icon_px))
+        btn_dev.setIconSize(QSize(_dev_icon_px, _dev_icon_px))
         self._apply_library_footer_button(btn_dev, unified_table_style)
         btn_dev.setVisible(False)
         self.ui.btn_dev = btn_dev
@@ -1425,6 +1433,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self._wire_title_bar_about_updates()
         self.ui.btn_start.clicked.connect(self.start_render_thread)
         self.ui.btn_start.setEnabled(False)
+
+        # Steam Deck / Dev pad → Portable actions (View=Choose clip, Menu=Render, …).
+        try:
+            from steempeg.input import install_deck_actions
+
+            install_deck_actions(self)
+        except Exception:
+            pass
 
 
 
@@ -2806,9 +2822,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'btn_logs'):
             self.setup_logs_menu()
         
-        # We connect the "Final setup" update to all interface changes
+        # Quality Preset: Standard ladder + Custom recipes (single handler).
         if hasattr(self.ui, 'combo_quality'):
-            self.ui.combo_quality.currentTextChanged.connect(self.on_quality_mode_changed)
+            # Avoid duplicate connections if the earlier bind already attached.
+            try:
+                self.ui.combo_quality.currentTextChanged.disconnect(self.on_quality_mode_changed)
+            except (TypeError, RuntimeError):
+                pass
+            try:
+                self.ui.combo_quality.currentTextChanged.disconnect(self.update_bitrate_options)
+            except (TypeError, RuntimeError):
+                pass
         if hasattr(self.ui, 'btn_quality_original_help'):
             self.ui.btn_quality_original_help.setToolTip(
                 "Original preset warning — click for details.\n"
@@ -5633,6 +5657,14 @@ def main():
             # the long-standing "icon disappears after update" bug.
             myappid = 'Steempeg.SteempegApp'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+        # Start Menu .lnk with logo.ico + same AUMID — required for taskbar icon when
+        # launched via python.exe / Code Runner (otherwise Explorer shows blank file).
+        try:
+            from steempeg.infra.os_notify import ensure_steempeg_aumid_shortcut
+
+            ensure_steempeg_aumid_shortcut(force=True)
         except Exception:
             pass
         # Detach the black cmd.exe host when launched via python.exe / Code Runner.
