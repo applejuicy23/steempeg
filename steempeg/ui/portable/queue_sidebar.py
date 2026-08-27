@@ -84,6 +84,15 @@ def _dispose_sink() -> QWidget:
     return _DISPOSE_SINK
 
 
+def _scroll_child_visible(w: QWidget) -> None:
+    parent = w.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QScrollArea):
+            parent.ensureWidgetVisible(w, 24, 24)
+            return
+        parent = parent.parentWidget()
+
+
 def _dispose_list_child(w: QWidget) -> None:
     """Detach a list row without mapping a top-level window (Linux X11 flash/hang)."""
     try:
@@ -935,6 +944,41 @@ class PortableQueueSidebar(QWidget):
             self._selected_ids = set()
             self._anchor_id = None
         self._apply_selection_styles()
+
+    def deck_select_relative(self, delta: int) -> str | None:
+        """Gamepad ▲▼ — move queue highlight without activating the job."""
+        ids = list(self._row_ids)
+        if not ids:
+            return None
+        cur = getattr(self._app, "_selected_queue_job_id", None)
+        if cur not in ids:
+            cur = self._anchor_id if self._anchor_id in ids else None
+        if cur not in ids and self._selected_ids:
+            for jid in ids:
+                if jid in self._selected_ids:
+                    cur = jid
+                    break
+        if cur not in ids:
+            cur = ids[0]
+        idx = ids.index(cur)
+        nxt = max(0, min(len(ids) - 1, idx + int(delta)))
+        job_id = ids[nxt]
+        self.sync_selection(job_id)
+        row = self._rows.get(job_id)
+        if row is not None:
+            _scroll_child_visible(row)
+        return job_id
+
+    def deck_activate_selected(self) -> None:
+        """Gamepad A in queue zone — same as clicking the highlighted row."""
+        job_id = getattr(self._app, "_selected_queue_job_id", None)
+        if job_id not in self._row_ids and self._selected_ids:
+            for jid in self._row_ids:
+                if jid in self._selected_ids:
+                    job_id = jid
+                    break
+        if job_id and job_id in self._row_ids:
+            self.job_selected.emit(job_id)
 
     def _on_row_clicked(self, job_id: str, mods) -> None:
         if getattr(self._app, "_clips_scan_active", False):
