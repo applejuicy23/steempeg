@@ -3766,17 +3766,44 @@ class RenderedLibraryMixin:
         grid = getattr(self, "grid_screenshots", None)
         if grid is None or not hasattr(self, "combo_sort"):
             return
+        if getattr(self, "_screenshots_sorting", False):
+            return
+        self._screenshots_sorting = True
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._apply_screenshots_sorting_body(grid)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._screenshots_sorting = False
+
+    def _apply_screenshots_sorting_body(self, grid: QListWidget) -> None:
         idx = self._screenshots_global_sort_index()
-        # Drop live widgets first (while items are still in the grid).
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is not None:
-                self._dematerialize_screenshot_item(item)
+
+        # Keep a path near the current viewport so mid-library sorts don't jump to top.
+        anchor_path = ""
+        for item in self._screenshots_visible_items():
+            anchor_path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            if anchor_path:
+                break
+
+        # Drop only live photo widgets (cap ~96) — never walk all rows for this.
+        live = getattr(self, "_screenshot_live_paths", None)
+        if isinstance(live, set) and live:
+            index = getattr(self, "_screenshot_items_by_path", None)
+            if not isinstance(index, dict):
+                self._rebuild_screenshot_path_index()
+                index = getattr(self, "_screenshot_items_by_path", {}) or {}
+            for key in list(live):
+                item = index.get(key)
+                if item is not None:
+                    self._dematerialize_screenshot_item(item)
         self._screenshot_live_paths = set()
 
+        n = grid.count()
         payload: list[tuple[QListWidgetItem, str, float, str, str]] = []
-        while grid.count():
-            item = grid.takeItem(0)
+        payload_reserve = payload.append
+        for i in range(n):
+            item = grid.item(i)
             if item is None:
                 continue
             path = str(item.data(Qt.ItemDataRole.UserRole) or "")
@@ -3786,7 +3813,7 @@ class RenderedLibraryMixin:
                 mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
             except (TypeError, ValueError):
                 mtime = 0.0
-            payload.append((item, path, mtime, game, source))
+            payload_reserve((item, path, mtime, game, source))
 
         def game_key(entry: tuple[QListWidgetItem, str, float, str, str]) -> str:
             return (entry[3] or "").lower()
@@ -3809,10 +3836,15 @@ class RenderedLibraryMixin:
 
         grid.setUpdatesEnabled(False)
         try:
+            # takeItem(0) in a loop is O(n²) and freezes multi-k libraries.
+            # Taking from the end is O(n); items stay owned by us until re-add.
+            for i in range(n - 1, -1, -1):
+                grid.takeItem(i)
             for item, _path, _mtime, _game, _source in payload:
                 grid.addItem(item)
         finally:
             grid.setUpdatesEnabled(True)
+
         self._rebuild_screenshot_path_index()
         self._screenshot_seen_paths = set(
             (getattr(self, "_screenshot_items_by_path", None) or {}).keys()
@@ -3820,7 +3852,16 @@ class RenderedLibraryMixin:
         if not hasattr(self, "_sort_applied_by_panel"):
             self._sort_applied_by_panel = {}
         self._sort_applied_by_panel["screenshots"] = idx
-        self._apply_screenshots_filters()
+        self._apply_screenshots_filters(refresh_viewport=False)
+
+        if anchor_path:
+            key = self._screenshot_path_key(anchor_path)
+            anchor_item = (getattr(self, "_screenshot_items_by_path", None) or {}).get(
+                key
+            )
+            if anchor_item is not None and not anchor_item.isHidden():
+                grid.scrollTo(anchor_item, QAbstractItemView.ScrollHint.PositionAtCenter)
+
         self._schedule_screenshots_viewport_refresh(0)
 
     def _row_hidden_by_screenshots_filters(

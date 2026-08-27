@@ -42,8 +42,6 @@ _MIN_OVERFLOW_PX = 4
 # Soft glyph dissolve at clipped edges (logical px; scaled by DPR in paint).
 _EDGE_FADE_PX = 10.0
 _EDGE_FADE_MIN_W = 48
-# How long a side eases in/out when entering/leaving a rest (seamless A/B).
-_EDGE_FADE_EASE_MS = 320
 
 
 def _ease_in_out_cubic(t: float) -> float:
@@ -88,51 +86,22 @@ def _edge_fade_width(rect_w: float) -> float:
     return min(_EDGE_FADE_PX, max(6.0, rect_w * 0.10))
 
 
-def _edge_fade_strengths(elapsed_ms: int) -> tuple[float, float]:
-    """Left [A] / right [B] dissolve from the ping-pong phase.
+def _edge_fade_strengths(
+    offset: float, max_offset: float, fade_px: float
+) -> tuple[float, float]:
+    """Left [A] / right [B] from how many px are still clipped past each edge.
 
-    Rest @ start (title head visible): only [B] — overflow cut on the right.
-    Rest @ end   (title tail visible): only [A] — overflow cut on the left.
-    Cruising: both [A] and [B]. Ease the side that appears/disappears at rests
-    so pause ↔ travel stays seamless (no both-sides blur while parked).
+    Rest @ start: offset=0 → only [B]. Rest @ end: offset=max → only [A].
+    Mid-travel: both full. Near a rest the fade *width* shrinks with the
+    remaining overhang — driven by scroll geometry, not a timed strength ramp
+    (that looked like the blur peeling off after the title stopped).
     """
-    t = int(elapsed_ms) % _CYCLE_MS
-    ease = max(80, min(_EDGE_FADE_EASE_MS, _TRAVEL_MS // 3))
-
-    # --- pause @ start: "Hatsune Miku: …" — blur only on the right ---
-    if t < _PAUSE_MS:
-        return 0.0, 1.0
-    t -= _PAUSE_MS
-
-    # --- cruise → end ---
-    if t < _TRAVEL_MS:
-        left = 1.0
-        right = 1.0
-        # Leaving start: bring [A] up (was off at rest).
-        if t < ease:
-            left = _smoothstep(float(t) / float(ease))
-        # Approaching end rest: drop [B] (end pause is left-only).
-        rem = _TRAVEL_MS - t
-        if rem < ease:
-            right = _smoothstep(float(rem) / float(ease))
-        return left, right
-    t -= _TRAVEL_MS
-
-    # --- pause @ end: "…DIVA MIX" — blur only on the left ---
-    if t < _PAUSE_MS:
-        return 1.0, 0.0
-    t -= _PAUSE_MS
-
-    # --- cruise → start ---
-    left = 1.0
-    right = 1.0
-    # Leaving end: bring [B] up (was off at rest).
-    if t < ease:
-        right = _smoothstep(float(t) / float(ease))
-    # Approaching start rest: drop [A] (start pause is right-only).
-    rem = _TRAVEL_MS - t
-    if rem < ease:
-        left = _smoothstep(float(rem) / float(ease))
+    if max_offset <= 0.0 or fade_px <= 0.0:
+        return 0.0, 0.0
+    left_overhang = max(0.0, float(offset))
+    right_overhang = max(0.0, float(max_offset) - float(offset))
+    left = min(1.0, left_overhang / fade_px)
+    right = min(1.0, right_overhang / fade_px)
     return left, right
 
 
@@ -348,8 +317,10 @@ class OverflowMarqueeLabel(QLabel):
         # Snap to the global phase on every paint (scroll-back / click stay in sync).
         elapsed = _TICKER.elapsed_ms()
         self._offset = _scroll_factor(elapsed) * self._max_offset
-        left_s, right_s = _edge_fade_strengths(elapsed)
         fade_px = _edge_fade_width(float(rect.width()))
+        left_s, right_s = _edge_fade_strengths(
+            self._offset, self._max_offset, fade_px
+        )
 
         # Paint glyphs on a transparent layer, dissolve edge columns, then blit.
         # (DestinationIn on the widget painted a visible fog band over the footer.)
