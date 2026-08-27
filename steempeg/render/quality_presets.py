@@ -2,8 +2,12 @@
 
 4K uses Divine; 8K and anything taller uses Goddess. Bitrate tables may only
 list known keys (through 4320p); taller Goddess steps scale from 4320 by area.
+
+Also tags for the v48 categorized Quality Preset combo (Standard vs Custom).
 """
 from __future__ import annotations
+
+from typing import Any
 
 # Fixed ladder (tall → short). Extra Goddess heights are injected when the
 # source clip is taller than the last known step.
@@ -33,6 +37,14 @@ _LABEL_BY_HEIGHT: dict[int, str] = {
 _GODDESS_MIN = 4320
 _DIVINE_HEIGHT = 2160
 
+# QComboBox itemData (UserRole) kinds for Video Settings → Quality Preset.
+KIND_STANDARD = "standard"
+KIND_CUSTOM = "custom"
+KIND_TARGET = "target"
+KIND_HEADER = "header"
+
+TARGET_FILE_SIZE_LABEL = "🎯 Target File Size..."
+
 
 def quality_tier_label(height: int) -> str:
     """Human tier name for a vertical resolution."""
@@ -54,8 +66,13 @@ def build_quality_presets(source_height: int | None = None) -> list[tuple[str, i
     """Return ``(label, height)`` rows tall→short for the quality combo.
 
     When ``source_height`` is set, only presets ≤ that height are returned (no
-    greyed-out upscale rows). If the source is taller than the fixed ladder, the
-    exact source height is inserted as a Goddess step (12K/16K/…).
+    upscale rows — a 1440p clip never lists 2160p/4320p). If the source is
+    taller than the fixed ladder, the exact source height is inserted as a
+    Goddess step (12K/16K/…).
+
+    Callers must pass a real height (or a conservative fallback like 1080).
+    Passing ``None`` / ``0`` still returns the full ladder for tests — UI code
+    must not do that for live clips.
     """
     heights = list(_BASE_HEIGHTS)
     src = int(source_height) if source_height and source_height > 0 else 0
@@ -66,6 +83,28 @@ def build_quality_presets(source_height: int | None = None) -> list[tuple[str, i
     if src > 0:
         heights = [h for h in heights if h <= src]
     return [(format_quality_item(h), h) for h in heights]
+
+
+def original_quality_label(source_height: int | None = None) -> str:
+    src = int(source_height) if source_height and source_height > 0 else 0
+    if src > 0:
+        return f"Original (Lossless, {src}p)"
+    return "Original (Lossless)"
+
+
+def quality_item_meta(
+    *,
+    kind: str,
+    name: str = "",
+    height: int | None = None,
+) -> dict[str, Any]:
+    """Payload stored on Quality Preset combo rows (``Qt.UserRole``)."""
+    meta: dict[str, Any] = {"kind": str(kind or KIND_STANDARD)}
+    if name:
+        meta["name"] = str(name)
+    if height is not None:
+        meta["height"] = int(height)
+    return meta
 
 
 def bitrate_mbps_for(
