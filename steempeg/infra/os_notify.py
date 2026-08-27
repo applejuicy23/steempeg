@@ -4,11 +4,11 @@ Windows: WinRT ``ToastNotification`` via a short PowerShell helper. Qt's
 ``QSystemTrayIcon.showMessage`` is a balloon and usually never reaches Action
 Center on Win10/11.
 
-Important: an unpackaged AUMID only shows banners if Windows has a Start Menu
-shortcut for that ID pointing at a real ``.exe``. Dev runs (python / .bat) do
-not qualify — so we deliver through the registered PowerShell host AUMID (same
-path Probe A used) and stamp ``placement="attribution"`` as Steempeg. Frozen
-builds additionally register ``Steempeg.SteempegApp`` against the real exe.
+Important: an unpackaged AUMID only shows banners / a branded taskbar icon if
+Windows has a Start Menu shortcut for that ID. Frozen builds bind the real
+``.exe``; **dev runs** (``python.exe`` / Code Runner) bind ``python`` +
+``steempeg/app.py`` with ``logo.ico`` so the taskbar is not a blank white file.
+When no shortcut can be registered, toasts fall back to the PowerShell host AUMID.
 """
 from __future__ import annotations
 
@@ -94,47 +94,69 @@ def app_is_in_background(widget: QWidget | None = None) -> bool:
 
 
 def _toast_exe_candidate() -> str | None:
-    """Best .exe to bind the Start Menu AUMID shortcut to (frozen install)."""
+    """Frozen install only — never pick a leftover ``dist/*.exe`` while running from source.
+
+    Dev/Code Runner processes are ``python.exe``; binding the AUMID shortcut to a
+    different exe leaves the taskbar on the blank white file icon.
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    exe = os.path.abspath(sys.executable)
+    if exe.lower().endswith(".exe") and os.path.isfile(exe):
+        return exe
+    return None
+
+
+def _shortcut_launch_target() -> tuple[str, str, str] | None:
+    """``(target, arguments, workdir)`` for the Start Menu AUMID shortcut.
+
+    Frozen builds bind the real Steempeg ``.exe``. Dev runs (``python.exe`` /
+    Code Runner) bind ``sys.executable`` + ``steempeg/app.py`` with ``logo.ico``
+    so the taskbar matches the live process — not a blank document face.
+    """
+    if sys.platform != "win32":
+        return None
+    exe = _toast_exe_candidate()
+    if exe:
+        return exe, "", str(Path(exe).parent)
     if getattr(sys, "frozen", False):
-        exe = os.path.abspath(sys.executable)
-        if exe.lower().endswith(".exe") and os.path.isfile(exe):
-            return exe
+        return None
+    py = os.path.abspath(sys.executable or "")
+    if not py or not os.path.isfile(py):
+        return None
     try:
         from steempeg.infra.paths import get_install_root
 
         root = Path(get_install_root())
     except Exception:
         root = Path(__file__).resolve().parents[2]
-    for name in (
-        "Steempeg-windows.exe",
-        "Steempeg.exe",
-        "Steempeg-linux",  # not useful on win
-    ):
-        cand = root / name
-        if cand.is_file() and cand.suffix.lower() == ".exe":
-            return str(cand)
-    # Nested onedir layouts
-    for pattern in ("Steempeg*.exe", "**/Steempeg-windows.exe"):
-        try:
-            found = next(root.glob(pattern))
-            if found.is_file():
-                return str(found)
-        except StopIteration:
-            pass
-    return None
+    app_py = root / "steempeg" / "app.py"
+    if app_py.is_file():
+        return py, f'"{app_py}"', str(root)
+    return py, "-m steempeg.app", str(root)
 
 
-def _ensure_steempeg_toast_shortcut() -> bool:
-    """Register Start Menu .lnk with System.AppUserModel.ID → real exe.
+def ensure_steempeg_aumid_shortcut(*, force: bool = False) -> bool:
+    """Register Start Menu ``Steempeg.lnk`` with ``System.AppUserModel.ID`` + logo.
 
-    Returns True when a usable Steempeg AUMID shortcut exists.
+    Windows taskbar resolves the button icon from this shortcut when the process
+    sets ``Steempeg.SteempegApp``. Without it, ``python.exe`` / Code Runner shows
+    the blank white file icon even though ``WM_SETICON`` / window chrome are fine.
     """
     global _shortcut_ready
-    if _shortcut_ready:
+    if _shortcut_ready and not force:
         return True
-    exe = _toast_exe_candidate()
-    if not exe:
+    if sys.platform != "win32":
         return False
+    launch = _shortcut_launch_target()
+    if launch is None:
+        return False
+    target, arguments, workdir = launch
+    icon = get_resource_path("logo.ico")
+    if not icon or not os.path.isfile(icon):
+        icon = get_resource_path("logo.png")
+    if not icon or not os.path.isfile(icon):
+        icon = target
     try:
         programs = (
             Path(os.environ.get("APPDATA", ""))
@@ -145,22 +167,21 @@ def _ensure_steempeg_toast_shortcut() -> bool:
         )
         programs.mkdir(parents=True, exist_ok=True)
         lnk_path = programs / "Steempeg.lnk"
-        icon = get_resource_path("logo.ico")
-        if not icon or not os.path.isfile(icon):
-            icon = exe
-        exe_lit = exe.replace("'", "''")
+        target_lit = target.replace("'", "''")
+        args_lit = (arguments or "").replace("'", "''")
         lnk_lit = str(lnk_path).replace("'", "''")
-        work_lit = str(Path(exe).parent).replace("'", "''")
+        work_lit = str(workdir).replace("'", "''")
         icon_lit = str(icon).replace("'", "''")
         aumid = _WINDOWS_AUMID
         ps = f"""
 $ErrorActionPreference = 'Stop'
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut('{lnk_lit}')
-$sc.TargetPath = '{exe_lit}'
+$sc.TargetPath = '{target_lit}'
+$sc.Arguments = '{args_lit}'
 $sc.WorkingDirectory = '{work_lit}'
 $sc.Description = 'Steempeg'
-$sc.IconLocation = '{icon_lit}'
+$sc.IconLocation = '{icon_lit},0'
 $sc.Save()
 $code = @'
 using System;
@@ -227,10 +248,23 @@ Add-Type -TypeDefinition $code -Language CSharp
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         subprocess.run(**kwargs, timeout=20)
         _shortcut_ready = lnk_path.is_file()
+        if _shortcut_ready:
+            _log.info(
+                "AUMID shortcut ready: %s → %s %s (icon=%s)",
+                lnk_path,
+                target,
+                arguments or "",
+                icon,
+            )
         return _shortcut_ready
     except Exception as exc:
-        _log.debug("toast shortcut registration failed: %s", exc)
+        _log.debug("AUMID shortcut registration failed: %s", exc)
         return False
+
+
+def _ensure_steempeg_toast_shortcut() -> bool:
+    """Back-compat alias used by toast delivery."""
+    return ensure_steempeg_aumid_shortcut(force=False)
 
 
 def _windows_toast(title: str, body: str) -> bool:
