@@ -14,7 +14,7 @@ from steempeg.render.queue_display import format_job_output, format_job_preset, 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as ut
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
-from steempeg.ui.widgets import ElidedLabel
+from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
 
@@ -72,16 +72,19 @@ class RenderCompleteDialog(SteempegDialog):
         *,
         bar_color: str | None = None,
         bg_color: str | None = None,
+        show_clear_queue: bool = False,
+        always_clear_queue: bool = True,
     ):
         super().__init__("Render complete", parent, bar_color=bar_color, bg_color=bg_color)
         from steempeg.ui.ui_density import scaled_dialog_size
 
         mw, _ = scaled_dialog_size(580, 340, parent=parent)
-        rw, rh = scaled_dialog_size(600, 340, parent=parent)
+        rw, rh = scaled_dialog_size(600, 380 if show_clear_queue else 340, parent=parent)
         self.setMinimumWidth(mw)
         self.resize(rw, rh)
         self._choice = RenderCompleteChoice.OK
         self._output_file = output_file or ""
+        self._show_clear_queue = bool(show_clear_queue)
 
         body_row = QHBoxLayout()
         body_row.setSpacing(18)
@@ -129,6 +132,15 @@ class RenderCompleteDialog(SteempegDialog):
 
         body_row.addLayout(details, 1)
         self.content_layout.addLayout(body_row)
+
+        self._chk_clear_queue = None
+        if self._show_clear_queue:
+            self._chk_clear_queue = SteempegCheckBox(
+                "Remove from render queue"
+            )
+            self._chk_clear_queue.setChecked(bool(always_clear_queue))
+            self.content_layout.addWidget(self._chk_clear_queue)
+
         self.content_layout.addStretch(1)
 
         actions = QHBoxLayout()
@@ -207,3 +219,8 @@ class RenderCompleteDialog(SteempegDialog):
 
     def choice(self) -> RenderCompleteChoice:
         return self._choice
+
+    def clear_queue(self) -> bool:
+        if self._chk_clear_queue is None:
+            return False
+        return self._chk_clear_queue.isChecked()

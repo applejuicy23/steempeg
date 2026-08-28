@@ -1935,15 +1935,41 @@ class RenderMixin:
         from steempeg.ui.render_complete_dialog import RenderCompleteChoice, RenderCompleteDialog
 
         theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
+        clip_path = getattr(job, "clip_path", None)
+        queue_rows = (
+            self.render_queue.find_all_by_clip_path(clip_path)
+            if clip_path and hasattr(self, "render_queue")
+            else []
+        )
+        show_clear = bool(queue_rows)
+        always_clear = bool(
+            self.load_user_settings().get("always_clear_render_queue_after_batch", True)
+        )
+        if show_clear and always_clear:
+            self._remove_clip_from_render_queue(clip_path)
+            show_clear = False
+        parent = self.ui.window() if hasattr(self.ui, "window") else self.ui
         dlg = RenderCompleteDialog(
             job,
             output_file,
-            parent=self.ui,
+            parent=parent,
             bar_color=theme["title_bar"],
             bg_color=theme["app_bg"],
+            show_clear_queue=show_clear,
+            always_clear_queue=always_clear,
         )
         dlg.open_in_rendered_requested.connect(self.open_in_rendered_videos)
-        dlg.exec()
+        dlg.raise_()
+        dlg.activateWindow()
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        if show_clear:
+            self.save_user_settings(
+                "always_clear_render_queue_after_batch", dlg.clear_queue()
+            )
+            if accepted and dlg.clear_queue():
+                self._remove_clip_from_render_queue(clip_path)
+        if not accepted:
+            return
         choice = dlg.choice()
         if choice == RenderCompleteChoice.OPEN_FOLDER:
             self.open_rendered_folder(output_file)
@@ -6877,10 +6903,24 @@ class RenderMixin:
                 apply_square_icon(self.custom_icon_label, shaped, icon_px)
 
     def _sync_queue_job_render_status(self, job, success, error_msg, output_file: str = ""):
-        """Update the *specific* queue job (by id) — clip_path is not unique when duplicates exist."""
+        """Update the queue row for this encode (by id, else same clip_path)."""
         if job is None:
             return
-        target = self.render_queue.get(getattr(job, "id", "")) or job
+        target = self.render_queue.get(getattr(job, "id", ""))
+        if target is None:
+            clip_path = getattr(job, "clip_path", None)
+            if clip_path:
+                matches = self.render_queue.find_all_by_clip_path(clip_path) or []
+                for candidate in matches:
+                    if candidate.status == JobStatus.RENDERING:
+                        target = candidate
+                        break
+                if target is None and len(matches) == 1:
+                    target = matches[0]
+                elif target is None and matches:
+                    target = matches[0]
+        if target is None:
+            target = job
         if success:
             target.status = JobStatus.COMPLETED
             if output_file:
@@ -6891,6 +6931,15 @@ class RenderMixin:
         else:
             target.status = JobStatus.ERROR
             target.error_message = (error_msg or "")[:240]
+
+    def _remove_clip_from_render_queue(self, clip_path: str | None) -> None:
+        """Drop every queue row for ``clip_path`` (after a successful export)."""
+        if not clip_path or not hasattr(self, "render_queue"):
+            return
+        matches = self.render_queue.find_all_by_clip_path(clip_path) or []
+        ids = [getattr(j, "id", "") for j in matches if getattr(j, "id", "")]
+        if ids:
+            self.remove_queue_jobs(ids)
 
     def _queue_source_unavailable_reason(self, clip_path: str) -> str | None:
         """Why this clip cannot encode now — missing folder or uncured Dead."""
