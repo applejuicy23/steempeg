@@ -1288,16 +1288,13 @@ class RenderMixin:
         return not bool(getattr(self, "_queue_scheme_deferred", False))
 
     def _queue_owns_identity_chrome(self) -> bool:
-        """True when queue mode may drive render-dash identity chrome.
+        """True when queue mode is active (jobs kept, scheme not Left).
 
-        False while Left (deferred) or while the user is previewing a library /
-        rendered card (diversion). Player header follows the open clip only
-        (via ``_queue_context_job``). Footer Ready+#N stays queue-head through
-        ``_status_strip_context_job``.
+        Footer / Ready cluster always follow ``_status_strip_context_job``.
+        Player header always follows the open clip — never queue head.
+        False while Left (deferred).
         """
-        if not self._queue_is_active():
-            return False
-        return not bool(getattr(self, "_queue_library_preview_diversion", False))
+        return self._queue_is_active()
 
     def _player_has_open_clip(self) -> bool:
         """True when the player is showing real media (not the idle poster).
@@ -1397,11 +1394,8 @@ class RenderMixin:
         )
 
         if open_clip or bound_dead_export:
-            # Header always follows the media on screen (or the selected dead export).
-            if open_clip and self._queue_owns_identity_chrome():
-                if not self._sync_player_header_to_queue_context():
-                    self._restore_header_from_library_selection()
-            elif open_clip:
+            # Header always follows the media on screen — never queue head.
+            if open_clip:
                 self._restore_header_from_library_selection()
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 try:
@@ -4560,8 +4554,8 @@ class RenderMixin:
             self._sync_start_render_enabled(combo_valid=combo_valid)
 
         # 6. Short Summary ABOVE Ready
-        # Queue identity chrome: footer strip follows the status-strip job.
-        # Library preview diversion / Left: follow the playing clip instead.
+        # Footer follows the next queue job while queue mode is active; player
+        # header follows the open clip (handled elsewhere when strip_job is set).
         strip_job = self._status_strip_context_job()
         q_word = quality.split()[0] if quality.split() else "Unknown"
 
@@ -4645,11 +4639,11 @@ class RenderMixin:
                     )
                     apply_square_icon(self.bottom_icon_label, shaped, 24)
 
-            # Player header icon from preview when queue identity chrome is off.
+            # Player header icon from preview only — never the queue strip job.
             if (
                 hasattr(self, 'custom_text_label')
                 and hasattr(self, 'custom_icon_label')
-                and not self._queue_owns_identity_chrome()
+                and strip_job is None
             ):
                 self._set_player_header_game_icon(icon_path=target_icon)
 
@@ -6161,11 +6155,7 @@ class RenderMixin:
             len(self.render_queue),
         )
         # Do not seek/select job #1 or any queue card.
-        if not getattr(self, "_queue_library_preview_diversion", False):
-            self._sync_queue_player_and_dash_chrome()
-        else:
-            # Diversion skipped full chrome sync — still restore ClipCard circles.
-            self._refresh_clip_queue_badges_safe()
+        self._sync_queue_player_and_dash_chrome()
         self._sync_start_render_enabled()
         self.update_playback_badge()
         self.refresh_render_queue_panel()

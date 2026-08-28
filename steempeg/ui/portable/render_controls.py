@@ -278,24 +278,15 @@ class PortableRenderControlStrip(QFrame):
         self._apply_button_chrome()
 
     def sync_game_header(self) -> None:
-        """Compact game icon + name — queue-first when Render Queue has jobs."""
+        """Compact game icon + name — queue-first when Render Queue mode is active."""
         app = self._app
         name = ""
         icon_path = ""
 
-        # Prefer the status-strip / queue-context job when queue identity chrome
-        # is on (not a library preview diversion or Left).
         job = None
-        owns = True
-        if hasattr(app, "_queue_owns_identity_chrome"):
-            owns = bool(app._queue_owns_identity_chrome())
-        elif hasattr(app, "_queue_is_active"):
-            owns = bool(app._queue_is_active())
-        if owns:
+        if hasattr(app, "_queue_is_active") and app._queue_is_active():
             if hasattr(app, "_status_strip_context_job"):
                 job = app._status_strip_context_job()
-            elif hasattr(app, "_queue_context_job"):
-                job = app._queue_context_job()
         if job is not None:
             name = (getattr(job, "game_name", "") or "").strip()
             from steempeg.render.queue import resolve_job_game_icon_path
