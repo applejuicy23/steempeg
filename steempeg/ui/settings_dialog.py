@@ -202,6 +202,7 @@ from steempeg.ui.settings_prefs import (
     load_startup_library_scan,
     load_test_new_fullscreen,
     normalize_clock_format,
+    normalize_date_format,
     normalize_deck_controls,
     normalize_dev_mode,
     normalize_desktop_render_layout,
