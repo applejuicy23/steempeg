@@ -2155,14 +2155,9 @@ class RenderMixin:
             )
             self._dash_btn_style_render_settings = style
 
-        fmt = getattr(self, "_fmt_dash_btn", None)
-        if callable(fmt):
-            qss = fmt(style)
-        else:
-            qss = style.replace("<<FONT>>", tok.FONT_APP).format(
-                font=12, radius=8, pad="6px 14px"
-            )
+        from steempeg.ui.ui_density import COMFORT
 
+        dense = getattr(self, "_ui_density", None) or COMFORT
         btn = QPushButton()
         btn.setObjectName("btn_render_settings")
         btn.setText(" Render Settings")
@@ -2172,12 +2167,63 @@ class RenderMixin:
         btn.setToolTip("Open render settings in a floating window (click again to close)")
         btn.setAutoDefault(False)
         btn.setDefault(False)
-        btn.setFixedHeight(36)
+        btn.setFixedHeight(int(getattr(dense, "dash_btn_h", 36)))
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setStyleSheet(qss)
+        btn.setStyleSheet(self._dash_render_settings_qss())
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
         self._sync_dash_render_settings_button()
+
+    def _dash_render_settings_qss(self, *, border: str | None = None) -> str:
+        """Stock Render Settings QSS (current density). Optional live border color."""
+        from steempeg.ui.ui_density import COMFORT
+
+        dense = getattr(self, "_ui_density", None) or COMFORT
+        pad = "1px 8px" if getattr(dense, "compact", False) else "6px 14px"
+        radius = max(8, int(getattr(dense, "dash_btn_h", 36)) // 2)
+        font = int(getattr(dense, "dash_font", 12))
+        template = getattr(self, "_dash_btn_style_render_settings", None) or (
+            "QPushButton {{ font-family: <<FONT>>; "
+            "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
+            "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
+            "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
+            "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #8e7cc3; }}"
+            "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+        )
+        fmt = getattr(self, "_fmt_dash_btn", None)
+        if callable(fmt):
+            qss = fmt(template, font=font, radius=radius, pad=pad)
+        else:
+            qss = template.replace("<<FONT>>", tok.FONT_APP).format(
+                font=font, radius=radius, pad=pad
+            )
+        if border:
+            # Only the outline breathes — swap stock + hover border tokens.
+            qss = qss.replace("#8e7cc3", border).replace("#b29ae7", border)
+        return qss
+
+    def _ensure_dash_render_settings_breath(self):
+        from steempeg.ui.widgets.soft_accent_breath import SoftAccentBorderBreath
+
+        breath = getattr(self, "_dash_render_settings_breath", None)
+        btn = getattr(self, "btn_render_settings", None)
+        if btn is None:
+            return None
+        if breath is not None:
+            try:
+                if breath._button is btn:
+                    return breath
+            except RuntimeError:
+                pass
+        breath = SoftAccentBorderBreath(
+            btn,
+            style_builder=lambda c: self._dash_render_settings_qss(border=c),
+            from_color="#f2eef8",
+            to_color="#b29ae7",
+            parent=btn,
+        )
+        self._dash_render_settings_breath = breath
+        return breath
 
     def _sync_dash_render_settings_button(self) -> None:
         btn = getattr(self, "btn_render_settings", None)
@@ -2186,14 +2232,35 @@ class RenderMixin:
         show = self._desktop_render_layout_is_portable_like()
         btn.setVisible(show)
         open_dlg = getattr(self, "_desktop_render_settings_dlg", None)
+        is_open = False
+        is_minimized = False
         try:
-            is_open = open_dlg is not None and open_dlg.isVisible() and not open_dlg.isMinimized()
+            if open_dlg is not None:
+                open_dlg.objectName()
+                if hasattr(open_dlg, "is_parked_minimized"):
+                    is_minimized = bool(open_dlg.is_parked_minimized())
+                else:
+                    is_minimized = bool(open_dlg.isMinimized())
+                is_open = bool(open_dlg.isVisible()) and not is_minimized
         except RuntimeError:
             is_open = False
+            is_minimized = False
         if is_open:
             btn.setText(" Close Settings")
         else:
             btn.setText(" Render Settings")
+
+        # Breath only while yellow-minimized — soft light↔purple outline cue.
+        breath = self._ensure_dash_render_settings_breath()
+        if breath is None:
+            return
+        stock = self._dash_render_settings_qss()
+        if show and is_minimized:
+            if not breath.active:
+                btn.setStyleSheet(stock)
+            breath.start()
+        else:
+            breath.stop(restore_style=stock)
 
     def _desktop_render_layout_is_portable_like(self) -> bool:
         if getattr(self, "_portable_shell", False):
