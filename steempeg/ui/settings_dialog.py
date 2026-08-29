@@ -549,7 +549,7 @@ class SettingsDialog(SteempegDialog):
         btn_restart.clicked.connect(self._restart_app)
         restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         restart_row.addWidget(
-            self._hint("Quit and relaunch. Use after changing shell."),
+            self._hint("Quit and relaunch. Asks whether to save first."),
             1,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -1038,6 +1038,8 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
+                "Progressive paints Clips placeholders instantly and fills cards "
+                "as you scroll (disk logos + folder thumbs only). "
                 "Smart Launch skips a full folder pass when clip roots look unchanged. "
                 "Quick always rescans with cached health. "
                 "Full re-runs ffprobe and refreshes game icons/names from Steam. "
@@ -1546,24 +1548,32 @@ class SettingsDialog(SteempegDialog):
                 pass
 
     def _restart_app(self) -> None:
-        from steempeg.ui.message_dialog import steempeg_question
+        from steempeg.ui.message_dialog import DialogButton, steempeg_alert_actions
 
-        if not steempeg_question(
+        choice = steempeg_alert_actions(
             self,
             "Restart Steempeg?",
-            "Steempeg will quit and open again.",
-            detail="Unsaved dialog choices in this window are discarded. Save first if needed.",
-        ):
+            "Save current settings before restarting?",
+            (
+                DialogButton("Cancel", "secondary"),
+                DialogButton("Don't save", "secondary", accept=True),
+                DialogButton("Save && Restart", "primary", accept=True),
+            ),
+            min_width=420,
+        )
+        # 0 = Cancel, -1 = window close, 1 = Don't save, 2 = Save & Restart
+        if choice <= 0:
             return
-        # Persist shell prefs before relaunch so Restart after a shell change works
-        # even if the user forgot Save.
-        shell = self._combo_shell.currentData()
-        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
-            save_ui_shell(shell, app)
-        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
-            save_ask_ui_shell(self._chk_ask_shell.isChecked(), app)
-        # Flush queue + panel before relaunch so the other shell sees the same state.
+
         app = self._app
+        if choice == 2:
+            deferred = self._persist_settings()
+            if deferred is None:
+                return
+            # Live UI refreshes are pointless — we're about to quit.
+            del deferred
+
+        # Flush queue + panel before relaunch so the next process sees the same state.
         if hasattr(app, "_persist_render_queue"):
             try:
                 app._persist_render_queue()
@@ -1578,7 +1588,7 @@ class SettingsDialog(SteempegDialog):
         self.accept()
         from steempeg.ui.app_restart import restart_application
 
-        restart_application(self._app)
+        restart_application(app)
 
     def _apply_settings_form_chrome(self) -> None:
         """Theme-aware combos, line edits, and secondary buttons across all tabs."""
