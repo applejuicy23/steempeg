@@ -80,10 +80,62 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             pass
         self._title_bar.close_requested.connect(self.close_and_return)
 
+        # Frameless dialogs: Qt showMinimized() often minimizes the *parent* app
+        # (or never reports isMinimized). Yellow traffic light → soft hide instead.
+        self._soft_minimized = False
+        min_btn = getattr(self._title_bar, "btn_minimize", None)
+        if min_btn is not None:
+            try:
+                min_btn.clicked.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            min_btn.clicked.connect(self.soft_minimize)
+
         # Do NOT call _sync_portable_like_dock_chrome here — with this dialog
         # registered as floating it used to still re-glue the main splitter
         # (1–2s lag). Neo is already borrowed into this window.
         self._reclaim_neo_into_dialog()
+
+    def is_parked_minimized(self) -> bool:
+        """True when yellow-minimize hid us (or real Qt minimized, if it works)."""
+        if getattr(self, "_soft_minimized", False):
+            return True
+        try:
+            return bool(self.isMinimized())
+        except RuntimeError:
+            return False
+
+    def soft_minimize(self) -> None:
+        """Park Render Settings without killing neo — cue the dash button breath."""
+        self._soft_minimized = True
+        self.hide()
+        app = self._app
+        if hasattr(app, "_sync_dash_render_settings_button"):
+            try:
+                app._sync_dash_render_settings_button()
+            except Exception:
+                pass
+
+    def soft_restore(self) -> None:
+        """Bring a soft-minimized Render Settings window back."""
+        self._soft_minimized = False
+        try:
+            if self.isMinimized():
+                self.showNormal()
+            else:
+                self.show()
+        except RuntimeError:
+            return
+        self.raise_()
+        self.activateWindow()
+        if hasattr(self, "_reclaim_neo_into_dialog"):
+            self._reclaim_neo_into_dialog()
+        app = self._app
+        if hasattr(app, "_sync_dash_render_settings_button"):
+            try:
+                app._sync_dash_render_settings_button()
+            except Exception:
+                pass
 
     def _reclaim_neo_into_dialog(self) -> None:
         neo = self._neo or getattr(self._app, "neo_wrapper", None)
@@ -124,7 +176,21 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             except RuntimeError:
                 pass
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        from PySide6.QtCore import QEvent
+
+        if event.type() != QEvent.Type.WindowStateChange:
+            return
+        app = self._app
+        if hasattr(app, "_sync_dash_render_settings_button"):
+            try:
+                app._sync_dash_render_settings_button()
+            except Exception:
+                pass
+
     def close_and_return(self) -> None:
+        self._soft_minimized = False
         self._return_neo()
         self.hide()
         self.deleteLater()
@@ -250,10 +316,25 @@ def toggle_desktop_render_settings(app) -> None:
 
     if dlg is not None:
         # Second click: if minimized → restore; if visible → close (lower).
-        if dlg.isMinimized():
-            dlg.showNormal()
-            dlg.raise_()
-            dlg.activateWindow()
+        parked = False
+        try:
+            parked = (
+                hasattr(dlg, "is_parked_minimized") and dlg.is_parked_minimized()
+            ) or dlg.isMinimized()
+        except RuntimeError:
+            parked = False
+        if parked:
+            if hasattr(dlg, "soft_restore"):
+                dlg.soft_restore()
+            else:
+                dlg.showNormal()
+                dlg.raise_()
+                dlg.activateWindow()
+            if hasattr(app, "_sync_dash_render_settings_button"):
+                try:
+                    app._sync_dash_render_settings_button()
+                except Exception:
+                    pass
             return
         if dlg.isVisible():
             dlg.close_and_return()
