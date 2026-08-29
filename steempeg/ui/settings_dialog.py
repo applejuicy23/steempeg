@@ -1038,13 +1038,13 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
-                "Progressive paints Clips placeholders instantly and fills cards "
-                "as you scroll (disk logos + folder thumbs only). "
-                "Smart Launch skips a full folder pass when clip roots look unchanged. "
-                "Quick always rescans with cached health. "
-                "Full re-runs ffprobe and refreshes game icons/names from Steam. "
-                "Skip paints last session’s list instantly (no folder I/O). "
-                "Refresh rebuilds the whole library."
+                "Progressive (default): placeholders first, cards fill as you scroll — "
+                "fastest everyday launch; scroll may hitch on huge libraries. "
+                "Quick: rescan folders with cached health — good Refresh companion. "
+                "Full: ffprobe + Steam icons/names — use for first launch or when "
+                "adding a new clips folder. "
+                "Skip: paint last session list (often feels as slow as old Smart). "
+                "Refresh rebuilds the library (Quick-style)."
             )
         )
 
