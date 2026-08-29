@@ -719,23 +719,25 @@ DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_PROGRESSIVE
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
     (SCAN_PROGRESSIVE, "Progressive, load as you scroll"),
-    (SCAN_SMART, "Smart Launch, cache when unchanged"),
     (SCAN_QUICK, "Quick, folders + cached health"),
-    (SCAN_FULL, "Full, folders + ffprobe + Steam icons/names"),
-    (SCAN_CACHE, "Skip, instant last session"),
+    (SCAN_FULL, "Full, first launch / new folder"),
+    (SCAN_CACHE, "Skip, last session list"),
 )
 
 
 def normalize_startup_library_scan(value: object | None) -> str:
     text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
-        "smart_launch": SCAN_SMART,
-        "auto": SCAN_SMART,
+        # Smart Launch tested slow (= Skip path); migrate to Progressive.
+        "smart": SCAN_PROGRESSIVE,
+        "smart_launch": SCAN_PROGRESSIVE,
+        "auto": SCAN_PROGRESSIVE,
         "fast": SCAN_QUICK,
         "incremental": SCAN_QUICK,
         "cached_health": SCAN_QUICK,
         "ffprobe": SCAN_FULL,
         "complete": SCAN_FULL,
+        "first_launch": SCAN_FULL,
         "off": SCAN_CACHE,
         "skip": SCAN_CACHE,
         "none": SCAN_CACHE,
@@ -747,8 +749,11 @@ def normalize_startup_library_scan(value: object | None) -> str:
         "lazy": SCAN_PROGRESSIVE,
         "as_you_scroll": SCAN_PROGRESSIVE,
     }
-    if text in (SCAN_PROGRESSIVE, SCAN_SMART, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
+    if text in (SCAN_PROGRESSIVE, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
         return text
+    # Legacy key still in old settings.json — do not keep users on Smart.
+    if text == SCAN_SMART:
+        return SCAN_PROGRESSIVE
     return aliases.get(text, DEFAULT_STARTUP_LIBRARY_SCAN)
 
 
