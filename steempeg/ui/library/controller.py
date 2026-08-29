@@ -2471,7 +2471,8 @@ class LibraryMixin:
 
         if added:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
-            self.scan_clips(announce_duplicates=True)
+            # New Steam folders: Full scan (same as Choose/Add folder).
+            self.scan_clips(announce_duplicates=True, fast=False)
             steempeg_information(
                 self.ui,
                 "Steam folders found",
