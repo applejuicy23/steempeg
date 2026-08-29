@@ -710,13 +710,15 @@ def load_markers_on_strip(settings: dict | None) -> bool:
 
 KEY_STARTUP_LIBRARY_SCAN = "startup_library_scan"
 
+SCAN_PROGRESSIVE = "progressive"
 SCAN_SMART = "smart"
 SCAN_FULL = "full"
 SCAN_QUICK = "quick"
 SCAN_CACHE = "cache"
-DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_SMART
+DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_PROGRESSIVE
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
+    (SCAN_PROGRESSIVE, "Progressive, load as you scroll"),
     (SCAN_SMART, "Smart Launch, cache when unchanged"),
     (SCAN_QUICK, "Quick, folders + cached health"),
     (SCAN_FULL, "Full, folders + ffprobe + Steam icons/names"),
@@ -740,8 +742,12 @@ def normalize_startup_library_scan(value: object | None) -> str:
         "open_from_cache": SCAN_CACHE,
         "from_cache": SCAN_CACHE,
         "no_scan": SCAN_CACHE,
+        "stupid_launch": SCAN_PROGRESSIVE,
+        "viewport": SCAN_PROGRESSIVE,
+        "lazy": SCAN_PROGRESSIVE,
+        "as_you_scroll": SCAN_PROGRESSIVE,
     }
-    if text in (SCAN_SMART, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
+    if text in (SCAN_PROGRESSIVE, SCAN_SMART, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
         return text
     return aliases.get(text, DEFAULT_STARTUP_LIBRARY_SCAN)
 
