@@ -76,6 +76,10 @@ from steempeg.ui import ui_theme as ut
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
+_CLIP_CARD_SIZE = QSize(260, 190)
+_CLIP_VIEWPORT_OVERSCAN_PX = 220
+_CLIP_SCROLL_IDLE_MS = 120
+_CLIP_MAX_LIVE_WIDGETS = 96
 
 
 class LibraryMixin:
@@ -2042,6 +2046,8 @@ class LibraryMixin:
             _ = item.data(Qt.UserRole)
         except RuntimeError:
             return
+        if self.grid_clips.itemWidget(item) is None:
+            self._materialize_clip_grid_item(item)
         self._grid_select_item(item, mods=mods)
 
     def _publish_grid_selection(self, *, update_preview: bool = True) -> None:
@@ -2256,6 +2262,10 @@ class LibraryMixin:
             # Clicking empty space inside the grid keeps the current selection
             # (the purple outline stays); only clicking another card changes it.
             return True
+
+        # Progressive placeholders have no ClipCard until materialize.
+        if self.grid_clips.itemWidget(item) is None:
+            self._materialize_clip_grid_item(item)
 
         # Same deferred path as ClipCard — never load on the press stack.
         self._defer_grid_select_item(item, event)
@@ -3050,9 +3060,43 @@ class LibraryMixin:
 
         table = self.ui.table_clips
         title_item = table.item(row, 0)
-        date_item = table.item(row, 2)
         if not title_item:
             return
+        clip_path = title_item.data(Qt.UserRole)
+
+        item = QListWidgetItem(self.grid_clips)
+        item.setSizeHint(_CLIP_CARD_SIZE)
+        item.setData(Qt.UserRole, row)
+        item.setData(Qt.UserRole + 1, clip_path)
+        if table.isRowHidden(row):
+            item.setHidden(True)
+
+        if getattr(self, "_clips_progressive_active", False):
+            # Placeholder only — ClipCard waits for viewport materialize.
+            return
+        self._attach_clip_card_to_grid_item(item)
+
+    def _attach_clip_card_to_grid_item(self, item: QListWidgetItem) -> ClipCard | None:
+        """Build / attach a ClipCard for an existing grid item (materialize path)."""
+        if not hasattr(self, "grid_clips") or not hasattr(self.ui, "table_clips"):
+            return None
+        if item is None:
+            return None
+        existing = self.grid_clips.itemWidget(item)
+        if isinstance(existing, ClipCard):
+            return existing
+
+        try:
+            row = int(item.data(Qt.UserRole))
+        except (TypeError, ValueError):
+            return None
+        table = self.ui.table_clips
+        if row < 0 or row >= table.rowCount():
+            return None
+        title_item = table.item(row, 0)
+        date_item = table.item(row, 2)
+        if not title_item:
+            return None
 
         title = title_item.text() if title_item else "Unknown"
         date_raw = date_item.text() if date_item else "Today"
@@ -3060,7 +3104,7 @@ class LibraryMixin:
         dur_str = time_item.text().strip() if time_item else ""
         footer_right = self._clip_card_footer_text(title.strip(), date_raw, dur_str)
 
-        clip_path = title_item.data(Qt.UserRole)
+        clip_path = title_item.data(Qt.UserRole) or item.data(Qt.UserRole + 1)
         health_color = None
         if title_item.data(_CLIP_CURED_ROLE):
             health_color = health.HEALTH_COLORS[health.ClipHealth.CURED]
@@ -3077,7 +3121,7 @@ class LibraryMixin:
         badge_text = "Clip"
 
         if clip_path:
-            clip_folder_name = os.path.basename(clip_path)
+            clip_folder_name = os.path.basename(str(clip_path))
             parts = clip_folder_name.split("_")
 
             if title.strip().lower() == "unknown":
@@ -3095,25 +3139,24 @@ class LibraryMixin:
             if not icon_path and len(parts) >= 2 and parts[1].isdigit():
                 icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
 
-            # Skip restore must not touch library roots (W: sleep / network = multi-second).
-            # Local poster cache + game icons only; thumbs backfill later if needed.
-            if not getattr(self, "_scan_snapshot_restore", False):
-                if os.path.exists(clip_path):
+            # Progressive / Skip: disk thumbs only — never ffmpeg-generate here.
+            progressive = bool(getattr(self, "_clips_progressive_active", False))
+            if progressive or getattr(self, "_scan_snapshot_restore", False):
+                if progressive and os.path.exists(str(clip_path)):
                     thumb_path = resolve_clip_thumbnail(
-                        clip_path, self.cache_dir, allow_generate=False
+                        str(clip_path), self.cache_dir, allow_generate=False
                     )
-            else:
-                thumb_path = self._snapshot_local_poster_only(clip_path)
+                else:
+                    thumb_path = self._snapshot_local_poster_only(str(clip_path))
+            elif os.path.exists(str(clip_path)):
+                thumb_path = resolve_clip_thumbnail(
+                    str(clip_path), self.cache_dir, allow_generate=False
+                )
 
         is_unknown_clip = title.strip().lower() == "unknown"
-
-        item = QListWidgetItem(self.grid_clips)
-        item.setSizeHint(QSize(260, 190))
-        item.setData(Qt.UserRole, row)
         item.setData(Qt.UserRole + 1, clip_path)
 
         queue_membership = None
-        # Match Leave: no yellow # circles while queue scheme is deferred.
         queue_mode = (
             not hasattr(self, "_queue_is_active") or bool(self._queue_is_active())
         )
@@ -3146,15 +3189,21 @@ class LibraryMixin:
             level = title_item.data(_CLIP_HEALTH_ROLE)
             is_dead = level == health.ClipHealth.DEAD.value
         has_thumb = bool(thumb_path and os.path.exists(thumb_path))
-        # Skip paints before thumbs are resolved — never veil the whole library grey.
-        if getattr(self, "_scan_snapshot_restore", False):
+        if getattr(self, "_scan_snapshot_restore", False) and not getattr(
+            self, "_clips_progressive_active", False
+        ):
             card.set_unavailable(dead=is_dead, no_preview=False)
         else:
             card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
         self.grid_clips.setItemWidget(item, card)
 
-        if table.isRowHidden(row):
-            item.setHidden(True)
+        live = getattr(self, "_clip_live_paths", None)
+        if not isinstance(live, set):
+            live = set()
+            self._clip_live_paths = live
+        if clip_path:
+            live.add(os.path.normcase(os.path.normpath(str(clip_path))))
+        return card
 
     def refresh_library_datetime_displays(self) -> None:
         """Reformat clip/rendered date cells from stamps — no folder rescan."""
@@ -3693,7 +3742,11 @@ class LibraryMixin:
         if quiet_append:
             # CLIP often appears after FG for the same Steam session — drop the loser.
             self._purge_inferior_session_siblings()
-        if not quiet_append and not snapshot_restore:
+        if (
+            not quiet_append
+            and not snapshot_restore
+            and not getattr(self, "_clips_progressive_active", False)
+        ):
             # Full startup will re-download all icons shortly — skip the
             # missing-only backfill (would race / duplicate CDN work).
             if not do_steam_meta:
@@ -3746,7 +3799,9 @@ class LibraryMixin:
         if snapshot_restore and want_append:
             # Quiet top-up long after paint — must not compete with first frame.
             QTimer.singleShot(2500, self._append_new_clips_only)
-        if snapshot_restore:
+        if getattr(self, "_clips_progressive_active", False):
+            pass  # Progressive: no duration/poster flood — Refresh does a full scan.
+        elif snapshot_restore:
             QTimer.singleShot(400, self._schedule_clip_duration_backfill)
         elif not quiet_append:
             QTimer.singleShot(0, self._schedule_clip_duration_backfill)
@@ -3817,6 +3872,291 @@ class LibraryMixin:
             pass
         return ""
 
+    # ----- Progressive library load (viewport-lazy ClipCards) -----
+
+    def _ensure_clips_viewport_lazy_hooks(self) -> None:
+        """Install scroll-idle viewport refresh once (Screenshots pattern)."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        if getattr(self, "_clips_viewport_hooks_installed", False):
+            return
+        idle = QTimer(grid)
+        idle.setSingleShot(True)
+        idle.setInterval(_CLIP_SCROLL_IDLE_MS)
+        idle.timeout.connect(self._clips_on_scroll_idle)
+        self._clips_viewport_timer = idle
+        self._clips_scroll_active = False
+        self._clip_live_paths = set()
+        bar = grid.verticalScrollBar()
+        if bar is not None:
+            bar.valueChanged.connect(self._on_clips_scroll)
+        self._clips_viewport_hooks_installed = True
+
+    def _stop_progressive_clips_discover(self) -> None:
+        worker = getattr(self, "_progressive_clips_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(2000)
+        self._progressive_clips_worker = None
+
+    def start_progressive_clips_library(self) -> bool:
+        """Paint Clips placeholders fast; materialize cards as the viewport scrolls."""
+        if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
+            return False
+
+        if not getattr(self, "clips_folders", None):
+            self._load_clips_folders_from_settings()
+        library_roots = list(getattr(self, "clips_folders", None) or [])
+        if not library_roots:
+            return False
+
+        self._ensure_clips_viewport_lazy_hooks()
+        self._stop_library_scan()
+        self._stop_progressive_clips_discover()
+        self._stop_clip_poster_backfill()
+        self._stop_clip_duration_backfill()
+        self._scan_pending_rows = []
+        self._scan_flush_scheduled = False
+        self._scan_total = 0
+        self._scan_inserted = 0
+        self._scan_finalize_pending = None
+        self._scan_append_new_only = False
+        self._scan_snapshot_restore = False
+        self._clips_progressive_active = True
+        self._library_clip_rows = []
+        self._saved_clips_selection_path = ""
+        self._preview_clip_path = None
+        self._clips_visual_selected_rows = set()
+        self._clip_live_paths = set()
+        if hasattr(self, "_clear_clips_selection_visual"):
+            self._clear_clips_selection_visual()
+
+        table = self.ui.table_clips
+        grid = getattr(self, "grid_clips", None)
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        if grid is not None:
+            self._grid_anchor_item = None
+            self._grid_anchor_index = -1
+            grid.clear()
+
+        self._scan_generation = getattr(self, "_scan_generation", 0) + 1
+        self._clips_scan_active = False
+        self._sync_library_scan_interaction_lock(busy=False)
+        self._ensure_clip_health_cache()
+
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+
+        from steempeg.ui.library.progressive_clips_discover import (
+            ProgressiveClipsDiscoverWorker,
+        )
+
+        worker = ProgressiveClipsDiscoverWorker(
+            library_roots,
+            getattr(self, "cache_dir", "") or "",
+            getattr(self, "_clip_health_cache", {}) or {},
+            getattr(self, "game_names_cache", {}) or {},
+            prefer_session=True,
+            parent=getattr(self, "ui", None),
+        )
+        self._progressive_clips_worker = worker
+        worker.batch_ready.connect(self._on_progressive_clips_batch)
+        worker.finished_ok.connect(self._on_progressive_clips_finished)
+        worker.discover_failed.connect(self._on_progressive_clips_failed)
+        worker.start()
+        logging.info("Startup library scan: Progressive (viewport-lazy Clips)")
+        return True
+
+    def _on_progressive_clips_batch(self, rows) -> None:
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        if not rows:
+            return
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        grid = getattr(self, "grid_clips", None)
+        if table is None:
+            return
+        table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
+        try:
+            for row in rows:
+                if isinstance(row, ScannedClip):
+                    self._insert_scanned_clip_row(row)
+        finally:
+            table.setUpdatesEnabled(True)
+            if grid is not None:
+                grid.setUpdatesEnabled(True)
+        if hasattr(self, "fast_sync_grid"):
+            self.fast_sync_grid()
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        self._schedule_clips_viewport_refresh(0)
+
+    def _on_progressive_clips_finished(self, total: int) -> None:
+        self._progressive_clips_worker = None
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is not None:
+            table.setSortingEnabled(True)
+            table.horizontalHeader().setSectionsClickable(False)
+        if hasattr(self, "fast_sync_grid"):
+            self.fast_sync_grid()
+        self._purge_inferior_session_siblings()
+        if hasattr(self, "sync_library_filter_view"):
+            self.sync_library_filter_view()
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+        QTimer.singleShot(1500, self._persist_clips_library_snapshot)
+        self._schedule_clips_viewport_refresh(0)
+        if getattr(self, "_startup_library_scan_active", False) and hasattr(
+            self, "preload_render_history"
+        ):
+            self._startup_library_scan_active = False
+            self.preload_render_history(announce=False)
+        elif hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+        logging.info("Progressive Clips: %d placeholders ready", int(total or 0))
+
+    def _on_progressive_clips_failed(self, message: str) -> None:
+        self._progressive_clips_worker = None
+        logging.warning("Progressive Clips discover failed: %s", message)
+        if getattr(self, "_startup_library_scan_active", False):
+            self._startup_library_scan_active = False
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator("Ready", "ready")
+
+    def _on_clips_scroll(self, *_args) -> None:
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        self._clips_scroll_active = True
+        timer = getattr(self, "_clips_viewport_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def _clips_on_scroll_idle(self) -> None:
+        self._clips_scroll_active = False
+        self._clips_refresh_viewport()
+
+    def _schedule_clips_viewport_refresh(self, delay_ms: int = 0) -> None:
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        timer = getattr(self, "_clips_viewport_timer", None)
+        if timer is None:
+            QTimer.singleShot(max(0, int(delay_ms)), self._clips_refresh_viewport)
+            return
+        if delay_ms <= 0:
+            timer.start(1)
+        else:
+            timer.start(int(delay_ms))
+
+    def _clips_visible_items(self) -> list:
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return []
+        vp = grid.viewport()
+        if vp is None:
+            return []
+        area = vp.rect().adjusted(
+            0, -_CLIP_VIEWPORT_OVERSCAN_PX, 0, _CLIP_VIEWPORT_OVERSCAN_PX
+        )
+        out = []
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            idx = grid.indexFromItem(item)
+            if not idx.isValid():
+                continue
+            if area.intersects(grid.visualRect(idx)):
+                out.append(item)
+        return out
+
+    def _materialize_clip_grid_item(self, item) -> ClipCard | None:
+        if not getattr(self, "_clips_progressive_active", False):
+            # Still allow one-shot materialize if a placeholder somehow remains.
+            pass
+        return self._attach_clip_card_to_grid_item(item)
+
+    def _dematerialize_clip_grid_item(self, item) -> None:
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or item is None:
+            return
+        card = grid.itemWidget(item)
+        if card is None:
+            return
+        path = str(item.data(Qt.UserRole + 1) or "")
+        grid.removeItemWidget(item)
+        try:
+            card.deleteLater()
+        except RuntimeError:
+            pass
+        live = getattr(self, "_clip_live_paths", None)
+        if isinstance(live, set) and path:
+            live.discard(os.path.normcase(os.path.normpath(path)))
+
+    def _clips_refresh_viewport(self) -> None:
+        """Materialize visible (+overscan) ClipCards; dematerialize far ones."""
+        if getattr(self, "_clips_scroll_active", False):
+            return
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        if getattr(self, "_library_panel_mode", "clips") != "clips":
+            if not grid.isVisible():
+                return
+        try:
+            grid.doItemsLayout()
+        except Exception:
+            pass
+
+        visible = self._clips_visible_items()
+        keep_keys: set[str] = set()
+        for item in visible:
+            path = str(item.data(Qt.UserRole + 1) or "")
+            if path:
+                keep_keys.add(os.path.normcase(os.path.normpath(path)))
+            self._materialize_clip_grid_item(item)
+
+        live = getattr(self, "_clip_live_paths", None)
+        if isinstance(live, set) and live:
+            index: dict[str, object] = {}
+            for i in range(grid.count()):
+                it = grid.item(i)
+                if it is None:
+                    continue
+                p = str(it.data(Qt.UserRole + 1) or "")
+                if p:
+                    index[os.path.normcase(os.path.normpath(p))] = it
+            for key in list(live):
+                if key in keep_keys:
+                    continue
+                item = index.get(key)
+                if item is not None and not item.isSelected():
+                    self._dematerialize_clip_grid_item(item)
+
+            live = getattr(self, "_clip_live_paths", None)
+            if isinstance(live, set) and len(live) > _CLIP_MAX_LIVE_WIDGETS:
+                # Cap: drop farthest non-selected live cards.
+                for key in list(live):
+                    if len(live) <= _CLIP_MAX_LIVE_WIDGETS:
+                        break
+                    if key in keep_keys:
+                        continue
+                    item = index.get(key)
+                    if item is not None and not item.isSelected():
+                        self._dematerialize_clip_grid_item(item)
+
     def restore_clips_from_session_cache(
         self,
         *,
@@ -3860,6 +4200,7 @@ class LibraryMixin:
             return False
 
         self._stop_library_scan()
+        self._stop_progressive_clips_discover()
         self._stop_clip_poster_backfill()
         self._stop_clip_duration_backfill()
         self._scan_pending_rows = []
@@ -3869,6 +4210,8 @@ class LibraryMixin:
         self._scan_finalize_pending = None
         self._scan_append_new_only = False
         self._scan_snapshot_restore = True
+        self._clips_progressive_active = False
+        self._clip_live_paths = set()
         self._snapshot_append_new_after = bool(append_new)
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
@@ -4116,6 +4459,7 @@ class LibraryMixin:
             return
 
         self._stop_library_scan()
+        self._stop_progressive_clips_discover()
         self._stop_clip_poster_backfill()
         self._stop_clip_duration_backfill()
         self._scan_pending_rows = []
@@ -4125,6 +4469,8 @@ class LibraryMixin:
         self._scan_finalize_pending = None
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
+        self._clips_progressive_active = False
+        self._clip_live_paths = set()
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
         self._preview_clip_path = None
