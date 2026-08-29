@@ -2515,7 +2515,8 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips(announce_duplicates=True)
+        # First / primary folder: Full scan (ffprobe + Steam meta) — Emily 29 Aug.
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
@@ -2536,7 +2537,8 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips(announce_duplicates=True)
+        # New folder: Full scan so health + icons land once — Emily 29 Aug.
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def remove_clips_folder(self, path):
         """Remove one library root and rescan."""
