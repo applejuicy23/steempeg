@@ -770,6 +770,8 @@ class RenderedLibraryMixin:
                 LibraryMixin.set_view_mode(
                     self, getattr(self, "_clips_view_mode", "grid"), relayout=False
                 )
+            if hasattr(self, "_schedule_clips_viewport_refresh"):
+                self._schedule_clips_viewport_refresh(50)
         self._sync_library_view_toggle_for_mode()
         self._sync_sort_combo_for_panel()
         if old_mode != mode:
