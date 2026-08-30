@@ -79,7 +79,9 @@ _CLIP_CURED_ROLE = Qt.UserRole + 4
 _CLIP_CARD_SIZE = QSize(260, 190)
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
-_CLIP_MAX_LIVE_WIDGETS = 96
+# Once a card has been seen it stays (scroll-back should not hitch).
+# Cap is only a RAM safety valve — farthest from the viewport go first.
+_CLIP_MAX_LIVE_WIDGETS = 256
 
 
 class LibraryMixin:
@@ -2500,6 +2502,12 @@ class LibraryMixin:
 
     def choose_folder(self):
         """Pick the primary clips folder (first library root)."""
+        try:
+            from steempeg.infra.window_focus import yield_foreground_to_external
+
+            yield_foreground_to_external(self.ui)
+        except Exception:
+            pass
         folder = QFileDialog.getExistingDirectory(
             self.ui, "Select primary clips folder", self._default_clips_dialog_path()
         )
@@ -2521,6 +2529,12 @@ class LibraryMixin:
 
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
+        try:
+            from steempeg.infra.window_focus import yield_foreground_to_external
+
+            yield_foreground_to_external(self.ui)
+        except Exception:
+            pass
         folder = QFileDialog.getExistingDirectory(
             self.ui, "Add clips folder", self._default_clips_dialog_path()
         )
@@ -3894,7 +3908,14 @@ class LibraryMixin:
         bar = grid.verticalScrollBar()
         if bar is not None:
             bar.valueChanged.connect(self._on_clips_scroll)
+            bar.rangeChanged.connect(self._on_clips_scroll_range)
         self._clips_viewport_hooks_installed = True
+
+    def _on_clips_scroll_range(self, *_args) -> None:
+        """Sheet open / layout grow — scrollbar appears without a wheel tick."""
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        self._schedule_clips_viewport_refresh(50)
 
     def _stop_progressive_clips_discover(self) -> None:
         worker = getattr(self, "_progressive_clips_worker", None)
@@ -3990,8 +4011,15 @@ class LibraryMixin:
             grid.setUpdatesEnabled(False)
         try:
             for row in rows:
-                if isinstance(row, ScannedClip):
-                    self._insert_scanned_clip_row(row)
+                if not isinstance(row, ScannedClip):
+                    continue
+                path = os.path.normcase(os.path.normpath(row.full_path))
+                if any(
+                    path == os.path.normcase(os.path.normpath(root))
+                    for root in (getattr(self, "clips_folders", None) or [])
+                ):
+                    continue
+                self._insert_scanned_clip_row(row)
         finally:
             table.setUpdatesEnabled(True)
             if grid is not None:
@@ -4081,6 +4109,23 @@ class LibraryMixin:
                 continue
             if area.intersects(grid.visualRect(idx)):
                 out.append(item)
+        if grid.count() <= 0 or vp.height() <= 0:
+            return out
+        cols_fn = getattr(self, "_clip_grid_column_count_for", None)
+        cols = int(cols_fn(grid)) if callable(cols_fn) else 6
+        cols = max(1, cols)
+        cell_h = max(1, _CLIP_CARD_SIZE.height() + max(0, int(grid.spacing())))
+        rows = max(2, (vp.height() + _CLIP_VIEWPORT_OVERSCAN_PX) // cell_h + 1)
+        expect = min(grid.count(), cols * rows)
+        if len(out) >= expect:
+            return out
+        # Portable Choose a Clip: first row had visualRects, the rest still
+        # (0,0,0,0) until layout — fill the first screen by index.
+        seen = {id(item) for item in out}
+        for i in range(expect):
+            item = grid.item(i)
+            if item is not None and not item.isHidden() and id(item) not in seen:
+                out.append(item)
         return out
 
     def _materialize_clip_grid_item(self, item) -> ClipCard | None:
@@ -4106,8 +4151,19 @@ class LibraryMixin:
         if isinstance(live, set) and path:
             live.discard(os.path.normcase(os.path.normpath(path)))
 
+    def _clip_item_distance_from_viewport(self, grid, item, vp_rect) -> int:
+        idx = grid.indexFromItem(item)
+        if not idx.isValid():
+            return 10**9
+        vr = grid.visualRect(idx)
+        if vr.bottom() < vp_rect.top():
+            return vp_rect.top() - vr.bottom()
+        if vr.top() > vp_rect.bottom():
+            return vr.top() - vp_rect.bottom()
+        return 0
+
     def _clips_refresh_viewport(self) -> None:
-        """Materialize visible (+overscan) ClipCards; dematerialize far ones."""
+        """Materialize visible (+overscan) ClipCards; keep already-seen ones."""
         if getattr(self, "_clips_scroll_active", False):
             return
         if not getattr(self, "_clips_progressive_active", False):
@@ -4132,33 +4188,40 @@ class LibraryMixin:
             self._materialize_clip_grid_item(item)
 
         live = getattr(self, "_clip_live_paths", None)
-        if isinstance(live, set) and live:
-            index: dict[str, object] = {}
-            for i in range(grid.count()):
-                it = grid.item(i)
-                if it is None:
-                    continue
-                p = str(it.data(Qt.UserRole + 1) or "")
-                if p:
-                    index[os.path.normcase(os.path.normpath(p))] = it
-            for key in list(live):
-                if key in keep_keys:
-                    continue
-                item = index.get(key)
-                if item is not None and not item.isSelected():
-                    self._dematerialize_clip_grid_item(item)
+        if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
+            return
 
+        # Already-seen cards stay. Only drop farthest extras if RAM cap is hit.
+        vp = grid.viewport()
+        vp_rect = vp.rect() if vp is not None else None
+        index: dict[str, object] = {}
+        for i in range(grid.count()):
+            it = grid.item(i)
+            if it is None:
+                continue
+            p = str(it.data(Qt.UserRole + 1) or "")
+            if p:
+                index[os.path.normcase(os.path.normpath(p))] = it
+
+        candidates: list[tuple[int, object]] = []
+        for key in list(live):
+            if key in keep_keys:
+                continue
+            item = index.get(key)
+            if item is None or item.isSelected():
+                continue
+            dist = (
+                self._clip_item_distance_from_viewport(grid, item, vp_rect)
+                if vp_rect is not None
+                else 10**9
+            )
+            candidates.append((dist, item))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        for _dist, item in candidates:
             live = getattr(self, "_clip_live_paths", None)
-            if isinstance(live, set) and len(live) > _CLIP_MAX_LIVE_WIDGETS:
-                # Cap: drop farthest non-selected live cards.
-                for key in list(live):
-                    if len(live) <= _CLIP_MAX_LIVE_WIDGETS:
-                        break
-                    if key in keep_keys:
-                        continue
-                    item = index.get(key)
-                    if item is not None and not item.isSelected():
-                        self._dematerialize_clip_grid_item(item)
+            if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
+                break
+            self._dematerialize_clip_grid_item(item)
 
     def restore_clips_from_session_cache(
         self,
