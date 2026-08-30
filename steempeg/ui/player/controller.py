@@ -4876,7 +4876,8 @@ class PlayerMixin:
 
         toast = getattr(self, '_screenshot_toast', None)
         if toast is None:
-            toast = QWidget(self.ui)
+            # Unowned on Windows — parented Tools re-stack Steempeg over Explorer.
+            toast = QWidget(None if sys.platform == "win32" else self.ui)
             toast.setObjectName("screenshotToastHost")
             # Tool (not ToolTip) without stays-on-top — stays under Clips Manager sheets.
             # Not Qt.Popup: we keep WA_ShowWithoutActivating so copy/open don't steal focus;
