@@ -950,14 +950,15 @@ class PortableQueueSidebar(QWidget):
         ids = list(self._row_ids)
         if not ids:
             return None
-        cur = getattr(self._app, "_selected_queue_job_id", None)
-        if cur not in ids:
-            cur = self._anchor_id if self._anchor_id in ids else None
+        # Prefer the deck cursor (_anchor / selected ids), not the last-activated job.
+        cur = self._anchor_id if self._anchor_id in ids else None
         if cur not in ids and self._selected_ids:
             for jid in ids:
                 if jid in self._selected_ids:
                     cur = jid
                     break
+        if cur not in ids:
+            cur = getattr(self._app, "_selected_queue_job_id", None)
         if cur not in ids:
             cur = ids[0]
         idx = ids.index(cur)
@@ -971,12 +972,16 @@ class PortableQueueSidebar(QWidget):
 
     def deck_activate_selected(self) -> None:
         """Gamepad A in queue zone — same as clicking the highlighted row."""
-        job_id = getattr(self._app, "_selected_queue_job_id", None)
-        if job_id not in self._row_ids and self._selected_ids:
+        # Deck cursor first — do not fall back to a stale active job while the
+        # purple highlight sits on another card.
+        job_id = self._anchor_id if self._anchor_id in self._row_ids else None
+        if job_id is None and self._selected_ids:
             for jid in self._row_ids:
                 if jid in self._selected_ids:
                     job_id = jid
                     break
+        if job_id is None:
+            job_id = getattr(self._app, "_selected_queue_job_id", None)
         if job_id and job_id in self._row_ids:
             self.job_selected.emit(job_id)
 
