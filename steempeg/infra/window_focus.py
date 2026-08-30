@@ -282,9 +282,52 @@ def on_shell_lost_foreground(widget) -> None:
     """Call when Steempeg is no longer the OS foreground app.
 
     Strips a stuck ``WS_EX_TOPMOST`` *without* ``HWND_NOTOPMOST`` reshuffle (that
-    would park Steempeg on top of Explorer again).
+    would park Steempeg on top of Explorer again). Also sweeps every top-level
+    Steempeg HWND — Portable sheets / Tools can carry the bit too.
     """
     clear_widget_topmost(widget)
+    clear_all_steempeg_topmost()
+
+
+def clear_all_steempeg_topmost() -> None:
+    """Strip stuck always-on-top from every Qt top-level window (Windows)."""
+    if sys.platform != "win32":
+        return
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        for w in app.topLevelWidgets():
+            try:
+                if w is None or not w.isWindow():
+                    continue
+                clear_widget_topmost(w)
+            except RuntimeError:
+                continue
+            except Exception:
+                continue
+    except Exception as exc:
+        _log.debug("clear_all_steempeg_topmost failed: %s", exc)
+
+
+def yield_foreground_to_external(anchor=None) -> None:
+    """Drop TOPMOST before opening Explorer / browsers / native pickers.
+
+    If Steempeg stays always-on-top, those windows map *under* us and we often
+    remain ApplicationActive — so the focus-loss clear never runs. Call this
+    right before ``os.startfile`` / ``QFileDialog`` / ``webbrowser.open``.
+    """
+    if sys.platform != "win32":
+        return
+    if anchor is not None:
+        try:
+            win = anchor.window() if hasattr(anchor, "window") else anchor
+            clear_widget_topmost(win)
+        except Exception:
+            pass
+    clear_all_steempeg_topmost()
 
 
 def mark_embed_noactivate(widget) -> bool:
