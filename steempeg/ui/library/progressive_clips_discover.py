@@ -12,7 +12,7 @@ from steempeg.library.clips_library_cache import (
     _lightweight_row_from_path,
     clips_from_library_cache,
 )
-from steempeg.library.scan import ScannedClip, collect_clip_roots
+from steempeg.library.scan import ScannedClip, discover_clip_paths
 
 _BATCH = 64
 
@@ -64,8 +64,12 @@ class ProgressiveClipsDiscoverWorker(QThread):
 
     def _collect_rows(self) -> list[ScannedClip]:
         roots = [r for r in self._library_roots if r]
+        root_keys = {os.path.normcase(os.path.normpath(r)) for r in roots}
         seen: set[str] = set()
         out: list[ScannedClip] = []
+
+        def _is_library_root(path: str) -> bool:
+            return os.path.normcase(os.path.normpath(path)) in root_keys
 
         if self._prefer_session:
             for row in clips_from_library_cache(
@@ -73,35 +77,35 @@ class ProgressiveClipsDiscoverWorker(QThread):
                 library_roots=roots,
                 require_exists=False,
             ):
+                if _is_library_root(row.full_path):
+                    continue
                 key = os.path.normcase(row.full_path)
                 if key in seen:
                     continue
                 seen.add(key)
                 out.append(row)
 
-        # Shallow disk reconcile — append paths not already in the session list.
-        for root in roots:
+        # Same path filter as Refresh / Full — collect_clip_roots alone would
+        # paint the library folder itself as an Unknown/FG card (SteamLibrary).
+        try:
+            paths, _dupes = discover_clip_paths(roots)
+        except OSError:
+            paths = []
+        for path in paths:
             if self.isInterruptionRequested():
                 break
-            if not root or not os.path.isdir(root):
+            if _is_library_root(path):
                 continue
-            try:
-                paths = sorted(collect_clip_roots(root))
-            except OSError:
+            key = os.path.normcase(os.path.normpath(path))
+            if key in seen:
                 continue
-            for path in paths:
-                if self.isInterruptionRequested():
-                    break
-                key = os.path.normcase(os.path.normpath(path))
-                if key in seen:
-                    continue
-                seen.add(key)
-                row = _lightweight_row_from_path(
-                    path,
-                    cache_dir=self._cache_dir,
-                    health_cache=self._health_cache,
-                    game_names_cache=self._game_names_cache,
-                )
-                if row is not None:
-                    out.append(row)
+            seen.add(key)
+            row = _lightweight_row_from_path(
+                path,
+                cache_dir=self._cache_dir,
+                health_cache=self._health_cache,
+                game_names_cache=self._game_names_cache,
+            )
+            if row is not None:
+                out.append(row)
         return out
