@@ -188,6 +188,12 @@ def open_path_with_default_app(path: str) -> None:
         logging.warning("Cannot open — path does not exist: %s", norm)
         return
     if sys.platform == "win32":
+        try:
+            from steempeg.infra.window_focus import yield_foreground_to_external
+
+            yield_foreground_to_external()
+        except Exception:
+            pass
         os.startfile(norm)  # noqa: S606
     elif sys.platform == "darwin":
         _spawn_detached(["open", norm])
@@ -218,6 +224,12 @@ def open_text_file(path: str) -> None:
         return
     norm = os.path.abspath(path)
     if sys.platform == "win32":
+        try:
+            from steempeg.infra.window_focus import yield_foreground_to_external
+
+            yield_foreground_to_external()
+        except Exception:
+            pass
         subprocess.Popen(["notepad.exe", norm])
         return
     if sys.platform == "darwin":
@@ -278,6 +290,12 @@ def reveal_in_file_manager(path: str) -> None:
     norm = os.path.abspath(os.path.normpath(path))
     if os.path.exists(norm):
         if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import yield_foreground_to_external
+
+                yield_foreground_to_external()
+            except Exception:
+                pass
             if _reveal_windows(norm):
                 return
             # Fallback: attach path to /select, — split argv form is unreliable.
