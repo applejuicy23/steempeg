@@ -965,12 +965,27 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
     return bool((settings or {}).get(KEY_TEST_NEW_FULLSCREEN))
 
 
-# ----- Dev tools (Advanced tab) -----
+# ----- Console mode / Deck gamepad (General → Shell) -----
+# Stored as deck_controls for older settings.json. Default: on for steamdeck
+# builds, off for Windows / Linux desktop. Future: a simpler D-pad-only
+# "PlayStation home" nav style beside this full Console mapping.
 
 KEY_DEV_MODE = "dev_mode"
 KEY_DECK_CONTROLS = "deck_controls"
 DEFAULT_DEV_MODE = False
-DEFAULT_DECK_CONTROLS = False
+
+
+def default_deck_controls() -> bool:
+    """Steam Deck builds → Console on; Windows / Linux → off."""
+    try:
+        from steempeg.ui.shell_chooser import is_steamdeck_build
+
+        return bool(is_steamdeck_build())
+    except Exception:
+        return False
+
+
+DEFAULT_DECK_CONTROLS = False  # used only when platform probe fails mid-normalize
 
 
 def normalize_dev_mode(value: object | None) -> bool:
@@ -998,19 +1013,23 @@ def normalize_deck_controls(value: object | None) -> bool:
     text = str(value or "").strip().lower()
     if text in ("1", "true", "yes", "on"):
         return True
-    if text in ("0", "false", "no", "off", ""):
+    if text in ("0", "false", "no", "off"):
         return False
-    return DEFAULT_DECK_CONTROLS
+    if text == "":
+        return default_deck_controls()
+    return default_deck_controls()
 
 
 def load_deck_controls(settings: dict | None) -> bool:
-    return normalize_deck_controls(
-        (settings or {}).get(KEY_DECK_CONTROLS, DEFAULT_DECK_CONTROLS)
-    )
+    """Console mode — missing key uses platform default (Deck on / desktop off)."""
+    settings = settings or {}
+    if KEY_DECK_CONTROLS not in settings:
+        return default_deck_controls()
+    return normalize_deck_controls(settings.get(KEY_DECK_CONTROLS))
 
 
 def deck_controls_enabled(settings: dict | None = None, *, app=None) -> bool:
-    """Deck / Dev-pad actions — explicit opt-in or Developer mode (QA)."""
+    """Console / Dev-pad actions — Console mode opt-in or Developer mode (QA)."""
     if settings is None:
         settings = {}
         if app is not None and hasattr(app, "load_user_settings"):
