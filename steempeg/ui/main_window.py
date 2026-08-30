@@ -78,6 +78,16 @@ class MainWindow(_WindowBase):
             # Inactive shell often skips enter/leave on the dots until click —
             # re-evaluate under the cursor when focus returns (or is lost).
             QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
+            # Portable (and Desktop) can keep WS_EX_TOPMOST after a focus flash.
+            # While TOPMOST, Explorer/browsers open *under* us and we may stay
+            # ApplicationActive — so applicationStateChanged never clears it.
+            if sys.platform == "win32" and not self.isActiveWindow():
+                try:
+                    from steempeg.infra.window_focus import on_shell_lost_foreground
+
+                    on_shell_lost_foreground(self)
+                except Exception:
+                    pass
         super().changeEvent(event)
 
     def hideEvent(self, event):
