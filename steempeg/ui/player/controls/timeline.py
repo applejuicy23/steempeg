@@ -7,9 +7,10 @@ ThumbnailPreviewWidget is the floating thumbnail shown while hovering the timeli
 fed by PreviewSniperWorker.
 """
 import json
+import logging
 import os
 import re
-import logging
+import sys
 import time
 
 import PySide6.QtWidgets as qtw
@@ -113,6 +114,13 @@ class TimelineCanvas(QWidget):
         # A parentless Qt.ToolTip often stacks *under* the native mpv surface in
         # Portable theatre (and fullscreen HUD), so hover previews look "dead".
         self.preview_widget = ThumbnailPreviewWidget(self)
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                detach_tool_ownership(self.preview_widget)
+            except Exception:
+                pass
 
         self.visual_ms = 0.0  
         self.target_ms = 0.0  
@@ -210,6 +218,13 @@ class TimelineCanvas(QWidget):
         self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.text_tooltip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
         self.text_tooltip.hide()
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                detach_tool_ownership(self.text_tooltip)
+            except Exception:
+                pass
 
         # Strip + ruler from Settings S/M/L (Large = class defaults above; track stays).
         self.apply_strip_metrics(metrics_for_current())
