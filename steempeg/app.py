@@ -6028,6 +6028,20 @@ def main():
             # over the empty theatre — resync after first paint.
             QTimer.singleShot(0, force_app_cursor_resync)
             QTimer.singleShot(50, force_app_cursor_resync)
+            # Sheet promote / late theatre re-assert can re-stick TOPMOST after
+            # the 500ms clear — sweep again so Explorer is not buried under
+            # Portable (Desktop already settled before these timers).
+            if sys.platform == "win32":
+                def _clear_portable_topmost():
+                    try:
+                        from steempeg.infra.window_focus import clear_all_steempeg_topmost
+
+                        clear_all_steempeg_topmost()
+                    except Exception:
+                        pass
+
+                QTimer.singleShot(700, _clear_portable_topmost)
+                QTimer.singleShot(1500, _clear_portable_topmost)
         if hasattr(window, "schedule_silent_update_check"):
             # Quiet badge probe — never auto-installs; user still chooses backup/update.
             # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).
