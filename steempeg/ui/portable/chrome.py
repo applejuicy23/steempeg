@@ -1077,6 +1077,10 @@ def open_portable_clip_picker(app, *, host_parent=None) -> None:
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
+        # Progressive: theatre hid the grid — first paint only filled ~1 row.
+        if hasattr(app, "_schedule_clips_viewport_refresh"):
+            app._schedule_clips_viewport_refresh(0)
+            QTimer.singleShot(80, lambda: app._schedule_clips_viewport_refresh(0))
     except Exception:
         app._portable_clip_picker_open = False
         app._portable_clip_picker_host = None
