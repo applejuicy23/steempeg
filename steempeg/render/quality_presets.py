@@ -7,6 +7,7 @@ Also tags for the v48 categorized Quality Preset combo (Standard vs Custom).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Fixed ladder (tall → short). Extra Goddess heights are injected when the
@@ -60,6 +61,82 @@ def format_quality_item(height: int) -> str:
     """Combo row text, e.g. ``2160p (Divine Quality)``."""
     h = int(height)
     return f"{h}p ({quality_tier_label(h)})"
+
+
+def parse_quality_height(quality_text: str | None) -> int:
+    """Extract ``2160`` from ``2160p (Divine Quality)``; 0 if Original / unknown."""
+    text = quality_text or ""
+    if "Original" in text and "Target" not in text:
+        return 0
+    if "Target File" in text:
+        return 0
+    m = re.search(r"(\d+)\s*p", text, flags=re.IGNORECASE)
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return 0
+
+
+def resolve_quality_for_source(
+    quality_text: str,
+    source_height: int,
+    *,
+    fallback: str | None = None,
+) -> str:
+    """Pick a quality label that does not upscale past *source_height*.
+
+    Order: requested → *fallback* (if usable) → Original.
+    """
+    src = int(source_height) if source_height and source_height > 0 else 0
+    text = (quality_text or "").strip()
+    if not text:
+        return original_quality_label(src or None)
+    if "Original" in text and "Target" not in text:
+        return original_quality_label(src or None) if src else text
+    if "Target File" in text:
+        return text
+
+    want = parse_quality_height(text)
+    if src <= 0 or want <= 0 or want <= src:
+        return text
+
+    fb = (fallback or "").strip()
+    if fb and not fb.lower().startswith("original"):
+        fb_h = parse_quality_height(fb)
+        if fb_h <= 0:
+            # Bare height token.
+            try:
+                fb_h = int(re.search(r"(\d+)", fb).group(1)) if re.search(r"(\d+)", fb) else 0
+            except Exception:
+                fb_h = 0
+        if 0 < fb_h <= src:
+            if parse_quality_height(fb) > 0 and "(" in fb:
+                return fb
+            return format_quality_item(fb_h)
+
+    return original_quality_label(src)
+
+
+def resolve_fps_for_source(fps_text: str, source_fps: int) -> str:
+    """Clamp a preset FPS choice so it never exceeds the clip's FPS."""
+    text = (fps_text or "").strip()
+    src = int(source_fps) if source_fps and source_fps > 0 else 0
+    if not text or "Original" in text:
+        return f"{src} FPS (Original)" if src > 0 else (text or "60 FPS (Original)")
+    m = re.search(r"(\d+)", text)
+    if not m:
+        return text
+    try:
+        want = int(m.group(1))
+    except ValueError:
+        return text
+    if src > 0 and want > src:
+        return f"{src} FPS (Original)"
+    if "FPS" in text.upper():
+        return text
+    return f"{want} FPS"
 
 
 def build_quality_presets(source_height: int | None = None) -> list[tuple[str, int]]:

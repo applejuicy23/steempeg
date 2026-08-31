@@ -890,6 +890,17 @@ class TimelineCanvas(QWidget):
         if time.time() < getattr(self, "user_seek_lock_time", 0):
             return
         vlc_ms = float(vlc_ms)
+        # After rapid ±15s / scrub: stick sits on target while mpv still reports
+        # intermediate PTS from the seek queue — ignore those so we don't teleport.
+        # Still honor clip-switch / park resets (vlc ≈ 0).
+        target = float(self.target_ms)
+        visual = float(self.visual_ms)
+        if (
+            vlc_ms > 1.0
+            and abs(vlc_ms - target) > 1200.0
+            and abs(visual - target) < 100.0
+        ):
+            return
         speed = max(float(self.playback_speed) or 1.0, 1e-6)
 
         if was_playing and not self.is_playing:
@@ -1800,7 +1811,7 @@ class TimelineCanvas(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton: return
         if self.drag_state == 'playhead':
-            self.user_seek_lock_time = time.time() + 0.15 
+            self.user_seek_lock_time = time.time() + 0.55
             self.update_playhead(event.position().x())
             self.resume_requested.emit()
         elif self.drag_state in ['trim_l', 'trim_r']:
@@ -1823,7 +1834,9 @@ class TimelineCanvas(QWidget):
         self.visual_ms = max(0.0, min(float(new_position_ms), float(self.duration_ms)))
         self.target_ms = self.visual_ms
         self.vlc_last_update_time = time.time()
-        self.user_seek_lock_time = time.time() + 0.15 
+        # Rapid ±15s stacks mpv seeks; keep ownership long enough that mid-flight
+        # PTS cannot yank the stick (0.15s was too short under hammer clicks).
+        self.user_seek_lock_time = time.time() + 0.55
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
         self._refresh_overview_playhead_marker()

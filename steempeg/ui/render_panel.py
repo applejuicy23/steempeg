@@ -1343,8 +1343,9 @@ def apply_settings_panel_density(ui, dense) -> None:
         fnt.setPixelSize(field_font)
         dest.setFont(fnt)
 
-    # Preset create chrome (Save as new). Row actions live on each list item.
+    # Preset create chrome (Create… + Save as new). Row actions live on each list item.
     _preset_faces = (
+        ("btn_preset_create", "#303030", "#f0f0f0", "#4a4a4a", "#3a3a3a", "#6b5a8e", "#262626"),
         ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
     )
     for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in _preset_faces:
@@ -1431,6 +1432,7 @@ class PresetListRow(QWidget):
         on_toggle_fav,
         on_toggle_expand,
         on_apply,
+        on_edit,
         on_update,
         on_rename,
         on_duplicate,
@@ -1518,11 +1520,13 @@ class PresetListRow(QWidget):
 
         menu = QMenu(apply_split)
         menu.setStyleSheet(ut.library_menu_stylesheet())
+        act_edit = menu.addAction("Edit in editor…")
         act_update = menu.addAction("Update from panel")
         act_rename = menu.addAction("Rename…")
         act_dup = menu.addAction("Duplicate")
         menu.addSeparator()
         act_del = menu.addAction("Delete")
+        act_edit.triggered.connect(lambda *_: on_edit(name))
         act_update.triggered.connect(lambda *_: on_update(name))
         act_rename.triggered.connect(lambda *_: on_rename(name))
         act_dup.triggered.connect(lambda *_: on_duplicate(name))
@@ -1700,9 +1704,11 @@ def restyle_presets_page(ui, app) -> None:
     info_btn.setToolTip(
         "Standard — built-in quality ladder (immutable).\n"
         "Custom — your saved Video / Audio / Export recipes.\n"
+        "Create… opens the mini-editor (does not change the live panel).\n"
+        "Save as new snapshots the current panel.\n"
         "Apply from here or pick either kind in Video Settings → Quality Preset.\n"
         "Star Custom rows to pin favourites. Expand a Custom row for details.\n"
-        "▾ on Custom: Update / Rename / Duplicate / Delete."
+        "▾ on Custom: Edit / Update / Rename / Duplicate / Delete."
     )
     info_btn.setStyleSheet(
         with_tooltip_style(
@@ -1766,8 +1772,24 @@ def restyle_presets_page(ui, app) -> None:
         hover_border="#b29ae7",
         pressed_bg="#3a324a",
     )
-    btn_save.setToolTip("Save the current Video / Audio / Export panel as a new named preset.")
+    btn_save.setToolTip(
+        "Snapshot the current Video / Audio / Export panel as a named preset."
+    )
     ui.btn_preset_save = btn_save
+
+    btn_create = _save_as_like_btn(
+        "Create…",
+        bg="#303030",
+        fg="#f0f0f0",
+        border="#4a4a4a",
+        hover_bg="#3a3a3a",
+        hover_border="#6b5a8e",
+        pressed_bg="#262626",
+    )
+    btn_create.setToolTip(
+        "Open the preset mini-editor — build a recipe without changing the live panel."
+    )
+    ui.btn_preset_create = btn_create
 
     name_block = QWidget()
     name_lay = QVBoxLayout(name_block)
@@ -1778,6 +1800,7 @@ def restyle_presets_page(ui, app) -> None:
     create_row.setContentsMargins(0, 0, 0, 0)
     create_row.setSpacing(8)
     create_row.addWidget(name_edit, 1)
+    create_row.addWidget(btn_create, 0)
     create_row.addWidget(btn_save, 0)
     name_lay.addLayout(create_row)
     root.addWidget(_content_width_wrap(name_block))
@@ -1811,6 +1834,9 @@ def restyle_presets_page(ui, app) -> None:
     root.addWidget(status)
 
     btn_save.clicked.connect(lambda: getattr(app, "save_export_preset_from_ui", lambda: None)())
+    btn_create.clicked.connect(
+        lambda: getattr(app, "create_export_preset_in_editor", lambda: None)()
+    )
     preset_list.itemSelectionChanged.connect(
         lambda: getattr(app, "_on_export_preset_selection_changed", lambda: None)()
     )

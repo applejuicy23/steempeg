@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -328,7 +329,10 @@ class SteempegDialog(QDialog):
 
         self._card = _DialogCard(self, radius=_CARD_RADIUS_PX, fill=bar_color)
         self._card.setObjectName("SteempegDialogCard")
-        outer.addWidget(self._card)
+        self._card.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        outer.addWidget(self._card, 1)
 
         card_layout = QVBoxLayout(self._card)
         card_layout.setContentsMargins(0, 0, 0, 0)

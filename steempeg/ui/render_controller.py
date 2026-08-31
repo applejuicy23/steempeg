@@ -2637,7 +2637,10 @@ class RenderMixin:
             lay = parent.layout() if parent is not None else None
             if lay is not None:
                 lay.removeWidget(neo)
-            neo.setParent(None)
+            else:
+                from steempeg.ui.portable.sheets import _reparent_borrowed
+
+                _reparent_borrowed(neo)
         garage.layout().addWidget(neo)
         neo.hide()
 
@@ -2655,12 +2658,12 @@ class RenderMixin:
         dash = getattr(self, "render_dashboard", None)
 
         # Detach from garage / stale parent — always re-dock into bottom_v_wrap.
+        # No setParent(None): that maps a brief top-level HWND at (0,0).
         parent = neo.parentWidget()
         if parent is not None:
             prev_lay = parent.layout()
             if prev_lay is not None:
                 prev_lay.removeWidget(neo)
-            neo.setParent(None)
 
         insert_at = 0
         if dash is not None:
@@ -5505,6 +5508,7 @@ class RenderMixin:
                 on_toggle_fav=self.toggle_export_preset_favourite_from_ui,
                 on_toggle_expand=self._toggle_export_preset_row_expanded,
                 on_apply=self.apply_export_preset_to_panel,
+                on_edit=self.edit_export_preset_in_editor,
                 on_update=self.update_export_preset_from_ui,
                 on_rename=self.rename_export_preset_from_ui,
                 on_duplicate=self.duplicate_export_preset_from_ui,
@@ -5664,6 +5668,47 @@ class RenderMixin:
         if dlg.exec() != dlg.DialogCode.Accepted:
             return None
         return (edit.text() or "").strip() or None
+
+    def create_export_preset_in_editor(self) -> None:
+        """Open the mini-editor to author a new Custom preset."""
+        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
+
+        key = open_preset_mini_editor(self)
+        if not key:
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
+        self._set_preset_status(f"Created “{key}” in the mini-editor.")
+
+    def edit_export_preset_in_editor(self, name: str | None = None) -> None:
+        """Open the mini-editor for an existing Custom preset."""
+        from steempeg.ui.message_dialog import steempeg_warning
+        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
+
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Edit preset",
+                "Select a saved Custom preset in the list first.",
+            )
+            return
+        key = open_preset_mini_editor(self, edit_name=selected)
+        if not key:
+            return
+        expanded = self._export_preset_expanded_names()
+        if selected in expanded and key != selected:
+            expanded.discard(selected)
+            expanded.add(key)
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
+        self._set_preset_status(f"Updated “{key}” in the mini-editor.")
 
     def save_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import load_presets_map, save_preset
@@ -5836,7 +5881,13 @@ class RenderMixin:
             self._set_preset_status(f"Removed “{selected}” from favourites.")
 
     def apply_export_preset_to_panel(self, name: str | None = None) -> None:
+        from dataclasses import replace
+
         from steempeg.render.export_presets import get_preset_settings
+        from steempeg.render.quality_presets import (
+            resolve_fps_for_source,
+            resolve_quality_for_source,
+        )
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
@@ -5857,6 +5908,23 @@ class RenderMixin:
             )
             return
         self._select_export_preset_by_name(preset_name)
+
+        src_h = int(getattr(self, "current_orig_height", 0) or 0)
+        src_fps = int(getattr(self, "current_orig_fps", 0) or 0)
+        orig_q = settings.quality_text or ""
+        resolved_q = resolve_quality_for_source(
+            settings.quality_text,
+            src_h,
+            fallback=getattr(settings, "quality_fallback", None) or "Original",
+        )
+        resolved_fps = resolve_fps_for_source(settings.fps_text, src_fps)
+        if resolved_q != settings.quality_text or resolved_fps != settings.fps_text:
+            settings = replace(
+                settings,
+                quality_text=resolved_q,
+                fps_text=resolved_fps,
+            )
+
         # One summary rebuild at the end — not once per combo signal.
         self._applying_export_preset = True
         try:
@@ -5865,7 +5933,12 @@ class RenderMixin:
             self._set_active_custom_preset(preset_name)
         finally:
             self._applying_export_preset = False
-        self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
+        if resolved_q != orig_q:
+            self._set_preset_status(
+                f"Applied “{preset_name}” (quality → {resolved_q} for this clip)."
+            )
+        else:
+            self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
         self._persist_render_settings_quiet()
 
     # --- Active Custom preset checkmark (Quality Preset combo) ---------------

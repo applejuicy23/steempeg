@@ -81,13 +81,44 @@ class MainWindow(_WindowBase):
             # Portable (and Desktop) can keep WS_EX_TOPMOST after a focus flash.
             # While TOPMOST, Explorer/browsers open *under* us and we may stay
             # ApplicationActive — so applicationStateChanged never clears it.
+            # Defer one tick: on dialog open activeWindow() is often still None
+            # mid-ActivationChange, so a sync check wrongly ran the full sweep
+            # and buried the new SteempegDialog under the shell.
             if sys.platform == "win32" and not self.isActiveWindow():
-                try:
-                    from steempeg.infra.window_focus import on_shell_lost_foreground
+                def _after_shell_deactivated(win=self) -> None:
+                    try:
+                        if win.isActiveWindow():
+                            return
+                        from PySide6.QtCore import Qt
+                        from PySide6.QtWidgets import QApplication
 
-                    on_shell_lost_foreground(self)
-                except Exception:
-                    pass
+                        from steempeg.infra.window_focus import (
+                            on_shell_internal_dialog_focus,
+                            on_shell_lost_foreground,
+                            should_skip_hwnd_ops_for_foreground,
+                            steempeg_internal_dialog_active,
+                        )
+
+                        # Snipping / Start / Search — do not touch HWND z-order.
+                        if should_skip_hwnd_ops_for_foreground():
+                            return
+                        app = QApplication.instance()
+                        # Focus left the process entirely → never raise ourselves.
+                        if (
+                            app is not None
+                            and app.applicationState()
+                            != Qt.ApplicationState.ApplicationActive
+                        ):
+                            on_shell_lost_foreground(win)
+                            return
+                        if steempeg_internal_dialog_active():
+                            on_shell_internal_dialog_focus(win)
+                        else:
+                            on_shell_lost_foreground(win)
+                    except Exception:
+                        pass
+
+                QTimer.singleShot(0, _after_shell_deactivated)
         super().changeEvent(event)
 
     def hideEvent(self, event):

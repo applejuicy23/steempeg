@@ -2445,9 +2445,12 @@ def show_settings_dialog(app) -> None:
     app._app_settings_open = True
     app._deck_app_settings_focus_idx = 0
     try:
-        from steempeg.input.deck_navigation import reset_app_settings_deck_focus
+        from steempeg.ui.settings_prefs import deck_controls_enabled
 
-        QTimer.singleShot(0, lambda: reset_app_settings_deck_focus(app))
+        if deck_controls_enabled(app=app):
+            from steempeg.input.deck_navigation import reset_app_settings_deck_focus
+
+            QTimer.singleShot(0, lambda: reset_app_settings_deck_focus(app))
     except Exception:
         pass
     try:
@@ -2456,6 +2459,12 @@ def show_settings_dialog(app) -> None:
         app._app_settings_open = False
         if getattr(app, "_app_settings_dlg", None) is dlg:
             app._app_settings_dlg = None
+        try:
+            from steempeg.input.deck_navigation import hide_deck_focus_ring
+
+            hide_deck_focus_ring(app)
+        except Exception:
+            pass
         # Modal buttons keep PointingHand on the cursor stack until destroyed.
         # Strip them now, then resync after deleteLater so Qt re-queries a live widget.
         try:

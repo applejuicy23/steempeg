@@ -2322,11 +2322,23 @@ class PlayerMixin:
                     pass
             if sys.platform == "win32":
                 try:
-                    from steempeg.infra.window_focus import on_shell_lost_foreground
+                    from steempeg.infra.window_focus import (
+                        on_shell_lost_foreground,
+                        should_skip_hwnd_ops_for_foreground,
+                    )
 
-                    on_shell_lost_foreground(self.ui)
+                    # ApplicationInactive = OS focus left Steempeg (Snipping Tool,
+                    # Start, Alt-Tab, …). Never raise dialogs here — that aborted
+                    # snips; Start + FRAMECHANGED used to orphan the mpv embed.
+                    if not should_skip_hwnd_ops_for_foreground():
+                        on_shell_lost_foreground(self.ui)
                 except Exception:
                     pass
+        else:
+            # Back from Start / Alt-Tab — re-seat the wid= surface if DWM moved it.
+            if sys.platform == "win32":
+                QTimer.singleShot(0, self._reassert_mpv_embed_after_focus)
+                QTimer.singleShot(80, self._reassert_mpv_embed_after_focus)
 
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
@@ -2344,6 +2356,30 @@ class PlayerMixin:
                 # Force-wake the panel so it doesn't end up in a coma!
                 if hasattr(self, 'wake_up_fullscreen_controls'):
                     self.wake_up_fullscreen_controls()
+
+    def _reassert_mpv_embed_after_focus(self) -> None:
+        """Force mpv wid= child back into video_container geometry after focus loss."""
+        if sys.platform != "win32":
+            return
+        wrapper = getattr(self, "mpv_wrapper", None)
+        if wrapper is None:
+            return
+        try:
+            wrapper._last_video_rect = None
+            if hasattr(wrapper, "update_geometry"):
+                wrapper.update_geometry()
+        except RuntimeError:
+            return
+        except Exception:
+            pass
+        screen = getattr(self, "mpv_screen", None)
+        if screen is not None:
+            try:
+                from steempeg.infra.window_focus import mark_embed_noactivate
+
+                mark_embed_noactivate(screen)
+            except Exception:
+                pass
 
     def wake_up_fullscreen_controls(self):
         """ Restores mouse arrow visibility and maps HUD controls layer on motion. """
@@ -2754,14 +2790,39 @@ class PlayerMixin:
             self.was_playing_before_drag = False
 
     def on_timeline_seek(self, position_ms):
-        """ Commands MPV to jump. """
+        """Queue an absolute seek — coalesce bursts so ±15s spam cannot teleport."""
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
             return
-        if self._safe_mpv_seek(position_ms / 1000.0):
-            self._ignore_playback_stall(0.6)
+        self._pending_seek_ms = int(position_ms)
+        self._ignore_playback_stall(0.8)
+        timer = getattr(self, "_seek_coalesce_timer", None)
+        if timer is None:
+            timer = QTimer(self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._flush_pending_timeline_seek)
+            self._seek_coalesce_timer = timer
+        # Restart on every jump — only the latest target hits mpv.
+        timer.start(55)
+
+    def _flush_pending_timeline_seek(self) -> None:
+        ms = getattr(self, "_pending_seek_ms", None)
+        if ms is None:
+            return
+        self._pending_seek_ms = None
+        if self._safe_mpv_seek(ms / 1000.0):
+            self._ignore_playback_stall(0.8)
+            # Keep stick ownership until demux catches the final hop.
+            canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
+            if canvas is not None:
+                canvas.user_seek_lock_time = time.time() + 0.45
 
     def on_timeline_release(self):
-        """ Triggered when the user releases the mouse button after dragging. """
+        """Triggered when the user releases the mouse button after dragging."""
+        # Flush coalesced seek immediately so release lands on the scrub point.
+        timer = getattr(self, "_seek_coalesce_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            self._flush_pending_timeline_seek()
         if not self._mpv_has_media():
             return
         try:
