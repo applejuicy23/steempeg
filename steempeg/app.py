@@ -1176,6 +1176,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         return False
 
                     def _apply_mask(self):
+                        if getattr(self, "_suspended", False):
+                            return
                         obj = self._target
                         if obj is None or obj.width() <= 0 or obj.height() <= 0:
                             return
@@ -3784,10 +3786,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def _refresh_ui_theme_surfaces(self, *, preview: bool = False) -> None:
         """Re-tint major chrome widgets after a UI theme switch (no layout/mask changes)."""
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QColor, QPalette
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.design_tokens import with_tooltip_style
-        from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
 
         # Clip info is built once at open — close so the next show picks up tokens.
         clip_info = getattr(self, "_clip_info_popup", None)
@@ -3798,55 +3798,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 pass
             self._clip_info_popup = None
 
-        p = ut.active_palette()
+        from steempeg.ui.render_panel import apply_neo_shell_theme_chrome
 
-        neo = getattr(self, "neo_wrapper", None)
-        if neo is not None:
-            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
-
-        scroll = getattr(self, "right_scroll", None)
-        if scroll is not None:
-            scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
-            from steempeg.ui.widgets.vertical_scrollbar import (
-                ensure_steempg_vertical_scrollbar,
-                settings_scrollbar_chrome,
-            )
-
-            ensure_steempg_vertical_scrollbar(
-                scroll, chrome=settings_scrollbar_chrome()
-            )
-            vp = scroll.viewport()
-            if vp is not None:
-                vp.setAutoFillBackground(True)
-                pal = vp.palette()
-                qc = QColor(p.bg_settings_panel)
-                for group in (
-                    QPalette.ColorGroup.Active,
-                    QPalette.ColorGroup.Inactive,
-                    QPalette.ColorGroup.Disabled,
-                ):
-                    pal.setColor(group, QPalette.ColorRole.Window, qc)
-                    pal.setColor(group, QPalette.ColorRole.Base, qc)
-                vp.setPalette(pal)
-
-        if hasattr(self.ui, "settings_tabs"):
-            self.ui.settings_tabs.setStyleSheet(
-                ut.neo_settings_tabs_stylesheet(settings_panel_stylesheet())
-            )
-            for i in range(self.ui.settings_tabs.count()):
-                page = self.ui.settings_tabs.widget(i)
-                if page is None:
-                    continue
-                obj = page.objectName()
-                if obj:
-                    page.setStyleSheet(ut.neo_tab_page_stylesheet(obj))
-                else:
-                    page.setStyleSheet(
-                        f"background-color: {p.bg_settings_panel}; border: none;"
-                    )
-
-        for btn in getattr(self, "neo_nav_buttons", []) or []:
-            btn.setStyleSheet(ut.neo_nav_pill_stylesheet())
+        apply_neo_shell_theme_chrome(self)
 
         header = getattr(self, "player_header_frame", None)
         if header is not None:
@@ -3998,6 +3952,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if sheet is not None and hasattr(sheet, "apply_ui_theme_chrome"):
             try:
                 sheet.apply_ui_theme_chrome()
+            except Exception:
+                pass
+        desk_rs = getattr(self, "_desktop_render_settings_dlg", None)
+        if desk_rs is not None and hasattr(desk_rs, "apply_ui_theme_chrome"):
+            try:
+                desk_rs.apply_ui_theme_chrome()
             except Exception:
                 pass
 

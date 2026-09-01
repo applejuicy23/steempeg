@@ -296,6 +296,8 @@ def restore_portable_neo_chrome(app) -> None:
         if hasattr(app, attr):
             delattr(app, attr)
 
+    restore_neo_dock_masks(app)
+
     # Undo Deck content shrink — restore shell settings column.
     ui = getattr(app, "ui", None)
     if ui is not None:
@@ -315,14 +317,30 @@ def expand_neo_for_floating_dialog(neo, dialog) -> None:
     Do **not** set ``minimumSize`` to the dialog content box: that fights the
     dialog layout, overlaps neo-nav hitboxes (hover on A paints B), and
     squashes settings chrome.
+
+    Suspend only the outer ``neo_wrapper`` mask while floating. Translucent
+    frameless dialogs used to desync nav hit-tests against a masked wrapper;
+    opaque float dialogs are fine without it. The settings scroll's left-only
+    mask (nav↔content divider curve) does not touch the nav rail and must stay
+    active — clearing it leaves square TL/BL corners on Windows.
     """
     if neo is None or dialog is None:
         return
-    from PySide6.QtWidgets import QScrollArea, QTabWidget
+    from PySide6.QtWidgets import QPushButton, QScrollArea, QTabWidget
 
     neo.setMinimumSize(0, 0)
     neo.setMaximumSize(16777215, 16777215)
     neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    app = getattr(dialog, "_app", None)
+    if app is not None:
+        wrapper_mask = getattr(app, "_neo_wrapper_mask", None)
+        if wrapper_mask is not None:
+            wrapper_mask._suspended = True
+    try:
+        neo.clearMask()
+    except RuntimeError:
+        pass
 
     for scroll in neo.findChildren(QScrollArea):
         if scroll.objectName() == "neo_settings_scroll":
@@ -339,26 +357,61 @@ def expand_neo_for_floating_dialog(neo, dialog) -> None:
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
 
-    # Keep the nav rail from being width-crushed when the sheet opens.
+    # Keep the nav rail from being width-crushed; raise above the scroll so a
+    # stale overlap cannot steal clicks from the pills.
     sidebar = neo.findChild(QWidget, "neo_sidebar")
     if sidebar is not None:
         try:
-            if sidebar.minimumWidth() < 180:
-                sidebar.setMinimumWidth(180)
+            if sidebar.width() > 0:
+                sidebar.setFixedWidth(max(180, int(sidebar.width())))
+            elif sidebar.minimumWidth() < 180:
+                sidebar.setFixedWidth(220)
             sidebar.setSizePolicy(
                 QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
             )
-            from PySide6.QtWidgets import QPushButton
-
+            sidebar.raise_()
             for btn in sidebar.findChildren(QPushButton):
-                btn.setMinimumHeight(40)
+                # Fixed height — min-only still let a tight layout overlap rows.
+                btn.setFixedHeight(44)
                 btn.setSizePolicy(
                     QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
                 )
+                try:
+                    btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+                except Exception:
+                    pass
         except RuntimeError:
             pass
 
+    if app is not None:
+        corner_mask = getattr(app, "corner_mask", None)
+        if corner_mask is not None:
+            corner_mask._suspended = False
+            timer = getattr(corner_mask, "_timer", None)
+            if timer is not None:
+                try:
+                    timer.start(0)
+                except RuntimeError:
+                    pass
+
     neo.updateGeometry()
+
+
+def restore_neo_dock_masks(app) -> None:
+    """Re-enable neo corner masks after floating Render Settings returns neo."""
+    if app is None:
+        return
+    for attr in ("_neo_wrapper_mask", "corner_mask"):
+        mask = getattr(app, attr, None)
+        if mask is None:
+            continue
+        mask._suspended = False
+        timer = getattr(mask, "_timer", None)
+        if timer is not None:
+            try:
+                timer.start(0)
+            except RuntimeError:
+                pass
 
 
 def persist_render_settings(app) -> bool:
@@ -784,6 +837,15 @@ class PortableRenderSettingsDialog(SteempegDialog):
     def apply_ui_theme_chrome(self) -> None:
         """Retint dialog chrome + Queue rail + Render strip when UI theme changes."""
         super().apply_ui_theme_chrome()
+        from steempeg.ui.render_panel import (
+            apply_neo_shell_theme_chrome,
+            apply_render_panel_theme_chrome,
+        )
+
+        apply_neo_shell_theme_chrome(self._app)
+        ui = getattr(self._app, "ui", None)
+        if ui is not None:
+            apply_render_panel_theme_chrome(ui)
         strip = getattr(self, "_strip", None)
         if strip is not None and hasattr(strip, "apply_ui_theme_chrome"):
             try:

@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QLabel, QSizePolicy, QWidget
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.message_dialog import dialog_theme
@@ -53,6 +54,99 @@ def _raise_floating_dialog(dlg) -> None:
             pass
 
 
+class _NeoNavHitGuard(QObject):
+    """Route neo-nav clicks by OS cursor geometry, not Qt's broken hit-test.
+
+    Under translucent frameless dialogs on Windows, mouse events can land on the
+    wrong pill (hover Video → activate Source / no-op). ``QCursor.pos()`` stays
+    correct — map that into the sidebar and activate the button whose rect
+    actually contains the pointer.
+    """
+
+    def __init__(self, dialog: QWidget, app):
+        super().__init__(dialog)
+        self._app = app
+        self._hover = None
+        targets = []
+        neo = getattr(app, "neo_wrapper", None)
+        sidebar = getattr(app, "_neo_sidebar", None)
+        scroll = getattr(app, "right_scroll", None)
+        for w in (dialog, neo, sidebar, scroll):
+            if w is not None:
+                targets.append(w)
+        for btn in getattr(app, "neo_nav_buttons", []) or []:
+            targets.append(btn)
+        for w in targets:
+            try:
+                w.setMouseTracking(True)
+                w.installEventFilter(self)
+            except RuntimeError:
+                continue
+
+    def _button_at_cursor(self):
+        sidebar = getattr(self._app, "_neo_sidebar", None)
+        if sidebar is None:
+            return None
+        try:
+            if not sidebar.isVisible():
+                return None
+            local = sidebar.mapFromGlobal(QCursor.pos())
+            if not sidebar.rect().contains(local):
+                return None
+            for btn in getattr(self._app, "neo_nav_buttons", []) or []:
+                if btn.geometry().contains(local):
+                    return btn
+        except RuntimeError:
+            return None
+        return None
+
+    def _sync_hover(self, btn) -> None:
+        if btn is self._hover:
+            return
+        prev = self._hover
+        self._hover = btn
+        for b in getattr(self._app, "neo_nav_buttons", []) or []:
+            try:
+                b.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, b is btn)
+                b.update()
+            except RuntimeError:
+                continue
+        if prev is not None:
+            try:
+                prev.update()
+            except RuntimeError:
+                pass
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        et = event.type()
+        if et in (
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverMove,
+            QEvent.Type.Enter,
+            QEvent.Type.Leave,
+        ):
+            self._sync_hover(self._button_at_cursor())
+            return False
+        if et != QEvent.Type.MouseButtonPress:
+            return False
+        try:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+        except Exception:
+            return False
+        btn = self._button_at_cursor()
+        if btn is None:
+            return False
+        # Wrong widget received the press — redirect to the geometric target.
+        if obj is not btn:
+            try:
+                btn.click()
+            except RuntimeError:
+                return False
+            return True
+        return False
+
+
 class DesktopRenderSettingsDialog(SteempegDialog):
     """Non-modal window that borrows the docked neo export panel.
 
@@ -68,13 +162,19 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             parent or getattr(app, "ui", None),
             show_minimize=True,
             show_maximize=False,
-            content_margins=(12, 10, 12, 12),
+            content_margins=(8, 8, 8, 8),
             **theme,
         )
         self._app = app
         self._neo = getattr(app, "neo_wrapper", None)
         self._home = (None, None, -1, "orphan")
         self._returned = False
+        self._neo_nav_hit_guard = None
+
+        # Opaque HWND keeps nav hit-tests correct; body fill matches neo card.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAutoFillBackground(True)
+        self._apply_surface_chrome()
 
         # Neo borrow can touch winId before geometry is set — keep the dialog
         # off-screen until warm-map show() (no Aero flash at 0,0).
@@ -192,8 +292,12 @@ class DesktopRenderSettingsDialog(SteempegDialog):
         except RuntimeError:
             pass
         self._reveal_neo_chrome()
+        self._apply_surface_chrome()
+        if self._neo_nav_hit_guard is None and self._neo is not None:
+            self._neo_nav_hit_guard = _NeoNavHitGuard(self, self._app)
         QTimer.singleShot(0, self._sync_floating_neo_geometry)
         QTimer.singleShot(0, lambda: _raise_floating_dialog(self))
+        QTimer.singleShot(0, _clear_stuck_cursor)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -343,6 +447,12 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 _return_widget(self._neo, parent, layout, index, kind, visible=True)
         except Exception:
             _log.exception("Failed returning neo_wrapper after Render Settings close")
+        try:
+            from steempeg.ui.portable.sheets import restore_neo_dock_masks
+
+            restore_neo_dock_masks(app)
+        except Exception:
+            pass
         if hasattr(self._app, "fit_settings_tab_to_page"):
             try:
                 self._app.fit_settings_tab_to_page()
@@ -388,13 +498,30 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 except Exception:
                     pass
 
+    def _apply_surface_chrome(self) -> None:
+        """Dialog shell + borrowed neo — TrueDark must not leave Default gray voids."""
+        from steempeg.ui import ui_theme as ut
+        from steempeg.ui.render_panel import (
+            apply_neo_shell_theme_chrome,
+            apply_render_panel_theme_chrome,
+        )
+
+        p = ut.active_palette()
+        fill = p.bg_settings_panel
+        self._bg_color = fill
+        if hasattr(self, "_apply_card_chrome"):
+            # Do not call setStyleSheet again here — that wipes SteempegDialogContent /
+            # QScrollArea fills and Windows paints Default mid-gray through.
+            self._apply_card_chrome(p.chrome_title_bar, fill)
+        if self._app is not None:
+            apply_neo_shell_theme_chrome(self._app)
+            ui = getattr(self._app, "ui", None)
+            if ui is not None:
+                apply_render_panel_theme_chrome(ui)
+
     def apply_ui_theme_chrome(self) -> None:
         super().apply_ui_theme_chrome()
-        from steempeg.ui.render_panel import apply_render_panel_theme_chrome
-
-        ui = getattr(self._app, "ui", None)
-        if ui is not None:
-            apply_render_panel_theme_chrome(ui)
+        self._apply_surface_chrome()
 
 
 def toggle_desktop_render_settings(app) -> None:
