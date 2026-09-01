@@ -33,20 +33,6 @@ from steempeg.ui.design_tokens import ACCENT_PRIMARY
 
 _TRANSIENT_STATUS_MS = 3500
 
-_DEFAULT_CLIP_SESSION = {
-    "is_trim_mode": False,
-    "trim_start_ms": 0,
-    "trim_end_ms": 0,
-    "zoom_level": 1.0,
-    "scroll_x": 0,
-    "container": "MP4",
-    "codec_text": "H.264 (AVC)",
-    "audio_format": "AAC",
-    "output_preset": "Custom",
-    "audio_only": False,
-    "mute_audio": False,
-}
-
 
 def _format_mbit(kbps: float | int) -> str:
     """Show bitrate as Mbit/s with one decimal (e.g. 22.3, 55, 0.3 Mbit)."""
@@ -80,6 +66,7 @@ from steempeg.render import bitrate
 from steempeg.render.output_formats import (
     AUDIO_FORMATS,
     CONTAINERS,
+    DEFAULT_CODEC_TEXT,
     KNOWN_OUTPUT_EXTENSIONS,
     OUTPUT_PRESETS,
     VIDEO_CODEC_ITEMS,
@@ -89,6 +76,21 @@ from steempeg.render.output_formats import (
     output_extension,
     resolve_video_encoder,
 )
+
+_DEFAULT_CLIP_SESSION = {
+    "is_trim_mode": False,
+    "trim_start_ms": 0,
+    "trim_end_ms": 0,
+    "zoom_level": 1.0,
+    "scroll_x": 0,
+    "container": "MP4",
+    "codec_text": DEFAULT_CODEC_TEXT,
+    "audio_format": "AAC",
+    "output_preset": "Custom",
+    "audio_only": False,
+    "mute_audio": False,
+}
+
 from steempeg.render.encode_speed import (
     ENCODE_SPEED_OPTIONS,
     encode_speed_hint,
@@ -427,7 +429,10 @@ class RenderMixin:
                     continue
                 ui.combo_codec.addItem(item)
             if ui.combo_codec.count():
-                ui.combo_codec.setCurrentIndex(min(1, ui.combo_codec.count() - 1))
+                idx = ui.combo_codec.findText(DEFAULT_CODEC_TEXT)
+                if idx < 0:
+                    idx = min(1, ui.combo_codec.count() - 1)
+                ui.combo_codec.setCurrentIndex(idx)
 
         if hasattr(ui, "combo_audio_format"):
             ui.combo_audio_format.clear()
