@@ -172,7 +172,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         
         # Classic single-column width (~29.1). Wide shells switch to a 3-column
         # arrangement via _relayout_sections — block internals stay unchanged.
-        self.setFixedWidth(460)
+        self.setFixedWidth(460) 
         self._three_col = False
         self._last_packed_h = 0
         self._popup_avail_h = 0
@@ -379,7 +379,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         down_path = os.path.join(temp_dir, "smpeg_down.png").replace('\\', '/')
 
         pix = QPixmap(16, 16)
-
+        
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
@@ -412,8 +412,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             }
             QDateEdit:hover, QTimeEdit:hover { background-color: #404040; border: 2px solid #6b5a8e; }
             QDateEdit:focus, QTimeEdit:focus { background-color: #3a324a; border: 2px solid #b29ae7; }
-
-
+            
+            
             QDateEdit::drop-down {
                 subcontrol-origin: border;
                 subcontrol-position: top right;
@@ -442,7 +442,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             }
             QDateEdit::drop-down:hover, QTimeEdit::up-button:hover, QTimeEdit::down-button:hover { background-color: #6b5a8e; }
             QDateEdit::drop-down:pressed, QTimeEdit::up-button:pressed, QTimeEdit::down-button:pressed { background-color: #b29ae7; }
-
+            
 
             QTimeEdit::up-arrow {
                 image: url("UP_ARROW_PATH");
@@ -452,14 +452,14 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 image: url("DOWN_ARROW_PATH");
                 width: 10px; height: 10px;
             }
-
+            
 
             QCalendarWidget QWidget { alternate-background-color: #2d2d2d; background-color: #252525; color: white; }
             QCalendarWidget QToolButton { color: white; background-color: #383838; border-radius: 4px; padding: 2px; }
             QCalendarWidget QToolButton:hover { background-color: #6b5a8e; }
             QCalendarWidget QAbstractItemView:enabled { color: white; background-color: #252525; selection-background-color: #6b5a8e; selection-color: white; border-radius: 4px; }
         """.replace("<<FONT>>", tok.FONT_APP)
-
+        
         smart_input_style = raw_style.replace("UP_ARROW_PATH", up_path).replace("DOWN_ARROW_PATH", down_path)
         self._filter_date_arrow_up = up_path
         self._filter_date_arrow_down = down_path
@@ -1163,31 +1163,31 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self._relayout_sections()
 
     _PILL_BTN_STYLE = """
-        QPushButton {
-            background-color: #383838;
-            color: #aaaaaa;
-            border: 2px solid #444444;
-            border-radius: 10px;
+            QPushButton {
+                background-color: #383838;
+                color: #aaaaaa;
+                border: 2px solid #444444;
+                border-radius: 10px;
             font-family: <<FONT>>;
-            font-weight: bold;
-            font-size: 13px;
-            padding: 4px 12px;
-            min-height: 24px;
-        }
-        QPushButton:hover {
-            background-color: #404040;
-            color: #ffffff;
-            border: 2px solid #555555;
-        }
-        QPushButton:checked {
-            background-color: #404040;
-            color: #ffffff;
-            border: 2px solid #6b5a8e;
-        }
-        QPushButton:checked:hover {
-            background-color: #3a324a;
-            border: 2px solid #b29ae7;
-        }
+                font-weight: bold;
+                font-size: 13px;
+                padding: 4px 12px;
+                min-height: 24px;
+            }
+            QPushButton:hover {
+                background-color: #404040;
+                color: #ffffff;
+                border: 2px solid #555555;
+            }
+            QPushButton:checked {
+                background-color: #404040;
+                color: #ffffff;
+                border: 2px solid #6b5a8e;
+            }
+            QPushButton:checked:hover {
+                background-color: #3a324a;
+                border: 2px solid #b29ae7;
+            }
     """.replace("<<FONT>>", tok.FONT_APP)
 
     def set_content_max_height(self, max_px: int, *, relayout: bool = True) -> None:
@@ -1589,7 +1589,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.actual_max_dt = max_dt
         self.actual_min_sec = min_sec
         self.actual_max_sec = max_sec
-
+        
         if not clamp or stats['min_dt'] is None:
             return
 
@@ -1780,7 +1780,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
     def clear_filters(self):
         """ Resets all buttons and calendars to ACTUAL minimums. """
         self._is_gathering = True
-
+        
         for i in range(self.games_layout.count()):
             w = self.games_layout.itemAt(i).widget()
             if w:
@@ -1815,7 +1815,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.input_max_time.setTime(QTime(23, 59, 59))
         self.input_min_dur.setTime(self._sec_to_qtime(full_stats['min_sec']))
         self.input_max_dur.setTime(self._sec_to_qtime(full_stats['max_sec']))
-
+        
         self._is_gathering = False
         self.update_live_count()
         # Clear used to only reset pills until Apply — grid stayed filtered with
@@ -1924,7 +1924,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 sec = self._parse_row_duration(r_dur.text())
                 if sec < min_dur: show = False
                 if sec > max_dur: show = False
-
+            
             if show: count += 1
 
         self.btn_apply.setText(f"Apply Filters ({count})")
@@ -1933,7 +1933,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         """ LIGHTNING FAST FILTERING (NO SORTING, NO LAGS) """
         if not hasattr(self, 'app'): return
         table = self.app.ui.table_clips
-
+        
         table.setUpdatesEnabled(False)
 
         selected_games = self._get_checked_names(self.games_layout)

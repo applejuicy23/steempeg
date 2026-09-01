@@ -1833,7 +1833,7 @@ class LibraryMixin:
         menu.addSeparator()
         action_open = menu.addAction("📂 Open in folder")
         action_delete = menu.addAction("🗑️ Delete Clip" if count == 1 else f"🗑️ Delete Clips ({count})")
-
+        
         if count == 1:
             clip_path = clip_paths[0]
             action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
@@ -2763,7 +2763,7 @@ class LibraryMixin:
                 # Saving the index and visibility status
                 table_order[clip_path] = {'row': row, 'hidden': table.isRowHidden(row)}
 
-        # 2. Gently update grid elements
+        # 2. Gently update grid elements 
         for i in range(grid.count()):
             item = grid.item(i)
             clip_path = item.data(Qt.UserRole + 1)
@@ -2774,7 +2774,7 @@ class LibraryMixin:
                 # this as a ghost "000084" in the thumb area.)
                 item.setText(f"{info['row']:06d}")
                 item.setForeground(QBrush(QColor(0, 0, 0, 0)))
-                item.setData(Qt.UserRole, info['row'])
+                item.setData(Qt.UserRole, info['row']) 
                 hidden = info['hidden']
             item.setHidden(hidden)
         # 3. Qt's built-in ultra-fast sort
@@ -3270,7 +3270,7 @@ class LibraryMixin:
                         card = grid.itemWidget(gitem)
                         if isinstance(card, ClipCard):
                             card.set_date_footer(footer)
-                        break
+                            break
 
         # Rendered videos — reformat from file mtime (stored or live).
         rendered = getattr(self, "table_rendered", None)
@@ -4631,7 +4631,7 @@ class LibraryMixin:
 
         self.current_clip_duration_str = duration_str
         return size_str, duration_str
-
+    
     def _schedule_clip_folder_size_label(self, clip_path: str) -> None:
         """Measure folder size off the UI thread (can walk thousands of chunks)."""
         if not clip_path:
@@ -4696,13 +4696,13 @@ class LibraryMixin:
         """ Transforms rows from a hidden table into vibrant cards. """
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
-
+            
         # Items get destroyed below — drop the stale Shift anchor or range-select breaks.
         self._grid_anchor_item = None
         self._grid_anchor_index = -1
         self._clips_visual_selected_rows = set()
         self.grid_clips.clear()
-
+        
         for row in range(self.ui.table_clips.rowCount()):
             self._append_grid_card_for_row(row)
 
@@ -4860,7 +4860,7 @@ class LibraryMixin:
         if not hasattr(self, 'btn_filter_pill'): return
         if getattr(self, "_clips_scan_active", False):
             return
-
+        
         # 1. Forcefully destroy the old window to reset the Qt focus bug.
         if hasattr(self, 'filter_menu') and self.filter_menu:
             self.filter_menu.deleteLater()
@@ -4903,7 +4903,7 @@ class LibraryMixin:
         def get_sort_key(data):
             r = data['table_items']
             
-            if sort_idx == 0:
+            if sort_idx == 0: 
                 # Steam folder stamp (stable across Refresh); FS mtime only as fallback.
                 clip_path = r[0].data(Qt.UserRole) if r[0] else ""
                 return (
@@ -4918,7 +4918,7 @@ class LibraryMixin:
             if sort_idx in (3, 4): # TYPE
                 txt = r[1].text().lower() if r[1] else ""
                 return re.sub(r'[^a-zа-я0-9]', '', txt)
-
+                
             if sort_idx in (5, 6): # HEALTH
                 level = self._row_display_health_level(r[0]) if r[0] else health.ClipHealth.HEALTHY.value
                 rank = {
@@ -4942,7 +4942,7 @@ class LibraryMixin:
                 m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
                 s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
                 return h * 3600 + m * 60 + s
-
+                
             if sort_idx in (11, 12):  # FOLDER (library root / parent dir)
                 clip_path = r[0].data(Qt.UserRole) if r[0] else ""
                 roots = getattr(self, "clips_folders", None) or []
