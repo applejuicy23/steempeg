@@ -2332,9 +2332,14 @@ class PlayerMixin:
                     # snips; Start + FRAMECHANGED used to orphan the mpv embed.
                     if not should_skip_hwnd_ops_for_foreground():
                         on_shell_lost_foreground(self.ui)
+                    # mpv vo=gpu can re-steal Z-order on later presents without
+                    # changing GetForegroundWindow — keep tucking under FG while
+                    # inactive and a clip is loaded (idle has no present steal).
+                    self._start_zorder_watchdog()
                 except Exception:
                     pass
         else:
+            self._stop_zorder_watchdog()
             # Back from Start / Alt-Tab — re-seat the wid= surface if DWM moved it.
             if sys.platform == "win32":
                 QTimer.singleShot(0, self._reassert_mpv_embed_after_focus)
@@ -2357,11 +2362,67 @@ class PlayerMixin:
                 if hasattr(self, 'wake_up_fullscreen_controls'):
                     self.wake_up_fullscreen_controls()
 
+    def _start_zorder_watchdog(self) -> None:
+        """While inactive + clip loaded, periodically demote if we cover FG."""
+        if sys.platform != "win32":
+            return
+        timer = getattr(self, "_zorder_watchdog", None)
+        if timer is None:
+            parent = getattr(self, "ui", None) or self
+            timer = QTimer(parent)
+            timer.setInterval(250)
+            timer.timeout.connect(self._zorder_watchdog_tick)
+            self._zorder_watchdog = timer
+        if not timer.isActive():
+            timer.start()
+
+    def _stop_zorder_watchdog(self) -> None:
+        timer = getattr(self, "_zorder_watchdog", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    def _zorder_watchdog_tick(self) -> None:
+        """Demote shell under foreign FG if mpv present re-stacked us."""
+        if sys.platform != "win32":
+            self._stop_zorder_watchdog()
+            return
+        app = QApplication.instance()
+        if app is None or app.applicationState() == Qt.ApplicationState.ApplicationActive:
+            self._stop_zorder_watchdog()
+            return
+        # No clip / timeline off → mpv is not presenting; nothing to fight.
+        tl = getattr(self, "custom_timeline", None)
+        if tl is None or not tl.isEnabled():
+            return
+        if not getattr(self, "player", None):
+            return
+        try:
+            from steempeg.infra.window_focus import (
+                on_shell_lost_foreground,
+                should_skip_hwnd_ops_for_foreground,
+            )
+
+            if should_skip_hwnd_ops_for_foreground():
+                return
+            on_shell_lost_foreground(self.ui)
+        except Exception:
+            pass
+
     def _reassert_mpv_embed_after_focus(self) -> None:
         """Force mpv wid= child back into video_container geometry after focus loss."""
         if sys.platform != "win32":
             return
         wrapper = getattr(self, "mpv_wrapper", None)
+        screen = getattr(self, "mpv_screen", None)
+        if screen is not None:
+            try:
+                from steempeg.infra.window_focus import reseat_native_embed_child
+
+                # ClipCard QMenu / Explorer yield can detach the Win32 parent of
+                # the wid= child — SetParent before geometry or video stays afloat.
+                reseat_native_embed_child(screen)
+            except Exception:
+                pass
         if wrapper is None:
             return
         try:
@@ -2372,7 +2433,6 @@ class PlayerMixin:
             return
         except Exception:
             pass
-        screen = getattr(self, "mpv_screen", None)
         if screen is not None:
             try:
                 from steempeg.infra.window_focus import mark_embed_noactivate
@@ -2811,10 +2871,15 @@ class PlayerMixin:
         self._pending_seek_ms = None
         if self._safe_mpv_seek(ms / 1000.0):
             self._ignore_playback_stall(0.8)
-            # Keep stick ownership until demux catches the final hop.
+            # Guard PTS until demux catches the final coalesced hop (not the stick).
             canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
             if canvas is not None:
-                canvas.user_seek_lock_time = time.time() + 0.45
+                canvas.user_seek_guard_ms = float(ms)
+                playing = bool(getattr(canvas, "is_playing", False))
+                canvas.user_seek_lock_time = time.time() + (
+                    0.12 if playing else 0.45
+                )
+
 
     def on_timeline_release(self):
         """Triggered when the user releases the mouse button after dragging."""

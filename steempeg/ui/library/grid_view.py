@@ -154,7 +154,7 @@ class ClipCard(qtw.QWidget):
         self.thumb_label.setAttribute(qtc.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         # Transparent so baked corner alpha shows the panel behind, not a square fill.
         self.thumb_label.setStyleSheet("background-color: transparent; border: none;")
-        # top | mid | bottom | both — Round style only: shelf flush vs panel edges
+        # top | mid | bottom | both — SteempegUI shelf flush vs panel edges
         self._edge_role = "mid"
         self._thumb_raw: Optional[qtg.QPixmap] = None
 
@@ -365,7 +365,8 @@ class ClipCard(qtw.QWidget):
         return {
             "border": (tl, tr, br, bl),
             "thumb": (tl, tr, 0, 0),
-            "footer": (0, 0, fr if bl else 0, fr if br else 0),
+            # footer tuple is (tl, tr, br, bl) — soft radius tracks bottom corners.
+            "footer": (0, 0, fr if br else 0, fr if bl else 0),
         }
 
     def _corner_radii(self) -> tuple[int, int, int, int]:

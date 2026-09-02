@@ -3,154 +3,21 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QCursor
-from PySide6.QtWidgets import QLabel, QSizePolicy, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QLabel, QSizePolicy
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.message_dialog import dialog_theme
-from steempeg.ui.portable.sheets import (
-    _borrow_widget,
-    _clear_borrow_dont_show,
-    _return_widget,
-)
+from steempeg.ui.portable.sheets import _borrow_widget, _return_widget
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 _log = logging.getLogger(__name__)
-
-# v48 comfort size at 2K — neo sidebar + two Video Settings columns.
-_FLOAT_W = 980
-_FLOAT_H = 640
-_FLOAT_MIN_W = 720
-_FLOAT_MIN_H = 480
-
-
-def _clear_stuck_cursor() -> None:
-    from steempeg.ui.window_chrome import force_app_cursor_resync
-
-    try:
-        force_app_cursor_resync()
-    except Exception:
-        pass
-    QTimer.singleShot(0, force_app_cursor_resync)
-    QTimer.singleShot(50, force_app_cursor_resync)
-
-
-def _raise_floating_dialog(dlg) -> None:
-    """Keep modeless Render Settings above the shell (Windows TOPMOST demote race)."""
-    try:
-        from steempeg.infra.window_focus import prepare_shell_for_modeless_dialog
-
-        shell = dlg.parentWidget()
-        prepare_shell_for_modeless_dialog(shell, dlg)
-        QTimer.singleShot(
-            0, lambda: prepare_shell_for_modeless_dialog(shell, dlg)
-        )
-    except Exception:
-        try:
-            dlg.raise_()
-            dlg.activateWindow()
-        except RuntimeError:
-            pass
-
-
-class _NeoNavHitGuard(QObject):
-    """Route neo-nav clicks by OS cursor geometry, not Qt's broken hit-test.
-
-    Under translucent frameless dialogs on Windows, mouse events can land on the
-    wrong pill (hover Video → activate Source / no-op). ``QCursor.pos()`` stays
-    correct — map that into the sidebar and activate the button whose rect
-    actually contains the pointer.
-    """
-
-    def __init__(self, dialog: QWidget, app):
-        super().__init__(dialog)
-        self._app = app
-        self._hover = None
-        targets = []
-        neo = getattr(app, "neo_wrapper", None)
-        sidebar = getattr(app, "_neo_sidebar", None)
-        scroll = getattr(app, "right_scroll", None)
-        for w in (dialog, neo, sidebar, scroll):
-            if w is not None:
-                targets.append(w)
-        for btn in getattr(app, "neo_nav_buttons", []) or []:
-            targets.append(btn)
-        for w in targets:
-            try:
-                w.setMouseTracking(True)
-                w.installEventFilter(self)
-            except RuntimeError:
-                continue
-
-    def _button_at_cursor(self):
-        sidebar = getattr(self._app, "_neo_sidebar", None)
-        if sidebar is None:
-            return None
-        try:
-            if not sidebar.isVisible():
-                return None
-            local = sidebar.mapFromGlobal(QCursor.pos())
-            if not sidebar.rect().contains(local):
-                return None
-            for btn in getattr(self._app, "neo_nav_buttons", []) or []:
-                if btn.geometry().contains(local):
-                    return btn
-        except RuntimeError:
-            return None
-        return None
-
-    def _sync_hover(self, btn) -> None:
-        if btn is self._hover:
-            return
-        prev = self._hover
-        self._hover = btn
-        for b in getattr(self._app, "neo_nav_buttons", []) or []:
-            try:
-                b.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, b is btn)
-                b.update()
-            except RuntimeError:
-                continue
-        if prev is not None:
-            try:
-                prev.update()
-            except RuntimeError:
-                pass
-
-    def eventFilter(self, obj, event):  # noqa: N802
-        et = event.type()
-        if et in (
-            QEvent.Type.MouseMove,
-            QEvent.Type.HoverMove,
-            QEvent.Type.Enter,
-            QEvent.Type.Leave,
-        ):
-            self._sync_hover(self._button_at_cursor())
-            return False
-        if et != QEvent.Type.MouseButtonPress:
-            return False
-        try:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return False
-        except Exception:
-            return False
-        btn = self._button_at_cursor()
-        if btn is None:
-            return False
-        # Wrong widget received the press — redirect to the geometric target.
-        if obj is not btn:
-            try:
-                btn.click()
-            except RuntimeError:
-                return False
-            return True
-        return False
 
 
 class DesktopRenderSettingsDialog(SteempegDialog):
     """Non-modal window that borrows the docked neo export panel.
 
-    Minimize in the title bar (no maximize — fixed v48 footprint). Closing
+    Minimize in the title bar (no maximize — keep a fixed usable size). Closing
     (or toggling the dash button) returns neo to the main shell (hidden again
     while Like a Portable).
     """
@@ -162,29 +29,21 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             parent or getattr(app, "ui", None),
             show_minimize=True,
             show_maximize=False,
-            content_margins=(8, 8, 8, 8),
+            content_margins=(12, 10, 12, 12),
             **theme,
         )
         self._app = app
         self._neo = getattr(app, "neo_wrapper", None)
         self._home = (None, None, -1, "orphan")
         self._returned = False
-        self._neo_nav_hit_guard = None
 
-        # Opaque HWND keeps nav hit-tests correct; body fill matches neo card.
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAutoFillBackground(True)
-        self._apply_surface_chrome()
-
-        # Neo borrow can touch winId before geometry is set — keep the dialog
-        # off-screen until warm-map show() (no Aero flash at 0,0).
-        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        self.setWindowOpacity(0.0)
-
+        # Register before borrow/sync — otherwise portable-like dock chrome parks
+        # neo back into the garage and this window stays empty black.
         app._desktop_render_settings_dlg = self
 
-        self.setMinimumSize(_FLOAT_MIN_W, _FLOAT_MIN_H)
-        self.resize(_FLOAT_W, _FLOAT_H)
+        self.setMinimumSize(720, 480)
+        self.resize(980, 640)
+        # Modeless — user can keep Start / Pause / Cancel on the dash.
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
 
@@ -193,27 +52,27 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             empty.setStyleSheet(f"color: {tok.TEXT_MUTED};")
             self.content_layout.addWidget(empty, 1)
         else:
-            # Borrow without setParent(None) — orphan HWND was the Aero flash.
-            try:
-                self._neo.hide()
-            except RuntimeError:
-                pass
+            # Undo dock collapse so neo can fill this window.
             self._neo.setMaximumHeight(16777215)
             self._neo.setMinimumHeight(0)
             self._home = _borrow_widget(self._neo)
+            self._neo.show()
             self._neo.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
             tabs = getattr(getattr(app, "ui", None), "settings_tabs", None)
             if tabs is not None:
+                tabs.show()
                 from steempeg.ui.settings_prefs import apply_default_render_tab
 
                 apply_default_render_tab(app)
-            from steempeg.ui.portable.sheets import expand_neo_for_floating_dialog
-
-            expand_neo_for_floating_dialog(self._neo, self)
+            for name in ("_neo_sidebar", "right_scroll"):
+                w = getattr(app, name, None)
+                if w is not None:
+                    w.show()
+            if hasattr(app, "fit_settings_tab_to_page"):
+                QTimer.singleShot(0, app.fit_settings_tab_to_page)
             self.content_layout.addWidget(self._neo, 1)
-            # Stay hidden until the dialog itself is mapped (showEvent).
 
         try:
             self._title_bar.close_requested.disconnect(self.reject)
@@ -221,176 +80,51 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             pass
         self._title_bar.close_requested.connect(self.close_and_return)
 
-        self._soft_minimized = False
-        min_btn = getattr(self._title_bar, "btn_minimize", None)
-        if min_btn is not None:
-            try:
-                min_btn.clicked.disconnect()
-            except (TypeError, RuntimeError):
-                pass
-            min_btn.clicked.connect(self.soft_minimize)
+        # Do NOT call _sync_portable_like_dock_chrome here — with this dialog
+        # registered as floating it used to still re-glue the main splitter
+        # (1–2s lag). Neo is already borrowed into this window.
+        self._reclaim_neo_into_dialog()
 
-        self._reclaim_neo_into_dialog(reveal=False)
-
-    def _reveal_neo_chrome(self) -> None:
-        """Show borrowed neo only after this dialog is on-screen."""
-        neo = self._neo
-        if neo is not None:
-            _clear_borrow_dont_show(neo)
-            neo.show()
-        tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
-        if tabs is not None:
-            try:
-                tabs.show()
-            except RuntimeError:
-                pass
-        for name in ("_neo_sidebar", "right_scroll"):
-            w = getattr(self._app, name, None)
-            if w is not None:
-                try:
-                    _clear_borrow_dont_show(w)
-                    w.show()
-                except RuntimeError:
-                    pass
-        if hasattr(self._app, "fit_settings_tab_to_page"):
-            try:
-                self._app.fit_settings_tab_to_page()
-            except Exception:
-                pass
-
-    def _prepare_geometry_before_map(self) -> None:
-        # First map: v48 size + center (Windows DWM ghost at 0,0 without this).
-        if not getattr(self, "_floating_mapped", False):
-            self.resize(_FLOAT_W, _FLOAT_H)
-            self._floating_mapped = True
-            self.ensurePolished()
-            self._center_on_parent()
-            return
-        self.ensurePolished()
-
-    def show(self):
-        """Warm-map at final geometry on every platform — kills Aero flash."""
-        if self._map_suppressed:
-            return super().show()
-        return self._show_without_map_flash()
-
-    def _sync_floating_neo_geometry(self) -> None:
-        from steempeg.ui.portable.sheets import expand_neo_for_floating_dialog
-
-        neo = self._neo or getattr(self._app, "neo_wrapper", None)
-        expand_neo_for_floating_dialog(neo, self)
-        if neo is not None and hasattr(self._app, "fit_settings_tab_to_page"):
-            try:
-                self._app.fit_settings_tab_to_page()
-            except Exception:
-                pass
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        try:
-            self.setWindowOpacity(1.0)
-        except RuntimeError:
-            pass
-        self._reveal_neo_chrome()
-        self._apply_surface_chrome()
-        if self._neo_nav_hit_guard is None and self._neo is not None:
-            self._neo_nav_hit_guard = _NeoNavHitGuard(self, self._app)
-        QTimer.singleShot(0, self._sync_floating_neo_geometry)
-        QTimer.singleShot(0, lambda: _raise_floating_dialog(self))
-        QTimer.singleShot(0, _clear_stuck_cursor)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._sync_floating_neo_geometry()
-
-    def is_parked_minimized(self) -> bool:
-        if getattr(self, "_soft_minimized", False):
-            return True
-        try:
-            return bool(self.isMinimized())
-        except RuntimeError:
-            return False
-
-    def soft_minimize(self) -> None:
-        self._soft_minimized = True
-        self.hide()
-        _clear_stuck_cursor()
-        app = self._app
-        if hasattr(app, "_sync_dash_render_settings_button"):
-            try:
-                app._sync_dash_render_settings_button()
-            except Exception:
-                pass
-
-    def soft_restore(self) -> None:
-        self._soft_minimized = False
-        try:
-            if self.isMinimized():
-                self.showNormal()
-            else:
-                self.show()
-        except RuntimeError:
-            return
-        _raise_floating_dialog(self)
-        if hasattr(self, "_reclaim_neo_into_dialog"):
-            self._reclaim_neo_into_dialog(reveal=True)
-        self._sync_floating_neo_geometry()
-        app = self._app
-        if hasattr(app, "_sync_dash_render_settings_button"):
-            try:
-                app._sync_dash_render_settings_button()
-            except Exception:
-                pass
-
-    def _reclaim_neo_into_dialog(self, *, reveal: bool = True) -> None:
+    def _reclaim_neo_into_dialog(self) -> None:
         neo = self._neo or getattr(self._app, "neo_wrapper", None)
         if neo is None:
             return
         self._neo = neo
         try:
             if self.isAncestorOf(neo):
-                if reveal and self.isVisible():
-                    self._reveal_neo_chrome()
-                self._sync_floating_neo_geometry()
+                neo.show()
                 return
         except RuntimeError:
             return
-        try:
-            neo.hide()
-        except RuntimeError:
-            pass
         parent = neo.parentWidget()
         if parent is not None:
             lay = parent.layout()
             if lay is not None:
                 lay.removeWidget(neo)
             else:
-                _borrow_widget(neo)
+                neo.setParent(None)
         neo.setMaximumHeight(16777215)
         neo.setMinimumHeight(0)
         neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.content_layout.addWidget(neo, 1)
+        neo.show()
         if getattr(self._app, "_neo_dock_home", None):
             self._app._neo_dock_home = None
-        if reveal and self.isVisible():
-            self._reveal_neo_chrome()
-        self._sync_floating_neo_geometry()
-
-    def changeEvent(self, event) -> None:
-        super().changeEvent(event)
-        from PySide6.QtCore import QEvent
-
-        if event.type() != QEvent.Type.WindowStateChange:
-            return
-        app = self._app
-        if hasattr(app, "_sync_dash_render_settings_button"):
+        for name in ("_neo_sidebar", "right_scroll"):
+            w = getattr(self._app, name, None)
+            if w is not None:
+                try:
+                    w.show()
+                except RuntimeError:
+                    pass
+        tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
+        if tabs is not None:
             try:
-                app._sync_dash_render_settings_button()
-            except Exception:
+                tabs.show()
+            except RuntimeError:
                 pass
 
     def close_and_return(self) -> None:
-        self._soft_minimized = False
         self._return_neo()
         self.hide()
         self.deleteLater()
@@ -402,7 +136,8 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 app._sync_dash_render_settings_button()
             except Exception:
                 pass
-        _clear_stuck_cursor()
+        # Light close: neo already in garage — only re-glue dash. Full dock sync
+        # (setSizes + middle-gap + spacer walk) was the 1–2s close lag.
         self._light_portable_like_after_settings_close(app)
 
     def _return_neo(self) -> None:
@@ -410,13 +145,11 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             return
         self._returned = True
         parent, layout, index, kind = self._home
+        # Prefer the chrome garage while Like a Portable — never leave a dock hole.
+        # When switching to It's a Desktop, hand off to dock restore (not garage).
         app = self._app
         garage = getattr(app, "_neo_chrome_garage", None)
         try:
-            try:
-                self._neo.hide()
-            except RuntimeError:
-                pass
             portable_like = (
                 hasattr(app, "_desktop_render_layout_is_portable_like")
                 and app._desktop_render_layout_is_portable_like()
@@ -427,32 +160,23 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                     prev_lay = prev.layout() if prev is not None else None
                     if prev_lay is not None:
                         prev_lay.removeWidget(self._neo)
-                _clear_borrow_dont_show(self._neo)
                 garage.layout().addWidget(self._neo)
                 self._neo.hide()
             elif (
                 not portable_like
                 and hasattr(app, "_restore_neo_to_dock_layout")
             ):
-                # removeWidget only — restore reparents into bottom_v_wrap.
-                # setParent(None) here flashed the same top-left Aero ghost on close.
+                # Detach from this dialog; dock chrome will place neo above dash.
                 if self._neo.parentWidget() is not None:
                     prev = self._neo.parentWidget()
                     prev_lay = prev.layout() if prev is not None else None
                     if prev_lay is not None:
                         prev_lay.removeWidget(self._neo)
-                app._restore_neo_to_dock_layout()
+                self._neo.setParent(None)
             else:
-                _clear_borrow_dont_show(self._neo)
                 _return_widget(self._neo, parent, layout, index, kind, visible=True)
         except Exception:
             _log.exception("Failed returning neo_wrapper after Render Settings close")
-        try:
-            from steempeg.ui.portable.sheets import restore_neo_dock_masks
-
-            restore_neo_dock_masks(app)
-        except Exception:
-            pass
         if hasattr(self._app, "fit_settings_tab_to_page"):
             try:
                 self._app.fit_settings_tab_to_page()
@@ -473,11 +197,11 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 app._sync_dash_render_settings_button()
             except Exception:
                 pass
-        _clear_stuck_cursor()
         self._light_portable_like_after_settings_close(app)
 
     @staticmethod
     def _light_portable_like_after_settings_close(app) -> None:
+        """Park neo + glue dash without a full portable-like dock rebuild."""
         try:
             if hasattr(app, "_desktop_render_layout_is_portable_like"):
                 if not app._desktop_render_layout_is_portable_like():
@@ -498,30 +222,14 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                 except Exception:
                     pass
 
-    def _apply_surface_chrome(self) -> None:
-        """Dialog shell + borrowed neo — TrueDark must not leave Default gray voids."""
-        from steempeg.ui import ui_theme as ut
-        from steempeg.ui.render_panel import (
-            apply_neo_shell_theme_chrome,
-            apply_render_panel_theme_chrome,
-        )
-
-        p = ut.active_palette()
-        fill = p.bg_settings_panel
-        self._bg_color = fill
-        if hasattr(self, "_apply_card_chrome"):
-            # Do not call setStyleSheet again here — that wipes SteempegDialogContent /
-            # QScrollArea fills and Windows paints Default mid-gray through.
-            self._apply_card_chrome(p.chrome_title_bar, fill)
-        if self._app is not None:
-            apply_neo_shell_theme_chrome(self._app)
-            ui = getattr(self._app, "ui", None)
-            if ui is not None:
-                apply_render_panel_theme_chrome(ui)
-
     def apply_ui_theme_chrome(self) -> None:
+        """Re-tint dialog shell when UI theme changes while window is open."""
         super().apply_ui_theme_chrome()
-        self._apply_surface_chrome()
+        from steempeg.ui.render_panel import apply_render_panel_theme_chrome
+
+        ui = getattr(self._app, "ui", None)
+        if ui is not None:
+            apply_render_panel_theme_chrome(ui)
 
 
 def toggle_desktop_render_settings(app) -> None:
@@ -541,39 +249,31 @@ def toggle_desktop_render_settings(app) -> None:
         app._desktop_render_settings_dlg = None
 
     if dlg is not None:
-        parked = False
-        try:
-            parked = (
-                hasattr(dlg, "is_parked_minimized") and dlg.is_parked_minimized()
-            ) or dlg.isMinimized()
-        except RuntimeError:
-            parked = False
-        if parked:
-            if hasattr(dlg, "soft_restore"):
-                dlg.soft_restore()
-            else:
-                dlg.showNormal()
-                _raise_floating_dialog(dlg)
-            if hasattr(app, "_sync_dash_render_settings_button"):
-                try:
-                    app._sync_dash_render_settings_button()
-                except Exception:
-                    pass
+        # Second click: if minimized → restore; if visible → close (lower).
+        if dlg.isMinimized():
+            dlg.showNormal()
+            dlg.raise_()
+            dlg.activateWindow()
             return
         if dlg.isVisible():
             dlg.close_and_return()
             return
 
     dlg = DesktopRenderSettingsDialog(app, parent=getattr(app, "ui", None))
+    # __init__ already assigned _desktop_render_settings_dlg
     dlg.show()
-    _raise_floating_dialog(dlg)
+    dlg.raise_()
+    dlg.activateWindow()
+    # One reclaim only — no post-show dock sync (that re-glued the shell).
     if hasattr(dlg, "_reclaim_neo_into_dialog"):
-        dlg._reclaim_neo_into_dialog(reveal=True)
+        dlg._reclaim_neo_into_dialog()
     if hasattr(app, "_sync_dash_render_settings_button"):
         try:
             app._sync_dash_render_settings_button()
         except Exception:
             pass
+    # Do not touch update_status_indicator here — forcing "Ready" zeroed the
+    # encode progress strip on every open (rapid toggle made it obvious).
 
 
 def close_desktop_render_settings(app) -> None:

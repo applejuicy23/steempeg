@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -329,10 +328,7 @@ class SteempegDialog(QDialog):
 
         self._card = _DialogCard(self, radius=_CARD_RADIUS_PX, fill=bar_color)
         self._card.setObjectName("SteempegDialogCard")
-        self._card.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        outer.addWidget(self._card, 1)
+        outer.addWidget(self._card)
 
         card_layout = QVBoxLayout(self._card)
         card_layout.setContentsMargins(0, 0, 0, 0)
@@ -645,19 +641,12 @@ class SteempegDialog(QDialog):
         if hasattr(self._card, "set_fill"):
             self._card.set_fill(bar_color)
         inner_radius = max(_CARD_RADIUS_PX - _SIDE_RAIL_PX, 0)
-        # Opaque dialogs (e.g. floating Render Settings) need a solid QDialog fill;
-        # translucent frameless shells keep the outer HWND transparent.
-        dialog_bg = (
-            bg_color
-            if not self.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            else "transparent"
-        )
         # Card fill is painted in _DialogCard.paintEvent (antialiased).
         # Children keep stylesheet radii so their opaque rects match the shell.
         self.setStyleSheet(
             f"""
             QDialog {{
-                background-color: {dialog_bg};
+                background-color: transparent;
             }}
             QWidget#SteempegDialogCard {{
                 background-color: transparent;

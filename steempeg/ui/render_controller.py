@@ -2642,10 +2642,7 @@ class RenderMixin:
             lay = parent.layout() if parent is not None else None
             if lay is not None:
                 lay.removeWidget(neo)
-            else:
-                from steempeg.ui.portable.sheets import _reparent_borrowed
-
-                _reparent_borrowed(neo)
+            neo.setParent(None)
         garage.layout().addWidget(neo)
         neo.hide()
 
@@ -4044,22 +4041,66 @@ class RenderMixin:
         (Source Info, Export) show a phantom scrollbar over empty space. Collapsing the
         non-current pages to an Ignored size policy makes each page contribute 0 height,
         so the scroll range matches what's actually visible.
+
+        Floating Render Settings is different: Preferred sizeHints collapse
+        ``settings_tabs`` / ``right_scroll`` toward content width/height, so neo
+        sits as a postage-stamp plate with black void beside it — and each nav
+        click re-runs this and makes it worse. Use Expanding for the active page
+        while floating so the plate keeps filling the dialog.
         """
+        from PySide6.QtWidgets import QSizePolicy
+
         tabs = getattr(self.ui, 'settings_tabs', None)
         if tabs is None:
             return
         if idx is None:
             idx = tabs.currentIndex()
+        floating = False
+        try:
+            floating = bool(self._floating_render_settings_holds_neo())
+        except Exception:
+            floating = False
+        active = (
+            QSizePolicy.Policy.Expanding
+            if floating
+            else QSizePolicy.Policy.Preferred
+        )
         for i in range(tabs.count()):
             page = tabs.widget(i)
             if page is None:
                 continue
             if i == idx:
-                page.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+                page.setSizePolicy(active, active)
             else:
-                page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+                page.setSizePolicy(
+                    QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+                )
             page.updateGeometry()
         tabs.updateGeometry()
+        if floating:
+            # Keep scroll/tabs Expanding after the sizeHint collapse above.
+            try:
+                tabs.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                )
+                scroll = getattr(self, "right_scroll", None)
+                if scroll is not None:
+                    scroll.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                    )
+                    scroll.setMinimumSize(0, 0)
+                    scroll.setMaximumSize(16777215, 16777215)
+                neo = getattr(self, "neo_wrapper", None)
+                if neo is not None:
+                    neo.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                    )
+            except RuntimeError:
+                pass
+
+    def _expand_neo_if_floating(self, *_args) -> None:
+        """No-op — v48 float path had no expand_neo_for_floating_dialog."""
+        return
 
     def _refresh_source_video_bitrate(self) -> float:
         """Return source video Mbps, re-probing from disk when the cached value is missing."""
@@ -4798,8 +4839,8 @@ class RenderMixin:
         if is_target_mode and not getattr(self, "_bulk_settings_apply", False):
             self.update_final_setup()
 
-    def _ensure_fps_combo_for_target(self) -> None:
-        """Target mode needs a usable FPS row (blank combo broke the size plan)."""
+    def _ensure_fps_combo_populated(self) -> None:
+        """Refill FPS when empty (float open / theme chrome / Target size plan)."""
         combo = getattr(self.ui, "combo_fps", None)
         if combo is None:
             return
@@ -4809,9 +4850,34 @@ class RenderMixin:
         combo.blockSignals(True)
         if combo.count() <= 0:
             combo.addItem(f"{fps_val} FPS (Original)")
+            optional_fps = []
+            if fps_val >= 60:
+                optional_fps = [30, 15]
+            elif fps_val >= 30:
+                optional_fps = [15]
+            for target in optional_fps:
+                combo.addItem(f"{target} FPS")
+            for target in (60, 30, 15):
+                label = f"{target} FPS"
+                if combo.findText(label) < 0 and target > fps_val:
+                    combo.addItem(label)
+                    from steempeg.ui.widgets.combo_chrome import set_combo_item_enabled
+
+                    set_combo_item_enabled(
+                        combo,
+                        combo.count() - 1,
+                        False,
+                        tooltip=f"Source is {fps_val} FPS — cannot upscale to {target} FPS.",
+                    )
+            combo.insertSeparator(combo.count())
+            combo.addItem("⚙️ Custom FPS...")
         combo.setCurrentIndex(0)
         combo.setEnabled(True)
         combo.blockSignals(False)
+
+    def _ensure_fps_combo_for_target(self) -> None:
+        """Target mode needs a usable FPS row (blank combo broke the size plan)."""
+        self._ensure_fps_combo_populated()
 
     def init_original_help_state(self) -> None:
         """Apply the saved 'don't show again' preference to the Original warning icon."""
@@ -7258,39 +7324,42 @@ class RenderMixin:
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
         has_jobs = len(self.render_queue) > 0
         had_jobs = bool(getattr(self, "_queue_sync_had_jobs", False))
+        # Emily: auto-expand only on empty → first job(s). Later adds must not
+        # fight an intentional hide while the queue already has videos.
+        became_nonempty = bool(has_jobs) and not had_jobs
         self._queue_sync_had_jobs = has_jobs
 
         if has_jobs:
+            if became_nonempty:
+                # 0 → 1+: drop any leftover hide latch from a prior drained queue
+                # *before* show(), so the panel is mapped when we open sizes.
+                self._queue_user_collapsed = False
             if not bool(getattr(self, "_queue_user_collapsed", False)):
                 self.render_queue_panel.show()
-            if not had_jobs:
-                # Fresh jobs — clear any prior user-collapse and open once.
-                self._queue_user_collapsed = False
-                if hasattr(self, "_persist_queue_panel_open"):
-                    self._persist_queue_panel_open(True)
-            # Auto-open only when jobs first appear, or when the pane is shut
-            # without a user-collapse latch (theatre exit safety). Never reopen
-            # on routine refreshes (clip select, progress ticks, Leave/Resume).
+            # Auto-open only when jobs first appear, or theatre/fullscreen exit
+            # restore. Never reopen on routine refreshes / subsequent adds.
             # Scrap ≤48 counts as shut — closed panes often sit at PANE_FREED (1).
             should_open = (
                 sizes[1] <= 48
                 and not bool(getattr(self, "_queue_user_collapsed", False))
                 and not bool(getattr(self, "_splitter_dragging", False))
                 and (
-                    not had_jobs
+                    became_nonempty
                     or bool(getattr(self, "_queue_splitter_restore_open", False))
                 )
             )
             if should_open and hasattr(self, "_open_queue_in_right_splitter"):
+                self.render_queue_panel.show()
                 self._open_queue_in_right_splitter()
                 if hasattr(self, "_persist_queue_panel_open"):
                     self._persist_queue_panel_open(True)
             self._queue_splitter_restore_open = False
         else:
+            # Empty slate: next first add may auto-open. Do not keep a hide latch
+            # from jobs that are no longer in the queue.
+            self._queue_user_collapsed = False
             self.render_queue_panel.show()
-            if bool(getattr(self, "_queue_user_collapsed", False)) or (
-                had_jobs and sizes[1] > 0
-            ):
+            if had_jobs and sizes[1] > 0:
                 self._selected_queue_job_id = None
                 if hasattr(self, "_close_queue_pane"):
                     self._close_queue_pane()

@@ -129,7 +129,10 @@ def _apply_settings_combo_chrome(*combos: QComboBox) -> None:
     # Vertical padding comes from fixed height centering — QSS padding-top/bottom
     # + a short layout slot is what flattened the Video grid rows.
     field_bg, field_border, drop_bg = ut.render_settings_active_combo_colors()
-    from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
+    from steempeg.ui.widgets.combo_chrome import (
+        combo_down_arrow_qss,
+        combo_popup_item_rules,
+    )
 
     combo_qss = f"""
     QComboBox {{
@@ -150,11 +153,7 @@ def _apply_settings_combo_chrome(*combos: QComboBox) -> None:
         border-top-right-radius: 10px; border-bottom-right-radius: 10px;
     }}
     QComboBox::drop-down:disabled {{ background-color: #1f1f1f; }}
-    QComboBox::down-arrow {{
-        width: 0; height: 0;
-        border-left: 5px solid transparent; border-right: 5px solid transparent;
-        border-top: 6px solid #cccccc;
-    }}
+    {combo_down_arrow_qss(size=10).strip()}
     """ + combo_popup_item_rules(dense)
     for combo in combos:
         if combo is None:

@@ -833,6 +833,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
             self.wrap_library_views_in_stack(views_layout)
 
+            from steempeg.ui.library.folder_drop_filter import install_clips_folder_drop
+
+            install_clips_folder_drop(
+                self.grid_clips,
+                self.ui.table_clips,
+                getattr(self, "clips_page", None),
+                on_folders=self.add_clips_folder_paths,
+                highlight=getattr(self, "clips_page", None)
+                or self.library_views_container,
+            )
+
             from steempeg.ui.library.library_styles import install_library_scroll_sync
 
             install_library_scroll_sync(self)
@@ -1075,6 +1086,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.right_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
             self.right_scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            try:
+                self.right_scroll.setSizeAdjustPolicy(
+                    QScrollArea.SizeAdjustPolicy.AdjustIgnored
+                )
+            except Exception:
+                pass
 
             # Left radii only (= divider curve). Right edge stays square so the opaque
             # settings fill reaches the card edge; neo_wrapper's outer mask clips TR/BR.
@@ -1092,10 +1109,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 QScrollArea#neo_settings_scroll > QWidget {{
                     background-color: {_neo_settings};
                     border: none;
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
                 }}
-                QWidget#qt_scrollarea_viewport {{
+                QScrollArea#neo_settings_scroll QWidget#qt_scrollarea_viewport {{
                     background-color: {_neo_settings};
                     border: none;
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
                 }}
             """)
             from steempeg.ui.widgets.vertical_scrollbar import (
@@ -1126,9 +1151,27 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.settings_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.ui.settings_tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.ui.settings_tabs.setStyleSheet(f"""
-                QTabWidget {{ background-color: {_neo_settings}; border: none; }}
-                QTabWidget::pane {{ border: none; background-color: {_neo_settings}; }}
-                QTabWidget > QStackedWidget {{ background-color: {_neo_settings}; border: none; }}
+                QTabWidget {{
+                    background-color: {_neo_settings}; border: none;
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
+                }}
+                QTabWidget::pane {{
+                    border: none; background-color: {_neo_settings};
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
+                }}
+                QTabWidget > QStackedWidget {{
+                    background-color: {_neo_settings}; border: none;
+                    border-top-left-radius: {_neo_r_px}px;
+                    border-bottom-left-radius: {_neo_r_px}px;
+                    border-top-right-radius: 0px;
+                    border-bottom-right-radius: 0px;
+                }}
                 QStackedWidget > QWidget {{ background-color: {_neo_settings}; }}
 
                 QLabel {{ color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }}
@@ -1211,7 +1254,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
                 self.neo_wrapper.installEventFilter(self._neo_wrapper_mask)
             
-            neo_layout.addWidget(self.right_scroll)
+            neo_layout.addWidget(self.right_scroll, 1)
             
             # 5. Placing our wrapper back in the original location without conflicts
             if parent_layout:
@@ -3193,6 +3236,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Same rhythm as Original preset warning: 8px between title and body.
         lay.setSpacing(8)
 
+        from steempeg.ui.icon_assets import playinfo_pixmap
         from steempeg.ui.player_header_layout import (
             player_header_font_px,
             player_header_title_qfont,
@@ -3203,10 +3247,22 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
             f" font-family: {tok.FONT_APP}; background: transparent;"
         )
+        # Same playinfo2.png glyph as the header Clip info chip (hot tint).
+        _info_icon_sz = max(14, int(btn.iconSize().width() or heading_font.pixelSize()))
+        heading_row = QHBoxLayout()
+        heading_row.setContentsMargins(0, 0, 0, 0)
+        heading_row.setSpacing(8)
+        heading_icon = QLabel()
+        heading_icon.setFixedSize(_info_icon_sz, _info_icon_sz)
+        heading_icon.setPixmap(playinfo_pixmap("#e8e8e8", _info_icon_sz))
+        heading_icon.setStyleSheet("background: transparent; border: none;")
         heading = QLabel("Clip info")
         heading.setFont(heading_font)
         heading.setStyleSheet(heading_qss)
-        lay.addWidget(heading)
+        heading_row.addWidget(heading_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        heading_row.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
+        heading_row.addStretch(1)
+        lay.addLayout(heading_row)
 
         lines = [ln for ln in text.split("\n") if ln.strip()]
         # Resolve game title from header meta — never via colon-split of tip lines.
