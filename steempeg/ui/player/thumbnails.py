@@ -422,6 +422,8 @@ class PreviewSniperWorker(QThread):
 
     def request_frame(self, media_path, hover_sec):
         self._is_killed = False
+        prev_target = int(self.target_sec) if self.target_sec is not None else -1
+        in_flight = int(self._in_flight_sec) if self._in_flight_sec is not None else -1
         self._cancel_background_warm()
 
         # hover_sec is already a floor bucket from preview_bucket_sec — do not re-round.
@@ -447,12 +449,22 @@ class PreviewSniperWorker(QThread):
                 self.init_filename = ""
                 self.chunk_template = ""
 
-        if self.target_sec >= 0 and target_sec != self.target_sec:
-            self._prefer_dir = 1 if target_sec > self.target_sec else -1
+        if prev_target >= 0 and target_sec != prev_target:
+            self._prefer_dir = 1 if target_sec > prev_target else -1
             self._fail_until.pop(target_sec, None)
             self._stable_since = time.monotonic()
-        elif self.target_sec != target_sec:
+        elif prev_target != target_sec:
             self._stable_since = time.monotonic()
+
+        # Cursor moved — abort in-flight decode of the old bucket so hover wins
+        # over batch / neighbor warm (Emily sniper priority).
+        if (
+            target_sec != prev_target
+            and in_flight >= 0
+            and in_flight != target_sec
+        ):
+            self._decode_gen += 1
+            self._kill_ffmpeg_subprocess()
 
         # Always retarget — cache hits must still drive left/right neighbor prefill.
         self.target_sec = target_sec
