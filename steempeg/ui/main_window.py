@@ -97,17 +97,13 @@ class MainWindow(_WindowBase):
                             on_shell_lost_foreground,
                             should_skip_hwnd_ops_for_foreground,
                             steempeg_internal_dialog_active,
-                            steempeg_popup_menu_active,
                         )
 
-                        # Snipping / Start / Search / ClipCard QMenu — any
-                        # SetWindowPos on the frameless shell can orphan mpv wid=.
+                        # Snipping / Start / Search — do not touch HWND z-order.
                         if should_skip_hwnd_ops_for_foreground():
                             return
-                        if steempeg_popup_menu_active():
-                            return
                         app = QApplication.instance()
-                        # Focus left the process entirely → demote, never raise.
+                        # Focus left the process entirely → never raise ourselves.
                         if (
                             app is not None
                             and app.applicationState()
@@ -115,13 +111,10 @@ class MainWindow(_WindowBase):
                         ):
                             on_shell_lost_foreground(win)
                             return
-                        # Still ApplicationActive: focus is on another Steempeg
-                        # surface (dialog / Tool). Only promote dialogs — do NOT
-                        # run on_shell_lost_foreground here. That path's
-                        # SetWindowPos was the ClipCard-RMB → mpv fly-out bug
-                        # (menu deactivates the shell while the app stays active).
                         if steempeg_internal_dialog_active():
                             on_shell_internal_dialog_focus(win)
+                        else:
+                            on_shell_lost_foreground(win)
                     except Exception:
                         pass
 

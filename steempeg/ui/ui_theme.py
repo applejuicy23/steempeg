@@ -124,7 +124,6 @@ _PALETTE_TRUE_DARK = UiThemePalette(
     bg_shell="#121212",
     bg_player_canvas="#1a1a1a",
     bg_card="#141414",
-    # Content host one step above nav face (v48 hierarchy) — not Default #2d2d2d.
     bg_settings_panel="#161616",
     bg_player_header="#161616",
     bg_placeholder_canvas="#0f0f0f",
