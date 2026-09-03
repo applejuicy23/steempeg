@@ -465,8 +465,9 @@ class RenderQueueHistoryDialog(SteempegDialog):
         dlg.exec()
 
     def _request_open_in_rendered(self, path: str) -> None:
+        # Keep history open — same as the completed-queue plaque when jumping
+        # to Rendered videos (Emily: only Source clip / leave should dismiss).
         self.open_in_rendered_requested.emit(path)
-        self.accept()
 
     def _request_open_source_clip(self, path: str) -> None:
         self.open_source_clip_requested.emit(path)
