@@ -131,10 +131,7 @@ class TimelineCanvas(QWidget):
         # wall-clock time, so it must be scaled by this or it races ahead at 1x and gets
         # yanked back (visible jitter when zoomed in, especially at 0.1x).
         self.playback_speed = 1.0
-        self.user_seek_lock_time = 0
-        # After ±15 / scrub: ignore in-flight PTS far from this target (survives
-        # visual drift while playing — unlike a pure time lock on the stick).
-        self.user_seek_guard_ms = None
+        self.user_seek_lock_time = 0 
         
         self.is_trim_mode = False
         self.trim_start_ms = 0.0
@@ -889,22 +886,21 @@ class TimelineCanvas(QWidget):
         self.is_playing = bool(is_playing)
         if self.drag_state == 'playhead':
             return
-        # Scrub / force_jump owns PTS briefly — don't let lagging samples fight it.
-        # (Playhead extrapolation still runs while playing; see process_60fps_frame.)
+        # Scrub / force_jump owns the stick briefly — don't let lagging PTS fight it.
         if time.time() < getattr(self, "user_seek_lock_time", 0):
             return
         vlc_ms = float(vlc_ms)
+        # After rapid ±15s / scrub: stick sits on target while mpv still reports
+        # intermediate PTS from the seek queue — ignore those so we don't teleport.
         # Still honor clip-switch / park resets (vlc ≈ 0).
-        if vlc_ms <= 1.0:
-            self.user_seek_guard_ms = None
-        # After rapid ±15s / scrub: ignore mid-flight PTS far from the jump target
-        # even after the stick has extrapolated past it while playing.
-        guard = getattr(self, "user_seek_guard_ms", None)
-        if guard is not None and vlc_ms > 1.0:
-            if abs(vlc_ms - float(guard)) > 1200.0:
-                return
-            if abs(vlc_ms - float(guard)) <= 500.0:
-                self.user_seek_guard_ms = None
+        target = float(self.target_ms)
+        visual = float(self.visual_ms)
+        if (
+            vlc_ms > 1.0
+            and abs(vlc_ms - target) > 1200.0
+            and abs(visual - target) < 100.0
+        ):
+            return
         speed = max(float(self.playback_speed) or 1.0, 1e-6)
 
         if was_playing and not self.is_playing:
@@ -976,10 +972,7 @@ class TimelineCanvas(QWidget):
         self.last_frame_time = now # Update NO MATTER WHAT to avoid any jumps!
         
         if self.drag_state == 'playhead' or self.duration_ms <= 0: return
-        # Paused: hold stick on jump target until demux catches up.
-        # Playing: never freeze — keep extrapolating from the jumped sample.
-        if now < getattr(self, 'user_seek_lock_time', 0) and not self.is_playing:
-            return
+        if now < getattr(self, 'user_seek_lock_time', 0): return 
 
         # Perfect Interpolation During Zoom
         if getattr(self, 'is_zooming', False):
@@ -1818,12 +1811,8 @@ class TimelineCanvas(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton: return
         if self.drag_state == 'playhead':
+            self.user_seek_lock_time = time.time() + 0.55
             self.update_playhead(event.position().x())
-            self.user_seek_guard_ms = self.visual_ms
-            # PTS-only ownership; scrubber keeps moving if playback resumes.
-            self.user_seek_lock_time = time.time() + (
-                0.12 if self.is_playing else 0.55
-            )
             self.resume_requested.emit()
         elif self.drag_state in ['trim_l', 'trim_r']:
             self.trim_changed.emit(int(self.trim_start_ms), int(self.trim_end_ms))
@@ -1845,12 +1834,9 @@ class TimelineCanvas(QWidget):
         self.visual_ms = max(0.0, min(float(new_position_ms), float(self.duration_ms)))
         self.target_ms = self.visual_ms
         self.vlc_last_update_time = time.time()
-        self.user_seek_guard_ms = self.visual_ms
-        # Playing: short PTS lock only — process_60fps must keep extrapolating.
-        # Paused: longer lock so a 15s hop does not snap back to stale frame PTS.
-        self.user_seek_lock_time = time.time() + (
-            0.12 if self.is_playing else 0.55
-        )
+        # Rapid ±15s stacks mpv seeks; keep ownership long enough that mid-flight
+        # PTS cannot yank the stick (0.15s was too short under hammer clicks).
+        self.user_seek_lock_time = time.time() + 0.55
         self.seek_requested.emit(int(self.visual_ms))
         self.update()
         self._refresh_overview_playhead_marker()
