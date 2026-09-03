@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPixmap
@@ -1833,7 +1834,7 @@ class LibraryMixin:
         menu.addSeparator()
         action_open = menu.addAction("📂 Open in folder")
         action_delete = menu.addAction("🗑️ Delete Clip" if count == 1 else f"🗑️ Delete Clips ({count})")
-        
+
         if count == 1:
             clip_path = clip_paths[0]
             action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
@@ -2544,43 +2545,6 @@ class LibraryMixin:
         # First / primary folder: Full scan (ffprobe + Steam meta) — Emily 29 Aug.
         self.scan_clips(announce_duplicates=True, fast=False)
 
-    def add_clips_folder_paths(self, paths):
-        """Append folder path(s) to the library (button dialog + drag-drop share this)."""
-        if isinstance(paths, (str, bytes, os.PathLike)):
-            paths = [paths]
-        existing = {os.path.normpath(p) for p in (getattr(self, "clips_folders", None) or [])}
-        added: list[str] = []
-        saw_duplicate = False
-        for raw in paths or ():
-            if not raw:
-                continue
-            folder = os.path.normpath(str(raw))
-            if not folder or not os.path.isdir(folder):
-                continue
-            if folder in existing:
-                saw_duplicate = True
-                continue
-            if not self.clips_folders:
-                self.clips_folders = [folder]
-                self.clips_folder = folder
-            else:
-                self.clips_folders.append(folder)
-            existing.add(folder)
-            added.append(folder)
-
-        if not added:
-            if saw_duplicate:
-                steempeg_information(
-                    self.ui, "Library folders", "That folder is already in the list."
-                )
-            return
-
-        self.save_user_settings("user_cleared_library", False)
-        self._save_clips_folders()
-        self._update_folder_picker_label()
-        # New folder: Full scan so health + icons land once — Emily 29 Aug.
-        self.scan_clips(announce_duplicates=True, fast=False)
-
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
         try:
@@ -2594,7 +2558,20 @@ class LibraryMixin:
         )
         if not folder:
             return
-        self.add_clips_folder_paths([folder])
+        folder = os.path.normpath(folder)
+        if folder in self.clips_folders:
+            steempeg_information(self.ui, "Library folders", "That folder is already in the list.")
+            return
+        if not self.clips_folders:
+            self.clips_folders = [folder]
+            self.clips_folder = folder
+        else:
+            self.clips_folders.append(folder)
+        self.save_user_settings("user_cleared_library", False)
+        self._save_clips_folders()
+        self._update_folder_picker_label()
+        # New folder: Full scan so health + icons land once — Emily 29 Aug.
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def remove_clips_folder(self, path):
         """Remove one library root and rescan."""
@@ -2804,7 +2781,7 @@ class LibraryMixin:
                 # Saving the index and visibility status
                 table_order[clip_path] = {'row': row, 'hidden': table.isRowHidden(row)}
 
-        # 2. Gently update grid elements 
+        # 2. Gently update grid elements
         for i in range(grid.count()):
             item = grid.item(i)
             clip_path = item.data(Qt.UserRole + 1)
@@ -2815,7 +2792,7 @@ class LibraryMixin:
                 # this as a ghost "000084" in the thumb area.)
                 item.setText(f"{info['row']:06d}")
                 item.setForeground(QBrush(QColor(0, 0, 0, 0)))
-                item.setData(Qt.UserRole, info['row']) 
+                item.setData(Qt.UserRole, info['row'])
                 hidden = info['hidden']
             item.setHidden(hidden)
         # 3. Qt's built-in ultra-fast sort
@@ -3311,7 +3288,7 @@ class LibraryMixin:
                         card = grid.itemWidget(gitem)
                         if isinstance(card, ClipCard):
                             card.set_date_footer(footer)
-                            break
+                        break
 
         # Rendered videos — reformat from file mtime (stored or live).
         rendered = getattr(self, "table_rendered", None)
@@ -3440,29 +3417,6 @@ class LibraryMixin:
     def _clip_grid_column_count_for(self, grid) -> int:
         if grid is None:
             return 1
-        # Prefer live IconMode wrap from the leading visual row. Only trust it
-        # when the first slots already have real rects (layout settled) — a
-        # lone on-screen orphan must not report cols=1.
-        first_y: int | None = None
-        cols_visual = 0
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is None or item.isHidden():
-                continue
-            idx = grid.indexFromItem(item)
-            if not idx.isValid():
-                continue
-            vr = grid.visualRect(idx)
-            if vr.width() <= 0 or vr.height() <= 0:
-                cols_visual = 0
-                break
-            if first_y is None:
-                first_y = vr.top()
-            if abs(vr.top() - first_y) > 1:
-                break
-            cols_visual += 1
-        if cols_visual > 0:
-            return cols_visual
         viewport_w = max(1, grid.viewport().width())
         spacing = max(0, int(grid.spacing()))
         # ClipCard cell is ~260 wide (sizeHint).
@@ -3470,12 +3424,7 @@ class LibraryMixin:
         return max(1, (viewport_w + spacing) // (cell + spacing))
 
     def sync_clip_card_edge_roles(self) -> None:
-        """SteempegUI: square shelf flush on top/bottom rows (Clips + Rendered).
-
-        Row math uses every non-hidden grid slot (including placeholders) so a
-        lone last-row orphan keeps ``bottom`` / square bottoms — same as a
-        full last row. «Кто последний, тот с квадратной жопой.»
-        """
+        """SteempegUI: square shelf flush on top/bottom rows (Clips + Rendered)."""
         from steempeg.ui.clip_card_style import (
             CARD_STYLE_STEEMPEG_UI,
             get_clip_card_style,
@@ -3488,28 +3437,25 @@ class LibraryMixin:
             grid = getattr(self, grid_name, None)
             if grid is None:
                 continue
-            # Parallel to visual IconMode order: None = placeholder / non-card.
-            slots: list = []
+            visible: list = []
             for i in range(grid.count()):
                 item = grid.item(i)
                 if item is None or item.isHidden():
                     continue
                 card = grid.itemWidget(item)
-                slots.append(card if isinstance(card, ClipCard) else None)
-            cards = [c for c in slots if c is not None]
-            if not cards:
+                if isinstance(card, ClipCard):
+                    visible.append(card)
+            if not visible:
                 continue
             if not shelf:
                 # Square / Round ignore shelf roles — keep mid so a later
                 # SteempegUI switch re-applies cleanly.
-                for card in cards:
+                for card in visible:
                     card.set_edge_role("mid")
                 continue
             cols = self._clip_grid_column_count_for(grid)
-            last_row = (len(slots) - 1) // cols
-            for idx, card in enumerate(slots):
-                if card is None:
-                    continue
+            last_row = (len(visible) - 1) // cols
+            for idx, card in enumerate(visible):
                 row = idx // cols
                 if last_row == 0:
                     role = "both"
@@ -4260,43 +4206,40 @@ class LibraryMixin:
             self._materialize_clip_grid_item(item)
 
         live = getattr(self, "_clip_live_paths", None)
-        if isinstance(live, set) and len(live) > _CLIP_MAX_LIVE_WIDGETS:
-            # Already-seen cards stay. Only drop farthest extras if RAM cap is hit.
-            vp = grid.viewport()
-            vp_rect = vp.rect() if vp is not None else None
-            index: dict[str, object] = {}
-            for i in range(grid.count()):
-                it = grid.item(i)
-                if it is None:
-                    continue
-                p = str(it.data(Qt.UserRole + 1) or "")
-                if p:
-                    index[os.path.normcase(os.path.normpath(p))] = it
+        if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
+            return
 
-            candidates: list[tuple[int, object]] = []
-            for key in list(live):
-                if key in keep_keys:
-                    continue
-                item = index.get(key)
-                if item is None or item.isSelected():
-                    continue
-                dist = (
-                    self._clip_item_distance_from_viewport(grid, item, vp_rect)
-                    if vp_rect is not None
-                    else 10**9
-                )
-                candidates.append((dist, item))
-            candidates.sort(key=lambda pair: pair[0], reverse=True)
-            for _dist, item in candidates:
-                live = getattr(self, "_clip_live_paths", None)
-                if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
-                    break
-                self._dematerialize_clip_grid_item(item)
+        # Already-seen cards stay. Only drop farthest extras if RAM cap is hit.
+        vp = grid.viewport()
+        vp_rect = vp.rect() if vp is not None else None
+        index: dict[str, object] = {}
+        for i in range(grid.count()):
+            it = grid.item(i)
+            if it is None:
+                continue
+            p = str(it.data(Qt.UserRole + 1) or "")
+            if p:
+                index[os.path.normcase(os.path.normpath(p))] = it
 
-        # Fresh ClipCards default to mid (rounded bottoms). Re-apply shelf roles
-        # so a last-row orphan gets square bottoms like a full last row.
-        if hasattr(self, "sync_clip_card_edge_roles"):
-            self.sync_clip_card_edge_roles()
+        candidates: list[tuple[int, object]] = []
+        for key in list(live):
+            if key in keep_keys:
+                continue
+            item = index.get(key)
+            if item is None or item.isSelected():
+                continue
+            dist = (
+                self._clip_item_distance_from_viewport(grid, item, vp_rect)
+                if vp_rect is not None
+                else 10**9
+            )
+            candidates.append((dist, item))
+        candidates.sort(key=lambda pair: pair[0], reverse=True)
+        for _dist, item in candidates:
+            live = getattr(self, "_clip_live_paths", None)
+            if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
+                break
+            self._dematerialize_clip_grid_item(item)
 
     def restore_clips_from_session_cache(
         self,
@@ -4706,7 +4649,7 @@ class LibraryMixin:
 
         self.current_clip_duration_str = duration_str
         return size_str, duration_str
-    
+
     def _schedule_clip_folder_size_label(self, clip_path: str) -> None:
         """Measure folder size off the UI thread (can walk thousands of chunks)."""
         if not clip_path:
@@ -4771,13 +4714,13 @@ class LibraryMixin:
         """ Transforms rows from a hidden table into vibrant cards. """
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
-            
+
         # Items get destroyed below — drop the stale Shift anchor or range-select breaks.
         self._grid_anchor_item = None
         self._grid_anchor_index = -1
         self._clips_visual_selected_rows = set()
         self.grid_clips.clear()
-        
+
         for row in range(self.ui.table_clips.rowCount()):
             self._append_grid_card_for_row(row)
 
@@ -4935,7 +4878,7 @@ class LibraryMixin:
         if not hasattr(self, 'btn_filter_pill'): return
         if getattr(self, "_clips_scan_active", False):
             return
-        
+
         # 1. Forcefully destroy the old window to reset the Qt focus bug.
         if hasattr(self, 'filter_menu') and self.filter_menu:
             self.filter_menu.deleteLater()
@@ -4978,7 +4921,7 @@ class LibraryMixin:
         def get_sort_key(data):
             r = data['table_items']
             
-            if sort_idx == 0: 
+            if sort_idx == 0:
                 # Steam folder stamp (stable across Refresh); FS mtime only as fallback.
                 clip_path = r[0].data(Qt.UserRole) if r[0] else ""
                 return (
@@ -4993,7 +4936,7 @@ class LibraryMixin:
             if sort_idx in (3, 4): # TYPE
                 txt = r[1].text().lower() if r[1] else ""
                 return re.sub(r'[^a-zа-я0-9]', '', txt)
-                
+
             if sort_idx in (5, 6): # HEALTH
                 level = self._row_display_health_level(r[0]) if r[0] else health.ClipHealth.HEALTHY.value
                 rank = {
@@ -5017,7 +4960,7 @@ class LibraryMixin:
                 m = int(re.search(r'(\d+)m', txt).group(1)) if 'm' in txt else 0
                 s = int(re.search(r'(\d+)s', txt).group(1)) if 's' in txt else 0
                 return h * 3600 + m * 60 + s
-                
+
             if sort_idx in (11, 12):  # FOLDER (library root / parent dir)
                 clip_path = r[0].data(Qt.UserRole) if r[0] else ""
                 roots = getattr(self, "clips_folders", None) or []

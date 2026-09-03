@@ -2871,15 +2871,10 @@ class PlayerMixin:
         self._pending_seek_ms = None
         if self._safe_mpv_seek(ms / 1000.0):
             self._ignore_playback_stall(0.8)
-            # Guard PTS until demux catches the final coalesced hop (not the stick).
+            # Keep stick ownership until demux catches the final hop.
             canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
             if canvas is not None:
-                canvas.user_seek_guard_ms = float(ms)
-                playing = bool(getattr(canvas, "is_playing", False))
-                canvas.user_seek_lock_time = time.time() + (
-                    0.12 if playing else 0.45
-                )
-
+                canvas.user_seek_lock_time = time.time() + 0.45
 
     def on_timeline_release(self):
         """Triggered when the user releases the mouse button after dragging."""
