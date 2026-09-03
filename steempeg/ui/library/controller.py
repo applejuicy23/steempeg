@@ -2218,6 +2218,22 @@ class LibraryMixin:
                             self._is_switching = False
                             self._awaiting_first_frame = False
                         # Fall through to reload so timeline/thumbs recover.
+                    elif (
+                        really_open
+                        and hasattr(self, "_queue_is_active")
+                        and self._queue_is_active()
+                        and hasattr(self, "render_queue")
+                        and self.render_queue.find_by_clip_path(clip_path)
+                    ):
+                        # Queued clip (incl. duplicates): still activate the
+                        # remembered / first job — ignore-guard used to leave
+                        # the 40% spinner and never call generate_and_play.
+                        logging.info(
+                            "Same-clip library click while queued — "
+                            "activating queue job: %s",
+                            clip_path,
+                        )
+                        # Fall through to update_quality_options → activate.
                     elif really_open:
                         logging.debug(
                             "Same-clip click ignored (already previewing): %s",

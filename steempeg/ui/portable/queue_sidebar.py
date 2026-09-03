@@ -986,10 +986,6 @@ class PortableQueueSidebar(QWidget):
             self.job_selected.emit(job_id)
 
     def _on_row_clicked(self, job_id: str, mods) -> None:
-        if getattr(self._app, "_clips_scan_active", False):
-            if hasattr(self._app, "set_status"):
-                self._app.set_status("Library is still loading — Queue is locked.")
-            return
         mods = mods or Qt.KeyboardModifier.NoModifier
         if mods & _TOGGLE_SELECT_MODIFIERS:
             if job_id in self._selected_ids:
@@ -1015,9 +1011,19 @@ class PortableQueueSidebar(QWidget):
         self._selected_ids = {job_id}
         self._anchor_id = job_id
         self._apply_selection_styles()
-        # Already the active queue job — ignore re-click (no reload).
         if job_id and job_id == getattr(self._app, "_selected_queue_job_id", None):
-            return
+            job = None
+            if hasattr(self._app, "render_queue"):
+                job = self._app.render_queue.get(job_id)
+            path = job.clip_path if job is not None else None
+            playing = False
+            if path and hasattr(self._app, "_is_clip_actively_previewing"):
+                try:
+                    playing = bool(self._app._is_clip_actively_previewing(path))
+                except Exception:
+                    playing = False
+            if playing:
+                return
         self.job_selected.emit(job_id)
 
     def _on_remove_requested(self, job_id: str) -> None:

@@ -341,6 +341,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # (single Start Render never inserts a COMPLETED job into render_queue).
         self._completed_plaque_clip_path = None
         self._clip_session_memory = {}
+        # When a clip is queued N times, Clips Manager opens the job the user
+        # last activated in Render Queue (else the first queue row for that path).
+        self._last_queue_job_id_by_clip = {}
+        self._queue_job_session_memory = {}
 
         
         # Export quality ladder (Divine 4K / Goddess 8K+); rebuilt per clip when taller.
