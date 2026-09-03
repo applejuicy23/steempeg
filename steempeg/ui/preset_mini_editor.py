@@ -12,16 +12,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
-    QWidget,
 )
 
 from steempeg.core import capabilities
@@ -34,7 +31,6 @@ from steempeg.render.export_presets import (
 from steempeg.render.output_formats import (
     AUDIO_FORMATS,
     CONTAINERS,
-    DEFAULT_CODEC_TEXT,
     VIDEO_CODEC_ITEMS,
 )
 from steempeg.render.quality_presets import (
@@ -122,17 +118,14 @@ def _section_title(text: str) -> QLabel:
 
 
 def _apply_settings_combo_chrome(*combos: QComboBox) -> None:
-    """Same face as Video Settings; floor height so a tight dialog cannot squash."""
+    """Same face + height as Video Settings combos."""
     dense = COMFORT
     field_font = int(dense.footer_font)
     line_h = _settings_combo_line_h(dense)
-    # Vertical padding comes from fixed height centering — QSS padding-top/bottom
-    # + a short layout slot is what flattened the Video grid rows.
+    # Vertical padding from fixed height only — QSS padding-top/bottom + min-height
+    # stacked with setMinimumHeight is what ballooned these rows in the dialog.
     field_bg, field_border, drop_bg = ut.render_settings_active_combo_colors()
-    from steempeg.ui.widgets.combo_chrome import (
-        combo_down_arrow_qss,
-        combo_popup_item_rules,
-    )
+    from steempeg.ui.widgets.combo_chrome import combo_popup_item_rules
 
     combo_qss = f"""
     QComboBox {{
@@ -153,7 +146,11 @@ def _apply_settings_combo_chrome(*combos: QComboBox) -> None:
         border-top-right-radius: 10px; border-bottom-right-radius: 10px;
     }}
     QComboBox::drop-down:disabled {{ background-color: #1f1f1f; }}
-    {combo_down_arrow_qss(size=10).strip()}
+    QComboBox::down-arrow {{
+        width: 0; height: 0;
+        border-left: 5px solid transparent; border-right: 5px solid transparent;
+        border-top: 6px solid #cccccc;
+    }}
     """ + combo_popup_item_rules(dense)
     for combo in combos:
         if combo is None:
@@ -211,23 +208,11 @@ class PresetMiniEditor(SteempegDialog):
         self._app = app
         self._edit_name = " ".join((edit_name or "").strip().split()) or None
         # No set_comfort_size / setFixedSize — that crushed combo bodies to slits.
-        self.setMinimumSize(580, 620)
-        self.resize(640, 720)
+        self.setMinimumSize(580, 640)
+        self.resize(640, 760)
 
         root = self.content_layout
-        root.setSpacing(10)
-
-        # Scroll so the tall Video grid never compresses combo row heights.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        body = QWidget()
-        body.setStyleSheet("background: transparent;")
-        form = QVBoxLayout(body)
-        form.setContentsMargins(0, 0, 4, 0)
-        form.setSpacing(12)
+        root.setSpacing(14)
 
         name_col = QVBoxLayout()
         name_col.setSpacing(4)
@@ -245,10 +230,10 @@ class PresetMiniEditor(SteempegDialog):
             self._name.setText(self._edit_name)
         name_col.addWidget(name_lbl, alignment=Qt.AlignmentFlag.AlignLeft)
         name_col.addWidget(self._name)
-        form.addLayout(name_col)
+        root.addLayout(name_col)
 
         # --- Video (2-col grid like Video Settings) ---
-        form.addWidget(_section_title("Video"))
+        root.addWidget(_section_title("Video"))
 
         self._quality = QComboBox()
         self._quality.addItem(original_quality_label(None), "original")
@@ -295,7 +280,7 @@ class PresetMiniEditor(SteempegDialog):
         video = QGridLayout()
         video.setContentsMargins(0, 0, 0, 0)
         video.setHorizontalSpacing(16)
-        video.setVerticalSpacing(12)
+        video.setVerticalSpacing(10)
         video.addLayout(_field_cell("Quality", self._quality), 0, 0)
         video.addLayout(_field_cell("If unavailable", self._fallback), 0, 1)
         video.addLayout(_field_cell("Bitrate tier", self._bitrate), 1, 0)
@@ -305,13 +290,13 @@ class PresetMiniEditor(SteempegDialog):
         video.addLayout(_field_cell("Encode speed", self._speed), 3, 0)
         video.setColumnStretch(0, 1)
         video.setColumnStretch(1, 1)
-        form.addLayout(video)
+        root.addLayout(video)
 
         # --- Audio ---
-        form.addWidget(_section_title("Audio"))
+        root.addWidget(_section_title("Audio"))
 
         self._mute = SteempegCheckBox("Disable audio (video only)")
-        form.addWidget(self._mute)
+        root.addWidget(self._mute)
 
         self._audio_fmt = QComboBox()
         for fmt in AUDIO_FORMATS:
@@ -324,15 +309,15 @@ class PresetMiniEditor(SteempegDialog):
         audio = QGridLayout()
         audio.setContentsMargins(0, 0, 0, 0)
         audio.setHorizontalSpacing(16)
-        audio.setVerticalSpacing(12)
+        audio.setVerticalSpacing(10)
         audio.addLayout(_field_cell("Audio format", self._audio_fmt), 0, 0)
         audio.addLayout(_field_cell("Audio bitrate", self._audio_br), 0, 1)
         audio.setColumnStretch(0, 1)
         audio.setColumnStretch(1, 1)
-        form.addLayout(audio)
+        root.addLayout(audio)
 
         # --- Export ---
-        form.addWidget(_section_title("Export"))
+        root.addWidget(_section_title("Export"))
 
         self._container = QComboBox()
         for c in CONTAINERS:
@@ -344,11 +329,7 @@ class PresetMiniEditor(SteempegDialog):
         export.addLayout(_field_cell("Container", self._container), 0, 0)
         export.setColumnStretch(0, 1)
         export.setColumnStretch(1, 1)
-        form.addLayout(export)
-        form.addStretch(1)
-
-        scroll.setWidget(body)
-        root.addWidget(scroll, 1)
+        root.addLayout(export)
 
         _apply_settings_combo_chrome(
             self._quality,
@@ -413,7 +394,6 @@ class PresetMiniEditor(SteempegDialog):
             _set_combo_text(self._audio_fmt, "AAC")
             _set_combo_data(self._audio_br, 192)
             _set_combo_text(self._container, "MP4")
-            _set_combo_text(self._codec, DEFAULT_CODEC_TEXT)
 
         self._sync_original_locks()
         self._sync_audio_enabled()
@@ -425,9 +405,6 @@ class PresetMiniEditor(SteempegDialog):
         self._encoder.setEnabled(not is_orig)
         self._speed.setEnabled(not is_orig)
         self._fallback.setEnabled(not is_orig)
-        self._fps.setEnabled(not is_orig)
-        if is_orig:
-            _set_combo_data(self._fps, "Original")
 
     def _sync_audio_enabled(self) -> None:
         on = not self._mute.isChecked()
@@ -493,20 +470,16 @@ class PresetMiniEditor(SteempegDialog):
         if settings.container_format:
             _set_combo_text(self._container, settings.container_format)
 
-        self._sync_original_locks()
-        self._sync_audio_enabled()
-
     def _build_settings(self) -> RenderJobSettings | None:
         qdata = self._quality.currentData()
         if qdata == "original":
             quality_text = original_quality_label(None)
             bitrate_text = "Unknown Mbps (Original)"
-            codec_text = "H.264 (AVC)"  # stream copy — UI placeholder only
+            codec_text = "H.264 (AVC)"
             encoder_codec = "libx264"
             encoder_display = "CPU (Software)"
             encode_speed = "balanced"
             fallback = _FALLBACK_ORIGINAL
-            fps_text = "60 FPS (Original)"
         else:
             height = int(qdata or 1080)
             quality_text = self._quality.currentText()
@@ -519,7 +492,7 @@ class PresetMiniEditor(SteempegDialog):
                 bitrate_text = f"{level} - 0 Mbps"
             else:
                 bitrate_text = f"{level} - {mbps:g} Mbps"
-            codec_text = self._codec.currentText() or DEFAULT_CODEC_TEXT
+            codec_text = self._codec.currentText() or "H.264 (AVC)"
             encoder_codec = str(self._encoder.currentData() or "libx264")
             encoder_display = self._encoder.currentText() or ""
             encode_speed = normalize_encode_speed(
@@ -532,12 +505,11 @@ class PresetMiniEditor(SteempegDialog):
                 else str(fb_data or _FALLBACK_ORIGINAL)
             )
 
-        if qdata != "original":
-            fps_data = str(self._fps.currentData() or "Original")
-            if fps_data == "Original":
-                fps_text = "60 FPS (Original)"
-            else:
-                fps_text = fps_data
+        fps_data = str(self._fps.currentData() or "Original")
+        if fps_data == "Original":
+            fps_text = "60 FPS (Original)"
+        else:
+            fps_text = fps_data
 
         mute = self._mute.isChecked()
         audio_fmt = self._audio_fmt.currentText() or "AAC"
