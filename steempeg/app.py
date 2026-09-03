@@ -1787,6 +1787,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.video_wrapper = QFrame()
         self.video_wrapper.setObjectName("playerVideoWrapper")
         self.video_wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.video_wrapper.setAttribute(
+            Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True
+        )
         self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
         self.video_wrapper.installEventFilter(self)
         

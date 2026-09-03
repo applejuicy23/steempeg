@@ -321,6 +321,7 @@ class LifecycleMixin:
         for splitter in (
             getattr(self.ui, "main_splitter", None),
             getattr(self, "right_h_splitter", None),
+            getattr(self, "main_v_splitter", None),
         ):
             if splitter is not None:
                 splitter.splitterMoved.connect(self._sync_mpv_surface_geometry)
