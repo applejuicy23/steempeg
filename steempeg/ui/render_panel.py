@@ -1081,6 +1081,10 @@ def suspend_neo_wrapper_mask_for_float(app) -> None:
     Windows — second open is the spicy case (garage still carries a tiny mask).
     Keep the settings scroll's left-only mask (nav↔content divider curve).
     Call ``restore_neo_dock_masks`` when neo returns to the dock / chrome garage.
+
+    Also square the neo plate: docked ``border-radius`` without a mask punches
+    pink crescents under the sidebar / content corners (dialog chrome already
+    rounds the window).
     """
     if app is None:
         return
@@ -1099,6 +1103,16 @@ def suspend_neo_wrapper_mask_for_float(app) -> None:
             neo.clearMask()
         except RuntimeError:
             pass
+        try:
+            from steempeg.ui import ui_theme as ut
+
+            p = ut.active_palette()
+            neo.setStyleSheet(
+                f"QWidget#neo_wrapper {{ background-color: {p.bg_card}; "
+                f"border-radius: 0px; border: none; }}"
+            )
+        except Exception:
+            pass
     corner_mask = getattr(app, "corner_mask", None)
     if corner_mask is not None:
         corner_mask._suspended = False
@@ -1114,6 +1128,14 @@ def restore_neo_dock_masks(app) -> None:
     """Re-enable neo corner masks after floating Render Settings returns neo."""
     if app is None:
         return
+    neo = getattr(app, "neo_wrapper", None)
+    if neo is not None:
+        try:
+            from steempeg.ui import ui_theme as ut
+
+            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+        except Exception:
+            pass
     for attr in ("_neo_wrapper_mask", "corner_mask"):
         mask = getattr(app, attr, None)
         if mask is None:

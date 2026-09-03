@@ -3847,7 +3847,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         neo = getattr(self, "neo_wrapper", None)
         if neo is not None:
-            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+            wrapper_mask = getattr(self, "_neo_wrapper_mask", None)
+            if wrapper_mask is not None and getattr(wrapper_mask, "_suspended", False):
+                # Floating Render Settings — keep a square plate (dialog chrome rounds).
+                neo.setStyleSheet(
+                    f"QWidget#neo_wrapper {{ background-color: {p.bg_card}; "
+                    f"border-radius: 0px; border: none; }}"
+                )
+            else:
+                neo.setStyleSheet(ut.neo_wrapper_stylesheet())
 
         scroll = getattr(self, "right_scroll", None)
         if scroll is not None:
