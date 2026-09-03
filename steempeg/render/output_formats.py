@@ -17,9 +17,6 @@ VIDEO_CODEC_ITEMS = (
     "VP9",
 )
 
-# Default re-encode codec for new clips/sessions (not used for Original stream copy).
-DEFAULT_CODEC_TEXT = "H.265 (HEVC)"
-
 AUDIO_FORMATS = (
     "AAC",
     "MP3",

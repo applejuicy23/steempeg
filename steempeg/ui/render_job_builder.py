@@ -14,7 +14,7 @@ from steempeg.core import capabilities
 from steempeg.render.bitrate import format_video_mbps
 from steempeg.render.encode_speed import normalize_encode_speed
 from steempeg.ui.settings_prefs import resolve_app_export_folder
-from steempeg.render.output_formats import DEFAULT_CODEC_TEXT, resolve_video_encoder
+from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
     RenderJobSettings,
@@ -565,7 +565,7 @@ def apply_per_clip_export_to_settings(
     memory = getattr(app, "_clip_session_memory", {}).get(clip_norm, {})
     if memory:
         settings.container_format = memory.get("container", "MP4")
-        settings.codec_text = memory.get("codec_text", DEFAULT_CODEC_TEXT)
+        settings.codec_text = memory.get("codec_text", "H.264 (AVC)")
         settings.audio_format = memory.get("audio_format", "AAC")
         settings.output_preset = memory.get("output_preset", "Custom")
         settings.audio_only = bool(memory.get("audio_only", False))
@@ -584,7 +584,7 @@ def apply_per_clip_export_to_settings(
         return
 
     settings.container_format = "MP4"
-    settings.codec_text = DEFAULT_CODEC_TEXT
+    settings.codec_text = "H.264 (AVC)"
     settings.audio_format = "AAC"
     settings.output_preset = "Custom"
     settings.audio_only = False
@@ -703,7 +703,7 @@ def _apply_export_memory_to_settings(
 ) -> None:
     if clip_memory:
         settings.container_format = clip_memory.get("container", "MP4")
-        settings.codec_text = clip_memory.get("codec_text", DEFAULT_CODEC_TEXT)
+        settings.codec_text = clip_memory.get("codec_text", "H.264 (AVC)")
         settings.audio_format = clip_memory.get("audio_format", "AAC")
         settings.output_preset = clip_memory.get("output_preset", "Custom")
         settings.audio_only = bool(clip_memory.get("audio_only", False))
