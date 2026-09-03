@@ -1763,34 +1763,19 @@ class RenderMixin:
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
-        self._preview_clip_path = clip_path
         self._rendered_media_path = None
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
 
-        # Clip is queued — activate the right card rather than always the first.
-        # If one of this clip's duplicate cards is already selected, stay on it
-        # (the user is switching library rows to a clip already loaded in the player).
-        # Otherwise activate the first (or only) matching card.
-        queue_job = self.render_queue.find_by_clip_path(clip_path)
+        # Clip is queued (possibly N duplicates). Do NOT stamp
+        # ``_preview_clip_path`` first — activate_queue_job would think the
+        # clip is already playing and skip MPV (visual select, silent player).
+        queue_job = self._resolve_queue_job_for_library_clip(clip_path)
         if queue_job:
-            clip_norm = os.path.normpath(clip_path)
-            selected_id = getattr(self, "_selected_queue_job_id", None)
-            if selected_id:
-                selected = self.render_queue.get(selected_id)
-                if (
-                    selected is not None
-                    and os.path.normpath(selected.clip_path or "") == clip_norm
-                ):
-                    # Already on a card for this clip — refresh header only.
-                    self._apply_header_from_table_row(selected_row)
-                    if hasattr(self, "set_player_header_clip_controls_visible"):
-                        self.set_player_header_clip_controls_visible(True)
-                    self.refresh_render_queue_panel(sync_splitter=False)
-                    self.update_playback_badge()
-                    return
             self.activate_queue_job(queue_job.id)
             return
+
+        self._preview_clip_path = clip_path
 
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
@@ -1800,14 +1785,23 @@ class RenderMixin:
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         # Play first — Source Info XML / folder size must not block first frame.
-        self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
+        self.generate_and_play_preview(
+            clip_path, trim_restore=trim_restore, remount=True
+        )
         self._schedule_quality_populate_after_open(clip_path, trim_restore)
         # Selection only — never inflate Render Queue from a library click.
         self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):
-            if not getattr(self, "_render_dock_visible", False):
+            dock = getattr(self, "bottom_v_wrap", None)
+            dock_up = False
+            if dock is not None:
+                try:
+                    dock_up = bool(dock.isVisible())
+                except RuntimeError:
+                    dock_up = False
+            if not dock_up:
                 self._sync_library_mode_chrome()
         if hasattr(self, "_schedule_persist_library_ui_state"):
             self._schedule_persist_library_ui_state()
@@ -2478,10 +2472,7 @@ class RenderMixin:
             return
         if self._floating_render_settings_holds_neo():
             return
-        if not (
-            self._neo_is_parked_in_chrome_garage()
-            or getattr(self, "_neo_dock_home", None)
-        ):
+        if not self._neo_is_parked_in_chrome_garage():
             return
         self._restore_neo_to_dock_layout()
 
@@ -4138,6 +4129,37 @@ class RenderMixin:
                     )
                     neo.setMinimumSize(0, 0)
                     neo.setMaximumSize(16777215, 16777215)
+            except RuntimeError:
+                pass
+        else:
+            # Docked: Preferred pages must only grow the scroll *contents*.
+            # If neo/bottom inherit that sizeHint, MPV-open shoves the tab bar
+            # under the screen and the v-splitter fights the user.
+            try:
+                tabs.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                )
+                tabs.setMinimumHeight(0)
+                scroll = getattr(self, "right_scroll", None)
+                if scroll is not None:
+                    scroll.setSizePolicy(
+                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+                    )
+                    scroll.setMinimumHeight(0)
+                    try:
+                        from PySide6.QtWidgets import QScrollArea
+
+                        scroll.setSizeAdjustPolicy(
+                            QScrollArea.SizeAdjustPolicy.AdjustIgnored
+                        )
+                    except Exception:
+                        pass
+                neo = getattr(self, "neo_wrapper", None)
+                if neo is not None:
+                    neo.setMinimumHeight(0)
+                bottom = getattr(self, "bottom_v_wrap", None)
+                if bottom is not None:
+                    bottom.setMinimumHeight(0)
             except RuntimeError:
                 pass
 
@@ -6184,10 +6206,6 @@ class RenderMixin:
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
-        if getattr(self, "_clips_scan_active", False):
-            if hasattr(self, "set_status"):
-                self.set_status("Library is still loading — Queue is locked.")
-            return
         job = self.render_queue.get(job_id)
         if not job:
             return
@@ -6200,73 +6218,43 @@ class RenderMixin:
         self._flush_clip_session_state()
         if self._sync_active_queue_job_from_ui():
             self._persist_render_queue()
-        prev_preview = os.path.normpath(getattr(self, "_preview_clip_path", None) or "")
-        prev_opening = os.path.normpath(getattr(self, "_opening_clip_path", None) or "")
-        job_norm = os.path.normpath(job.clip_path or "")
         self._loading_queue_job = True
         try:
             self._selected_queue_job_id = job_id
+            self._remember_queue_job_for_clip(job.clip_path, job_id)
             self._preview_clip_path = job.clip_path
-            # Per-job snapshot — never path memory (duplicates share clip_path).
             session = self._session_state_from_job_settings(job)
             self._apply_header_from_job(job)
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 self.set_player_header_clip_controls_visible(True)
-            same_preview = bool(job_norm) and job_norm in (prev_preview, prev_opening)
-            preview_idle = not (
-                getattr(self, "_is_switching", False)
-                or getattr(self, "_awaiting_first_frame", False)
+            # Always remount. Skipping play when path/MPV looked "already up"
+            # left the previous clip on screen (or a black player on cold start).
+            self.generate_and_play_preview(
+                job.clip_path, trim_restore=session, remount=True
             )
-            if same_preview and preview_idle and hasattr(self, "apply_trim_state"):
-                # Same media already up — remounting is wasteful and the in-flight
-                # spam guard can leave the previous job's Trim on screen.
-                self._pending_trim_restore = None
-                self._apply_clip_session_state(session, silent=True)
-                self._populate_quality_options_for_clip(
-                    job.clip_path, preserve_ui_selection=False,
-                )
-                apply_job_settings_to_ui(self, job.settings)
-                self.update_final_setup()
-                self._loading_queue_job = False
-            else:
-                # Start playback before Source Info XML / size work.
-                self.generate_and_play_preview(job.clip_path, trim_restore=session)
-                self._populate_quality_options_for_clip(
-                    job.clip_path, preserve_ui_selection=False,
-                )
-                self._apply_export_session_state(session, silent=True)
-                apply_job_settings_to_ui(self, job.settings)
-                self.update_final_setup()
-                if hasattr(self, "_maybe_start_thumbs_after_quality"):
-                    self._maybe_start_thumbs_after_quality(job.clip_path)
+            self._populate_quality_options_for_clip(
+                job.clip_path, preserve_ui_selection=False,
+            )
+            self._apply_export_session_state(session, silent=True)
+            apply_job_settings_to_ui(self, job.settings)
+            self.update_final_setup()
+            if hasattr(self, "_maybe_start_thumbs_after_quality"):
+                self._maybe_start_thumbs_after_quality(job.clip_path)
         except Exception:
             self._loading_queue_job = False
             raise
         self._highlight_clip_in_library(job.clip_path)
-        # Card/list selection only — do not force the Render Queue pane open.
         self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
-        if hasattr(self, "_sync_library_mode_chrome"):
-            if not getattr(self, "_render_dock_visible", False):
-                self._sync_library_mode_chrome()
-        # Queue selection must refresh Ready badge + neo binding chrome.
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
-        if hasattr(self, "_ensure_docked_neo_visible_for_context"):
-            try:
-                self._ensure_docked_neo_visible_for_context()
-            except Exception:
-                pass
 
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""
-        if getattr(self, "_clips_scan_active", False):
-            if hasattr(self, "set_status"):
-                self.set_status("Library is still loading — Queue is locked.")
-            return
         logging.info("Queue selection: %s", job_id)
         self.activate_queue_job(job_id)
+
     def _highlight_clip_in_library(self, clip_path: str) -> None:
         """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
         if not clip_path or not hasattr(self.ui, "table_clips"):
@@ -6730,26 +6718,52 @@ class RenderMixin:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
 
-    def _queue_job_for_preview_sync(self, clip_path: str | None = None):
-        """Resolve the queue job that should receive live trim/settings edits.
+    def _remember_queue_job_for_clip(self, clip_path: str | None, job_id: str | None) -> None:
+        """Remember which duplicate card was last opened for this clip path."""
+        if not clip_path or not job_id:
+            return
+        if not hasattr(self, "_last_queue_job_id_by_clip"):
+            self._last_queue_job_id_by_clip = {}
+        self._last_queue_job_id_by_clip[os.path.normpath(clip_path)] = str(job_id)
 
-        Prefer the *selected* queue job when its clip path matches — identical
-        clips share a path, so ``find_by_clip_path`` alone always hits the first
-        duplicate and confuses TRIM / export memory across rows.
+    def _resolve_queue_job_for_library_clip(self, clip_path: str):
+        """Which queue card Clips Manager should open for a duplicated clip.
+
+        Order: currently selected job for this path → last activated job still
+        in the queue → first queue row for the path.
         """
-        preview = clip_path or self._current_preview_clip_path()
-        if not preview or not hasattr(self, "render_queue"):
+        if not clip_path or not hasattr(self, "render_queue"):
             return None
-        preview_norm = os.path.normpath(preview)
+        jobs = self.render_queue.find_all_by_clip_path(clip_path)
+        if not jobs:
+            return None
+        clip_norm = os.path.normpath(clip_path)
         selected_id = getattr(self, "_selected_queue_job_id", None)
         if selected_id:
             selected = self.render_queue.get(selected_id)
             if (
                 selected is not None
-                and os.path.normpath(selected.clip_path or "") == preview_norm
+                and os.path.normpath(selected.clip_path or "") == clip_norm
             ):
                 return selected
-        return self.render_queue.find_by_clip_path(preview)
+        remembered = (getattr(self, "_last_queue_job_id_by_clip", None) or {}).get(
+            clip_norm
+        )
+        if remembered:
+            job = self.render_queue.get(remembered)
+            if (
+                job is not None
+                and os.path.normpath(job.clip_path or "") == clip_norm
+            ):
+                return job
+        return jobs[0]
+
+    def _queue_job_for_preview_sync(self, clip_path: str | None = None):
+        """Resolve the queue job that should receive live trim/settings edits."""
+        preview = clip_path or self._current_preview_clip_path()
+        if not preview or not hasattr(self, "render_queue"):
+            return None
+        return self._resolve_queue_job_for_library_clip(preview)
 
     def _in_queue_membership_indices(self, clip_path) -> list:
         """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""

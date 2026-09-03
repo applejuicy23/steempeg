@@ -340,10 +340,14 @@ class PlayerMixin:
             except Exception:
                 pass
 
-    def _kick_linux_embed_surface(self) -> None:
-        """Re-apply embed geometry after the stack shows ``video_container``."""
-        if sys.platform == "win32":
-            return
+    def _kick_embed_surface(self) -> None:
+        """Re-apply embed geometry after the stack shows ``video_container``.
+
+        QStackedLayout only flips Qt visibility. The native ``wid=`` child can
+        keep a stale HWND rect (or 0×0 from ``_park_mpv_screen``) and paint
+        over the shell — library / Render Settings tabs look like they dropped
+        under the screen. Linux always kicked this; Windows skipped it.
+        """
         wrapper = getattr(self, "mpv_wrapper", None)
         if wrapper is None or not hasattr(wrapper, "update_geometry"):
             return
@@ -351,7 +355,45 @@ class PlayerMixin:
             wrapper._last_video_rect = None
             wrapper.update_geometry()
         except Exception as exc:
-            logging.debug("Linux embed surface kick failed: %s", exc)
+            logging.debug("embed surface kick failed: %s", exc)
+
+    def _kick_linux_embed_surface(self) -> None:
+        self._kick_embed_surface()
+
+    def _keep_v_dock_on_screen(self) -> None:
+        """If Source Info / neo sizeHint inflated the bottom pane, cap it.
+
+        Never inflate and never run mid-drag — that is what made the splitters
+        fight the user after a clip open.
+        """
+        if getattr(self, "_splitter_dragging", False):
+            return
+        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
+            return
+        if hasattr(self, "_desktop_render_layout_is_portable_like"):
+            try:
+                if self._desktop_render_layout_is_portable_like():
+                    return
+            except Exception:
+                pass
+        v_split = getattr(self, "main_v_splitter", None)
+        ui = getattr(self, "ui", None)
+        if v_split is None or ui is None:
+            return
+        try:
+            sizes = list(v_split.sizes())
+        except RuntimeError:
+            return
+        if len(sizes) < 2 or int(sizes[1]) <= 0:
+            return
+        total = sum(sizes) if sum(sizes) > 0 else int(v_split.height() or 0)
+        total = max(int(total), 1)
+        from steempeg.ui.layout_defaults import main_v_splitter_max_bottom
+
+        cap = main_v_splitter_max_bottom(int(ui.height() or 0) or total)
+        if int(sizes[1]) <= cap:
+            return
+        v_split.setSizes([max(total - cap, 200), cap])
 
     def _clear_player_surface(self):
         """Stop mpv and return the player area to the empty placeholder.
@@ -920,7 +962,9 @@ class PlayerMixin:
                     self.video_stack.setCurrentWidget(self.ui.video_container)
                 except Exception:
                     pass
-            self._kick_linux_embed_surface()
+            self._kick_embed_surface()
+            if hasattr(self, "_keep_v_dock_on_screen"):
+                self._keep_v_dock_on_screen()
             self._finish_preview_switch(switch_gen)
             clip = getattr(self, "_preview_clip_path", None)
             if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
@@ -1005,9 +1049,10 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
-        self._kick_linux_embed_surface()
-        if sys.platform != "win32":
-            QTimer.singleShot(0, self._kick_linux_embed_surface)
+        self._kick_embed_surface()
+        QTimer.singleShot(0, self._kick_embed_surface)
+        if hasattr(self, "_keep_v_dock_on_screen"):
+            self._keep_v_dock_on_screen()
         # Switching gate can clear as soon as the new picture is visible.
         self._finish_preview_switch(switch_gen)
         clip = getattr(self, "_preview_clip_path", None)
@@ -3037,9 +3082,8 @@ class PlayerMixin:
                     self.video_stack.setCurrentWidget(self.ui.video_container)
                 except Exception:
                     pass
-            self._kick_linux_embed_surface()
-            if sys.platform != "win32":
-                QTimer.singleShot(0, self._kick_linux_embed_surface)
+            self._kick_embed_surface()
+            QTimer.singleShot(0, self._kick_embed_surface)
         if hasattr(self, "clear_clip_open_loading"):
             self.clear_clip_open_loading()
         has_trim = bool(getattr(self, "_pending_trim_restore", None))
@@ -3521,6 +3565,17 @@ class PlayerMixin:
         have = self._norm_clip_path_key(getattr(self, "_preview_clip_path", None))
         if not want or want != have:
             return False
+        play = getattr(self, "_active_play_media_path", None)
+        if not play:
+            return False
+        play_n = self._norm_clip_path_key(play)
+        sep = os.sep
+        if not (
+            play_n == want
+            or play_n.startswith(want + sep)
+            or play_n.startswith(want + "/")
+        ):
+            return False
         return bool(self._mpv_has_media())
 
     def _stash_pending_open_seek(self, clip_path: str, seek_sec: float | None) -> None:
@@ -3766,11 +3821,20 @@ class PlayerMixin:
         if hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(percent)
 
-    def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
+    def generate_and_play_preview(
+        self,
+        clip_path=None,
+        trim_restore=None,
+        force=False,
+        mpd_override=None,
+        remount=False,
+    ):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
 
         force=True bypasses the dead-clip guard for a best-effort "salvage" preview
         (may show corrupted video, audio only, or nothing — entirely on the user).
+        remount=True restarts MPV even if the same folder is already opening
+        (queue / library clicks must not be swallowed by the in-flight skip).
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
@@ -3809,6 +3873,7 @@ class PlayerMixin:
             and want == opening
             and not mpd_override
             and not force
+            and not remount
             and (
                 getattr(self, "_is_switching", False)
                 or getattr(self, "_awaiting_first_frame", False)
@@ -3828,10 +3893,18 @@ class PlayerMixin:
 
         self._opening_clip_path = clip_path
         self._preview_clip_path = clip_path
-        # Raw clip is active now — re-show dash/settings only when dock was hidden
-        # (Screenshots / rendered-only). Skip geometry churn while already open.
+        # Raw clip is active now — re-show dash/settings only when the dock
+        # widget is actually hidden (Screenshots / rendered-only). Never use
+        # the flag: a stale False re-glues the v-splitter on every MPV open.
         if hasattr(self, "_sync_library_mode_chrome"):
-            if not getattr(self, "_render_dock_visible", False):
+            dock = getattr(self, "bottom_v_wrap", None)
+            dock_up = False
+            if dock is not None:
+                try:
+                    dock_up = bool(dock.isVisible())
+                except RuntimeError:
+                    dock_up = False
+            if not dock_up:
                 self._sync_library_mode_chrome()
         self.set_clip_open_loading(
             clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
