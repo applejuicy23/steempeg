@@ -33,6 +33,20 @@ from steempeg.ui.design_tokens import ACCENT_PRIMARY
 
 _TRANSIENT_STATUS_MS = 3500
 
+_DEFAULT_CLIP_SESSION = {
+    "is_trim_mode": False,
+    "trim_start_ms": 0,
+    "trim_end_ms": 0,
+    "zoom_level": 1.0,
+    "scroll_x": 0,
+    "container": "MP4",
+    "codec_text": "H.264 (AVC)",
+    "audio_format": "AAC",
+    "output_preset": "Custom",
+    "audio_only": False,
+    "mute_audio": False,
+}
+
 
 def _format_mbit(kbps: float | int) -> str:
     """Show bitrate as Mbit/s with one decimal (e.g. 22.3, 55, 0.3 Mbit)."""
@@ -66,7 +80,6 @@ from steempeg.render import bitrate
 from steempeg.render.output_formats import (
     AUDIO_FORMATS,
     CONTAINERS,
-    DEFAULT_CODEC_TEXT,
     KNOWN_OUTPUT_EXTENSIONS,
     OUTPUT_PRESETS,
     VIDEO_CODEC_ITEMS,
@@ -76,21 +89,6 @@ from steempeg.render.output_formats import (
     output_extension,
     resolve_video_encoder,
 )
-
-_DEFAULT_CLIP_SESSION = {
-    "is_trim_mode": False,
-    "trim_start_ms": 0,
-    "trim_end_ms": 0,
-    "zoom_level": 1.0,
-    "scroll_x": 0,
-    "container": "MP4",
-    "codec_text": DEFAULT_CODEC_TEXT,
-    "audio_format": "AAC",
-    "output_preset": "Custom",
-    "audio_only": False,
-    "mute_audio": False,
-}
-
 from steempeg.render.encode_speed import (
     ENCODE_SPEED_OPTIONS,
     encode_speed_hint,
@@ -429,10 +427,7 @@ class RenderMixin:
                     continue
                 ui.combo_codec.addItem(item)
             if ui.combo_codec.count():
-                idx = ui.combo_codec.findText(DEFAULT_CODEC_TEXT)
-                if idx < 0:
-                    idx = min(1, ui.combo_codec.count() - 1)
-                ui.combo_codec.setCurrentIndex(idx)
+                ui.combo_codec.setCurrentIndex(min(1, ui.combo_codec.count() - 1))
 
         if hasattr(ui, "combo_audio_format"):
             ui.combo_audio_format.clear()
@@ -2642,7 +2637,10 @@ class RenderMixin:
             lay = parent.layout() if parent is not None else None
             if lay is not None:
                 lay.removeWidget(neo)
-            neo.setParent(None)
+            else:
+                from steempeg.ui.portable.sheets import _reparent_borrowed
+
+                _reparent_borrowed(neo)
         garage.layout().addWidget(neo)
         neo.hide()
 
@@ -3299,7 +3297,7 @@ class RenderMixin:
         if not hasattr(self, "_clip_session_memory"):
             self._clip_session_memory = {}
         self._clip_session_memory[norm] = state
-        job = self.render_queue.find_by_clip_path(clip_path)
+        job = self._queue_job_for_preview_sync(clip_path)
         if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
             job.settings.is_trim_mode = bool(state["is_trim_mode"])
             job.settings.trim_start_ms = int(state["trim_start_ms"])
@@ -3317,7 +3315,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self.render_queue.find_by_clip_path(preview)
+        job = self._queue_job_for_preview_sync(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings.is_trim_mode = bool(self.custom_timeline.is_trim_mode)
@@ -3346,7 +3344,7 @@ class RenderMixin:
         self._clip_session_memory[norm] = state
         if not self._queue_is_active():
             return
-        job = self.render_queue.find_by_clip_path(clip_path)
+        job = self._queue_job_for_preview_sync(clip_path)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return
         job.settings.is_trim_mode = bool(state["is_trim_mode"])
@@ -3370,7 +3368,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self.render_queue.find_by_clip_path(preview)
+        job = self._queue_job_for_preview_sync(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings = snapshot_settings_from_ui(self)
@@ -4042,11 +4040,9 @@ class RenderMixin:
         non-current pages to an Ignored size policy makes each page contribute 0 height,
         so the scroll range matches what's actually visible.
 
-        Floating Render Settings is different: Preferred sizeHints collapse
-        ``settings_tabs`` / ``right_scroll`` toward content width/height, so neo
-        sits as a postage-stamp plate with black void beside it — and each nav
-        click re-runs this and makes it worse. Use Expanding for the active page
-        while floating so the plate keeps filling the dialog.
+        Floating Render Settings must keep Expanding on the active page / scroll /
+        neo — Preferred sizeHints collapse the plate into a postage stamp (or let
+        it crawl past the dialog chrome on the next map).
         """
         from PySide6.QtWidgets import QSizePolicy
 
@@ -4078,7 +4074,6 @@ class RenderMixin:
             page.updateGeometry()
         tabs.updateGeometry()
         if floating:
-            # Keep scroll/tabs Expanding after the sizeHint collapse above.
             try:
                 tabs.setSizePolicy(
                     QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -4095,12 +4090,10 @@ class RenderMixin:
                     neo.setSizePolicy(
                         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
                     )
+                    neo.setMinimumSize(0, 0)
+                    neo.setMaximumSize(16777215, 16777215)
             except RuntimeError:
                 pass
-
-    def _expand_neo_if_floating(self, *_args) -> None:
-        """No-op — v48 float path had no expand_neo_for_floating_dialog."""
-        return
 
     def _refresh_source_video_bitrate(self) -> float:
         """Return source video Mbps, re-probing from disk when the cached value is missing."""
@@ -4839,8 +4832,8 @@ class RenderMixin:
         if is_target_mode and not getattr(self, "_bulk_settings_apply", False):
             self.update_final_setup()
 
-    def _ensure_fps_combo_populated(self) -> None:
-        """Refill FPS when empty (float open / theme chrome / Target size plan)."""
+    def _ensure_fps_combo_for_target(self) -> None:
+        """Target mode needs a usable FPS row (blank combo broke the size plan)."""
         combo = getattr(self.ui, "combo_fps", None)
         if combo is None:
             return
@@ -4850,34 +4843,9 @@ class RenderMixin:
         combo.blockSignals(True)
         if combo.count() <= 0:
             combo.addItem(f"{fps_val} FPS (Original)")
-            optional_fps = []
-            if fps_val >= 60:
-                optional_fps = [30, 15]
-            elif fps_val >= 30:
-                optional_fps = [15]
-            for target in optional_fps:
-                combo.addItem(f"{target} FPS")
-            for target in (60, 30, 15):
-                label = f"{target} FPS"
-                if combo.findText(label) < 0 and target > fps_val:
-                    combo.addItem(label)
-                    from steempeg.ui.widgets.combo_chrome import set_combo_item_enabled
-
-                    set_combo_item_enabled(
-                        combo,
-                        combo.count() - 1,
-                        False,
-                        tooltip=f"Source is {fps_val} FPS — cannot upscale to {target} FPS.",
-                    )
-            combo.insertSeparator(combo.count())
-            combo.addItem("⚙️ Custom FPS...")
         combo.setCurrentIndex(0)
         combo.setEnabled(True)
         combo.blockSignals(False)
-
-    def _ensure_fps_combo_for_target(self) -> None:
-        """Target mode needs a usable FPS row (blank combo broke the size plan)."""
-        self._ensure_fps_combo_populated()
 
     def init_original_help_state(self) -> None:
         """Apply the saved 'don't show again' preference to the Original warning icon."""
@@ -6678,6 +6646,27 @@ class RenderMixin:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
 
+    def _queue_job_for_preview_sync(self, clip_path: str | None = None):
+        """Resolve the queue job that should receive live trim/settings edits.
+
+        Prefer the *selected* queue job when its clip path matches — identical
+        clips share a path, so ``find_by_clip_path`` alone always hits the first
+        duplicate and confuses TRIM / export memory across rows.
+        """
+        preview = clip_path or self._current_preview_clip_path()
+        if not preview or not hasattr(self, "render_queue"):
+            return None
+        preview_norm = os.path.normpath(preview)
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        if selected_id:
+            selected = self.render_queue.get(selected_id)
+            if (
+                selected is not None
+                and os.path.normpath(selected.clip_path or "") == preview_norm
+            ):
+                return selected
+        return self.render_queue.find_by_clip_path(preview)
+
     def _in_queue_membership_indices(self, clip_path) -> list:
         """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""
         if not clip_path or not hasattr(self, "render_queue"):
@@ -7324,42 +7313,39 @@ class RenderMixin:
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
         has_jobs = len(self.render_queue) > 0
         had_jobs = bool(getattr(self, "_queue_sync_had_jobs", False))
-        # Emily: auto-expand only on empty → first job(s). Later adds must not
-        # fight an intentional hide while the queue already has videos.
-        became_nonempty = bool(has_jobs) and not had_jobs
         self._queue_sync_had_jobs = has_jobs
 
         if has_jobs:
-            if became_nonempty:
-                # 0 → 1+: drop any leftover hide latch from a prior drained queue
-                # *before* show(), so the panel is mapped when we open sizes.
-                self._queue_user_collapsed = False
             if not bool(getattr(self, "_queue_user_collapsed", False)):
                 self.render_queue_panel.show()
-            # Auto-open only when jobs first appear, or theatre/fullscreen exit
-            # restore. Never reopen on routine refreshes / subsequent adds.
+            if not had_jobs:
+                # Fresh jobs — clear any prior user-collapse and open once.
+                self._queue_user_collapsed = False
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(True)
+            # Auto-open only when jobs first appear, or when the pane is shut
+            # without a user-collapse latch (theatre exit safety). Never reopen
+            # on routine refreshes (clip select, progress ticks, Leave/Resume).
             # Scrap ≤48 counts as shut — closed panes often sit at PANE_FREED (1).
             should_open = (
                 sizes[1] <= 48
                 and not bool(getattr(self, "_queue_user_collapsed", False))
                 and not bool(getattr(self, "_splitter_dragging", False))
                 and (
-                    became_nonempty
+                    not had_jobs
                     or bool(getattr(self, "_queue_splitter_restore_open", False))
                 )
             )
             if should_open and hasattr(self, "_open_queue_in_right_splitter"):
-                self.render_queue_panel.show()
                 self._open_queue_in_right_splitter()
                 if hasattr(self, "_persist_queue_panel_open"):
                     self._persist_queue_panel_open(True)
             self._queue_splitter_restore_open = False
         else:
-            # Empty slate: next first add may auto-open. Do not keep a hide latch
-            # from jobs that are no longer in the queue.
-            self._queue_user_collapsed = False
             self.render_queue_panel.show()
-            if had_jobs and sizes[1] > 0:
+            if bool(getattr(self, "_queue_user_collapsed", False)) or (
+                had_jobs and sizes[1] > 0
+            ):
                 self._selected_queue_job_id = None
                 if hasattr(self, "_close_queue_pane"):
                     self._close_queue_pane()
