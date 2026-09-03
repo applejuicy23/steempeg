@@ -886,6 +886,15 @@ class RenderedLibraryMixin:
         show_bottom = self._should_show_render_dock()
         prev_show = getattr(self, "_render_dock_visible", None)
         self._render_dock_visible = show_bottom
+        # Opening a clip must not re-glue / re-dock / setSizes. That shoved the
+        # library tab bar (and Render Settings tabs) off the bottom of the screen.
+        if (
+            prev_show is not None
+            and bool(prev_show) == bool(show_bottom)
+            and not getattr(self, "is_theater", False)
+            and not getattr(self, "is_fullscreen", False)
+        ):
+            return
 
         portable_like = False
         if hasattr(self, "_desktop_render_layout_is_portable_like"):
