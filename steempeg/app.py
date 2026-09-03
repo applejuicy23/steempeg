@@ -833,17 +833,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             
             self.wrap_library_views_in_stack(views_layout)
 
-            from steempeg.ui.library.folder_drop_filter import install_clips_folder_drop
-
-            install_clips_folder_drop(
-                self.grid_clips,
-                self.ui.table_clips,
-                getattr(self, "clips_page", None),
-                on_folders=self.add_clips_folder_paths,
-                highlight=getattr(self, "clips_page", None)
-                or self.library_views_container,
-            )
-
             from steempeg.ui.library.library_styles import install_library_scroll_sync
 
             install_library_scroll_sync(self)
@@ -1077,7 +1066,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             # Make the scroll area size to the active page so short tabs don't get a phantom scrollbar
             self.ui.settings_tabs.currentChanged.connect(self.fit_settings_tab_to_page)
             
-            neo_layout.addWidget(sidebar_frame)
+            neo_layout.addWidget(sidebar_frame, 0)
             
             # 4. Settings content host — opaque shell gray (not #000 void / not transparent).
             self.right_scroll = QScrollArea()
@@ -1086,12 +1075,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.right_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
             self.right_scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            try:
-                self.right_scroll.setSizeAdjustPolicy(
-                    QScrollArea.SizeAdjustPolicy.AdjustIgnored
-                )
-            except Exception:
-                pass
 
             # Left radii only (= divider curve). Right edge stays square so the opaque
             # settings fill reaches the card edge; neo_wrapper's outer mask clips TR/BR.
@@ -1109,18 +1092,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 QScrollArea#neo_settings_scroll > QWidget {{
                     background-color: {_neo_settings};
                     border: none;
-                    border-top-left-radius: {_neo_r_px}px;
-                    border-bottom-left-radius: {_neo_r_px}px;
-                    border-top-right-radius: 0px;
-                    border-bottom-right-radius: 0px;
                 }}
-                QScrollArea#neo_settings_scroll QWidget#qt_scrollarea_viewport {{
+                QWidget#qt_scrollarea_viewport {{
                     background-color: {_neo_settings};
                     border: none;
-                    border-top-left-radius: {_neo_r_px}px;
-                    border-bottom-left-radius: {_neo_r_px}px;
-                    border-top-right-radius: 0px;
-                    border-bottom-right-radius: 0px;
                 }}
             """)
             from steempeg.ui.widgets.vertical_scrollbar import (
@@ -1151,27 +1126,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.settings_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.ui.settings_tabs.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.ui.settings_tabs.setStyleSheet(f"""
-                QTabWidget {{
-                    background-color: {_neo_settings}; border: none;
-                    border-top-left-radius: {_neo_r_px}px;
-                    border-bottom-left-radius: {_neo_r_px}px;
-                    border-top-right-radius: 0px;
-                    border-bottom-right-radius: 0px;
-                }}
-                QTabWidget::pane {{
-                    border: none; background-color: {_neo_settings};
-                    border-top-left-radius: {_neo_r_px}px;
-                    border-bottom-left-radius: {_neo_r_px}px;
-                    border-top-right-radius: 0px;
-                    border-bottom-right-radius: 0px;
-                }}
-                QTabWidget > QStackedWidget {{
-                    background-color: {_neo_settings}; border: none;
-                    border-top-left-radius: {_neo_r_px}px;
-                    border-bottom-left-radius: {_neo_r_px}px;
-                    border-top-right-radius: 0px;
-                    border-bottom-right-radius: 0px;
-                }}
+                QTabWidget {{ background-color: {_neo_settings}; border: none; }}
+                QTabWidget::pane {{ border: none; background-color: {_neo_settings}; }}
+                QTabWidget > QStackedWidget {{ background-color: {_neo_settings}; border: none; }}
                 QStackedWidget > QWidget {{ background-color: {_neo_settings}; }}
 
                 QLabel {{ color: #cccccc; font-weight: bold; background: transparent; font-family: 'Arial'; }}
@@ -1209,19 +1166,30 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         self._target = target
                         self._radius = float(radius)
                         self._left_only = bool(left_only)
+                        self._suspended = False
                         self._timer = QTimer(self)
                         self._timer.setSingleShot(True)
                         self._timer.timeout.connect(self._apply_mask)
 
                     def eventFilter(self, obj, event):
                         if event.type() == QEvent.Type.Resize:
+                            # Float Render Settings suspends outer neo mask — never
+                            # restart debounce or a mid-layout Resize re-clips hits.
+                            if getattr(self, "_suspended", False):
+                                self._timer.stop()
+                                return False
                             self._timer.start(60)
                         return False
 
                     def _apply_mask(self):
-                        if getattr(self, "_suspended", False):
-                            return
                         obj = self._target
+                        if getattr(self, "_suspended", False):
+                            if obj is not None:
+                                try:
+                                    obj.clearMask()
+                                except RuntimeError:
+                                    pass
+                            return
                         if obj is None or obj.width() <= 0 or obj.height() <= 0:
                             return
                         try:
@@ -3236,7 +3204,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Same rhythm as Original preset warning: 8px between title and body.
         lay.setSpacing(8)
 
-        from steempeg.ui.icon_assets import playinfo_pixmap
         from steempeg.ui.player_header_layout import (
             player_header_font_px,
             player_header_title_qfont,
@@ -3247,22 +3214,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
             f" font-family: {tok.FONT_APP}; background: transparent;"
         )
-        # Same playinfo2.png glyph as the header Clip info chip (hot tint).
-        _info_icon_sz = max(14, int(btn.iconSize().width() or heading_font.pixelSize()))
-        heading_row = QHBoxLayout()
-        heading_row.setContentsMargins(0, 0, 0, 0)
-        heading_row.setSpacing(8)
-        heading_icon = QLabel()
-        heading_icon.setFixedSize(_info_icon_sz, _info_icon_sz)
-        heading_icon.setPixmap(playinfo_pixmap("#e8e8e8", _info_icon_sz))
-        heading_icon.setStyleSheet("background: transparent; border: none;")
         heading = QLabel("Clip info")
         heading.setFont(heading_font)
         heading.setStyleSheet(heading_qss)
-        heading_row.addWidget(heading_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading_row.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading_row.addStretch(1)
-        lay.addLayout(heading_row)
+        lay.addWidget(heading)
 
         lines = [ln for ln in text.split("\n") if ln.strip()]
         # Resolve game title from header meta — never via colon-split of tip lines.
@@ -3842,8 +3797,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def _refresh_ui_theme_surfaces(self, *, preview: bool = False) -> None:
         """Re-tint major chrome widgets after a UI theme switch (no layout/mask changes)."""
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPalette
         from steempeg.ui import ui_theme as ut
         from steempeg.ui.design_tokens import with_tooltip_style
+        from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
 
         # Clip info is built once at open — close so the next show picks up tokens.
         clip_info = getattr(self, "_clip_info_popup", None)
@@ -3854,9 +3811,55 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 pass
             self._clip_info_popup = None
 
-        from steempeg.ui.render_panel import apply_neo_shell_theme_chrome
+        p = ut.active_palette()
 
-        apply_neo_shell_theme_chrome(self)
+        neo = getattr(self, "neo_wrapper", None)
+        if neo is not None:
+            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+
+        scroll = getattr(self, "right_scroll", None)
+        if scroll is not None:
+            scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
+            from steempeg.ui.widgets.vertical_scrollbar import (
+                ensure_steempg_vertical_scrollbar,
+                settings_scrollbar_chrome,
+            )
+
+            ensure_steempg_vertical_scrollbar(
+                scroll, chrome=settings_scrollbar_chrome()
+            )
+            vp = scroll.viewport()
+            if vp is not None:
+                vp.setAutoFillBackground(True)
+                pal = vp.palette()
+                qc = QColor(p.bg_settings_panel)
+                for group in (
+                    QPalette.ColorGroup.Active,
+                    QPalette.ColorGroup.Inactive,
+                    QPalette.ColorGroup.Disabled,
+                ):
+                    pal.setColor(group, QPalette.ColorRole.Window, qc)
+                    pal.setColor(group, QPalette.ColorRole.Base, qc)
+                vp.setPalette(pal)
+
+        if hasattr(self.ui, "settings_tabs"):
+            self.ui.settings_tabs.setStyleSheet(
+                ut.neo_settings_tabs_stylesheet(settings_panel_stylesheet())
+            )
+            for i in range(self.ui.settings_tabs.count()):
+                page = self.ui.settings_tabs.widget(i)
+                if page is None:
+                    continue
+                obj = page.objectName()
+                if obj:
+                    page.setStyleSheet(ut.neo_tab_page_stylesheet(obj))
+                else:
+                    page.setStyleSheet(
+                        f"background-color: {p.bg_settings_panel}; border: none;"
+                    )
+
+        for btn in getattr(self, "neo_nav_buttons", []) or []:
+            btn.setStyleSheet(ut.neo_nav_pill_stylesheet())
 
         header = getattr(self, "player_header_frame", None)
         if header is not None:
@@ -4008,12 +4011,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if sheet is not None and hasattr(sheet, "apply_ui_theme_chrome"):
             try:
                 sheet.apply_ui_theme_chrome()
-            except Exception:
-                pass
-        desk_rs = getattr(self, "_desktop_render_settings_dlg", None)
-        if desk_rs is not None and hasattr(desk_rs, "apply_ui_theme_chrome"):
-            try:
-                desk_rs.apply_ui_theme_chrome()
             except Exception:
                 pass
 

@@ -1074,83 +1074,57 @@ def set_settings_panel_locked(app, locked: bool):
 _EXPORT_COMBO_NAMES = frozenset({"combo_output_preset", "combo_container"})
 
 
-def _lock_widget_panel_fill(widget, color: str) -> None:
-    """Palette-lock a QWidget so Windows light theme cannot paint gray voids."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QColor, QPalette
+def suspend_neo_wrapper_mask_for_float(app) -> None:
+    """Clear outer ``neo_wrapper`` QRegion mask while neo lives in a float sheet.
 
-    if widget is None:
+    Translucent frameless dialogs + a masked ``neo_wrapper`` desync hit-tests on
+    Windows — second open is the spicy case (garage still carries a tiny mask).
+    Keep the settings scroll's left-only mask (nav↔content divider curve).
+    Call ``restore_neo_dock_masks`` when neo returns to the dock / chrome garage.
+    """
+    if app is None:
         return
-    widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    widget.setAutoFillBackground(True)
-    pal = widget.palette()
-    qc = QColor(color)
-    for group in (
-        QPalette.ColorGroup.Active,
-        QPalette.ColorGroup.Inactive,
-        QPalette.ColorGroup.Disabled,
-    ):
-        pal.setColor(group, QPalette.ColorRole.Window, qc)
-        pal.setColor(group, QPalette.ColorRole.Base, qc)
-    widget.setPalette(pal)
-
-
-def apply_neo_shell_theme_chrome(app) -> None:
-    """Re-tint neo_wrapper, settings scroll host, tab pages, and nav pills."""
-    from steempeg.ui.widgets.combo_chrome import settings_panel_stylesheet
-
-    p = ut.active_palette()
-    ui = getattr(app, "ui", None)
-    panel_bg = p.bg_settings_panel
-
+    wrapper_mask = getattr(app, "_neo_wrapper_mask", None)
+    if wrapper_mask is not None:
+        wrapper_mask._suspended = True
+        timer = getattr(wrapper_mask, "_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
     neo = getattr(app, "neo_wrapper", None)
     if neo is not None:
-        neo.setStyleSheet(ut.neo_wrapper_stylesheet())
-        _lock_widget_panel_fill(neo, p.bg_card)
+        try:
+            neo.clearMask()
+        except RuntimeError:
+            pass
+    corner_mask = getattr(app, "corner_mask", None)
+    if corner_mask is not None:
+        corner_mask._suspended = False
+        timer = getattr(corner_mask, "_timer", None)
+        if timer is not None:
+            try:
+                timer.start(0)
+            except RuntimeError:
+                pass
 
-    scroll = getattr(app, "right_scroll", None)
-    if scroll is not None:
-        scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
-        from steempeg.ui.widgets.vertical_scrollbar import (
-            ensure_steempg_vertical_scrollbar,
-            settings_scrollbar_chrome,
-        )
 
-        ensure_steempg_vertical_scrollbar(
-            scroll, chrome=settings_scrollbar_chrome()
-        )
-        _lock_widget_panel_fill(scroll, panel_bg)
-        _lock_widget_panel_fill(scroll.viewport(), panel_bg)
-        corner_mask = getattr(app, "corner_mask", None)
-        if corner_mask is not None and not getattr(corner_mask, "_suspended", False):
-            timer = getattr(corner_mask, "_timer", None)
-            if timer is not None:
-                try:
-                    timer.start(0)
-                except RuntimeError:
-                    pass
-
-    tabs = getattr(ui, "settings_tabs", None) if ui is not None else None
-    if tabs is not None:
-        tabs.setStyleSheet(
-            ut.neo_settings_tabs_stylesheet(settings_panel_stylesheet())
-        )
-        _lock_widget_panel_fill(tabs, panel_bg)
-        for i in range(tabs.count()):
-            page = tabs.widget(i)
-            if page is None:
-                continue
-            obj = page.objectName()
-            if obj:
-                page.setStyleSheet(ut.neo_tab_page_stylesheet(obj))
-            else:
-                page.setStyleSheet(
-                    f"background-color: {panel_bg}; border: none;"
-                )
-            _lock_widget_panel_fill(page, panel_bg)
-
-    for btn in getattr(app, "neo_nav_buttons", []) or []:
-        btn.setStyleSheet(ut.neo_nav_pill_stylesheet())
+def restore_neo_dock_masks(app) -> None:
+    """Re-enable neo corner masks after floating Render Settings returns neo."""
+    if app is None:
+        return
+    for attr in ("_neo_wrapper_mask", "corner_mask"):
+        mask = getattr(app, attr, None)
+        if mask is None:
+            continue
+        mask._suspended = False
+        timer = getattr(mask, "_timer", None)
+        if timer is not None:
+            try:
+                timer.start(0)
+            except RuntimeError:
+                pass
 
 
 def apply_render_panel_theme_chrome(ui) -> None:
@@ -1423,20 +1397,8 @@ def apply_settings_panel_density(ui, dense) -> None:
         dest.setFont(fnt)
 
     # Preset create chrome (Create… + Save as new). Row actions live on each list item.
-    p = ut.active_palette()
-    if p.name == ut.UI_THEME_DEFAULT:
-        create_face = ("#303030", "#f0f0f0", "#4a4a4a", "#3a3a3a", "#6b5a8e", "#262626")
-    else:
-        create_face = (
-            p.button_secondary_bg,
-            "#f0f0f0",
-            p.button_secondary_border,
-            p.button_secondary_hover_bg,
-            "#6b5a8e",
-            p.button_secondary_pressed_bg,
-        )
     _preset_faces = (
-        ("btn_preset_create", *create_face),
+        ("btn_preset_create", "#303030", "#f0f0f0", "#4a4a4a", "#3a3a3a", "#6b5a8e", "#262626"),
         ("btn_preset_save", "#4a3d66", "#f0ecff", "#6b5a8e", "#5a4d76", "#b29ae7", "#3a324a"),
     )
     for attr, bg, fg, brd, hover_bg, hover_brd, pressed_bg in _preset_faces:
