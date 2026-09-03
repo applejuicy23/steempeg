@@ -1075,6 +1075,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.right_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
             self.right_scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            # Do not re-query every tab page sizeHint on each splitter pixel.
+            try:
+                self.right_scroll.setSizeAdjustPolicy(
+                    QScrollArea.SizeAdjustPolicy.AdjustIgnored
+                )
+            except Exception:
+                pass
 
             # Left radii only (= divider curve). Right edge stays square so the opaque
             # settings fill reaches the card edge; neo_wrapper's outer mask clips TR/BR.
@@ -1160,6 +1167,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 from PySide6.QtCore import QRectF
                 from PySide6.QtGui import QPainterPath, QRegion
 
+                _mask_app = self
+
                 class _DebouncedRegionMask(QObject):
                     def __init__(self, target, radius: float, *, left_only: bool = False):
                         super().__init__(target)
@@ -1167,6 +1176,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         self._radius = float(radius)
                         self._left_only = bool(left_only)
                         self._suspended = False
+                        self._app_host = _mask_app
                         self._timer = QTimer(self)
                         self._timer.setSingleShot(True)
                         self._timer.timeout.connect(self._apply_mask)
@@ -1176,6 +1186,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                             # Float Render Settings suspends outer neo mask — never
                             # restart debounce or a mid-layout Resize re-clips hits.
                             if getattr(self, "_suspended", False):
+                                self._timer.stop()
+                                return False
+                            # setMask(QRegion) repaints the whole settings subtree.
+                            # Skip while a splitter handle is down.
+                            host = getattr(self, "_app_host", None)
+                            if host is not None and getattr(
+                                host, "_splitter_dragging", False
+                            ):
                                 self._timer.stop()
                                 return False
                             self._timer.start(60)

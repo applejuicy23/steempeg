@@ -3800,6 +3800,8 @@ class PlayerMixin:
 
         # Spam-click while this same open is already in flight — don't restart MPV/remux.
         # Pending related-clip seek (if any) is kept and applied when finish fires.
+        # Queue duplicates share clip_path: still refresh deferred trim so job B
+        # does not inherit job A's pending restore when the user clicks mid-open.
         want = self._norm_clip_path_key(clip_path)
         opening = self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
         if (
@@ -3812,12 +3814,15 @@ class PlayerMixin:
                 or getattr(self, "_awaiting_first_frame", False)
             )
         ):
+            if trim_restore is not None:
+                self._pending_trim_restore = trim_restore
             logging.info(
                 "Preview skipped (open already in flight): %s "
-                "(switching=%s awaiting=%s)",
+                "(switching=%s awaiting=%s trim_refresh=%s)",
                 clip_path,
                 bool(getattr(self, "_is_switching", False)),
                 bool(getattr(self, "_awaiting_first_frame", False)),
+                trim_restore is not None,
             )
             return
 

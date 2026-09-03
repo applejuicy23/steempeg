@@ -1768,9 +1768,27 @@ class RenderMixin:
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
 
+        # Clip is queued — activate the right card rather than always the first.
+        # If one of this clip's duplicate cards is already selected, stay on it
+        # (the user is switching library rows to a clip already loaded in the player).
+        # Otherwise activate the first (or only) matching card.
         queue_job = self.render_queue.find_by_clip_path(clip_path)
         if queue_job:
-            # Clip is already queued -> behave exactly like clicking its queue card.
+            clip_norm = os.path.normpath(clip_path)
+            selected_id = getattr(self, "_selected_queue_job_id", None)
+            if selected_id:
+                selected = self.render_queue.get(selected_id)
+                if (
+                    selected is not None
+                    and os.path.normpath(selected.clip_path or "") == clip_norm
+                ):
+                    # Already on a card for this clip — refresh header only.
+                    self._apply_header_from_table_row(selected_row)
+                    if hasattr(self, "set_player_header_clip_controls_visible"):
+                        self.set_player_header_clip_controls_visible(True)
+                    self.refresh_render_queue_panel(sync_splitter=False)
+                    self.update_playback_badge()
+                    return
             self.activate_queue_job(queue_job.id)
             return
 
@@ -3170,23 +3188,34 @@ class RenderMixin:
             return dict(memory[clip_path])
         job = self.render_queue.find_by_clip_path(clip_path)
         if job:
-            s = job.settings
-            state = dict(_DEFAULT_CLIP_SESSION)
-            state.update(
-                {
-                    "is_trim_mode": bool(s.is_trim_mode),
-                    "trim_start_ms": int(s.trim_start_ms),
-                    "trim_end_ms": int(s.trim_end_ms),
-                    "container": s.container_format or state["container"],
-                    "codec_text": s.codec_text or state["codec_text"],
-                    "audio_format": s.audio_format or state["audio_format"],
-                    "output_preset": s.output_preset or state["output_preset"],
-                    "audio_only": bool(s.audio_only),
-                    "mute_audio": bool(s.mute_audio),
-                }
-            )
-            return state
+            return self._session_state_from_job_settings(job)
         return dict(_DEFAULT_CLIP_SESSION)
+
+    def _session_state_from_job_settings(self, job) -> dict:
+        """Build UI session from a *specific* queue job (duplicates share clip_path)."""
+        s = job.settings
+        state = dict(_DEFAULT_CLIP_SESSION)
+        state.update(
+            {
+                "is_trim_mode": bool(s.is_trim_mode),
+                "trim_start_ms": int(s.trim_start_ms or 0),
+                "trim_end_ms": int(s.trim_end_ms or 0),
+                "container": s.container_format or state["container"],
+                "codec_text": s.codec_text or state["codec_text"],
+                "audio_format": s.audio_format or state["audio_format"],
+                "output_preset": s.output_preset or state["output_preset"],
+                "audio_only": bool(s.audio_only),
+                "mute_audio": bool(s.mute_audio),
+            }
+        )
+        # Zoom/scroll may be remembered per job without poisoning the path slot.
+        saved = (getattr(self, "_queue_job_session_memory", None) or {}).get(job.id)
+        if saved:
+            state["zoom_level"] = float(
+                saved.get("zoom_level", state.get("zoom_level", 1.0))
+            )
+            state["scroll_x"] = int(saved.get("scroll_x", state.get("scroll_x", 0)))
+        return state
 
     def _enable_all_output_combo_items(self) -> None:
         ui = self.ui
@@ -3294,14 +3323,20 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
-        if not hasattr(self, "_clip_session_memory"):
-            self._clip_session_memory = {}
-        self._clip_session_memory[norm] = state
         job = self._queue_job_for_preview_sync(clip_path)
         if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
             job.settings.is_trim_mode = bool(state["is_trim_mode"])
             job.settings.trim_start_ms = int(state["trim_start_ms"])
             job.settings.trim_end_ms = int(state["trim_end_ms"])
+            if not hasattr(self, "_queue_job_session_memory"):
+                self._queue_job_session_memory = {}
+            self._queue_job_session_memory[job.id] = state
+            # Do NOT write shared path memory while a queue job owns the preview —
+            # duplicate cards of the same clip would inherit each other's Trim.
+            return
+        if not hasattr(self, "_clip_session_memory"):
+            self._clip_session_memory = {}
+        self._clip_session_memory[norm] = state
 
     def _flush_current_trim_state(self) -> None:
         self._flush_clip_session_state()
@@ -3339,12 +3374,23 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
+        job = self._queue_job_for_preview_sync(clip_path)
+        if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+            job.settings.is_trim_mode = bool(state["is_trim_mode"])
+            job.settings.trim_start_ms = int(state["trim_start_ms"])
+            job.settings.trim_end_ms = int(state["trim_end_ms"])
+            if not hasattr(self, "_queue_job_session_memory"):
+                self._queue_job_session_memory = {}
+            self._queue_job_session_memory[job.id] = state
+            if hasattr(self, "render_queue_panel"):
+                self.render_queue_panel.patch_job_trim(job)
+            return
         if not hasattr(self, "_clip_session_memory"):
             self._clip_session_memory = {}
         self._clip_session_memory[norm] = state
         if not self._queue_is_active():
             return
-        job = self._queue_job_for_preview_sync(clip_path)
+        job = self.render_queue.find_by_clip_path(clip_path)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return
         job.settings.is_trim_mode = bool(state["is_trim_mode"])
@@ -5197,12 +5243,28 @@ class RenderMixin:
             payload = collect_queue_add_payload(self, clip_path)
             if payload is None:
                 return None
+            if was_duplicate:
+                # Notice promises a fresh Original-style row — do not copy the
+                # live Trim from the sibling card of the same clip.
+                payload.trim = {
+                    "is_trim_mode": False,
+                    "trim_start_ms": 0,
+                    "trim_end_ms": 0,
+                }
+                if payload.settings is not None:
+                    payload.settings.is_trim_mode = False
+                    payload.settings.trim_start_ms = 0
+                    payload.settings.trim_end_ms = 0
             self._start_async_queue_add(payload, clip_path, was_duplicate)
             return None
 
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
+        if was_duplicate and job.settings is not None:
+            job.settings.is_trim_mode = False
+            job.settings.trim_start_ms = 0
+            job.settings.trim_end_ms = 0
         return self._commit_queue_job(job, clip_path, was_duplicate, sync_ui=False)
 
     def _remember_job_salvage(self, job) -> None:
@@ -6134,27 +6196,49 @@ class RenderMixin:
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
         self._queue_library_preview_diversion = False
+        # Persist the *previous* selection before the loading gate blocks sync.
+        self._flush_clip_session_state()
+        if self._sync_active_queue_job_from_ui():
+            self._persist_render_queue()
+        prev_preview = os.path.normpath(getattr(self, "_preview_clip_path", None) or "")
+        prev_opening = os.path.normpath(getattr(self, "_opening_clip_path", None) or "")
+        job_norm = os.path.normpath(job.clip_path or "")
         self._loading_queue_job = True
         try:
-            self._flush_clip_session_state()
-            if self._sync_active_queue_job_from_ui():
-                self._persist_render_queue()
             self._selected_queue_job_id = job_id
             self._preview_clip_path = job.clip_path
-            session = self._session_state_for_clip(job.clip_path)
+            # Per-job snapshot — never path memory (duplicates share clip_path).
+            session = self._session_state_from_job_settings(job)
             self._apply_header_from_job(job)
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 self.set_player_header_clip_controls_visible(True)
-            # Start playback before Source Info XML / size work.
-            self.generate_and_play_preview(job.clip_path, trim_restore=session)
-            self._populate_quality_options_for_clip(
-                job.clip_path, preserve_ui_selection=False,
+            same_preview = bool(job_norm) and job_norm in (prev_preview, prev_opening)
+            preview_idle = not (
+                getattr(self, "_is_switching", False)
+                or getattr(self, "_awaiting_first_frame", False)
             )
-            self._apply_export_session_state(session, silent=True)
-            apply_job_settings_to_ui(self, job.settings)
-            self.update_final_setup()
-            if hasattr(self, "_maybe_start_thumbs_after_quality"):
-                self._maybe_start_thumbs_after_quality(job.clip_path)
+            if same_preview and preview_idle and hasattr(self, "apply_trim_state"):
+                # Same media already up — remounting is wasteful and the in-flight
+                # spam guard can leave the previous job's Trim on screen.
+                self._pending_trim_restore = None
+                self._apply_clip_session_state(session, silent=True)
+                self._populate_quality_options_for_clip(
+                    job.clip_path, preserve_ui_selection=False,
+                )
+                apply_job_settings_to_ui(self, job.settings)
+                self.update_final_setup()
+                self._loading_queue_job = False
+            else:
+                # Start playback before Source Info XML / size work.
+                self.generate_and_play_preview(job.clip_path, trim_restore=session)
+                self._populate_quality_options_for_clip(
+                    job.clip_path, preserve_ui_selection=False,
+                )
+                self._apply_export_session_state(session, silent=True)
+                apply_job_settings_to_ui(self, job.settings)
+                self.update_final_setup()
+                if hasattr(self, "_maybe_start_thumbs_after_quality"):
+                    self._maybe_start_thumbs_after_quality(job.clip_path)
         except Exception:
             self._loading_queue_job = False
             raise

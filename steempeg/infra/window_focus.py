@@ -14,7 +14,6 @@ import sys
 _log = logging.getLogger(__name__)
 
 _GW_OWNER = 4
-_GW_HWNDPREV = 3  # next higher window in Z-order
 _SW_RESTORE = 9
 _SW_SHOW = 5
 _HWND_TOPMOST = -1
@@ -111,85 +110,25 @@ def _pick_main_hwnd(hwnds: list[int]) -> int | None:
     return scored[0][1]
 
 
-def _exstyle(hwnd: int) -> int:
-    import ctypes
-
-    return int(ctypes.windll.user32.GetWindowLongW(hwnd, _GWL_EXSTYLE))
-
-
-def _has_topmost_bit(hwnd: int) -> bool:
-    try:
-        return bool(_exstyle(hwnd) & _WS_EX_TOPMOST)
-    except Exception:
-        return False
-
-
-def _hwnd_is_strictly_above(hwnd: int, other: int) -> bool:
-    """True when *hwnd* is higher than *other* in the global Z-order."""
-    import ctypes
-
-    user32 = ctypes.windll.user32
-    cur = int(other)
-    # Cap walks — z-order lists are finite but a bad HWND must not spin forever.
-    for _ in range(512):
-        cur = int(user32.GetWindow(cur, _GW_HWNDPREV) or 0)
-        if not cur:
-            return False
-        if cur == int(hwnd):
-            return True
-    return False
-
-
-def _same_process(hwnd_a: int, hwnd_b: int) -> bool:
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    pid_a = wintypes.DWORD()
-    pid_b = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(int(hwnd_a), ctypes.byref(pid_a))
-    user32.GetWindowThreadProcessId(int(hwnd_b), ctypes.byref(pid_b))
-    return bool(pid_a.value) and int(pid_a.value) == int(pid_b.value)
-
-
-def _is_foreign_foreground(shell_hwnd: int, fg: int) -> bool:
-    """True when *fg* is a real other-app window (not Steempeg / our Tools)."""
-    import ctypes
-
-    if not fg or int(fg) == int(shell_hwnd):
-        return False
-    user32 = ctypes.windll.user32
-    if user32.IsChild(int(shell_hwnd), int(fg)):
-        return False
-    if _same_process(shell_hwnd, fg):
-        return False
-    owner = int(user32.GetWindow(int(fg), _GW_OWNER) or 0)
-    if owner and (
-        owner == int(shell_hwnd) or user32.IsChild(int(shell_hwnd), owner)
-    ):
-        return False
-    return True
-
-
 def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
-    """Ensure *hwnd* actually leaves the always-on-top band.
+    """Ensure *hwnd* is not permanently always-on-top.
 
-    Windows only honors topmost changes via ``SetWindowPos(HWND_NOTOPMOST)``.
-    Stripping ``WS_EX_TOPMOST`` with ``SetWindowLong`` + ``SWP_NOZORDER`` is a
-    no-op for Z-order: the style bit can disappear while the window stays in the
-    topmost band — Explorer/browsers then map *under* Steempeg forever.
+    The brief TOPMOST flash used to steal focus can leave ``WS_EX_TOPMOST`` set
+    (especially with custom DWM/NCCALCSIZE chrome), which buries Explorer and
+    every other app under Steempeg until restart.
 
-    The older style-only path tried to avoid ``HWND_NOTOPMOST`` parking the shell
-    at the top of the *normal* band (which buried tabs during mpv play). That
-    race is handled by ``demote_hwnd_below_foreground`` when another app already
-    owns the foreground — do **not** resurrect style-only clears.
+    Default path is style-only (``SWP_NOZORDER``): never bump Steempeg over
+    browser tabs / Explorer. MPV focus flicker used to hit ActivationChange →
+    ``HWND_NOTOPMOST``, which demotes out of the topmost band *and* parks the
+    shell at the top of the normal Z-order — exactly the "tabs hide under
+    Steempeg while video plays" bug.
 
     Never use ``SWP_FRAMECHANGED`` here: on frameless + ``wid=`` embed that
     sends ``WM_NCCALCSIZE`` and can orphan the mpv child HWND as a floating
     video surface (seen when opening Start / losing focus in windowed mode).
 
-    ``reshuffle_z`` is kept for call-site compatibility; both paths demote for
-    real when the topmost bit is set (the only durable fix).
+    Pass ``reshuffle_z=True`` only after an intentional TOPMOST flash (startup /
+    toast raise), where staying foreground among normal windows is desired.
     """
     import ctypes
 
@@ -199,71 +138,22 @@ def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
         if not (ex & _WS_EX_TOPMOST):
             return
         user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex & ~_WS_EX_TOPMOST)
-        # HWND_NOTOPMOST is mandatory — style-only left us stuck in the topmost band.
-        flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
-        user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-        _ = reshuffle_z  # API compat; demotion always applies when bit was set
+        if reshuffle_z:
+            flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        else:
+            # Style bit already cleared — nudge without FRAMECHANGED so DWM does
+            # not rebuild the client and detach the mpv embed.
+            flags = (
+                _SWP_NOMOVE
+                | _SWP_NOSIZE
+                | _SWP_NOZORDER
+                | _SWP_NOOWNERZORDER
+                | _SWP_NOACTIVATE
+            )
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
     except Exception as exc:
         _log.debug("clear_topmost failed hwnd=%s: %s", hwnd, exc)
-
-
-def demote_hwnd_below_foreground(hwnd: int) -> None:
-    """Tuck *hwnd* under a foreign foreground window; drop stuck topmost.
-
-    Root cause this targets (Emily / «раз и навсегда»): while mpv ``wid=`` +
-    ``vo=gpu`` presents, Steempeg can sit above Explorer/browser even when that
-    other app is ``GetForegroundWindow`` — either from a stuck topmost band
-    (ineffective style-only clear after a focus flash) or from Z-order steal
-    without activation. Idle / no clip does not present, so ordering looks fine.
-
-    ``SetWindowPos(hwnd, fg, …)`` places us directly below *fg* (fg precedes us
-    in Z-order) and, when *fg* is non-topmost, also ejects us from the topmost
-    band — without the ``HWND_NOTOPMOST`` “jump to top of normal band” park.
-
-    Never raises / activates Steempeg. Never ``SWP_FRAMECHANGED`` (mpv orphan).
-    Callers must skip Start / Search / Snipping via
-    ``should_skip_hwnd_ops_for_foreground``.
-    """
-    import ctypes
-
-    user32 = ctypes.windll.user32
-    try:
-        hwnd = int(hwnd)
-        if not hwnd or not user32.IsWindow(hwnd):
-            return
-        fg = int(user32.GetForegroundWindow() or 0)
-        had_topmost = _has_topmost_bit(hwnd)
-        if had_topmost:
-            user32.SetWindowLongW(
-                hwnd, _GWL_EXSTYLE, _exstyle(hwnd) & ~_WS_EX_TOPMOST
-            )
-
-        flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
-        if _is_foreign_foreground(hwnd, fg):
-            # Demote when covering FG, or when still carrying topmost over it.
-            if had_topmost or _hwnd_is_strictly_above(hwnd, fg):
-                user32.SetWindowPos(hwnd, fg, 0, 0, 0, 0, flags)
-                return
-
-        if had_topmost:
-            user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-    except Exception as exc:
-        _log.debug("demote_hwnd_below_foreground failed hwnd=%s: %s", hwnd, exc)
-
-
-def demote_widget_below_foreground(widget) -> bool:
-    """Qt wrapper for :func:`demote_hwnd_below_foreground`."""
-    if sys.platform != "win32" or widget is None:
-        return False
-    try:
-        hwnd = int(widget.winId())
-        if not hwnd:
-            return False
-        demote_hwnd_below_foreground(hwnd)
-        return True
-    except Exception as exc:
-        _log.debug("demote_widget_below_foreground failed: %s", exc)
-        return False
 
 
 def _topmost_flash(hwnd: int) -> None:
@@ -300,8 +190,7 @@ def _force_foreground(hwnd: int) -> None:
     if foreground == hwnd:
         # Already front — only strip a stuck TOPMOST bit; do not BringWindowToTop
         # (that re-stacks Steempeg over other apps on every no-op raise).
-        # HWND_NOTOPMOST is required; style-only leaves the topmost band intact.
-        _clear_topmost(hwnd, reshuffle_z=True)
+        _clear_topmost(hwnd)
         return
 
     pid_fore = wintypes.DWORD()
@@ -335,18 +224,18 @@ def _force_foreground(hwnd: int) -> None:
             user32.AttachThreadInput(tid_cur, tid_target, False)
         if attached_fore:
             user32.AttachThreadInput(tid_cur, tid_fore, False)
-        # We intend to be the foreground app — HWND_NOTOPMOST is correct here
-        # (top of the normal band). Never leave WS_EX_TOPMOST stuck.
-        _clear_topmost(hwnd, reshuffle_z=True)
+        # Never leave the shell in the always-on-top band. Style-only clear —
+        # HWND_NOTOPMOST reshuffle here used to park Steempeg over Explorer after
+        # every raise attempt (including no-ops).
+        _clear_topmost(hwnd, reshuffle_z=False)
 
 
 def clear_widget_topmost(widget, *, reshuffle_z: bool = False) -> bool:
     """Strip stuck always-on-top from a Qt top-level widget (Windows).
 
-    Always issues ``HWND_NOTOPMOST`` when the bit is set (style-only clear does
-    not leave the topmost band). When another app already owns the foreground,
-    prefer :func:`demote_widget_below_foreground` so we tuck *under* that app
-    instead of parking at the top of the normal Z-order.
+    ``reshuffle_z=True`` also issues ``HWND_NOTOPMOST`` so the window actually
+    leaves the topmost band (style-only clear can leave it painted above
+    normal-z siblings — which buries modeless Steempeg dialogs under the shell).
     """
     if sys.platform != "win32":
         return False
@@ -589,37 +478,9 @@ def foreground_is_windows_shell_ui() -> bool:
         return False
 
 
-def steempeg_popup_menu_active() -> bool:
-    """True while a Qt popup (ClipCard QMenu, etc.) owns the grab.
-
-    Shell ActivationChange fires when a QMenu opens (main window is no longer
-    ``isActiveWindow``) but the process stays ``ApplicationActive``. Running
-    ``SetWindowPos`` / TOPMOST clears on the frameless shell in that window
-    orphans the mpv ``wid=`` child — video floats over the Render Queue while
-    the player viewport stays black. Same class of bug as Start-menu detach.
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        from PySide6.QtWidgets import QApplication
-
-        app = QApplication.instance()
-        if app is None:
-            return False
-        if app.activePopupWidget() is not None:
-            return True
-        return False
-    except Exception:
-        return False
-
-
 def should_skip_hwnd_ops_for_foreground() -> bool:
-    """Snipping / Start / Search / our QMenu — do not touch shell HWND z-order."""
-    return (
-        foreground_is_screen_capture()
-        or foreground_is_windows_shell_ui()
-        or steempeg_popup_menu_active()
-    )
+    """Snipping / Start / Search — do not touch Steempeg HWND z-order or frame."""
+    return foreground_is_screen_capture() or foreground_is_windows_shell_ui()
 
 
 def raise_visible_steempeg_dialogs() -> None:
@@ -654,27 +515,17 @@ def raise_visible_steempeg_dialogs() -> None:
 def on_shell_lost_foreground(widget) -> None:
     """Call when Steempeg is no longer the OS foreground app.
 
-    Durable demotion (not a style-only TOPMOST clear):
-    - Drop stuck always-on-top
-    - If a foreign window owns focus but Steempeg still paints above it
-      (mpv ``vo=gpu`` present / prior HWND_NOTOPMOST park), tuck the shell
-      directly under that foreground HWND
-
-    Also sweeps every top-level Steempeg HWND — Portable sheets / Tools can
-    carry the topmost bit too.
+    Strips a stuck ``WS_EX_TOPMOST`` *without* ``HWND_NOTOPMOST`` reshuffle (that
+    would park Steempeg on top of Explorer again). Also sweeps every top-level
+    Steempeg HWND — Portable sheets / Tools can carry the bit too.
 
     Never raise / activate Steempeg here — Win+Shift+S and Snipping Tool abort
-    if we steal foreground mid-capture. Same for Start / Search / ClipCard
-    QMenu (``SetWindowPos`` on the frameless shell orphans mpv ``wid=``).
+    if we steal foreground mid-capture. Same for Start / Search (mpv embed).
     """
     if should_skip_hwnd_ops_for_foreground():
         return
-    demote_widget_below_foreground(widget)
-    # Other top-levels (Tools / sheets) may still carry WS_EX_TOPMOST.
+    clear_widget_topmost(widget)
     clear_all_steempeg_topmost()
-    # clear_all uses HWND_NOTOPMOST which can re-park the shell at the top of
-    # the normal band — demote again under the real foreground app.
-    demote_widget_below_foreground(widget)
 
 
 def clear_all_steempeg_topmost() -> None:
@@ -691,7 +542,7 @@ def clear_all_steempeg_topmost() -> None:
             try:
                 if w is None or not w.isWindow():
                     continue
-                clear_widget_topmost(w, reshuffle_z=True)
+                clear_widget_topmost(w)
             except RuntimeError:
                 continue
             except Exception:
@@ -712,27 +563,16 @@ def yield_foreground_to_external(anchor=None) -> None:
     if anchor is not None:
         try:
             win = anchor.window() if hasattr(anchor, "window") else anchor
-            # Real demotion — style-only left us in the topmost band.
-            clear_widget_topmost(win, reshuffle_z=True)
-            demote_widget_below_foreground(win)
+            clear_widget_topmost(win)
         except Exception:
             pass
     clear_all_steempeg_topmost()
-    if anchor is not None:
-        try:
-            win = anchor.window() if hasattr(anchor, "window") else anchor
-            demote_widget_below_foreground(win)
-        except Exception:
-            pass
 
 
 def reseat_native_embed_child(widget) -> bool:
     """Re-parent an mpv ``wid=`` child if Win32 parenting drifted from Qt.
 
-    Shell ``SetWindowPos`` / focus churn (ClipCard QMenu, Explorer yield) can
-    leave the native child as a floating HWND — video paints offset over the
-    UI while ``video_container`` stays black. ``SetParent`` back to the Qt
-    parent, then geometry update, without ``SWP_FRAMECHANGED``.
+    Only for ClipCard / Explorer yield — never call from splitter resize.
     """
     if sys.platform != "win32" or widget is None:
         return False
