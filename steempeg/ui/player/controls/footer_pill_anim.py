@@ -124,6 +124,43 @@ def animate_chip_in_pill(
     group.start(QAbstractAnimation.DeletionPolicy.KeepWhenStopped)
 
 
+def animate_geometry_move(widget: QWidget, start: QRect, end: QRect, on_finished=None) -> None:
+    """Slide ``widget`` from ``start`` to ``end`` (marker pill teleport)."""
+    if widget is None or not start.isValid() or not end.isValid():
+        return
+    if start == end:
+        widget.setGeometry(end)
+        if on_finished is not None:
+            try:
+                on_finished()
+            except Exception:
+                pass
+        return
+    _stop_group(widget, "_footer_geom_anim")
+    widget.setGeometry(start)
+    widget.show()
+    widget.raise_()
+    anim = QPropertyAnimation(widget, b"geometry", widget)
+    anim.setDuration(_DUR_MS)
+    anim.setStartValue(start)
+    anim.setEndValue(end)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _finish() -> None:
+        widget._footer_geom_anim = None  # type: ignore[attr-defined]
+        widget.setGeometry(end)
+        widget.raise_()
+        if on_finished is not None:
+            try:
+                on_finished()
+            except Exception:
+                pass
+
+    anim.finished.connect(_finish)
+    widget._footer_geom_anim = anim  # type: ignore[attr-defined]
+    anim.start(QAbstractAnimation.DeletionPolicy.KeepWhenStopped)
+
+
 def animate_footer_overlay_widget(
     widget: QWidget,
     *,
