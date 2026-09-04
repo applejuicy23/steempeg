@@ -6120,7 +6120,12 @@ class RenderMixin:
         logging.info("Queue selection: %s", job_id)
         self.activate_queue_job(job_id)
     def _highlight_clip_in_library(self, clip_path: str) -> None:
-        """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
+        """Mirror a queue selection onto the library table (no preview reload).
+
+        Respects Clips Manager filters: a filtered-out game (e.g. Wuthering Waves
+        while only Miku/CS2 are checked) stays hidden — do not punch a hole in
+        the filter just to show the queue pick.
+        """
         if not clip_path or not hasattr(self.ui, "table_clips"):
             return
         norm = os.path.normpath(clip_path)
@@ -6134,17 +6139,7 @@ class RenderMixin:
         if target_row < 0:
             return
 
-        # Filtered-out clips stay in the table as hidden rows. Selecting them and
-        # scrollToItem left a blank strip at the top of Choose-a-Clip — reveal
-        # just this card so the queue pick is visible without wiping the filter.
-        if table.isRowHidden(target_row):
-            table.setRowHidden(target_row, False)
-            if hasattr(self, "grid_clips"):
-                for i in range(self.grid_clips.count()):
-                    gi = self.grid_clips.item(i)
-                    if gi is not None and gi.data(Qt.UserRole) == target_row:
-                        gi.setHidden(False)
-                        break
+        filtered_out = bool(table.isRowHidden(target_row))
 
         table.blockSignals(True)
         table.clearSelection()
@@ -6158,13 +6153,24 @@ class RenderMixin:
             for i in range(self.grid_clips.count()):
                 gi = self.grid_clips.item(i)
                 is_match = gi.data(Qt.UserRole) == target_row
-                gi.setSelected(is_match)
-                if is_match:
-                    anchor_item = gi
+                # Keep filtered cards hidden; only select visible matches.
+                if filtered_out and is_match:
+                    gi.setSelected(False)
+                    gi.setHidden(True)
+                else:
+                    gi.setSelected(is_match)
+                    if is_match:
+                        anchor_item = gi
             self.grid_clips.blockSignals(False)
-            if anchor_item is not None and not anchor_item.isHidden():
+            if (
+                not filtered_out
+                and anchor_item is not None
+                and not anchor_item.isHidden()
+            ):
                 self._grid_anchor_item = anchor_item
-                self._grid_anchor_index = self._list_widget_item_index(self.grid_clips, anchor_item)
+                self._grid_anchor_index = self._list_widget_item_index(
+                    self.grid_clips, anchor_item
+                )
                 self.grid_clips.scrollToItem(anchor_item)
             if hasattr(self, "_sync_grid_card_visuals"):
                 self._sync_grid_card_visuals()
