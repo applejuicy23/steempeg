@@ -49,6 +49,7 @@ def animate_chip_in_pill(
     *,
     show: bool,
     target_w: int = 40,
+    on_finished=None,
 ) -> None:
     """Grow/shrink ``chip`` inside ``pill`` (Marker settings gear)."""
     if chip is None:
@@ -112,6 +113,11 @@ def animate_chip_in_pill(
         if pill is not None:
             pill.updateGeometry()
             pill.adjustSize()
+        if on_finished is not None:
+            try:
+                on_finished()
+            except Exception:
+                pass
 
     group.finished.connect(_finish)
     chip._footer_chip_anim = group  # type: ignore[attr-defined]
