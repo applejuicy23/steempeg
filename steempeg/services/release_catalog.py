@@ -99,6 +99,12 @@ class VersionMilestone:
 # (i) badge = keyed Early v8–v11, or any v12+ version listed here.
 VERSION_MILESTONES: tuple[VersionMilestone, ...] = (
     VersionMilestone(
+        49.0,
+        "📚",
+        "Progressive library",
+        "Viewport-lazy Clips on launch; Create… presets; Console mode; Marker Settings by game.",
+    ),
+    VersionMilestone(
         43.0,
         "⚡",
         "Skip library startup",
