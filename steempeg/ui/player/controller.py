@@ -400,7 +400,10 @@ class PlayerMixin:
             self.custom_timeline.canvas.markers.clear()
             if hasattr(self.custom_timeline.canvas, 'mode_segments'):
                 self.custom_timeline.canvas.mode_segments = []
-            self.custom_timeline.canvas.update()
+            if hasattr(self.custom_timeline.canvas, "notify_markers_changed"):
+                self.custom_timeline.canvas.notify_markers_changed(animate=True)
+            else:
+                self.custom_timeline.canvas.update()
 
         if hasattr(self, 'video_stack') and hasattr(self, 'placeholder_frame'):
             self.video_stack.setCurrentWidget(self.placeholder_frame)
@@ -2839,7 +2842,10 @@ class PlayerMixin:
         canvas.rendered_media_path = None
         canvas._hover_preview_bucket = -1
         canvas._batch_thumbs_busy = False
-        canvas.update()
+        if hasattr(canvas, "notify_markers_changed"):
+            canvas.notify_markers_changed(animate=True)
+        else:
+            canvas.update()
 
     def _begin_preview_switch(self) -> int:
         """Pause MPV and stop background workers before loading another file."""
@@ -3309,7 +3315,10 @@ class PlayerMixin:
                 canvas._markers_cache_dir = self.cache_dir
                 sidecar_entries = load_markers_sidecar(self.cache_dir, file_path)
                 canvas.markers.extend(markers_to_canvas(sidecar_entries))
-            canvas.update()
+            if hasattr(canvas, "notify_markers_changed"):
+                canvas.notify_markers_changed(reveal=True)
+            else:
+                canvas.update()
 
         self.ui.video_container.setStyleSheet("background-color: transparent;")
         self._awaiting_first_frame = True
@@ -4533,7 +4542,10 @@ class PlayerMixin:
         }
         markers_list.append(internal_marker)
         markers_list.sort(key=lambda x: x.get('time_ms', 0))
-        canvas.update()
+        if hasattr(canvas, "notify_markers_changed"):
+            canvas.notify_markers_changed()
+        else:
+            canvas.update()
         
         rendered_path = getattr(canvas, "rendered_media_path", None)
         if rendered_path and os.path.isfile(rendered_path) and hasattr(self, "cache_dir"):

@@ -2169,6 +2169,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if not hasattr(self, 'custom_timeline'):
                     self.custom_timeline = CustomTimelineWidget()
                     self.custom_timeline.canvas.marker_store.set_cache_dir(self.cache_dir)
+                self.custom_timeline.canvas.marker_chrome_changed.connect(
+                    self.sync_marker_settings_button_visible,
+                    Qt.ConnectionType.UniqueConnection,
+                )
                 v_layout.addWidget(self.custom_timeline)
                 v_layout.addSpacing(6)
                 # ROW 2: Volume/Speed | pinned timer | tools — timer never leaves center
@@ -2384,6 +2388,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                 marker_pill_layout.addWidget(self.btn_add_marker)
                 marker_pill_layout.addWidget(self.btn_marker_settings)
+                self.sync_marker_settings_button_visible()
 
                 # NEW CAMERA BUTTON
                 self.btn_screenshot = QPushButton()
@@ -2984,7 +2989,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.custom_timeline.set_duration(0)   # Reset time
                 self.custom_timeline.force_jump(0)     # Position the playhead at 0
                 self.custom_timeline.canvas.markers.clear()
-                self.custom_timeline.canvas.update()
+                if hasattr(self.custom_timeline.canvas, "notify_markers_changed"):
+                    self.custom_timeline.canvas.notify_markers_changed(animate=True)
+                else:
+                    self.custom_timeline.canvas.update()
                 
         if hasattr(self.ui, 'label_time'):
             self.ui.label_time.setText("00:00 / 00:00")
@@ -3023,6 +3031,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             sync_header_center_mirror(self)
         except Exception:
             pass
+
+    def sync_marker_settings_button_visible(self) -> None:
+        """Empty clip → Markers pin only; gear appears once there is ≥1 pin."""
+        btn = getattr(self, "btn_marker_settings", None)
+        if btn is None:
+            return
+        canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
+        has_markers = bool(getattr(canvas, "markers", None)) if canvas is not None else False
+        btn.setVisible(has_markers)
 
     def _source_info_tooltip_text(self) -> str:
         """Build clip facts from Source Info labels / header meta (hover + click popup)."""
