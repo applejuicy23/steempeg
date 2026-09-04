@@ -2425,9 +2425,31 @@ def show_settings_dialog(app) -> None:
     app._app_settings_open = True
     app._deck_app_settings_focus_idx = 0
     try:
-        from steempeg.input.deck_navigation import reset_app_settings_deck_focus
+        from steempeg.input.deck_navigation import (
+            console_focus_ring_allowed,
+            hide_deck_focus_ring,
+        )
 
-        QTimer.singleShot(0, lambda: reset_app_settings_deck_focus(app))
+        if console_focus_ring_allowed(app):
+            from steempeg.input.deck_navigation import reset_app_settings_deck_focus
+
+            QTimer.singleShot(0, lambda: reset_app_settings_deck_focus(app))
+        else:
+            # Console off (Dev mode may still be on): no lavender DeckFocusRing.
+            hide_deck_focus_ring(app)
+
+            def _clear_settings_pad_focus(d=dlg, a=app) -> None:
+                try:
+                    hide_deck_focus_ring(a)
+                    d.setFocus(Qt.FocusReason.OtherFocusReason)
+                    fw = QApplication.focusWidget()
+                    if fw is not None and d.isAncestorOf(fw):
+                        fw.clearFocus()
+                    d.clearFocus()
+                except RuntimeError:
+                    pass
+
+            QTimer.singleShot(0, _clear_settings_pad_focus)
     except Exception:
         pass
     try:

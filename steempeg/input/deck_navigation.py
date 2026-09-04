@@ -405,7 +405,31 @@ def _focus_ring_host(app: Any, target: QWidget) -> QWidget | None:
     return page
 
 
+def console_focus_ring_allowed(app: Any) -> bool:
+    """Purple Settings/Render ring follows Console checkbox only — not Dev mode.
+
+    Dev mode still enables pad *actions* for QA, but must not auto-outline
+    Check for updates when Console mode is off.
+    """
+    try:
+        from steempeg.ui.settings_prefs import load_deck_controls
+
+        settings = {}
+        if app is not None and hasattr(app, "load_user_settings"):
+            try:
+                settings = app.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        return bool(load_deck_controls(settings))
+    except Exception:
+        return False
+
+
 def _show_focus_ring(app: Any, target: QWidget) -> None:
+    # Console off → never paint (Dev mode alone is not enough).
+    if not console_focus_ring_allowed(app):
+        hide_deck_focus_ring(app)
+        return
     if target is None:
         hide_deck_focus_ring(app)
         return
@@ -999,7 +1023,13 @@ def _confirm_clip_picker(app: Any) -> None:
 
 
 def reset_app_settings_deck_focus(app: Any) -> None:
-    """Paint the purple ring on the first control when Settings opens."""
+    """Paint the purple ring on the first control when Settings opens.
+
+    Requires Console mode on. Dev mode alone must not outline Check for updates.
+    """
+    if not console_focus_ring_allowed(app):
+        hide_deck_focus_ring(app)
+        return
     app._deck_app_settings_focus_idx = 0
     hide_deck_focus_ring(app)
     QTimer.singleShot(0, lambda: _focus_app_settings_by_delta(app, 0))
