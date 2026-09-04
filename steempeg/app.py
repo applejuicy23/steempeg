@@ -3058,20 +3058,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         from steempeg.ui.player.controls.footer_pill_anim import animate_chip_in_pill
 
+        def _after_chip() -> None:
+            try:
+                from steempeg.ui.player.controls.adaptive_trim_tools import (
+                    sync_trim_tools_placement,
+                )
+
+                sync_trim_tools_placement(self)
+            except Exception:
+                pass
+
         animate_chip_in_pill(
             btn,
             getattr(self, "marker_pill", None),
             show=has_markers,
             target_w=target_w,
+            on_finished=_after_chip,
         )
-        try:
-            from steempeg.ui.player.controls.adaptive_trim_tools import (
-                sync_trim_tools_placement,
-            )
-
-            sync_trim_tools_placement(self)
-        except Exception:
-            pass
+        _after_chip()
 
     def _source_info_tooltip_text(self) -> str:
         """Build clip facts from Source Info labels / header meta (hover + click popup)."""
