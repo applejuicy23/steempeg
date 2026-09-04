@@ -369,9 +369,14 @@ def _finalize_overlay_bottom_row(app) -> None:
         return
 
     marker_rect = None
+    teleporting = markers_below and getattr(markers, "_footer_geom_anim", None) is not None
     if markers_below and pill is not None:
         _reposition_markers_below(app, markers, pill)
-        marker_rect = markers.geometry()
+        marker_rect = (
+            _markers_below_target_rect(app, markers, pill)
+            if teleporting or getattr(markers, "_footer_geom_anim", None) is not None
+            else markers.geometry()
+        )
         markers.raise_()
 
     if tools_below and trim is not None:
@@ -382,7 +387,12 @@ def _finalize_overlay_bottom_row(app) -> None:
                 tools.move(max(0, limit - tools.width()), tools.y())
         tools.raise_()
 
-    if markers_below and tools_below:
+    # Same baseline when both visible (skip while marker teleport owns geometry).
+    if (
+        markers_below
+        and tools_below
+        and getattr(markers, "_footer_geom_anim", None) is None
+    ):
         th = max(tools.height(), 1)
         mh = max(markers.height(), 1)
         markers.move(markers.x(), int(tools.y() + (th - mh) // 2))
@@ -434,17 +444,41 @@ def _sync_trim_tools_nudge(app, tools: QWidget, trim: QWidget, active: bool) -> 
 
 
 def _place_markers_below(app, markers: QWidget, pill: QWidget) -> None:
+    from steempeg.ui.player.controls.footer_pill_anim import animate_geometry_move
+
+    overlay = _overlay_host(app, pill)
+    start = None
+    if markers.isVisible() and markers.parentWidget() is not None:
+        try:
+            top_left = markers.mapTo(overlay, QPoint(0, 0))
+            sz = markers.size()
+            if sz.width() > 0 and sz.height() > 0:
+                start = QRect(top_left, sz)
+        except RuntimeError:
+            start = None
+
     host, layout = _right_host(pill)
     if layout is not None and layout.indexOf(markers) >= 0:
         layout.removeWidget(markers)
     if layout is not None:
         layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-    overlay = _overlay_host(app, pill)
     markers.setParent(overlay)
+    if start is not None and start.isValid():
+        markers.setGeometry(start)
     markers.show()
     app._marker_pill_placement = "below"
-    _reposition_markers_below(app, markers, pill)
+    end = _markers_below_target_rect(app, markers, pill)
+    markers.setGeometry(end)
+    if start is not None and start.isValid() and end.isValid() and start != end:
+
+        def _after_teleport() -> None:
+            try:
+                sync_trim_tools_placement(app)
+            except Exception:
+                pass
+
+        animate_geometry_move(markers, start, end, on_finished=_after_teleport)
 
 
 def _markers_below_target_rect(app, markers: QWidget, pill: QWidget) -> QRect:
@@ -477,9 +511,18 @@ def _place_markers_inline(app, markers: QWidget) -> None:
     if host is None or layout is None:
         return
 
+    geom_anim = getattr(markers, "_footer_geom_anim", None)
+    if geom_anim is not None:
+        try:
+            geom_anim.stop()
+        except RuntimeError:
+            pass
+        markers._footer_geom_anim = None  # type: ignore[attr-defined]
+
     if markers.parentWidget() is not host:
         markers.setParent(host)
 
+    # Clear overlay fixed geometry so the layout owns size again.
     markers.setMinimumSize(0, 0)
     markers.setMaximumSize(16777215, 16777215)
 
@@ -501,6 +544,7 @@ def _place_markers_inline(app, markers: QWidget) -> None:
     layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     app._marker_pill_placement = "inline"
     markers.show()
+    markers.updateGeometry()
 
 
 def _overlay_row_top_y(app, overlay: QWidget) -> int | None:
@@ -567,6 +611,8 @@ def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
 
 def _reposition_markers_below(app, markers: QWidget, pill: QWidget) -> None:
     if getattr(app, "_marker_pill_placement", None) != "below":
+        return
+    if getattr(markers, "_footer_geom_anim", None) is not None:
         return
     if markers.parentWidget() is None:
         return
