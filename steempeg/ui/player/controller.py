@@ -3550,11 +3550,55 @@ class PlayerMixin:
             return str(job.id) if job is not None else None
         return None
 
+    def _attach_library_open_loading_host(
+        self, clip_path: str | None, *, percent: int | None, hosts: list
+    ) -> None:
+        """Ensure the Clips Manager ClipCard for ``clip_path`` is a loading host."""
+        key = self._norm_clip_path_key(clip_path)
+        if not key:
+            return
+        # Already bound and spinning.
+        for host in hosts:
+            if getattr(host, "_job_id", None):
+                continue
+            try:
+                if hasattr(host, "is_loading") and host.is_loading():
+                    return
+            except RuntimeError:
+                continue
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        pct = 0 if percent is None else percent
+        # Prefer current progress if the open is mid-flight.
+        last = int(getattr(self, "_clip_open_load_pct", -1) or -1)
+        if last >= 0:
+            pct = last
+        try:
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                path = item.data(Qt.UserRole + 1)
+                if self._norm_clip_path_key(path) != key:
+                    continue
+                card = grid.itemWidget(item)
+                if card is not None and hasattr(card, "set_loading"):
+                    card.set_loading(True, percent=pct)
+                    if card not in hosts:
+                        hosts.insert(0, card)
+                break
+        except RuntimeError:
+            pass
+
     def _attach_queue_open_loading_hosts(
         self, jid: str, *, percent: int | None, hosts: list
     ) -> None:
         """Append Render Queue / Portable sidebar hosts for ``jid`` into ``hosts``."""
         pct = 0 if percent is None else percent
+        last = int(getattr(self, "_clip_open_load_pct", -1) or -1)
+        if last >= 0:
+            pct = last
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None:
             for card in getattr(panel, "_card_widgets", None) or ():
@@ -3575,9 +3619,13 @@ class PlayerMixin:
                     pass
 
     def _reconcile_clip_open_loading_hosts(
-        self, *, job_id: str | None, percent: int | None = None
+        self,
+        *,
+        job_id: str | None,
+        percent: int | None = None,
+        clip_path: str | None = None,
     ) -> None:
-        """After same-path early-return: bind/drop queue hosts to match ``job_id``."""
+        """Re-bind library + queue hosts after highlight / panel rebuild."""
         jid = str(job_id).strip() if job_id else ""
         hosts = list(getattr(self, "_clip_open_loading_hosts", None) or [])
         kept: list = []
@@ -3592,6 +3640,8 @@ class PlayerMixin:
                         pass
                     continue
             kept.append(host)
+        path = clip_path or getattr(self, "_opening_clip_path", None)
+        self._attach_library_open_loading_host(path, percent=percent, hosts=kept)
         if jid and not any(getattr(h, "_job_id", None) == jid for h in kept):
             self._attach_queue_open_loading_hosts(jid, percent=percent, hosts=kept)
         self._clip_open_loading_hosts = kept or None
@@ -3607,14 +3657,16 @@ class PlayerMixin:
         key = self._norm_clip_path_key(clip_path)
         jid = self._job_id_for_clip_open_loading(clip_path, job_id)
         # Same clip already spinning (deferred preview painted early) — keep it,
-        # but still re-bind queue hosts when job_id / rebuild changed.
+        # but still re-bind library + queue hosts (highlight / rebuild can drop them).
         if (
             key
             and key == self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
         ):
             if percent is not None and hasattr(self, "update_clip_open_loading_progress"):
                 self.update_clip_open_loading_progress(percent)
-            self._reconcile_clip_open_loading_hosts(job_id=jid, percent=percent)
+            self._reconcile_clip_open_loading_hosts(
+                job_id=jid, percent=percent, clip_path=clip_path
+            )
             return
 
         self.clear_clip_open_loading()
@@ -3623,23 +3675,9 @@ class PlayerMixin:
             self._opening_clip_path = clip_path
         hosts: list = []
         if key:
-            grid = getattr(self, "grid_clips", None)
-            if grid is not None:
-                try:
-                    for i in range(grid.count()):
-                        item = grid.item(i)
-                        if item is None:
-                            continue
-                        path = item.data(Qt.UserRole + 1)
-                        if self._norm_clip_path_key(path) != key:
-                            continue
-                        card = grid.itemWidget(item)
-                        if card is not None and hasattr(card, "set_loading"):
-                            card.set_loading(True, percent=0 if percent is None else percent)
-                            hosts.append(card)
-                        break
-                except RuntimeError:
-                    pass
+            self._attach_library_open_loading_host(
+                clip_path, percent=percent, hosts=hosts
+            )
 
         if jid:
             self._attach_queue_open_loading_hosts(jid, percent=percent, hosts=hosts)

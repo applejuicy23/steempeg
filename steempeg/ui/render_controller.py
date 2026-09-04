@@ -6074,6 +6074,9 @@ class RenderMixin:
             self._apply_header_from_job(job)
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 self.set_player_header_clip_controls_visible(True)
+            # Select/reveal the library ClipCard *before* open-spinner bind so
+            # filtered/hidden cards exist for % sync with the queue card.
+            self._highlight_clip_in_library(job.clip_path)
             # Always remount: shared duplicate paths must refresh their session.
             self.generate_and_play_preview(
                 job.clip_path, trim_restore=session, remount=True
@@ -6089,10 +6092,9 @@ class RenderMixin:
         except Exception:
             self._loading_queue_job = False
             raise
-        self._highlight_clip_in_library(job.clip_path)
         # Card/list selection only — do not force the Render Queue pane open.
         self.refresh_render_queue_panel(sync_splitter=False)
-        # Panel rebuild replaces queue cards — re-bind open-spinner hosts.
+        # Panel rebuild replaces queue cards; also re-bind library ClipCard %.
         if hasattr(self, "set_clip_open_loading"):
             self.set_clip_open_loading(job.clip_path, job_id=job_id)
         self.update_playback_badge()
