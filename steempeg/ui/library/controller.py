@@ -2215,6 +2215,20 @@ class LibraryMixin:
                             self._is_switching = False
                             self._awaiting_first_frame = False
                         # Fall through to reload so timeline/thumbs recover.
+                    elif (
+                        really_open
+                        and hasattr(self, "_queue_is_active")
+                        and self._queue_is_active()
+                        and hasattr(self, "render_queue")
+                        and self.render_queue.find_by_clip_path(clip_path)
+                    ):
+                        # Queued clip (including duplicates): let the normal
+                        # selection path activate its remembered queue job.
+                        logging.info(
+                            "Same-clip library click while queued — "
+                            "activating queue job: %s",
+                            clip_path,
+                        )
                     elif really_open:
                         logging.debug(
                             "Same-clip click ignored (already previewing): %s",

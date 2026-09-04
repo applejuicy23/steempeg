@@ -3400,6 +3400,17 @@ class PlayerMixin:
         have = self._norm_clip_path_key(getattr(self, "_preview_clip_path", None))
         if not want or want != have:
             return False
+        play = getattr(self, "_active_play_media_path", None)
+        if not play:
+            return False
+        play_n = self._norm_clip_path_key(play)
+        sep = os.sep
+        if not (
+            play_n == want
+            or play_n.startswith(want + sep)
+            or play_n.startswith(want + "/")
+        ):
+            return False
         return bool(self._mpv_has_media())
 
     def _stash_pending_open_seek(self, clip_path: str, seek_sec: float | None) -> None:
@@ -3645,11 +3656,15 @@ class PlayerMixin:
         if hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(percent)
 
-    def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
+    def generate_and_play_preview(
+        self, clip_path=None, trim_restore=None, force=False, mpd_override=None,
+        remount=False,
+    ):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
 
         force=True bypasses the dead-clip guard for a best-effort "salvage" preview
         (may show corrupted video, audio only, or nothing — entirely on the user).
+        remount=True restarts MPV even if the same folder is already opening.
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
@@ -3686,6 +3701,7 @@ class PlayerMixin:
             and want == opening
             and not mpd_override
             and not force
+            and not remount
             and (
                 getattr(self, "_is_switching", False)
                 or getattr(self, "_awaiting_first_frame", False)

@@ -1763,17 +1763,19 @@ class RenderMixin:
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
-        self._preview_clip_path = clip_path
         self._rendered_media_path = None
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
 
-        queue_job = self.render_queue.find_by_clip_path(clip_path)
+        # Clip is queued (possibly N duplicates). Do NOT stamp
+        # ``_preview_clip_path`` first — activate_queue_job would think the
+        # clip is already playing and skip MPV (visual select, silent player).
+        queue_job = self._resolve_queue_job_for_library_clip(clip_path)
         if queue_job:
-            # Clip is already queued -> behave exactly like clicking its queue card.
             self.activate_queue_job(queue_job.id)
             return
 
+        self._preview_clip_path = clip_path
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
         self._queue_library_preview_diversion = True
@@ -1782,7 +1784,9 @@ class RenderMixin:
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         # Play first — Source Info XML / folder size must not block first frame.
-        self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
+        self.generate_and_play_preview(
+            clip_path, trim_restore=trim_restore, remount=True
+        )
         self._schedule_quality_populate_after_open(clip_path, trim_restore)
         # Selection only — never inflate Render Queue from a library click.
         self.refresh_render_queue_panel(sync_splitter=False)
@@ -3098,25 +3102,35 @@ class RenderMixin:
         memory = getattr(self, "_clip_session_memory", None) or {}
         if clip_path in memory:
             return dict(memory[clip_path])
-        job = self.render_queue.find_by_clip_path(clip_path)
+        job = self._resolve_queue_job_for_library_clip(clip_path)
         if job:
-            s = job.settings
-            state = dict(_DEFAULT_CLIP_SESSION)
-            state.update(
-                {
-                    "is_trim_mode": bool(s.is_trim_mode),
-                    "trim_start_ms": int(s.trim_start_ms),
-                    "trim_end_ms": int(s.trim_end_ms),
-                    "container": s.container_format or state["container"],
-                    "codec_text": s.codec_text or state["codec_text"],
-                    "audio_format": s.audio_format or state["audio_format"],
-                    "output_preset": s.output_preset or state["output_preset"],
-                    "audio_only": bool(s.audio_only),
-                    "mute_audio": bool(s.mute_audio),
-                }
-            )
-            return state
+            return self._session_state_from_job_settings(job)
         return dict(_DEFAULT_CLIP_SESSION)
+
+    def _session_state_from_job_settings(self, job) -> dict:
+        """Build UI session from a *specific* queue job (duplicates share clip_path)."""
+        s = job.settings
+        state = dict(_DEFAULT_CLIP_SESSION)
+        state.update(
+            {
+                "is_trim_mode": bool(s.is_trim_mode),
+                "trim_start_ms": int(s.trim_start_ms or 0),
+                "trim_end_ms": int(s.trim_end_ms or 0),
+                "container": s.container_format or state["container"],
+                "codec_text": s.codec_text or state["codec_text"],
+                "audio_format": s.audio_format or state["audio_format"],
+                "output_preset": s.output_preset or state["output_preset"],
+                "audio_only": bool(s.audio_only),
+                "mute_audio": bool(s.mute_audio),
+            }
+        )
+        saved = (getattr(self, "_queue_job_session_memory", None) or {}).get(job.id)
+        if saved:
+            state["zoom_level"] = float(
+                saved.get("zoom_level", state.get("zoom_level", 1.0))
+            )
+            state["scroll_x"] = int(saved.get("scroll_x", state.get("scroll_x", 0)))
+        return state
 
     def _enable_all_output_combo_items(self) -> None:
         ui = self.ui
@@ -3224,14 +3238,20 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
-        if not hasattr(self, "_clip_session_memory"):
-            self._clip_session_memory = {}
-        self._clip_session_memory[norm] = state
-        job = self.render_queue.find_by_clip_path(clip_path)
+        job = self._queue_job_for_preview_sync(clip_path)
         if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
             job.settings.is_trim_mode = bool(state["is_trim_mode"])
             job.settings.trim_start_ms = int(state["trim_start_ms"])
             job.settings.trim_end_ms = int(state["trim_end_ms"])
+            if not hasattr(self, "_queue_job_session_memory"):
+                self._queue_job_session_memory = {}
+            self._queue_job_session_memory[job.id] = state
+            # Do NOT write shared path memory while a queue job owns the preview —
+            # duplicate cards of the same clip would inherit each other's Trim.
+            return
+        if not hasattr(self, "_clip_session_memory"):
+            self._clip_session_memory = {}
+        self._clip_session_memory[norm] = state
 
     def _flush_current_trim_state(self) -> None:
         self._flush_clip_session_state()
@@ -3245,7 +3265,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self.render_queue.find_by_clip_path(preview)
+        job = self._queue_job_for_preview_sync(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings.is_trim_mode = bool(self.custom_timeline.is_trim_mode)
@@ -3269,19 +3289,20 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
+        job = self._queue_job_for_preview_sync(clip_path)
+        if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
+            job.settings.is_trim_mode = bool(state["is_trim_mode"])
+            job.settings.trim_start_ms = int(state["trim_start_ms"])
+            job.settings.trim_end_ms = int(state["trim_end_ms"])
+            if not hasattr(self, "_queue_job_session_memory"):
+                self._queue_job_session_memory = {}
+            self._queue_job_session_memory[job.id] = state
+            if hasattr(self, "render_queue_panel"):
+                self.render_queue_panel.patch_job_trim(job)
+            return
         if not hasattr(self, "_clip_session_memory"):
             self._clip_session_memory = {}
         self._clip_session_memory[norm] = state
-        if not self._queue_is_active():
-            return
-        job = self.render_queue.find_by_clip_path(clip_path)
-        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
-            return
-        job.settings.is_trim_mode = bool(state["is_trim_mode"])
-        job.settings.trim_start_ms = int(state["trim_start_ms"])
-        job.settings.trim_end_ms = int(state["trim_end_ms"])
-        if hasattr(self, "render_queue_panel"):
-            self.render_queue_panel.patch_job_trim(job)
 
     def _apply_trim_from_job_settings(self, settings) -> None:
         if hasattr(self, "apply_trim_state"):
@@ -3298,7 +3319,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self.render_queue.find_by_clip_path(preview)
+        job = self._queue_job_for_preview_sync(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings = snapshot_settings_from_ui(self)
@@ -5088,12 +5109,27 @@ class RenderMixin:
             payload = collect_queue_add_payload(self, clip_path)
             if payload is None:
                 return None
+            if was_duplicate:
+                # Do not copy the live Trim from a sibling duplicate card.
+                payload.trim = {
+                    "is_trim_mode": False,
+                    "trim_start_ms": 0,
+                    "trim_end_ms": 0,
+                }
+                if payload.settings is not None:
+                    payload.settings.is_trim_mode = False
+                    payload.settings.trim_start_ms = 0
+                    payload.settings.trim_end_ms = 0
             self._start_async_queue_add(payload, clip_path, was_duplicate)
             return None
 
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
+        if was_duplicate and job.settings is not None:
+            job.settings.is_trim_mode = False
+            job.settings.trim_start_ms = 0
+            job.settings.trim_end_ms = 0
         return self._commit_queue_job(job, clip_path, was_duplicate, sync_ui=False)
 
     def _remember_job_salvage(self, job) -> None:
@@ -5438,6 +5474,7 @@ class RenderMixin:
                 on_toggle_fav=self.toggle_export_preset_favourite_from_ui,
                 on_toggle_expand=self._toggle_export_preset_row_expanded,
                 on_apply=self.apply_export_preset_to_panel,
+                on_edit=self.edit_export_preset_in_editor,
                 on_update=self.update_export_preset_from_ui,
                 on_rename=self.rename_export_preset_from_ui,
                 on_duplicate=self.duplicate_export_preset_from_ui,
@@ -5597,6 +5634,47 @@ class RenderMixin:
         if dlg.exec() != dlg.DialogCode.Accepted:
             return None
         return (edit.text() or "").strip() or None
+
+    def create_export_preset_in_editor(self) -> None:
+        """Open the mini-editor to author a new Custom preset."""
+        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
+
+        key = open_preset_mini_editor(self)
+        if not key:
+            return
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
+        self._set_preset_status(f"Created “{key}” in the mini-editor.")
+
+    def edit_export_preset_in_editor(self, name: str | None = None) -> None:
+        """Open the mini-editor for an existing Custom preset."""
+        from steempeg.ui.message_dialog import steempeg_warning
+        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
+
+        selected = (name or "").strip() or self._list_selected_export_preset_name()
+        if not selected:
+            steempeg_warning(
+                self.ui,
+                "Edit preset",
+                "Select a saved Custom preset in the list first.",
+            )
+            return
+        key = open_preset_mini_editor(self, edit_name=selected)
+        if not key:
+            return
+        expanded = self._export_preset_expanded_names()
+        if selected in expanded and key != selected:
+            expanded.discard(selected)
+            expanded.add(key)
+        self.refresh_export_presets_list()
+        self._select_export_preset_by_name(key)
+        edit = getattr(self.ui, "preset_name_edit", None)
+        if edit is not None:
+            edit.setText(key)
+        self._set_preset_status(f"Updated “{key}” in the mini-editor.")
 
     def save_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import load_presets_map, save_preset
@@ -5769,7 +5847,13 @@ class RenderMixin:
             self._set_preset_status(f"Removed “{selected}” from favourites.")
 
     def apply_export_preset_to_panel(self, name: str | None = None) -> None:
+        from dataclasses import replace
+
         from steempeg.render.export_presets import get_preset_settings
+        from steempeg.render.quality_presets import (
+            resolve_fps_for_source,
+            resolve_quality_for_source,
+        )
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
@@ -5790,6 +5874,23 @@ class RenderMixin:
             )
             return
         self._select_export_preset_by_name(preset_name)
+
+        src_h = int(getattr(self, "current_orig_height", 0) or 0)
+        src_fps = int(getattr(self, "current_orig_fps", 0) or 0)
+        orig_q = settings.quality_text or ""
+        resolved_q = resolve_quality_for_source(
+            settings.quality_text,
+            src_h,
+            fallback=getattr(settings, "quality_fallback", None) or "Original",
+        )
+        resolved_fps = resolve_fps_for_source(settings.fps_text, src_fps)
+        if resolved_q != settings.quality_text or resolved_fps != settings.fps_text:
+            settings = replace(
+                settings,
+                quality_text=resolved_q,
+                fps_text=resolved_fps,
+            )
+
         # One summary rebuild at the end — not once per combo signal.
         self._applying_export_preset = True
         try:
@@ -5798,7 +5899,12 @@ class RenderMixin:
             self._set_active_custom_preset(preset_name)
         finally:
             self._applying_export_preset = False
-        self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
+        if resolved_q != orig_q:
+            self._set_preset_status(
+                f"Applied “{preset_name}” (quality → {resolved_q} for this clip)."
+            )
+        else:
+            self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
         self._persist_render_settings_quiet()
 
     # --- Active Custom preset checkmark (Quality Preset combo) ---------------
@@ -5955,19 +6061,23 @@ class RenderMixin:
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
         self._queue_library_preview_diversion = False
+        # Persist the *previous* selection before the loading gate blocks sync.
+        self._flush_clip_session_state()
+        if self._sync_active_queue_job_from_ui():
+            self._persist_render_queue()
         self._loading_queue_job = True
         try:
-            self._flush_clip_session_state()
-            if self._sync_active_queue_job_from_ui():
-                self._persist_render_queue()
             self._selected_queue_job_id = job_id
+            self._remember_queue_job_for_clip(job.clip_path, job_id)
             self._preview_clip_path = job.clip_path
-            session = self._session_state_for_clip(job.clip_path)
+            session = self._session_state_from_job_settings(job)
             self._apply_header_from_job(job)
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 self.set_player_header_clip_controls_visible(True)
-            # Start playback before Source Info XML / size work.
-            self.generate_and_play_preview(job.clip_path, trim_restore=session)
+            # Always remount: shared duplicate paths must refresh their session.
+            self.generate_and_play_preview(
+                job.clip_path, trim_restore=session, remount=True
+            )
             self._populate_quality_options_for_clip(
                 job.clip_path, preserve_ui_selection=False,
             )
@@ -6466,6 +6576,49 @@ class RenderMixin:
         if not clip_path:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
+
+    def _remember_queue_job_for_clip(self, clip_path: str | None, job_id: str | None) -> None:
+        """Remember which duplicate card was last opened for this clip path."""
+        if not clip_path or not job_id:
+            return
+        if not hasattr(self, "_last_queue_job_id_by_clip"):
+            self._last_queue_job_id_by_clip = {}
+        self._last_queue_job_id_by_clip[os.path.normpath(clip_path)] = str(job_id)
+
+    def _resolve_queue_job_for_library_clip(self, clip_path: str):
+        """Resolve a duplicated clip to its selected, remembered, or first card."""
+        if not clip_path or not hasattr(self, "render_queue"):
+            return None
+        jobs = self.render_queue.find_all_by_clip_path(clip_path)
+        if not jobs:
+            return None
+        clip_norm = os.path.normpath(clip_path)
+        selected_id = getattr(self, "_selected_queue_job_id", None)
+        if selected_id:
+            selected = self.render_queue.get(selected_id)
+            if (
+                selected is not None
+                and os.path.normpath(selected.clip_path or "") == clip_norm
+            ):
+                return selected
+        remembered = (getattr(self, "_last_queue_job_id_by_clip", None) or {}).get(
+            clip_norm
+        )
+        if remembered:
+            job = self.render_queue.get(remembered)
+            if (
+                job is not None
+                and os.path.normpath(job.clip_path or "") == clip_norm
+            ):
+                return job
+        return jobs[0]
+
+    def _queue_job_for_preview_sync(self, clip_path: str | None = None):
+        """Resolve the queue job that should receive live trim/settings edits."""
+        preview = clip_path or self._current_preview_clip_path()
+        if not preview or not hasattr(self, "render_queue"):
+            return None
+        return self._resolve_queue_job_for_library_clip(preview)
 
     def _in_queue_membership_indices(self, clip_path) -> list:
         """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""

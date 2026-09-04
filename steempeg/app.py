@@ -328,6 +328,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.current_clip_duration_sec = 0
         self.render_queue = RenderQueue()
         self._selected_queue_job_id = None
+        self._last_queue_job_id_by_clip = {}
         self._loading_queue_job = False
         self._queue_batch_active = False
         self._queue_scheme_deferred = False
