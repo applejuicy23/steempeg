@@ -40,11 +40,12 @@ KEY_DESKTOP_RENDER_LAYOUT = "desktop_render_layout"
 
 DESKTOP_RENDER_ITS_A_DESKTOP = "its_a_desktop"
 DESKTOP_RENDER_LIKE_A_PORTABLE = "like_a_portable"
-DEFAULT_DESKTOP_RENDER_LAYOUT = DESKTOP_RENDER_ITS_A_DESKTOP
+# Stock Desktop chrome: floating Render Settings (classic dock still in Settings).
+DEFAULT_DESKTOP_RENDER_LAYOUT = DESKTOP_RENDER_LIKE_A_PORTABLE
 
 DESKTOP_RENDER_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
-    (DESKTOP_RENDER_ITS_A_DESKTOP, "It's a Desktop"),
     (DESKTOP_RENDER_LIKE_A_PORTABLE, "Like a Portable"),
+    (DESKTOP_RENDER_ITS_A_DESKTOP, "It's a Desktop"),
 )
 
 KEY_PORTABLE_LIKE_MIDDLE_SPLITTER = "portable_like_middle_splitter"

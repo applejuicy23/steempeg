@@ -489,9 +489,9 @@ class SettingsDialog(SteempegDialog):
         g.addLayout(layout_row)
         g.addWidget(
             self._hint(
-                "It's a Desktop, classic docked Render panel. "
-                "Like a Portable, purple Render Settings beside Start opens a "
-                "floating settings window (minimize / maximize; click again to close)."
+                "Like a Portable is stock: purple Render Settings beside Start opens a "
+                "floating settings window (minimize / maximize; click again to close). "
+                "It's a Desktop keeps the classic docked Render panel."
             )
         )
         self._chk_portable_like_middle_splitter = SteempegCheckBox(
