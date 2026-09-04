@@ -2481,7 +2481,8 @@ class LibraryMixin:
 
         if added:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
-            self.scan_clips(announce_duplicates=True)
+            # New Steam folders: Full scan (same as Choose/Add folder).
+            self.scan_clips(announce_duplicates=True, fast=False)
             steempeg_information(
                 self.ui,
                 "Steam folders found",
@@ -2525,7 +2526,8 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips(announce_duplicates=True)
+        # First / primary folder: Full scan (ffprobe + Steam meta).
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
@@ -2546,7 +2548,8 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
-        self.scan_clips(announce_duplicates=True)
+        # New folder: Full scan so health + icons land once.
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def remove_clips_folder(self, path):
         """Remove one library root and rescan."""
@@ -2925,9 +2928,22 @@ class LibraryMixin:
         if hasattr(self, "refresh_render_queue_panel"):
             self.refresh_render_queue_panel()
 
-        # 4. Rescan folders (fast: cached health, no Steam network)
+        # 4. Rescan folders. Progressive is launch-only — Refresh runs Full.
         self._stop_clip_poster_backfill()
-        self.scan_clips(fast=True)
+        from steempeg.ui.settings_prefs import SCAN_PROGRESSIVE, load_startup_library_scan
+
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        if load_startup_library_scan(settings) == SCAN_PROGRESSIVE:
+            # Same companion as On launch → Full: Steam icons/names after paint.
+            self._startup_refresh_steam_meta = True
+            self.scan_clips(fast=False)
+        else:
+            self.scan_clips(fast=True)
 
     def _insert_scanned_clip_row(self, row: ScannedClip) -> int:
         """Append one scanned clip to the hidden table (+ grid card). Returns row index."""

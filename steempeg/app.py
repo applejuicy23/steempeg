@@ -2913,6 +2913,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     "Steam auto-discovery on first launch: %s folder(s)",
                     len(discovered),
                 )
+                # Fresh unpack / empty library: first Steam roots need Full
+                # (ffprobe + meta). Later launches keep On launch → Progressive.
+                self._force_full_startup_scan = True
 
         # Keep the folder-picker (+ button / label) in sync with whatever roots we
         # ended up with. Auto-detected paths never went through choose_folder(), so
@@ -4303,6 +4306,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         )
 
         mode = load_startup_library_scan(settings)
+        # First-launch Steam folder discover overrides Progressive for this boot only.
+        if getattr(self, "_force_full_startup_scan", False) and mode == SCAN_PROGRESSIVE:
+            logging.info(
+                "Startup library scan: Full (first-launch Steam folders; "
+                "Progressive resumes next launch)"
+            )
+            mode = SCAN_FULL
+            self._force_full_startup_scan = False
 
         def _restore_session_side_libraries(*, restored_clips: bool) -> None:
             """Paint Rendered + Screenshots from session JSON (Skip / Smart)."""
