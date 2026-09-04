@@ -3205,10 +3205,24 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
             f" font-family: {tok.FONT_APP}; background: transparent;"
         )
+        # Same circle+triangle glyph as the header chip that opens this popup.
+        from steempeg.ui.icon_assets import playinfo_icon
+
+        _HEADING_ICON = max(16, min(22, int(heading_font.pixelSize())))
+        heading_row = QHBoxLayout()
+        heading_row.setContentsMargins(0, 0, 0, 0)
+        heading_row.setSpacing(8)
+        heading_icon = QLabel()
+        heading_icon.setFixedSize(_HEADING_ICON, _HEADING_ICON)
+        heading_icon.setStyleSheet("background: transparent; border: none;")
+        heading_icon.setPixmap(playinfo_icon(_HEADING_ICON).pixmap(_HEADING_ICON, _HEADING_ICON))
+        heading_row.addWidget(heading_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         heading = QLabel("Clip info")
         heading.setFont(heading_font)
         heading.setStyleSheet(heading_qss)
-        lay.addWidget(heading)
+        heading_row.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
+        heading_row.addStretch(1)
+        lay.addLayout(heading_row)
 
         lines = [ln for ln in text.split("\n") if ln.strip()]
         # Resolve game title from header meta — never via colon-split of tip lines.
