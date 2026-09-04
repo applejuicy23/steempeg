@@ -29,6 +29,8 @@ _DROP_GAP_PX = 10
 _TIMER_CUSHION_PX = 100
 # Gap between trim tools and Trim / marker cluster when markers are stacked.
 _TRIM_LEFT_NUDGE_PX = 28
+# Hard gap when both overlays share the bottom row (nudge alone is too small).
+_OVERLAY_PAIR_GAP_PX = 12
 
 
 def _is_portable_shell(app) -> bool:
@@ -68,11 +70,9 @@ def sync_trim_tools_placement(app) -> None:
 
     if markers is not None:
         _sync_marker_pill_placement(app, markers)
-        if getattr(app, "_marker_pill_placement", None) == "below":
-            pill = getattr(app, "pill_container", None)
-            if pill is not None:
-                _reposition_markers_below(app, markers, pill)
-                markers.raise_()
+
+    # Markers under theater first, then tools shift left if they would overlap.
+    _finalize_overlay_bottom_row(app)
 
 
 def _apply_trim_tools_visibility(app, tools: QWidget, trim: QWidget, active: bool) -> None:
@@ -345,6 +345,51 @@ def _reposition_tools_below(app, trim: QWidget, tools: QWidget) -> None:
     x = max(0, min(x, max(0, overlay.width() - tw)))
     tools.setGeometry(x, y, tw, th)
     tools.raise_()
+
+
+def _finalize_overlay_bottom_row(app) -> None:
+    """Markers under theater/fs; tools under Cancel; same Y; no overlap."""
+    markers = getattr(app, "marker_pill", None)
+    tools = getattr(app, "trim_tools_pill", None)
+    pill = getattr(app, "pill_container", None)
+    trim = getattr(app, "btn_trim", None)
+
+    markers_below = (
+        markers is not None
+        and getattr(app, "_marker_pill_placement", None) == "below"
+        and markers.isVisible()
+    )
+    tools_below = (
+        tools is not None
+        and getattr(app, "_trim_tools_placement", None) == "below"
+        and tools.isVisible()
+        and _trim_mode_active(app)
+    )
+    if not markers_below and not tools_below:
+        return
+
+    marker_rect = None
+    if markers_below and pill is not None:
+        _reposition_markers_below(app, markers, pill)
+        marker_rect = markers.geometry()
+        markers.raise_()
+
+    if tools_below and trim is not None:
+        _reposition_tools_below(app, trim, tools)
+        if marker_rect is not None and markers.parentWidget() is tools.parentWidget():
+            limit = marker_rect.x() - _OVERLAY_PAIR_GAP_PX
+            if tools.x() + tools.width() > limit:
+                tools.move(max(0, limit - tools.width()), tools.y())
+        tools.raise_()
+
+    if markers_below and tools_below:
+        th = max(tools.height(), 1)
+        mh = max(markers.height(), 1)
+        markers.move(markers.x(), int(tools.y() + (th - mh) // 2))
+        markers.raise_()
+    elif markers_below and pill is not None:
+        _reposition_markers_below(app, markers, pill)
+        markers.raise_()
 
 
 def _sync_trim_tools_nudge(app, tools: QWidget, trim: QWidget, active: bool) -> None:
