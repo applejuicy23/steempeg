@@ -23,7 +23,6 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -32,7 +31,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -816,9 +814,7 @@ class DevModeDialog(SteempegDialog):
         self._worker: _RenderQAWorker | None = None
         self._filters_worker: _FiltersQAWorker | None = None
         self._system_worker: _SystemInfoWorker | None = None
-        self._dev_size_default = (720, 760)
-        self._dev_size_deck_pad = (920, 640)
-        self.set_comfort_size(*self._dev_size_default)
+        self.set_comfort_size(720, 760)
 
         root = self.content_layout
         root.setContentsMargins(12, 8, 12, 12)
@@ -830,8 +826,6 @@ class DevModeDialog(SteempegDialog):
         tabs.addTab(self._build_render_qa_tab(), "Render QA")
         tabs.addTab(self._build_tools_tab(), "Tools")
         tabs.addTab(self._build_deck_pad_tab(), "Deck pad")
-        self._dev_tabs = tabs
-        tabs.currentChanged.connect(self._on_dev_tab_changed)
 
     # ── Render QA Tab ────────────────────────────────────────────────────────
 
@@ -1117,13 +1111,6 @@ class DevModeDialog(SteempegDialog):
 
         return page
 
-    def _on_dev_tab_changed(self, index: int) -> None:
-        name = self._dev_tabs.tabText(index)
-        if name == "Deck pad":
-            self.set_comfort_size(*self._dev_size_deck_pad)
-        else:
-            self.set_comfort_size(*self._dev_size_default)
-
     def _build_deck_pad_tab(self) -> QWidget:
         """Virtual Steam Deck face — taps feed ``steempeg.input.gamepad`` bus."""
         from steempeg.input.gamepad import DeckButton, OS_ONLY_BUTTONS, gamepad_bus
@@ -1133,119 +1120,71 @@ class DevModeDialog(SteempegDialog):
         lay.setSpacing(10)
 
         tip = QLabel(
-            "Same bus as a real pad. Enable Settings → General → Shell → Console mode "
-            "(or Developer mode). View → Choose a Clip · Menu → Render · Y Trim · "
-            "A play (trim: set end) · X queue (trim: set start) · "
-            "L1/R1 ±15s · R2 fullscreen · L2 jump trim start. "
-            "Sheets + Settings: L1/R1 tabs · D-pad focus · A · B. "
-            "STEAM / QAM are SteamOS-only."
+            "Emulate Deck buttons into the same bus as a real pad.\n"
+            "Enable Settings → Advanced → Dev tools → Deck gamepad controls (or Developer mode).\n"
+            "View → Choose a Clip · Menu → Render · Y → Trim · A → Play / confirm / activate.\n"
+            "B → close sheet · X → Add to queue · D-pad → cards / tabs / focus.\n"
+            "Render: L2 = Queue rail · R2 = settings · ▲▼ jobs or controls.\n"
+            "STEAM / QAM stay locked (SteamOS only). Prefer Portable shell when testing."
         )
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #b0b0b0;")
         lay.addWidget(tip)
 
-        pad_px = 52
-
-        def _mk(
-            label: str,
-            btn: DeckButton,
-            *,
-            enabled: bool = True,
-            tooltip: str = "",
-        ) -> QPushButton:
+        def _mk(label: str, btn: DeckButton, *, enabled: bool = True) -> QPushButton:
             b = QPushButton(label)
+            b.setMinimumHeight(36)
             b.setEnabled(enabled)
-            if tooltip:
-                b.setToolTip(tooltip)
             if enabled:
-                b.clicked.connect(lambda *_args, button=btn: gamepad_bus().tap(button))
-            elif not tooltip:
+                b.clicked.connect(lambda *_: gamepad_bus().tap(btn))
+            else:
                 b.setToolTip("SteamOS overlay — not bound in Steempeg")
             return b
 
-        def _wide(label: str, btn: DeckButton, *, enabled: bool = True) -> QPushButton:
-            b = _mk(label, btn, enabled=enabled)
-            b.setMinimumHeight(44)
-            b.setMaximumHeight(48)
-            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            return b
-
-        def _key(label: str, btn: DeckButton, *, tooltip: str = "") -> QPushButton:
-            b = _mk(label, btn, tooltip=tooltip)
-            b.setFixedSize(pad_px, pad_px)
-            return b
-
-        def _diamond(cells: list[tuple[int, int, QPushButton]]) -> QWidget:
-            wrap = QWidget()
-            grid = QGridLayout(wrap)
-            grid.setContentsMargins(0, 4, 0, 4)
-            grid.setSpacing(6)
-            for row, col, widget in cells:
-                grid.addWidget(widget, row, col)
-            return wrap
-
+        # Left cluster
         g_left = QGroupBox("Left")
         left = QVBoxLayout(g_left)
-        left.setSpacing(8)
-        left.addWidget(_wide("View", DeckButton.VIEW))
+        left.addWidget(_mk("View", DeckButton.VIEW))
+        dpad = QHBoxLayout()
+        dpad.addWidget(_mk("◀", DeckButton.DPAD_LEFT))
+        dpad_mid = QVBoxLayout()
+        dpad_mid.addWidget(_mk("▲", DeckButton.DPAD_UP))
+        dpad_mid.addWidget(_mk("▼", DeckButton.DPAD_DOWN))
+        dpad.addLayout(dpad_mid)
+        dpad.addWidget(_mk("▶", DeckButton.DPAD_RIGHT))
+        left.addLayout(dpad)
+        left.addWidget(_mk("L1", DeckButton.L1))
+        left.addWidget(_mk("L2", DeckButton.L2))
         left.addWidget(
-            _diamond(
-                [
-                    (0, 1, _key("▲", DeckButton.DPAD_UP)),
-                    (1, 0, _key("◀", DeckButton.DPAD_LEFT)),
-                    (1, 2, _key("▶", DeckButton.DPAD_RIGHT)),
-                    (2, 1, _key("▼", DeckButton.DPAD_DOWN)),
-                ]
-            )
+            _mk("STEAM (OS)", DeckButton.STEAM, enabled=False)
         )
-        left.addWidget(_wide("L1", DeckButton.L1))
-        left.addWidget(_wide("L2", DeckButton.L2))
-        left.addWidget(_wide("STEAM (OS)", DeckButton.STEAM, enabled=False))
+        lay.addWidget(g_left)
 
+        # Right cluster
         g_right = QGroupBox("Right")
         right = QVBoxLayout(g_right)
-        right.setSpacing(8)
-        right.addWidget(_wide("Menu → Render", DeckButton.MENU))
+        right.addWidget(_mk("Menu ☰ → Render", DeckButton.MENU))
+        face = QHBoxLayout()
+        face_mid = QVBoxLayout()
+        face_mid.addWidget(_mk("Y → Trim", DeckButton.Y))
+        face_row = QHBoxLayout()
+        face_row.addWidget(_mk("X → Queue", DeckButton.X))
+        face_row.addWidget(_mk("B → Back", DeckButton.B))
+        face_mid.addLayout(face_row)
+        face_mid.addWidget(_mk("A → Play", DeckButton.A))
+        face.addLayout(face_mid)
+        right.addLayout(face)
+        right.addWidget(_mk("R1", DeckButton.R1))
+        right.addWidget(_mk("R2", DeckButton.R2))
         right.addWidget(
-            _diamond(
-                [
-                    (0, 1, _key("Y", DeckButton.Y, tooltip="Trim")),
-                    (1, 0, _key("X", DeckButton.X, tooltip="Add to queue")),
-                    (1, 2, _key("B", DeckButton.B, tooltip="Close / back")),
-                    (2, 1, _key("A", DeckButton.A, tooltip="Play / confirm")),
-                ]
-            )
+            _mk("QAM … (OS)", DeckButton.QAM, enabled=False)
         )
-        right.addWidget(_wide("R1", DeckButton.R1))
-        right.addWidget(_wide("R2", DeckButton.R2))
-        right.addWidget(_wide("QAM … (OS)", DeckButton.QAM, enabled=False))
+        lay.addWidget(g_right)
 
-        clusters = QHBoxLayout()
-        clusters.setSpacing(12)
-        clusters.addWidget(g_left, 1)
-        clusters.addWidget(g_right, 1)
-        lay.addLayout(clusters)
-        lay.addStretch(1)
-        page.setMinimumSize(700, 480)
-
+        # Silence unused import lint if any
         _ = OS_ONLY_BUTTONS
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(page)
-        from steempeg.ui.library.library_styles import (
-            LIBRARY_SCROLLBAR_VERTICAL,
-            install_library_vertical_scrollbar,
-        )
-
-        scroll.setStyleSheet("QScrollArea { border: none; }" + LIBRARY_SCROLLBAR_VERTICAL)
-        install_library_vertical_scrollbar(scroll)
-
-        container = QWidget()
-        cl = QVBoxLayout(container)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.addWidget(scroll, 1)
-        return container
+        lay.addStretch(1)
+        return page
 
     # ── Slots ────────────────────────────────────────────────────────────────
 

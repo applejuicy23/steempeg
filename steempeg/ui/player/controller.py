@@ -340,14 +340,10 @@ class PlayerMixin:
             except Exception:
                 pass
 
-    def _kick_embed_surface(self) -> None:
-        """Re-apply embed geometry after the stack shows ``video_container``.
-
-        QStackedLayout only flips Qt visibility. The native ``wid=`` child can
-        keep a stale HWND rect (or 0×0 from ``_park_mpv_screen``) and paint
-        over the shell — library / Render Settings tabs look like they dropped
-        under the screen. Linux always kicked this; Windows skipped it.
-        """
+    def _kick_linux_embed_surface(self) -> None:
+        """Re-apply embed geometry after the stack shows ``video_container``."""
+        if sys.platform == "win32":
+            return
         wrapper = getattr(self, "mpv_wrapper", None)
         if wrapper is None or not hasattr(wrapper, "update_geometry"):
             return
@@ -355,45 +351,7 @@ class PlayerMixin:
             wrapper._last_video_rect = None
             wrapper.update_geometry()
         except Exception as exc:
-            logging.debug("embed surface kick failed: %s", exc)
-
-    def _kick_linux_embed_surface(self) -> None:
-        self._kick_embed_surface()
-
-    def _keep_v_dock_on_screen(self) -> None:
-        """If Source Info / neo sizeHint inflated the bottom pane, cap it.
-
-        Never inflate and never run mid-drag — that is what made the splitters
-        fight the user after a clip open.
-        """
-        if getattr(self, "_splitter_dragging", False):
-            return
-        if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
-            return
-        if hasattr(self, "_desktop_render_layout_is_portable_like"):
-            try:
-                if self._desktop_render_layout_is_portable_like():
-                    return
-            except Exception:
-                pass
-        v_split = getattr(self, "main_v_splitter", None)
-        ui = getattr(self, "ui", None)
-        if v_split is None or ui is None:
-            return
-        try:
-            sizes = list(v_split.sizes())
-        except RuntimeError:
-            return
-        if len(sizes) < 2 or int(sizes[1]) <= 0:
-            return
-        total = sum(sizes) if sum(sizes) > 0 else int(v_split.height() or 0)
-        total = max(int(total), 1)
-        from steempeg.ui.layout_defaults import main_v_splitter_max_bottom
-
-        cap = main_v_splitter_max_bottom(int(ui.height() or 0) or total)
-        if int(sizes[1]) <= cap:
-            return
-        v_split.setSizes([max(total - cap, 200), cap])
+            logging.debug("Linux embed surface kick failed: %s", exc)
 
     def _clear_player_surface(self):
         """Stop mpv and return the player area to the empty placeholder.
@@ -962,9 +920,7 @@ class PlayerMixin:
                     self.video_stack.setCurrentWidget(self.ui.video_container)
                 except Exception:
                     pass
-            self._kick_embed_surface()
-            if hasattr(self, "_keep_v_dock_on_screen"):
-                self._keep_v_dock_on_screen()
+            self._kick_linux_embed_surface()
             self._finish_preview_switch(switch_gen)
             clip = getattr(self, "_preview_clip_path", None)
             if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
@@ -1049,10 +1005,9 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
-        self._kick_embed_surface()
-        QTimer.singleShot(0, self._kick_embed_surface)
-        if hasattr(self, "_keep_v_dock_on_screen"):
-            self._keep_v_dock_on_screen()
+        self._kick_linux_embed_surface()
+        if sys.platform != "win32":
+            QTimer.singleShot(0, self._kick_linux_embed_surface)
         # Switching gate can clear as soon as the new picture is visible.
         self._finish_preview_switch(switch_gen)
         clip = getattr(self, "_preview_clip_path", None)
@@ -2367,28 +2322,11 @@ class PlayerMixin:
                     pass
             if sys.platform == "win32":
                 try:
-                    from steempeg.infra.window_focus import (
-                        on_shell_lost_foreground,
-                        should_skip_hwnd_ops_for_foreground,
-                    )
+                    from steempeg.infra.window_focus import on_shell_lost_foreground
 
-                    # ApplicationInactive = OS focus left Steempeg (Snipping Tool,
-                    # Start, Alt-Tab, …). Never raise dialogs here — that aborted
-                    # snips; Start + FRAMECHANGED used to orphan the mpv embed.
-                    if not should_skip_hwnd_ops_for_foreground():
-                        on_shell_lost_foreground(self.ui)
-                    # mpv vo=gpu can re-steal Z-order on later presents without
-                    # changing GetForegroundWindow — keep tucking under FG while
-                    # inactive and a clip is loaded (idle has no present steal).
-                    self._start_zorder_watchdog()
+                    on_shell_lost_foreground(self.ui)
                 except Exception:
                     pass
-        else:
-            self._stop_zorder_watchdog()
-            # Back from Start / Alt-Tab — re-seat the wid= surface if DWM moved it.
-            if sys.platform == "win32":
-                QTimer.singleShot(0, self._reassert_mpv_embed_after_focus)
-                QTimer.singleShot(80, self._reassert_mpv_embed_after_focus)
 
        # This matters to us ONLY if we are in fullscreen mode.
         if not getattr(self, 'is_fullscreen', False):
@@ -2406,85 +2344,6 @@ class PlayerMixin:
                 # Force-wake the panel so it doesn't end up in a coma!
                 if hasattr(self, 'wake_up_fullscreen_controls'):
                     self.wake_up_fullscreen_controls()
-
-    def _start_zorder_watchdog(self) -> None:
-        """While inactive + clip loaded, periodically demote if we cover FG."""
-        if sys.platform != "win32":
-            return
-        timer = getattr(self, "_zorder_watchdog", None)
-        if timer is None:
-            parent = getattr(self, "ui", None) or self
-            timer = QTimer(parent)
-            timer.setInterval(250)
-            timer.timeout.connect(self._zorder_watchdog_tick)
-            self._zorder_watchdog = timer
-        if not timer.isActive():
-            timer.start()
-
-    def _stop_zorder_watchdog(self) -> None:
-        timer = getattr(self, "_zorder_watchdog", None)
-        if timer is not None and timer.isActive():
-            timer.stop()
-
-    def _zorder_watchdog_tick(self) -> None:
-        """Demote shell under foreign FG if mpv present re-stacked us."""
-        if sys.platform != "win32":
-            self._stop_zorder_watchdog()
-            return
-        app = QApplication.instance()
-        if app is None or app.applicationState() == Qt.ApplicationState.ApplicationActive:
-            self._stop_zorder_watchdog()
-            return
-        # No clip / timeline off → mpv is not presenting; nothing to fight.
-        tl = getattr(self, "custom_timeline", None)
-        if tl is None or not tl.isEnabled():
-            return
-        if not getattr(self, "player", None):
-            return
-        try:
-            from steempeg.infra.window_focus import (
-                on_shell_lost_foreground,
-                should_skip_hwnd_ops_for_foreground,
-            )
-
-            if should_skip_hwnd_ops_for_foreground():
-                return
-            on_shell_lost_foreground(self.ui)
-        except Exception:
-            pass
-
-    def _reassert_mpv_embed_after_focus(self) -> None:
-        """Force mpv wid= child back into video_container geometry after focus loss."""
-        if sys.platform != "win32":
-            return
-        wrapper = getattr(self, "mpv_wrapper", None)
-        screen = getattr(self, "mpv_screen", None)
-        if screen is not None:
-            try:
-                from steempeg.infra.window_focus import reseat_native_embed_child
-
-                # ClipCard QMenu / Explorer yield can detach the Win32 parent of
-                # the wid= child — SetParent before geometry or video stays afloat.
-                reseat_native_embed_child(screen)
-            except Exception:
-                pass
-        if wrapper is None:
-            return
-        try:
-            wrapper._last_video_rect = None
-            if hasattr(wrapper, "update_geometry"):
-                wrapper.update_geometry()
-        except RuntimeError:
-            return
-        except Exception:
-            pass
-        if screen is not None:
-            try:
-                from steempeg.infra.window_focus import mark_embed_noactivate
-
-                mark_embed_noactivate(screen)
-            except Exception:
-                pass
 
     def wake_up_fullscreen_controls(self):
         """ Restores mouse arrow visibility and maps HUD controls layer on motion. """
@@ -2895,39 +2754,14 @@ class PlayerMixin:
             self.was_playing_before_drag = False
 
     def on_timeline_seek(self, position_ms):
-        """Queue an absolute seek — coalesce bursts so ±15s spam cannot teleport."""
+        """ Commands MPV to jump. """
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
             return
-        self._pending_seek_ms = int(position_ms)
-        self._ignore_playback_stall(0.8)
-        timer = getattr(self, "_seek_coalesce_timer", None)
-        if timer is None:
-            timer = QTimer(self.ui)
-            timer.setSingleShot(True)
-            timer.timeout.connect(self._flush_pending_timeline_seek)
-            self._seek_coalesce_timer = timer
-        # Restart on every jump — only the latest target hits mpv.
-        timer.start(55)
-
-    def _flush_pending_timeline_seek(self) -> None:
-        ms = getattr(self, "_pending_seek_ms", None)
-        if ms is None:
-            return
-        self._pending_seek_ms = None
-        if self._safe_mpv_seek(ms / 1000.0):
-            self._ignore_playback_stall(0.8)
-            # Keep stick ownership until demux catches the final hop.
-            canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
-            if canvas is not None:
-                canvas.user_seek_lock_time = time.time() + 0.45
+        if self._safe_mpv_seek(position_ms / 1000.0):
+            self._ignore_playback_stall(0.6)
 
     def on_timeline_release(self):
-        """Triggered when the user releases the mouse button after dragging."""
-        # Flush coalesced seek immediately so release lands on the scrub point.
-        timer = getattr(self, "_seek_coalesce_timer", None)
-        if timer is not None and timer.isActive():
-            timer.stop()
-            self._flush_pending_timeline_seek()
+        """ Triggered when the user releases the mouse button after dragging. """
         if not self._mpv_has_media():
             return
         try:
@@ -3082,8 +2916,9 @@ class PlayerMixin:
                     self.video_stack.setCurrentWidget(self.ui.video_container)
                 except Exception:
                     pass
-            self._kick_embed_surface()
-            QTimer.singleShot(0, self._kick_embed_surface)
+            self._kick_linux_embed_surface()
+            if sys.platform != "win32":
+                QTimer.singleShot(0, self._kick_linux_embed_surface)
         if hasattr(self, "clear_clip_open_loading"):
             self.clear_clip_open_loading()
         has_trim = bool(getattr(self, "_pending_trim_restore", None))
@@ -3565,17 +3400,6 @@ class PlayerMixin:
         have = self._norm_clip_path_key(getattr(self, "_preview_clip_path", None))
         if not want or want != have:
             return False
-        play = getattr(self, "_active_play_media_path", None)
-        if not play:
-            return False
-        play_n = self._norm_clip_path_key(play)
-        sep = os.sep
-        if not (
-            play_n == want
-            or play_n.startswith(want + sep)
-            or play_n.startswith(want + "/")
-        ):
-            return False
         return bool(self._mpv_has_media())
 
     def _stash_pending_open_seek(self, clip_path: str, seek_sec: float | None) -> None:
@@ -3821,20 +3645,11 @@ class PlayerMixin:
         if hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(percent)
 
-    def generate_and_play_preview(
-        self,
-        clip_path=None,
-        trim_restore=None,
-        force=False,
-        mpd_override=None,
-        remount=False,
-    ):
+    def generate_and_play_preview(self, clip_path=None, trim_restore=None, force=False, mpd_override=None):
         """ Instantly loads and plays the Steam .mpd playlist using MPV. No proxy needed!
 
         force=True bypasses the dead-clip guard for a best-effort "salvage" preview
         (may show corrupted video, audio only, or nothing — entirely on the user).
-        remount=True restarts MPV even if the same folder is already opening
-        (queue / library clicks must not be swallowed by the in-flight skip).
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
@@ -3864,8 +3679,6 @@ class PlayerMixin:
 
         # Spam-click while this same open is already in flight — don't restart MPV/remux.
         # Pending related-clip seek (if any) is kept and applied when finish fires.
-        # Queue duplicates share clip_path: still refresh deferred trim so job B
-        # does not inherit job A's pending restore when the user clicks mid-open.
         want = self._norm_clip_path_key(clip_path)
         opening = self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
         if (
@@ -3873,38 +3686,26 @@ class PlayerMixin:
             and want == opening
             and not mpd_override
             and not force
-            and not remount
             and (
                 getattr(self, "_is_switching", False)
                 or getattr(self, "_awaiting_first_frame", False)
             )
         ):
-            if trim_restore is not None:
-                self._pending_trim_restore = trim_restore
             logging.info(
                 "Preview skipped (open already in flight): %s "
-                "(switching=%s awaiting=%s trim_refresh=%s)",
+                "(switching=%s awaiting=%s)",
                 clip_path,
                 bool(getattr(self, "_is_switching", False)),
                 bool(getattr(self, "_awaiting_first_frame", False)),
-                trim_restore is not None,
             )
             return
 
         self._opening_clip_path = clip_path
         self._preview_clip_path = clip_path
-        # Raw clip is active now — re-show dash/settings only when the dock
-        # widget is actually hidden (Screenshots / rendered-only). Never use
-        # the flag: a stale False re-glues the v-splitter on every MPV open.
+        # Raw clip is active now — re-show dash/settings only when dock was hidden
+        # (Screenshots / rendered-only). Skip geometry churn while already open.
         if hasattr(self, "_sync_library_mode_chrome"):
-            dock = getattr(self, "bottom_v_wrap", None)
-            dock_up = False
-            if dock is not None:
-                try:
-                    dock_up = bool(dock.isVisible())
-                except RuntimeError:
-                    dock_up = False
-            if not dock_up:
+            if not getattr(self, "_render_dock_visible", False):
                 self._sync_library_mode_chrome()
         self.set_clip_open_loading(
             clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
@@ -5075,8 +4876,7 @@ class PlayerMixin:
 
         toast = getattr(self, '_screenshot_toast', None)
         if toast is None:
-            # Unowned on Windows — parented Tools re-stack Steempeg over Explorer.
-            toast = QWidget(None if sys.platform == "win32" else self.ui)
+            toast = QWidget(self.ui)
             toast.setObjectName("screenshotToastHost")
             # Tool (not ToolTip) without stays-on-top — stays under Clips Manager sheets.
             # Not Qt.Popup: we keep WA_ShowWithoutActivating so copy/open don't steal focus;

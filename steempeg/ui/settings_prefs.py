@@ -710,50 +710,39 @@ def load_markers_on_strip(settings: dict | None) -> bool:
 
 KEY_STARTUP_LIBRARY_SCAN = "startup_library_scan"
 
-SCAN_PROGRESSIVE = "progressive"
 SCAN_SMART = "smart"
 SCAN_FULL = "full"
 SCAN_QUICK = "quick"
 SCAN_CACHE = "cache"
-DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_PROGRESSIVE
+DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_SMART
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
-    (SCAN_PROGRESSIVE, "Progressive, load as you scroll"),
+    (SCAN_SMART, "Smart Launch, cache when unchanged"),
     (SCAN_QUICK, "Quick, folders + cached health"),
-    (SCAN_FULL, "Full, first launch / new folder"),
-    (SCAN_CACHE, "Skip, last session list"),
+    (SCAN_FULL, "Full, folders + ffprobe + Steam icons/names"),
+    (SCAN_CACHE, "Skip, instant last session"),
 )
 
 
 def normalize_startup_library_scan(value: object | None) -> str:
     text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
-        # Smart Launch tested slow (= Skip path); migrate to Progressive.
-        "smart": SCAN_PROGRESSIVE,
-        "smart_launch": SCAN_PROGRESSIVE,
-        "auto": SCAN_PROGRESSIVE,
+        "smart_launch": SCAN_SMART,
+        "auto": SCAN_SMART,
         "fast": SCAN_QUICK,
         "incremental": SCAN_QUICK,
         "cached_health": SCAN_QUICK,
         "ffprobe": SCAN_FULL,
         "complete": SCAN_FULL,
-        "first_launch": SCAN_FULL,
         "off": SCAN_CACHE,
         "skip": SCAN_CACHE,
         "none": SCAN_CACHE,
         "open_from_cache": SCAN_CACHE,
         "from_cache": SCAN_CACHE,
         "no_scan": SCAN_CACHE,
-        "stupid_launch": SCAN_PROGRESSIVE,
-        "viewport": SCAN_PROGRESSIVE,
-        "lazy": SCAN_PROGRESSIVE,
-        "as_you_scroll": SCAN_PROGRESSIVE,
     }
-    if text in (SCAN_PROGRESSIVE, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
+    if text in (SCAN_SMART, SCAN_FULL, SCAN_QUICK, SCAN_CACHE):
         return text
-    # Legacy key still in old settings.json — do not keep users on Smart.
-    if text == SCAN_SMART:
-        return SCAN_PROGRESSIVE
     return aliases.get(text, DEFAULT_STARTUP_LIBRARY_SCAN)
 
 
@@ -965,27 +954,12 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
     return bool((settings or {}).get(KEY_TEST_NEW_FULLSCREEN))
 
 
-# ----- Console mode / Deck gamepad (General → Shell) -----
-# Stored as deck_controls for older settings.json. Default: on for steamdeck
-# builds, off for Windows / Linux desktop. Future: a simpler D-pad-only
-# "PlayStation home" nav style beside this full Console mapping.
+# ----- Dev tools (Advanced tab) -----
 
 KEY_DEV_MODE = "dev_mode"
 KEY_DECK_CONTROLS = "deck_controls"
 DEFAULT_DEV_MODE = False
-
-
-def default_deck_controls() -> bool:
-    """Steam Deck builds → Console on; Windows / Linux → off."""
-    try:
-        from steempeg.ui.shell_chooser import is_steamdeck_build
-
-        return bool(is_steamdeck_build())
-    except Exception:
-        return False
-
-
-DEFAULT_DECK_CONTROLS = False  # used only when platform probe fails mid-normalize
+DEFAULT_DECK_CONTROLS = False
 
 
 def normalize_dev_mode(value: object | None) -> bool:
@@ -1013,23 +987,19 @@ def normalize_deck_controls(value: object | None) -> bool:
     text = str(value or "").strip().lower()
     if text in ("1", "true", "yes", "on"):
         return True
-    if text in ("0", "false", "no", "off"):
+    if text in ("0", "false", "no", "off", ""):
         return False
-    if text == "":
-        return default_deck_controls()
-    return default_deck_controls()
+    return DEFAULT_DECK_CONTROLS
 
 
 def load_deck_controls(settings: dict | None) -> bool:
-    """Console mode — missing key uses platform default (Deck on / desktop off)."""
-    settings = settings or {}
-    if KEY_DECK_CONTROLS not in settings:
-        return default_deck_controls()
-    return normalize_deck_controls(settings.get(KEY_DECK_CONTROLS))
+    return normalize_deck_controls(
+        (settings or {}).get(KEY_DECK_CONTROLS, DEFAULT_DECK_CONTROLS)
+    )
 
 
 def deck_controls_enabled(settings: dict | None = None, *, app=None) -> bool:
-    """Console / Dev-pad actions — Console mode opt-in or Developer mode (QA)."""
+    """Deck / Dev-pad actions — explicit opt-in or Developer mode (QA)."""
     if settings is None:
         settings = {}
         if app is not None and hasattr(app, "load_user_settings"):

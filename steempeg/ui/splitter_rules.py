@@ -124,8 +124,6 @@ class SplitterRulesMixin:
         self._splitter_handle_watchers = []
         self._frozen_queue_width = 0
         self._frozen_player_floor = 0
-        self._frozen_queue_floor = 0
-        self._frozen_min_state = None  # (player_shut, queue_shut) last applied
         self._right_drag_mode = ""
         self._watch_splitter_handle(getattr(ui, "main_splitter", None), LEFT)
         self._watch_splitter_handle(getattr(self, "right_h_splitter", None), RIGHT)
@@ -146,20 +144,6 @@ class SplitterRulesMixin:
     def _begin_splitter_drag(self, side: str) -> None:
         self._splitter_drag_side = side
         self._splitter_dragging = True
-        # Drop region masks for the drag — setMask mid-resize is the band lag.
-        try:
-            for attr in ("corner_mask", "_neo_wrapper_mask"):
-                mask = getattr(self, attr, None)
-                if mask is None:
-                    continue
-                timer = getattr(mask, "_timer", None)
-                if timer is not None:
-                    timer.stop()
-                target = getattr(mask, "_target", None)
-                if target is not None:
-                    target.clearMask()
-        except Exception:
-            pass
         # Kill a snap armed by a prior splitterMoved — it must not fire mid-hold.
         timer = getattr(self, "_right_h_snap_timer", None)
         if timer is not None:
@@ -184,10 +168,7 @@ class SplitterRulesMixin:
             # Freeze the content floor so header elide / queue cards cannot
             # renegotiate the kiss threshold every pixel (Stage B).
             self._frozen_player_floor = self._player_column_floor()
-            self._frozen_queue_floor = self._queue_layout_floor()
-            self._frozen_min_state = None
             return
-        self._frozen_min_state = None
         sizes = self.right_h_splitter.sizes()
         # Freeze the wall now. Reading it live lets the queue balloon while the
         # player column is collapsed, which drags the right handle along.
@@ -204,17 +185,6 @@ class SplitterRulesMixin:
         self._right_drag_mode = ""
         self._sync_kiss_flag()
         self.sync_queue_minimum()
-        # Apply deferred corner masks now that the drag is done (masks were
-        # suppressed per-pixel to avoid setMask(QRegion) subtree repaint lag).
-        try:
-            for attr in ("corner_mask", "_neo_wrapper_mask"):
-                mask = getattr(self, attr, None)
-                if mask is not None and not getattr(mask, "_suspended", False):
-                    timer = getattr(mask, "_timer", None)
-                    if timer is not None:
-                        timer.start(60)
-        except Exception:
-            pass
         try:
             from steempeg.ui.splitter_telemetry import get_splitter_telemetry, splitter_reason
 

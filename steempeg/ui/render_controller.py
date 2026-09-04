@@ -1763,19 +1763,16 @@ class RenderMixin:
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
+        self._preview_clip_path = clip_path
         self._rendered_media_path = None
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
 
-        # Clip is queued (possibly N duplicates). Do NOT stamp
-        # ``_preview_clip_path`` first — activate_queue_job would think the
-        # clip is already playing and skip MPV (visual select, silent player).
-        queue_job = self._resolve_queue_job_for_library_clip(clip_path)
+        queue_job = self.render_queue.find_by_clip_path(clip_path)
         if queue_job:
+            # Clip is already queued -> behave exactly like clicking its queue card.
             self.activate_queue_job(queue_job.id)
             return
-
-        self._preview_clip_path = clip_path
 
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
@@ -1785,23 +1782,14 @@ class RenderMixin:
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         # Play first — Source Info XML / folder size must not block first frame.
-        self.generate_and_play_preview(
-            clip_path, trim_restore=trim_restore, remount=True
-        )
+        self.generate_and_play_preview(clip_path, trim_restore=trim_restore)
         self._schedule_quality_populate_after_open(clip_path, trim_restore)
         # Selection only — never inflate Render Queue from a library click.
         self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):
-            dock = getattr(self, "bottom_v_wrap", None)
-            dock_up = False
-            if dock is not None:
-                try:
-                    dock_up = bool(dock.isVisible())
-                except RuntimeError:
-                    dock_up = False
-            if not dock_up:
+            if not getattr(self, "_render_dock_visible", False):
                 self._sync_library_mode_chrome()
         if hasattr(self, "_schedule_persist_library_ui_state"):
             self._schedule_persist_library_ui_state()
@@ -2167,9 +2155,14 @@ class RenderMixin:
             )
             self._dash_btn_style_render_settings = style
 
-        from steempeg.ui.ui_density import COMFORT
+        fmt = getattr(self, "_fmt_dash_btn", None)
+        if callable(fmt):
+            qss = fmt(style)
+        else:
+            qss = style.replace("<<FONT>>", tok.FONT_APP).format(
+                font=12, radius=8, pad="6px 14px"
+            )
 
-        dense = getattr(self, "_ui_density", None) or COMFORT
         btn = QPushButton()
         btn.setObjectName("btn_render_settings")
         btn.setText(" Render Settings")
@@ -2179,63 +2172,12 @@ class RenderMixin:
         btn.setToolTip("Open render settings in a floating window (click again to close)")
         btn.setAutoDefault(False)
         btn.setDefault(False)
-        btn.setFixedHeight(int(getattr(dense, "dash_btn_h", 36)))
+        btn.setFixedHeight(36)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setStyleSheet(self._dash_render_settings_qss())
+        btn.setStyleSheet(qss)
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
         self._sync_dash_render_settings_button()
-
-    def _dash_render_settings_qss(self, *, border: str | None = None) -> str:
-        """Stock Render Settings QSS (current density). Optional live border color."""
-        from steempeg.ui.ui_density import COMFORT
-
-        dense = getattr(self, "_ui_density", None) or COMFORT
-        pad = "1px 8px" if getattr(dense, "compact", False) else "6px 14px"
-        radius = max(8, int(getattr(dense, "dash_btn_h", 36)) // 2)
-        font = int(getattr(dense, "dash_font", 12))
-        template = getattr(self, "_dash_btn_style_render_settings", None) or (
-            "QPushButton {{ font-family: <<FONT>>; "
-            "font-size: {font}px; font-weight: bold; background-color: #5a4b7a; color: #ffffff; "
-            "border: 2px solid #8e7cc3; border-radius: {radius}px; padding: {pad}; }}"
-            "QPushButton:hover {{ background-color: #6b5a8e; border: 2px solid #b29ae7; }}"
-            "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #8e7cc3; }}"
-            "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
-        )
-        fmt = getattr(self, "_fmt_dash_btn", None)
-        if callable(fmt):
-            qss = fmt(template, font=font, radius=radius, pad=pad)
-        else:
-            qss = template.replace("<<FONT>>", tok.FONT_APP).format(
-                font=font, radius=radius, pad=pad
-            )
-        if border:
-            # Only the outline breathes — swap stock + hover border tokens.
-            qss = qss.replace("#8e7cc3", border).replace("#b29ae7", border)
-        return qss
-
-    def _ensure_dash_render_settings_breath(self):
-        from steempeg.ui.widgets.soft_accent_breath import SoftAccentBorderBreath
-
-        breath = getattr(self, "_dash_render_settings_breath", None)
-        btn = getattr(self, "btn_render_settings", None)
-        if btn is None:
-            return None
-        if breath is not None:
-            try:
-                if breath._button is btn:
-                    return breath
-            except RuntimeError:
-                pass
-        breath = SoftAccentBorderBreath(
-            btn,
-            style_builder=lambda c: self._dash_render_settings_qss(border=c),
-            from_color="#f2eef8",
-            to_color="#b29ae7",
-            parent=btn,
-        )
-        self._dash_render_settings_breath = breath
-        return breath
 
     def _sync_dash_render_settings_button(self) -> None:
         btn = getattr(self, "btn_render_settings", None)
@@ -2244,35 +2186,14 @@ class RenderMixin:
         show = self._desktop_render_layout_is_portable_like()
         btn.setVisible(show)
         open_dlg = getattr(self, "_desktop_render_settings_dlg", None)
-        is_open = False
-        is_minimized = False
         try:
-            if open_dlg is not None:
-                open_dlg.objectName()
-                if hasattr(open_dlg, "is_parked_minimized"):
-                    is_minimized = bool(open_dlg.is_parked_minimized())
-                else:
-                    is_minimized = bool(open_dlg.isMinimized())
-                is_open = bool(open_dlg.isVisible()) and not is_minimized
+            is_open = open_dlg is not None and open_dlg.isVisible() and not open_dlg.isMinimized()
         except RuntimeError:
             is_open = False
-            is_minimized = False
         if is_open:
             btn.setText(" Close Settings")
         else:
             btn.setText(" Render Settings")
-
-        # Breath only while yellow-minimized — soft light↔purple outline cue.
-        breath = self._ensure_dash_render_settings_breath()
-        if breath is None:
-            return
-        stock = self._dash_render_settings_qss()
-        if show and is_minimized:
-            if not breath.active:
-                btn.setStyleSheet(stock)
-            breath.start()
-        else:
-            breath.stop(restore_style=stock)
 
     def _desktop_render_layout_is_portable_like(self) -> bool:
         if getattr(self, "_portable_shell", False):
@@ -2472,7 +2393,10 @@ class RenderMixin:
             return
         if self._floating_render_settings_holds_neo():
             return
-        if not self._neo_is_parked_in_chrome_garage():
+        if not (
+            self._neo_is_parked_in_chrome_garage()
+            or getattr(self, "_neo_dock_home", None)
+        ):
             return
         self._restore_neo_to_dock_layout()
 
@@ -2646,10 +2570,7 @@ class RenderMixin:
             lay = parent.layout() if parent is not None else None
             if lay is not None:
                 lay.removeWidget(neo)
-            else:
-                from steempeg.ui.portable.sheets import _reparent_borrowed
-
-                _reparent_borrowed(neo)
+            neo.setParent(None)
         garage.layout().addWidget(neo)
         neo.hide()
 
@@ -2667,12 +2588,12 @@ class RenderMixin:
         dash = getattr(self, "render_dashboard", None)
 
         # Detach from garage / stale parent — always re-dock into bottom_v_wrap.
-        # No setParent(None): that maps a brief top-level HWND at (0,0).
         parent = neo.parentWidget()
         if parent is not None:
             prev_lay = parent.layout()
             if prev_lay is not None:
                 prev_lay.removeWidget(neo)
+            neo.setParent(None)
 
         insert_at = 0
         if dash is not None:
@@ -3179,34 +3100,23 @@ class RenderMixin:
             return dict(memory[clip_path])
         job = self.render_queue.find_by_clip_path(clip_path)
         if job:
-            return self._session_state_from_job_settings(job)
-        return dict(_DEFAULT_CLIP_SESSION)
-
-    def _session_state_from_job_settings(self, job) -> dict:
-        """Build UI session from a *specific* queue job (duplicates share clip_path)."""
-        s = job.settings
-        state = dict(_DEFAULT_CLIP_SESSION)
-        state.update(
-            {
-                "is_trim_mode": bool(s.is_trim_mode),
-                "trim_start_ms": int(s.trim_start_ms or 0),
-                "trim_end_ms": int(s.trim_end_ms or 0),
-                "container": s.container_format or state["container"],
-                "codec_text": s.codec_text or state["codec_text"],
-                "audio_format": s.audio_format or state["audio_format"],
-                "output_preset": s.output_preset or state["output_preset"],
-                "audio_only": bool(s.audio_only),
-                "mute_audio": bool(s.mute_audio),
-            }
-        )
-        # Zoom/scroll may be remembered per job without poisoning the path slot.
-        saved = (getattr(self, "_queue_job_session_memory", None) or {}).get(job.id)
-        if saved:
-            state["zoom_level"] = float(
-                saved.get("zoom_level", state.get("zoom_level", 1.0))
+            s = job.settings
+            state = dict(_DEFAULT_CLIP_SESSION)
+            state.update(
+                {
+                    "is_trim_mode": bool(s.is_trim_mode),
+                    "trim_start_ms": int(s.trim_start_ms),
+                    "trim_end_ms": int(s.trim_end_ms),
+                    "container": s.container_format or state["container"],
+                    "codec_text": s.codec_text or state["codec_text"],
+                    "audio_format": s.audio_format or state["audio_format"],
+                    "output_preset": s.output_preset or state["output_preset"],
+                    "audio_only": bool(s.audio_only),
+                    "mute_audio": bool(s.mute_audio),
+                }
             )
-            state["scroll_x"] = int(saved.get("scroll_x", state.get("scroll_x", 0)))
-        return state
+            return state
+        return dict(_DEFAULT_CLIP_SESSION)
 
     def _enable_all_output_combo_items(self) -> None:
         ui = self.ui
@@ -3314,20 +3224,14 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
-        job = self._queue_job_for_preview_sync(clip_path)
+        if not hasattr(self, "_clip_session_memory"):
+            self._clip_session_memory = {}
+        self._clip_session_memory[norm] = state
+        job = self.render_queue.find_by_clip_path(clip_path)
         if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
             job.settings.is_trim_mode = bool(state["is_trim_mode"])
             job.settings.trim_start_ms = int(state["trim_start_ms"])
             job.settings.trim_end_ms = int(state["trim_end_ms"])
-            if not hasattr(self, "_queue_job_session_memory"):
-                self._queue_job_session_memory = {}
-            self._queue_job_session_memory[job.id] = state
-            # Do NOT write shared path memory while a queue job owns the preview —
-            # duplicate cards of the same clip would inherit each other's Trim.
-            return
-        if not hasattr(self, "_clip_session_memory"):
-            self._clip_session_memory = {}
-        self._clip_session_memory[norm] = state
 
     def _flush_current_trim_state(self) -> None:
         self._flush_clip_session_state()
@@ -3341,7 +3245,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self._queue_job_for_preview_sync(preview)
+        job = self.render_queue.find_by_clip_path(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings.is_trim_mode = bool(self.custom_timeline.is_trim_mode)
@@ -3365,17 +3269,6 @@ class RenderMixin:
             return
         state = self._capture_clip_session_state()
         norm = os.path.normpath(clip_path)
-        job = self._queue_job_for_preview_sync(clip_path)
-        if job and job.status in (JobStatus.QUEUED, JobStatus.ERROR):
-            job.settings.is_trim_mode = bool(state["is_trim_mode"])
-            job.settings.trim_start_ms = int(state["trim_start_ms"])
-            job.settings.trim_end_ms = int(state["trim_end_ms"])
-            if not hasattr(self, "_queue_job_session_memory"):
-                self._queue_job_session_memory = {}
-            self._queue_job_session_memory[job.id] = state
-            if hasattr(self, "render_queue_panel"):
-                self.render_queue_panel.patch_job_trim(job)
-            return
         if not hasattr(self, "_clip_session_memory"):
             self._clip_session_memory = {}
         self._clip_session_memory[norm] = state
@@ -3405,7 +3298,7 @@ class RenderMixin:
         preview = self._current_preview_clip_path()
         if not preview:
             return False
-        job = self._queue_job_for_preview_sync(preview)
+        job = self.render_queue.find_by_clip_path(preview)
         if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
             return False
         job.settings = snapshot_settings_from_ui(self)
@@ -4076,92 +3969,22 @@ class RenderMixin:
         (Source Info, Export) show a phantom scrollbar over empty space. Collapsing the
         non-current pages to an Ignored size policy makes each page contribute 0 height,
         so the scroll range matches what's actually visible.
-
-        Floating Render Settings must keep Expanding on the active page / scroll /
-        neo — Preferred sizeHints collapse the plate into a postage stamp (or let
-        it crawl past the dialog chrome on the next map).
         """
-        from PySide6.QtWidgets import QSizePolicy
-
         tabs = getattr(self.ui, 'settings_tabs', None)
         if tabs is None:
             return
         if idx is None:
             idx = tabs.currentIndex()
-        floating = False
-        try:
-            floating = bool(self._floating_render_settings_holds_neo())
-        except Exception:
-            floating = False
-        active = (
-            QSizePolicy.Policy.Expanding
-            if floating
-            else QSizePolicy.Policy.Preferred
-        )
         for i in range(tabs.count()):
             page = tabs.widget(i)
             if page is None:
                 continue
             if i == idx:
-                page.setSizePolicy(active, active)
+                page.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
             else:
-                page.setSizePolicy(
-                    QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
-                )
+                page.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
             page.updateGeometry()
         tabs.updateGeometry()
-        if floating:
-            try:
-                tabs.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-                )
-                scroll = getattr(self, "right_scroll", None)
-                if scroll is not None:
-                    scroll.setSizePolicy(
-                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-                    )
-                    scroll.setMinimumSize(0, 0)
-                    scroll.setMaximumSize(16777215, 16777215)
-                neo = getattr(self, "neo_wrapper", None)
-                if neo is not None:
-                    neo.setSizePolicy(
-                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-                    )
-                    neo.setMinimumSize(0, 0)
-                    neo.setMaximumSize(16777215, 16777215)
-            except RuntimeError:
-                pass
-        else:
-            # Docked: Preferred pages must only grow the scroll *contents*.
-            # If neo/bottom inherit that sizeHint, MPV-open shoves the tab bar
-            # under the screen and the v-splitter fights the user.
-            try:
-                tabs.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-                )
-                tabs.setMinimumHeight(0)
-                scroll = getattr(self, "right_scroll", None)
-                if scroll is not None:
-                    scroll.setSizePolicy(
-                        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-                    )
-                    scroll.setMinimumHeight(0)
-                    try:
-                        from PySide6.QtWidgets import QScrollArea
-
-                        scroll.setSizeAdjustPolicy(
-                            QScrollArea.SizeAdjustPolicy.AdjustIgnored
-                        )
-                    except Exception:
-                        pass
-                neo = getattr(self, "neo_wrapper", None)
-                if neo is not None:
-                    neo.setMinimumHeight(0)
-                bottom = getattr(self, "bottom_v_wrap", None)
-                if bottom is not None:
-                    bottom.setMinimumHeight(0)
-            except RuntimeError:
-                pass
 
     def _refresh_source_video_bitrate(self) -> float:
         """Return source video Mbps, re-probing from disk when the cached value is missing."""
@@ -5265,28 +5088,12 @@ class RenderMixin:
             payload = collect_queue_add_payload(self, clip_path)
             if payload is None:
                 return None
-            if was_duplicate:
-                # Notice promises a fresh Original-style row — do not copy the
-                # live Trim from the sibling card of the same clip.
-                payload.trim = {
-                    "is_trim_mode": False,
-                    "trim_start_ms": 0,
-                    "trim_end_ms": 0,
-                }
-                if payload.settings is not None:
-                    payload.settings.is_trim_mode = False
-                    payload.settings.trim_start_ms = 0
-                    payload.settings.trim_end_ms = 0
             self._start_async_queue_add(payload, clip_path, was_duplicate)
             return None
 
         job = build_render_job_from_ui(self, clip_path)
         if job is None:
             return None
-        if was_duplicate and job.settings is not None:
-            job.settings.is_trim_mode = False
-            job.settings.trim_start_ms = 0
-            job.settings.trim_end_ms = 0
         return self._commit_queue_job(job, clip_path, was_duplicate, sync_ui=False)
 
     def _remember_job_salvage(self, job) -> None:
@@ -5631,7 +5438,6 @@ class RenderMixin:
                 on_toggle_fav=self.toggle_export_preset_favourite_from_ui,
                 on_toggle_expand=self._toggle_export_preset_row_expanded,
                 on_apply=self.apply_export_preset_to_panel,
-                on_edit=self.edit_export_preset_in_editor,
                 on_update=self.update_export_preset_from_ui,
                 on_rename=self.rename_export_preset_from_ui,
                 on_duplicate=self.duplicate_export_preset_from_ui,
@@ -5791,47 +5597,6 @@ class RenderMixin:
         if dlg.exec() != dlg.DialogCode.Accepted:
             return None
         return (edit.text() or "").strip() or None
-
-    def create_export_preset_in_editor(self) -> None:
-        """Open the mini-editor to author a new Custom preset."""
-        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
-
-        key = open_preset_mini_editor(self)
-        if not key:
-            return
-        self.refresh_export_presets_list()
-        self._select_export_preset_by_name(key)
-        edit = getattr(self.ui, "preset_name_edit", None)
-        if edit is not None:
-            edit.setText(key)
-        self._set_preset_status(f"Created “{key}” in the mini-editor.")
-
-    def edit_export_preset_in_editor(self, name: str | None = None) -> None:
-        """Open the mini-editor for an existing Custom preset."""
-        from steempeg.ui.message_dialog import steempeg_warning
-        from steempeg.ui.preset_mini_editor import open_preset_mini_editor
-
-        selected = (name or "").strip() or self._list_selected_export_preset_name()
-        if not selected:
-            steempeg_warning(
-                self.ui,
-                "Edit preset",
-                "Select a saved Custom preset in the list first.",
-            )
-            return
-        key = open_preset_mini_editor(self, edit_name=selected)
-        if not key:
-            return
-        expanded = self._export_preset_expanded_names()
-        if selected in expanded and key != selected:
-            expanded.discard(selected)
-            expanded.add(key)
-        self.refresh_export_presets_list()
-        self._select_export_preset_by_name(key)
-        edit = getattr(self.ui, "preset_name_edit", None)
-        if edit is not None:
-            edit.setText(key)
-        self._set_preset_status(f"Updated “{key}” in the mini-editor.")
 
     def save_export_preset_from_ui(self) -> None:
         from steempeg.render.export_presets import load_presets_map, save_preset
@@ -6004,13 +5769,7 @@ class RenderMixin:
             self._set_preset_status(f"Removed “{selected}” from favourites.")
 
     def apply_export_preset_to_panel(self, name: str | None = None) -> None:
-        from dataclasses import replace
-
         from steempeg.render.export_presets import get_preset_settings
-        from steempeg.render.quality_presets import (
-            resolve_fps_for_source,
-            resolve_quality_for_source,
-        )
         from steempeg.ui.message_dialog import steempeg_warning
         from steempeg.ui.render_job_builder import apply_job_settings_to_ui
 
@@ -6031,23 +5790,6 @@ class RenderMixin:
             )
             return
         self._select_export_preset_by_name(preset_name)
-
-        src_h = int(getattr(self, "current_orig_height", 0) or 0)
-        src_fps = int(getattr(self, "current_orig_fps", 0) or 0)
-        orig_q = settings.quality_text or ""
-        resolved_q = resolve_quality_for_source(
-            settings.quality_text,
-            src_h,
-            fallback=getattr(settings, "quality_fallback", None) or "Original",
-        )
-        resolved_fps = resolve_fps_for_source(settings.fps_text, src_fps)
-        if resolved_q != settings.quality_text or resolved_fps != settings.fps_text:
-            settings = replace(
-                settings,
-                quality_text=resolved_q,
-                fps_text=resolved_fps,
-            )
-
         # One summary rebuild at the end — not once per combo signal.
         self._applying_export_preset = True
         try:
@@ -6056,12 +5798,7 @@ class RenderMixin:
             self._set_active_custom_preset(preset_name)
         finally:
             self._applying_export_preset = False
-        if resolved_q != orig_q:
-            self._set_preset_status(
-                f"Applied “{preset_name}” (quality → {resolved_q} for this clip)."
-            )
-        else:
-            self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
+        self._set_preset_status(f"Applied “{preset_name}” to the export panel.")
         self._persist_render_settings_quiet()
 
     # --- Active Custom preset checkmark (Quality Preset combo) ---------------
@@ -6206,6 +5943,10 @@ class RenderMixin:
 
     def activate_queue_job(self, job_id: str) -> None:
         """Load preview, trim, and settings from a queue job snapshot."""
+        if getattr(self, "_clips_scan_active", False):
+            if hasattr(self, "set_status"):
+                self.set_status("Library is still loading — Queue is locked.")
+            return
         job = self.render_queue.get(job_id)
         if not job:
             return
@@ -6214,24 +5955,19 @@ class RenderMixin:
             self._queue_scheme_deferred = False
             self._queue_resume_job_id = None
         self._queue_library_preview_diversion = False
-        # Persist the *previous* selection before the loading gate blocks sync.
-        self._flush_clip_session_state()
-        if self._sync_active_queue_job_from_ui():
-            self._persist_render_queue()
         self._loading_queue_job = True
         try:
+            self._flush_clip_session_state()
+            if self._sync_active_queue_job_from_ui():
+                self._persist_render_queue()
             self._selected_queue_job_id = job_id
-            self._remember_queue_job_for_clip(job.clip_path, job_id)
             self._preview_clip_path = job.clip_path
-            session = self._session_state_from_job_settings(job)
+            session = self._session_state_for_clip(job.clip_path)
             self._apply_header_from_job(job)
             if hasattr(self, "set_player_header_clip_controls_visible"):
                 self.set_player_header_clip_controls_visible(True)
-            # Always remount. Skipping play when path/MPV looked "already up"
-            # left the previous clip on screen (or a black player on cold start).
-            self.generate_and_play_preview(
-                job.clip_path, trim_restore=session, remount=True
-            )
+            # Start playback before Source Info XML / size work.
+            self.generate_and_play_preview(job.clip_path, trim_restore=session)
             self._populate_quality_options_for_clip(
                 job.clip_path, preserve_ui_selection=False,
             )
@@ -6244,17 +5980,30 @@ class RenderMixin:
             self._loading_queue_job = False
             raise
         self._highlight_clip_in_library(job.clip_path)
+        # Card/list selection only — do not force the Render Queue pane open.
         self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
         self._update_start_button_label()
+        if hasattr(self, "_sync_library_mode_chrome"):
+            if not getattr(self, "_render_dock_visible", False):
+                self._sync_library_mode_chrome()
+        # Queue selection must refresh Ready badge + neo binding chrome.
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
+        if hasattr(self, "_ensure_docked_neo_visible_for_context"):
+            try:
+                self._ensure_docked_neo_visible_for_context()
+            except Exception:
+                pass
 
     def on_queue_job_selected(self, job_id: str):
         """Load preview and settings for the selected queue card."""
+        if getattr(self, "_clips_scan_active", False):
+            if hasattr(self, "set_status"):
+                self.set_status("Library is still loading — Queue is locked.")
+            return
         logging.info("Queue selection: %s", job_id)
         self.activate_queue_job(job_id)
-
     def _highlight_clip_in_library(self, clip_path: str) -> None:
         """Mirror a queue selection back onto the Grid/List card (no preview reload)."""
         if not clip_path or not hasattr(self.ui, "table_clips"):
@@ -6717,53 +6466,6 @@ class RenderMixin:
         if not clip_path:
             return None
         return self.render_queue.find_by_clip_path(clip_path)
-
-    def _remember_queue_job_for_clip(self, clip_path: str | None, job_id: str | None) -> None:
-        """Remember which duplicate card was last opened for this clip path."""
-        if not clip_path or not job_id:
-            return
-        if not hasattr(self, "_last_queue_job_id_by_clip"):
-            self._last_queue_job_id_by_clip = {}
-        self._last_queue_job_id_by_clip[os.path.normpath(clip_path)] = str(job_id)
-
-    def _resolve_queue_job_for_library_clip(self, clip_path: str):
-        """Which queue card Clips Manager should open for a duplicated clip.
-
-        Order: currently selected job for this path → last activated job still
-        in the queue → first queue row for the path.
-        """
-        if not clip_path or not hasattr(self, "render_queue"):
-            return None
-        jobs = self.render_queue.find_all_by_clip_path(clip_path)
-        if not jobs:
-            return None
-        clip_norm = os.path.normpath(clip_path)
-        selected_id = getattr(self, "_selected_queue_job_id", None)
-        if selected_id:
-            selected = self.render_queue.get(selected_id)
-            if (
-                selected is not None
-                and os.path.normpath(selected.clip_path or "") == clip_norm
-            ):
-                return selected
-        remembered = (getattr(self, "_last_queue_job_id_by_clip", None) or {}).get(
-            clip_norm
-        )
-        if remembered:
-            job = self.render_queue.get(remembered)
-            if (
-                job is not None
-                and os.path.normpath(job.clip_path or "") == clip_norm
-            ):
-                return job
-        return jobs[0]
-
-    def _queue_job_for_preview_sync(self, clip_path: str | None = None):
-        """Resolve the queue job that should receive live trim/settings edits."""
-        preview = clip_path or self._current_preview_clip_path()
-        if not preview or not hasattr(self, "render_queue"):
-            return None
-        return self._resolve_queue_job_for_library_clip(preview)
 
     def _in_queue_membership_indices(self, clip_path) -> list:
         """1-based ``queue_index`` values for every job of this clip (ClipCard order)."""

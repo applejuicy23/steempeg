@@ -341,10 +341,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # (single Start Render never inserts a COMPLETED job into render_queue).
         self._completed_plaque_clip_path = None
         self._clip_session_memory = {}
-        # When a clip is queued N times, Clips Manager opens the job the user
-        # last activated in Render Queue (else the first queue row for that path).
-        self._last_queue_job_id_by_clip = {}
-        self._queue_job_session_memory = {}
 
         
         # Export quality ladder (Divine 4K / Goddess 8K+); rebuilt per clip when taller.
@@ -1070,7 +1066,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             # Make the scroll area size to the active page so short tabs don't get a phantom scrollbar
             self.ui.settings_tabs.currentChanged.connect(self.fit_settings_tab_to_page)
             
-            neo_layout.addWidget(sidebar_frame, 0)
+            neo_layout.addWidget(sidebar_frame)
             
             # 4. Settings content host — opaque shell gray (not #000 void / not transparent).
             self.right_scroll = QScrollArea()
@@ -1079,13 +1075,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.right_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             self.right_scroll.setFrameShape(QFrame.Shape.NoFrame)
             self.right_scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            # Do not re-query every tab page sizeHint on each splitter pixel.
-            try:
-                self.right_scroll.setSizeAdjustPolicy(
-                    QScrollArea.SizeAdjustPolicy.AdjustIgnored
-                )
-            except Exception:
-                pass
 
             # Left radii only (= divider curve). Right edge stays square so the opaque
             # settings fill reaches the card edge; neo_wrapper's outer mask clips TR/BR.
@@ -1171,47 +1160,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 from PySide6.QtCore import QRectF
                 from PySide6.QtGui import QPainterPath, QRegion
 
-                _mask_app = self
-
                 class _DebouncedRegionMask(QObject):
                     def __init__(self, target, radius: float, *, left_only: bool = False):
                         super().__init__(target)
                         self._target = target
                         self._radius = float(radius)
                         self._left_only = bool(left_only)
-                        self._suspended = False
-                        self._app_host = _mask_app
                         self._timer = QTimer(self)
                         self._timer.setSingleShot(True)
                         self._timer.timeout.connect(self._apply_mask)
 
                     def eventFilter(self, obj, event):
                         if event.type() == QEvent.Type.Resize:
-                            # Float Render Settings suspends outer neo mask — never
-                            # restart debounce or a mid-layout Resize re-clips hits.
-                            if getattr(self, "_suspended", False):
-                                self._timer.stop()
-                                return False
-                            # setMask(QRegion) repaints the whole settings subtree.
-                            # Skip while a splitter handle is down.
-                            host = getattr(self, "_app_host", None)
-                            if host is not None and getattr(
-                                host, "_splitter_dragging", False
-                            ):
-                                self._timer.stop()
-                                return False
                             self._timer.start(60)
                         return False
 
                     def _apply_mask(self):
                         obj = self._target
-                        if getattr(self, "_suspended", False):
-                            if obj is not None:
-                                try:
-                                    obj.clearMask()
-                                except RuntimeError:
-                                    pass
-                            return
                         if obj is None or obj.width() <= 0 or obj.height() <= 0:
                             return
                         try:
@@ -1244,7 +1209,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
                 self.neo_wrapper.installEventFilter(self._neo_wrapper_mask)
             
-            neo_layout.addWidget(self.right_scroll, 1)
+            neo_layout.addWidget(self.right_scroll)
             
             # 5. Placing our wrapper back in the original location without conflicts
             if parent_layout:
@@ -1787,9 +1752,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.video_wrapper = QFrame()
         self.video_wrapper.setObjectName("playerVideoWrapper")
         self.video_wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.video_wrapper.setAttribute(
-            Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True
-        )
         self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
         self.video_wrapper.installEventFilter(self)
         
@@ -3239,24 +3201,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             f"color: #ffffff; font-weight: 700; font-size: {heading_font.pixelSize()}px;"
             f" font-family: {tok.FONT_APP}; background: transparent;"
         )
-        # Same circle+triangle glyph as the header chip that opens this popup.
-        from steempeg.ui.icon_assets import playinfo_icon
-
-        _HEADING_ICON = max(16, min(22, int(heading_font.pixelSize())))
-        heading_row = QHBoxLayout()
-        heading_row.setContentsMargins(0, 0, 0, 0)
-        heading_row.setSpacing(8)
-        heading_icon = QLabel()
-        heading_icon.setFixedSize(_HEADING_ICON, _HEADING_ICON)
-        heading_icon.setStyleSheet("background: transparent; border: none;")
-        heading_icon.setPixmap(playinfo_icon(_HEADING_ICON).pixmap(_HEADING_ICON, _HEADING_ICON))
-        heading_row.addWidget(heading_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         heading = QLabel("Clip info")
         heading.setFont(heading_font)
         heading.setStyleSheet(heading_qss)
-        heading_row.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
-        heading_row.addStretch(1)
-        lay.addLayout(heading_row)
+        lay.addWidget(heading)
 
         lines = [ln for ln in text.split("\n") if ln.strip()]
         # Resolve game title from header meta — never via colon-split of tip lines.
@@ -3854,15 +3802,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         neo = getattr(self, "neo_wrapper", None)
         if neo is not None:
-            wrapper_mask = getattr(self, "_neo_wrapper_mask", None)
-            if wrapper_mask is not None and getattr(wrapper_mask, "_suspended", False):
-                # Floating Render Settings — keep a square plate (dialog chrome rounds).
-                neo.setStyleSheet(
-                    f"QWidget#neo_wrapper {{ background-color: {p.bg_card}; "
-                    f"border-radius: 0px; border: none; }}"
-                )
-            else:
-                neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
 
         scroll = getattr(self, "right_scroll", None)
         if scroll is not None:
@@ -4356,7 +4296,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.settings_prefs import (
             SCAN_CACHE,
             SCAN_FULL,
-            SCAN_PROGRESSIVE,
             SCAN_SMART,
             load_startup_library_scan,
         )
@@ -4421,19 +4360,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         def _start():
             # Clips first; Rendered is deferred until clips finishes (Quick/Full).
-            if mode == SCAN_PROGRESSIVE:
-                logging.info("Startup library scan: Progressive")
-                restored_clips = False
-                if getattr(self, "clips_folders", None):
-                    self._startup_library_scan_active = True
-                    self._defer_rendered_scan_until_clips_done = False
-                    if hasattr(self, "start_progressive_clips_library"):
-                        restored_clips = bool(self.start_progressive_clips_library())
-                    if not restored_clips:
-                        self._startup_library_scan_active = False
-                _restore_session_side_libraries(restored_clips=restored_clips)
-                return
-
             if mode == SCAN_CACHE:
                 _start_cache_style(
                     append_new=True,
@@ -4521,7 +4447,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Skip / Smart: paint synchronously while the window is still hidden so the
         # first frame is already Ready (no post-show "Loading render history…").
         # Quick/Full: defer one tick so maximize geometry can settle first.
-        if mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE):
+        if mode in (SCAN_CACHE, SCAN_SMART):
             _start()
         else:
             QTimer.singleShot(0, _start)
@@ -5493,11 +5419,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             settings_btn.setStyleSheet(
                 self._fmt_dash_btn(settings_style, font=font, radius=radius, pad=pad)
             )
-        if hasattr(self, "_sync_dash_render_settings_button"):
-            try:
-                self._sync_dash_render_settings_button()
-            except Exception:
-                pass
         if hasattr(self, "_sync_queue_scheme_chrome"):
             self._sync_queue_scheme_chrome()
         if hasattr(self, "_sync_dash_queue_status_chrome"):
@@ -5977,13 +5898,13 @@ def main():
         )
         from steempeg.ui.settings_prefs import (
             SCAN_CACHE,
-            SCAN_PROGRESSIVE,
             SCAN_SMART,
             load_startup_library_scan,
         )
 
-        # Progressive / Skip / Smart: opaque veil covers post-maximize chrome thrash.
-        # Quick/Full: settle pass only — no «Preparing workspace…» flash.
+        # Skip / Smart: opaque veil covers post-maximize chrome thrash (crooked
+        # footer / Ready badge). Quick/Full: settle pass only — no «Preparing
+        # workspace…» flash (that thrash was mainly a cache-path issue).
         _settle_settings = {}
         if hasattr(window, "load_user_settings"):
             try:
@@ -5991,7 +5912,7 @@ def main():
             except Exception:
                 _settle_settings = {}
         _settle_mode = load_startup_library_scan(_settle_settings)
-        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE)
+        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART)
         begin_startup_settle(window, use_veil=_use_settle_veil)
         window._sync_startup_layout()
         try:
@@ -6088,20 +6009,6 @@ def main():
             # over the empty theatre — resync after first paint.
             QTimer.singleShot(0, force_app_cursor_resync)
             QTimer.singleShot(50, force_app_cursor_resync)
-            # Sheet promote / late theatre re-assert can re-stick TOPMOST after
-            # the 500ms clear — sweep again so Explorer is not buried under
-            # Portable (Desktop already settled before these timers).
-            if sys.platform == "win32":
-                def _clear_portable_topmost():
-                    try:
-                        from steempeg.infra.window_focus import clear_all_steempeg_topmost
-
-                        clear_all_steempeg_topmost()
-                    except Exception:
-                        pass
-
-                QTimer.singleShot(700, _clear_portable_topmost)
-                QTimer.singleShot(1500, _clear_portable_topmost)
         if hasattr(window, "schedule_silent_update_check"):
             # Quiet badge probe — never auto-installs; user still chooses backup/update.
             # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).

@@ -63,7 +63,6 @@ class MPVWrapper(QWidget):
             self.top_line = self.bottom_line = self.left_line = self.right_line = None
 
         self.setStyleSheet("background-color: transparent;")
-        self.setAttribute(Qt.WA_DontCreateNativeAncestors)
 
     @staticmethod
     def _apply_native_attrs(widget: QWidget, *, for_video: bool) -> None:

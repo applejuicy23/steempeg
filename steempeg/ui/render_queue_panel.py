@@ -1208,19 +1208,13 @@ class RenderQueuePanel(QWidget):
 
     def _on_card_clicked(self, job_id: str) -> None:
         app = getattr(self, "_app", None)
-        # Re-click only if this job is selected AND its media is actually up.
-        if job_id and app is not None and job_id == getattr(app, "_selected_queue_job_id", None):
-            job = None
-            if hasattr(app, "render_queue"):
-                job = app.render_queue.get(job_id)
-            path = job.clip_path if job is not None else None
-            playing = False
-            if path and hasattr(app, "_is_clip_actively_previewing"):
-                try:
-                    playing = bool(app._is_clip_actively_previewing(path))
-                except Exception:
-                    playing = False
-            if playing and job_id == getattr(self, "_selected_id", None):
+        if app is not None and getattr(app, "_clips_scan_active", False):
+            if hasattr(app, "set_status"):
+                app.set_status("Library is still loading — Queue is locked.")
+            return
+        # Already the active queue job — ignore re-click.
+        if job_id and job_id == getattr(app, "_selected_queue_job_id", None):
+            if job_id == getattr(self, "_selected_id", None):
                 return
         self._selected_id = job_id
         for card in self._card_widgets:

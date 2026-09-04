@@ -309,82 +309,6 @@ def restore_portable_neo_chrome(app) -> None:
             pass
 
 
-def expand_neo_for_floating_dialog(neo, dialog) -> None:
-    """Clear 0×0 garage constraints so neo can fill a floating Render sheet.
-
-    Do **not** set ``minimumSize`` to the dialog content box: that fights the
-    dialog layout, overlaps neo-nav hitboxes (hover on A paints B), and
-    squashes settings chrome.
-
-    Suspend the outer ``neo_wrapper`` mask while floating — a stale QRegion
-    from the garage/first close desyncs hit-tests on the second open.
-    """
-    if neo is None or dialog is None:
-        return
-    from PySide6.QtWidgets import QPushButton, QScrollArea, QTabWidget
-
-    neo.setMinimumSize(0, 0)
-    neo.setMaximumSize(16777215, 16777215)
-    neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-    app = getattr(dialog, "_app", None)
-    if app is not None:
-        try:
-            from steempeg.ui.render_panel import suspend_neo_wrapper_mask_for_float
-
-            suspend_neo_wrapper_mask_for_float(app)
-        except Exception:
-            pass
-    else:
-        try:
-            neo.clearMask()
-        except RuntimeError:
-            pass
-
-    for scroll in neo.findChildren(QScrollArea):
-        if scroll.objectName() == "neo_settings_scroll":
-            scroll.setMinimumSize(0, 0)
-            scroll.setMaximumSize(16777215, 16777215)
-            scroll.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-            )
-    for tabs in neo.findChildren(QTabWidget):
-        if tabs.objectName() == "settings_tabs":
-            tabs.setMinimumSize(0, 0)
-            tabs.setMaximumSize(16777215, 16777215)
-            tabs.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-            )
-
-    # Keep the nav rail from being width-crushed; raise above scroll so a stale
-    # overlap cannot steal clicks from the pills (Export was the usual victim).
-    sidebar = neo.findChild(QWidget, "neo_sidebar")
-    if sidebar is not None:
-        try:
-            if sidebar.width() > 0:
-                sidebar.setFixedWidth(max(180, int(sidebar.width())))
-            elif sidebar.minimumWidth() < 180:
-                sidebar.setFixedWidth(220)
-            sidebar.setSizePolicy(
-                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
-            )
-            sidebar.raise_()
-            for btn in sidebar.findChildren(QPushButton):
-                btn.setFixedHeight(44)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.setSizePolicy(
-                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-                )
-                try:
-                    btn.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
-                except Exception:
-                    pass
-        except RuntimeError:
-            pass
-
-    neo.updateGeometry()
-
-
 def persist_render_settings(app) -> bool:
     """Snapshot export panel into settings.json (shared by Desktop and Portable)."""
     try:
@@ -460,58 +384,18 @@ def _find_layout_index(layout, widget: QWidget):
     return None
 
 
-# Hidden host so borrowed widgets never become top-level HWNDs (Aero/white flash).
-_BORROW_SINK: QWidget | None = None
-
-
-def _borrow_sink() -> QWidget:
-    global _BORROW_SINK
-    if _BORROW_SINK is None:
-        sink = QWidget()
-        sink.setObjectName("steempegBorrowSink")
-        sink.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        sink.hide()
-        _BORROW_SINK = sink
-    return _BORROW_SINK
-
-
-def _reparent_borrowed(widget: QWidget) -> None:
-    """Park under the borrow sink — never ``setParent(None)`` (maps at 0,0)."""
-    from PySide6.QtCore import Qt
-
-    try:
-        widget.hide()
-        widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        widget.setParent(_borrow_sink())
-    except RuntimeError:
-        pass
-
-
 def _borrow_widget(widget: QWidget):
     """Detach widget from layout or QSplitter parent.
 
     Returns (parent, layout_or_None, index, kind) where kind is ``\"layout\"`` or ``\"splitter\"``.
-
-    Never orphan with ``setParent(None)``: that briefly maps a top-level HWND at
-    (0,0) — the white/Aero «прослойка» when opening Render Settings. Layout
-    borrows stay under the old parent until ``addWidget`` reparents; splitter /
-    orphan cases park under a hidden sink.
     """
-    from PySide6.QtCore import Qt
-
-    try:
-        widget.hide()
-        widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-    except RuntimeError:
-        pass
-
     parent = widget.parentWidget()
     layout = parent.layout() if parent is not None else None
     found = _find_layout_index(layout, widget) if layout is not None else None
     if found is not None:
         host_layout, index = found
         host_layout.removeWidget(widget)
-        # Keep old parent until the destination layout reparents — no orphan HWND.
+        widget.setParent(None)
         return parent, host_layout, index, "layout"
 
     # QSplitter (main library column) has no QLayout.
@@ -523,21 +407,11 @@ def _borrow_widget(widget: QWidget):
             if parent.widget(i) is widget:
                 index = i
                 break
-        _reparent_borrowed(widget)
+        widget.setParent(None)
         return parent, None, index, "splitter"
 
-    _reparent_borrowed(widget)
+    widget.setParent(None)
     return parent, None, -1, "orphan"
-
-
-def _clear_borrow_dont_show(widget: QWidget) -> None:
-    """Allow a borrowed widget to paint after it has a real parent again."""
-    from PySide6.QtCore import Qt
-
-    try:
-        widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
-    except RuntimeError:
-        pass
 
 
 def _return_widget(
@@ -621,7 +495,6 @@ class PortableRenderSettingsDialog(SteempegDialog):
         else:
             self._home = _borrow_widget(self._neo)
             # Warm/prewarm: keep neo hidden — showing it forces a top-level HWND flash.
-            _clear_borrow_dont_show(self._neo)
             if not self._warm:
                 self._neo.show()
             self._neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -712,7 +585,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
             if lay is not None:
                 lay.removeWidget(neo)
             else:
-                _reparent_borrowed(neo)
+                neo.setParent(None)
         neo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         # Insert above the control strip when present.
         strip = getattr(self, "_strip", None)
@@ -727,23 +600,6 @@ class PortableRenderSettingsDialog(SteempegDialog):
         # Dock chrome may have snapshotted this sheet as neo's "home" — drop it.
         if getattr(self._app, "_neo_dock_home", None):
             self._app._neo_dock_home = None
-        from steempeg.ui.portable.sheets import expand_neo_for_floating_dialog
-
-        expand_neo_for_floating_dialog(neo, self)
-
-    def _sync_floating_neo_geometry(self) -> None:
-        from steempeg.ui.portable.sheets import expand_neo_for_floating_dialog
-
-        neo = self._neo or getattr(self._app, "neo_wrapper", None)
-        expand_neo_for_floating_dialog(neo, self)
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        QTimer.singleShot(0, self._sync_floating_neo_geometry)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._sync_floating_neo_geometry()
 
     def prepare_for_show(self) -> None:
         """Re-arm a warm sheet before show (no reparent)."""
@@ -803,7 +659,6 @@ class PortableRenderSettingsDialog(SteempegDialog):
             QTimer.singleShot(0, self._app.fit_settings_tab_to_page)
         if hasattr(self, "reset_title_bar_chrome"):
             self.reset_title_bar_chrome()
-        QTimer.singleShot(0, self._sync_floating_neo_geometry)
 
     def apply_ui_theme_chrome(self) -> None:
         """Retint dialog chrome + Queue rail + Render strip when UI theme changes."""
@@ -935,12 +790,6 @@ class PortableRenderSettingsDialog(SteempegDialog):
             parent, layout, index, kind = self._home
             _return_widget(self._neo, parent, layout, index, kind, visible=False)
             self._neo = None
-            try:
-                from steempeg.ui.render_panel import restore_neo_dock_masks
-
-                restore_neo_dock_masks(self._app)
-            except Exception:
-                pass
             # Keep tabs hidden while portable theatre remains active.
             if getattr(self._app, "is_theater", False):
                 tabs = getattr(getattr(self._app, "ui", None), "settings_tabs", None)
@@ -997,7 +846,6 @@ class PortableClipPickerDialog(SteempegDialog):
             self._prepare_library_for_sheet()
             self._home = _borrow_widget(self._panel)
             # Warm: do not show the panel — parent.show() forces a top-level HWND flash.
-            _clear_borrow_dont_show(self._panel)
             if not self._warm:
                 self._panel.show()
             self._panel.setMinimumWidth(0)
@@ -1071,7 +919,6 @@ class PortableClipPickerDialog(SteempegDialog):
         # lived in this sheet — without show() Add a Clip opens a blank dialog.
         if self._panel is not None:
             try:
-                _clear_borrow_dont_show(self._panel)
                 self._panel.show()
                 self._panel.setMinimumWidth(0)
                 self._panel.setSizePolicy(
@@ -1085,7 +932,6 @@ class PortableClipPickerDialog(SteempegDialog):
                 self._panel = panel
                 self._prepare_library_for_sheet()
                 self._home = _borrow_widget(self._panel)
-                _clear_borrow_dont_show(self._panel)
                 self._panel.show()
                 self._panel.setMinimumWidth(0)
                 self._panel.setSizePolicy(
@@ -1159,8 +1005,6 @@ class PortableClipPickerDialog(SteempegDialog):
 
         self._folder_home = _borrow_widget(folder)
         self._refresh_home = _borrow_widget(refresh)
-        _clear_borrow_dont_show(folder)
-        _clear_borrow_dont_show(refresh)
         self._folder_size_policy = folder.sizePolicy()
         self._refresh_size_policy = refresh.sizePolicy()
         self._folder_max_width = folder.maximumWidth()

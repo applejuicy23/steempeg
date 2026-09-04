@@ -149,19 +149,7 @@ class LifecycleMixin:
                             return True
                     
         # 2. Grid — RMB opens menu; LMB multi-select is handled on cards / empty viewport
-        if hasattr(self, "grid_clips") and source in (
-            self.grid_clips,
-            self.grid_clips.viewport(),
-        ):
-            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
-                if getattr(self, "_clips_progressive_active", False) and hasattr(
-                    self, "_schedule_clips_viewport_refresh"
-                ):
-                    delay = 0 if event.type() == QEvent.Type.Show else 50
-                    self._schedule_clips_viewport_refresh(delay)
-                return False
-            if source != self.grid_clips.viewport():
-                return False
+        if hasattr(self, 'grid_clips') and source == self.grid_clips.viewport():
             if event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.RightButton:
                     self.show_grid_context_menu(event.position().toPoint())
@@ -321,7 +309,6 @@ class LifecycleMixin:
         for splitter in (
             getattr(self.ui, "main_splitter", None),
             getattr(self, "right_h_splitter", None),
-            getattr(self, "main_v_splitter", None),
         ):
             if splitter is not None:
                 splitter.splitterMoved.connect(self._sync_mpv_surface_geometry)

@@ -770,8 +770,6 @@ class RenderedLibraryMixin:
                 LibraryMixin.set_view_mode(
                     self, getattr(self, "_clips_view_mode", "grid"), relayout=False
                 )
-            if hasattr(self, "_schedule_clips_viewport_refresh"):
-                self._schedule_clips_viewport_refresh(50)
         self._sync_library_view_toggle_for_mode()
         self._sync_sort_combo_for_panel()
         if old_mode != mode:
@@ -886,15 +884,6 @@ class RenderedLibraryMixin:
         show_bottom = self._should_show_render_dock()
         prev_show = getattr(self, "_render_dock_visible", None)
         self._render_dock_visible = show_bottom
-        # Opening a clip must not re-glue / re-dock / setSizes. That shoved the
-        # library tab bar (and Render Settings tabs) off the bottom of the screen.
-        if (
-            prev_show is not None
-            and bool(prev_show) == bool(show_bottom)
-            and not getattr(self, "is_theater", False)
-            and not getattr(self, "is_fullscreen", False)
-        ):
-            return
 
         portable_like = False
         if hasattr(self, "_desktop_render_layout_is_portable_like"):
@@ -2792,8 +2781,6 @@ class RenderedLibraryMixin:
             action_folder.setEnabled(False)
             action_related.setEnabled(False)
         menu.exec(self.grid_screenshots.viewport().mapToGlobal(pos))
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def _library_clip_refs_for_screenshot_link(self) -> list:
         """Clips Manager rows as ``LibraryClipRef`` for screenshot → clip matching."""
@@ -3058,8 +3045,6 @@ class RenderedLibraryMixin:
                 os.startfile(path)  # type: ignore[attr-defined]
             except Exception as exc:
                 logging.warning("Could not open screenshot %s: %s", path, exc)
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def _on_screenshot_open_folder(self, path: str) -> None:
         from steempeg.infra.paths import reveal_in_file_manager
@@ -3068,8 +3053,6 @@ class RenderedLibraryMixin:
             reveal_in_file_manager(path)
         except Exception as exc:
             logging.warning("Could not reveal screenshot %s: %s", path, exc)
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def choose_records_folder(self) -> None:
         """Change the export / Records folder from the Rendered tab footer."""
@@ -5179,8 +5162,6 @@ class RenderedLibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
         menu.exec(self.grid_rendered.viewport().mapToGlobal(pos))
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def show_rendered_table_context_menu(self, pos) -> None:
         file_paths = self._context_menu_rendered_paths_table(pos)
@@ -5192,8 +5173,6 @@ class RenderedLibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
         menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def _handle_rendered_grid_card_context_menu(self, item, event) -> None:
         # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
@@ -5209,8 +5188,6 @@ class RenderedLibraryMixin:
             reveal_in_file_manager(file_path)
         except Exception as exc:
             logging.error("Failed to open rendered folder: %s", exc)
-        if hasattr(self, "_reassert_mpv_after_library_menu"):
-            self._reassert_mpv_after_library_menu()
 
     def _rendered_delete_confirm_copy(self, paths: list[str]) -> tuple[str, str, str]:
         """Title, message, and detail for a rendered-file delete confirmation."""

@@ -72,8 +72,6 @@ class RenderJobSettings:
     container_format: str = "MP4"
     output_preset: str = "Custom"
     encode_speed: str = "balanced"
-    # If quality cannot apply (taller than source): try this label, else Original.
-    quality_fallback: str = "Original"
 
 
 @dataclass

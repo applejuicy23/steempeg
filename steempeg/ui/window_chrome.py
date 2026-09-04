@@ -371,11 +371,12 @@ class _TitleBarUpdateButton(QPushButton):
 
 
 def force_app_cursor_resync() -> None:
-    """Clear a stuck hand / resize / splitter cursor left by chrome or modals.
+    """Clear a stuck PointingHand left by a closed modal (chooser / About / sheets).
 
-    Qt often keeps the last widget's cursor until the mouse moves. Edge-resize
-    grips can also keep an unfinished ``grabMouse()`` after a dialog open
-    steals focus — that leaves SizeHor (↔) / SplitH everywhere until restart.
+    Qt often keeps the last dialog widget's cursor until the mouse moves. Push
+    Arrow onto the override stack and pop it so the widget under the pointer is
+    re-queried; nudge ``QCursor.setPos`` for Windows. Also strip cursors from
+    the widget chain under the pointer (destroyed dialog buttons leave ghosts).
     """
     app = QApplication.instance()
     if app is None:
@@ -383,13 +384,6 @@ def force_app_cursor_resync() -> None:
     try:
         while app.overrideCursor() is not None:
             app.restoreOverrideCursor()
-        # Unfinished edge-resize / drag grab is the usual «stuck ↔» culprit.
-        grabber = QWidget.mouseGrabber()
-        if grabber is not None:
-            try:
-                grabber.releaseMouse()
-            except RuntimeError:
-                pass
         # Widget under the pointer may still be a dying modal button with
         # PointingHand — clear the whole parent chain before the Arrow nudge.
         under = app.widgetAt(QCursor.pos())
@@ -402,61 +396,30 @@ def force_app_cursor_resync() -> None:
             walk = walk.parentWidget()
         app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
         app.restoreOverrideCursor()
-        sticky = {
-            Qt.CursorShape.PointingHandCursor,
-            Qt.CursorShape.SizeHorCursor,
-            Qt.CursorShape.SizeVerCursor,
-            Qt.CursorShape.SizeFDiagCursor,
-            Qt.CursorShape.SizeBDiagCursor,
-            Qt.CursorShape.SplitHCursor,
-            Qt.CursorShape.SplitVCursor,
-        }
         for w in app.topLevelWidgets():
             try:
-                if w.cursor().shape() in sticky:
+                # Don't wipe intentional caption arrows — only clear if the
+                # window itself somehow inherited a hand from a child.
+                if w.cursor().shape() == Qt.CursorShape.PointingHandCursor:
                     w.unsetCursor()
             except RuntimeError:
                 pass
         pos = QCursor.pos()
         QCursor.setPos(pos)
-        # Re-query after the nudge; if still sticky, force Arrow for one frame.
+        # Re-query after the nudge; if still a hand, force Arrow for one frame.
         under2 = app.widgetAt(QCursor.pos())
         if under2 is not None:
             try:
                 shape = under2.cursor().shape()
             except RuntimeError:
                 shape = Qt.CursorShape.ArrowCursor
-            if shape in sticky and (
-                shape != Qt.CursorShape.PointingHandCursor
-                or not isinstance(under2, QAbstractButton)
+            if shape == Qt.CursorShape.PointingHandCursor and not isinstance(
+                under2, QAbstractButton
             ):
                 app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
                 app.restoreOverrideCursor()
     except RuntimeError:
         pass
-
-
-def release_windows_edge_resize_grabs(window: QWidget) -> None:
-    """Drop unfinished grip mouse-grabs and re-layout (hide if blocked)."""
-    if os.name != "nt":
-        return
-    ctrl = getattr(window, "_windows_edge_resize_filter", None)
-    if ctrl is None:
-        return
-    for grip in getattr(ctrl, "_grips", ()) or ():
-        try:
-            if getattr(grip, "_origin", None) is not None:
-                grip.releaseMouse()
-                grip._origin = None
-                grip._start_geo = None
-        except RuntimeError:
-            continue
-    if hasattr(ctrl, "_layout_grips"):
-        try:
-            ctrl._layout_grips()
-        except Exception:
-            pass
-    force_app_cursor_resync()
 
 
 class SteempegTitleBar(QWidget):
@@ -1199,15 +1162,6 @@ def _edge_resize_blocked(window: QWidget) -> bool:
     host = getattr(window, "_app_host", None)
     if host is not None and getattr(host, "is_fullscreen", False):
         return True
-    # Modeless SteempegDialog open: hide grips so SizeHor cannot stick over the
-    # sheet (translucent dialog + z-order demote left ↔ painted app-wide).
-    try:
-        from steempeg.infra.window_focus import steempeg_internal_dialog_active
-
-        if steempeg_internal_dialog_active():
-            return True
-    except Exception:
-        pass
     return False
 
 
@@ -1307,7 +1261,6 @@ class _WinResizeGrip(QWidget):
         self._edges = edges
         self._origin: QPoint | None = None
         self._start_geo = None
-        self.setObjectName("SteempegWinResizeGrip")
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setStyleSheet("background: transparent;")

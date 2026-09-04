@@ -123,10 +123,6 @@ def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
     shell at the top of the normal Z-order — exactly the "tabs hide under
     Steempeg while video plays" bug.
 
-    Never use ``SWP_FRAMECHANGED`` here: on frameless + ``wid=`` embed that
-    sends ``WM_NCCALCSIZE`` and can orphan the mpv child HWND as a floating
-    video surface (seen when opening Start / losing focus in windowed mode).
-
     Pass ``reshuffle_z=True`` only after an intentional TOPMOST flash (startup /
     toast raise), where staying foreground among normal windows is desired.
     """
@@ -142,14 +138,13 @@ def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
             flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
             user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
         else:
-            # Style bit already cleared — nudge without FRAMECHANGED so DWM does
-            # not rebuild the client and detach the mpv embed.
             flags = (
                 _SWP_NOMOVE
                 | _SWP_NOSIZE
                 | _SWP_NOZORDER
                 | _SWP_NOOWNERZORDER
                 | _SWP_NOACTIVATE
+                | _SWP_FRAMECHANGED
             )
             user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
     except Exception as exc:
@@ -230,20 +225,15 @@ def _force_foreground(hwnd: int) -> None:
         _clear_topmost(hwnd, reshuffle_z=False)
 
 
-def clear_widget_topmost(widget, *, reshuffle_z: bool = False) -> bool:
-    """Strip stuck always-on-top from a Qt top-level widget (Windows).
-
-    ``reshuffle_z=True`` also issues ``HWND_NOTOPMOST`` so the window actually
-    leaves the topmost band (style-only clear can leave it painted above
-    normal-z siblings — which buries modeless Steempeg dialogs under the shell).
-    """
+def clear_widget_topmost(widget) -> bool:
+    """Strip stuck always-on-top from a Qt top-level widget (Windows)."""
     if sys.platform != "win32":
         return False
     try:
         hwnd = int(widget.winId())
         if not hwnd:
             return False
-        _clear_topmost(hwnd, reshuffle_z=reshuffle_z)
+        _clear_topmost(hwnd)
         return True
     except Exception as exc:
         _log.debug("clear_widget_topmost failed: %s", exc)
@@ -288,321 +278,13 @@ def detach_tool_ownership(widget) -> None:
         _log.debug("detach_tool_ownership failed: %s", exc)
 
 
-def prepare_shell_for_modeless_dialog(shell, dialog) -> None:
-    """Demote shell topmost, then put *dialog* in front (open / restore path)."""
-    shell_win = None
-    if shell is not None:
-        try:
-            shell_win = shell.window() if hasattr(shell, "window") else shell
-            clear_widget_topmost(shell_win, reshuffle_z=True)
-        except Exception:
-            shell_win = None
-    if shell_win is not None:
-        try:
-            from steempeg.ui.window_chrome import release_windows_edge_resize_grabs
-
-            release_windows_edge_resize_grabs(shell_win)
-        except Exception:
-            pass
-    if dialog is None:
-        return
-    try:
-        dialog.raise_()
-        dialog.activateWindow()
-        wh = dialog.windowHandle()
-        if wh is not None:
-            wh.requestActivate()
-    except RuntimeError:
-        return
-    force_widget_foreground(dialog)
-    try:
-        from steempeg.ui.window_chrome import force_app_cursor_resync
-
-        force_app_cursor_resync()
-    except Exception:
-        pass
-
-
-def on_shell_internal_dialog_focus(widget) -> None:
-    """Shell lost activation to another Steempeg dialog (Render Settings, etc.).
-
-    Drop the shell out of the always-on-top band (``HWND_NOTOPMOST``), then
-    re-raise every visible SteempegDialog. Style-only TOPMOST clear left the
-    shell painted above modeless dialogs — post-v48 «dialog under app» bug.
-    """
-    clear_widget_topmost(widget, reshuffle_z=True)
-    try:
-        from steempeg.ui.window_chrome import release_windows_edge_resize_grabs
-
-        release_windows_edge_resize_grabs(widget)
-    except Exception:
-        pass
-    raise_visible_steempeg_dialogs()
-
-
-def steempeg_internal_dialog_active() -> bool:
-    """True when *focus* is on a Steempeg dialog (same app still ApplicationActive).
-
-    Must NOT treat «any visible dialog» as active — that made Win+Shift+S /
-    Snipping Tool abort: we re-raised ourselves and stole foreground mid-capture.
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtGui import QGuiApplication
-        from PySide6.QtWidgets import QApplication
-
-        from steempeg.ui.widgets.dialog_chrome import SteempegDialog
-
-        app = QApplication.instance()
-        if app is None:
-            return False
-        # OS focus is outside Steempeg entirely (Snipping Tool, Explorer, …).
-        if app.applicationState() != Qt.ApplicationState.ApplicationActive:
-            return False
-
-        candidates = []
-        fg = app.activeWindow()
-        if fg is not None:
-            candidates.append(fg)
-        try:
-            fw = QGuiApplication.focusWindow()
-            if fw is not None:
-                candidates.append(fw)
-        except Exception:
-            pass
-
-        for fg in candidates:
-            w = fg
-            while w is not None:
-                try:
-                    if isinstance(w, SteempegDialog) and w.isVisible():
-                        return True
-                except RuntimeError:
-                    break
-                try:
-                    w = w.parentWidget()
-                except RuntimeError:
-                    break
-        return False
-    except Exception:
-        return False
-
-
-def foreground_is_screen_capture() -> bool:
-    """True when Windows Snipping / ScreenClippingHost owns the foreground."""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-
-        user32 = ctypes.windll.user32
-        hwnd = int(user32.GetForegroundWindow() or 0)
-        if not hwnd:
-            return False
-        # Class name is the reliable signal (titles localize).
-        buf = ctypes.create_unicode_buffer(256)
-        if not user32.GetClassNameW(hwnd, buf, 256):
-            return False
-        cls = (buf.value or "").lower()
-        needles = (
-            "screenclipping",
-            "snippingtool",
-            "snipoverlay",
-            "screensketch",
-        )
-        return any(n in cls for n in needles)
-    except Exception:
-        return False
-
-
-def foreground_is_windows_shell_ui() -> bool:
-    """True when Start / Search / Task View owns the foreground.
-
-    Opening Пуск while a clip plays used to race our TOPMOST clear
-    (``SWP_FRAMECHANGED``) and orphan the mpv ``wid=`` child as a floating
-    video rectangle. Skip HWND churn for these hosts the same way we skip
-    Snipping Tool.
-    """
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        hwnd = int(user32.GetForegroundWindow() or 0)
-        if not hwnd:
-            return False
-        buf = ctypes.create_unicode_buffer(256)
-        if user32.GetClassNameW(hwnd, buf, 256):
-            cls = (buf.value or "").lower()
-            class_needles = (
-                "immersivelauncher",
-                "windows.ui.core.corewindow",
-                "xamlexplorerhostislandwindow",
-                "multitaskingviewframe",  # Task View
-                "windows.internal.shell",
-            )
-            if any(n in cls for n in class_needles):
-                return True
-        # Process name is stable across Win10/11 Start / Search hosts.
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if not pid.value:
-            return False
-        kernel32 = ctypes.windll.kernel32
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid.value)
-        )
-        if not handle:
-            return False
-        try:
-            size = wintypes.DWORD(260)
-            path_buf = ctypes.create_unicode_buffer(260)
-            if kernel32.QueryFullProcessImageNameW(handle, 0, path_buf, ctypes.byref(size)):
-                name = (path_buf.value or "").replace("/", "\\").lower()
-                leaf = name.rsplit("\\", 1)[-1]
-                return leaf in (
-                    "startmenuexperiencehost.exe",
-                    "searchhost.exe",
-                    "searchapp.exe",
-                    "shellexperiencehost.exe",
-                )
-        finally:
-            kernel32.CloseHandle(handle)
-        return False
-    except Exception:
-        return False
-
-
-def should_skip_hwnd_ops_for_foreground() -> bool:
-    """Snipping / Start / Search — do not touch Steempeg HWND z-order or frame."""
-    return foreground_is_screen_capture() or foreground_is_windows_shell_ui()
-
-
-def raise_visible_steempeg_dialogs() -> None:
-    """Bring every visible SteempegDialog above the main shell (Windows)."""
-    if sys.platform != "win32":
-        return
-    try:
-        from PySide6.QtWidgets import QApplication
-
-        from steempeg.ui.widgets.dialog_chrome import SteempegDialog
-
-        app = QApplication.instance()
-        if app is None:
-            return
-        for w in app.topLevelWidgets():
-            try:
-                if not isinstance(w, SteempegDialog) or not w.isVisible():
-                    continue
-                if getattr(w, "_map_suppressed", False):
-                    continue
-                w.raise_()
-                w.activateWindow()
-                force_widget_foreground(w)
-            except RuntimeError:
-                continue
-            except Exception:
-                continue
-    except Exception as exc:
-        _log.debug("raise_visible_steempeg_dialogs failed: %s", exc)
-
-
 def on_shell_lost_foreground(widget) -> None:
     """Call when Steempeg is no longer the OS foreground app.
 
     Strips a stuck ``WS_EX_TOPMOST`` *without* ``HWND_NOTOPMOST`` reshuffle (that
-    would park Steempeg on top of Explorer again). Also sweeps every top-level
-    Steempeg HWND — Portable sheets / Tools can carry the bit too.
-
-    Never raise / activate Steempeg here — Win+Shift+S and Snipping Tool abort
-    if we steal foreground mid-capture. Same for Start / Search (mpv embed).
+    would park Steempeg on top of Explorer again).
     """
-    if should_skip_hwnd_ops_for_foreground():
-        return
     clear_widget_topmost(widget)
-    clear_all_steempeg_topmost()
-
-
-def clear_all_steempeg_topmost() -> None:
-    """Strip stuck always-on-top from every Qt top-level window (Windows)."""
-    if sys.platform != "win32":
-        return
-    try:
-        from PySide6.QtWidgets import QApplication
-
-        app = QApplication.instance()
-        if app is None:
-            return
-        for w in app.topLevelWidgets():
-            try:
-                if w is None or not w.isWindow():
-                    continue
-                clear_widget_topmost(w)
-            except RuntimeError:
-                continue
-            except Exception:
-                continue
-    except Exception as exc:
-        _log.debug("clear_all_steempeg_topmost failed: %s", exc)
-
-
-def yield_foreground_to_external(anchor=None) -> None:
-    """Drop TOPMOST before opening Explorer / browsers / native pickers.
-
-    If Steempeg stays always-on-top, those windows map *under* us and we often
-    remain ApplicationActive — so the focus-loss clear never runs. Call this
-    right before ``os.startfile`` / ``QFileDialog`` / ``webbrowser.open``.
-    """
-    if sys.platform != "win32":
-        return
-    if anchor is not None:
-        try:
-            win = anchor.window() if hasattr(anchor, "window") else anchor
-            clear_widget_topmost(win)
-        except Exception:
-            pass
-    clear_all_steempeg_topmost()
-
-
-def reseat_native_embed_child(widget) -> bool:
-    """Re-parent an mpv ``wid=`` child if Win32 parenting drifted from Qt.
-
-    Only for ClipCard / Explorer yield — never call from splitter resize.
-    """
-    if sys.platform != "win32" or widget is None:
-        return False
-    try:
-        import ctypes
-
-        parent = widget.parentWidget()
-        if parent is None:
-            return False
-        widget.createWinId()
-        parent.createWinId()
-        child = int(widget.winId())
-        parent_hwnd = int(parent.winId())
-        if not child or not parent_hwnd:
-            return False
-        user32 = ctypes.windll.user32
-        cur = int(user32.GetParent(child) or 0)
-        if cur != parent_hwnd:
-            user32.SetParent(child, parent_hwnd)
-            _log.info(
-                "reseat_native_embed_child: SetParent hwnd=%s -> %s (was %s)",
-                child,
-                parent_hwnd,
-                cur,
-            )
-        mark_embed_noactivate(widget)
-        return True
-    except Exception as exc:
-        _log.debug("reseat_native_embed_child failed: %s", exc)
-        return False
 
 
 def mark_embed_noactivate(widget) -> bool:
@@ -626,13 +308,13 @@ def mark_embed_noactivate(widget) -> bool:
         if ex & _WS_EX_NOACTIVATE:
             return True
         user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex | _WS_EX_NOACTIVATE)
-        # No SWP_FRAMECHANGED — same orphan risk as clear_topmost on wid= embeds.
         flags = (
             _SWP_NOMOVE
             | _SWP_NOSIZE
             | _SWP_NOZORDER
             | _SWP_NOOWNERZORDER
             | _SWP_NOACTIVATE
+            | _SWP_FRAMECHANGED
         )
         user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
         return True

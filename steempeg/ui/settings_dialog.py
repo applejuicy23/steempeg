@@ -541,28 +541,6 @@ class SettingsDialog(SteempegDialog):
             g.addWidget(self._chk_ask_shell)
             g.addWidget(self._hint("Applies the next time Steempeg starts."))
 
-        self._chk_deck_controls = SteempegCheckBox("Console mode (gamepad)")
-        self._chk_deck_controls.setChecked(load_deck_controls(settings))
-        if is_steamdeck_build():
-            self._chk_deck_controls.setToolTip(
-                "Gamepad mapping for Portable: player, Choose a Clip, Render. "
-                "On by default for Steam Deck builds. Developer mode also enables it."
-            )
-        else:
-            self._chk_deck_controls.setToolTip(
-                "Gamepad mapping for Portable: player, Choose a Clip, Render. "
-                "Off by default on Windows / Linux. Turn on to test with a pad "
-                "or Dev Mode → Deck pad. Developer mode also enables it."
-            )
-        g.addWidget(self._chk_deck_controls)
-        g.addWidget(
-            self._hint(
-                "Player: A play · Y trim · L1/R1 ±15s · R2 fullscreen · "
-                "in trim X/A = start/end. Sheets: View / Menu / D-pad. "
-                "Later: a simpler ▲▼◀▶-only Console style."
-            )
-        )
-
         restart_row = QHBoxLayout()
         restart_row.setSpacing(8)
         restart_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -571,7 +549,7 @@ class SettingsDialog(SteempegDialog):
         btn_restart.clicked.connect(self._restart_app)
         restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         restart_row.addWidget(
-            self._hint("Quit and relaunch. Asks whether to save first."),
+            self._hint("Quit and relaunch. Use after changing shell."),
             1,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -1060,14 +1038,11 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
-                "Progressive (default): placeholders first, cards fill as you scroll — "
-                "fastest everyday launch. Once a card has loaded it stays "
-                "(scrolling back should not hitch); a new stretch may hitch. "
-                "Quick: rescan folders with cached health — good Refresh companion. "
-                "Full: ffprobe + Steam icons/names — use for first launch or when "
-                "adding a new clips folder. "
-                "Skip: paint last session list (often feels as slow as old Smart). "
-                "Refresh rebuilds the library (Quick-style)."
+                "Smart Launch skips a full folder pass when clip roots look unchanged. "
+                "Quick always rescans with cached health. "
+                "Full re-runs ffprobe and refreshes game icons/names from Steam. "
+                "Skip paints last session’s list instantly (no folder I/O). "
+                "Refresh rebuilds the whole library."
             )
         )
 
@@ -1257,14 +1232,22 @@ class SettingsDialog(SteempegDialog):
         self._chk_dev_mode = SteempegCheckBox("Developer mode")
         self._chk_dev_mode.setChecked(load_dev_mode(settings))
         self._chk_dev_mode.setToolTip(
-            "Show the Dev footer/title-bar button and Developer Tools dialog. "
-            "Also enables Console gamepad actions for QA."
+            "Show the Dev footer/title-bar button and Developer Tools dialog."
         )
         a.addWidget(self._chk_dev_mode)
+        self._chk_deck_controls = SteempegCheckBox(
+            "Deck gamepad controls (experimental)"
+        )
+        self._chk_deck_controls.setChecked(load_deck_controls(settings))
+        self._chk_deck_controls.setToolTip(
+            "View / Menu / ABXY / D-pad / shoulders in Portable. "
+            "Also enabled automatically when Developer mode is on."
+        )
+        a.addWidget(self._chk_deck_controls)
         a.addWidget(
             self._hint(
-                "Console mode lives under General → Shell. "
-                "Dev Mode → Deck pad emulates the controller."
+                "Raw v49 mapping — test with Dev Mode → Deck pad or a real controller. "
+                "Off by default on Desktop."
             )
         )
 
@@ -1282,8 +1265,6 @@ class SettingsDialog(SteempegDialog):
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(_BTN_PRIMARY)
         btn_save.clicked.connect(self._save)
-        self._btn_cancel = btn_cancel
-        self._btn_save = btn_save
         actions.addWidget(btn_cancel)
         actions.addWidget(btn_save)
         root.addLayout(actions)
@@ -1428,12 +1409,6 @@ class SettingsDialog(SteempegDialog):
 
     def _browse_export_folder(self) -> None:
         start = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
-        try:
-            from steempeg.infra.window_focus import yield_foreground_to_external
-
-            yield_foreground_to_external(self)
-        except Exception:
-            pass
         folder = QFileDialog.getExistingDirectory(
             self, "Select export folder", start
         )
@@ -1460,12 +1435,6 @@ class SettingsDialog(SteempegDialog):
         start = normalize_screenshots_folder(
             self._edit_screenshots.text()
         ) or default_screenshots_dir()
-        try:
-            from steempeg.infra.window_focus import yield_foreground_to_external
-
-            yield_foreground_to_external(self)
-        except Exception:
-            pass
         folder = QFileDialog.getExistingDirectory(
             self, "Select screenshots folder", start
         )
@@ -1577,32 +1546,24 @@ class SettingsDialog(SteempegDialog):
                 pass
 
     def _restart_app(self) -> None:
-        from steempeg.ui.message_dialog import DialogButton, steempeg_alert_actions
+        from steempeg.ui.message_dialog import steempeg_question
 
-        choice = steempeg_alert_actions(
+        if not steempeg_question(
             self,
             "Restart Steempeg?",
-            "Save current settings before restarting?",
-            (
-                DialogButton("Cancel", "secondary"),
-                DialogButton("Don't save", "secondary", accept=True),
-                DialogButton("Save && Restart", "primary", accept=True),
-            ),
-            min_width=420,
-        )
-        # 0 = Cancel, -1 = window close, 1 = Don't save, 2 = Save & Restart
-        if choice <= 0:
+            "Steempeg will quit and open again.",
+            detail="Unsaved dialog choices in this window are discarded. Save first if needed.",
+        ):
             return
-
+        # Persist shell prefs before relaunch so Restart after a shell change works
+        # even if the user forgot Save.
+        shell = self._combo_shell.currentData()
+        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
+            save_ui_shell(shell, app)
+        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
+            save_ask_ui_shell(self._chk_ask_shell.isChecked(), app)
+        # Flush queue + panel before relaunch so the other shell sees the same state.
         app = self._app
-        if choice == 2:
-            deferred = self._persist_settings()
-            if deferred is None:
-                return
-            # Live UI refreshes are pointless — we're about to quit.
-            del deferred
-
-        # Flush queue + panel before relaunch so the next process sees the same state.
         if hasattr(app, "_persist_render_queue"):
             try:
                 app._persist_render_queue()
@@ -1617,7 +1578,7 @@ class SettingsDialog(SteempegDialog):
         self.accept()
         from steempeg.ui.app_restart import restart_application
 
-        restart_application(app)
+        restart_application(self._app)
 
     def _apply_settings_form_chrome(self) -> None:
         """Theme-aware combos, line edits, and secondary buttons across all tabs."""
@@ -2441,30 +2402,9 @@ def show_settings_dialog(app) -> None:
     from steempeg.ui.window_chrome import force_app_cursor_resync
 
     dlg = SettingsDialog(app, parent=getattr(app, "ui", None))
-    app._app_settings_dlg = dlg
-    app._app_settings_open = True
-    app._deck_app_settings_focus_idx = 0
-    try:
-        from steempeg.ui.settings_prefs import deck_controls_enabled
-
-        if deck_controls_enabled(app=app):
-            from steempeg.input.deck_navigation import reset_app_settings_deck_focus
-
-            QTimer.singleShot(0, lambda: reset_app_settings_deck_focus(app))
-    except Exception:
-        pass
     try:
         dlg.exec()
     finally:
-        app._app_settings_open = False
-        if getattr(app, "_app_settings_dlg", None) is dlg:
-            app._app_settings_dlg = None
-        try:
-            from steempeg.input.deck_navigation import hide_deck_focus_ring
-
-            hide_deck_focus_ring(app)
-        except Exception:
-            pass
         # Modal buttons keep PointingHand on the cursor stack until destroyed.
         # Strip them now, then resync after deleteLater so Qt re-queries a live widget.
         try:
