@@ -4038,11 +4038,12 @@ class LibraryMixin:
             table.setUpdatesEnabled(True)
             if grid is not None:
                 grid.setUpdatesEnabled(True)
-        if hasattr(self, "fast_sync_grid"):
-            self.fast_sync_grid()
+        # Append-only while discovering — `_append_grid_card_for_row` keeps
+        # table/grid order. Per-batch fast_sync_grid was an O(n) main-thread
+        # sort on every 64 rows and made Progressive feel like UI lock-up.
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
-        self._schedule_clips_viewport_refresh(0)
+        self._schedule_clips_viewport_refresh(50)
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
