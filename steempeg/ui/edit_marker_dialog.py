@@ -49,6 +49,7 @@ class EditSteamMarkerDialog(SteempegDialog):
         parent=None,
         *,
         marker_key: str = "usermarker",
+        app_id: str | None = None,
         **theme_kwargs,
     ):
         if not theme_kwargs.get("bar_color"):
@@ -57,6 +58,7 @@ class EditSteamMarkerDialog(SteempegDialog):
         self.setMinimumWidth(400)
         self.resize(440, 360)
         self._marker_key = marker_key or "usermarker"
+        self._app_id = str(app_id or "").strip() or None
         self._custom_icon = ""
 
         prefs = mprefs.load_marker_prefs()
@@ -105,7 +107,12 @@ class EditSteamMarkerDialog(SteempegDialog):
         self._class_combo = QComboBox()
         self._class_combo.setStyleSheet(_FIELD_STYLE)
         self._class_combo.addItem("(no class)", "")
-        for cls in prefs.get("classes") or []:
+        current_class = str(ov.get("class_id") or "")
+        for cls in mprefs.classes_for_app(
+            self._app_id,
+            prefs,
+            include_ids={current_class} if current_class else None,
+        ):
             color = str(cls.get("color") or "").strip()
             suffix = f" ({color})" if color else " (no color)"
             self._class_combo.addItem(

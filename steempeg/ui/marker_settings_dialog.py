@@ -40,6 +40,7 @@ from steempeg.ui.marker_icons import (
 )
 from steempeg.ui.message_dialog import (
     dialog_theme,
+    steempeg_information,
     steempeg_question,
 )
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
@@ -473,6 +474,18 @@ class MarkerSettingsDialog(SteempegDialog):
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_del)
         left.addLayout(btn_row)
+        scope = str(self._app_id or "").strip()
+        if scope:
+            scope_hint = (
+                f"Classes for this game only (Steam app {scope}). "
+                "New classes stay under this game — not shared with every clip."
+            )
+        else:
+            scope_hint = (
+                "Open a clip with a known game to create classes for that game. "
+                "Older classes without a game still show until recreated."
+            )
+        left.addWidget(self._hint(scope_hint))
         row.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -732,7 +745,7 @@ class MarkerSettingsDialog(SteempegDialog):
         prev_id = self._current_class_id()
         self._class_list.blockSignals(True)
         self._class_list.clear()
-        for cls in self._prefs.get("classes") or []:
+        for cls in mprefs.classes_for_app(self._app_id, self._prefs):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, cls.get("id"))
             item.setSizeHint(QSize(180, _CLASS_ROW_H))
@@ -807,9 +820,20 @@ class MarkerSettingsDialog(SteempegDialog):
             return
         self._mk_class.blockSignals(True)
         cur = self._mk_class.currentData()
+        keep: set[str] = set()
+        if cur:
+            keep.add(str(cur))
+        key = getattr(self, "_selected_key", None)
+        if key:
+            ov = mprefs.marker_override(str(key), self._prefs)
+            cid = str(ov.get("class_id") or "")
+            if cid:
+                keep.add(cid)
         self._mk_class.clear()
         self._mk_class.addItem("— no class —", "")
-        for cls in self._prefs.get("classes") or []:
+        for cls in mprefs.classes_for_app(
+            self._app_id, self._prefs, include_ids=keep or None
+        ):
             self._mk_class.addItem(str(cls.get("name")), cls.get("id"))
         if cur:
             idx = self._mk_class.findData(cur)
@@ -868,7 +892,15 @@ class MarkerSettingsDialog(SteempegDialog):
             self._cls_color_swatch.setToolTip("No color — group only")
 
     def _add_class(self) -> None:
-        mprefs.create_class("New class")
+        if not str(self._app_id or "").strip():
+            steempeg_information(
+                self,
+                "No game on this clip",
+                "Open a clip with a known Steam game first — classes are saved "
+                "per game (e.g. CS2), not for every clip.",
+            )
+            return
+        mprefs.create_class("New class", app_id=self._app_id)
         self._emit_changed()
         self._reload_classes()
         self._class_list.setCurrentRow(self._class_list.count() - 1)
