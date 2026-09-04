@@ -13,7 +13,17 @@ import logging
 import time
 
 import PySide6.QtWidgets as qtw
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QFrame,
@@ -103,6 +113,8 @@ class TimelineCanvas(QWidget):
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
     open_steam_screenshot_folder_requested = Signal(object)
+    # Host chrome (Marker settings gear) follows empty vs non-empty pin list.
+    marker_chrome_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -187,6 +199,10 @@ class TimelineCanvas(QWidget):
         self.mode_segments = []
         self.clip_ranges = []
         self.hovered_marker = None
+        # 0…1 — faded in when a clip’s pins are revealed on open.
+        self._marker_pin_opacity = 1.0
+        self._marker_pin_anim = None
+        self._marker_band_anim = None
         # True while a timeline QMenu is up — Leave from popup grab must not
         # clear marker selection (fullscreen auto-hide / re-RMB would break).
         self._context_menu_open = False
@@ -312,16 +328,161 @@ class TimelineCanvas(QWidget):
         except Exception:
             return False
 
-    def _marker_track_y(self) -> float:
-        """Y of the seek groove — tall pad for the above-row, compact for overlay."""
-        if self._markers_on_strip():
-            # Leave room for the playhead head; icons sit centered on the groove.
-            head = float(getattr(self, "master_head_h", 0.0) or 0.0)
-            overflow = max(
-                0.0, (float(TIMELINE_MARKER_LOGICAL) - float(self._TRACK_H)) / 2.0
-            )
-            return max(8.0, head, overflow + 2.0)
+    def _compact_marker_track_y(self) -> float:
+        """Groove Y when pins sit on the track (Settings → Markers on the strip)."""
+        # Leave room for the playhead head; icons sit centered on the groove.
+        head = float(getattr(self, "master_head_h", 0.0) or 0.0)
+        overflow = max(
+            0.0, (float(TIMELINE_MARKER_LOGICAL) - float(self._TRACK_H)) / 2.0
+        )
+        return max(8.0, head, overflow + 2.0)
+
+    def _marker_band_track_y(self) -> float:
+        """Full above-row pad so pins sit above the seek groove."""
         return float(TIMELINE_MARKER_LOGICAL + 10)
+
+    def _idle_marker_track_y(self) -> float:
+        """No pins: center the groove so the strip does not look top-squashed.
+
+        Top pad ≈ ruler block below → seek bar sits mid-panel until markers
+        expand the band upward.
+        """
+        below = float(
+            int(self._RULER_GAP) + int(self._MAJOR_TICK_H) + int(self._BOTTOM_PAD)
+        )
+        head = float(getattr(self, "master_head_h", 0.0) or 0.0)
+        return max(below, head, 10.0)
+
+    def _marker_track_y(self) -> float:
+        """Target Y of the seek groove for the current marker / Settings mode."""
+        if self._markers_on_strip():
+            return self._compact_marker_track_y()
+        if getattr(self, "markers", None):
+            return self._marker_band_track_y()
+        return self._idle_marker_track_y()
+
+    def _apply_marker_track_y(self, y: float) -> None:
+        """Apply groove Y + canvas height; notify the scroll host if height changed."""
+        prev_h = int(getattr(self, "_CANVAS_H", 0) or 0)
+        self._TRACK_Y = float(y)
+        self._CANVAS_H = int(
+            self._TRACK_Y
+            + self._TRACK_H
+            + self._RULER_GAP
+            + self._MAJOR_TICK_H
+            + self._BOTTOM_PAD
+        )
+        self.setMinimumHeight(self._CANVAS_H)
+        if self._CANVAS_H != prev_h:
+            w = self.parentWidget()
+            while w is not None:
+                if hasattr(w, "_recompute_container_height"):
+                    self.resize(max(1, self.width()), self._CANVAS_H)
+                    w._recompute_container_height()
+                    break
+                w = w.parentWidget()
+        self.update()
+
+    def _stop_marker_band_anim(self) -> None:
+        anim = getattr(self, "_marker_band_anim", None)
+        if anim is not None:
+            try:
+                anim.stop()
+            except RuntimeError:
+                pass
+            self._marker_band_anim = None
+
+    def _stop_marker_pin_anim(self) -> None:
+        anim = getattr(self, "_marker_pin_anim", None)
+        if anim is not None:
+            try:
+                anim.stop()
+            except RuntimeError:
+                pass
+            self._marker_pin_anim = None
+
+    def _set_marker_pin_opacity(self, value: float) -> None:
+        self._marker_pin_opacity = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    def _animate_marker_pin_opacity(self, start: float, end: float) -> None:
+        self._stop_marker_pin_anim()
+        self._set_marker_pin_opacity(start)
+        if abs(float(end) - float(start)) < 0.02:
+            self._set_marker_pin_opacity(end)
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(220)
+        anim.setStartValue(float(start))
+        anim.setEndValue(float(end))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(lambda v: self._set_marker_pin_opacity(float(v)))
+        anim.finished.connect(lambda: self._set_marker_pin_opacity(end))
+        self._marker_pin_anim = anim
+        anim.start()
+
+    def _refresh_marker_band_layout(self, *, animate: bool = True) -> None:
+        """Collapse/expand the above-strip pad when the clip gains or loses pins."""
+        target = self._marker_track_y()
+        current = float(getattr(self, "_TRACK_Y", target) or target)
+        self._stop_marker_band_anim()
+
+        if (not animate) or abs(current - target) < 0.5:
+            self._apply_marker_track_y(target)
+            return
+
+        anim = QVariantAnimation(self)
+        anim.setDuration(220)
+        anim.setStartValue(current)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(lambda v: self._apply_marker_track_y(float(v)))
+        anim.finished.connect(lambda: self._apply_marker_track_y(target))
+        self._marker_band_anim = anim
+        anim.start()
+
+    def notify_markers_changed(self, *, animate: bool = True, reveal: bool = False) -> None:
+        """Call after markers are loaded, added, cleared, or deleted.
+
+        ``reveal=True`` (clip open / timeline load): expand from the idle band and
+        fade pins in (above-row mode only).
+
+        Settings → Visual → **Markers on the strip**: height stays compact always —
+        nothing to raise/lower; only pin fade still runs on reveal.
+        """
+        has = bool(getattr(self, "markers", None))
+        on_strip = self._markers_on_strip()
+
+        if on_strip:
+            # Groove-only layout: never run idle↔band height animation.
+            self._stop_marker_band_anim()
+            self._apply_marker_track_y(self._compact_marker_track_y())
+            if reveal and has:
+                self._stop_marker_pin_anim()
+                self._set_marker_pin_opacity(0.0)
+                self._animate_marker_pin_opacity(0.0, 1.0)
+            else:
+                self._stop_marker_pin_anim()
+                self._marker_pin_opacity = 1.0
+            self.marker_chrome_changed.emit()
+            return
+
+        if reveal and has:
+            self._stop_marker_band_anim()
+            self._stop_marker_pin_anim()
+            # Force idle → band so expand always plays on open.
+            self._apply_marker_track_y(self._idle_marker_track_y())
+            self._set_marker_pin_opacity(0.0)
+            self._refresh_marker_band_layout(animate=True)
+            self._animate_marker_pin_opacity(0.0, 1.0)
+        elif not has:
+            # Close clip / empty load / last pin deleted — collapse band smoothly.
+            self._stop_marker_pin_anim()
+            self._marker_pin_opacity = 1.0
+            self._refresh_marker_band_layout(animate=animate)
+        else:
+            self._refresh_marker_band_layout(animate=animate)
+        self.marker_chrome_changed.emit()
 
     def _rebuild_playhead_scroller(self) -> None:
         """Rebuild the playhead stem so it matches the current track height."""
@@ -395,7 +556,7 @@ class TimelineCanvas(QWidget):
             )
         except Exception as exc:
             print(f"Clip markers cache load: {exc}")
-        self.update()
+        self.notify_markers_changed(reveal=True)
 
     def load_timeline_json(
         self,
@@ -432,9 +593,9 @@ class TimelineCanvas(QWidget):
                     clip_path=clip_path,
                     json_path=json_path,
                 )
-                self.update()
             except Exception as exc:
                 print(f"Clip markers cache load: {exc}")
+            self.notify_markers_changed(reveal=True)
             return
         
         try:
@@ -546,9 +707,10 @@ class TimelineCanvas(QWidget):
                 else:
                     self.clip_ranges.append((a, b))
 
-            self.update()
+            self.notify_markers_changed(reveal=True)
         except Exception as e:
             print(f"Error loading JSON: {e}")
+            self.notify_markers_changed(reveal=True)
 
     @staticmethod
     def _is_self_kill_event(title, desc="") -> bool:
@@ -1217,6 +1379,7 @@ class TimelineCanvas(QWidget):
 
         # Sort the markers by time to ensure rendering proceeds strictly from left to right!
         sorted_markers = sorted(getattr(self, 'markers', []), key=lambda m: m['time_ms'])
+        pin_a = max(0.0, min(1.0, float(getattr(self, "_marker_pin_opacity", 1.0) or 1.0)))
         
         for marker in sorted_markers:
             if marker != hovered_m:
@@ -1224,9 +1387,9 @@ class TimelineCanvas(QWidget):
                 
                 # If the distance to the previous marker is less than one pin, fade it
                 if (m_x - last_drawn_x) < marker_width:
-                    painter.setOpacity(0.5)
+                    painter.setOpacity(0.5 * pin_a)
                 else:
-                    painter.setOpacity(1.0)
+                    painter.setOpacity(1.0 * pin_a)
                     last_drawn_x = m_x
                     
                 draw_marker(marker, False)
@@ -1234,8 +1397,9 @@ class TimelineCanvas(QWidget):
                 
         # 2. TOP LAYER: Draw the hovered icon (Always 100% visible on top!)
         if hovered_m and hovered_m in getattr(self, 'markers', []):
-            painter.setOpacity(1.0)
+            painter.setOpacity(pin_a)
             draw_marker(hovered_m, True)
+            painter.setOpacity(1.0)
 
         # Hover ghost: semi-transparent playhead needle (not the ancient fade strip).
         if getattr(self, 'is_hovering', False) and not getattr(self, 'is_hovering_trim_handle', False) and self.drag_state == 'none' and not getattr(self, 'hovered_marker', None):
@@ -1551,6 +1715,7 @@ class TimelineCanvas(QWidget):
             marker.get('desc', ''),
             self,
             marker_key=marker_key,
+            app_id=getattr(self, "current_app_id", None),
         )
         if dialog.exec():
             marker['title'] = dialog.title_text
@@ -1608,7 +1773,7 @@ class TimelineCanvas(QWidget):
             self.markers.remove(marker)
             self.hovered_marker = None
             if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
-            self.update()
+            self.notify_markers_changed()
 
         rendered_path = getattr(self, "rendered_media_path", None)
         if rendered_path and os.path.isfile(rendered_path):
