@@ -4296,6 +4296,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.settings_prefs import (
             SCAN_CACHE,
             SCAN_FULL,
+            SCAN_PROGRESSIVE,
             SCAN_SMART,
             load_startup_library_scan,
         )
@@ -4360,6 +4361,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         def _start():
             # Clips first; Rendered is deferred until clips finishes (Quick/Full).
+            if mode == SCAN_PROGRESSIVE:
+                logging.info("Startup library scan: Progressive")
+                restored_clips = False
+                if getattr(self, "clips_folders", None):
+                    self._startup_library_scan_active = True
+                    self._defer_rendered_scan_until_clips_done = False
+                    if hasattr(self, "start_progressive_clips_library"):
+                        restored_clips = bool(self.start_progressive_clips_library())
+                    if not restored_clips:
+                        self._startup_library_scan_active = False
+                _restore_session_side_libraries(restored_clips=restored_clips)
+                return
+
             if mode == SCAN_CACHE:
                 _start_cache_style(
                     append_new=True,
@@ -4444,10 +4458,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if hasattr(self, "restore_screenshots_from_session_cache"):
                 QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
 
-        # Skip / Smart: paint synchronously while the window is still hidden so the
-        # first frame is already Ready (no post-show "Loading render history…").
+        # Skip / Smart / Progressive: paint synchronously while still hidden.
         # Quick/Full: defer one tick so maximize geometry can settle first.
-        if mode in (SCAN_CACHE, SCAN_SMART):
+        if mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE):
             _start()
         else:
             QTimer.singleShot(0, _start)
@@ -5898,13 +5911,13 @@ def main():
         )
         from steempeg.ui.settings_prefs import (
             SCAN_CACHE,
+            SCAN_PROGRESSIVE,
             SCAN_SMART,
             load_startup_library_scan,
         )
 
-        # Skip / Smart: opaque veil covers post-maximize chrome thrash (crooked
-        # footer / Ready badge). Quick/Full: settle pass only — no «Preparing
-        # workspace…» flash (that thrash was mainly a cache-path issue).
+        # Progressive / Skip / Smart: opaque veil covers post-maximize chrome thrash.
+        # Quick/Full: settle pass only — no «Preparing workspace…» flash.
         _settle_settings = {}
         if hasattr(window, "load_user_settings"):
             try:
@@ -5912,7 +5925,7 @@ def main():
             except Exception:
                 _settle_settings = {}
         _settle_mode = load_startup_library_scan(_settle_settings)
-        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART)
+        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE)
         begin_startup_settle(window, use_veil=_use_settle_veil)
         window._sync_startup_layout()
         try:
