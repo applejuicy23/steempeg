@@ -1120,12 +1120,12 @@ class DevModeDialog(SteempegDialog):
         lay.setSpacing(10)
 
         tip = QLabel(
-            "Emulate Deck buttons into the same bus as a real pad.\n"
-            "Enable Settings → Advanced → Dev tools → Deck gamepad controls (or Developer mode).\n"
-            "View → Choose a Clip · Menu → Render · Y → Trim · A → Play / confirm / activate.\n"
-            "B → close sheet · X → Add to queue · D-pad → cards / tabs / focus.\n"
-            "Render: L2 = Queue rail · R2 = settings · ▲▼ jobs or controls.\n"
-            "STEAM / QAM stay locked (SteamOS only). Prefer Portable shell when testing."
+            "Same bus as a real pad. Enable Settings → General → Shell → Console mode "
+            "(or Developer mode). View → Choose a Clip · Menu → Render · Y Trim · "
+            "A play (trim: set end) · X queue (trim: set start) · "
+            "L1/R1 ±15s · R2 fullscreen · L2 jump trim start. "
+            "Sheets + Settings: L1/R1 tabs · D-pad focus · A · B. "
+            "STEAM / QAM are SteamOS-only."
         )
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #b0b0b0;")

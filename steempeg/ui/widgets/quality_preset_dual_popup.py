@@ -238,6 +238,83 @@ class QualityPresetDualPopup(QFrame):
         self.raise_()
         self.activateWindow()
 
+    def deck_navigate(self, button_name: str) -> bool:
+        """Gamepad nav while the dual popup is open. button_name: up/down/left/right."""
+        left = self._left["list"]
+        right = self._right["list"]
+        active = self._deck_active_list()
+        if button_name == "left":
+            if active is right and left.count() > 0:
+                row = max(0, min(left.count() - 1, active.currentRow()))
+                right.clearSelection()
+                left.setCurrentRow(row if row < left.count() else 0)
+                left.scrollToItem(left.currentItem())
+                self._deck_sync_combo_from_list(left)
+            return True
+        if button_name == "right":
+            if active is left and right.count() > 0:
+                row = max(0, min(right.count() - 1, active.currentRow()))
+                left.clearSelection()
+                right.setCurrentRow(row if row < right.count() else 0)
+                right.scrollToItem(right.currentItem())
+                self._deck_sync_combo_from_list(right)
+            return True
+        if button_name in ("up", "down") and active is not None and active.count() > 0:
+            delta = -1 if button_name == "up" else 1
+            row = active.currentRow()
+            if row < 0:
+                row = 0
+            else:
+                row = max(0, min(active.count() - 1, row + delta))
+            active.setCurrentRow(row)
+            active.scrollToItem(active.currentItem())
+            self._deck_sync_combo_from_list(active)
+            return True
+        return True
+
+    def deck_confirm(self) -> bool:
+        """A — apply the highlighted row and close."""
+        active = self._deck_active_list()
+        if active is None:
+            self.hide()
+            return True
+        item = active.currentItem()
+        if item is None and active.count() > 0:
+            active.setCurrentRow(0)
+            item = active.currentItem()
+        if item is not None:
+            self._on_pick(item)
+        else:
+            self.hide()
+        return True
+
+    def _deck_active_list(self) -> QListWidget | None:
+        left = self._left["list"]
+        right = self._right["list"]
+        if left.currentItem() is not None:
+            return left
+        if right.currentItem() is not None:
+            return right
+        if left.count() > 0:
+            left.setCurrentRow(0)
+            return left
+        if right.count() > 0:
+            right.setCurrentRow(0)
+            return right
+        return None
+
+    def _deck_sync_combo_from_list(self, lst: QListWidget) -> None:
+        item = lst.currentItem()
+        if item is None:
+            return
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        if idx is None:
+            return
+        combo = self._combo
+        idx = int(idx)
+        if combo.currentIndex() != idx:
+            combo.setCurrentIndex(idx)
+
     def _on_pick(self, item: QListWidgetItem) -> None:
         idx = item.data(Qt.ItemDataRole.UserRole)
         if idx is None:
