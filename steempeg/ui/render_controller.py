@@ -6092,6 +6092,9 @@ class RenderMixin:
         self._highlight_clip_in_library(job.clip_path)
         # Card/list selection only — do not force the Render Queue pane open.
         self.refresh_render_queue_panel(sync_splitter=False)
+        # Panel rebuild replaces queue cards — re-bind open-spinner hosts.
+        if hasattr(self, "set_clip_open_loading"):
+            self.set_clip_open_loading(job.clip_path, job_id=job_id)
         self.update_playback_badge()
         self._update_start_button_label()
         if hasattr(self, "_sync_library_mode_chrome"):

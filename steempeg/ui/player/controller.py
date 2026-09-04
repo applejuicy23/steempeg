@@ -2450,8 +2450,7 @@ class PlayerMixin:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("❌ Cancel")
             self.btn_trim.setStyleSheet(STYLE_TRIM_CANCEL_BUTTON)
-            if hasattr(self, "trim_tools_pill"):
-                self.trim_tools_pill.show()
+            # Visibility animated in sync_trim_tools_placement.
         else:
             trim_icon_path = get_resource_path("trim_icon.png")
             if os.path.exists(trim_icon_path):
@@ -2461,8 +2460,6 @@ class PlayerMixin:
                 self.btn_trim.setIcon(QIcon())
                 self.btn_trim.setText("✂️ Trim")
             self.btn_trim.setStyleSheet(STYLE_TRIM_BUTTON)
-            if hasattr(self, "trim_tools_pill"):
-                self.trim_tools_pill.hide()
             self._apply_video_border(False)
         from steempeg.ui.player.controls.adaptive_trim_tools import (
             sync_trim_tools_placement,
@@ -3525,6 +3522,80 @@ class PlayerMixin:
                     except RuntimeError:
                         pass
 
+    def _job_id_for_clip_open_loading(
+        self, clip_path: str | None, job_id: str | None = None
+    ) -> str | None:
+        """Queue job id for open-spinner hosts — never reuse a stale selection.
+
+        Explicit ``job_id=""`` / ``None`` with a non-queued path must not fall
+        back to ``_selected_queue_job_id`` from a previous queue card.
+        """
+        if job_id is not None:
+            jid = str(job_id).strip()
+            if not jid:
+                return None
+            if clip_path and hasattr(self, "render_queue"):
+                job = self.render_queue.get(jid)
+                if job is None:
+                    return None
+                if os.path.normpath(job.clip_path or "") != os.path.normpath(
+                    str(clip_path)
+                ):
+                    return None
+            return jid
+        if not clip_path:
+            return None
+        if hasattr(self, "_resolve_queue_job_for_library_clip"):
+            job = self._resolve_queue_job_for_library_clip(clip_path)
+            return str(job.id) if job is not None else None
+        return None
+
+    def _attach_queue_open_loading_hosts(
+        self, jid: str, *, percent: int | None, hosts: list
+    ) -> None:
+        """Append Render Queue / Portable sidebar hosts for ``jid`` into ``hosts``."""
+        pct = 0 if percent is None else percent
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None:
+            for card in getattr(panel, "_card_widgets", None) or ():
+                if getattr(card, "_job_id", None) == jid and hasattr(card, "set_loading"):
+                    try:
+                        card.set_loading(True, percent=pct)
+                        hosts.append(card)
+                    except RuntimeError:
+                        pass
+        sidebar = getattr(self, "_portable_queue_sidebar", None)
+        if sidebar is not None:
+            row = getattr(sidebar, "_rows", {}).get(jid)
+            if row is not None and hasattr(row, "set_loading"):
+                try:
+                    row.set_loading(True, percent=pct)
+                    hosts.append(row)
+                except RuntimeError:
+                    pass
+
+    def _reconcile_clip_open_loading_hosts(
+        self, *, job_id: str | None, percent: int | None = None
+    ) -> None:
+        """After same-path early-return: bind/drop queue hosts to match ``job_id``."""
+        jid = str(job_id).strip() if job_id else ""
+        hosts = list(getattr(self, "_clip_open_loading_hosts", None) or [])
+        kept: list = []
+        for host in hosts:
+            hid = getattr(host, "_job_id", None)
+            if hid:
+                if not jid or str(hid) != jid:
+                    try:
+                        if hasattr(host, "set_loading"):
+                            host.set_loading(False)
+                    except RuntimeError:
+                        pass
+                    continue
+            kept.append(host)
+        if jid and not any(getattr(h, "_job_id", None) == jid for h in kept):
+            self._attach_queue_open_loading_hosts(jid, percent=percent, hosts=kept)
+        self._clip_open_loading_hosts = kept or None
+
     def set_clip_open_loading(
         self,
         clip_path: str | None = None,
@@ -3534,13 +3605,16 @@ class PlayerMixin:
     ) -> None:
         """Show spinner on the clip/queue banner that is opening into the player."""
         key = self._norm_clip_path_key(clip_path)
-        # Same clip already spinning (deferred preview painted early) — keep it.
+        jid = self._job_id_for_clip_open_loading(clip_path, job_id)
+        # Same clip already spinning (deferred preview painted early) — keep it,
+        # but still re-bind queue hosts when job_id / rebuild changed.
         if (
             key
             and key == self._norm_clip_path_key(getattr(self, "_opening_clip_path", None))
         ):
             if percent is not None and hasattr(self, "update_clip_open_loading_progress"):
                 self.update_clip_open_loading_progress(percent)
+            self._reconcile_clip_open_loading_hosts(job_id=jid, percent=percent)
             return
 
         self.clear_clip_open_loading()
@@ -3567,26 +3641,8 @@ class PlayerMixin:
                 except RuntimeError:
                     pass
 
-        jid = str(job_id or getattr(self, "_selected_queue_job_id", "") or "")
         if jid:
-            panel = getattr(self, "render_queue_panel", None)
-            if panel is not None:
-                for card in getattr(panel, "_card_widgets", None) or ():
-                    if getattr(card, "_job_id", None) == jid and hasattr(card, "set_loading"):
-                        try:
-                            card.set_loading(True, percent=0 if percent is None else percent)
-                            hosts.append(card)
-                        except RuntimeError:
-                            pass
-            sidebar = getattr(self, "_portable_queue_sidebar", None)
-            if sidebar is not None:
-                row = getattr(sidebar, "_rows", {}).get(jid)
-                if row is not None and hasattr(row, "set_loading"):
-                    try:
-                        row.set_loading(True, percent=0 if percent is None else percent)
-                        hosts.append(row)
-                    except RuntimeError:
-                        pass
+            self._attach_queue_open_loading_hosts(jid, percent=percent, hosts=hosts)
         self._clip_open_loading_hosts = hosts or None
 
     def update_clip_open_loading_progress(self, percent: int | None) -> None:
@@ -3732,9 +3788,7 @@ class PlayerMixin:
         if hasattr(self, "_sync_library_mode_chrome"):
             if not getattr(self, "_render_dock_visible", False):
                 self._sync_library_mode_chrome()
-        self.set_clip_open_loading(
-            clip_path, job_id=getattr(self, "_selected_queue_job_id", None)
-        )
+        self.set_clip_open_loading(clip_path, job_id=None)
 
         if hasattr(self, "get_clip_health_report"):
             report = self.get_clip_health_report(clip_path)

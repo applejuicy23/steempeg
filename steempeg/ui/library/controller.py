@@ -1965,9 +1965,14 @@ class LibraryMixin:
         path = cell.data(Qt.UserRole)
         if not path:
             return
-        self.set_clip_open_loading(
-            path, job_id=getattr(self, "_selected_queue_job_id", None)
-        )
+        # Resolve from this path — never pass a stale `_selected_queue_job_id`
+        # from a previous queue card (that painted % on the wrong hosts).
+        job_id = None
+        if hasattr(self, "_resolve_queue_job_for_library_clip"):
+            job = self._resolve_queue_job_for_library_clip(path)
+            if job is not None:
+                job_id = job.id
+        self.set_clip_open_loading(path, job_id=job_id)
         # Paint spinner before synchronous XML / remux / MPV work blocks the UI.
         if hasattr(self, "grid_clips") and self.grid_clips is not None:
             try:
