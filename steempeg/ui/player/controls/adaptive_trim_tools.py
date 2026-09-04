@@ -473,7 +473,12 @@ def _overlay_row_height(app) -> int:
 
 
 def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
-    """Y for stacked markers: match trim-tool circles when they share the row."""
+    """Y for stacked markers: Trim/Cancel baseline (+ gap), never theater/fs bottom.
+
+    Theater/fs pill is taller than Trim — anchoring under it drops markers too low
+    when Trim tools are hidden. Always match the row Trim tools would use.
+    """
+    del pill  # kept for call-site compatibility
     tools = getattr(app, "trim_tools_pill", None)
     if (
         tools is not None
@@ -482,18 +487,18 @@ def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
         and tools.parentWidget() is overlay
     ):
         th = max(tools.height(), 1)
-        # Same baseline as trim circles; center if pill heights differ slightly.
         return int(tools.y() + (th - mh) // 2)
 
     row_top = _overlay_row_top_y(app, overlay)
     if row_top is not None:
-        rh = _overlay_row_height(app)
-        return int(row_top + (rh - mh) // 2)
+        return int(row_top + max(0, (_overlay_row_height(app) - mh) // 2))
 
-    bottom_center = pill.mapTo(
-        overlay, QPoint(pill.width() // 2, pill.height())
-    )
-    return int(bottom_center.y() + _DROP_GAP_PX)
+    # Last resort: still Trim button, not theater/fs.
+    trim = getattr(app, "btn_trim", None)
+    if trim is not None:
+        anchor = trim.mapTo(overlay, QPoint(trim.width() // 2, trim.height()))
+        return int(anchor.y() + _DROP_GAP_PX)
+    return _DROP_GAP_PX
 
 
 def _reposition_markers_below(app, markers: QWidget, pill: QWidget) -> None:
