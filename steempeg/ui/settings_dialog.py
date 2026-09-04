@@ -168,7 +168,6 @@ from steempeg.ui.settings_prefs import (
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
     MEDIA_CACHE_LIMIT_LABELS,
-    DESKTOP_RENDER_LIKE_A_PORTABLE,
     DESKTOP_RENDER_LAYOUT_LABELS,
     RENDER_TAB_LABELS,
     STARTUP_SCAN_LABELS,
@@ -197,7 +196,6 @@ from steempeg.ui.settings_prefs import (
     load_markers_on_strip,
     load_media_cache_limit_gb,
     load_mpv_log_level,
-    load_portable_like_middle_splitter,
     load_remember_library_tab,
     load_startup_library_scan,
     load_test_new_fullscreen,
@@ -214,7 +212,6 @@ from steempeg.ui.settings_prefs import (
     normalize_marker_trim_offset_ms,
     normalize_markers_on_strip,
     normalize_media_cache_limit_gb,
-    normalize_portable_like_middle_splitter,
     normalize_render_tab,
     normalize_screenshots_folder,
     normalize_startup_library_scan,
@@ -494,23 +491,6 @@ class SettingsDialog(SteempegDialog):
                 "It's a Desktop keeps the classic docked Render panel."
             )
         )
-        self._chk_portable_like_middle_splitter = SteempegCheckBox(
-            "Show middle splitter (Like a Portable)"
-        )
-        cur_middle = load_portable_like_middle_splitter(settings)
-        self._committed_portable_like_middle_splitter = cur_middle
-        self._chk_portable_like_middle_splitter.setChecked(cur_middle)
-        g.addWidget(self._chk_portable_like_middle_splitter)
-        g.addWidget(
-            self._hint(
-                "Restore the player↔dash drag handle in Like a Portable layout. "
-                "Off keeps the fixed air gap (default). Save applies live."
-            )
-        )
-        self._combo_desktop_render.currentIndexChanged.connect(
-            self._sync_portable_like_middle_splitter_enabled
-        )
-        self._sync_portable_like_middle_splitter_enabled()
 
         g.addWidget(self._section("Shell"))
         shell_row = QHBoxLayout()
@@ -1650,17 +1630,6 @@ class SettingsDialog(SteempegDialog):
             install_library_vertical_scrollbar(scroll)
         self._apply_settings_form_chrome()
 
-    def _sync_portable_like_middle_splitter_enabled(self, *_args) -> None:
-        chk = getattr(self, "_chk_portable_like_middle_splitter", None)
-        combo = getattr(self, "_combo_desktop_render", None)
-        if chk is None or combo is None:
-            return
-        portable = (
-            normalize_desktop_render_layout(combo.currentData())
-            == DESKTOP_RENDER_LIKE_A_PORTABLE
-        )
-        chk.setEnabled(portable)
-
     def _refresh_ui_theme(self, theme: str, *, preview: bool = False) -> None:
         if hasattr(self._app, "apply_ui_theme"):
             try:
@@ -2144,19 +2113,14 @@ class SettingsDialog(SteempegDialog):
             self._combo_desktop_render.currentData()
         )
         pending[KEY_DESKTOP_RENDER_LAYOUT] = desktop_layout
-        middle_splitter = normalize_portable_like_middle_splitter(
-            self._chk_portable_like_middle_splitter.isChecked()
-        )
-        pending[KEY_PORTABLE_LIKE_MIDDLE_SPLITTER] = middle_splitter
+        # Air-gap only — middle splitter opt-in removed (Emily 4 Sep 2026).
+        pending[KEY_PORTABLE_LIKE_MIDDLE_SPLITTER] = False
         layout_apply = desktop_layout != getattr(
             self, "_committed_desktop_render", desktop_layout
-        ) or middle_splitter != getattr(
-            self, "_committed_portable_like_middle_splitter", middle_splitter
         )
         if layout_apply and hasattr(self._app, "apply_desktop_render_layout"):
             deferred.append(self._app.apply_desktop_render_layout)
         self._committed_desktop_render = desktop_layout
-        self._committed_portable_like_middle_splitter = middle_splitter
 
         pending[KEY_NOTIFY_ON_RENDER_COMPLETE] = self._chk_notify.isChecked()
         pending[KEY_PAUSE_PREVIEW_DURING_RENDER] = self._chk_pause_preview.isChecked()

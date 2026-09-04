@@ -152,11 +152,8 @@ def normalize_portable_like_middle_splitter(value: object | None) -> bool:
 
 
 def load_portable_like_middle_splitter(settings: dict | None) -> bool:
-    return normalize_portable_like_middle_splitter(
-        (settings or {}).get(
-            KEY_PORTABLE_LIKE_MIDDLE_SPLITTER, DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER
-        )
-    )
+    """Always air-gap — Settings opt-in to restore the drag handle was removed."""
+    return False
 
 
 def apply_default_render_tab(app, tab: object | None = None) -> int:
