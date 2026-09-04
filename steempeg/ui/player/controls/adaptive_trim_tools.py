@@ -20,7 +20,7 @@ squeeze above.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QHBoxLayout, QSpacerItem, QSizePolicy, QWidget
 
 # Steam Deck landscape and similarly narrow shells.
@@ -402,6 +402,25 @@ def _place_markers_below(app, markers: QWidget, pill: QWidget) -> None:
     _reposition_markers_below(app, markers, pill)
 
 
+def _markers_below_target_rect(app, markers: QWidget, pill: QWidget) -> QRect:
+    """Target geometry for markers under theater/fs (overlay coords)."""
+    overlay = markers.parentWidget()
+    if overlay is None:
+        overlay = _overlay_host(app, pill)
+    hint = markers.sizeHint()
+    mw = max(hint.width(), markers.minimumSizeHint().width(), 90)
+    mh = max(hint.height(), markers.minimumSizeHint().height(), 40)
+    if markers.width() > 0:
+        mw = max(mw, markers.width())
+    if markers.height() > 0:
+        mh = max(mh, markers.height())
+    pill_center = pill.mapTo(overlay, pill.rect().center())
+    x = int(pill_center.x() - mw // 2)
+    y = _marker_stack_y(app, overlay, pill, mh)
+    x = max(0, min(x, max(0, overlay.width() - mw)))
+    return QRect(x, y, mw, mh)
+
+
 def _place_markers_inline(app, markers: QWidget) -> None:
     screenshot = getattr(app, "btn_screenshot", None)
     trim = getattr(app, "btn_trim", None)
@@ -504,16 +523,7 @@ def _marker_stack_y(app, overlay: QWidget, pill: QWidget, mh: int) -> int:
 def _reposition_markers_below(app, markers: QWidget, pill: QWidget) -> None:
     if getattr(app, "_marker_pill_placement", None) != "below":
         return
-    overlay = markers.parentWidget()
-    if overlay is None:
+    if markers.parentWidget() is None:
         return
-
-    hint = markers.sizeHint()
-    mw = max(hint.width(), markers.minimumSizeHint().width(), 90)
-    mh = max(hint.height(), markers.minimumSizeHint().height(), 40)
-    pill_center = pill.mapTo(overlay, pill.rect().center())
-    x = int(pill_center.x() - mw // 2)
-    y = _marker_stack_y(app, overlay, pill, mh)
-    x = max(0, min(x, max(0, overlay.width() - mw)))
-    markers.setGeometry(x, y, mw, mh)
+    markers.setGeometry(_markers_below_target_rect(app, markers, pill))
     markers.raise_()
