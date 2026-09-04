@@ -53,15 +53,14 @@ def sync_trim_tools_placement(app) -> None:
     if want_below:
         if mode != "below":
             _place_tools_below(app, trim, tools)
-        elif tools.isVisible():
+        elif tools.isVisible() or _trim_mode_active(app):
             _reposition_tools_below(app, trim, tools)
     else:
         if mode != "left":
             _place_tools_left(app, trim, tools)
 
     active = _trim_mode_active(app)
-    tools.setVisible(active)
-    _sync_trim_tools_nudge(app, tools, trim, active)
+    _apply_trim_tools_visibility(app, tools, trim, active)
 
     if active and getattr(app, "_trim_tools_placement", None) == "below":
         _reposition_tools_below(app, trim, tools)
@@ -74,6 +73,32 @@ def sync_trim_tools_placement(app) -> None:
             if pill is not None:
                 _reposition_markers_below(app, markers, pill)
                 markers.raise_()
+
+
+def _apply_trim_tools_visibility(app, tools: QWidget, trim: QWidget, active: bool) -> None:
+    """Show/hide trim tools with a short fade (works for left and below)."""
+    from steempeg.ui.player.controls.footer_pill_anim import animate_footer_overlay_widget
+
+    was = bool(tools.isVisible())
+    if active and was:
+        _sync_trim_tools_nudge(app, tools, trim, True)
+        return
+    if (not active) and (not was):
+        _sync_trim_tools_nudge(app, tools, trim, False)
+        return
+
+    if active:
+        # Layout first so geometry/sizeHint are correct, then fade in.
+        tools.setVisible(True)
+        _sync_trim_tools_nudge(app, tools, trim, True)
+        final = None
+        if getattr(app, "_trim_tools_placement", None) == "below":
+            _reposition_tools_below(app, trim, tools)
+            final = tools.geometry()
+        animate_footer_overlay_widget(tools, show=True, final_geom=final)
+    else:
+        _sync_trim_tools_nudge(app, tools, trim, False)
+        animate_footer_overlay_widget(tools, show=False)
 
 
 def ensure_adaptive_trim_hook(app) -> None:

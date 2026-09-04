@@ -2388,6 +2388,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
                 marker_pill_layout.addWidget(self.btn_add_marker)
                 marker_pill_layout.addWidget(self.btn_marker_settings)
+                # Empty clip: pin only — sync grows the gear in when pins appear.
+                self.btn_marker_settings.hide()
                 self.sync_marker_settings_button_visible()
 
                 # NEW CAMERA BUTTON
@@ -3033,13 +3035,43 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             pass
 
     def sync_marker_settings_button_visible(self) -> None:
-        """Empty clip → Markers pin only; gear appears once there is ≥1 pin."""
+        """Empty clip → Markers pin only; gear grows in once there is ≥1 pin."""
         btn = getattr(self, "btn_marker_settings", None)
         if btn is None:
             return
         canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
         has_markers = bool(getattr(canvas, "markers", None)) if canvas is not None else False
-        btn.setVisible(has_markers)
+        animating = getattr(btn, "_footer_chip_anim", None) is not None
+        if not animating:
+            if has_markers and btn.isVisible() and btn.width() >= 32:
+                return
+            if not has_markers and not btn.isVisible():
+                return
+
+        add = getattr(self, "btn_add_marker", None)
+        target_w = 40
+        if add is not None:
+            try:
+                target_w = max(32, int(add.width() or 40))
+            except RuntimeError:
+                target_w = 40
+
+        from steempeg.ui.player.controls.footer_pill_anim import animate_chip_in_pill
+
+        animate_chip_in_pill(
+            btn,
+            getattr(self, "marker_pill", None),
+            show=has_markers,
+            target_w=target_w,
+        )
+        try:
+            from steempeg.ui.player.controls.adaptive_trim_tools import (
+                sync_trim_tools_placement,
+            )
+
+            sync_trim_tools_placement(self)
+        except Exception:
+            pass
 
     def _source_info_tooltip_text(self) -> str:
         """Build clip facts from Source Info labels / header meta (hover + click popup)."""
