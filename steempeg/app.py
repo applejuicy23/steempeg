@@ -276,10 +276,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         # Chrome color theme (built-in default until saved settings load at startup).
         from steempeg.ui import design_tokens as _tok_boot
-        from steempeg.ui.ui_theme import UI_THEME_DEFAULT
+        from steempeg.ui.ui_theme import DEFAULT_UI_THEME
 
         self._chrome_theme = _tok_boot.DEFAULT_CHROME_THEME
-        self._ui_theme = UI_THEME_DEFAULT
+        self._ui_theme = DEFAULT_UI_THEME
         self._ui_theme_applied = False
 
         from PySide6.QtGui import QColor, QPalette
@@ -523,10 +523,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 apply_ui_font_preference(app=QApplication.instance())
         except Exception:
             pass
-        from steempeg.ui.ui_theme import KEY_UI_THEME, UI_THEME_DEFAULT, normalize_ui_theme
+        from steempeg.ui.ui_theme import KEY_UI_THEME, DEFAULT_UI_THEME, normalize_ui_theme
 
         saved_ui = normalize_ui_theme(
-            self.load_user_settings().get(KEY_UI_THEME, UI_THEME_DEFAULT)
+            self.load_user_settings().get(KEY_UI_THEME, DEFAULT_UI_THEME)
         )
         self.apply_ui_theme(saved_ui, persist=False)
         

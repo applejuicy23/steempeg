@@ -232,8 +232,8 @@ from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.ui_theme import (
+    DEFAULT_UI_THEME,
     KEY_UI_THEME,
-    UI_THEME_DEFAULT,
     UI_THEME_LABELS,
     get_ui_theme,
     normalize_ui_theme,
@@ -589,7 +589,7 @@ class SettingsDialog(SteempegDialog):
         self._combo_ui_theme = QComboBox()
         for value, label in UI_THEME_LABELS:
             self._combo_ui_theme.addItem(label, value)
-        cur_theme = normalize_ui_theme(settings.get(KEY_UI_THEME, UI_THEME_DEFAULT))
+        cur_theme = normalize_ui_theme(settings.get(KEY_UI_THEME, DEFAULT_UI_THEME))
         self._committed_ui_theme = cur_theme
         tidx = self._combo_ui_theme.findData(cur_theme)
         self._combo_ui_theme.setCurrentIndex(max(0, tidx))
@@ -598,9 +598,9 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(theme_row)
         v.addWidget(
             self._hint(
-                "Default matches the stock Steempeg look. TrueDark is a darker unified "
-                "family. TrueDark OLED uses pure black shell and player canvas with "
-                "slightly elevated cards. Save applies; Cancel keeps the last saved theme."
+                "TrueDark is the stock look (new installs). Default keeps the classic "
+                "Steempeg chrome. TrueDark OLED uses pure black shell and player canvas "
+                "with slightly elevated cards. Save applies; Cancel keeps the last saved theme."
             )
         )
 
@@ -1676,7 +1676,7 @@ class SettingsDialog(SteempegDialog):
         import logging
 
         committed = normalize_ui_theme(
-            getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
+            getattr(self, "_committed_ui_theme", DEFAULT_UI_THEME)
         )
         live = get_ui_theme()
         combo = normalize_ui_theme(self._combo_ui_theme.currentData())
@@ -2166,7 +2166,7 @@ class SettingsDialog(SteempegDialog):
         ui_theme = normalize_ui_theme(self._combo_ui_theme.currentData())
         pending[KEY_UI_THEME] = ui_theme
         opened_theme = normalize_ui_theme(
-            getattr(self, "_committed_ui_theme", UI_THEME_DEFAULT)
+            getattr(self, "_committed_ui_theme", DEFAULT_UI_THEME)
         )
         live_theme = normalize_ui_theme(get_ui_theme())
         if ui_theme != live_theme:

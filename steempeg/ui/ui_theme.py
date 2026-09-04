@@ -15,10 +15,12 @@ KEY_UI_THEME = "ui_theme"
 UI_THEME_DEFAULT = "default"
 UI_THEME_TRUE_DARK = "truedark"
 UI_THEME_TRUE_DARK_OLED = "truedark_oled"
+# Stock look for new installs (Default / OLED remain selectable in Settings).
+DEFAULT_UI_THEME = UI_THEME_TRUE_DARK
 
 UI_THEME_LABELS: tuple[tuple[str, str], ...] = (
-    (UI_THEME_DEFAULT, "Default"),
     (UI_THEME_TRUE_DARK, "TrueDark"),
+    (UI_THEME_DEFAULT, "Default"),
     (UI_THEME_TRUE_DARK_OLED, "TrueDark OLED"),
 )
 
@@ -218,10 +220,10 @@ _active: UiThemePalette = _PALETTE_DEFAULT
 
 
 def normalize_ui_theme(value: object | None) -> str:
-    name = str(value or UI_THEME_DEFAULT).strip().lower()
+    name = str(value or DEFAULT_UI_THEME).strip().lower()
     if name in UI_THEMES:
         return name
-    return UI_THEME_DEFAULT
+    return DEFAULT_UI_THEME
 
 
 def get_ui_theme() -> str:
