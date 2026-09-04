@@ -187,21 +187,60 @@ def next_class_color(existing_count: int) -> str:
     return CLASS_PALETTE[existing_count % len(CLASS_PALETTE)]
 
 
+def class_app_id(cls: dict | None) -> str:
+    """Steam app id this class belongs to; empty = legacy unscoped."""
+    if not isinstance(cls, dict):
+        return ""
+    return str(cls.get("app_id") or "").strip()
+
+
+def classes_for_app(
+    app_id: str | None,
+    prefs: dict | None = None,
+    *,
+    include_ids: set[str] | frozenset[str] | None = None,
+) -> list[dict]:
+    """Classes for one game, plus legacy unscoped rows and optional extras.
+
+    New classes are stamped with the open clip's ``app_id`` (e.g. CS2 ``730``).
+    Older rows without ``app_id`` stay visible everywhere so existing prefs
+    keep working until recreated under a game.
+    """
+    data = prefs if prefs is not None else load_marker_prefs()
+    aid = str(app_id or "").strip()
+    keep = {str(x) for x in (include_ids or ()) if str(x).strip()}
+    out: list[dict] = []
+    for cls in data.get("classes") or []:
+        if not isinstance(cls, dict) or not cls.get("id"):
+            continue
+        cid = str(cls.get("id"))
+        ca = class_app_id(cls)
+        if cid in keep or not ca or (aid and ca == aid):
+            out.append(cls)
+        elif not aid and not ca:
+            out.append(cls)
+    return out
+
+
 def create_class(
     name: str | None = None,
     *,
     color: str | None = None,
     icon: str | None = None,
+    app_id: str | None = None,
 ) -> dict:
     data = load_marker_prefs()
-    classes = list(data.get("classes") or [])
-    idx = len(classes) + 1
+    aid = str(app_id or "").strip()
+    scoped = classes_for_app(aid, data) if aid else list(data.get("classes") or [])
+    idx = len(scoped) + 1
     cls = {
         "id": f"cls_{uuid.uuid4().hex[:8]}",
         "name": (name or f"Class {idx}").strip() or f"Class {idx}",
-        "color": color or next_class_color(len(classes)),
+        "color": color or next_class_color(len(scoped)),
         "icon": icon or "",
+        "app_id": aid,
     }
+    classes = list(data.get("classes") or [])
     classes.append(cls)
     data["classes"] = classes
     save_marker_prefs(data)
