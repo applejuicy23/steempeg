@@ -1190,9 +1190,9 @@ class SettingsDialog(SteempegDialog):
         self._chk_test_new_fullscreen.setChecked(load_test_new_fullscreen(settings))
         a.addWidget(self._chk_test_new_fullscreen)
         loud_hint = QLabel(
-            "If the old grey screen before enter/exit bothers you, turn this on. "
-            "Skips the transition cover (same as STEEMPEG_FS_COVER=0). "
-            "May briefly show a black edge on exit."
+            "Stock default: on (Desktop and Portable). Skips the grey transition "
+            "cover on fullscreen enter/exit (same as STEEMPEG_FS_COVER=0). "
+            "May briefly show a black edge on exit — turn off to restore the cover."
         )
         loud_hint.setWordWrap(True)
         loud_hint.setStyleSheet(

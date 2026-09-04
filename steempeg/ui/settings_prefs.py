@@ -955,9 +955,9 @@ def load_remember_library_tab(settings: dict | None) -> bool:
 
 
 # Experimental: skip the grey #1e1e1e flash cover on immersive fullscreen
-# enter/exit (same as STEEMPEG_FS_COVER=0). Default keeps the cover.
+# enter/exit (same as STEEMPEG_FS_COVER=0). Stock default: on (Desktop + Portable).
 KEY_TEST_NEW_FULLSCREEN = "test_new_fullscreen"
-DEFAULT_TEST_NEW_FULLSCREEN = False
+DEFAULT_TEST_NEW_FULLSCREEN = True
 
 
 def load_test_new_fullscreen(settings: dict | None) -> bool:
