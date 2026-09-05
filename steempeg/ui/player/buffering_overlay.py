@@ -95,6 +95,19 @@ class BufferingOverlay(QWidget):
         self._spin.timeout.connect(self._advance)
         self.hide()
 
+    def _fit_message_width(self, message: str) -> None:
+        """Grow the pill for longer prepare/progress labels."""
+        from PySide6.QtGui import QFont, QFontMetrics
+
+        font = QFont(self.font())
+        font.setPointSize(10)
+        font.setBold(True)
+        text_w = QFontMetrics(font).horizontalAdvance(message or "Buffering…")
+        # Spinner slot (~52) + trailing pad; clamp so it stays a pill not a bar.
+        width = max(168, min(300, 52 + text_w + 24))
+        if self.width() != width:
+            self.resize(width, 60)
+
     def _advance(self):
         self._angle = (self._angle + 24) % 360
         self.update()
@@ -186,6 +199,7 @@ class BufferingOverlay(QWidget):
         except Exception:
             pass
         self._message = message
+        self._fit_message_width(message)
         self._reposition(anchor_widget)
         if not self._spin.isActive():
             self._spin.start()
