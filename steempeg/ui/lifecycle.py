@@ -313,7 +313,10 @@ class LifecycleMixin:
         """Re-pin the native mpv child after splitter / panel layout changes."""
         wrapper = getattr(self, "mpv_wrapper", None)
         if wrapper is not None:
-            wrapper.update_geometry()
+            if hasattr(wrapper, "force_geometry_refresh"):
+                wrapper.force_geometry_refresh()
+            else:
+                wrapper.update_geometry()
 
     def _install_mpv_geometry_hooks(self):
         # Windows formula: hook both splitters so the embed stays clipped while

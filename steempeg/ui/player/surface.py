@@ -25,7 +25,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -117,14 +117,37 @@ class MPVWrapper(QWidget):
         """
         self.mpv_screen.setGeometry(0, 0, 0, 0)
         self.mpv_screen.hide()
-        for line in self.lines:
-            line.hide()
+        self._park_border_lines()
         self._border_ring = None
         if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
             self.hud_reference.hide()
         self._last_video_rect = (0, 0, 0, 0)
+        self._last_screen_origin = None
         if sys.platform != "win32":
             self.update()
+
+    def _park_border_lines(self) -> None:
+        """Hide + zero the yellow trim ring so DWM cannot keep a ghost frame."""
+        for line in self.lines:
+            line.hide()
+            line.setGeometry(0, 0, 0, 0)
+
+    def _apply_border_line_geometry(self, x: int, y: int, total_w: int, total_h: int, b: int, video_h: int) -> None:
+        """Move the four native edge widgets without leaving a second on-screen ring."""
+        if not self.lines or b <= 0:
+            self._park_border_lines()
+            return
+        # Hide before ConfigureWindow — otherwise Windows keeps the old frame
+        # composited next to the new one (FS exit duplicate yellow boxes).
+        for line in self.lines:
+            line.hide()
+        self.top_line.setGeometry(x, y, total_w, b)
+        self.bottom_line.setGeometry(x, y + total_h - b, total_w, b)
+        self.left_line.setGeometry(x, y + b, b, video_h)
+        self.right_line.setGeometry(x + total_w - b, y + b, b, video_h)
+        for line in self.lines:
+            line.show()
+            line.raise_()
 
     def begin_transition(self):
         """Stop tracking geometry until :meth:`end_transition`.
@@ -132,9 +155,11 @@ class MPVWrapper(QWidget):
         Immersive enter/exit rebuilds the layout several times, and every pass
         moved the embedded HWND — visible as the video jumping between sizes.
         The surface is left where it is (clipped by its parent at worst) so the
-        last decoded frame stays on screen instead of blanking.
+        last decoded frame stays on screen instead of blanking. The trim ring is
+        parked: leaving it visible paints a second yellow frame after re-pin.
         """
         self._transition_frozen = True
+        self._park_border_lines()
 
     def end_transition(self):
         """Apply the settled geometry once."""
@@ -142,7 +167,17 @@ class MPVWrapper(QWidget):
             return
         self._transition_frozen = False
         # Defeat the dedupe: the frozen passes already recorded intermediate rects.
+        self.force_geometry_refresh()
+
+    def force_geometry_refresh(self) -> None:
+        """Re-pin mpv + trim ring even when the relative video rect is unchanged.
+
+        After fullscreen / splitter moves the wrapper's screen origin changes while
+        the centered 16:9 rect inside it can stay identical — the early-out would
+        skip ``setGeometry`` and leave the yellow native border HWNDs stranded.
+        """
         self._last_video_rect = None
+        self._last_screen_origin = None
         self.update_geometry()
 
     def update_geometry(self):
@@ -159,9 +194,6 @@ class MPVWrapper(QWidget):
 
         if self.mpv_screen.isHidden():
             self.mpv_screen.show()
-            if getattr(self, "_is_border_active", False):
-                for line in self.lines:
-                    line.show()
             if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
                 self.hud_reference.show()
 
@@ -189,14 +221,23 @@ class MPVWrapper(QWidget):
             if getattr(self, "_is_border_active", False) and b > 0
             else None
         )
+        try:
+            origin = self.mapToGlobal(QPoint(0, 0))
+            screen_origin = (int(origin.x()), int(origin.y()))
+        except RuntimeError:
+            screen_origin = None
         # Skip redundant ConfigureWindow when nothing changed (multi-caller paths).
+        # Must include screen origin: parent can move with an identical relative rect
+        # (FS exit, splitter kiss) and native border children would otherwise drift.
         if (
             getattr(self, "_last_video_rect", None) == video_rect
             and getattr(self, "_border_ring", None) == border_ring
+            and getattr(self, "_last_screen_origin", None) == screen_origin
         ):
             return
         self._last_video_rect = video_rect
         self._border_ring = border_ring
+        self._last_screen_origin = screen_origin
 
         if _FS_TRACE:
             logging.info("[fstrace] %.3f mpv geom -> %s", time.perf_counter(), video_rect)
@@ -204,12 +245,9 @@ class MPVWrapper(QWidget):
         self.mpv_screen.setGeometry(*video_rect)
 
         if self.lines and border_ring is not None:
-            self.top_line.setGeometry(x, y, total_w, b)
-            self.bottom_line.setGeometry(x, y + total_h - b, total_w, b)
-            self.left_line.setGeometry(x, y + b, b, video_h)
-            self.right_line.setGeometry(x + total_w - b, y + b, b, video_h)
-            for line in self.lines:
-                line.raise_()
+            self._apply_border_line_geometry(x, y, total_w, total_h, b, video_h)
+        elif self.lines:
+            self._park_border_lines()
 
         if sys.platform != "win32":
             self.update()
@@ -226,27 +264,28 @@ class MPVWrapper(QWidget):
         super().resizeEvent(event)
 
     def moveEvent(self, event):
-        # Native embed does not always track parent moves during splitter drags.
+        # Native embed + trim ring do not always track parent moves during
+        # splitter / immersive layout — invalidate dedupe so HWNDs re-pin.
+        self._last_screen_origin = None
         self.update_geometry()
         super().moveEvent(event)
 
     def showEvent(self, event):
-        self.update_geometry()
+        self.force_geometry_refresh()
         super().showEvent(event)
 
     def set_border_active(self, active):
         if active == getattr(self, "_is_border_active", None):
+            # Still re-pin: FS exit can leave the ring active but HWND-stale.
+            if active:
+                self.force_geometry_refresh()
             return
 
         self._is_border_active = active
         self._last_video_rect = None
-        for line in self.lines:
-            if active:
-                line.show()
-                line.raise_()
-            else:
-                line.hide()
-
+        self._last_screen_origin = None
+        if not active:
+            self._park_border_lines()
         self.update_geometry()
         if sys.platform != "win32":
             self.update()
