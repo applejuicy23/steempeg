@@ -489,6 +489,8 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
         self.hide()
+        if hasattr(self.app, "sync_filter_pill_badge"):
+            self.app.sync_filter_pill_badge()
 
     def _apply(self):
         if not self.app:
@@ -499,3 +501,5 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
         self.hide()
+        if hasattr(self.app, "sync_filter_pill_badge"):
+            self.app.sync_filter_pill_badge()

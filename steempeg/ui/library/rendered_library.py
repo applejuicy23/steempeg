@@ -738,6 +738,8 @@ class RenderedLibraryMixin:
         self._library_panel_mode = mode
         for key, tab in self._library_tabs.items():
             tab.set_active(key == mode)
+        if hasattr(self, "sync_filter_pill_badge"):
+            self.sync_filter_pill_badge()
         if hasattr(self, "library_stack"):
             self.library_stack.setCurrentIndex(self._library_stack_index_for(mode))
         if mode == "rendered":
@@ -1262,6 +1264,8 @@ class RenderedLibraryMixin:
         )
         self._screenshots_filter_games = sgames
         self._screenshots_filter_folders = folders
+        if hasattr(self, "sync_filter_pill_badge"):
+            QTimer.singleShot(0, self.sync_filter_pill_badge)
 
     def _persist_library_filter_memory(self) -> None:
         """Write filter memory without waiting for the full UI-persist gate.

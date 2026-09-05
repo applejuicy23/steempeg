@@ -1837,6 +1837,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
         self.hide()
+        if hasattr(self.app, "sync_filter_pill_badge"):
+            self.app.sync_filter_pill_badge()
 
     def _resolved_duration_bounds(self):
         """Return min/max duration seconds, recovering from stale 0:00–0:00."""
@@ -2059,3 +2061,5 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         # Keep the library header • N Clips on the filtered size (not rowCount).
         if hasattr(self.app, '_update_library_count_label'):
             self.app._update_library_count_label()
+        if hasattr(self.app, "sync_filter_pill_badge"):
+            self.app.sync_filter_pill_badge()
