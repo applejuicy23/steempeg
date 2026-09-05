@@ -80,10 +80,29 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             pass
         self._title_bar.close_requested.connect(self.close_and_return)
 
-        # Do NOT call _sync_portable_like_dock_chrome here — with this dialog
-        # registered as floating it used to still re-glue the main splitter
-        # (1–2s lag). Neo is already borrowed into this window.
+        # Do NOT call full dock chrome sync here (1–2s lag). Reclaim neo once;
+        # dash glue is deferred until after show() so the window paints first.
         self._reclaim_neo_into_dialog()
+
+    @staticmethod
+    def _light_glue_dash_while_settings_open(app) -> None:
+        """Pin the dash strip after neo leaves the dock — setSizes only, no reveal walk."""
+        try:
+            if not (
+                hasattr(app, "_desktop_render_layout_is_portable_like")
+                and app._desktop_render_layout_is_portable_like()
+            ):
+                return
+            if getattr(app, "_portable_like_dash_closed", False):
+                return
+            if hasattr(app, "_ensure_dash_in_bottom_wrap"):
+                app._ensure_dash_in_bottom_wrap()
+            # Direct glue only — skip _reapply_portable_like_middle_gap (settings
+            # reload + splitter reveal) which made Open feel like a UI stall.
+            if hasattr(app, "_glue_portable_like_dash_open"):
+                app._glue_portable_like_dash_open()
+        except Exception:
+            _log.exception("Light dash glue after Render Settings open failed")
 
     def _reclaim_neo_into_dialog(self) -> None:
         neo = self._neo or getattr(self._app, "neo_wrapper", None)
@@ -260,13 +279,14 @@ def toggle_desktop_render_settings(app) -> None:
             return
 
     dlg = DesktopRenderSettingsDialog(app, parent=getattr(app, "ui", None))
-    # __init__ already assigned _desktop_render_settings_dlg
+    # __init__ already assigned _desktop_render_settings_dlg and reclaimed neo.
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()
-    # One reclaim only — no post-show dock sync (that re-glued the shell).
-    if hasattr(dlg, "_reclaim_neo_into_dialog"):
-        dlg._reclaim_neo_into_dialog()
+    # Glue after first paint — keeps Open snappy; still kills the black void.
+    QTimer.singleShot(
+        0, lambda: DesktopRenderSettingsDialog._light_glue_dash_while_settings_open(app)
+    )
     if hasattr(app, "_sync_dash_render_settings_button"):
         try:
             app._sync_dash_render_settings_button()

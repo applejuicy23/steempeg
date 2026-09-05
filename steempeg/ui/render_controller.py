@@ -2921,9 +2921,9 @@ class RenderMixin:
             return
 
         # --- Like a Portable ---
-        # Floating Render Settings already owns neo — do NOT re-glue / setSizes the
-        # main v-splitter here. That was the 1–2s open lag (neo borrow + full dock
-        # sync × N). Dash geometry stays as-is until settings close.
+        # Floating Render Settings owns neo — do NOT re-glue / setSizes here.
+        # That was the 1–2s open lag (neo borrow + full dock sync × N). Dash
+        # glue after open is a deferred one-liner in desktop_render_settings.
         if floating:
             if hw is not None and hasattr(hw, "set_suppressed"):
                 hw.set_suppressed(True)
