@@ -367,6 +367,7 @@ class PlayerMixin:
         self._awaiting_first_frame = False
         self._pending_open_seek = None
         self._open_seek_timer_armed = False
+        self._clear_remux_quality_hold()
 
         if hasattr(self, 'player') and self.player:
             self.player.pause = True
@@ -817,6 +818,24 @@ class PlayerMixin:
 
         if getattr(self, '_is_switching', False):
             return
+
+        # Quality-gear remux hold owns the overlay until seek restore lands.
+        if getattr(self, '_remux_quality_hold_active', False):
+            msg = getattr(self, "_remux_quality_hold_message", None) or "Buffering…"
+            self._set_playback_loading(True, msg)
+            return
+
+        # Growing remux still encoding after seek restore: mpv often sits in
+        # paused_for_cache / flat time_pos. Stall logic would pin "Buffering…"
+        # forever — _tick keeps Showing Preparing % instead.
+        remux_pair = getattr(self, "_progressive_remux", None)
+        if remux_pair is not None:
+            try:
+                _gen, job = remux_pair
+                if job is not None and job.poll() is None:
+                    return
+            except Exception:
+                pass
 
         now = time.time()
         if now < getattr(self, '_playback_ignore_stall_until', 0):
@@ -3913,22 +3932,32 @@ class PlayerMixin:
         mpd_path = all_mpds[0]
         abs_path = os.path.abspath(mpd_path).replace("\\", "/")
 
-        # Linux: libmpv cannot demux Steam .mpd — remux to cached .mkv (or use cache).
+        # Linux: remux Steam .mpd when demux is missing (or quality gear needs encode).
         from steempeg.core.dash.mpd_playback import (
             existing_playback_cache_for_play,
-            host_libmpv_needs_mpd_bridge,
+            should_remux_mpd_for_playback,
         )
 
         pending_remux = False
         early_play_path = abs_path
-        if host_libmpv_needs_mpd_bridge() and abs_path.lower().endswith(".mpd"):
-            cached = existing_playback_cache_for_play(abs_path)
+        remux_qid, remux_h = self._remux_preview_quality_args()
+        if should_remux_mpd_for_playback(remux_qid) and abs_path.lower().endswith(".mpd"):
+            cached = existing_playback_cache_for_play(abs_path, quality_id=remux_qid)
             if cached:
                 early_play_path = cached.replace("\\", "/")
+                self._current_remux_quality_id = remux_qid
             else:
                 pending_remux = True
                 # Remux in background; play as soon as the file grows. Banner % tracks bytes.
-                self._start_clip_remux_async(switch_gen, abs_path, clip_path)
+                self._start_clip_remux_async(
+                    switch_gen,
+                    abs_path,
+                    clip_path,
+                    quality_id=remux_qid,
+                    max_height=remux_h,
+                )
+        else:
+            self._current_remux_quality_id = None
         if not pending_remux:
             self._nudge_clip_open_loading(48)
 
@@ -4122,6 +4151,23 @@ class PlayerMixin:
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
 
+    def _remux_preview_quality_args(self) -> tuple[str, int | None]:
+        """Current player-gear quality for Linux remux cache keying."""
+        from steempeg.core.dash.mpd_playback import (
+            max_height_for_quality,
+            normalize_remux_quality_id,
+        )
+        from steempeg.ui.player import preview_quality as pq
+
+        raw = getattr(self, "_preview_quality_id", None)
+        if not raw:
+            try:
+                raw = self.load_user_settings().get(pq.SETTINGS_KEY, pq.DEFAULT_QUALITY)
+            except Exception:
+                raw = pq.DEFAULT_QUALITY
+        qid = normalize_remux_quality_id(pq.normalize_quality_id(raw))
+        return qid, max_height_for_quality(qid)
+
     def _prefetch_clip_playback_media(self, clip_path: str) -> None:
         """Warm Linux DASH remux cache early without starting playback."""
         if sys.platform == "win32" or not clip_path:
@@ -4130,12 +4176,10 @@ class PlayerMixin:
             from steempeg.core.dash.mpd_playback import (
                 estimate_remux_bytes,
                 existing_playback_cache_for_play,
-                host_libmpv_needs_mpd_bridge,
                 remux_mpd_for_playback,
+                should_remux_mpd_for_playback,
             )
         except Exception:
-            return
-        if not host_libmpv_needs_mpd_bridge():
             return
         try:
             mpds = self.get_all_mpd_paths(clip_path)
@@ -4144,12 +4188,17 @@ class PlayerMixin:
         if not mpds:
             return
         abs_path = os.path.abspath(mpds[0]).replace("\\", "/")
-        if existing_playback_cache_for_play(abs_path):
+        qid, max_h = self._remux_preview_quality_args()
+        if not should_remux_mpd_for_playback(qid):
+            return
+        if existing_playback_cache_for_play(abs_path, quality_id=qid):
             return
         try:
             from steempeg.infra.disk_space import should_skip_linux_remux_prefetch
 
-            if should_skip_linux_remux_prefetch(estimate_remux_bytes(abs_path)):
+            if should_skip_linux_remux_prefetch(
+                estimate_remux_bytes(abs_path, quality_id=qid, max_height=max_h)
+            ):
                 logging.info("Prefetch remux skipped: low disk space (%s)", abs_path)
                 return
         except Exception:
@@ -4158,32 +4207,59 @@ class PlayerMixin:
         if inflight is None:
             inflight = set()
             self._prefetch_remux_paths = inflight
-        if abs_path in inflight:
+        inflight_key = f"{abs_path}|{qid}"
+        if inflight_key in inflight:
             return
-        inflight.add(abs_path)
+        inflight.add(inflight_key)
 
         import threading
 
         def _worker():
             try:
-                remux_mpd_for_playback(abs_path)
+                remux_mpd_for_playback(abs_path, quality_id=qid, max_height=max_h)
             except Exception as exc:
                 logging.debug("Prefetch remux failed for %s: %s", abs_path, exc)
             finally:
-                inflight.discard(abs_path)
+                inflight.discard(inflight_key)
 
         threading.Thread(target=_worker, name="steempeg-mpd-prefetch", daemon=True).start()
 
-    def _start_clip_remux_async(self, switch_gen: int, abs_path: str, clip_path: str) -> None:
+    def _start_clip_remux_async(
+        self,
+        switch_gen: int,
+        abs_path: str,
+        clip_path: str,
+        *,
+        quality_id: str | None = None,
+        max_height: int | None = None,
+        seek_after: float | None = None,
+    ) -> None:
         """Cold remux without a loader: play the growing file as soon as it has data."""
         import threading
 
-        from steempeg.core.dash.mpd_playback import RemuxJob, start_remux_job
+        from steempeg.core.dash.mpd_playback import (
+            RemuxJob,
+            normalize_remux_quality_id,
+            start_remux_job,
+        )
+
+        qid = normalize_remux_quality_id(
+            quality_id if quality_id is not None else self._remux_preview_quality_args()[0]
+        )
+        if max_height is None and qid != "source":
+            max_height = self._remux_preview_quality_args()[1]
+        self._current_remux_quality_id = qid
 
         prev = getattr(self, "_progressive_remux", None)
         if prev is not None:
             old_gen, old_job = prev
+            # Abort superseded clip opens *or* an in-flight remux for a different quality.
+            should_abort = False
             if old_gen != switch_gen and isinstance(old_job, RemuxJob):
+                should_abort = True
+            elif isinstance(old_job, RemuxJob) and getattr(old_job, "quality_id", "source") != qid:
+                should_abort = True
+            if should_abort and isinstance(old_job, RemuxJob):
                 try:
                     old_job.abort()
                 except Exception:
@@ -4195,8 +4271,11 @@ class PlayerMixin:
                 from steempeg.core.dash.mpd_playback import remux_disk_plan
                 from steempeg.ui.disk_space_warning import ensure_linux_disk_for_remux
 
-                need, _free = remux_disk_plan(abs_path)
+                need, _free = remux_disk_plan(
+                    abs_path, quality_id=qid, max_height=max_height
+                )
                 if not ensure_linux_disk_for_remux(self.ui, need_bytes=need):
+                    self._clear_remux_quality_hold()
                     self._clear_preview_switch_gates()
                     if hasattr(self, "clear_clip_open_loading"):
                         self.clear_clip_open_loading()
@@ -4205,9 +4284,10 @@ class PlayerMixin:
                 logging.exception("Linux remux disk-space check failed")
 
         try:
-            started = start_remux_job(abs_path)
+            started = start_remux_job(abs_path, quality_id=qid, max_height=max_height)
         except Exception as exc:
             logging.error("DASH remux start failed for %s: %s", abs_path, exc)
+            self._clear_remux_quality_hold()
             self._clear_preview_switch_gates()
             if hasattr(self, "clear_clip_open_loading"):
                 self.clear_clip_open_loading()
@@ -4224,15 +4304,42 @@ class PlayerMixin:
             return
 
         if isinstance(started, str):
-            logging.info("MPV play via DASH remux cache: %s", started)
-            self._start_clip_playback(switch_gen, abs_path, started.replace("\\", "/"), abs_path)
+            logging.info(
+                "MPV play via DASH remux cache (%s): %s", qid, started
+            )
+            self._current_remux_quality_id = qid
+            self._start_clip_playback(
+                switch_gen,
+                abs_path,
+                started.replace("\\", "/"),
+                clip_path,
+                seek_after=seek_after,
+            )
             return
 
         job: RemuxJob = started
         self._progressive_remux = (switch_gen, job)
         early_started = {"done": False}
+        # Quality-gear restore into a growing libx264 .tmp.mkv is not seek-safe:
+        # early-play at ~4 MiB (~6% of estimate) leaves mpv paused_for_cache /
+        # eternal Buffering. Wait for finalize when a restore seek is needed.
+        # Source -c copy (no height) may still early-play for cold opens.
+        want_restore = seek_after is not None and float(seek_after) > 0.05
+        is_encode = bool(getattr(job, "max_height", None))
+        block_early_play = want_restore and is_encode
 
         def _on_ui(play_path: str = "", err_text: str = "", finished: bool = False) -> None:
+            # Always drop a dead remux hold when this job ends, even if a newer
+            # switch_gen won the race (otherwise Preparing sticks forever).
+            if err_text and getattr(self, "_progressive_remux", None) == (switch_gen, job):
+                self._progressive_remux = None
+            if err_text:
+                self._clear_remux_quality_hold()
+                try:
+                    if hasattr(self, "player") and self.player:
+                        self.player.pause = False
+                except Exception:
+                    pass
             if switch_gen != getattr(self, "_media_switch_gen", 0):
                 return
             if err_text:
@@ -4251,21 +4358,57 @@ class PlayerMixin:
             if not play_path:
                 return
             if finished:
+                if getattr(self, "_progressive_remux", None) == (switch_gen, job):
+                    self._progressive_remux = None
                 if early_started["done"]:
                     self._current_play_abs_path = play_path
+                    self._current_remux_quality_id = qid
                     if hasattr(self, "custom_timeline"):
                         self.custom_timeline.sniper_source_path = abs_path
                         self.custom_timeline.current_video_path = play_path
-                    logging.info("DASH remux finished (already playing): %s", play_path)
+                    logging.info(
+                        "DASH remux finished (already playing, %s): %s", qid, play_path
+                    )
+                    # Re-open finalized file so demuxer sees a complete mkv, then restore.
+                    if want_restore:
+                        self._start_clip_playback(
+                            switch_gen,
+                            abs_path,
+                            play_path,
+                            clip_path,
+                            seek_after=seek_after,
+                        )
+                    elif getattr(self, "_remux_quality_hold_active", False):
+                        self._clear_remux_quality_hold()
+                        try:
+                            self.player.pause = False
+                        except Exception:
+                            pass
+                    else:
+                        self._set_playback_loading(False)
                     return
-                logging.info("MPV play via DASH remux cache: %s", play_path)
-                self._start_clip_playback(switch_gen, abs_path, play_path, abs_path)
+                logging.info("MPV play via DASH remux cache (%s): %s", qid, play_path)
+                self._current_remux_quality_id = qid
+                self._start_clip_playback(
+                    switch_gen,
+                    abs_path,
+                    play_path,
+                    clip_path,
+                    seek_after=seek_after,
+                )
                 return
             if early_started["done"]:
                 return
             early_started["done"] = True
-            logging.info("MPV play via growing remux: %s", play_path)
-            self._start_clip_playback(switch_gen, abs_path, play_path, abs_path)
+            logging.info("MPV play via growing remux (%s): %s", qid, play_path)
+            self._current_remux_quality_id = qid
+            self._start_clip_playback(
+                switch_gen,
+                abs_path,
+                play_path,
+                clip_path,
+                seek_after=seek_after,
+            )
 
         def _tick() -> None:
             if switch_gen != getattr(self, "_media_switch_gen", 0):
@@ -4274,7 +4417,10 @@ class PlayerMixin:
                 except Exception:
                     pass
                 return
-            # Estimated remux progress for the clip banner (%).
+            # Estimated remux progress for the clip banner + Preparing pill (%).
+            # Keep Preparing for the whole encode (incl. after seek restore /
+            # early-play) so stall detection cannot pin eternal Buffering.
+            remux_still_running = job.poll() is None
             try:
                 need = int(getattr(job, "need", 0) or 0)
                 written = int(job.bytes_written() or 0)
@@ -4282,13 +4428,24 @@ class PlayerMixin:
                     pct = min(99, max(0, int(written * 100 / need)))
                     if hasattr(self, "update_clip_open_loading_progress"):
                         self.update_clip_open_loading_progress(pct)
+                    show_prep = remux_still_running or getattr(
+                        self, "_remux_quality_hold_active", False
+                    )
+                    if show_prep:
+                        label = getattr(job, "quality_id", None) or qid
+                        if label and label != "source":
+                            msg = f"Preparing {label}… {pct}%"
+                        else:
+                            msg = f"Preparing… {pct}%"
+                        self._remux_quality_hold_message = msg
+                        self._set_playback_loading(True, msg)
             except Exception:
                 pass
-            if not early_started["done"]:
+            if not early_started["done"] and not block_early_play:
                 early = job.early_play_path()
                 if early:
                     _on_ui(play_path=early.replace("\\", "/"))
-            if job.poll() is None:
+            if remux_still_running:
                 QTimer.singleShot(120, _tick)
                 return
 
@@ -4307,6 +4464,8 @@ class PlayerMixin:
                         logging.debug(
                             "DASH remux finalize after early play: %s (%s)", abs_path, abs_exc
                         )
+                        if switch_gen == getattr(self, "_media_switch_gen", 0):
+                            QTimer.singleShot(0, lambda: self._set_playback_loading(False))
                         return
                     err_text = str(abs_exc)
                     logging.error("DASH playback remux failed for %s: %s", abs_path, abs_exc)
@@ -4324,7 +4483,13 @@ class PlayerMixin:
         QTimer.singleShot(80, _tick)
 
     def _start_clip_playback(
-        self, switch_gen: int, abs_path: str, play_path: str, clip_path: str
+        self,
+        switch_gen: int,
+        abs_path: str,
+        play_path: str,
+        clip_path: str,
+        *,
+        seek_after: float | None = None,
     ) -> None:
         """Open *play_path* in mpv after switch/remux. No-op if a newer switch won."""
         if switch_gen != getattr(self, "_media_switch_gen", 0):
@@ -4354,23 +4519,44 @@ class PlayerMixin:
         try:
             if not self._ensure_linux_mpv_vo():
                 self._clear_preview_switch_gates()
+                self._clear_remux_quality_hold()
                 return
             self.player.play(play_path)
-            self.player.pause = False
+            # Quality-switch restore: stay paused at t=0 until seek lands (avoids
+            # audible restart-from-start while Buffering is shown).
+            want_seek = seek_after is not None and float(seek_after) > 0.05
+            self.player.pause = bool(want_seek) or bool(
+                getattr(self, "_remux_quality_hold_active", False)
+            )
         except Exception as exc:
             logging.warning("MPV play failed (%s); recreating core once", exc)
             self._discard_dead_linux_mpv()
             try:
                 if not self._ensure_linux_mpv_vo():
                     self._clear_preview_switch_gates()
+                    self._clear_remux_quality_hold()
                     return
                 self.player.play(play_path)
-                self.player.pause = False
+                want_seek = seek_after is not None and float(seek_after) > 0.05
+                self.player.pause = bool(want_seek) or bool(
+                    getattr(self, "_remux_quality_hold_active", False)
+                )
             except Exception as exc2:
                 logging.error("MPV play failed for %s: %s", play_path, exc2)
                 self._discard_dead_linux_mpv()
                 self._clear_preview_switch_gates()
+                self._clear_remux_quality_hold()
                 return
+
+        if seek_after is not None and seek_after > 0.05:
+            # Growing / just-opened remux often cannot seek yet — retry until PTS lands.
+            self._schedule_remux_seek_restore(float(seek_after), switch_gen)
+        elif getattr(self, "_remux_quality_hold_active", False):
+            self._clear_remux_quality_hold()
+            try:
+                self.player.pause = False
+            except Exception:
+                pass
 
         self._clip_open_play_t0 = time.time()
         self._nudge_clip_open_loading(70)
@@ -4546,6 +4732,21 @@ class PlayerMixin:
                 self._restart_from_eof = False
 
             is_playing = not self.player.pause
+
+            # Remux quality switch: keep stick + clock pinned until seek lands.
+            # Buffering overlay: freeze wall-clock extrapolation (scroller must not
+            # crawl while video is not actually advancing).
+            hold_active = bool(getattr(self, "_remux_quality_hold_active", False))
+            buffering_ui = bool(getattr(self, "_playback_loading_active", False))
+            if hold_active:
+                hold_sec = float(getattr(self, "_remux_quality_hold_seek", 0.0) or 0.0)
+                current_ms = max(0.0, hold_sec * 1000.0)
+                is_playing = False
+            elif buffering_ui:
+                canvas = getattr(getattr(self, "custom_timeline", None), "canvas", None)
+                if canvas is not None:
+                    current_ms = float(getattr(canvas, "visual_ms", current_ms) or current_ms)
+                is_playing = False
 
             # Send the data to our smooth custom timeline (even during seek grace —
             # freezing here left the stick at 0 until grace ended, then teleported).
@@ -5154,6 +5355,367 @@ class PlayerMixin:
             QTimer.singleShot(120, lambda p=preset_id: self._retry_preview_quality(p))
         if persist:
             self.save_user_settings(pq.SETTINGS_KEY, preset_id)
+        # Linux/Steam Deck remux path: gear must switch the quality-keyed mkv
+        # (live MPV vf alone is a no-op on copy-remux under common hwdec/vo).
+        self._maybe_rebind_linux_remux_preview_quality(preset_id)
+
+    def _playing_linux_dash_remux(self) -> bool:
+        """True when the open clip is a Linux remux of a Steam ``.mpd``."""
+        from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
+
+        if not host_libmpv_needs_mpd_bridge():
+            return False
+        if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
+            return False
+        mpd = getattr(self, "_current_mpd_abs_path", None) or ""
+        return bool(mpd) and mpd.lower().endswith(".mpd")
+
+    def _arm_remux_quality_hold(self, seek_sec: float, *, message: str | None = None) -> None:
+        """Freeze timeline + Buffering overlay while a Linux remux quality switch runs."""
+        seek_sec = max(0.0, float(seek_sec or 0.0))
+        self._remux_quality_hold_active = True
+        self._remux_quality_hold_seek = seek_sec
+        self._remux_quality_hold_message = message or "Preparing…"
+        self._remux_quality_hold_token = int(getattr(self, "_remux_quality_hold_token", 0) or 0) + 1
+        hold_token = self._remux_quality_hold_token
+        # Pin stick without emitting seek_requested (would yank the still-open file).
+        timeline = getattr(self, "custom_timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None and float(getattr(canvas, "duration_ms", 0) or 0) > 0:
+            ms = min(seek_sec * 1000.0, float(canvas.duration_ms))
+            canvas.visual_ms = ms
+            canvas.target_ms = ms
+            canvas.is_playing = False
+            canvas.vlc_last_update_time = time.time()
+            # Block set_vlc_time / interpolation from fighting the pin.
+            canvas.user_seek_lock_time = time.time() + 180.0
+            try:
+                canvas.update()
+            except Exception:
+                pass
+            if hasattr(self.ui, "label_time"):
+                dur_ms = int(float(canvas.duration_ms))
+                def _fmt(ms_v: int) -> str:
+                    s = max(0, ms_v) // 1000
+                    return f"{(s % 3600) // 60:02d}:{s % 60:02d}"
+                self.ui.label_time.setText(f"{_fmt(int(ms))} / {_fmt(dur_ms)}")
+        try:
+            if hasattr(self, "player") and self.player:
+                self.player.pause = True
+        except Exception:
+            pass
+        self._set_playback_loading(True, self._remux_quality_hold_message)
+        # Hard safety: never leave Preparing/Buffering owned by a remux hold forever.
+        QTimer.singleShot(
+            180_000,
+            lambda t=hold_token: self._remux_quality_hold_watchdog(t),
+        )
+
+    def _remux_quality_hold_watchdog(self, token: int) -> None:
+        """Drop a stuck remux-quality overlay if seek restore never finishes."""
+        if token != getattr(self, "_remux_quality_hold_token", 0):
+            return
+        if not getattr(self, "_remux_quality_hold_active", False):
+            return
+        logging.warning("Remux quality hold watchdog: clearing stuck Preparing/Buffering overlay")
+        self._clear_remux_quality_hold()
+        try:
+            if hasattr(self, "player") and self.player:
+                self.player.pause = False
+        except Exception:
+            pass
+
+    def _clear_remux_quality_hold(self) -> None:
+        """Release timeline pin / overlay owned by a remux quality switch."""
+        was = bool(getattr(self, "_remux_quality_hold_active", False))
+        self._remux_quality_hold_active = False
+        self._remux_quality_hold_seek = None
+        self._remux_quality_hold_message = None
+        timeline = getattr(self, "custom_timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None:
+            # Drop the long lock so normal sync resumes.
+            canvas.user_seek_lock_time = 0.0
+        if was:
+            self._set_playback_loading(False)
+
+    def _capture_preview_seek_sec(self) -> float:
+        """Best current playhead for quality-switch restore (mpv, else timeline)."""
+        seek_pos = 0.0
+        try:
+            seek_pos = float(getattr(self.player, "time_pos", 0) or 0)
+        except Exception:
+            seek_pos = 0.0
+        timeline = getattr(self, "custom_timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None:
+            try:
+                visual_sec = float(getattr(canvas, "visual_ms", 0) or 0) / 1000.0
+            except Exception:
+                visual_sec = 0.0
+            # Prefer timeline when mpv already reset / lagging after a prior reopen.
+            if visual_sec > seek_pos + 0.35 or seek_pos < 0.25:
+                seek_pos = max(seek_pos, visual_sec)
+        return max(0.0, seek_pos)
+
+    @staticmethod
+    def _norm_media_path(path: str | None) -> str:
+        if not path:
+            return ""
+        return os.path.normcase(os.path.normpath(str(path).replace("\\", "/")))
+
+    def _mpv_path_matches_play_abs(self) -> bool:
+        """True when libmpv's open path is the remux/play target (not the prior clip)."""
+        want = self._norm_media_path(getattr(self, "_current_play_abs_path", None))
+        if not want:
+            return False
+        player = getattr(self, "player", None)
+        if not player:
+            return False
+        try:
+            have = self._norm_media_path(getattr(player, "path", None))
+        except Exception:
+            return False
+        return bool(have) and have == want
+
+    def _schedule_remux_seek_restore(
+        self,
+        seek_sec: float,
+        switch_gen: int,
+        attempts: int = 0,
+        *,
+        path_ready: bool = False,
+        seek_issued: bool = False,
+    ) -> None:
+        """Retry absolute seek after remux reopen until PTS is near the prior playhead.
+
+        Must not trust ``time_pos`` until mpv's path matches the new play file —
+        otherwise a stale position from the previous quality falsely "lands" the
+        restore (attempts=0) and clears Preparing into eternal Buffering.
+        """
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            self._clear_remux_quality_hold()
+            return
+        seek_sec = float(seek_sec)
+        if seek_sec <= 0.05:
+            self._clear_remux_quality_hold()
+            try:
+                if hasattr(self, "player") and self.player:
+                    self.player.pause = False
+            except Exception:
+                pass
+            return
+
+        def _retry(*, ready: bool = path_ready, issued: bool = seek_issued, delay: int = 50) -> None:
+            QTimer.singleShot(
+                delay,
+                lambda: self._schedule_remux_seek_restore(
+                    seek_sec,
+                    switch_gen,
+                    attempts + 1,
+                    path_ready=ready,
+                    seek_issued=issued,
+                ),
+            )
+
+        if not self._mpv_has_media():
+            if attempts < 160:
+                _retry(ready=False, issued=False, delay=50)
+            else:
+                logging.warning(
+                    "Remux quality seek restore abandoned (player not ready, want=%.2fs)",
+                    seek_sec,
+                )
+                self._clear_remux_quality_hold()
+                try:
+                    if hasattr(self, "player") and self.player:
+                        self.player.pause = False
+                except Exception:
+                    pass
+            return
+
+        # Wait until the *new* remux/cache path is actually open.
+        if not self._mpv_path_matches_play_abs():
+            if attempts < 200:
+                _retry(ready=False, issued=False, delay=50)
+            else:
+                logging.warning(
+                    "Remux quality seek restore abandoned (path mismatch, want=%.2fs path=%s)",
+                    seek_sec,
+                    getattr(self, "_current_play_abs_path", None),
+                )
+                self._clear_remux_quality_hold()
+                try:
+                    if hasattr(self, "player") and self.player:
+                        self.player.pause = False
+                except Exception:
+                    pass
+            return
+
+        if not path_ready:
+            # First tick with the new path loaded — ignore any leftover time_pos.
+            _retry(ready=True, issued=False, delay=40)
+            return
+
+        remux = getattr(self, "_progressive_remux", None)
+        remux_inflight = False
+        if remux is not None:
+            try:
+                remux_inflight = remux[1].poll() is None
+            except Exception:
+                remux_inflight = False
+
+        dur = self._playback_duration_sec() or 0.0
+        # Incomplete growing files report a short duration — keep waiting.
+        if dur > 0.5 and seek_sec > dur + 1.0 and remux_inflight:
+            if attempts < 600:
+                _retry(ready=True, issued=seek_issued, delay=100)
+                return
+
+        target = seek_sec
+        if dur > 0.5:
+            target = min(seek_sec, max(0.0, float(dur) - 0.05))
+
+        # Bypass _safe_mpv_seek gates — quality rebind may still be settling first-frame.
+        issued = False
+        try:
+            if self._mpv_has_media() and self._mpv_path_matches_play_abs():
+                self.player.seek(float(target), reference="absolute", precision="exact")
+                issued = True
+        except Exception:
+            try:
+                self.player.time_pos = float(target)
+                issued = True
+            except Exception:
+                issued = False
+
+        if issued:
+            seek_issued = True
+
+        try:
+            pos = float(getattr(self.player, "time_pos", 0) or 0)
+        except Exception:
+            pos = 0.0
+
+        # Require at least one seek into the new file before accepting a land —
+        # never treat the previous clip's time_pos as success.
+        if (not seek_issued) or abs(pos - target) > 1.25:
+            max_attempts = 600 if remux_inflight else 200
+            if attempts < max_attempts:
+                _retry(ready=True, issued=seek_issued, delay=50 if issued else 80)
+                return
+            logging.warning(
+                "Remux quality seek restore gave up (want=%.2fs got=%.2fs)",
+                target,
+                pos,
+            )
+
+        landed = pos if seek_issued and abs(pos - target) <= 1.25 else target
+        logging.info(
+            "Remux quality seek restore %.2fs (got=%.2fs, attempts=%d)",
+            target,
+            pos,
+            attempts,
+        )
+        timeline = getattr(self, "custom_timeline", None)
+        canvas = getattr(timeline, "canvas", None) if timeline is not None else None
+        if canvas is not None and float(getattr(canvas, "duration_ms", 0) or 0) > 0:
+            ms = landed * 1000.0
+            canvas.user_seek_lock_time = 0.0
+            canvas.visual_ms = ms
+            canvas.target_ms = ms
+            canvas.vlc_last_update_time = time.time()
+            try:
+                canvas.update()
+            except Exception:
+                pass
+        self._ignore_playback_stall(0.8)
+        self._clear_remux_quality_hold()
+        try:
+            if hasattr(self, "player") and self.player:
+                self.player.pause = False
+        except Exception:
+            pass
+
+    def _maybe_rebind_linux_remux_preview_quality(self, preset_id: str) -> None:
+        """Rebuild / switch remux cache when the player gear changes on Linux."""
+        if not self._playing_linux_dash_remux():
+            return
+        from steempeg.core.dash.mpd_playback import (
+            existing_playback_cache_for_play,
+            max_height_for_quality,
+            normalize_remux_quality_id,
+            should_remux_mpd_for_playback,
+        )
+
+        qid = normalize_remux_quality_id(preset_id)
+        cur_qid = getattr(self, "_current_remux_quality_id", None)
+        want_remux = should_remux_mpd_for_playback(qid)
+        # Native Source (auto + demux): cur_qid is None.
+        if not want_remux and cur_qid is None:
+            return
+        if want_remux and cur_qid == qid:
+            return
+
+        mpd = os.path.abspath(self._current_mpd_abs_path).replace("\\", "/")
+        clip_path = getattr(self, "_preview_clip_path", None) or mpd
+        max_h = max_height_for_quality(qid)
+        switch_gen = getattr(self, "_media_switch_gen", 0)
+        seek_pos = self._capture_preview_seek_sec()
+        hold_msg = "Buffering…" if qid == "source" else f"Preparing {qid}…"
+        self._arm_remux_quality_hold(seek_pos, message=hold_msg)
+
+        # Experimental auto: Source with demux → play the .mpd directly.
+        if not want_remux:
+            logging.info(
+                "Preview quality source: native DASH %s (seek=%.2fs)",
+                mpd,
+                seek_pos,
+            )
+            self._current_remux_quality_id = None
+            self._start_clip_playback(
+                switch_gen,
+                mpd,
+                mpd,
+                clip_path,
+                seek_after=seek_pos,
+            )
+            return
+
+        cached = existing_playback_cache_for_play(mpd, quality_id=qid)
+        if cached:
+            logging.info(
+                "Preview quality %s: switching remux cache %s (seek=%.2fs)",
+                qid,
+                cached,
+                seek_pos,
+            )
+            self._current_remux_quality_id = qid
+            self._start_clip_playback(
+                switch_gen,
+                mpd,
+                cached.replace("\\", "/"),
+                clip_path,
+                seek_after=seek_pos,
+            )
+            return
+
+        logging.info(
+            "Preview quality %s: remuxing DASH at %s (seek=%.2fs)",
+            qid,
+            f"{max_h}p" if max_h else "source",
+            seek_pos,
+        )
+        # Claim the quality immediately so a second gear click does not fork jobs.
+        self._current_remux_quality_id = qid
+        self._start_clip_remux_async(
+            switch_gen,
+            mpd,
+            clip_path,
+            quality_id=qid,
+            max_height=max_h,
+            seek_after=seek_pos,
+        )
 
     def _retry_preview_quality(self, preset_id: str, retry: int = 0) -> None:
         from steempeg.ui.player import preview_quality as pq
