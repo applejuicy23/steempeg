@@ -5179,6 +5179,20 @@ class RenderMixin:
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
+    def _queue_add_matches_open_clip(self, clip_path: str) -> bool:
+        """True when the enqueued path is the clip currently open/previewed.
+
+        Used so Add-to-Queue can highlight the new card when it is for the
+        open library selection, without stealing selection when other clips
+        are enqueued while previewing X.
+        """
+        if not clip_path:
+            return False
+        preview = self._current_preview_clip_path()
+        if not preview:
+            return False
+        return os.path.normpath(clip_path) == os.path.normpath(preview)
+
     def _commit_queue_job(
         self, job, clip_path: str, was_duplicate: bool, *, sync_ui: bool
     ):
@@ -5191,6 +5205,12 @@ class RenderMixin:
             job.output_file,
         )
         self._sync_queue_add_busy_chrome()
+        # Mirror library selection onto the new queue card when the open clip
+        # was just enqueued (desktop panel + portable rail both read this id).
+        if self._queue_add_matches_open_clip(clip_path):
+            self._selected_queue_job_id = job.id
+            self._remember_queue_job_for_clip(clip_path, job.id)
+            self._queue_library_preview_diversion = False
         if sync_ui:
             self._queue_library_preview_diversion = False
             QTimer.singleShot(
