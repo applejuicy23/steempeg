@@ -27,6 +27,8 @@ from steempeg.infra.logging import ffmpeg_cli_loglevel
 _log = logging.getLogger(__name__)
 
 _SNIPER_CACHE_MAX = 160
+_SNIPER_W = 160
+_SNIPER_H = 90
 # Full-strip batch thumbs are only worth generating for the first N seconds of a clip.
 # Longer clips rely on on-demand sniper hover frames instead of a multi-hour ffmpeg job.
 MAX_BATCH_SEC = 600
@@ -70,6 +72,27 @@ def _ensure_thumb_dir(path: str) -> None:
         except OSError:
             shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path, exist_ok=True)
+
+
+def _sniper_pixmap_from_frame(frame) -> QPixmap | None:
+    """Scale a PyAV frame to sniper size without the PIL round-trip."""
+    try:
+        # Decode-side scale is cheaper than full-res → PIL → resize.
+        small = frame.reformat(width=_SNIPER_W, height=_SNIPER_H, format="rgb24")
+        arr = small.to_ndarray(format="rgb24")
+        h, w, _ = arr.shape
+        qimg = QImage(arr.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+        pm = QPixmap.fromImage(qimg)
+        return pm if not pm.isNull() else None
+    except Exception:
+        try:
+            img = frame.to_image().resize((_SNIPER_W, _SNIPER_H))
+            img_data = img.convert("RGBA").tobytes("raw", "RGBA")
+            qimg = QImage(img_data, img.width, img.height, QImage.Format.Format_RGBA8888)
+            pm = QPixmap.fromImage(qimg)
+            return pm if not pm.isNull() else None
+        except Exception:
+            return None
 
 
 class PreviewSniperWorker(QThread):
@@ -527,14 +550,11 @@ class PreviewSniperWorker(QThread):
 
             pixmap = None
             stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
             for frame in container.decode(stream):
                 if self._is_killed or gen != self._decode_gen:
                     break
-                img = frame.to_image()
-                img = img.resize((160, 90))
-                img_data = img.convert("RGBA").tobytes("raw", "RGBA")
-                qimg = QImage(img_data, img.width, img.height, QImage.Format_RGBA8888)
-                pixmap = QPixmap.fromImage(qimg)
+                pixmap = _sniper_pixmap_from_frame(frame)
                 break
 
             container.close()
@@ -581,11 +601,7 @@ class PreviewSniperWorker(QThread):
             for frame in container.decode(stream):
                 if self._is_killed or gen != self._decode_gen:
                     break
-                img = frame.to_image()
-                img = img.resize((160, 90))
-                img_data = img.convert("RGBA").tobytes("raw", "RGBA")
-                qimg = QImage(img_data, img.width, img.height, QImage.Format_RGBA8888)
-                pixmap = QPixmap.fromImage(qimg)
+                pixmap = _sniper_pixmap_from_frame(frame)
                 break
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             if pixmap is not None and not pixmap.isNull():
