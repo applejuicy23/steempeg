@@ -467,6 +467,11 @@ class PlayerMixin:
             wrapper.begin_transition()
         else:
             wrapper.end_transition()
+            # Yellow trim ring is four native HWNDs — re-pin after layout settles.
+            if getattr(self, "_video_border_active", False) and hasattr(
+                wrapper, "force_geometry_refresh"
+            ):
+                wrapper.force_geometry_refresh()
 
     def _on_video_stack_page_changed(self, _index: int = 0):
         """Keep native embed parked whenever video_container is not the top page."""
@@ -1728,6 +1733,14 @@ class PlayerMixin:
                 self.align_fullscreen_hud()
                 self.player_footer_frame.show()
                 self.player_footer_frame.raise_()
+                try:
+                    from steempeg.ui.player.controls.adaptive_trim_tools import (
+                        schedule_sync_trim_tools_placement,
+                    )
+
+                    schedule_sync_trim_tools_placement(self)
+                except Exception:
+                    pass
                 if self._is_player_idle_placeholder() and hasattr(self, 'fs_timer'):
                     self.fs_timer.stop()
             # Thaw last, so the first frame the user sees is the finished layout.
@@ -2013,6 +2026,14 @@ class PlayerMixin:
                 _fstrace("EXIT footer shown")
                 if right_layout:
                     right_layout.activate()
+                try:
+                    from steempeg.ui.player.controls.adaptive_trim_tools import (
+                        schedule_sync_trim_tools_placement,
+                    )
+
+                    schedule_sync_trim_tools_placement(self)
+                except Exception:
+                    pass
                 if hasattr(self, 'btn_fullscreen'):
                     self.btn_fullscreen.clearFocus()
                     QApplication.postEvent(self.btn_fullscreen, QEvent(QEvent.Type.Leave))
@@ -2072,6 +2093,18 @@ class PlayerMixin:
                     ensure_right_h_handle_chrome(self)
                 except Exception:
                     self._restore_right_h_splitter_handle()
+            try:
+                from steempeg.ui.player.controls.adaptive_trim_tools import (
+                    schedule_sync_trim_tools_placement,
+                )
+
+                schedule_sync_trim_tools_placement(self)
+            except Exception:
+                pass
+            wrapper = getattr(self, "mpv_wrapper", None)
+            if wrapper is not None and hasattr(wrapper, "force_geometry_refresh"):
+                # Late splitter/title-bar settle can move the wrapper after thaw.
+                QTimer.singleShot(0, wrapper.force_geometry_refresh)
             self.ui.repaint()
             QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             self._hide_immersive_transition_cover()
@@ -2658,7 +2691,7 @@ class PlayerMixin:
             self.video_overlay.show_border = False
             self.video_overlay.update()
         if hasattr(self, 'border_overlay'):
-            self.border_overlay.setStyleSheet("border: 3px solid #ffcc00; background-color: transparent;")
+            self.border_overlay.setStyleSheet("border: none; background-color: transparent;")
         self._set_trim_button_active(False)
 
     def cancel_trim_mode(self):
@@ -2673,6 +2706,14 @@ class PlayerMixin:
     def toggle_trim_state(self):
         """ Toggles between Trim mode and Normal mode seamlessly without interrupting playback """
         if not hasattr(self, 'custom_timeline'): return
+
+        # Spam-clicks on Trim↔Cancel used to hide the tools pill (fade/reparent
+        # races). Ignore toggles inside a short window after the last one.
+        now = time.monotonic()
+        last = float(getattr(self, "_trim_toggle_mono", 0.0) or 0.0)
+        if now - last < 0.28:
+            return
+        self._trim_toggle_mono = now
 
         if self.custom_timeline.is_trim_mode:
             self._deactivate_trim_ui()
@@ -3412,7 +3453,12 @@ class PlayerMixin:
             return str(path)
 
     def _is_clip_actively_previewing(self, clip_path: str) -> bool:
-        """True when this Steam clip folder is already loaded and seekable."""
+        """True when this Steam clip folder is already loaded and seekable.
+
+        ``_active_play_media_path`` is only stamped for flat rendered exports —
+        Steam/DASH previews never set it, so do not require it here (that made
+        every Clips / Queue re-click look «idle» and remount).
+        """
         if not clip_path:
             return False
         if getattr(self, "_rendered_media_path", None):
@@ -3424,17 +3470,6 @@ class PlayerMixin:
         want = self._norm_clip_path_key(clip_path)
         have = self._norm_clip_path_key(getattr(self, "_preview_clip_path", None))
         if not want or want != have:
-            return False
-        play = getattr(self, "_active_play_media_path", None)
-        if not play:
-            return False
-        play_n = self._norm_clip_path_key(play)
-        sep = os.sep
-        if not (
-            play_n == want
-            or play_n.startswith(want + sep)
-            or play_n.startswith(want + "/")
-        ):
             return False
         return bool(self._mpv_has_media())
 
