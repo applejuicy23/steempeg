@@ -21,6 +21,12 @@ _DUR_MS = 200
 def _stop_group(widget: QWidget, attr: str) -> None:
     group = getattr(widget, attr, None)
     if group is not None:
+        # Drop finished handlers before stop so a race cannot hide/show after
+        # a newer toggle already owns the widget (spam Trim / Cancel).
+        try:
+            group.finished.disconnect()
+        except (TypeError, RuntimeError):
+            pass
         try:
             group.stop()
         except RuntimeError:

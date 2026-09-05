@@ -211,6 +211,15 @@ class SplitterRulesMixin:
                 sync_centered_title_width(self)
         except Exception:
             pass
+        # Trim/marker overlays map from Cancel / theater — wait a tick after drag.
+        try:
+            from steempeg.ui.player.controls.adaptive_trim_tools import (
+                schedule_sync_trim_tools_placement,
+            )
+
+            schedule_sync_trim_tools_placement(self)
+        except Exception:
+            pass
         # Custom right-handle drags can shut the queue without Qt's snap timer
         # seeing a "user collapse" — latch + persist so clip select cannot reopen.
         if side == RIGHT and self._splitter_rules_active():

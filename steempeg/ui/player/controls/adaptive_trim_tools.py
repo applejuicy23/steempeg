@@ -37,6 +37,30 @@ def _is_portable_shell(app) -> bool:
     return bool(getattr(app, "_portable_shell", False))
 
 
+def schedule_sync_trim_tools_placement(app) -> None:
+    """Coalesce placement to the next event-loop tick.
+
+    Footer ``resizeEvent`` (and live splitter drags) often run before Cancel /
+    theater geometry has settled. Syncing immediately parks the below-Trim
+    overlay on a stale mapTo — clamped to the right edge until minimize or a
+    marker-gear resync. One deferred pass matches the settled layout.
+    """
+    from PySide6.QtCore import QTimer
+
+    if getattr(app, "_trim_tools_sync_pending", False):
+        return
+    app._trim_tools_sync_pending = True
+
+    def _run() -> None:
+        app._trim_tools_sync_pending = False
+        try:
+            sync_trim_tools_placement(app)
+        except Exception:
+            pass
+
+    QTimer.singleShot(0, _run)
+
+
 def sync_trim_tools_placement(app) -> None:
     """Sync Trim tools then marker pill for the current footer width."""
     trim = getattr(app, "btn_trim", None)
@@ -63,13 +87,32 @@ def sync_trim_tools_placement(app) -> None:
 
     active = _trim_mode_active(app)
     _apply_trim_tools_visibility(app, tools, trim, active)
+    if active:
+        _ensure_footer_overlay_visible(tools)
 
     if active and getattr(app, "_trim_tools_placement", None) == "below":
         _reposition_tools_below(app, trim, tools)
+        tools.show()
         tools.raise_()
 
     if markers is not None:
         _sync_marker_pill_placement(app, markers)
+
+    # Nudge depends on final marker placement — running it earlier left a 28px
+    # hole between tools and Cancel after markers returned inline (FS / resize).
+    _sync_trim_tools_nudge(app, tools, trim, active)
+
+    # Markers may have just stacked — re-check so tools cannot stay inline under
+    # the center while markers sit on the bottom row alone.
+    if (
+        active
+        and getattr(app, "_marker_pill_placement", None) == "below"
+        and getattr(app, "_trim_tools_placement", None) != "below"
+    ):
+        _place_tools_below(app, trim, tools)
+        tools.show()
+        _ensure_footer_overlay_visible(tools)
+        _reposition_tools_below(app, trim, tools)
 
     # Markers under theater first, then tools shift left if they would overlap.
     _finalize_overlay_bottom_row(app)
@@ -81,24 +124,34 @@ def _apply_trim_tools_visibility(app, tools: QWidget, trim: QWidget, active: boo
 
     was = bool(tools.isVisible())
     if active and was:
-        _sync_trim_tools_nudge(app, tools, trim, True)
         return
     if (not active) and (not was):
-        _sync_trim_tools_nudge(app, tools, trim, False)
         return
 
     if active:
         # Layout first so geometry/sizeHint are correct, then fade in.
         tools.setVisible(True)
-        _sync_trim_tools_nudge(app, tools, trim, True)
         final = None
         if getattr(app, "_trim_tools_placement", None) == "below":
             _reposition_tools_below(app, trim, tools)
             final = tools.geometry()
         animate_footer_overlay_widget(tools, show=True, final_geom=final)
     else:
-        _sync_trim_tools_nudge(app, tools, trim, False)
         animate_footer_overlay_widget(tools, show=False)
+
+
+def _ensure_footer_overlay_visible(widget: QWidget) -> None:
+    """Undo a stopped fade that left opacity at 0 while still ``isVisible``."""
+    if widget is None:
+        return
+    if getattr(widget, "_footer_overlay_anim", None) is not None:
+        return
+    from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+    fx = widget.graphicsEffect()
+    if isinstance(fx, QGraphicsOpacityEffect) and float(fx.opacity()) < 0.99:
+        widget.setGraphicsEffect(None)
+    widget.show()
 
 
 def ensure_adaptive_trim_hook(app) -> None:
@@ -106,7 +159,7 @@ def ensure_adaptive_trim_hook(app) -> None:
     row = getattr(app, "_footer_controls_row", None)
     if row is None or getattr(row, "_trim_tools_hooked", False):
         return
-    row.on_resized = lambda: sync_trim_tools_placement(app)
+    row.on_resized = lambda: schedule_sync_trim_tools_placement(app)
     row._trim_tools_hooked = True
 
 
@@ -162,7 +215,16 @@ def _should_drop_below(app) -> bool:
     or the right chrome would collide with the centered timer. Markers already
     stacked below are excluded from packed width so tools can still decide
     independently. Portable uses the same rule; markers never stack there.
+
+    Once markers have stacked, tools must stay below too — otherwise they return
+    to the inline rail and vanish under the centered play/timer (Ignored overflow).
     """
+    if (
+        _trim_mode_active(app)
+        and getattr(app, "_marker_pill_placement", None) == "below"
+    ):
+        return True
+
     ui = getattr(app, "ui", None)
     win_w = int(ui.width()) if ui is not None else 0
     if win_w <= _NARROW_SHELL_W:
@@ -273,10 +335,25 @@ def _dissolve_legacy_cluster(app, trim: QWidget, tools: QWidget) -> None:
         app._trim_tools_placement = None  # force re-place next
 
 
+def _clear_trim_tools_nudge(app, trim: QWidget | None = None) -> None:
+    """Drop the tools↔Cancel spacer if it is still in the right rail."""
+    spacer = getattr(app, "_trim_tools_nudge_spacer", None)
+    if spacer is None:
+        return
+    host_trim = trim if trim is not None else getattr(app, "btn_trim", None)
+    if host_trim is not None:
+        _host, layout = _right_host(host_trim)
+        if layout is not None:
+            layout.removeItem(spacer)
+    app._trim_tools_nudge_spacer = None
+
+
 def _place_tools_left(app, trim: QWidget, tools: QWidget) -> None:
     host, layout = _right_host(trim)
     if host is None or layout is None:
         return
+
+    _clear_trim_tools_nudge(app, trim)
 
     if tools.parentWidget() is not host:
         tools.setParent(host)
@@ -300,6 +377,7 @@ def _place_tools_left(app, trim: QWidget, tools: QWidget) -> None:
 
 def _place_tools_below(app, trim: QWidget, tools: QWidget) -> None:
     host, layout = _right_host(trim)
+    _clear_trim_tools_nudge(app, trim)
     if layout is not None and layout.indexOf(tools) >= 0:
         layout.removeWidget(tools)
     if layout is not None:
@@ -327,6 +405,20 @@ def _tools_left_nudge(app) -> int:
     return _TRIM_LEFT_NUDGE_PX
 
 
+def _overlay_content_x_bounds(overlay: QWidget, tw: int) -> tuple[int, int]:
+    """Keep below-Trim overlays inside the footer's content margins."""
+    left = 0
+    right = 0
+    try:
+        m = overlay.contentsMargins()
+        left = int(m.left())
+        right = int(m.right())
+    except Exception:
+        pass
+    max_x = max(left, overlay.width() - right - tw)
+    return left, max_x
+
+
 def _reposition_tools_below(app, trim: QWidget, tools: QWidget) -> None:
     if getattr(app, "_trim_tools_placement", None) != "below":
         return
@@ -342,7 +434,8 @@ def _reposition_tools_below(app, trim: QWidget, tools: QWidget) -> None:
     )
     x = int(bottom_center.x() - tw // 2) - _tools_left_nudge(app)
     y = int(bottom_center.y() + _DROP_GAP_PX)
-    x = max(0, min(x, max(0, overlay.width() - tw)))
+    lo, hi = _overlay_content_x_bounds(overlay, tw)
+    x = max(lo, min(x, hi))
     tools.setGeometry(x, y, tw, th)
     tools.raise_()
 
@@ -384,7 +477,11 @@ def _finalize_overlay_bottom_row(app) -> None:
         if marker_rect is not None and markers.parentWidget() is tools.parentWidget():
             limit = marker_rect.x() - _OVERLAY_PAIR_GAP_PX
             if tools.x() + tools.width() > limit:
-                tools.move(max(0, limit - tools.width()), tools.y())
+                overlay = tools.parentWidget()
+                lo = 0
+                if overlay is not None:
+                    lo, _ = _overlay_content_x_bounds(overlay, tools.width())
+                tools.move(max(lo, limit - tools.width()), tools.y())
         tools.raise_()
 
     # Same baseline when both visible (skip while marker teleport owns geometry).
@@ -417,14 +514,13 @@ def _sync_trim_tools_nudge(app, tools: QWidget, trim: QWidget, active: bool) -> 
     spacer = getattr(app, "_trim_tools_nudge_spacer", None)
 
     if not want:
-        if spacer is not None:
-            layout.removeItem(spacer)
-            app._trim_tools_nudge_spacer = None
+        _clear_trim_tools_nudge(app, trim)
         return
 
     tools_idx = layout.indexOf(tools)
     trim_idx = layout.indexOf(trim)
     if tools_idx < 0 or trim_idx < 0 or tools_idx >= trim_idx:
+        _clear_trim_tools_nudge(app, trim)
         return
 
     if spacer is None:
@@ -496,7 +592,8 @@ def _markers_below_target_rect(app, markers: QWidget, pill: QWidget) -> QRect:
     pill_center = pill.mapTo(overlay, pill.rect().center())
     x = int(pill_center.x() - mw // 2)
     y = _marker_stack_y(app, overlay, pill, mh)
-    x = max(0, min(x, max(0, overlay.width() - mw)))
+    lo, hi = _overlay_content_x_bounds(overlay, mw)
+    x = max(lo, min(x, hi))
     return QRect(x, y, mw, mh)
 
 
@@ -543,6 +640,9 @@ def _place_markers_inline(app, markers: QWidget) -> None:
 
     layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     app._marker_pill_placement = "inline"
+    # Tools↔Cancel nudge is only for markers-below; drop it with the stack.
+    if trim is not None:
+        _clear_trim_tools_nudge(app, trim)
     markers.show()
     markers.updateGeometry()
 
