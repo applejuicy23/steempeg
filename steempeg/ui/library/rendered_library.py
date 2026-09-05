@@ -3862,7 +3862,13 @@ class RenderedLibraryMixin:
                 key
             )
             if anchor_item is not None and not anchor_item.isHidden():
-                grid.scrollTo(anchor_item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                # PySide6 on Linux requires QModelIndex; QListWidgetItem is rejected.
+                anchor_index = grid.indexFromItem(anchor_item)
+                if anchor_index.isValid():
+                    grid.scrollTo(
+                        anchor_index,
+                        QAbstractItemView.ScrollHint.PositionAtCenter,
+                    )
 
         self._schedule_screenshots_viewport_refresh(0)
 
