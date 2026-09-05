@@ -481,6 +481,52 @@ class LibraryMixin:
         )
         self.refresh_steam_icons(quiet=True, chain_names=True)
 
+    def _steam_meta_progress_pct(self, done: int, total: int, *, stage: str) -> int:
+        """Map icons (then optional names) onto one Full-style 0–100% strip."""
+        total = max(1, int(total))
+        done = max(0, min(int(done), total))
+        frac = done / float(total)
+        if stage == "icons":
+            if getattr(self, "_steam_refresh_chain_names", False):
+                pct = int(50.0 * frac)
+                # Leave headroom so names can own 50–100.
+                return min(pct, 49) if done >= total else pct
+            return int(100.0 * frac)
+        if getattr(self, "_steam_names_after_icons", False):
+            return 50 + int(50.0 * frac)
+        return int(100.0 * frac)
+
+    def _paint_steam_meta_status(
+        self,
+        label: str,
+        *,
+        done: int,
+        total: int,
+        stage: str,
+    ) -> None:
+        """Purple loading wave + filling bar while Steam icons/names download."""
+        self._steam_meta_refresh_active = True
+        pct = self._steam_meta_progress_pct(done, total, stage=stage)
+        text = f"{label} ({pct}%)"
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator(text, "busy", scan_phase="loading")
+        elif hasattr(self, "set_status"):
+            self.set_status(text)
+
+    def _finish_steam_meta_status(self, msg: str, *, quiet: bool) -> None:
+        """End Steam meta chrome: brief purple note, then Ready (never idle-green hang)."""
+        self._steam_meta_refresh_active = False
+        self._steam_names_after_icons = False
+        if hasattr(self, "update_status_indicator"):
+            self.update_status_indicator(msg, "accent", scan_phase=None)
+            if hasattr(self, "_schedule_transient_status_clear"):
+                # Quiet Full path: snap back quickly; menu refresh keeps the note a bit longer.
+                self._schedule_transient_status_clear(1200 if quiet else 2800)
+            else:
+                self.update_status_indicator("Ready", "ready")
+        elif hasattr(self, "set_status"):
+            self.set_status(msg)
+
     def refresh_steam_icons(self, *, quiet: bool = False, chain_names: bool = False):
         """Re-download game icons for every app id in the current library list."""
         if self._refresh_menu_busy():
@@ -492,9 +538,14 @@ class LibraryMixin:
             return
         self._steam_refresh_quiet = bool(quiet)
         self._steam_refresh_chain_names = bool(chain_names)
+        self._steam_names_after_icons = False
         self.game_icons_cache.clear()
-        if hasattr(self, "set_status"):
-            self.set_status(f"Refreshing game icons from Steam (0/{len(app_ids)})…")
+        self._paint_steam_meta_status(
+            f"Refreshing game icons from Steam (0/{len(app_ids)})",
+            done=0,
+            total=len(app_ids),
+            stage="icons",
+        )
 
         worker = SteamIconsRefreshWorker(app_ids, self.cache_dir, self.ui)
         self._steam_icons_worker = worker
@@ -504,8 +555,12 @@ class LibraryMixin:
         worker.start()
 
     def _on_steam_icons_progress(self, done: int, total: int) -> None:
-        if hasattr(self, "set_status"):
-            self.set_status(f"Refreshing game icons from Steam ({done}/{total})…")
+        self._paint_steam_meta_status(
+            f"Refreshing game icons from Steam ({done}/{total})",
+            done=done,
+            total=total,
+            stage="icons",
+        )
 
     def _on_steam_icons_finished(self, payload: dict) -> None:
         self._steam_icons_worker = None
@@ -530,14 +585,17 @@ class LibraryMixin:
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
         msg = f"Refreshed {updated} of {total} game icon(s) from Steam."
-        if hasattr(self, "set_status"):
-            self.set_status(msg)
         if quiet:
             logging.info("%s", msg)
         else:
             steempeg_information(self.ui, "Game icons", msg)
         if chain:
+            # Keep purple strip alive across the icons→names handoff.
+            self._steam_names_after_icons = True
+            self._steam_meta_refresh_active = True
             QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
+            return
+        self._finish_steam_meta_status(msg, quiet=quiet)
 
     def refresh_steam_names(self, *, quiet: bool = False):
         """Re-fetch game names from Steam for every app id in the library list."""
@@ -547,11 +605,26 @@ class LibraryMixin:
             return
         app_ids = sorted(self._collect_library_app_ids())
         if not app_ids:
+            self._steam_meta_refresh_active = False
+            self._steam_names_after_icons = False
             return
         self._steam_refresh_quiet = bool(quiet)
         self._steam_refresh_chain_names = False
-        if hasattr(self, "set_status"):
-            self.set_status(f"Refreshing game names from Steam (0/{len(app_ids)})…")
+        after_icons = bool(getattr(self, "_steam_names_after_icons", False))
+        start_done = 0
+        self._paint_steam_meta_status(
+            f"Refreshing game names from Steam (0/{len(app_ids)})",
+            done=start_done,
+            total=len(app_ids),
+            stage="names",
+        )
+        # When chained, show the 50% floor immediately.
+        if after_icons and hasattr(self, "update_status_indicator"):
+            self.update_status_indicator(
+                f"Refreshing game names from Steam (0/{len(app_ids)}) (50%)",
+                "busy",
+                scan_phase="loading",
+            )
 
         worker = SteamNamesRefreshWorker(app_ids, self.ui)
         self._steam_names_worker = worker
@@ -561,8 +634,12 @@ class LibraryMixin:
         worker.start()
 
     def _on_steam_names_progress(self, done: int, total: int) -> None:
-        if hasattr(self, "set_status"):
-            self.set_status(f"Refreshing game names from Steam ({done}/{total})…")
+        self._paint_steam_meta_status(
+            f"Refreshing game names from Steam ({done}/{total})",
+            done=done,
+            total=total,
+            stage="names",
+        )
 
     def _on_steam_names_finished(self, payload: dict) -> None:
         self._steam_names_worker = None
@@ -597,12 +674,11 @@ class LibraryMixin:
         updated = int(payload.get("updated") or 0)
         total = int(payload.get("total") or 0)
         msg = f"Refreshed {updated} of {total} game name(s) from Steam."
-        if hasattr(self, "set_status"):
-            self.set_status(msg)
         if quiet:
             logging.info("%s", msg)
         else:
             steempeg_information(self.ui, "Game names", msg)
+        self._finish_steam_meta_status(msg, quiet=quiet)
 
     def recheck_clip_health(self):
         """Full health pass for listed clips (ffprobe when needed). Off the UI thread."""
@@ -761,19 +837,29 @@ class LibraryMixin:
         self._health_recheck_worker = None
         self._steam_icons_worker = None
         self._steam_names_worker = None
+        if chain:
+            # Icons failed mid-Full chain — keep strip busy and try names.
+            self._steam_names_after_icons = True
+            self._steam_meta_refresh_active = True
+        else:
+            self._steam_meta_refresh_active = False
+            self._steam_names_after_icons = False
         if hasattr(self, "set_status"):
             self.set_status(f"Refresh failed: {message}")
         if quiet:
             logging.warning("Startup Steam refresh failed: %s", message)
-            # Icons failed mid-Full chain — still try names.
             if chain:
                 QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
+            elif hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
             return
         steempeg_information(
             self.ui,
             "Refresh failed",
             f"Something went wrong during the background refresh.\n\n{message}",
         )
+        if hasattr(self, "update_status_indicator") and not chain:
+            self.update_status_indicator("Ready", "ready")
     def _stop_library_scan(self):
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
@@ -2901,6 +2987,153 @@ class LibraryMixin:
             self.fast_sync_grid()
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
+        if hasattr(self, "sync_filter_pill_badge"):
+            self.sync_filter_pill_badge()
+
+    def _count_active_clips_filter_categories(self) -> int:
+        """How many Clips filter *categories* are narrowed (not match count)."""
+        from steempeg.ui.library.filters import (
+            FilterMenu,
+            _library_root_for_clip,
+            _row_display_health_level,
+        )
+
+        saved = getattr(self, "saved_filter_state", None)
+        if not saved or not saved.get("active"):
+            return 0
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is None or table.rowCount() <= 0:
+            return 0
+
+        all_games: set[str] = set()
+        all_types: set[str] = set()
+        all_health: set[str] = set()
+        all_folders: set[str] = set()
+        roots = list(getattr(self, "clips_folders", None) or [])
+        min_dt = None
+        max_dt = None
+        min_sec = None
+        max_sec = None
+        for row in range(table.rowCount()):
+            g = table.item(row, 0)
+            t = table.item(row, 1)
+            d = table.item(row, 2)
+            dur = table.item(row, 3)
+            if g is not None:
+                name = g.text().strip()
+                if name:
+                    all_games.add(name)
+                all_health.add(_row_display_health_level(g))
+                clip_path = g.data(Qt.UserRole) or ""
+                root = _library_root_for_clip(clip_path, roots)
+                if root:
+                    all_folders.add(os.path.normcase(os.path.normpath(root)))
+            if t is not None:
+                tl = t.text().strip()
+                if tl:
+                    all_types.add(tl)
+            if d is not None:
+                q_dt = FilterMenu._parse_row_datetime(d.text())
+                if q_dt is not None:
+                    if min_dt is None or q_dt < min_dt:
+                        min_dt = q_dt
+                    if max_dt is None or q_dt > max_dt:
+                        max_dt = q_dt
+            if dur is not None:
+                sec = FilterMenu._parse_row_duration(dur.text())
+                if min_sec is None or sec < min_sec:
+                    min_sec = sec
+                if max_sec is None or sec > max_sec:
+                    max_sec = sec
+
+        n = 0
+        sel_games = {str(x).strip() for x in (saved.get("games") or []) if str(x).strip()}
+        if all_games and sel_games != all_games:
+            n += 1
+        sel_types = {str(x).strip() for x in (saved.get("types") or []) if str(x).strip()}
+        if all_types and sel_types != all_types:
+            n += 1
+        sel_health = {str(x).strip() for x in (saved.get("health") or []) if str(x).strip()}
+        if all_health and sel_health != all_health:
+            n += 1
+        sel_folders = {
+            os.path.normcase(os.path.normpath(p))
+            for p in (saved.get("folders") or [])
+            if p
+        }
+        if all_folders and sel_folders != all_folders:
+            n += 1
+
+        min_date = saved.get("min_date")
+        max_date = saved.get("max_date")
+        if min_dt is not None and max_dt is not None:
+            lib_min_d = min_dt.date()
+            lib_max_d = max_dt.date()
+            if (
+                min_date is not None
+                and hasattr(min_date, "isValid")
+                and min_date.isValid()
+                and min_date > lib_min_d
+            ):
+                n += 1
+            elif (
+                max_date is not None
+                and hasattr(max_date, "isValid")
+                and max_date.isValid()
+                and max_date < lib_max_d
+            ):
+                n += 1
+
+        min_time = saved.get("min_time")
+        max_time = saved.get("max_time")
+        min_t = FilterMenu._qtime_to_sec(min_time) if min_time is not None else 0
+        max_t = (
+            FilterMenu._qtime_to_sec(max_time) if max_time is not None else 24 * 3600 - 1
+        )
+        if min_t > 0 or max_t < 24 * 3600 - 1:
+            n += 1
+
+        min_dur_t = saved.get("min_dur")
+        max_dur_t = saved.get("max_dur")
+        min_dur = FilterMenu._qtime_to_sec(min_dur_t) if min_dur_t is not None else 0
+        max_dur = FilterMenu._qtime_to_sec(max_dur_t) if max_dur_t is not None else 0
+        if not (max_dur <= 0 and min_dur <= 0) and min_sec is not None and max_sec is not None:
+            if min_dur > int(min_sec) or (max_dur > 0 and max_dur < int(max_sec)):
+                n += 1
+        return n
+
+    def _count_active_rendered_filter_categories(self) -> int:
+        n = 0
+        if getattr(self, "_rendered_filter_games", None) is not None:
+            n += 1
+        if getattr(self, "_rendered_filter_types", None) is not None:
+            n += 1
+        return n
+
+    def _count_active_screenshots_filter_categories(self) -> int:
+        n = 0
+        if getattr(self, "_screenshots_filter_games", None) is not None:
+            n += 1
+        if getattr(self, "_screenshots_filter_folders", None) is not None:
+            n += 1
+        return n
+
+    def sync_filter_pill_badge(self) -> None:
+        """Corner count on the funnel = active filter categories for the open tab."""
+        pill = getattr(self, "btn_filter_pill", None)
+        if pill is None or not hasattr(pill, "set_active_count"):
+            return
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "rendered":
+            count = self._count_active_rendered_filter_categories()
+        elif mode == "screenshots":
+            count = self._count_active_screenshots_filter_categories()
+        else:
+            count = self._count_active_clips_filter_categories()
+        try:
+            pill.set_active_count(count)
+        except RuntimeError:
+            pass
 
     def sync_library_filter_view(self) -> None:
         """Align grid visibility with remembered filters before showing the library."""
@@ -2914,6 +3147,8 @@ class LibraryMixin:
         self.saved_filter_state = None
         if hasattr(self, "_persist_library_filter_memory"):
             self._persist_library_filter_memory()
+        if hasattr(self, "sync_filter_pill_badge"):
+            self.sync_filter_pill_badge()
         if getattr(self, 'filter_menu', None) is not None:
             try:
                 self.filter_menu.deleteLater()

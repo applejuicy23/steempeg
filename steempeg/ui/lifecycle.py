@@ -333,6 +333,16 @@ class LifecycleMixin:
                 if hasattr(self, "_schedule_transient_status_clear"):
                     self._schedule_transient_status_clear()
                 return
+            # Steam meta / library refresh summaries — purple, never idle-green,
+            # then snap back to Ready (same language as Screenshots updated).
+            if text.startswith("Refreshed ") and " from Steam" in text:
+                self.update_status_indicator(text, "accent")
+                if hasattr(self, "_schedule_transient_status_clear"):
+                    self._schedule_transient_status_clear(1800)
+                return
+            if text.startswith("Refreshing game ") and " from Steam" in text:
+                self.update_status_indicator(text, "busy")
+                return
             state = "ready"
             if text == "Error!":
                 state = "error"
@@ -345,6 +355,8 @@ class LifecycleMixin:
             elif text.endswith("..."):
                 state = "busy"
             elif text.endswith(".."):
+                state = "busy"
+            elif text.endswith("…"):
                 state = "busy"
             self.update_status_indicator(text, state)
 

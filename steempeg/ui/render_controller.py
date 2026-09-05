@@ -772,6 +772,13 @@ class RenderMixin:
             return
         if getattr(self, "_update_check_busy", False) and scan_phase is None and state == "ready":
             return
+        # While Steam icons/names refresh after Full (or Refresh ▾), ignore stray Ready.
+        if (
+            getattr(self, "_steam_meta_refresh_active", False)
+            and scan_phase is None
+            and state == "ready"
+        ):
+            return
         # Live encode: never let a stray Ready (e.g. old Render Settings open path)
         # wipe Part N% / the progress strip.
         if (
