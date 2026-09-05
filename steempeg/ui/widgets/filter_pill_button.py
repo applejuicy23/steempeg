@@ -1,44 +1,107 @@
 """A square icon button that opens the filter panel (matches sort-combo chrome)."""
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QLabel, QPushButton
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter, QIcon
+from PySide6.QtWidgets import QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
 
-class FilterPillButton(QPushButton):
+class _FilterBadgeSticker(QWidget):
+    """Circle + digit — lives outside libraryToolbarPill so radius QSS cannot chop it."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("FilterPill")
-        self.setText("")
-        self.setToolTip("Filters")
-        self.setIcon(QIcon(get_resource_path("filter.png")))
-        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("FilterPillBadge")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._text = ""
+        self._font_px = 7
+        self._bg = QColor(ACCENT_PRIMARY)
+        self._fg = QColor("#1a1228")
+
+    def set_sticker(self, text: str, side: int, font_px: int) -> None:
+        self._text = text
+        self._font_px = font_px
+        self.setFixedSize(side, side)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — Qt API
+        if not self._text:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = min(self.width(), self.height())
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self._bg)
+        p.drawEllipse(0, 0, side - 1, side - 1)
+        font = QFont("Segoe UI", self._font_px)
+        font.setBold(True)
+        font.setWeight(QFont.Weight.Bold)
+        p.setFont(font)
+        p.setPen(self._fg)
+        # Tight center — ExtraBold digits sit low; nudge up 1px.
+        box = QRect(0, -1, side - 1, side - 1)
+        p.drawText(box, int(Qt.AlignmentFlag.AlignCenter), self._text)
+        p.end()
+
+
+class FilterPillButton(QWidget):
+    """Funnel chip + corner count sticker.
+
+    Host stays ``filter_size``. Badge is reparented to the *parent of*
+    ``libraryToolbarPill`` (sibling of the capsule) — the pill's
+    ``border-radius`` clips descendants at the round end, which is exactly
+    where the filter sits.
+    """
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("FilterPillHost")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
         self._active_count = 0
-        self._badge = QLabel(self)
-        self._badge.setObjectName("FilterPillBadge")
-        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._dense = COMFORT
+        self._badge_side = 12
+
+        self._btn = QPushButton(self)
+        self._btn.setObjectName("FilterPill")
+        self._btn.setText("")
+        self._btn.setToolTip("Filters")
+        self._btn.setIcon(QIcon(get_resource_path("filter.png")))
+        self._btn.setCursor(Qt.PointingHandCursor)
+        self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn.clicked.connect(self.clicked.emit)
+
+        self._badge = _FilterBadgeSticker()
         self._badge.hide()
+
         self.apply_density(COMFORT)
 
     def apply_density(self, dense: UiDensity) -> None:
         from steempeg.ui import ui_theme as ut
 
-        # Same outer box as the Sorting combo (comfort ~36px ≈ combo min-h + pad + border).
+        self._dense = dense
         sz = dense.filter_size
         icon = max(10, sz // 2 - (1 if dense.compact else 2))
-        # Rounded square like compact_combo — not a circle (radius ≠ sz/2).
         border = 1 if dense.compact else 2
         radius = 6 if dense.compact else 8
         pad = 1 if dense.compact else 2
+        self._badge_side = 11 if dense.compact else 12
+
         self.setFixedSize(sz, sz)
-        self.setIconSize(QSize(icon, icon))
+        self.setMinimumSize(sz, sz)
+        self.setMaximumSize(sz, sz)
+        self._btn.setFixedSize(sz, sz)
+        self._btn.move(0, 0)
+        self._btn.setIconSize(QSize(icon, icon))
         if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
             p = ut.active_palette()
-            self.setStyleSheet(f"""
+            self._btn.setStyleSheet(f"""
         QPushButton#FilterPill {{
             background-color: {p.button_secondary_bg};
             border: {border}px solid {p.button_secondary_border};
@@ -60,7 +123,7 @@ class FilterPillButton(QPushButton):
         }}
     """)
         else:
-            self.setStyleSheet(f"""
+            self._btn.setStyleSheet(f"""
         QPushButton#FilterPill {{
             background-color: #383838;
             border: {border}px solid #444444;
@@ -81,11 +144,7 @@ class FilterPillButton(QPushButton):
             color: #777777;
         }}
     """)
-        self._restyle_badge(dense)
-        if self._active_count > 0:
-            self._badge.show()
-            self._badge.raise_()
-        self._place_badge()
+        self._refresh_badge_chrome()
 
     def set_active_count(self, count: int) -> None:
         """Corner badge: how many filter *categories* are narrowed (0 hides)."""
@@ -93,45 +152,79 @@ class FilterPillButton(QPushButton):
         self._active_count = n
         if n <= 0:
             self._badge.hide()
+            self._btn.setToolTip("Filters")
             self.setToolTip("Filters")
             return
-        label = "9+" if n > 9 else str(n)
-        self._badge.setText(label)
-        self._badge.show()
-        self._badge.raise_()
-        self._place_badge()
         noun = "filter" if n == 1 else "filters"
-        self.setToolTip(f"Filters · {n} active {noun}")
+        tip = f"Filters · {n} active {noun}"
+        self._btn.setToolTip(tip)
+        self.setToolTip(tip)
+        self._refresh_badge_chrome()
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 — Qt API
+        super().setEnabled(enabled)
+        self._btn.setEnabled(enabled)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._btn.setGeometry(0, 0, self.width(), self.height())
         self._place_badge()
 
-    def _restyle_badge(self, dense: UiDensity) -> None:
-        side = 14 if dense.compact else 16
-        font_px = 8 if dense.compact else 9
-        self._badge.setFixedSize(side, side)
-        self._badge.setStyleSheet(
-            f"""
-            QLabel#FilterPillBadge {{
-                background-color: {ACCENT_PRIMARY};
-                color: #1a1228;
-                border: none;
-                border-radius: {side // 2}px;
-                font-size: {font_px}px;
-                font-weight: 800;
-                font-family: Segoe UI, Arial, sans-serif;
-                padding: 0px;
-            }}
-            """
-        )
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._place_badge()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._refresh_badge_chrome()
+
+    def hideEvent(self, event) -> None:
+        self._badge.hide()
+        super().hideEvent(event)
+
+    def _font_px(self) -> int:
+        return 7
+
+    def _badge_float_host(self) -> QWidget | None:
+        """Parent of libraryToolbarPill — sibling layer, no radius clip."""
+        w = self.parentWidget()
+        while w is not None:
+            if w.objectName() == "libraryToolbarPill":
+                host = w.parentWidget()
+                return host if host is not None else w.window()
+            w = w.parentWidget()
+        return self.window()
+
+    def _ensure_badge_host(self) -> None:
+        host = self._badge_float_host()
+        if host is None:
+            return
+        if self._badge.parentWidget() is not host:
+            self._badge.setParent(host)
+
+    def _refresh_badge_chrome(self) -> None:
+        if self._active_count <= 0:
+            self._badge.hide()
+            return
+        label = "9+" if self._active_count > 9 else str(self._active_count)
+        self._badge.set_sticker(label, self._badge_side, self._font_px())
+        self._place_badge()
 
     def _place_badge(self) -> None:
-        if not self._badge.isVisible() and self._active_count <= 0:
+        if self._active_count <= 0:
+            self._badge.hide()
             return
-        # Overlap the top-right corner of the funnel (notification-style).
-        bw = self._badge.width()
-        bh = self._badge.height()
-        x = max(-2, self.width() - bw + 2)
-        y = max(-2, -2)
+        self._ensure_badge_host()
+        host = self._badge.parentWidget()
+        if host is None:
+            return
+        side = self._badge_side
+        # Corner sticker like the reference shot — small lip, full unclipped circle.
+        lip = 4 if not self._dense.compact else 3
+        corner = self.mapTo(host, QPoint(self.width(), 0))
+        x = int(corner.x() - side + lip)
+        y = int(corner.y() - lip)
         self._badge.move(x, y)
+        if self.isVisible():
+            self._badge.show()
+            self._badge.raise_()
