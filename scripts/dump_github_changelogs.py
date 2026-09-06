@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Dump all GitHub Releases (+ orphan tags) into a local .txt file.
 
+Includes release body, publish date, and zip assets (name / size / downloads).
+
 Usage (repo root, needs `gh` auth):
   python scripts/dump_github_changelogs.py
   python scripts/dump_github_changelogs.py --out docs/github_changelogs_dump.txt
@@ -59,6 +61,22 @@ def fetch_releases(repo: str) -> list[dict]:
     for r in data:
         if not isinstance(r, dict):
             continue
+        assets_raw = r.get("assets") or []
+        assets: list[dict] = []
+        if isinstance(assets_raw, list):
+            for a in assets_raw:
+                if not isinstance(a, dict):
+                    continue
+                name = a.get("name")
+                if not name:
+                    continue
+                assets.append(
+                    {
+                        "name": str(name),
+                        "size": a.get("size"),
+                        "download_count": a.get("download_count"),
+                    }
+                )
         slim.append(
             {
                 "tag_name": r.get("tag_name"),
@@ -69,8 +87,14 @@ def fetch_releases(repo: str) -> list[dict]:
                 "prerelease": r.get("prerelease"),
                 "html_url": r.get("html_url"),
                 "body": r.get("body"),
+                "assets": assets,
             }
         )
+    # Newest first by published/created (API is usually sorted; be explicit).
+    def _sort_key(rel: dict) -> str:
+        return str(rel.get("published_at") or rel.get("created_at") or "")
+
+    slim.sort(key=_sort_key, reverse=True)
     return slim
 
 
@@ -99,11 +123,24 @@ def format_date(iso: str | None) -> str:
         return iso
 
 
+def format_size(n: object) -> str:
+    try:
+        size = int(n)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "?"
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KiB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MiB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GiB"
+
+
 def write_dump(repo: str, releases: list[dict], tags: list[str], out_path: Path) -> None:
     release_tags = {str(r.get("tag_name") or "") for r in releases}
     orphan_tags = [t for t in tags if t not in release_tags]
 
-    # Newest first (API already returns newest-first for releases)
     lines: list[str] = []
     lines.append(f"GitHub changelogs dump — {repo}")
     lines.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
@@ -125,6 +162,7 @@ def write_dump(repo: str, releases: list[dict], tags: list[str], out_path: Path)
         flag_s = f" [{', '.join(flags)}]" if flags else ""
         url = rel.get("html_url") or ""
         body = (rel.get("body") or "").strip() or "(empty release body)"
+        assets = rel.get("assets") or []
 
         lines.append("-" * 72)
         lines.append(f"#{i}  {tag}{flag_s}")
@@ -133,6 +171,18 @@ def write_dump(repo: str, releases: list[dict], tags: list[str], out_path: Path)
         lines.append(f"Published: {published}")
         if url:
             lines.append(f"URL: {url}")
+        if isinstance(assets, list) and assets:
+            lines.append("Assets:")
+            for a in assets:
+                if not isinstance(a, dict):
+                    continue
+                an = a.get("name") or "?"
+                sz = format_size(a.get("size"))
+                dl = a.get("download_count")
+                dl_s = f", downloads={dl}" if dl is not None else ""
+                lines.append(f"  - {an} ({sz}{dl_s})")
+        elif isinstance(assets, list):
+            lines.append("Assets: (none)")
         lines.append("")
         lines.append(body)
         lines.append("")
