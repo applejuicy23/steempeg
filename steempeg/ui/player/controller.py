@@ -379,6 +379,11 @@ class PlayerMixin:
 
         self._set_playback_loading(False)
 
+        # Kill sniper / thumb batch here — clearing video_path alone left
+        # background warm holding DASH .m4s (WinError 32 on delete).
+        if hasattr(self, "_stop_timeline_thumb_batch"):
+            self._stop_timeline_thumb_batch()
+
         if hasattr(self.ui, 'video_container'):
             self.ui.video_container.setStyleSheet("background-color: transparent; border: none;")
 
@@ -389,10 +394,24 @@ class PlayerMixin:
                 self.custom_timeline.img_label.setPixmap(QPixmap())
             self.custom_timeline.thumb_dir = None
             self.custom_timeline.current_video_path = None
+            if hasattr(self.custom_timeline, "_cancel_sniper_leave_warm"):
+                try:
+                    self.custom_timeline._cancel_sniper_leave_warm()
+                except Exception:
+                    pass
+            if hasattr(self.custom_timeline, "sniper_timer"):
+                try:
+                    self.custom_timeline.sniper_timer.stop()
+                except Exception:
+                    pass
             if hasattr(self.custom_timeline, 'sniper'):
-                self.custom_timeline.sniper.video_path = None
-                if hasattr(self.custom_timeline.sniper, 'cache'):
-                    self.custom_timeline.sniper.cache.clear()
+                sniper = self.custom_timeline.sniper
+                if sniper is not None:
+                    try:
+                        sniper.kill_worker()
+                    except Exception:
+                        logging.debug("Sniper kill on clear failed", exc_info=True)
+                    sniper.video_path = None
 
             self.custom_timeline.set_vlc_time(0, False)
             self.custom_timeline.setEnabled(False)
@@ -521,16 +540,52 @@ class PlayerMixin:
                 return True
         return False
 
-    def release_media_before_delete(self, path: str) -> bool:
-        """Unload playback if *path* is currently open, so Windows can delete it.
+    def _force_release_clip_file_handles(self, path: str) -> None:
+        """Stop sniper / thumb batch / poster that may hold DASH files under *path*.
 
-        Resets the player to the idle placeholder (Please select a clip…).
-        Returns True when playback was cleared.
+        Playback can look idle while PyAV background warm still has a ``.m4s`` open.
         """
-        if not self._media_path_is_in_use(path):
+        if hasattr(self, "_stop_timeline_thumb_batch"):
+            self._stop_timeline_thumb_batch()
+        if hasattr(self, "custom_timeline"):
+            tl = self.custom_timeline
+            if hasattr(tl, "_cancel_sniper_leave_warm"):
+                try:
+                    tl._cancel_sniper_leave_warm()
+                except Exception:
+                    pass
+            if hasattr(tl, "sniper_timer"):
+                try:
+                    tl.sniper_timer.stop()
+                except Exception:
+                    pass
+            sniper = getattr(tl, "sniper", None)
+            if sniper is not None:
+                try:
+                    sniper.kill_worker()
+                except Exception:
+                    logging.debug("Sniper kill before delete failed", exc_info=True)
+                sniper.video_path = None
+        if hasattr(self, "_stop_clip_poster_backfill"):
+            try:
+                self._stop_clip_poster_backfill()
+            except Exception:
+                logging.debug("Poster backfill stop before delete failed", exc_info=True)
+
+    def release_media_before_delete(self, path: str) -> bool:
+        """Unload playback / decode workers so Windows can delete the clip folder.
+
+        Always stops sniper + thumbs (phantom chunk locks). If *path* is the
+        open / playing clip, also resets the player to the idle placeholder.
+        Returns True when release work ran.
+        """
+        if not path:
             return False
-        self.close_current_clip()
-        # Give mpv a beat to drop file handles before the caller deletes on disk.
+        was_open = self._media_path_is_in_use(path)
+        self._force_release_clip_file_handles(path)
+        if was_open:
+            self.close_current_clip()
+        # Give mpv / PyAV a beat to drop file handles before the caller deletes.
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
@@ -538,10 +593,18 @@ class PlayerMixin:
 
     def release_media_before_delete_any(self, paths) -> bool:
         """Unload once if any of *paths* is the active preview / playback."""
-        for path in paths or ():
+        paths = list(paths or ())
+        if not paths:
+            return False
+        # Always kill decode workers once — they may hold any of these folders.
+        self._force_release_clip_file_handles(paths[0])
+        for path in paths:
             if self._media_path_is_in_use(path):
                 return self.release_media_before_delete(path)
-        return False
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        return True
 
     def close_current_clip(self):
         """ Completely destroys the current clip and clears the interface. """
@@ -1307,17 +1370,29 @@ class PlayerMixin:
         if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.setVisible(not self.is_theater)
 
         if hasattr(self, 'video_wrapper'):
-            if self.is_theater:
-                self.video_wrapper.setStyleSheet("background-color: black; border: none;")
-            else:
-                try:
-                    from steempeg.ui import ui_theme as ut
+            try:
+                from steempeg.ui import ui_theme as ut
 
-                    self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
-                except Exception:
+                if self.is_theater:
+                    # Black stage, but keep Reunited side outlines when prefs say so
+                    # (otherwise header/footer lines stop at the video — Emily 6 Sep).
                     self.video_wrapper.setStyleSheet(
-                        "background-color: transparent; border: none;"
+                        ut.player_video_wrapper_stylesheet(background="black")
                     )
+                else:
+                    self.video_wrapper.setStyleSheet(ut.player_video_wrapper_stylesheet())
+            except Exception:
+                self.video_wrapper.setStyleSheet(
+                    "background-color: black; border: none;"
+                    if self.is_theater
+                    else "background-color: transparent; border: none;"
+                )
+            try:
+                from steempeg.ui.layout_defaults import restore_player_chrome_after_immersive
+
+                restore_player_chrome_after_immersive(self)
+            except Exception:
+                pass
 
         # Player↔dock gap: 10px only when the bottom dock is actually shown.
         if hasattr(self, 'top_v_wrap') and self.top_v_wrap.layout():
