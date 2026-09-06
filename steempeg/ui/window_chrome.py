@@ -597,6 +597,8 @@ class SteempegTitleBar(QWidget):
         plaque_lay.addWidget(
             self.chk_never_show_update_available, 0, Qt.AlignmentFlag.AlignVCenter
         )
+        # Rare action — only reveal while the cursor is over the title bar.
+        self.chk_never_show_update_available.hide()
         self._update_available_plaque.hide()
         root.addSpacing(8)
         root.addWidget(self._update_available_plaque, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -854,6 +856,32 @@ class SteempegTitleBar(QWidget):
             return
         self.hide_update_available_requested.emit()
 
+    def _title_bar_contains_cursor(self) -> bool:
+        from PySide6.QtGui import QCursor
+
+        return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+
+    def _sync_never_show_update_available_hover(self) -> None:
+        """Show «Never show again» only while hovering the title bar + plaque is up."""
+        chk = getattr(self, "chk_never_show_update_available", None)
+        plaque = getattr(self, "_update_available_plaque", None)
+        if chk is None:
+            return
+        show = (
+            plaque is not None
+            and plaque.isVisible()
+            and self._title_bar_contains_cursor()
+        )
+        chk.setVisible(bool(show))
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        super().enterEvent(event)
+        self._sync_never_show_update_available_hover()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        self._sync_never_show_update_available_hover()
+
     def set_bar_color(self, bg_color: str) -> None:
         """Re-tint the title bar background (used by the experimental themes)."""
         self._apply_bar_style(bg_color)
@@ -885,6 +913,7 @@ class SteempegTitleBar(QWidget):
                 chk.blockSignals(True)
                 chk.setChecked(False)
                 chk.blockSignals(False)
+                chk.hide()
             return
         label = "Update Available"
         if version:
@@ -920,10 +949,13 @@ class SteempegTitleBar(QWidget):
             if hasattr(chk, "_label_color_override"):
                 chk._label_color_override = color
                 chk.update()
+            # Stay hidden until title-bar hover (or show if already hovering).
+            chk.hide()
         if plaque is not None:
             plaque.show()
         else:
             btn.show()
+        self._sync_never_show_update_available_hover()
 
     def reset_traffic_lights(self) -> None:
         """Repaint window controls after maximize/DWM refresh (sticky hover / missed paint)."""
