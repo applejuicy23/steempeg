@@ -1067,6 +1067,39 @@ class DevModeDialog(SteempegDialog):
         btn_ffmpeg_err.clicked.connect(self._simulate_ffmpeg_error_dialog)
         lay.addWidget(btn_ffmpeg_err)
 
+        # -- Launch splash (v50 startup loader) --
+        g_splash = QGroupBox("Launch splash (startup loader)")
+        g_splash_lay = QVBoxLayout(g_splash)
+        g_splash_lay.addWidget(
+            QLabel(
+                "Preview the Adobe/Vegas-style cold-start card (logo · version · "
+                "% bar · status). Replay the same milestones as a real launch — "
+                "tweak visuals without restarting. Click or Esc to dismiss."
+            )
+        )
+        tip = g_splash_lay.itemAt(0).widget()
+        if isinstance(tip, QLabel):
+            tip.setWordWrap(True)
+            tip.setStyleSheet("color: #b0b0b0; font-weight: normal;")
+        self._chk_splash_hold = QCheckBox("Hold open at 100% (inspect)")
+        self._chk_splash_hold.setToolTip(
+            "Leave the splash visible after the script hits 100% so you can "
+            "judge layout / colors. Click or Esc to close."
+        )
+        g_splash_lay.addWidget(self._chk_splash_hold)
+        splash_row = QHBoxLayout()
+        btn_splash = QPushButton("Simulate launch splash")
+        btn_splash.setToolTip("Replay Starting → Opening workspace… on the real splash card.")
+        btn_splash.clicked.connect(self._simulate_launch_splash)
+        btn_splash_stop = QPushButton("Close splash")
+        btn_splash_stop.setToolTip("Stop the script and close the preview card.")
+        btn_splash_stop.clicked.connect(self._close_launch_splash_sim)
+        splash_row.addWidget(btn_splash)
+        splash_row.addWidget(btn_splash_stop)
+        splash_row.addStretch()
+        g_splash_lay.addLayout(splash_row)
+        lay.addWidget(g_splash)
+
         # -- Splitter movement telemetry (layout debugging) --
         g_split = QGroupBox("Splitter movement telemetry")
         g_split_lay = QVBoxLayout(g_split)
@@ -1453,3 +1486,30 @@ class DevModeDialog(SteempegDialog):
             host._show_steempeg_render_error_dialog(sample)
         except Exception as exc:
             self._tools_log.appendPlainText(f"ERROR: simulate failed: {exc}")
+
+    def _simulate_launch_splash(self) -> None:
+        """Replay the v50 cold-start splash card for visual design review."""
+        from steempeg.ui.launch_splash import simulate_launch_splash
+
+        hold = bool(
+            getattr(self, "_chk_splash_hold", None) is not None
+            and self._chk_splash_hold.isChecked()
+        )
+        self._tools_log.appendPlainText(
+            "Launch splash preview…"
+            + (" (hold at 100% — click/Esc to close)" if hold else "")
+        )
+        try:
+            simulate_launch_splash(hold_open=hold)
+        except Exception as exc:
+            self._tools_log.appendPlainText(f"ERROR: launch splash simulate failed: {exc}")
+
+    def _close_launch_splash_sim(self) -> None:
+        from steempeg.ui.launch_splash import (
+            cancel_launch_splash_simulation,
+            finish_launch_splash,
+        )
+
+        cancel_launch_splash_simulation()
+        finish_launch_splash(status="Closed", force=True)
+        self._tools_log.appendPlainText("Launch splash closed.")

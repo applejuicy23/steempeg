@@ -69,6 +69,26 @@ def get_resource_path(relative_path):
     return paths.get_resource_path(relative_path)
 
 
+def _launch_splash_progress(percent: float, status: str | None = None) -> None:
+    """Safe mid-constructor splash update (no-op if splash is off / closed)."""
+    try:
+        from steempeg.ui.launch_splash import update_launch_splash
+
+        update_launch_splash(percent, status)
+    except Exception:
+        pass
+
+
+def _splash_keepalive() -> None:
+    """Keep Preparing spinner moving during blocking startup work."""
+    try:
+        from steempeg.ui.launch_splash import launch_splash_keepalive
+
+        launch_splash_keepalive()
+    except Exception:
+        pass
+
+
 def _is_enabled_setting(value) -> bool:
     """Parse settings flag values that may arrive as bool/str/int."""
     if isinstance(value, bool):
@@ -270,8 +290,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
+        _launch_splash_progress(8, "Building window…")
 
         self.ui = MainWindow(app_host=self)
+        _launch_splash_progress(22, "Window ready…")
         self._install_animated_render_bar()
 
         # Chrome color theme (built-in default until saved settings load at startup).
@@ -390,6 +412,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.current_log_file = setup_logging(
             self.logs_dir, APP_VERSION_STR, self._session_ts, level=app_level
         )
+        _launch_splash_progress(32, "Loading preferences…")
         self.current_mpv_log_file = mpv_log_path(self.logs_dir, self._session_ts)
         prune_old_logs(
             self.logs_dir,
@@ -529,6 +552,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.load_user_settings().get(KEY_UI_THEME, DEFAULT_UI_THEME)
         )
         self.apply_ui_theme(saved_ui, persist=False)
+        _launch_splash_progress(42, "Applying theme…")
         
         # 3. CONFIGURING THE INTERFACE (TABLE AND COMBOBOXES)
         if hasattr(self.ui, 'table_clips'):
@@ -1253,6 +1277,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.combo_quality.currentTextChanged.connect(self.on_quality_preset_combo_changed) 
         
         # 4. BINDING BUTTONS TO FUNCTIONS
+        _launch_splash_progress(50, "Building chrome…")
         # --- UI INJECTION: COPY BUTTONS ---
         from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QSizePolicy
         
@@ -1727,9 +1752,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         except Exception as e:
             print(f"Error building ultimate monolithic dashboard: {e}")
-        
-        
+
+        _launch_splash_progress(54, "Preparing dashboard…")
+
         # --- FIXING THE INTERFACE AND PLAYER ---
+        _launch_splash_progress(58, "Preparing player…")
         # 1. Give the right panel some breathing room
         from steempeg.ui.layout_defaults import (
             RIGHT_PANEL_BOTTOM_INSET,
@@ -1820,6 +1847,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # When starting, show MAP 2 (Stub)
         self.video_stack.setCurrentWidget(self.placeholder_frame)
 
+        _launch_splash_progress(64, "Building player chrome…")
         # --- CREATE A TOP PANEL  ---
         # Title cluster: icon + game name + info chip. SteempegUI = left;
         # Steam-like = centered via spacers. Status/actions stay right.
@@ -2114,6 +2142,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.ui.btn_skip_back.setIconSize(QSize(32, 32))
         self.ui.btn_skip_forward.setIconSize(QSize(32, 32))
 
+        _launch_splash_progress(70, "Wiring player controls…")
         # --- NEXT-GEN TIMELINE & CONTROLS UI REBUILD ---
         from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFrame
         
@@ -2716,6 +2745,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     self.open_steam_screenshot_folder_for_marker
                 )
         
+        _launch_splash_progress(74, "Starting video engine…")
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
         mpv_log_path_str = self.current_mpv_log_file
         logging.info("MPV log: %s", mpv_log_path_str)
@@ -2906,9 +2936,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.combo_output_preset.currentTextChanged.connect(self.on_output_preset_changed)
     
         # 5. AUTOMATIC DATA LOADING AT PROGRAM START
+        _launch_splash_progress(78, "Detecting hardware…")
         self.detect_gpu_and_set_encoder()
         
         # 1. Load saved library folder roots (migrates legacy last_clips_folder)
+        _launch_splash_progress(88, "Loading library roots…")
         self._load_clips_folders_from_settings()
 
         # First launch only: auto-discover every Steam userdata/*/gamerecordings/clips.
@@ -2935,7 +2967,29 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # - the footer dashboard to resize while clips were being inserted
         # - cross-panel status updates (clips vs rendered) fighting each other
         self._start_startup_scans_pending = True
+        # Last splash stage — fast spinner + 100% for the rest of __init__
+        # (do not wait until after the constructor or the circle looks frozen).
+        try:
+            from steempeg.ui.launch_splash import (
+                launch_splash_begin_preparing,
+                launch_splash_keepalive,
+            )
 
+            launch_splash_begin_preparing()
+            self._launch_splash_keepalive = launch_splash_keepalive
+        except Exception:
+            self._launch_splash_keepalive = None
+            _launch_splash_progress(94, "Finishing setup…")
+
+        def _splash_spin() -> None:
+            fn = getattr(self, "_launch_splash_keepalive", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+        _splash_spin()
         if hasattr(self.ui, 'main_splitter'):
             from steempeg.ui.layout_defaults import (
                 DEFAULT_MAIN_SPLITTER_SIZES,
@@ -2958,8 +3012,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.ui.left_panel.setMinimumWidth(left_panel_min_width(avail_w, widget=self.ui))
             self._apply_responsive_layout_mins()
 
+        _splash_spin()
         self._apply_dark_shell()
         self._refresh_ui_theme_surfaces()
+        _splash_spin()
 
         # --- CUSTOM INPUTS: wire the overlay edit fields built by render_panel ---
         from PySide6.QtGui import QDoubleValidator, QIntValidator
@@ -2985,6 +3041,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         _wire_custom('input_custom_fps', 'warn_fps', QIntValidator(1, 120), self.validate_custom_fps)
         _wire_custom('input_custom_vbitrate', 'warn_vbitrate', QDoubleValidator(0.1, 200.0, 2), self.validate_custom_vbitrate)
         _wire_custom('input_custom_abitrate', 'warn_abitrate', QIntValidator(1, 500), self.validate_custom_abitrate)
+        _splash_spin()
     
         if hasattr(self, 'custom_timeline'):
                 self.custom_timeline.setEnabled(False) # Disable clicks into empty space
@@ -2999,6 +3056,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'label_time'):
             self.ui.label_time.setText("00:00 / 00:00")
         
+        _splash_spin()
         QApplication.instance().applicationStateChanged.connect(self.hide_hud_on_minimize)
 
     def set_player_header_clip_controls_visible(self, visible: bool) -> None:
@@ -3939,6 +3997,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 getattr(self, "_portable_shell", False)
                 and getattr(self, "is_theater", False)
             )
+            desktop_theatre = bool(
+                getattr(self, "is_theater", False)
+                and not getattr(self, "_portable_shell", False)
+            )
             if immersive:
                 vw.setStyleSheet(
                     ut.player_video_wrapper_stylesheet(
@@ -3946,7 +4008,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         chrome_outline=False,
                     )
                 )
-            elif portable_theatre:
+            elif portable_theatre or desktop_theatre:
                 vw.setStyleSheet(
                     ut.player_video_wrapper_stylesheet(background="black")
                 )
@@ -5889,10 +5951,19 @@ def main():
         save_ui_shell(ui_shell)
 
     try:
+        from steempeg.ui.launch_splash import finish_launch_splash, show_launch_splash
+
+        show_launch_splash()
+        _launch_splash_progress(4, "Starting Steempeg…")
+    except Exception:
+        logging.debug("Launch splash failed to open", exc_info=True)
+
+    try:
         window = SteempegApp()
         # Keep the lock alive for the process lifetime (prevent GC unlock).
         window._instance_lock = _instance_lock
         window._ui_shell = ui_shell
+        _splash_keepalive()
         
         if getattr(window, 'ui', None) is None:
             QMessageBox.critical(None, "Interface Error", "Failed to build the main window!")
@@ -5928,6 +5999,7 @@ def main():
 
         # Pre-size to the screen work area BEFORE showing.
         window._apply_dark_shell()
+        _splash_keepalive()
         from steempeg.ui.layout_defaults import (
             TARGET_MIN_WINDOW_HEIGHT,
             TARGET_MIN_WINDOW_WIDTH,
@@ -5969,6 +6041,7 @@ def main():
         # Portable: enter theatre BEFORE the first paint so desktop chrome never flashes.
         if ui_shell == UI_SHELL_PORTABLE:
             window.apply_portable_theatre_shell()
+        _splash_keepalive()
 
         # Hide the painted caption before the first ShowWindow — otherwise Windows
         # briefly maps a native-framed "Steempeg" HWND, then frameless leaves a
@@ -5980,6 +6053,7 @@ def main():
             # not fall back to the python.exe blank-document taskbar face.
             enable_frameless(window.ui)
             _force_native_window_icon(window.ui, icon_path)
+        _splash_keepalive()
 
         # Finish density / library restore / Skip paint WHILE STILL HIDDEN.
         # Showing first painted an empty "0 Clips" shell that then jumped —
@@ -6005,6 +6079,16 @@ def main():
                 _settle_settings = {}
         _settle_mode = load_startup_library_scan(_settle_settings)
         _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE)
+        # Hold Adobe-style splash at 100% with a real 1s fast-spin, then close it
+        # before the main shell maps (spinner is driven manually — QTimer is dead
+        # during blocking cold-start).
+        try:
+            from steempeg.ui.launch_splash import hold_launch_splash_opening
+
+            _splash_keepalive()
+            hold_launch_splash_opening(status="Preparing workspace…", hold_s=1.0)
+        except Exception:
+            logging.debug("Launch splash hold failed", exc_info=True)
         begin_startup_settle(window, use_veil=_use_settle_veil)
         window._sync_startup_layout()
         try:

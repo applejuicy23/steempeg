@@ -12,6 +12,7 @@ _BASE_ASSETS = (
     "logo.png",
     "logo.ico",
     "github.jpg",
+    "applejuicy23.png",
     "steam.png",
     "icon_play.png",
     "icon_pause.png",

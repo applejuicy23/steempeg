@@ -66,6 +66,7 @@ def kick_startup_settle_after_show(app) -> None:
         return
     _run_startup_settle_pass(app)
     gen = int(getattr(app, "_startup_settle_gen", 0) or 0)
+    # Splash already closed itself after the 1s Preparing spin in hold_launch_splash.
     reveal_ms = (
         STARTUP_SETTLE_REVEAL_MS
         if getattr(app, "_startup_settle_use_veil", True)
@@ -122,6 +123,12 @@ def _reveal_startup_settle_if(app, gen: int, *, reason: str) -> None:
             pass
         app._startup_settle_resize_filter = None
     logging.info("Startup settle veil revealed (%s)", reason)
+    try:
+        from steempeg.ui.launch_splash import finish_launch_splash
+
+        finish_launch_splash(status="Ready")
+    except Exception:
+        logging.debug("Launch splash close after settle failed", exc_info=True)
     try:
         app.ui.update()
     except Exception:
