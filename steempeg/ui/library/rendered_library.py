@@ -3158,11 +3158,7 @@ class RenderedLibraryMixin:
             self.apply_screenshots_sorting()
         self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
-        n_local = len(steempeg_rows)
-        if hasattr(self, "set_status"):
-            self.set_status(
-                f"Screenshots: {n_local} Steempeg · scanning Steam…"
-            )
+        # Progress stays on library Shots count — never the Render Settings status row.
         if steempeg_rows:
             self._screenshots_viewport_primed = True
             self._schedule_screenshots_viewport_refresh(0)
@@ -3304,11 +3300,6 @@ class RenderedLibraryMixin:
         # and starve visible tiles until all 8k placeholders land.
         self._apply_screenshots_filters(refresh_viewport=False)
         self._update_library_count_label()
-        if getattr(self, "_library_panel_mode", "") == "screenshots" and hasattr(
-            self, "set_status"
-        ):
-            n = self.grid_screenshots.count() if self.grid_screenshots is not None else 0
-            self.set_status(f"Screenshots: {n} · loading Steam…")
         # First batch: fill what the user can already see. Later batches only
         # extend the scroll range (placeholders); no rematerialize storm.
         if not getattr(self, "_screenshots_viewport_primed", False):
@@ -3325,9 +3316,8 @@ class RenderedLibraryMixin:
 
     def _on_steam_screenshots_scan_failed(self, message: str) -> None:
         logging.warning("Steam screenshots scan failed: %s", message)
-        if hasattr(self, "set_status"):
-            n = self.grid_screenshots.count() if getattr(self, "grid_screenshots", None) else 0
-            self.set_status(f"Screenshots: {n} (Steam scan failed)")
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
 
     def _on_steam_screenshots_scan_finished(self, total: int) -> None:
         worker = getattr(self, "_steam_screenshots_worker", None)
@@ -3384,16 +3374,13 @@ class RenderedLibraryMixin:
                 if str(row.get("source") or "").lower() != "steam"
             )
             steam_n = len(snapshot) - steem_n
-            if hasattr(self, "set_status"):
-                self.set_status(
-                    f"Screenshots: {len(snapshot)} file"
-                    f"{'s' if len(snapshot) != 1 else ''}"
-                    f" ({steem_n} Steempeg · {steam_n} Steam)"
-                )
+            if hasattr(self, "_update_library_count_label"):
+                self._update_library_count_label()
             logging.info(
-                "Screenshots refresh done: total=%d steempeg=%d steam_emitted=%d",
+                "Screenshots refresh done: total=%d steempeg=%d steam=%d steam_emitted=%d",
                 len(snapshot),
                 steem_n,
+                steam_n,
                 steam_total,
             )
             self._schedule_screenshots_viewport_refresh(50)
@@ -3668,11 +3655,6 @@ class RenderedLibraryMixin:
         self._screenshot_names_worker = worker
         worker.finished_names.connect(self._on_screenshot_game_names_finished)
         worker.failed.connect(self._on_screenshot_game_names_failed)
-        if hasattr(self, "set_status") and getattr(self, "_library_panel_mode", "") == "screenshots":
-            self.set_status(
-                f"Screenshots: resolving {len(app_ids)} game name"
-                f"{'s' if len(app_ids) != 1 else ''}…"
-            )
         worker.start()
 
     def _on_screenshot_game_names_failed(self, message: str) -> None:
@@ -3702,10 +3684,8 @@ class RenderedLibraryMixin:
                 pass
         updated = self.apply_screenshot_game_names(names)
         updated += self._backfill_steempeg_screenshot_identities()
-        if updated and hasattr(self, "set_status") and getattr(
-            self, "_library_panel_mode", ""
-        ) == "screenshots":
-            self.set_status(f"Screenshots: updated {updated} game name(s)")
+        if updated and hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
 
     def apply_screenshot_game_names(self, names: dict) -> int:
         """Apply app_id→name map to screenshot cards + filter selection. Returns rows touched."""
@@ -4558,7 +4538,21 @@ class RenderedLibraryMixin:
                 for i in range(n)
                 if (item := grid.item(i)) is not None and not item.isHidden()
             )
-            _set(visible, "Shots")
+            steam_busy = bool(
+                getattr(self, "_steam_screenshot_chunk_scheduled", False)
+                or (getattr(self, "_pending_steam_screenshot_rows", None) or [])
+            )
+            worker = getattr(self, "_steam_screenshots_worker", None)
+            if worker is not None:
+                try:
+                    steam_busy = steam_busy or worker.isRunning()
+                except RuntimeError:
+                    pass
+            # Growing count during Steam merge; ellipsis only before first card lands.
+            if steam_busy and visible <= 0:
+                _set("…", "Shots")
+            else:
+                _set(visible, "Shots")
             return
 
         if not hasattr(self.ui, "table_clips"):

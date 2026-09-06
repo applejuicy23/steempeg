@@ -331,13 +331,15 @@ class LifecycleMixin:
     def set_status(self, text):
         """Updates the render status row (delegates to update_status_indicator when available)."""
         if hasattr(self, 'update_status_indicator'):
-            if text.startswith("Screenshots: updated "):
-                self.update_status_indicator(text, "accent")
-                if hasattr(self, "_schedule_transient_status_clear"):
-                    self._schedule_transient_status_clear()
+            text = str(text or "")
+            # Screenshots load/count belongs in library chrome (Shots count), not the
+            # Render Settings status strip — opening the tab was spamming the dash.
+            if text.startswith("Screenshots:") or text.startswith("Refreshing Screenshots"):
+                if hasattr(self, "_update_library_count_label"):
+                    self._update_library_count_label()
                 return
             # Steam meta / library refresh summaries — purple, never idle-green,
-            # then snap back to Ready (same language as Screenshots updated).
+            # then snap back to Ready.
             if text.startswith("Refreshed ") and " from Steam" in text:
                 self.update_status_indicator(text, "accent")
                 if hasattr(self, "_schedule_transient_status_clear"):
