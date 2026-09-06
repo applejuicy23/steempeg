@@ -39,6 +39,8 @@ docs/linux-known-issues.md
 steempeg/.footer_lane_experiment_archive.py
 steempeg/.footer_lane_experiment_archive.diff
 steempeg/.footer_lane_experiment_notes.md
+steempeg/.cold_start_phased_archive.py
+steempeg/.cold_start_phased_notes.md
 
 # --- Local tooling, not shipped ---
 tools/
