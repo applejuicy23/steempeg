@@ -73,13 +73,10 @@ def player_outline_wraps_video() -> bool:
 
 
 def player_outline_immersive(app) -> bool:
-    """True when chrome outlines must hide (fullscreen / desktop theatre).
+    """True when chrome outlines must hide (fullscreen only).
 
-    Portable reuses ``is_theater`` to collapse docks, but still honors outline prefs
-    (otherwise Settings → Outline and stock lines never appear in Portable).
+    Desktop theatre keeps outline prefs so header / video / footer stay one
+    continuous box (Emily 6 Sep 2026 — side line was dropping on the black stage).
+    Portable reuses ``is_theater`` to collapse docks but still honors outline prefs.
     """
-    if getattr(app, "is_fullscreen", False):
-        return True
-    if getattr(app, "is_theater", False) and not getattr(app, "_portable_shell", False):
-        return True
-    return False
+    return bool(getattr(app, "is_fullscreen", False))

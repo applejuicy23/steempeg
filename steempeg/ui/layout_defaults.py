@@ -129,8 +129,8 @@ def _apply_player_chrome_stylesheets(app, *, immersive: bool, video_bg: str | No
     vw = getattr(app, "video_wrapper", None)
     if vw is not None:
         # Reunited + with-lines: side borders close the chrome outline.
-        # Desktop theatre / fullscreen: borderless black fill.
-        # Portable theatre: black fill, but outline sides still follow the pref.
+        # Fullscreen: borderless black fill (immersive).
+        # Theatre (desktop + portable): black fill, outline sides still follow the pref.
         vw.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         if immersive:
             vw.setStyleSheet(
@@ -166,14 +166,12 @@ def _apply_player_chrome_stylesheets(app, *, immersive: bool, video_bg: str | No
 
 
 def restore_player_chrome_after_immersive(app) -> None:
-    """Fast outline restore after desktop theatre exit (skip density / footer pills)."""
+    """Fast outline restore after desktop theatre / fullscreen exit."""
     from steempeg.ui.player_outline import player_outline_immersive
 
     immersive = player_outline_immersive(app)
-    portable = bool(getattr(app, "_portable_shell", False))
-    video_bg = "black" if immersive or (
-        portable and getattr(app, "is_theater", False)
-    ) else None
+    # Theatre stage stays black even when outlines remain (not fullscreen-immersive).
+    video_bg = "black" if immersive or getattr(app, "is_theater", False) else None
     _apply_player_chrome_stylesheets(app, immersive=immersive, video_bg=video_bg)
 
 
@@ -198,12 +196,8 @@ def apply_player_layout_mode(app, mode: str | None = None) -> str:
         pass
 
     immersive = player_outline_immersive(app)
-    # Portable keeps is_theater but still paints outline prefs; only the video
-    # plane uses a black fill (same as desktop theatre stage).
-    portable = bool(getattr(app, "_portable_shell", False))
-    video_bg = "black" if immersive or (
-        portable and getattr(app, "is_theater", False)
-    ) else None
+    # Theatre (desktop + portable) keeps a black stage; outlines still follow prefs.
+    video_bg = "black" if immersive or getattr(app, "is_theater", False) else None
 
     _apply_player_chrome_stylesheets(app, immersive=immersive, video_bg=video_bg)
 
