@@ -428,8 +428,6 @@ class LibraryMixin:
                 self.refresh_rendered_library()
             return
         if mode == "screenshots":
-            if hasattr(self, "set_status"):
-                self.set_status("Refreshing Screenshots…")
             if hasattr(self, "refresh_screenshots_library"):
                 self.refresh_screenshots_library(force=True)
             return
@@ -1042,6 +1040,10 @@ class LibraryMixin:
 
     def _context_menu_clip_paths_grid(self, pos) -> list:
         item = self.grid_clips.itemAt(pos)
+        return self._context_menu_clip_paths_from_grid_item(item)
+
+    def _context_menu_clip_paths_from_grid_item(self, item) -> list:
+        """Resolve delete/open targets from a known grid item (no itemAt re-hit)."""
         if not item:
             return []
 
@@ -1168,7 +1170,10 @@ class LibraryMixin:
         for clip_path in dead_paths:
             try:
                 if os.path.exists(clip_path):
-                    shutil.rmtree(clip_path)
+                    if hasattr(self, "_rmtree_clip_folder"):
+                        self._rmtree_clip_folder(clip_path)
+                    else:
+                        shutil.rmtree(clip_path)
                     logging.info(f"Deleted dead clip folder: {clip_path}")
                     if hasattr(self, "_on_queue_source_removed"):
                         self._on_queue_source_removed(clip_path)
@@ -2352,8 +2357,23 @@ class LibraryMixin:
 
     def _handle_grid_card_context_menu(self, item, event) -> None:
         # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
-        viewport_pos = self.grid_clips.viewport().mapFromGlobal(event.globalPosition().toPoint())
-        self.show_grid_context_menu(viewport_pos)
+        # Prefer the known card item — itemAt(mapFromGlobal) misses the first
+        # filtered / top-row card when the hit lands on chrome, gap, or badge.
+        if not self._clips_library_accepts_selection():
+            return
+        clip_paths = self._context_menu_clip_paths_from_grid_item(item)
+        if not clip_paths:
+            viewport_pos = self.grid_clips.viewport().mapFromGlobal(
+                event.globalPosition().toPoint()
+            )
+            clip_paths = self._context_menu_clip_paths_grid(viewport_pos)
+        if not clip_paths:
+            return
+
+        menu = QMenu(self.grid_clips)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
+        self._populate_library_context_menu(menu, clip_paths)
+        menu.exec(event.globalPosition().toPoint())
 
     def _handle_grid_viewport_press(self, event) -> bool:
         if not self._clips_library_accepts_selection():
@@ -2414,6 +2434,36 @@ class LibraryMixin:
         except Exception as e:
             logging.error(f"Failed to open folder: {e}")
 
+    def _rmtree_clip_folder(self, clip_path: str, *, attempts: int = 6) -> None:
+        """``shutil.rmtree`` with release + short retries for WinError 32 locks."""
+        import time
+
+        last_exc: Exception | None = None
+        for attempt in range(max(1, attempts)):
+            try:
+                shutil.rmtree(clip_path)
+                return
+            except OSError as exc:
+                last_exc = exc
+                winerr = getattr(exc, "winerror", None)
+                # 32 = sharing violation; 5 = access denied (sometimes same lock family)
+                if winerr not in (32, 5) and not isinstance(exc, PermissionError):
+                    raise
+                logging.warning(
+                    "Delete clip retry %s/%s after lock: %s",
+                    attempt + 1,
+                    attempts,
+                    exc,
+                )
+                if hasattr(self, "release_media_before_delete"):
+                    self.release_media_before_delete(clip_path)
+                app = QApplication.instance()
+                if app is not None:
+                    app.processEvents()
+                time.sleep(0.05 * (attempt + 1))
+        if last_exc is not None:
+            raise last_exc
+
     def delete_clip(self, clip_path):
         """ Prompts for confirmation and deletes the clip folder permanently. """
         confirm = True
@@ -2435,7 +2485,7 @@ class LibraryMixin:
             return
 
         try:
-            # Must unload first — Windows won't delete a clip folder mpv still holds.
+            # Unload + kill sniper/thumbs first — Windows won't delete held .m4s.
             if hasattr(self, "release_media_before_delete"):
                 self.release_media_before_delete(clip_path)
 
@@ -2446,7 +2496,7 @@ class LibraryMixin:
             except Exception:
                 logging.exception("Clip media-cache purge failed")
 
-            shutil.rmtree(clip_path)
+            self._rmtree_clip_folder(clip_path)
             logging.info(f"Deleted clip folder: {clip_path}")
             if hasattr(self, "_on_queue_source_removed"):
                 self._on_queue_source_removed(clip_path)
@@ -2462,7 +2512,23 @@ class LibraryMixin:
             salvaged = getattr(self, "_salvaged_clips", {})
             if norm in salvaged:
                 del salvaged[norm]
-            self.scan_clips()
+
+            # Surgical UI drop — full scan_clips() re-applied filters mid-rebuild and
+            # looked like “only ~20 clips” until Refresh wiped the filter.
+            if hasattr(self, "_remove_library_clip_paths_from_ui"):
+                self._remove_library_clip_paths_from_ui([clip_path])
+                live = getattr(self, "_clip_live_paths", None)
+                if isinstance(live, set):
+                    live.discard(os.path.normcase(norm))
+                if hasattr(self, "reapply_saved_library_filters"):
+                    self.reapply_saved_library_filters()
+                if hasattr(self, "_persist_clips_library_snapshot"):
+                    try:
+                        self._persist_clips_library_snapshot()
+                    except Exception:
+                        logging.debug("Clip snapshot persist after delete failed", exc_info=True)
+            else:
+                self.scan_clips()
 
             if hasattr(self.ui, 'label_short_summary'):
                 if hasattr(self, "_sync_queue_player_and_dash_chrome"):
