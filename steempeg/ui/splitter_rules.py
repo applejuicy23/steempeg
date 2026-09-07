@@ -1,18 +1,23 @@
-"""Desktop shell splitter rules — Clips Manager | player column | Render Queue.
+"""Desktop shell splitter rules — side pane | player column | side pane.
 
 The shell is two nested splitters, not one flat three-pane splitter::
 
     main_splitter                <- LEFT handle
-    +- left_panel                   Clips Manager
+    +- outer pane                   Library (default) or Render Queue
     +- right_h_splitter          <- RIGHT handle
        +- right_panel               player column
-       +- render_queue_panel        Render Queue
+       +- inner pane                Render Queue (default) or Library
 
-The RIGHT handle divides the player column against the queue, so Clips Manager
-is not a participant and cannot move — that side behaves correctly on its own.
-The LEFT handle divides Clips against the *whole* right block, so Qt resizes
-that block as one unit and reshuffles its insides: the queue changes width and
-the right handle slides along with it.
+Settings → Visual → Side panels can swap Library ↔ Render Queue. The player
+stays in the middle. Geometry treats the panes as outer/inner; queue open,
+close, and persist follow the Render Queue widget wherever it sits.
+
+The RIGHT handle divides the player column against the inner pane, so the
+outer pane is not a participant and cannot move — that side behaves correctly
+on its own.
+The LEFT handle divides the outer pane against the *whole* right block, so Qt
+resizes that block as one unit and reshuffles its insides: the inner pane
+changes width and the right handle slides along with it.
 
 There is no arrangement of minimums that makes Qt treat the outer handle as a
 three-pane divider, so the left drag is driven here instead. On press the queue
@@ -122,7 +127,7 @@ class SplitterRulesMixin:
         self._splitter_drag_side = None
         self._splitter_dragging = False
         self._splitter_handle_watchers = []
-        self._frozen_queue_width = 0
+        self._frozen_inner_width = 0
         self._frozen_player_floor = 0
         self._right_drag_mode = ""
         self._watch_splitter_handle(getattr(ui, "main_splitter", None), LEFT)
@@ -165,22 +170,29 @@ class SplitterRulesMixin:
             # Latched once: mid-drag a pane stops being collapsed, and the rule
             # must not change while the button is still down.
             self._right_drag_mode = self._right_drag_mode_for_state()
+            # Keep kiss hysteresis honest — otherwise reopen skips the snap floor
+            # and the player column freeloads, then claps.
+            if self._right_drag_mode == FROM_KISS:
+                self._player_column_kissed = True
             # Freeze the content floor so header elide / queue cards cannot
             # renegotiate the kiss threshold every pixel (Stage B).
             self._frozen_player_floor = self._player_column_floor()
             return
         sizes = self.right_h_splitter.sizes()
-        # Freeze the wall now. Reading it live lets the queue balloon while the
-        # player column is collapsed, which drags the right handle along.
-        queue_w = int(sizes[1]) if len(sizes) >= 2 else 0
-        self._frozen_queue_width = queue_w if queue_w > PANE_SCRAP_WIDTH else 0
+        # Freeze the inner wall now. Reading it live lets that pane balloon while
+        # the player column is collapsed, which drags the right handle along.
+        inner_w = int(sizes[1]) if len(sizes) >= 2 else 0
+        inner_floor = self._inner_pane_floor()
+        # Sub-floor remnants are shut — freezing them as a wall lets the next
+        # left drag unroll the inner pane instead of popping it.
+        self._frozen_inner_width = inner_w if inner_w >= inner_floor else 0
         self.sync_queue_minimum()
 
     def _end_splitter_drag(self, side: str) -> None:
         if getattr(self, "_splitter_drag_side", None) == side:
             self._splitter_drag_side = None
         self._splitter_dragging = False
-        self._frozen_queue_width = 0
+        self._frozen_inner_width = 0
         self._frozen_player_floor = 0
         self._right_drag_mode = ""
         self._sync_kiss_flag()
@@ -220,26 +232,11 @@ class SplitterRulesMixin:
             schedule_sync_trim_tools_placement(self)
         except Exception:
             pass
-        # Custom right-handle drags can shut the queue without Qt's snap timer
-        # seeing a "user collapse" — latch + persist so clip select cannot reopen.
-        if side == RIGHT and self._splitter_rules_active():
-            sizes = self.right_h_splitter.sizes()
-            if len(sizes) < 2:
-                return
-            queue_w = int(sizes[1])
-            jobs = getattr(self, "render_queue", None)
-            has_jobs = jobs is not None and len(jobs) > 0
-            if queue_w <= PANE_SCRAP_WIDTH:
-                if has_jobs:
-                    self._queue_user_collapsed = True
-                if hasattr(self, "_persist_queue_panel_open"):
-                    self._persist_queue_panel_open(False)
-            else:
-                self._queue_user_collapsed = False
-                if hasattr(self, "_persist_queue_panel_open"):
-                    self._persist_queue_panel_open(True)
-            # Mid-drag no longer arms the snap timer; schedule scrap cleanup +
-            # width persist now that the button is up.
+        # Custom handle drags can shut the queue without Qt's snap timer seeing
+        # a "user collapse" — latch + persist so clip select cannot reopen.
+        if self._splitter_rules_active():
+            if hasattr(self, "_persist_queue_state_from_geometry"):
+                self._persist_queue_state_from_geometry()
             if hasattr(self, "_on_right_h_splitter_moved"):
                 self._on_right_h_splitter_moved()
 
@@ -266,10 +263,12 @@ class SplitterRulesMixin:
         sizes = self.right_h_splitter.sizes()
         if len(sizes) < 2:
             return
-        # Scrap counts as shut so a remnant cannot keep the layout floor latched.
+        # Below the inner floor counts as shut. Scraps between PANE_FREED and
+        # floor used to latch "open" here, keep the layout min, and unroll.
+        inner_shut = int(sizes[1]) < self._inner_pane_floor()
         self._free_collapsed_minimums(
             int(sizes[0]) <= PANE_FREED,
-            int(sizes[1]) <= PANE_SCRAP_WIDTH,
+            inner_shut,
         )
 
     def _splitter_drag_moved(self, side: str, global_x: int, grab_offset: int) -> bool:
@@ -288,11 +287,11 @@ class SplitterRulesMixin:
             # fights live content mins (header elide + queue cards) and twitches
             # the player column; left→kiss never had this because it is custom.
             return self._drag_right_both_open(global_x, grab_offset)
-        queue_w = int(getattr(self, "_frozen_queue_width", 0))
+        inner_w = int(getattr(self, "_frozen_inner_width", 0))
         main = self.ui.main_splitter
         main_total = sum(main.sizes()) or main.width()
-        # Everything the drag may divide: Clips plus the player column.
-        avail = main_total - queue_w - self._right_handle_width()
+        # Everything the drag may divide: outer pane plus the player column.
+        avail = main_total - inner_w - self._right_handle_width()
         if avail <= 0:
             return False
 
@@ -300,11 +299,11 @@ class SplitterRulesMixin:
         left = max(0, min(int(requested_left), avail))
         floor = self._effective_player_floor(avail)
         if floor <= 0:
-            return self._place_left_handle_at_verge(main_total, left, avail, queue_w)
+            return self._place_left_handle_at_verge(main_total, left, avail, inner_w)
 
-        left = self._snap_clips_width(left, avail, floor)
+        left = self._snap_outer_width(left, avail, floor)
         player_w = self._resolve_player_width(avail - left, floor)
-        self._apply_left_drag_geometry(main_total, avail - player_w, player_w, queue_w)
+        self._apply_left_drag_geometry(main_total, avail - player_w, player_w, inner_w)
         return True
 
     # --- geometry ---------------------------------------------------------
@@ -322,6 +321,87 @@ class SplitterRulesMixin:
             and getattr(self, "render_queue_panel", None) is not None
             and getattr(ui, "right_panel", None) is not None
         )
+
+    def _queue_on_left(self) -> bool:
+        """True when Render Queue is the outer (left) pane."""
+        queue = getattr(self, "render_queue_panel", None)
+        main = getattr(getattr(self, "ui", None), "main_splitter", None)
+        if queue is None or main is None:
+            return False
+        try:
+            return main.indexOf(queue) == 0
+        except RuntimeError:
+            return False
+
+    def _queue_splitter_and_index(self):
+        """Splitter that currently owns Render Queue, and that child's index."""
+        queue = getattr(self, "render_queue_panel", None)
+        if queue is None:
+            return None, -1
+        rhs = getattr(self, "right_h_splitter", None)
+        main = getattr(getattr(self, "ui", None), "main_splitter", None)
+        for splitter in (rhs, main):
+            if splitter is None:
+                continue
+            try:
+                idx = splitter.indexOf(queue)
+            except RuntimeError:
+                continue
+            if idx >= 0:
+                return splitter, idx
+        return None, -1
+
+    def _queue_pane_width(self) -> int:
+        splitter, idx = self._queue_splitter_and_index()
+        if splitter is None or idx < 0:
+            return 0
+        sizes = splitter.sizes()
+        if idx >= len(sizes):
+            return 0
+        return max(0, int(sizes[idx]))
+
+    def _queue_width_from_saved_sizes(self, main_sizes, rhs_sizes) -> int:
+        """Queue width encoded in a pair of splitter snapshots."""
+        if self._queue_on_left():
+            if isinstance(main_sizes, (list, tuple)) and main_sizes:
+                return max(0, int(main_sizes[0]))
+            return 0
+        if isinstance(rhs_sizes, (list, tuple)) and len(rhs_sizes) >= 2:
+            return max(0, int(rhs_sizes[1]))
+        return 0
+
+    def _library_min_width(self) -> int:
+        ui = getattr(self, "ui", None)
+        win_w = int(ui.width() or 0) if ui is not None else 0
+        return left_panel_min_width(win_w, widget=ui) if win_w else 360
+
+    def _outer_pane_floor(self) -> int:
+        if self._queue_on_left():
+            return self._queue_layout_floor()
+        return self._library_min_width()
+
+    def _inner_pane_floor(self) -> int:
+        if self._queue_on_left():
+            return self._library_min_width()
+        return self._queue_layout_floor()
+
+    def _persist_queue_state_from_geometry(self) -> None:
+        """Latch user-collapse + persist open/width from the live queue slot."""
+        queue_w = self._queue_pane_width()
+        jobs = getattr(self, "render_queue", None)
+        has_jobs = jobs is not None and len(jobs) > 0
+        floor = self._queue_layout_floor() if hasattr(self, "_queue_layout_floor") else PANE_SCRAP_WIDTH
+        if queue_w < floor:
+            if has_jobs:
+                self._queue_user_collapsed = True
+            if hasattr(self, "_persist_queue_panel_open"):
+                self._persist_queue_panel_open(False)
+            return
+        self._queue_user_collapsed = False
+        if hasattr(self, "_persist_queue_panel_open"):
+            self._persist_queue_panel_open(True)
+        if hasattr(self, "save_layout_setting"):
+            self.save_layout_setting("queue_panel_width", int(queue_w))
 
     def _right_handle_width(self) -> int:
         """How much room the right handle really takes.
@@ -364,22 +444,18 @@ class SplitterRulesMixin:
         return min(self._player_column_floor(), affordable)
 
     def _effective_player_floor(self, avail: int) -> int:
-        """Player floor for a left drag, where Clips Manager is the neighbour."""
-        ui = self.ui
-        return self._scaled_player_floor(
-            avail, left_panel_min_width(int(ui.width() or 0), widget=ui)
-        )
+        """Player floor for a left drag, where the outer pane is the neighbour."""
+        return self._scaled_player_floor(avail, self._outer_pane_floor())
 
-    def _snap_clips_width(self, left: int, avail: int, floor: int) -> int:
-        """States 1 and 2 — Clips is either shut or at least minimally open."""
-        ui = self.ui
-        clips_min = left_panel_min_width(int(ui.width() or 0), widget=ui)
-        if avail < clips_min + floor:
+    def _snap_outer_width(self, left: int, avail: int, floor: int) -> int:
+        """States 1 and 2 — outer pane is either shut or at least minimally open."""
+        outer_min = self._outer_pane_floor()
+        if avail < outer_min + floor:
             # Shell too narrow to honour both floors; the player column wins.
             return left
-        if left >= clips_min:
+        if left >= outer_min:
             return left
-        return 0 if left < clips_min * CLIPS_SNAP_SHUT else clips_min
+        return 0 if left < outer_min * CLIPS_SNAP_SHUT else outer_min
 
     def _resolve_player_width(self, wanted: int, floor: int) -> int:
         """States 3 to 5 — free travel, held at the floor, or collapsed."""
@@ -394,36 +470,41 @@ class SplitterRulesMixin:
         return max(int(wanted), floor)
 
     def _place_left_handle_at_verge(
-        self, main_total: int, left: int, avail: int, queue_w: int
+        self, main_total: int, left: int, avail: int, inner_w: int
     ) -> bool:
-        """Left drag with Clips a stone's throw from its own floor.
+        """Left drag with the outer pane a stone's throw from its own floor.
 
         Neither pane can give the other anything here, so the room has just two
-        placements: Clips shut with the player column holding it, or Clips holding
+        placements: outer shut with the player column holding it, or outer holding
         it with the column kissed shut. Halfway across decides which.
         """
         if left >= avail * CLIPS_SNAP_SHUT:
             self._player_column_kissed = True
-            self._apply_left_drag_geometry(main_total, avail, 0, queue_w)
+            self._apply_left_drag_geometry(main_total, avail, 0, inner_w)
             return True
-        if self._clips_width() <= PANE_FREED:
+        if self._outer_pane_width() <= PANE_FREED:
             # Already against the wall, so there is nothing left to shut. Pushing
             # on would just shove the right handle along.
             return True
-        return self._shut_clips_and_travel()
+        return self._shut_outer_and_travel()
 
-    def _clips_width(self) -> int:
+    def _outer_pane_width(self) -> int:
         sizes = self.ui.main_splitter.sizes()
         return int(sizes[0]) if sizes else 0
 
+    def _clips_width(self) -> int:
+        return self._outer_pane_width()
+
     def _apply_left_drag_geometry(
-        self, main_total: int, left: int, player_w: int, queue_w: int
+        self, main_total: int, left: int, player_w: int, inner_w: int
     ) -> None:
         handle = self._right_handle_width()
-        self._free_collapsed_minimums(player_w <= 0, queue_w <= 0)
-        block = player_w + queue_w + handle
+        self._free_collapsed_minimums(
+            player_w <= 0, inner_w <= 0, outer_shut=int(left) <= 0
+        )
+        block = player_w + inner_w + handle
         self.ui.main_splitter.setSizes([max(int(left), 0), max(block, handle)])
-        self.right_h_splitter.setSizes([max(int(player_w), 0), max(int(queue_w), 0)])
+        self.right_h_splitter.setSizes([max(int(player_w), 0), max(int(inner_w), 0)])
 
     def _right_drag_mode_for_state(self) -> str:
         """Which pane, if any, this drag has to snap back open.
@@ -437,32 +518,33 @@ class SplitterRulesMixin:
             return ""
         if int(sizes[0]) <= PANE_FREED:
             return FROM_KISS
-        # Scrap counts as shut so reopen snaps to layout floor (not 1→N unroll).
-        return REOPEN_QUEUE if int(sizes[1]) <= PANE_SCRAP_WIDTH else ""
+        # Below layout floor = shut: free-drag scrap (2px..floor-1) used to latch
+        # mode "" and unroll, then snap to floor on release («свиток»).
+        return REOPEN_QUEUE if int(sizes[1]) < self._inner_pane_floor() else ""
 
     def _drag_right_from_kiss(self, global_x: int, grab_offset: int) -> bool:
-        """Player column collapsed: reopen it, or shut the queue and travel."""
+        """Player column collapsed: reopen it, or shut the inner pane and travel."""
         sizes = self.right_h_splitter.sizes()
         if len(sizes) >= 2 and int(sizes[1]) <= PANE_FREED:
-            # Nothing but the handle is left, so the queue comes out of Clips.
-            return self._pull_queue_out_of_clips(global_x, grab_offset)
-        return self._drag_right_player_vs_queue(global_x, grab_offset)
+            # Nothing but the handle is left, so the inner pane comes out of outer.
+            return self._pull_inner_out_of_outer(global_x, grab_offset)
+        return self._drag_right_player_vs_inner(global_x, grab_offset)
 
     def _drag_right_both_open(self, global_x: int, grab_offset: int) -> bool:
         """Both panes open: same hysteresis as from-kiss (Stage B open→kiss)."""
-        return self._drag_right_player_vs_queue(global_x, grab_offset)
+        return self._drag_right_player_vs_inner(global_x, grab_offset)
 
-    def _drag_right_player_vs_queue(self, global_x: int, grab_offset: int) -> bool:
-        """Divide player | queue with kiss hysteresis; swallow native moveSplitter."""
+    def _drag_right_player_vs_inner(self, global_x: int, grab_offset: int) -> bool:
+        """Divide player | inner with kiss hysteresis; swallow native moveSplitter."""
         room, pointer = self._right_column_room(global_x, grab_offset)
         if room <= 0:
             return False
         # Layout floor (not content hint) — cards must not inflate the neighbour.
-        floor = self._scaled_player_floor(room, self._queue_layout_floor())
+        floor = self._scaled_player_floor(room, self._inner_pane_floor())
         if floor <= 0:
-            # Mirror of the left handle at the verge: the queue is a stone's throw
-            # from its own floor, so it either holds the room or shuts and takes
-            # the kissed left handle along. Halfway across decides which.
+            # Mirror of the left handle at the verge: the inner pane is a stone's
+            # throw from its own floor, so it either holds the room or shuts and
+            # takes the kissed left handle along. Halfway across decides which.
             if pointer >= room * CLIPS_SNAP_SHUT:
                 self.kiss_right_column_shut()
             else:
@@ -471,12 +553,12 @@ class SplitterRulesMixin:
         return self._apply_right_column(room, self._resolve_player_width(pointer, floor))
 
     def _reopen_queue_pane(self, global_x: int, grab_offset: int) -> bool:
-        """Queue collapsed: it pops back to its floor, the player column yields."""
+        """Inner pane collapsed: it pops back to its floor, the player column yields."""
         room, pointer = self._right_column_room(global_x, grab_offset)
         if room <= 0:
             return False
-        queue_w = self._snap_queue_width(room - pointer, room)
-        return self._apply_right_column(room, room - queue_w)
+        inner_w = self._snap_inner_width(room - pointer, room)
+        return self._apply_right_column(room, room - inner_w)
 
     def _right_column_room(self, global_x: int, grab_offset: int) -> tuple[int, int]:
         """Splittable width of the right column, and the player width asked for."""
@@ -490,18 +572,18 @@ class SplitterRulesMixin:
 
     def _apply_right_column(self, room: int, player_w: int) -> bool:
         player_w = max(0, min(int(player_w), int(room)))
-        queue_w = int(room) - player_w
-        self._free_collapsed_minimums(player_w <= 0, queue_w <= 0)
-        self.right_h_splitter.setSizes([player_w, queue_w])
+        inner_w = int(room) - player_w
+        self._free_collapsed_minimums(player_w <= 0, inner_w <= 0)
+        self.right_h_splitter.setSizes([player_w, inner_w])
         return True
 
-    def _pull_queue_out_of_clips(self, global_x: int, grab_offset: int) -> bool:
-        """Right handle in state 5 with the queue shut too — both are at the wall.
+    def _pull_inner_out_of_outer(self, global_x: int, grab_offset: int) -> bool:
+        """Right handle in state 5 with the inner pane shut too — both at the wall.
 
         Everywhere else the right handle divides the player column against the
-        queue and Clips is not involved. Here there is no queue left to divide
-        against, so the room for it has to come out of Clips — otherwise the
-        handle would be dead.
+        inner pane and the outer pane is not involved. Here there is no inner
+        pane left to divide against, so the room for it has to come out of the
+        outer pane — otherwise the handle would be dead.
         """
         main = self.ui.main_splitter
         handle = self._right_handle_width()
@@ -511,21 +593,22 @@ class SplitterRulesMixin:
             return False
 
         pointer = main.mapFromGlobal(QPoint(int(global_x), 0)).x() - int(grab_offset)
-        queue_w = self._snap_queue_width(room - pointer, room)
-        if queue_w <= 0:
+        inner_w = self._snap_inner_width(room - pointer, room)
+        if inner_w <= 0:
             self.kiss_right_column_shut()
             return True
         self._free_collapsed_minimums(True, False)
-        main.setSizes([max(room - queue_w, 0), handle + queue_w])
-        self.right_h_splitter.setSizes([0, queue_w])
+        main.setSizes([max(room - inner_w, 0), handle + inner_w])
+        self.right_h_splitter.setSizes([0, inner_w])
         return True
 
-    def _shut_clips_and_travel(self) -> bool:
-        """Shut Clips from the verge, taking the kissed right handle along.
+    def _shut_outer_and_travel(self) -> bool:
+        """Shut the outer pane from the verge, taking the kissed right handle along.
 
         The meeting point is a rigid joint here, so both handles end up against
-        the left wall and the queue takes up the room Clips gave back. Handing it
-        to the player column instead would reopen a pane the drag never asked for.
+        the left wall and the inner pane takes up the room the outer pane gave
+        back. Handing it to the player column instead would reopen a pane the
+        drag never asked for.
         """
         main = self.ui.main_splitter
         handle = self._right_handle_width()
@@ -534,10 +617,13 @@ class SplitterRulesMixin:
         if room <= 0:
             return False
         self._player_column_kissed = True
-        self._free_collapsed_minimums(True, False)
+        self._free_collapsed_minimums(True, False, outer_shut=True)
         main.setSizes([0, main_total])
         self.right_h_splitter.setSizes([0, room])
         return True
+
+    def _shut_clips_and_travel(self) -> bool:
+        return self._shut_outer_and_travel()
 
     def _queue_pane_floor(self) -> int:
         """Narrowest the queue renders at — its own content minimum."""
@@ -552,15 +638,22 @@ class SplitterRulesMixin:
             return 380
         return max(80, int(queue_panel_min_width(win_w, widget=getattr(self, "ui", None))))
 
+    def _snap_inner_width(self, wanted: int, room: int) -> int:
+        """Shut, or at least the inner layout min — never creep via content hint."""
+        floor = min(self._inner_pane_floor(), room)
+        if wanted < floor * CLIPS_SNAP_SHUT:
+            return 0
+        return min(max(int(wanted), floor), room)
+
     def _snap_queue_width(self, wanted: int, room: int) -> int:
-        """Shut, or at least the layout min — never creep via content hint (~1px)."""
+        """Shut, or at least the queue layout min — never creep via content hint."""
         floor = min(self._queue_layout_floor(), room)
         if wanted < floor * CLIPS_SNAP_SHUT:
             return 0
         return min(max(int(wanted), floor), room)
 
     def kiss_right_column_shut(self) -> None:
-        """State 5 with the queue already closed.
+        """State 5 with the inner pane already closed.
 
         The player column collapses and the right column shrinks to its bare
         handle, so the two handles meet while the right one stays grabbable.
@@ -576,15 +669,32 @@ class SplitterRulesMixin:
         self.right_h_splitter.setSizes([0, 0])
         main.setSizes([max(sum(sizes) - handle, 0), handle])
 
-    def _free_collapsed_minimums(self, player_shut: bool, queue_shut: bool) -> None:
+    def _free_collapsed_minimums(
+        self, player_shut: bool, inner_shut: bool, *, outer_shut: bool | None = None
+    ) -> None:
         """Collapsed → ``PANE_FREED``; open queue → layout floor (blocks squash)."""
         self.ui.right_panel.setMinimumWidth(PANE_FREED if player_shut else 0)
+        queue = self.render_queue_panel
+        lib = getattr(self.ui, "left_panel", None)
+        if outer_shut is None:
+            outer_shut = self._outer_pane_width() < self._outer_pane_floor()
+        if self._queue_on_left():
+            # Kiss with inner shut: outer (queue) holds the room.
+            queue_shut = False if (player_shut and inner_shut) else bool(outer_shut)
+        else:
+            queue_shut = bool(inner_shut)
         if queue_shut:
-            self.render_queue_panel.setMinimumWidth(PANE_FREED)
+            queue.setMinimumWidth(PANE_FREED)
         else:
             # Explicit min like Clips Manager — zero lets the list crush itself.
-            self.render_queue_panel.setMinimumWidth(self._queue_layout_floor())
-        # Both panes gone: the right column is nothing but its own handle. Without
-        # this the outer splitter re-inflates it and the kiss springs back open.
-        shut_width = self._right_handle_width() if (player_shut and queue_shut) else 0
+            queue.setMinimumWidth(self._queue_layout_floor())
+        if lib is not None and self._queue_on_left():
+            if inner_shut:
+                lib.setMinimumWidth(PANE_FREED)
+            else:
+                lib.setMinimumWidth(self._library_min_width())
+        # Both inner-column panes gone: the right column is nothing but its own
+        # handle. Without this the outer splitter re-inflates it and the kiss
+        # springs back open.
+        shut_width = self._right_handle_width() if (player_shut and inner_shut) else 0
         self.right_h_splitter.setMinimumWidth(shut_width)
