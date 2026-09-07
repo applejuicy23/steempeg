@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QMenu,
@@ -60,7 +61,7 @@ from steempeg.ui.library.screenshot_photo import (
     SCREENSHOT_PHOTO_W,
     ScreenshotPhoto,
 )
-from steempeg.ui.library.library_tab import LibraryTabWidget
+from steempeg.ui.library.library_tab import LibraryTabStrip, LibraryTabWidget
 from steempeg.ui.library.library_styles import (
     install_library_vertical_scrollbar,
     library_grid_stylesheet,
@@ -318,6 +319,58 @@ class RenderedLibraryMixin:
         self._screenshots_viewport_timer: QTimer | None = None
         self._screenshot_live_paths: set[str] = set()
 
+    def _library_tab_visual_order(self) -> list[str]:
+        host = getattr(self, "library_tabs_host", None)
+        if host is None:
+            return list(getattr(self, "_library_tabs", {}) or ())
+        order: list[str] = []
+        for i in range(host.count()):
+            item = host.itemAt(i)
+            w = item.widget() if item is not None else None
+            if isinstance(w, LibraryTabWidget) and w.mode:
+                order.append(w.mode)
+        return order
+
+    def _apply_library_tab_order(self, wanted: list[str] | None) -> None:
+        host = getattr(self, "library_tabs_host", None)
+        tabs = getattr(self, "_library_tabs", None)
+        if host is None or not tabs:
+            return
+        catalog = [m for m, _ in _LIBRARY_PANEL_DEFS]
+        seen: list[str] = []
+        for mode in wanted or ():
+            if mode in tabs and mode not in seen:
+                seen.append(mode)
+        for mode in catalog:
+            if mode in tabs and mode not in seen:
+                seen.append(mode)
+        for mode in list(tabs):
+            if mode not in seen:
+                seen.append(mode)
+        for mode in seen:
+            tab = tabs.get(mode)
+            if tab is None:
+                continue
+            host.removeWidget(tab)
+        for i, mode in enumerate(seen):
+            tab = tabs.get(mode)
+            if tab is None:
+                continue
+            host.insertWidget(i, tab)
+            tab.show()
+
+    def _reorder_library_tab_at(self, source: str, insert_idx: int) -> None:
+        tabs = getattr(self, "_library_tabs", {})
+        if source not in tabs:
+            return
+        remaining = [m for m in self._library_tab_visual_order() if m != source]
+        idx = max(0, min(int(insert_idx), len(remaining)))
+        remaining.insert(idx, source)
+        if remaining == self._library_tab_visual_order():
+            return
+        self._apply_library_tab_order(remaining)
+        self._schedule_persist_library_ui_state()
+
     def _make_library_tab_button(self, label: str, mode: str) -> LibraryTabWidget:
         from steempeg.ui.ui_density import COMFORT, tab_label
 
@@ -331,8 +384,9 @@ class RenderedLibraryMixin:
     def setup_library_tab_bar(self, cm_row: QHBoxLayout):
         """Chrome-like tab row with a + button to add panels."""
         self._init_rendered_library_state()
-        self.library_tabs_host = QHBoxLayout()
-        self.library_tabs_host.setSpacing(8)
+        self.library_tab_strip = LibraryTabStrip()
+        self.library_tabs_host = self.library_tab_strip.tabs_layout
+        self.library_tab_strip.tab_moved.connect(self._reorder_library_tab_at)
 
         clips_tab = self._make_library_tab_button("📁 Clips Manager", "clips")
         self._library_tabs["clips"] = clips_tab
@@ -344,10 +398,10 @@ class RenderedLibraryMixin:
         self.btn_library_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_library_add.setStyleSheet(_ADD_PANEL_BTN)
         self.btn_library_add.clicked.connect(self._show_add_library_panel_menu)
+        self.library_tabs_host.addWidget(self.btn_library_add)
 
         cm_row.addStretch()
-        cm_row.addLayout(self.library_tabs_host)
-        cm_row.addWidget(self.btn_library_add)
+        cm_row.addWidget(self.library_tab_strip)
         cm_row.addStretch()
 
         if hasattr(self, "library_toolbar_pill"):
@@ -382,13 +436,12 @@ class RenderedLibraryMixin:
         menu = QMenu(self.ui)
         menu.setStyleSheet(ut.logs_menu_stylesheet())
         actions: dict = {}
-        can_remove = len(self._library_tabs) > 1
 
         for mode, label in _LIBRARY_PANEL_DEFS:
             if mode in self._library_tabs:
-                if can_remove:
-                    act = menu.addAction(f"−  {label}")
-                    actions[act] = ("close", mode)
+                # Empty chrome is allowed — any open tab can be closed.
+                act = menu.addAction(f"−  {label}")
+                actions[act] = ("close", mode)
             else:
                 act = menu.addAction(f"+  {label}")
                 actions[act] = ("open", mode)
@@ -406,10 +459,176 @@ class RenderedLibraryMixin:
         else:
             self._close_library_tab(mode)
 
+    def _library_chrome_is_empty(self) -> bool:
+        return not bool(getattr(self, "_library_tabs", None))
+
+    def _library_toolbar_control_widgets(self) -> list:
+        """Controls inside the toolbar pill (shell stays; these hide when empty)."""
+        widgets = []
+        chrome = getattr(self, "view_mode_chrome", None)
+        if chrome is not None:
+            for attr in ("lbl_view", "toggle_pill", "lbl_count"):
+                w = getattr(chrome, attr, None)
+                if w is not None:
+                    widgets.append(w)
+        else:
+            for attr in ("_lbl_view", "toggle_pill", "lbl_clip_count"):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    widgets.append(w)
+        group = getattr(self, "_library_sort_filter_group", None)
+        if group is not None:
+            widgets.append(group)
+        else:
+            for attr in ("_lbl_sorting", "combo_sort", "btn_filter_pill"):
+                w = getattr(self, attr, None)
+                if w is not None:
+                    widgets.append(w)
+        return widgets
+
+    def _set_library_chrome_controls_visible(self, visible: bool) -> None:
+        """Show/hide toolbar controls + Choose Folder / Refresh (not About row)."""
+        pill = getattr(self, "library_toolbar_pill", None)
+        if pill is not None:
+            try:
+                if not visible:
+                    # Keep the island height when every control is hidden.
+                    if not getattr(self, "_library_toolbar_empty_min_h", None):
+                        self._library_toolbar_empty_min_h = max(
+                            int(pill.height()),
+                            int(pill.sizeHint().height()),
+                            40,
+                        )
+                    pill.setMinimumHeight(int(self._library_toolbar_empty_min_h))
+                else:
+                    pill.setMinimumHeight(0)
+            except RuntimeError:
+                pass
+        for w in self._library_toolbar_control_widgets():
+            try:
+                w.setVisible(bool(visible))
+            except RuntimeError:
+                pass
+        for attr in ("folder_picker", "btn_refresh"):
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            try:
+                w.setVisible(bool(visible))
+            except RuntimeError:
+                pass
+
+    def _ensure_library_empty_page(self) -> None:
+        """Queue-style plaque when every chrome tab is closed."""
+        if getattr(self, "library_empty_page", None) is not None:
+            return
+        if not hasattr(self, "library_stack"):
+            return
+        from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
+
+        page = QWidget()
+        page.setObjectName("libraryEmptyPage")
+        page.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(12, 24, 12, 24)
+        lay.setSpacing(0)
+
+        panel = QFrame()
+        panel.setObjectName("libraryEmptyPanel")
+        panel.setStyleSheet(
+            "QFrame#libraryEmptyPanel {"
+            " background-color: #262229; border: 1px solid #3d3d45; border-radius: 18px; }"
+        )
+        panel.setMaximumWidth(300)
+        panel_lay = QVBoxLayout(panel)
+        panel_lay.setContentsMargins(20, 18, 20, 16)
+        panel_lay.setSpacing(8)
+        panel_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        logo = QLabel()
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setStyleSheet("background: transparent; border: none;")
+        apply_square_icon(logo, app_logo_pixmap(48, dpr=1.0), 48)
+        panel_lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignHCenter)
+        panel_lay.addSpacing(4)
+
+        title = QLabel("Select a tab to continue")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setWordWrap(False)
+        title.setStyleSheet(
+            f"color: #c4b5e8; font-size: 14px; font-weight: bold; border: none;"
+            f" background: transparent; font-family: {tok.FONT_APP};"
+        )
+        hint = QLabel("Use + to choose")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(False)
+        hint.setStyleSheet(
+            f"color: #8a8a8a; font-size: 12px; border: none; background: transparent;"
+            f" font-family: {tok.FONT_APP};"
+        )
+        panel_lay.addWidget(title)
+        panel_lay.addWidget(hint)
+
+        lay.addStretch(1)
+        lay.addWidget(panel, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(2)
+
+        self.library_empty_page = page
+        self.library_empty_panel = panel
+        self.library_empty_logo = logo
+        self.library_empty_title = title
+        self.library_empty_hint = hint
+        self.library_stack.addWidget(page)
+
+    def _apply_empty_library_chrome(self) -> None:
+        """No open chrome tabs — keep panel size, empty toolbar shell, placeholder."""
+        old_mode = getattr(self, "_library_panel_mode", "clips")
+        if old_mode == "clips" and hasattr(self, "cancel_trim_mode"):
+            try:
+                self.cancel_trim_mode()
+            except Exception:
+                pass
+        self._library_panel_mode = ""
+        self._ensure_library_empty_page()
+        empty = getattr(self, "library_empty_page", None)
+        if empty is not None and hasattr(self, "library_stack"):
+            self.library_stack.setCurrentWidget(empty)
+        self._set_library_chrome_controls_visible(False)
+        self._sync_library_add_button()
+        if hasattr(self, "_clear_clips_selection_visual"):
+            try:
+                self._clear_clips_selection_visual()
+            except Exception:
+                pass
+        if hasattr(self, "_clear_rendered_selection_visual"):
+            try:
+                self._clear_rendered_selection_visual()
+            except Exception:
+                pass
+        if hasattr(self, "_clear_screenshots_selection_visual"):
+            try:
+                self._clear_screenshots_selection_visual()
+            except Exception:
+                pass
+        if hasattr(self, "_reset_player_placeholder_default"):
+            try:
+                self._reset_player_placeholder_default()
+            except Exception:
+                pass
+        if hasattr(self, "_sync_library_mode_chrome"):
+            self._sync_library_mode_chrome()
+        if hasattr(self, "sync_filter_pill_badge"):
+            try:
+                self.sync_filter_pill_badge()
+            except Exception:
+                pass
+
     def _sync_sort_combo_for_panel(self):
         if not hasattr(self, "combo_sort"):
             return
         mode = getattr(self, "_library_panel_mode", "clips")
+        if mode not in ("clips", "rendered", "screenshots"):
+            return
         if mode == "screenshots":
             self._ensure_screenshots_sort_combo()
             return
@@ -514,6 +733,8 @@ class RenderedLibraryMixin:
 
     def _remember_current_panel_sort(self) -> None:
         mode = getattr(self, "_library_panel_mode", "clips")
+        if mode not in ("clips", "rendered", "screenshots"):
+            return
         self._stash_sort_for_panel(mode)
 
     def _stash_library_tab_selection(self, tab: str) -> None:
@@ -679,14 +900,18 @@ class RenderedLibraryMixin:
     def _close_library_tab(self, mode: str):
         if mode not in self._library_tabs:
             return
-        if len(self._library_tabs) <= 1:
-            return
+        was_active = getattr(self, "_library_panel_mode", "") == mode
         tab = self._library_tabs.pop(mode)
         self.library_tabs_host.removeWidget(tab)
         tab.deleteLater()
         self._sync_library_add_button()
-        if self._library_panel_mode == mode:
-            fallback = "clips" if "clips" in self._library_tabs else next(iter(self._library_tabs))
+        if not self._library_tabs:
+            self._apply_empty_library_chrome()
+            self._schedule_persist_library_ui_state()
+            return
+        if was_active:
+            visual = self._library_tab_visual_order()
+            fallback = visual[0] if visual else next(iter(self._library_tabs))
             self.set_library_panel(fallback)
         else:
             self._persist_library_ui_state()
@@ -706,11 +931,13 @@ class RenderedLibraryMixin:
         elif mode == "screenshots":
             self._ensure_screenshots_widgets()
         tab = self._make_library_tab_button(labels[mode], mode)
-        order = [m for m, _ in _LIBRARY_PANEL_DEFS]
-        insert_idx = sum(1 for m in order[: order.index(mode)] if m in self._library_tabs)
-        self.library_tabs_host.insertWidget(insert_idx, tab)
+        # New tabs go at the end (Chrome-like). Restore applies saved visual order later.
+        self.library_tabs_host.addWidget(tab)
         self._library_tabs[mode] = tab
         self._sync_library_add_button()
+        # Leaving empty chrome — restore toolbar + footer folder/refresh.
+        if getattr(self, "_library_panel_mode", None) == "":
+            self._set_library_chrome_controls_visible(True)
         if not getattr(self, "_restoring_library_state", False):
             self._persist_library_ui_state()
 
@@ -727,10 +954,14 @@ class RenderedLibraryMixin:
     def set_library_panel(self, mode: str):
         if mode not in self._library_tabs:
             return
+        # Leaving empty chrome (panel size unchanged; controls come back).
+        if getattr(self, "_library_panel_mode", None) == "":
+            self._set_library_chrome_controls_visible(True)
         old_mode = getattr(self, "_library_panel_mode", "clips")
         if old_mode != mode:
-            self._stash_library_tab_selection(old_mode)
-            self._stash_sort_for_panel(old_mode)
+            if old_mode in ("clips", "rendered", "screenshots"):
+                self._stash_library_tab_selection(old_mode)
+                self._stash_sort_for_panel(old_mode)
             # Trim belongs to a clip preview; leaving the Clips tab must drop the trim
             # handles/button so they don't linger over a rendered preview.
             if old_mode == "clips" and hasattr(self, "cancel_trim_mode"):
@@ -776,7 +1007,7 @@ class RenderedLibraryMixin:
                 self._schedule_clips_viewport_refresh(50)
         self._sync_library_view_toggle_for_mode()
         self._sync_sort_combo_for_panel()
-        if old_mode != mode:
+        if old_mode != mode and mode in ("clips", "rendered", "screenshots"):
             self._restore_sort_for_panel(mode)
             self._restore_library_tab_selection(mode)
             # Re-sort only when this panel's data isn't already in the combo order.
@@ -806,6 +1037,22 @@ class RenderedLibraryMixin:
             if hasattr(self, "_update_start_button_label"):
                 self._update_start_button_label()
         self._schedule_persist_library_ui_state()
+        # Library tab flips resize chrome / clear hover without a fresh Enter on the
+        # traffic lights — re-sync so close/minimize glyphs work after a tab click.
+        try:
+            from PySide6.QtCore import QTimer
+
+            from steempeg.ui.window_chrome import (
+                force_app_cursor_resync,
+                refresh_traffic_lights_under_cursor,
+            )
+
+            ui = getattr(self, "ui", None)
+            if ui is not None:
+                QTimer.singleShot(0, lambda w=ui: refresh_traffic_lights_under_cursor(w))
+                QTimer.singleShot(0, force_app_cursor_resync)
+        except Exception:
+            pass
 
     def _library_stack_index_for(self, mode: str) -> int:
         if not hasattr(self, "library_stack"):
@@ -830,6 +1077,10 @@ class RenderedLibraryMixin:
             screenshots_folder_button_label,
         )
 
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            self._set_library_chrome_controls_visible(False)
+            return
+
         mode = getattr(self, "_library_panel_mode", "clips")
         dense = (
             getattr(self, "_ui_density", None)
@@ -837,6 +1088,12 @@ class RenderedLibraryMixin:
         )
         picker = getattr(self, "folder_picker", None)
         refresh = getattr(self, "btn_refresh", None)
+
+        # Empty chrome may have hidden these — restore when a tab is active.
+        if picker is not None:
+            picker.setVisible(True)
+        if refresh is not None:
+            refresh.setVisible(True)
 
         if picker is not None:
             from steempeg.ui.signal_utils import safe_disconnect
@@ -1068,6 +1325,9 @@ class RenderedLibraryMixin:
             return False
         if self._render_dock_kept_alive():
             return True
+        # No library chrome tabs — nothing to export from an empty shelf.
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return False
         # Loaded Clips Manager .mpd keeps dash + settings even on Screenshots tab.
         if self._has_active_raw_clip():
             return True
@@ -1186,14 +1446,17 @@ class RenderedLibraryMixin:
 
         rendered_tab_open = "rendered" in getattr(self, "_library_tabs", {})
         screenshots_tab_open = "screenshots" in getattr(self, "_library_tabs", {})
+        clips_tab_open = "clips" in getattr(self, "_library_tabs", {})
         self._remember_current_panel_sort()
         sorts = getattr(self, "_sort_index_by_panel", {}) or {}
         payload = {
-            "library_panel_mode": getattr(self, "_library_panel_mode", "clips"),
+            "library_panel_mode": getattr(self, "_library_panel_mode", "clips") or "",
             "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
             "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
+            "clips_tab_open": clips_tab_open,
             "rendered_tab_open": rendered_tab_open,
             "screenshots_tab_open": screenshots_tab_open,
+            "library_tab_order": self._library_tab_visual_order(),
             "clips_selected_path": clips_selected,
             "rendered_selected_path": rendered_selected,
             "preview_kind": preview_kind,
@@ -1209,7 +1472,8 @@ class RenderedLibraryMixin:
             logging.warning("Could not save library_ui.json: %s", exc)
         self.save_user_settings("library_ui", payload)
         logging.info(
-            "Saved library_ui (rendered_tab_open=%s, mode=%s)",
+            "Saved library_ui (clips_tab_open=%s, rendered_tab_open=%s, mode=%s)",
+            payload["clips_tab_open"],
             payload["rendered_tab_open"],
             payload["library_panel_mode"],
         )
@@ -1304,12 +1568,20 @@ class RenderedLibraryMixin:
             return
 
         logging.info(
-            "Restore library_ui (rendered_tab_open=%s, mode=%s)",
+            "Restore library_ui (clips_tab_open=%s, rendered_tab_open=%s, mode=%s)",
+            state.get("clips_tab_open", True),
             state.get("rendered_tab_open"),
             state.get("library_panel_mode", "clips"),
         )
 
+        # Default True for older saves that never persisted clips_tab_open.
+        wants_clips = bool(state.get("clips_tab_open", True))
         wants_rendered = self._wants_rendered_library_ui(state)
+        wants_shots = bool(
+            state.get("screenshots_tab_open")
+            or state.get("library_panel_mode") == "screenshots"
+        )
+
         if wants_rendered and "rendered" not in self._library_tabs:
             self._ensure_rendered_tab()
             logging.info(
@@ -1317,16 +1589,14 @@ class RenderedLibraryMixin:
                 state.get("library_panel_mode", "clips"),
             )
 
-        wants_shots = bool(
-            state.get("screenshots_tab_open")
-            or state.get("library_panel_mode") == "screenshots"
-        )
         if wants_shots and "screenshots" not in self._library_tabs:
             self._ensure_library_tab("screenshots")
 
         if getattr(self, "_library_ui_restored", False):
             if wants_rendered and "rendered" not in self._library_tabs:
                 self._ensure_rendered_tab()
+            if wants_shots and "screenshots" not in self._library_tabs:
+                self._ensure_library_tab("screenshots")
             return
 
         self._saved_clips_selection_path = ""
@@ -1353,21 +1623,42 @@ class RenderedLibraryMixin:
                 except (TypeError, ValueError):
                     self._sort_index_by_panel[key] = default
 
-            mode = state.get("library_panel_mode", "clips")
-            try:
-                from steempeg.ui.settings_prefs import load_remember_library_tab
+            # Startup always seeds Clips — drop it when the user closed every tab
+            # (or closed Clips while leaving others open).
+            if not wants_clips and "clips" in getattr(self, "_library_tabs", {}):
+                tab = self._library_tabs.pop("clips")
+                self.library_tabs_host.removeWidget(tab)
+                tab.deleteLater()
+                self._sync_library_add_button()
 
-                settings = {}
-                if hasattr(self, "load_user_settings"):
-                    settings = self.load_user_settings() or {}
-                if not load_remember_library_tab(settings):
-                    mode = "clips"
-            except Exception:
-                pass
-            if mode == "rendered" and "rendered" in getattr(self, "_library_tabs", {}):
-                self.open_library_panel("rendered")
-            elif mode in getattr(self, "_library_tabs", {}):
-                self.open_library_panel(mode)
+            if not getattr(self, "_library_tabs", {}):
+                self._apply_empty_library_chrome()
+            else:
+                saved_order = state.get("library_tab_order")
+                if isinstance(saved_order, list):
+                    self._apply_library_tab_order(
+                        [str(m) for m in saved_order if isinstance(m, str)]
+                    )
+                mode = state.get("library_panel_mode", "clips") or ""
+                try:
+                    from steempeg.ui.settings_prefs import load_remember_library_tab
+
+                    settings = {}
+                    if hasattr(self, "load_user_settings"):
+                        settings = self.load_user_settings() or {}
+                    if not load_remember_library_tab(settings):
+                        mode = (
+                            "clips"
+                            if "clips" in self._library_tabs
+                            else next(iter(self._library_tabs))
+                        )
+                except Exception:
+                    pass
+                if mode in getattr(self, "_library_tabs", {}):
+                    self.open_library_panel(mode)
+                else:
+                    # Saved mode missing — pick any open tab.
+                    self.open_library_panel(next(iter(self._library_tabs)))
 
             QTimer.singleShot(
                 0,
@@ -1379,6 +1670,10 @@ class RenderedLibraryMixin:
 
     def _restore_library_selections(self, state: dict):
         """Restore rendered-tab highlight only — clips start clean until the user picks one."""
+        if self._library_chrome_is_empty():
+            if hasattr(self, "_sync_library_mode_chrome"):
+                self._sync_library_mode_chrome()
+            return
         if hasattr(self, "_clear_clips_selection_visual"):
             self._clear_clips_selection_visual()
         self._saved_clips_selection_path = ""
@@ -1387,7 +1682,7 @@ class RenderedLibraryMixin:
 
         preview_kind = state.get("preview_kind") or ""
         preview_path = (state.get("preview_path") or "").strip()
-        mode = state.get("library_panel_mode", "clips")
+        mode = state.get("library_panel_mode", "clips") or ""
 
         if preview_kind == "rendered" and preview_path and os.path.isfile(preview_path):
             self._select_rendered_path(preview_path, play=False)
@@ -1583,6 +1878,8 @@ class RenderedLibraryMixin:
         play/seek even starts.
         """
         self._ensure_library_tab("clips")
+        if getattr(self, "_library_panel_mode", None) == "":
+            self._set_library_chrome_controls_visible(True)
         old_mode = getattr(self, "_library_panel_mode", "clips")
         if old_mode == "clips":
             return
@@ -4491,6 +4788,8 @@ class RenderedLibraryMixin:
     def _update_library_count_label(self):
         if not hasattr(self, "lbl_clip_count"):
             return
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return
 
         from steempeg.ui.widgets.view_mode_toggle import format_library_count
 
@@ -5275,6 +5574,8 @@ class RenderedLibraryMixin:
     # --- Hooks that branch when the rendered panel is active ---
 
     def set_view_mode(self, mode):
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return
         if getattr(self, "_library_panel_mode", "clips") == "screenshots":
             # Screenshots is Grid-only (Emily 13 Aug) — ignore List.
             self._sync_library_view_toggle_for_mode()
@@ -5291,6 +5592,8 @@ class RenderedLibraryMixin:
 
     def _sync_library_view_toggle_for_mode(self) -> None:
         """Screenshots: Grid-only in the RQ track shell. Clips/Rendered: both segments."""
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return
         mode = getattr(self, "_library_panel_mode", "clips")
         chrome = getattr(self, "view_mode_chrome", None)
         if chrome is not None:
@@ -5328,6 +5631,8 @@ class RenderedLibraryMixin:
                 list_btn.setStyleSheet(self.toggle_style_inactive)
 
     def apply_sorting(self):
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return
         self._remember_current_panel_sort()
         mode = getattr(self, "_library_panel_mode", "clips")
         if mode == "rendered":
@@ -5356,6 +5661,8 @@ class RenderedLibraryMixin:
         self._persist_library_ui_state()
 
     def show_filter_menu(self):
+        if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
+            return
         mode = getattr(self, "_library_panel_mode", "clips")
         if mode == "rendered":
             self.show_rendered_filter_menu()
