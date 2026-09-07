@@ -7289,8 +7289,11 @@ class RenderMixin:
         if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
             if hasattr(self, "_clamp_queue_panel_for_immersive"):
                 self._clamp_queue_panel_for_immersive(True)
-            total = sum(self.right_h_splitter.sizes()) or self.right_h_splitter.width()
-            self.right_h_splitter.setSizes([max(int(total), 1), 0])
+            if hasattr(self, "_close_queue_pane"):
+                self._close_queue_pane()
+            else:
+                total = sum(self.right_h_splitter.sizes()) or self.right_h_splitter.width()
+                self.right_h_splitter.setSizes([max(int(total), 1), 0])
             return
 
         if hasattr(self, "_clamp_queue_panel_for_immersive"):
@@ -7299,9 +7302,17 @@ class RenderMixin:
         # Always allow collapse — locking the pane open while jobs exist made the
         # nested minimumWidth shove Clips Manager on the outer splitter.
         self.right_h_splitter.setCollapsible(1, True)
+        main = getattr(getattr(self, "ui", None), "main_splitter", None)
+        if main is not None:
+            main.setCollapsible(0, True)
 
         sizes = self.right_h_splitter.sizes()
         total = sum(sizes) if sum(sizes) > 0 else self.right_h_splitter.width()
+        queue_w = (
+            self._queue_pane_width()
+            if hasattr(self, "_queue_pane_width")
+            else (int(sizes[1]) if len(sizes) >= 2 else 0)
+        )
         has_jobs = len(self.render_queue) > 0
         had_jobs = bool(getattr(self, "_queue_sync_had_jobs", False))
         self._queue_sync_had_jobs = has_jobs
@@ -7319,7 +7330,7 @@ class RenderMixin:
             # on routine refreshes (clip select, progress ticks, Leave/Resume).
             # Scrap ≤48 counts as shut — closed panes often sit at PANE_FREED (1).
             should_open = (
-                sizes[1] <= 48
+                queue_w <= 48
                 and not bool(getattr(self, "_queue_user_collapsed", False))
                 and not bool(getattr(self, "_splitter_dragging", False))
                 and (
@@ -7335,14 +7346,14 @@ class RenderMixin:
         else:
             self.render_queue_panel.show()
             if bool(getattr(self, "_queue_user_collapsed", False)) or (
-                had_jobs and sizes[1] > 0
+                had_jobs and queue_w > 0
             ):
                 self._selected_queue_job_id = None
                 if hasattr(self, "_close_queue_pane"):
                     self._close_queue_pane()
                 else:
                     self.right_h_splitter.setSizes([max(int(total), 1), 0])
-            elif sizes[1] <= 0 and hasattr(self, "_set_queue_pane_closed"):
+            elif queue_w <= 0 and hasattr(self, "_set_queue_pane_closed"):
                 # Empty + already shut: keep maxWidth clamped, handle visible.
                 self._set_queue_pane_closed(True)
 
