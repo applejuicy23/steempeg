@@ -666,7 +666,8 @@ class RenderQueuePanel(QWidget):
 
         outer = QVBoxLayout(self)
         self._outer_layout = outer
-        outer.setContentsMargins(_SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET)
+        self._gutter_on_left = True
+        self._apply_splitter_gutter()
         outer.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
 
         tab_row = QHBoxLayout()
@@ -973,6 +974,24 @@ class RenderQueuePanel(QWidget):
             dense=d,
         )
 
+    def set_splitter_gutter_side(self, side: str) -> None:
+        """Put the handle gutter on the player-facing edge (``left`` or ``right``)."""
+        self._gutter_on_left = str(side or "left").strip().lower() != "right"
+        self._apply_splitter_gutter()
+
+    def _apply_splitter_gutter(self) -> None:
+        if getattr(self, "_outer_layout", None) is None:
+            return
+        gutter = _SPLITTER_GUTTER
+        if getattr(self, "_gutter_on_left", True):
+            self._outer_layout.setContentsMargins(
+                gutter, 0, 0, RENDER_QUEUE_BOTTOM_INSET
+            )
+        else:
+            self._outer_layout.setContentsMargins(
+                0, 0, gutter, RENDER_QUEUE_BOTTOM_INSET
+            )
+
     def apply_density(self, dense: UiDensity) -> None:
         """Shrink queue chrome for Deck-class windows; rebuild list cards if thumbs change."""
         prev = self._density
@@ -1036,11 +1055,8 @@ class RenderQueuePanel(QWidget):
         self._btn_clear.setFont(clear_font)
         self._empty_panel.setMaximumWidth(dense.queue_empty_w)
         # Keep the same gutter as comfort desktop — compact used to zero this and
-        # glue the queue flush against the right_h_splitter handle (esp. Linux).
-        if hasattr(self, "_outer_layout") and self._outer_layout is not None:
-            self._outer_layout.setContentsMargins(
-                _SPLITTER_GUTTER, 0, 0, RENDER_QUEUE_BOTTOM_INSET
-            )
+        # glue the queue flush against the splitter handle (esp. Linux).
+        self._apply_splitter_gutter()
         if chrome is None:
             self._sync_view_toggle_buttons()
         if (
