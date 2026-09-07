@@ -133,7 +133,13 @@ class _MSG(ctypes.Structure):
 
 
 class _TrafficLight(QPushButton):
-    """macOS-style window control dot with a thin painted glyph (no Unicode junk)."""
+    """macOS-style window control dot with a thin painted glyph (no Unicode junk).
+
+    Hover look is painted here — never via ``setStyleSheet`` swaps. Swapping QSS
+    on hover triggers HoverLeave; after a library/neo tab click Qt keeps
+    ``WA_UnderMouse`` stuck elsewhere so HoverEnter never returns, and the
+    glyph/color flash off immediately (poll + press looked "dead").
+    """
 
     def __init__(self, color: str, hover_color: str, glyph: str = "close", parent=None):
         super().__init__(parent)
@@ -148,53 +154,71 @@ class _TrafficLight(QPushButton):
         # Hover* events still fire on an inactive top-level (enter/leave often do not
         # until the shell is clicked again — missing glyphs after Alt-Tab / restore).
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        # Without tracking, MouseMove never arrives until a press — after a sticky
+        # library-tab UnderMouse, HoverEnter is skipped and glyphs stay blank.
+        self.setMouseTracking(True)
         self.setText("")
-        self._apply_style()
-
-    def _apply_style(self) -> None:
-        bg = self._hover if self._hovered else self._base
+        # Static chrome only — fill + glyph are drawn in paintEvent.
         self.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: {bg};
+            """
+            QPushButton {
+                background-color: transparent;
                 border: none;
                 border-radius: 6px;
                 padding: 0;
                 margin: 0;
-            }}
+            }
             """
         )
 
+    def _cursor_over_self(self) -> bool:
+        try:
+            return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        except RuntimeError:
+            return False
+
     def _set_hovered(self, hovered: bool) -> None:
+        hovered = bool(hovered)
         if self._hovered == hovered:
             return
         self._hovered = hovered
-        self._apply_style()
+        try:
+            # Keep Qt's UnderMouse bit aligned with what we paint — stops Leave
+            # thrash from clearing the glyph while the cursor is still on the dot.
+            self.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, hovered)
+        except RuntimeError:
+            pass
+        self.update()
+
+    def _apply_style(self) -> None:
+        # Dialogs used to restyle these as QPushButtons. Discs are painted now.
         self.update()
 
     def _sync_hover_from_cursor(self) -> None:
-        try:
-            local = self.mapFromGlobal(QCursor.pos())
-            self._set_hovered(self.rect().contains(local))
-        except RuntimeError:
-            self._set_hovered(False)
+        self._set_hovered(self._cursor_over_self())
 
     def event(self, event):  # noqa: N802
         et = event.type()
         if et == QEvent.Type.HoverEnter:
             self._set_hovered(True)
         elif et == QEvent.Type.HoverLeave:
-            self._set_hovered(False)
-        elif et == QEvent.Type.HoverMove and not self._hovered:
-            self._set_hovered(True)
+            # Spurious Leave after QSS/layout/tab click — trust geometry.
+            self._set_hovered(self._cursor_over_self())
+        elif et in (QEvent.Type.HoverMove, QEvent.Type.MouseMove):
+            self._sync_hover_from_cursor()
         return super().event(event)
 
-    def enterEvent(self, event):
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._set_hovered(True)
+        super().mousePressEvent(event)
+
+    def enterEvent(self, event):  # noqa: N802
         self._set_hovered(True)
         super().enterEvent(event)
 
-    def leaveEvent(self, event):
-        self._set_hovered(False)
+    def leaveEvent(self, event):  # noqa: N802
+        self._set_hovered(self._cursor_over_self())
         super().leaveEvent(event)
 
     def hideEvent(self, event):
@@ -209,11 +233,17 @@ class _TrafficLight(QPushButton):
         QTimer.singleShot(0, self._sync_hover_from_cursor)
 
     def paintEvent(self, event):
-        super().paintEvent(event)
+        # Skip QPushButton chrome — we own the disc + glyph.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._hover if self._hovered else self._base))
+        painter.drawEllipse(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0))
+
         if not self._hovered:
+            painter.end()
             return
 
-        painter = QPainter(self)
         # Hairlines stay crisp without AA mush on a 13px dot.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
@@ -370,6 +400,36 @@ class _TitleBarUpdateButton(QPushButton):
         painter.end()
 
 
+# Geometry-driven traffic-light hover (no Enter) — Qt still applies the stuck
+# tab's Arrow; we push a hand override while a light is hot under the cursor.
+_traffic_hand_override = False
+
+
+def _sync_traffic_light_hand_cursor(want_hand: bool) -> None:
+    """Force PointingHand while a traffic light is geometry-hovered."""
+    global _traffic_hand_override
+    app = QApplication.instance()
+    if app is None:
+        return
+    try:
+        if want_hand:
+            if _traffic_hand_override and app.overrideCursor() is not None:
+                return
+            # Flag can be stale after force_app_cursor_resync clears the stack.
+            if _traffic_hand_override and app.overrideCursor() is None:
+                _traffic_hand_override = False
+            if not _traffic_hand_override:
+                app.setOverrideCursor(Qt.CursorShape.PointingHandCursor)
+                _traffic_hand_override = True
+            return
+        if _traffic_hand_override:
+            if app.overrideCursor() is not None:
+                app.restoreOverrideCursor()
+            _traffic_hand_override = False
+    except RuntimeError:
+        _traffic_hand_override = False
+
+
 def force_app_cursor_resync() -> None:
     """Clear a stuck PointingHand left by a closed modal (chooser / About / sheets).
 
@@ -378,19 +438,23 @@ def force_app_cursor_resync() -> None:
     re-queried; nudge ``QCursor.setPos`` for Windows. Also strip cursors from
     the widget chain under the pointer (destroyed dialog buttons leave ghosts).
     """
+    global _traffic_hand_override
     app = QApplication.instance()
     if app is None:
         return
     try:
         while app.overrideCursor() is not None:
             app.restoreOverrideCursor()
+        _traffic_hand_override = False
         # Widget under the pointer may still be a dying modal button with
         # PointingHand — clear the whole parent chain before the Arrow nudge.
         under = app.widgetAt(QCursor.pos())
         walk = under
         while walk is not None:
             try:
-                walk.unsetCursor()
+                # Don't strip the traffic-light hand — re-apply after unset chain.
+                if not isinstance(walk, _TrafficLight):
+                    walk.unsetCursor()
             except RuntimeError:
                 break
             walk = walk.parentWidget()
@@ -404,6 +468,18 @@ def force_app_cursor_resync() -> None:
                     w.unsetCursor()
             except RuntimeError:
                 pass
+        # Restore hand on any traffic light (unsetCursor may have hit parents only,
+        # but tab-click paths still expect these buttons to own PointingHand).
+        for w in app.topLevelWidgets():
+            for tb in _title_bars_for_window(w):
+                for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+                    btn = getattr(tb, attr, None)
+                    if btn is None:
+                        continue
+                    try:
+                        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    except RuntimeError:
+                        pass
         pos = QCursor.pos()
         QCursor.setPos(pos)
         # Re-query after the nudge; if still a hand, force Arrow for one frame.
@@ -418,8 +494,10 @@ def force_app_cursor_resync() -> None:
             ):
                 app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
                 app.restoreOverrideCursor()
+        # Geometry hover may still need the hand override (sticky tab UnderMouse).
+        refresh_traffic_lights_under_cursor_all()
     except RuntimeError:
-        pass
+        _traffic_hand_override = False
 
 
 class SteempegTitleBar(QWidget):
@@ -440,6 +518,9 @@ class SteempegTitleBar(QWidget):
         self._window = window
         self.setObjectName("SteempegTitleBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # So HoverMove reaches the bar even when a child missed Enter after a tab click.
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setMouseTracking(True)
         self.setFixedHeight(tok.TITLE_BAR_HEIGHT)
         # Caption drag area must stay arrow; only the shell tools use hand.
         self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -632,6 +713,27 @@ class SteempegTitleBar(QWidget):
 
         self._apply_bar_style(tok.BG_TITLE_BAR)
         self.set_update_available(False)
+
+        # Poll hover from cursor — do not rely on Enter/MouseMove. After a library
+        # tab click Qt can leave UnderMouse stuck elsewhere, and Win resize grips
+        # sit above the shell and eat hover over the top of the dots.
+        self._lights_poll = QTimer(self)
+        self._lights_poll.setInterval(32)
+        self._lights_poll.timeout.connect(self._poll_traffic_light_hover)
+        self._lights_poll.start()
+
+    def _poll_traffic_light_hover(self) -> None:
+        win = self._window
+        if win is None:
+            return
+        try:
+            if not win.isVisible() or win.isMinimized():
+                return
+        except RuntimeError:
+            return
+        # Scan all chrome windows — a dialog light's hand must not be cleared
+        # by a main-window-only poll while Render Settings / Settings is open.
+        refresh_traffic_lights_under_cursor_all()
 
     def eventFilter(self, watched, event):
         pairs = (
@@ -877,10 +979,24 @@ class SteempegTitleBar(QWidget):
     def enterEvent(self, event) -> None:  # noqa: N802
         super().enterEvent(event)
         self._sync_never_show_update_available_hover()
+        refresh_traffic_lights_under_cursor(self._window)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
         super().leaveEvent(event)
         self._sync_never_show_update_available_hover()
+        # Leaving the bar must clear sticky light hover (tab thrash / missed Leave).
+        refresh_traffic_lights_under_cursor(self._window)
+
+    def event(self, event):  # noqa: N802
+        et = event.type()
+        if et in (
+            QEvent.Type.HoverMove,
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverEnter,
+        ):
+            refresh_traffic_lights_under_cursor(self._window)
+            self._sync_never_show_update_available_hover()
+        return super().event(event)
 
     def set_bar_color(self, bg_color: str) -> None:
         """Re-tint the title bar background (used by the experimental themes)."""
@@ -958,7 +1074,12 @@ class SteempegTitleBar(QWidget):
         self._sync_never_show_update_available_hover()
 
     def reset_traffic_lights(self) -> None:
-        """Repaint window controls after maximize/DWM refresh (sticky hover / missed paint)."""
+        """Repaint window controls after maximize/DWM / layout thrash.
+
+        Always re-sync from the global cursor afterward — resize and library-tab
+        flips used to clear hover and never fire Enter again until the pointer
+        left the shell, so the close/minimize glyphs looked "dead".
+        """
         for attr in ("btn_close", "btn_minimize", "btn_maximize"):
             btn = getattr(self, attr, None)
             if btn is None:
@@ -970,6 +1091,7 @@ class SteempegTitleBar(QWidget):
             btn.raise_()
             btn.update()
         self.update()
+        refresh_traffic_lights_under_cursor(self._window)
 
     def sync_window_state(self) -> None:
         # Linux fake-maximize uses work-area geometry (isMaximized() stays False).
@@ -1018,6 +1140,7 @@ def install_title_bar(main_window) -> SteempegTitleBar:
     shell = QWidget(main_window)
     shell.setObjectName("appShell")
     shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    shell.setMouseTracking(True)
     shell.setStyleSheet(f"QWidget#appShell {{ background-color: {tok.BG_SHELL}; }}")
     shell_layout = QVBoxLayout(shell)
     shell_layout.setContentsMargins(0, 0, 0, 0)
@@ -1053,6 +1176,7 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     main_window.title_bar = title_bar
     main_window._custom_chrome_shell = shell
+    _ensure_traffic_light_hover_filter()
     # Platform-split edge/corner resize — keep both paths independent.
     # Windows: overlay grip widgets + HTCLIENT on grip bands (see enable_windows_*).
     # Linux: xcb manual / Wayland startSystemResize (unchanged).
@@ -1109,26 +1233,134 @@ def _linux_restore_target_geometry(window: QWidget) -> QRect:
     return screen.availableGeometry().adjusted(80, 60, -80, -60)
 
 
-def refresh_traffic_lights_under_cursor(window: QWidget) -> None:
+def _title_bars_for_window(window: QWidget) -> list:
+    bars = []
+    for attr in ("title_bar", "_title_bar"):
+        tb = getattr(window, attr, None)
+        if tb is not None and tb not in bars:
+            bars.append(tb)
+    return bars
+
+
+def refresh_traffic_lights_under_cursor_all() -> None:
+    """Re-sync lights on every top-level that has custom chrome."""
+    app = QApplication.instance()
+    if app is None:
+        return
+    any_hot = False
+    for w in app.topLevelWidgets():
+        if not _title_bars_for_window(w):
+            continue
+        try:
+            if not w.isVisible() or w.isMinimized():
+                continue
+        except RuntimeError:
+            continue
+        if refresh_traffic_lights_under_cursor(w, sync_hand_cursor=False):
+            any_hot = True
+    _sync_traffic_light_hand_cursor(any_hot)
+
+
+def refresh_traffic_lights_under_cursor(
+    window: QWidget, *, sync_hand_cursor: bool = True
+) -> bool:
     """Re-sync traffic-light hover from the global cursor.
 
     Used after title-bar drag/resize grabs, minimize restore, and activation —
     enter/leave are easy to miss while the shell is inactive.
+
+    Also used from an app-wide mouse-move filter: after clicking a library tab,
+    Qt can leave WA_UnderMouse stuck on the tab so HoverEnter never reaches the
+    dots — geometry still drives the painted glyph + hand cursor.
+
+    Returns True if any traffic light on this window is under the cursor.
     """
-    tb = getattr(window, "title_bar", None)
-    if tb is None:
-        return
+    bars = _title_bars_for_window(window)
+    if not bars:
+        if sync_hand_cursor:
+            # Still recompute globally so a lone main-window poll cannot clear a
+            # dialog light's hand override.
+            refresh_traffic_lights_under_cursor_all()
+        return False
     pos = QCursor.pos()
-    for attr in ("btn_close", "btn_minimize", "btn_maximize"):
-        btn = getattr(tb, attr, None)
-        if btn is None or not btn.isVisible():
-            continue
-        try:
-            hovered = btn.rect().contains(btn.mapFromGlobal(pos))
-        except RuntimeError:
+    under = None
+    try:
+        under = QApplication.widgetAt(pos)
+    except RuntimeError:
+        under = None
+
+    any_light_hot = False
+    for tb in bars:
+        for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+            btn = getattr(tb, attr, None)
+            if btn is None or not btn.isVisible():
+                continue
             hovered = False
-        if hasattr(btn, "_set_hovered"):
-            btn._set_hovered(hovered)
+            try:
+                if under is btn or (under is not None and btn.isAncestorOf(under)):
+                    hovered = True
+                elif btn.rect().contains(btn.mapFromGlobal(pos)):
+                    # Geometry fallback when widgetAt returns the title bar / shell.
+                    hovered = True
+            except RuntimeError:
+                hovered = False
+            if hovered:
+                any_light_hot = True
+                try:
+                    # force_app_cursor_resync may have unsetCursor on the chain.
+                    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                except RuntimeError:
+                    pass
+            if hasattr(btn, "_set_hovered"):
+                btn._set_hovered(hovered)
+
+    # Cursor is over a light by geometry but Qt still thinks a tab/grip owns
+    # UnderMouse — drop the sticky bit so later Enter/Leave behave.
+    if any_light_hot and under is not None and not isinstance(under, _TrafficLight):
+        try:
+            under.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, False)
+        except RuntimeError:
+            pass
+
+    if sync_hand_cursor:
+        # Main-window poll / single-window callers must scan all chrome windows
+        # so a dialog light's hand is not cleared by an unrelated refresh.
+        refresh_traffic_lights_under_cursor_all()
+    return any_light_hot
+
+
+class _TrafficLightHoverFilter(QObject):
+    """App-wide mouse moves → re-sync traffic-light glyphs.
+
+    Library tabs (and similar) can keep sticky WA_UnderMouse after a click, so
+    HoverEnter never fires on the close/minimize/maximize dots until the user
+    clicks a light. MouseMove still goes to the stuck widget — we catch it here
+    and paint from cursor geometry.
+    """
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        et = event.type()
+        if et not in (
+            QEvent.Type.MouseMove,
+            QEvent.Type.HoverMove,
+            QEvent.Type.MouseButtonRelease,
+        ):
+            return False
+        refresh_traffic_lights_under_cursor_all()
+        return False
+
+
+_traffic_light_hover_filter: _TrafficLightHoverFilter | None = None
+
+
+def _ensure_traffic_light_hover_filter() -> None:
+    global _traffic_light_hover_filter
+    app = QApplication.instance()
+    if app is None:
+        return
+    if _traffic_light_hover_filter is None:
+        _traffic_light_hover_filter = _TrafficLightHoverFilter(app)
+        app.installEventFilter(_traffic_light_hover_filter)
 
 
 def _linux_refresh_traffic_lights(window: QWidget) -> None:
@@ -1374,15 +1606,19 @@ class _WindowsEdgeResizeController(QObject):
         w, h = window.width(), window.height()
         b, c = _WIN_RESIZE_BORDER, _WIN_RESIZE_CORNER
         tc = _WIN_RESIZE_TOP_CORNER
+        # Leave the traffic-light strip alone — top grips used to sit above the
+        # shell and steal HoverEnter from the close/min/max dots (glyph only
+        # came back after clicking a light).
+        strip = _CONTROL_STRIP_WIDTH
         # Order matches specs in __init__.
         # Top corners stay small — a big square ate the close/min/max dots.
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, max(0, w - 2 * tc), b),  # top
+            (tc, 0, max(0, w - tc - strip), b),  # top (no control strip)
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
             (0, 0, tc, tc),  # top-left
-            (max(0, w - tc), 0, tc, tc),  # top-right
+            (max(0, w - tc), 0, tc, tc),  # top-right (outer margin only)
             (0, max(0, h - c), c, c),  # bottom-left
             (max(0, w - c), max(0, h - c), c, c),  # bottom-right
         )
@@ -1395,6 +1631,30 @@ class _WindowsEdgeResizeController(QObject):
             grip.setEnabled(True)
             grip.show()
             grip.raise_()
+        # Raise the chrome shell above top grips so traffic lights receive hover.
+        # Then put side/bottom grips back on top for resize (top strip stays under
+        # the shell — title-bar drag covers move; strip is punched from top grip).
+        shell = getattr(window, "_custom_chrome_shell", None)
+        if shell is not None:
+            try:
+                shell.raise_()
+            except RuntimeError:
+                pass
+            for grip in self._grips:
+                edges = getattr(grip, "_edges", None)
+                if edges is None:
+                    continue
+                top_only = edges == Qt.Edge.TopEdge
+                top_corner = edges in (
+                    Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+                    Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+                )
+                if top_only or top_corner:
+                    continue
+                try:
+                    grip.raise_()
+                except RuntimeError:
+                    pass
         tb = getattr(window, "title_bar", None)
         if tb is not None and hasattr(tb, "reset_traffic_lights"):
             tb.reset_traffic_lights()
@@ -1558,10 +1818,11 @@ class _LinuxEdgeResizeGrips(QObject):
         w, h = window.width(), window.height()
         b, c = _LINUX_RESIZE_BORDER, _LINUX_RESIZE_CORNER
         tc = _LINUX_RESIZE_TOP_CORNER
+        strip = _CONTROL_STRIP_WIDTH
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, max(0, w - 2 * tc), b),  # top
+            (tc, 0, max(0, w - tc - strip), b),  # top (no traffic-light strip)
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
             (0, 0, tc, tc),  # top-left
             (max(0, w - tc), 0, tc, tc),  # top-right
@@ -1577,6 +1838,27 @@ class _LinuxEdgeResizeGrips(QObject):
             grip.setEnabled(True)
             grip.show()
             grip.raise_()
+        shell = getattr(window, "_custom_chrome_shell", None)
+        if shell is not None:
+            try:
+                shell.raise_()
+            except RuntimeError:
+                pass
+            for grip in self._grips:
+                edges = getattr(grip, "_edges", None)
+                if edges is None:
+                    continue
+                top_only = edges == Qt.Edge.TopEdge
+                top_corner = edges in (
+                    Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+                    Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+                )
+                if top_only or top_corner:
+                    continue
+                try:
+                    grip.raise_()
+                except RuntimeError:
+                    pass
         tb = getattr(window, "title_bar", None)
         if tb is not None and hasattr(tb, "reset_traffic_lights"):
             tb.reset_traffic_lights()
@@ -2048,12 +2330,14 @@ def _on_nchittest(window, msg):
         if on_edge:
             return True, HTCLIENT
 
-    # Title-bar caption strip (logical) — drag via mousePress → WM_NCLBUTTONDOWN.
+    # Entire title-bar strip is Qt client (drag is via mousePress → NCLBUTTONDOWN).
+    # Including the traffic-light strip — returning None here used to let DefWindowProc
+    # treat the top-right as non-client after layout thrash, so HoverEnter never fired
+    # on the close/minimize/maximize dots (glyphs looked dead after clicking tabs).
     dpr = max(1.0, float(window.devicePixelRatioF()))
     pos = window.mapFromGlobal(QPoint(int(round(x / dpr)), int(round(y / dpr))))
     px, py = int(pos.x()), int(pos.y())
-    w = window.width()
-    if py < tok.TITLE_BAR_HEIGHT and px < (w - _CONTROL_STRIP_WIDTH):
+    if py < tok.TITLE_BAR_HEIGHT and 0 <= px < window.width():
         return True, HTCLIENT
 
     return None
