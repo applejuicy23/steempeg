@@ -394,10 +394,9 @@ class MarkerSettingsDialog(SteempegDialog):
 
         for btn in self.findChildren(QPushButton):
             # Title-bar traffic lights are QPushButtons — never restyle them as
-            # form buttons (idle becomes a gray square; hover restores via
-            # _TrafficLight._apply_style).
+            # form buttons (idle becomes a gray square; they paint the disc).
             if isinstance(btn, _TrafficLight):
-                btn._apply_style()
+                btn.update()
                 continue
             if btn.styleSheet().strip() == _ICON_BTN.strip():
                 continue
