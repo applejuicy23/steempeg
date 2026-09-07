@@ -511,6 +511,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
             load_timeline_strip_size_from_settings(_settings0)
             load_player_boost_from_settings(_settings0)
+            from steempeg.ui.settings_prefs import load_shell_side_layout
+
+            load_shell_side_layout(_settings0)
             from steempeg.ui.settings_prefs import (
                 KEY_PERMANENT_EXPORT_FOLDER,
                 apply_export_folder,
@@ -952,6 +955,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             from PySide6.QtWidgets import QHBoxLayout, QWidget, QFrame
             group_widget = QWidget()
             group_widget.setStyleSheet("background: transparent;")
+            # Hidden as a unit when chrome has no open library tabs (empty state).
+            self._library_sort_filter_group = group_widget
             group_layout = QHBoxLayout(group_widget)
             group_layout.setContentsMargins(0, 0, 0, 0)
             group_layout.setSpacing(0)
@@ -2700,6 +2705,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.ui.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
                 self.right_h_splitter.setSizes(DEFAULT_RIGHT_H_SPLITTER_SIZES)
                 self.install_splitter_rules()
+                self.apply_shell_side_layout(restore_widths=False)
                 try:
                     from steempeg.ui.splitter_telemetry import install_splitter_telemetry
 
@@ -4400,10 +4406,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._queue_sync_had_jobs = True
         if not self._queue_panel_should_open_on_startup():
             self._queue_user_collapsed = True
-            rhs = getattr(self, "right_h_splitter", None)
-            if rhs is not None:
-                total = sum(rhs.sizes()) or int(rhs.width() or 0) or 1
-                rhs.setSizes([max(int(total), 1), 0])
+            if hasattr(self, "_close_queue_pane"):
+                self._close_queue_pane()
+            elif hasattr(self, "sync_queue_minimum"):
+                rhs = getattr(self, "right_h_splitter", None)
+                if rhs is not None:
+                    total = sum(rhs.sizes()) or int(rhs.width() or 0) or 1
+                    rhs.setSizes([max(int(total), 1), 0])
             if hasattr(self, "sync_queue_minimum"):
                 self.sync_queue_minimum()
             return
@@ -4650,7 +4659,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         left_min = left_panel_min_width(w, widget=host)
 
         if hasattr(self.ui, "left_panel") and self.ui.left_panel is not None:
-            self.ui.left_panel.setMinimumWidth(left_min)
+            inner_lib_shut = False
+            if hasattr(self, "_queue_on_left") and self._queue_on_left():
+                rhs = getattr(self, "right_h_splitter", None)
+                if rhs is not None:
+                    rs = rhs.sizes()
+                    inner_lib_shut = len(rs) >= 2 and int(rs[1]) <= 48
+            if not inner_lib_shut:
+                self.ui.left_panel.setMinimumWidth(left_min)
         # Queue min: Clips-style floor when open, PANE_FREED when shut — never a
         # blind 0 (that let the list/toolbar squash past MIN_QUEUE_*).
         if hasattr(self, "sync_queue_minimum"):
@@ -4842,22 +4858,38 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         total = sum(sizes) if sum(sizes) > 0 else int(rhs.width() or 0)
         player_w = int(sizes[0])
-        queue_w = int(sizes[1])
+        inner_w = int(sizes[1])
         if total <= 0:
             return
 
-        # Queue dragged shut → fully close.
-        if queue_w <= 0 or queue_w < 48:
-            if queue_w != 0:
+        queue_w = (
+            self._queue_pane_width() if hasattr(self, "_queue_pane_width") else inner_w
+        )
+        inner_is_queue = not bool(
+            hasattr(self, "_queue_on_left") and self._queue_on_left()
+        )
+        inner_floor = (
+            int(self._inner_pane_floor())
+            if hasattr(self, "_inner_pane_floor")
+            else 48
+        )
+        queue_floor = (
+            int(self._queue_layout_floor())
+            if hasattr(self, "_queue_layout_floor")
+            else 48
+        )
+
+        # Inner pane below its floor → fully close that slot (no sub-floor scrap
+        # for the next drag to unroll).
+        if inner_w <= 0 or inner_w < inner_floor:
+            if inner_w != 0:
                 rhs.setSizes([max(int(total), 1), 0])
-            jobs = getattr(self, "render_queue", None)
-            if jobs is not None and len(jobs) > 0:
-                self._queue_user_collapsed = True
-            if hasattr(self, "_persist_queue_panel_open"):
-                self._persist_queue_panel_open(False)
-            # Player scrap with the queue already shut → finish the kiss. Zeroing
-            # the whole column instead used to take the right handle down with
-            # it, leaving no way to pull the queue back out.
+            if inner_is_queue:
+                jobs = getattr(self, "render_queue", None)
+                if jobs is not None and len(jobs) > 0:
+                    self._queue_user_collapsed = True
+                if hasattr(self, "_persist_queue_panel_open"):
+                    self._persist_queue_panel_open(False)
             sizes = rhs.sizes()
             player_w = int(sizes[0]) if len(sizes) >= 2 else 0
             if 0 < player_w < 48:
@@ -4865,16 +4897,43 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.sync_queue_minimum()
             return
 
-        self._queue_user_collapsed = False
-        if hasattr(self, "_persist_queue_panel_open"):
-            self._persist_queue_panel_open(True)
-        # Player scrap between Clips handle and Queue handle → complete the kiss.
+        main = getattr(self.ui, "main_splitter", None)
+        if (
+            hasattr(self, "_queue_on_left")
+            and self._queue_on_left()
+            and main is not None
+        ):
+            main_sizes = main.sizes()
+            if len(main_sizes) >= 2:
+                outer_w = int(main_sizes[0])
+                main_total = (
+                    sum(main_sizes) if sum(main_sizes) > 0 else int(main.width() or 0)
+                )
+                if 0 < outer_w < queue_floor:
+                    main.setSizes([0, max(int(main_total), 1)])
+                    jobs = getattr(self, "render_queue", None)
+                    if jobs is not None and len(jobs) > 0:
+                        self._queue_user_collapsed = True
+                    if hasattr(self, "_persist_queue_panel_open"):
+                        self._persist_queue_panel_open(False)
+                    self.sync_queue_minimum()
+                    return
+                queue_w = outer_w
+
+        if inner_is_queue:
+            self._queue_user_collapsed = False
+            if hasattr(self, "_persist_queue_panel_open"):
+                self._persist_queue_panel_open(True)
+        elif queue_w >= queue_floor:
+            self._queue_user_collapsed = False
+            if hasattr(self, "_persist_queue_panel_open"):
+                self._persist_queue_panel_open(True)
+        # Player scrap between handles → complete the kiss.
         if 0 < player_w < 48:
             rhs.setSizes([0, max(int(total), 1)])
         else:
-            # Remember the open width the user just left (always, not only on quit).
-            live_q = int(rhs.sizes()[1]) if len(rhs.sizes()) >= 2 else queue_w
-            if live_q > 48:
+            live_q = int(queue_w)
+            if live_q >= queue_floor:
                 self.save_layout_setting("queue_panel_width", live_q)
         self.sync_queue_minimum()
         # Leave/Resume is explicit only (button or queue-card click) — never
@@ -4889,7 +4948,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             left_min = left_panel_min_width(w, widget=getattr(self, "ui", None)) if w else 360
 
         rhs = getattr(self, "right_h_splitter", None)
-        # Only snap microscopic queue scraps shut. Do NOT push player back up to
+        # Only snap microscopic inner scraps shut. Do NOT push player back up to
         # PLAYER_COLUMN_FLOOR — that was the constant bounce/lag on kiss.
         if rhs is not None:
             sizes = rhs.sizes()
@@ -4902,14 +4961,33 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             sizes = main.sizes()
             total = sum(sizes)
             if total > 0 and len(sizes) >= 2:
-                left = int(sizes[0])
-                # Soft Clips floor only when the right column still has room.
-                # Allow a full kiss (right ≈ 0) without yanking left back.
-                if left < left_min and sizes[1] > 48:
-                    left = min(left_min, max(0, total - 48))
-                    right = total - left
-                    if left != sizes[0] or right != sizes[1]:
-                        main.setSizes([left, right])
+                outer = int(sizes[0])
+                queue_left = bool(
+                    hasattr(self, "_queue_on_left") and self._queue_on_left()
+                )
+                outer_min = (
+                    self._queue_layout_floor()
+                    if queue_left and hasattr(self, "_queue_layout_floor")
+                    else left_min
+                )
+                # Soft outer floor only when the right column still has room.
+                # Allow a full kiss (right ≈ 0) without yanking outer back.
+                # Collapsed queue (user-closed) must stay at 0.
+                queue_collapsed = queue_left and (
+                    bool(getattr(self, "_queue_user_collapsed", False))
+                    or outer <= 48
+                )
+                if (
+                    not queue_collapsed
+                    and outer < outer_min
+                    and sizes[1] > 48
+                ):
+                    outer = min(outer_min, max(0, total - 48))
+                    right = total - outer
+                    if outer != sizes[0] or right != sizes[1]:
+                        main.setSizes([outer, right])
+                elif queue_left and 0 < outer < 48:
+                    main.setSizes([0, max(int(total), 1)])
 
         v_split = getattr(self, "main_v_splitter", None)
         if v_split is not None:
@@ -4943,6 +5021,213 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     # Extremely crushed bottom — nudge toward a sane restore ratio.
                     v_split.setSizes(restore_v_splitter_sizes(total))
 
+    def apply_shell_side_layout(
+        self, layout: str | None = None, *, restore_widths: bool = True
+    ) -> None:
+        """Place Library and Render Queue on the configured sides. Player stays center.
+
+        Default: Library left, Queue right. ``queue_left`` swaps those two panes.
+        Portable shell is unchanged (no side docks).
+        """
+        from steempeg.ui.settings_prefs import (
+            SHELL_SIDE_QUEUE_LEFT,
+            get_shell_side_layout,
+            normalize_shell_side_layout,
+            set_shell_side_layout,
+        )
+
+        if getattr(self, "_portable_shell", False):
+            return
+        ui = getattr(self, "ui", None)
+        main = getattr(ui, "main_splitter", None) if ui is not None else None
+        rhs = getattr(self, "right_h_splitter", None)
+        lib = getattr(ui, "left_panel", None) if ui is not None else None
+        queue = getattr(self, "render_queue_panel", None)
+        player = getattr(ui, "right_panel", None) if ui is not None else None
+        if None in (main, rhs, lib, queue, player):
+            return
+
+        wanted = set_shell_side_layout(
+            layout if layout is not None else get_shell_side_layout()
+        )
+        queue_left = wanted == SHELL_SIDE_QUEUE_LEFT
+        already_left = False
+        try:
+            already_left = main.indexOf(queue) == 0
+        except RuntimeError:
+            already_left = False
+        if already_left == queue_left:
+            self._shell_queue_on_left = queue_left
+            self.sync_shell_side_gutters()
+            return
+
+        lib_w = 0
+        queue_w = 0
+        try:
+            if main.indexOf(lib) == 0 and main.sizes():
+                lib_w = int(main.sizes()[0])
+            elif rhs.indexOf(lib) >= 0 and len(rhs.sizes()) >= 2:
+                lib_w = int(rhs.sizes()[rhs.indexOf(lib)])
+        except RuntimeError:
+            lib_w = int(lib.width() or 0)
+        try:
+            if rhs.indexOf(queue) >= 0 and len(rhs.sizes()) >= 2:
+                queue_w = int(rhs.sizes()[rhs.indexOf(queue)])
+            elif main.indexOf(queue) == 0 and main.sizes():
+                queue_w = int(main.sizes()[0])
+        except RuntimeError:
+            queue_w = int(queue.width() or 0)
+        if lib_w <= 0:
+            lib_w = int(lib.width() or 0)
+        if queue_w <= 0:
+            queue_w = int(queue.width() or 0)
+
+        timer = getattr(self, "_right_h_snap_timer", None)
+        if timer is not None:
+            timer.stop()
+        main.blockSignals(True)
+        rhs.blockSignals(True)
+        try:
+            queue.setParent(None)
+            lib.setParent(None)
+            if queue_left:
+                rhs.addWidget(lib)
+                main.insertWidget(0, queue)
+            else:
+                rhs.addWidget(queue)
+                main.insertWidget(0, lib)
+            if main.indexOf(rhs) < 0:
+                main.addWidget(rhs)
+            elif main.indexOf(rhs) != 1:
+                main.insertWidget(1, rhs)
+            main.setCollapsible(0, True)
+            main.setCollapsible(1, True)
+            rhs.setCollapsible(0, True)
+            rhs.setCollapsible(1, True)
+            lib.show()
+            queue.show()
+        finally:
+            main.blockSignals(False)
+            rhs.blockSignals(False)
+
+        self._shell_queue_on_left = queue_left
+        self.sync_shell_side_gutters()
+        if not restore_widths:
+            if hasattr(self, "sync_queue_minimum"):
+                self.sync_queue_minimum()
+            return
+
+        main_total = sum(main.sizes()) if sum(main.sizes()) > 0 else int(main.width() or 0)
+        main_total = max(int(main_total), 1)
+        rhs_total = sum(rhs.sizes()) if sum(rhs.sizes()) > 0 else int(rhs.width() or 0)
+        rhs_total = max(int(rhs_total), 1)
+        queue_open = queue_w > 48
+        applied_q = queue_w if queue_open else 0
+        applied_lib = lib_w if lib_w > 48 else self._library_min_width()
+        if queue_left:
+            applied_q = min(applied_q, max(0, main_total - 80))
+            main.setSizes([applied_q, max(main_total - applied_q, 1)])
+            applied_lib = min(applied_lib, max(0, rhs_total - 48))
+            rhs.setSizes([max(rhs_total - applied_lib, 0), applied_lib])
+        else:
+            applied_lib = min(applied_lib, max(0, main_total - 80))
+            main.setSizes([applied_lib, max(main_total - applied_lib, 1)])
+            applied_q = min(applied_q, max(0, rhs_total - 48))
+            rhs.setSizes([max(rhs_total - applied_q, 0), applied_q])
+        if hasattr(self, "sync_queue_minimum"):
+            self.sync_queue_minimum()
+        logging.info(
+            "Shell side layout → %s (queue_left=%s)",
+            normalize_shell_side_layout(wanted),
+            queue_left,
+        )
+
+    def sync_shell_side_gutters(self) -> None:
+        """Keep handle-facing insets on Library and Queue after a side swap.
+
+        Default: Queue gutter is on its left (player|queue), Library uses the
+        right of ``verticalLayout_left``. Swapped: flip those so the handles
+        do not sit flush on the pane chrome.
+        """
+        from steempeg.ui.layout_defaults import (
+            QUEUE_SPLITTER_GUTTER,
+            RIGHT_PANEL_BOTTOM_INSET,
+            RIGHT_PANEL_PLAYER_TOP_INSET,
+            RIGHT_PANEL_SIDE_INSET,
+        )
+
+        queue_left = bool(hasattr(self, "_queue_on_left") and self._queue_on_left())
+        gutter = int(QUEUE_SPLITTER_GUTTER)
+
+        queue = getattr(self, "render_queue_panel", None)
+        if queue is not None and hasattr(queue, "set_splitter_gutter_side"):
+            try:
+                queue.set_splitter_gutter_side("right" if queue_left else "left")
+            except RuntimeError:
+                pass
+
+        left_lay = getattr(getattr(self, "ui", None), "verticalLayout_left", None)
+        if left_lay is not None:
+            if queue_left:
+                left_lay.setContentsMargins(gutter, 0, 0, 0)
+            else:
+                left_lay.setContentsMargins(0, 0, gutter, 0)
+
+        # Player stays in the middle: left inset faces the left handle, right
+        # gutter faces the right handle — same in both layouts.
+        ui = getattr(self, "ui", None)
+        right_panel = getattr(ui, "right_panel", None) if ui is not None else None
+        right_layout = right_panel.layout() if right_panel is not None else None
+        if right_layout is not None:
+            right_layout.setContentsMargins(
+                RIGHT_PANEL_SIDE_INSET, 0, 0, RIGHT_PANEL_BOTTOM_INSET
+            )
+        wrap = getattr(self, "right_content_wrap", None)
+        wrap_lay = wrap.layout() if wrap is not None else None
+        if wrap_lay is not None:
+            wrap_lay.setContentsMargins(
+                0, RIGHT_PANEL_PLAYER_TOP_INSET, QUEUE_SPLITTER_GUTTER, 0
+            )
+
+    def refresh_shell_side_layout(self, layout: str | None = None) -> None:
+        self.apply_shell_side_layout(layout, restore_widths=True)
+
+    def _set_queue_pane_width(self, queue_w: int) -> None:
+        """Set Render Queue's splitter slot to ``queue_w`` (0 = closed)."""
+        from steempeg.ui.layout_defaults import PLAYER_COLUMN_FLOOR
+
+        queue_w = max(0, int(queue_w))
+        splitter, idx = self._queue_splitter_and_index()
+        if splitter is None or idx < 0:
+            return
+        sizes = list(splitter.sizes())
+        live = int(splitter.width() or 0)
+        summed = int(sum(sizes) if sizes else 0)
+        total = max(live, summed, 1)
+        queue_w = min(queue_w, max(0, total - 1))
+        other = max(total - queue_w, 1 if queue_w <= 0 else 0)
+        if idx == 0:
+            # Outer pane: keep a usable player column inside the rest.
+            if queue_w > 0:
+                max_q = max(0, total - PLAYER_COLUMN_FLOOR)
+                queue_w = min(queue_w, max_q)
+                other = max(total - queue_w, 1)
+            splitter.setSizes([queue_w, other])
+        else:
+            splitter.setSizes([other, queue_w])
+        if hasattr(self, "sync_queue_minimum"):
+            self.sync_queue_minimum()
+
+    def _close_queue_pane(self) -> None:
+        self._set_queue_pane_closed(True)
+
+    def _set_queue_pane_closed(self, closed: bool) -> None:
+        if closed:
+            self._set_queue_pane_width(0)
+            return
+        if hasattr(self, "_open_queue_in_right_splitter"):
+            self._open_queue_in_right_splitter()
+
     def _open_queue_in_right_splitter(self) -> None:
         """Open the queue pane to the last saved width (else layout default)."""
         from steempeg.ui.layout_defaults import (
@@ -4951,13 +5236,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             queue_panel_open_width,
         )
 
-        rhs = getattr(self, "right_h_splitter", None)
+        splitter, idx = self._queue_splitter_and_index()
         panel = getattr(self, "render_queue_panel", None)
-        if rhs is None or panel is None:
+        if splitter is None or idx < 0 or panel is None:
             return
-        sizes = rhs.sizes()
-        # Prefer live width once the shell has geometry; fall back to size sum.
-        live = int(rhs.width() or 0)
+        sizes = splitter.sizes()
+        live = int(splitter.width() or 0)
         summed = int(sum(sizes) if sizes else 0)
         total = max(live, summed, 1)
         win_w = int(self.ui.width() or 0) if getattr(self, "ui", None) else 0
@@ -4970,20 +5254,26 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 saved_w = int(saved)
             except (TypeError, ValueError):
                 saved_w = 0
-            # Restore last open width — do not clamp down to the default ideal
-            # (that made every launch ignore a wider drag from last session).
             if saved_w > 48:
                 queue_w = max(min_q, saved_w)
-        max_q = max(0, total - PLAYER_COLUMN_FLOOR)
+        if idx == 0:
+            rhs = getattr(self, "right_h_splitter", None)
+            inner_w = 0
+            handle = 6
+            if rhs is not None and len(rhs.sizes()) >= 2:
+                inner_w = int(rhs.sizes()[1]) if int(rhs.sizes()[1]) > 48 else 0
+            if hasattr(self, "_right_handle_width"):
+                try:
+                    handle = int(self._right_handle_width())
+                except Exception:
+                    handle = 6
+            max_q = max(0, total - PLAYER_COLUMN_FLOOR - inner_w - handle)
+        else:
+            max_q = max(0, total - PLAYER_COLUMN_FLOOR)
         if max_q < 80:
-            # Not enough room inside the right column — do not steal from Clips.
             return
         queue_w = max(min_q, min(int(queue_w), max_q))
-        rhs.setSizes([total - queue_w, queue_w])
-        # Clips-style floor while open (cleared again if the pane is shut).
-        if hasattr(self, "sync_queue_minimum"):
-            self.sync_queue_minimum()
-        # Persist the width we actually applied (after max_q clamp).
+        self._set_queue_pane_width(queue_w)
         if queue_w > 48:
             self.save_layout_setting("queue_panel_width", int(queue_w))
     def _player_chrome_icon_size(self, dense=None) -> int:
