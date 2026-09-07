@@ -213,7 +213,8 @@ class TimelineCanvas(QWidget):
         # NEW FLOATING TOOLTIP (Will reside beneath the scrollbar)
         from steempeg.ui import ui_theme as ut
 
-        self.text_tooltip = QLabel(self)
+        self.text_tooltip = QFrame(self)
+        self.text_tooltip.setObjectName("timelineMarkerTip")
         # No WindowStaysOnTopHint — owned TOPMOST Tools yank the Steempeg shell
         # over Explorer / browser when the tip shows. Tool alone still stacks
         # above the shell (incl. native mpv) without promoting other apps under us.
@@ -224,7 +225,17 @@ class TimelineCanvas(QWidget):
         )
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
         self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.text_tooltip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
+        self.text_tooltip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
+        tip_row = QHBoxLayout(self.text_tooltip)
+        tip_row.setContentsMargins(7, 4, 9, 4)
+        tip_row.setSpacing(6)
+        self._tooltip_icon = QLabel(self.text_tooltip)
+        self._tooltip_icon.setFixedSize(16, 16)
+        self._tooltip_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._tooltip_text = QLabel(self.text_tooltip)
+        self._tooltip_text.setTextFormat(Qt.TextFormat.RichText)
+        tip_row.addWidget(self._tooltip_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        tip_row.addWidget(self._tooltip_text, 0, Qt.AlignmentFlag.AlignVCenter)
         self.text_tooltip.hide()
 
         # Strip + ruler from Settings S/M/L (Large = class defaults above; track stays).
@@ -312,7 +323,7 @@ class TimelineCanvas(QWidget):
 
             tip = getattr(self, "text_tooltip", None)
             if tip is not None:
-                tip.setStyleSheet(ut.floating_tooltip_label_stylesheet())
+                tip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
             pw = getattr(self, "preview_widget", None)
             if pw is not None and hasattr(pw, "apply_theme"):
                 pw.apply_theme()
@@ -1857,8 +1868,23 @@ class TimelineCanvas(QWidget):
                     if desc: html_text += f"<br>{desc}"
                     if on_strip:
                         html_text += "<br><span style='font-weight:normal;opacity:0.85'>Ctrl+click to jump</span>"
-                    
-                    self.text_tooltip.setText(html_text)
+
+                    pix = self.get_icon_pixmap(found_marker)
+                    icon = getattr(self, "_tooltip_icon", None)
+                    body = getattr(self, "_tooltip_text", None)
+                    if icon is not None:
+                        if pix is not None and not pix.isNull():
+                            from steempeg.ui.icon_utils import apply_square_icon
+
+                            apply_square_icon(icon, pix, 16)
+                            icon.show()
+                        else:
+                            icon.clear()
+                            icon.hide()
+                    if body is not None:
+                        body.setText(html_text)
+                    else:
+                        self.text_tooltip.setText(html_text)
                     self.text_tooltip.adjustSize()
                     
                     tip_x = self.ms_to_x(found_marker["time_ms"])
