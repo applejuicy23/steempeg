@@ -161,6 +161,7 @@ from steempeg.ui.settings_prefs import (
     KEY_PORTABLE_LIKE_MIDDLE_SPLITTER,
     KEY_REMEMBER_LIBRARY_TAB,
     KEY_SCREENSHOTS_FOLDER,
+    KEY_SHELL_SIDE_LAYOUT,
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
     KEY_HIDE_UPDATE_AVAILABLE_BADGE,
@@ -170,6 +171,7 @@ from steempeg.ui.settings_prefs import (
     MEDIA_CACHE_LIMIT_LABELS,
     DESKTOP_RENDER_LAYOUT_LABELS,
     RENDER_TAB_LABELS,
+    SHELL_SIDE_LAYOUT_LABELS,
     STARTUP_SCAN_LABELS,
     TZ_SYSTEM,
     UPDATE_INTERVAL_LABELS,
@@ -197,6 +199,7 @@ from steempeg.ui.settings_prefs import (
     load_media_cache_limit_gb,
     load_mpv_log_level,
     load_remember_library_tab,
+    load_shell_side_layout,
     load_startup_library_scan,
     load_test_new_fullscreen,
     normalize_clock_format,
@@ -214,6 +217,7 @@ from steempeg.ui.settings_prefs import (
     normalize_media_cache_limit_gb,
     normalize_render_tab,
     normalize_screenshots_folder,
+    normalize_shell_side_layout,
     normalize_startup_library_scan,
     normalize_update_check_interval,
     notify_export_folder_fallback,
@@ -221,9 +225,12 @@ from steempeg.ui.settings_prefs import (
     resolve_screenshots_folder,
     resolve_update_check_interval,
     set_markers_on_strip,
+    set_shell_side_layout,
+    get_shell_side_layout,
     DEFAULT_APP_LOG_LEVEL,
     DEFAULT_FFMPEG_LOG_LEVEL,
     DEFAULT_MPV_LOG_LEVEL,
+    DEFAULT_SHELL_SIDE_LAYOUT,
 )
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -609,6 +616,47 @@ class SettingsDialog(SteempegDialog):
                     "different after Save. Fontconfig aliases that only substitute "
                     "Adwaita/Noto do not count as Segoe. Cancel keeps the last saved font."
                 )
+            )
+
+        v.addWidget(self._section("Side panels"))
+        sides_row = QHBoxLayout()
+        sides_row.setSpacing(8)
+        sides_lbl = QLabel("Sides")
+        sides_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_shell_sides = QComboBox()
+        for value, label in SHELL_SIDE_LAYOUT_LABELS:
+            self._combo_shell_sides.addItem(label, value)
+        cur_sides = load_shell_side_layout(settings)
+        self._committed_shell_sides = cur_sides
+        sides_idx = self._combo_shell_sides.findData(cur_sides)
+        self._combo_shell_sides.setCurrentIndex(max(0, sides_idx))
+        sides_row.addWidget(sides_lbl)
+        sides_row.addWidget(self._combo_shell_sides, 1)
+        v.addLayout(sides_row)
+        portable_shell = bool(getattr(self._app, "_portable_shell", False))
+        if portable_shell:
+            self._combo_shell_sides.setEnabled(False)
+            v.addWidget(
+                self._hint(
+                    "Desktop only. Portable has no side docks. "
+                    "Switch to Desktop to place Library and Render Queue left or right."
+                )
+            )
+        else:
+            v.addWidget(
+                self._hint(
+                    "Library chrome on one side, Render Queue on the other. "
+                    "The player stays in the middle. Render Queue stays one tab. "
+                    "Combo previews live; Save persists. Cancel restores the last saved sides."
+                )
+            )
+        self._shell_sides_preview_timer = QTimer(self)
+        self._shell_sides_preview_timer.setSingleShot(True)
+        self._shell_sides_preview_timer.setInterval(200)
+        self._shell_sides_preview_timer.timeout.connect(self._apply_shell_sides_preview)
+        if not portable_shell:
+            self._combo_shell_sides.currentIndexChanged.connect(
+                self._preview_shell_sides
             )
 
         v.addWidget(self._section("Game icons"))
@@ -1556,6 +1604,7 @@ class SettingsDialog(SteempegDialog):
             detail="Unsaved dialog choices in this window are discarded. Save first if needed.",
         ):
             return
+        app = self._app
         # Persist shell prefs before relaunch so Restart after a shell change works
         # even if the user forgot Save.
         shell = self._combo_shell.currentData()
@@ -1564,7 +1613,6 @@ class SettingsDialog(SteempegDialog):
         if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
             save_ask_ui_shell(self._chk_ask_shell.isChecked(), app)
         # Flush queue + panel before relaunch so the other shell sees the same state.
-        app = self._app
         if hasattr(app, "_persist_render_queue"):
             try:
                 app._persist_render_queue()
@@ -1579,7 +1627,7 @@ class SettingsDialog(SteempegDialog):
         self.accept()
         from steempeg.ui.app_restart import restart_application
 
-        restart_application(self._app)
+        restart_application(app)
 
     def _apply_settings_form_chrome(self) -> None:
         """Theme-aware combos, line edits, and secondary buttons across all tabs."""
@@ -1598,10 +1646,10 @@ class SettingsDialog(SteempegDialog):
         sec_qss = ut.settings_dialog_secondary_button_stylesheet()
         for btn in self.findChildren(QPushButton):
             # Title-bar traffic lights are QPushButtons — never restyle them as
-            # form secondary buttons (idle becomes a gray square outline; hover
-            # re-applies the red circle via _TrafficLight._apply_style).
+            # form secondary buttons (idle becomes a gray square outline; they
+            # paint the disc themselves).
             if isinstance(btn, _TrafficLight):
-                btn._apply_style()
+                btn.update()
                 continue
             if btn.objectName() == "settingsPrimaryBtn":
                 btn.setStyleSheet(_BTN_PRIMARY)
@@ -1721,6 +1769,26 @@ class SettingsDialog(SteempegDialog):
                 import logging
 
                 logging.exception("ClipCard style refresh failed for %s", style)
+
+    def _preview_shell_sides(self, *_args) -> None:
+        self._shell_sides_preview_timer.start()
+
+    def _apply_shell_sides_preview(self) -> None:
+        import logging
+
+        layout = normalize_shell_side_layout(self._combo_shell_sides.currentData())
+        set_shell_side_layout(layout)
+        logging.info("Shell side layout preview → %s", layout)
+        self._refresh_shell_sides(layout)
+
+    def _refresh_shell_sides(self, layout: str) -> None:
+        if hasattr(self._app, "refresh_shell_side_layout"):
+            try:
+                self._app.refresh_shell_side_layout(layout)
+            except Exception:
+                import logging
+
+                logging.exception("Shell side layout refresh failed for %s", layout)
 
     def _preview_header_layout(self, *_args) -> None:
         self._header_layout_preview_timer.start()
@@ -1908,6 +1976,23 @@ class SettingsDialog(SteempegDialog):
         logging.info("ClipCard style cancelled → restored %s", committed)
         self._refresh_clip_card_styles(committed)
 
+    def _restore_shell_sides_on_cancel(self) -> None:
+        """Undo live Library ↔ Queue side preview that was never Saved."""
+        import logging
+
+        if getattr(self, "_shell_sides_preview_timer", None) is not None:
+            self._shell_sides_preview_timer.stop()
+        committed = normalize_shell_side_layout(
+            getattr(self, "_committed_shell_sides", DEFAULT_SHELL_SIDE_LAYOUT)
+        )
+        live = get_shell_side_layout()
+        combo = normalize_shell_side_layout(self._combo_shell_sides.currentData())
+        if live == committed and combo == committed:
+            return
+        set_shell_side_layout(committed)
+        logging.info("Shell side layout cancelled → restored %s", committed)
+        self._refresh_shell_sides(committed)
+
     def _restore_header_layout_on_cancel(self) -> None:
         """Undo live header-layout preview that was never Saved."""
         import logging
@@ -2034,6 +2119,7 @@ class SettingsDialog(SteempegDialog):
         self._restore_ui_font_on_cancel()
         self._restore_icon_shape_on_cancel()
         self._restore_clip_card_style_on_cancel()
+        self._restore_shell_sides_on_cancel()
         self._restore_header_layout_on_cancel()
         self._restore_header_size_on_cancel()
         self._restore_player_layout_on_cancel()
@@ -2047,6 +2133,7 @@ class SettingsDialog(SteempegDialog):
         for attr in (
             "_icon_shape_preview_timer",
             "_clip_card_style_preview_timer",
+            "_shell_sides_preview_timer",
             "_header_layout_preview_timer",
             "_header_size_preview_timer",
             "_player_layout_preview_timer",
@@ -2175,6 +2262,13 @@ class SettingsDialog(SteempegDialog):
         if card_style != self._committed_clip_card_style:
             deferred.append(lambda s=card_style: self._refresh_clip_card_styles(s))
         self._committed_clip_card_style = card_style
+
+        sides = normalize_shell_side_layout(self._combo_shell_sides.currentData())
+        pending[KEY_SHELL_SIDE_LAYOUT] = sides
+        set_shell_side_layout(sides)
+        if sides != getattr(self, "_committed_shell_sides", sides):
+            deferred.append(lambda s=sides: self._refresh_shell_sides(s))
+        self._committed_shell_sides = sides
 
         header_layout = normalize_header_layout(self._combo_header_layout.currentData())
         pending[KEY_PLAYER_HEADER_LAYOUT] = header_layout
