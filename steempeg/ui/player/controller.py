@@ -1348,6 +1348,12 @@ class PlayerMixin:
             sizes = self.right_h_splitter.sizes()
             total = sum(sizes) if sum(sizes) > 0 else 1
             self.right_h_splitter.setSizes([total, 0])
+            if hasattr(self, "_queue_on_left") and self._queue_on_left():
+                main = getattr(getattr(self, "ui", None), "main_splitter", None)
+                if main is not None:
+                    main_sizes = main.sizes()
+                    main_total = sum(main_sizes) if sum(main_sizes) > 0 else int(main.width() or 1)
+                    main.setSizes([0, max(int(main_total), 1)])
             # Remember original handle geometry so we can restore the exact
             # same thickness as the left splitter (it is not always equal to
             # QUEUE_SPLITTER_GUTTER).
@@ -1445,16 +1451,29 @@ class PlayerMixin:
             # fullscreen's _exit_immersive_layout restore latch so sync reopens
             # the pane when it was open before theatre.
             pre_h = getattr(self, "_pre_theater_h_sizes", None)
-            was_open = (
-                isinstance(pre_h, (list, tuple))
-                and len(pre_h) >= 2
-                and int(pre_h[1]) > 48
-            )
+            pre_main = getattr(self, "_pre_theater_main_sizes", None)
+            was_open = False
+            if hasattr(self, "_queue_width_from_saved_sizes"):
+                was_open = self._queue_width_from_saved_sizes(pre_main, pre_h) > 48
+            else:
+                was_open = (
+                    isinstance(pre_h, (list, tuple))
+                    and len(pre_h) >= 2
+                    and int(pre_h[1]) > 48
+                )
             if was_open:
                 self._queue_user_collapsed = False
                 self._queue_splitter_restore_open = True
                 try:
-                    self.right_h_splitter.setSizes([int(x) for x in pre_h])
+                    if (
+                        hasattr(self, "_queue_on_left")
+                        and self._queue_on_left()
+                        and isinstance(pre_main, (list, tuple))
+                        and len(pre_main) >= 2
+                    ):
+                        self.ui.main_splitter.setSizes([int(x) for x in pre_main])
+                    if isinstance(pre_h, (list, tuple)) and len(pre_h) >= 2:
+                        self.right_h_splitter.setSizes([int(x) for x in pre_h])
                 except Exception:
                     pass
                 if hasattr(self, "_persist_queue_panel_open"):
@@ -1630,12 +1649,17 @@ class PlayerMixin:
             # Immersive exit restores pre-collapse sizes; allow one reopen pass
             # if that snapshot had the queue open and the user had not collapsed.
             imm_h = getattr(self, '_immersive_h_splitter_sizes', None)
-            if (
-                imm_h is not None
-                and len(imm_h) >= 2
-                and int(imm_h[1]) > 48
-                and not bool(getattr(self, '_queue_user_collapsed', False))
-            ):
+            imm_main = getattr(self, '_immersive_main_splitter_sizes', None)
+            queue_was_open = False
+            if hasattr(self, "_queue_width_from_saved_sizes"):
+                queue_was_open = self._queue_width_from_saved_sizes(imm_main, imm_h) > 48
+            else:
+                queue_was_open = (
+                    imm_h is not None
+                    and len(imm_h) >= 2
+                    and int(imm_h[1]) > 48
+                )
+            if queue_was_open and not bool(getattr(self, '_queue_user_collapsed', False)):
                 self._queue_splitter_restore_open = True
             self._sync_queue_splitter_visibility()
 
