@@ -51,6 +51,65 @@ DESKTOP_RENDER_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
 KEY_PORTABLE_LIKE_MIDDLE_SPLITTER = "portable_like_middle_splitter"
 DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER = False
 
+# ----- Desktop shell: library chrome ↔ Render Queue sides -----
+
+KEY_SHELL_SIDE_LAYOUT = "shell_side_layout"
+
+SHELL_SIDE_LIBRARY_LEFT = "library_left"
+SHELL_SIDE_QUEUE_LEFT = "queue_left"
+DEFAULT_SHELL_SIDE_LAYOUT = SHELL_SIDE_LIBRARY_LEFT
+
+SHELL_SIDE_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
+    (SHELL_SIDE_LIBRARY_LEFT, "Library left · Queue right"),
+    (SHELL_SIDE_QUEUE_LEFT, "Queue left · Library right"),
+)
+
+_current_shell_side_layout: str = DEFAULT_SHELL_SIDE_LAYOUT
+
+
+def normalize_shell_side_layout(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "library_left": SHELL_SIDE_LIBRARY_LEFT,
+        "library": SHELL_SIDE_LIBRARY_LEFT,
+        "clips_left": SHELL_SIDE_LIBRARY_LEFT,
+        "clips": SHELL_SIDE_LIBRARY_LEFT,
+        "default": SHELL_SIDE_LIBRARY_LEFT,
+        "right": SHELL_SIDE_LIBRARY_LEFT,
+        "queue_right": SHELL_SIDE_LIBRARY_LEFT,
+        "queue_left": SHELL_SIDE_QUEUE_LEFT,
+        "queue": SHELL_SIDE_QUEUE_LEFT,
+        "swapped": SHELL_SIDE_QUEUE_LEFT,
+        "queue_on_left": SHELL_SIDE_QUEUE_LEFT,
+        "left": SHELL_SIDE_QUEUE_LEFT,
+    }
+    if text in (SHELL_SIDE_LIBRARY_LEFT, SHELL_SIDE_QUEUE_LEFT):
+        return text
+    return aliases.get(text, DEFAULT_SHELL_SIDE_LAYOUT)
+
+
+def get_shell_side_layout() -> str:
+    return _current_shell_side_layout
+
+
+def set_shell_side_layout(value: object | None) -> str:
+    global _current_shell_side_layout
+    _current_shell_side_layout = normalize_shell_side_layout(value)
+    return _current_shell_side_layout
+
+
+def load_shell_side_layout(settings: dict | None = None) -> str:
+    raw = (settings or {}).get(KEY_SHELL_SIDE_LAYOUT, DEFAULT_SHELL_SIDE_LAYOUT)
+    return set_shell_side_layout(raw)
+
+
+def shell_queue_on_left(settings: dict | None = None) -> bool:
+    if settings is None:
+        return get_shell_side_layout() == SHELL_SIDE_QUEUE_LEFT
+    return normalize_shell_side_layout(
+        (settings or {}).get(KEY_SHELL_SIDE_LAYOUT, DEFAULT_SHELL_SIDE_LAYOUT)
+    ) == SHELL_SIDE_QUEUE_LEFT
+
 # ----- Permanent export folder -----
 
 KEY_PERMANENT_EXPORT_FOLDER = "permanent_export_folder"
