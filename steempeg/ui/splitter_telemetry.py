@@ -403,9 +403,13 @@ class SplitterTelemetryController:
                 blockers.append(f"drag:{side or '?'}")
             if bool(getattr(host, "_player_column_kissed", False)):
                 blockers.append("kiss")
-            frozen_q = int(getattr(host, "_frozen_queue_width", 0) or 0)
+            frozen_q = int(
+                getattr(host, "_frozen_inner_width", 0)
+                or getattr(host, "_frozen_queue_width", 0)
+                or 0
+            )
             if frozen_q:
-                blockers.append(f"frozen_queue={frozen_q}")
+                blockers.append(f"frozen_inner={frozen_q}")
             mode = str(getattr(host, "_right_drag_mode", "") or "")
             if mode:
                 blockers.append(f"right_mode={mode}")
