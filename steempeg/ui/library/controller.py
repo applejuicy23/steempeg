@@ -1907,12 +1907,16 @@ class LibraryMixin:
         if count == 0:
             return
 
+        self._library_menu_queue_action = None
+        self._library_menu_queue_paths = None
+
         queueable = [p for p in clip_paths if self._clip_can_queue(p)]
 
         if queueable:
             count_q = len(queueable)
             queue_label = "📋 Add to queue" if count_q == 1 else f"📋 Add to queue ({count_q})"
             action_queue = menu.addAction(queue_label)
+            action_queue.setData("add_to_queue")
             if len(queueable) < len(clip_paths):
                 action_queue.setToolTip(
                     "Unverified dead clips in the selection will be skipped"
@@ -1920,6 +1924,11 @@ class LibraryMixin:
             action_queue.triggered.connect(
                 lambda _checked=False, paths=list(queueable): self.add_clips_to_render_queue(paths)
             )
+            self._library_menu_queue_action = action_queue
+            self._library_menu_queue_paths = list(queueable)
+            menu.hovered.connect(self._on_library_context_hovered)
+            menu.aboutToShow.connect(self._on_library_context_shown)
+            menu.aboutToHide.connect(self._on_library_context_hidden)
 
         menu.addSeparator()
         action_open = menu.addAction("📂 Open in folder")
@@ -1932,6 +1941,67 @@ class LibraryMixin:
         else:
             action_open.setEnabled(False)
             action_delete.setEnabled(False)
+
+    def _on_library_context_shown(self) -> None:
+        QTimer.singleShot(0, self._peek_queue_if_cursor_on_add_action)
+
+    def _peek_queue_if_cursor_on_add_action(self) -> None:
+        action = getattr(self, "_library_menu_queue_action", None)
+        paths = getattr(self, "_library_menu_queue_paths", None) or []
+        if action is None or not paths:
+            return
+        menu = action.parent()
+        if not isinstance(menu, QMenu):
+            return
+        try:
+            at = menu.actionAt(menu.mapFromGlobal(QCursor.pos()))
+        except RuntimeError:
+            return
+        if at is action:
+            self._peek_hover_queue_for_add(paths)
+
+    def _on_library_context_hovered(self, action) -> None:
+        target = getattr(self, "_library_menu_queue_action", None)
+        paths = getattr(self, "_library_menu_queue_paths", None) or []
+        if target is not None and action is target:
+            self._peek_hover_queue_for_add(paths)
+        else:
+            self._clear_hover_queue_add_peek()
+
+    def _on_library_context_hidden(self) -> None:
+        self._library_menu_queue_action = None
+        self._library_menu_queue_paths = None
+        self._clear_hover_queue_add_peek()
+
+    def _peek_hover_queue_for_add(self, clip_paths: list) -> None:
+        ctrl = getattr(self, "_queue_hover", None)
+        if ctrl is not None and hasattr(ctrl, "peek_add_to_queue"):
+            try:
+                ctrl.peek_add_to_queue(list(clip_paths or []))
+                return
+            except RuntimeError:
+                pass
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None and hasattr(panel, "set_add_peek"):
+            try:
+                panel.set_add_peek(list(clip_paths or []))
+            except RuntimeError:
+                pass
+
+    def _clear_hover_queue_add_peek(self) -> None:
+        ctrl = getattr(self, "_queue_hover", None)
+        if ctrl is not None and hasattr(ctrl, "clear_add_peek"):
+            try:
+                ctrl.clear_add_peek()
+                return
+            except RuntimeError:
+                pass
+        panel = getattr(self, "render_queue_panel", None)
+        if panel is not None and hasattr(panel, "clear_add_peek"):
+            try:
+                panel.clear_add_peek()
+            except RuntimeError:
+                pass
 
     def sync_grid_from_table_selection(self):
         """Mirror multi-selection from the list into the grid."""

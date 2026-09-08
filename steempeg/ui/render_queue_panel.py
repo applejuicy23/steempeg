@@ -41,6 +41,7 @@ from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 from steempeg.ui.queue_card_shared import (
+    QUEUE_CARD_BORDER_PX,
     STATUS_BORDER_IDLE,
     _FONT,
     _LIST_THUMB_H,
@@ -52,9 +53,11 @@ from steempeg.ui.queue_card_shared import (
     job_accepts_drop as _job_accepts_drop,
     job_can_remove as _job_can_remove,
     set_game_icon_label,
+    start_card_peek_pulse,
     status_border_for_job,
     status_card_background,
     status_dot_style as _status_dot_style,
+    stop_card_peek_pulse,
 )
 from steempeg.ui.ui_density import (
     COMFORT,
@@ -91,12 +94,115 @@ def _dispose_queue_card(w: QWidget) -> None:
 
 from steempeg.ui.render_queue_grid import (
     QueueGridJobCard,
+    _CARD_H as _GRID_CARD_H,
     _CARD_W as _GRID_CARD_W,
     _REMOVE_BTN_STYLE,
 )
 _DRAG_PIXMAP_MAX_W = 300
 _DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
+
+
+class _QueueAddPeekGhost(QFrame):
+    """Dashed placeholder: where a clip would land if you choose Add to queue."""
+
+    def __init__(
+        self,
+        clip_path: str,
+        *,
+        grid: bool,
+        cache_dir: str | None,
+        title: str,
+        thumb_w: int = _LIST_THUMB_W,
+        thumb_h: int = _LIST_THUMB_H,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setObjectName("queueAddPeekGhost")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        hint = "Would be added"
+        self.setStyleSheet(
+            f"""
+            QFrame#queueAddPeekGhost {{
+                background-color: rgba(178, 154, 231, 0.14);
+                border: {QUEUE_CARD_BORDER_PX}px dashed #b29ae7;
+                border-radius: 12px;
+            }}
+            QFrame#queueAddPeekGhost QLabel {{
+                background: transparent; border: none; {_FONT}
+            }}
+            """
+        )
+        if grid:
+            self.setFixedSize(_GRID_CARD_W, _GRID_CARD_H)
+            lay = QVBoxLayout(self)
+            lay.setContentsMargins(10, 10, 10, 10)
+            lay.setSpacing(4)
+            plus = QLabel("+")
+            plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            plus.setStyleSheet(_status_dot_style("#ffcc00"))
+            plus.setFixedSize(26, 26)
+            name = ElidedLabel(title)
+            name.setStyleSheet(f"color: #f0f0f0; font-weight: bold; font-size: 12px; {_FONT}")
+            sub = QLabel(hint)
+            sub.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+            lay.addWidget(plus, 0, Qt.AlignmentFlag.AlignLeft)
+            lay.addWidget(name)
+            lay.addWidget(sub)
+            lay.addStretch(1)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setFixedHeight(int(thumb_h) + 12)
+            lay = QHBoxLayout(self)
+            lay.setContentsMargins(6, 6, 6, 6)
+            lay.setSpacing(8)
+            thumb = QLabel()
+            thumb.setFixedSize(int(thumb_w), int(thumb_h))
+            thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb.setStyleSheet(
+                "background-color: #1a1a1a; border: none; border-radius: 8px;"
+                f" color: #b29ae7; font-size: 22px; font-weight: bold; {_FONT}"
+            )
+            pix = None
+            try:
+                from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
+
+                thumb_path = resolve_clip_thumbnail(
+                    clip_path, cache_dir, allow_generate=False
+                )
+                if thumb_path:
+                    pix = QPixmap(thumb_path)
+            except Exception:
+                pix = None
+            if pix is not None and not pix.isNull():
+                thumb.setPixmap(
+                    pix.scaled(
+                        int(thumb_w),
+                        int(thumb_h),
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            else:
+                thumb.setText("+")
+            col = QVBoxLayout()
+            col.setContentsMargins(0, 0, 0, 0)
+            col.setSpacing(2)
+            name = ElidedLabel(title)
+            name.setStyleSheet(
+                f"color: #f0f0f0; font-weight: bold; font-size: 13px; {_FONT}"
+            )
+            name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            sub = QLabel(hint)
+            sub.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
+            sub.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            col.addWidget(name)
+            col.addWidget(sub)
+            col.addStretch(1)
+            lay.addWidget(thumb, 0, Qt.AlignmentFlag.AlignVCenter)
+            lay.addLayout(col, 1)
+        start_card_peek_pulse(self)
 _GRID_GAP = 10
 _QUEUE_TOGGLE_ACTIVE = (
     "background-color: #5138e6; color: #ffffff; border-radius: 12px;"
@@ -429,20 +535,21 @@ class QueueJobCard(QFrame):
     def _apply_card_style(self) -> None:
         # Portable: status outline only (no wash for waiting queued). Desktop keeps
         # the Ready yellow fill; running/error/done use the same border colours.
-        status_border, status_w = status_border_for_job(self._job, self._jobs_snapshot)
+        status_border, _status_w = status_border_for_job(self._job, self._jobs_snapshot)
         bg = status_card_background(
             self._job, self._jobs_snapshot, selected=self._selected
         )
+        ring = QUEUE_CARD_BORDER_PX
         if self._drop_highlight:
-            border = "2px dashed #b29ae7"
+            border = f"{ring}px dashed #b29ae7"
         elif self._selected:
-            border = "3px solid #b29ae7"
+            border = f"{ring}px solid #b29ae7"
         elif self._hovered:
             # Idle gray → purple hover; keep pipeline colour visible otherwise.
             hover = "#7a6aa8" if status_border == STATUS_BORDER_IDLE else status_border
-            border = f"{max(status_w, 2)}px solid {hover}"
+            border = f"{ring}px solid {hover}"
         else:
-            border = f"{status_w}px solid {status_border}"
+            border = f"{ring}px solid {status_border}"
         self.setStyleSheet(f"""
             QueueJobCard {{
                 background-color: {bg};
@@ -663,6 +770,14 @@ class RenderQueuePanel(QWidget):
         self._jobs: list[RenderJob] = []
         self._empty_hint_dismissed = False
         self._density = COMFORT
+        self._hover_hosted = False
+        self._add_peek_key: tuple[str, ...] | None = None
+        self._peek_ghosts: list[QWidget] = []
+        self._peek_showed_host = False
+        self._rest_vscroll = 0
+        self._peek_saved_v: int | None = None
+        self._hold_rest_scroll = False
+        self._applying_scroll = False
 
         outer = QVBoxLayout(self)
         self._outer_layout = outer
@@ -782,6 +897,7 @@ class RenderQueuePanel(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet(_SCROLL_STYLE)
         install_library_vertical_scrollbar(self._scroll)
+        self._scroll.verticalScrollBar().valueChanged.connect(self._on_queue_scroll)
 
         self._list_host = QueueListHost()
         self._list_host.dropped_at_end.connect(self._on_drop_at_end)
@@ -879,26 +995,26 @@ class RenderQueuePanel(QWidget):
 
     def eventFilter(self, obj, event):
         if obj == self._scroll.viewport() and event.type() == QEvent.Type.Resize:
-            if self._view_mode == "grid" and self._jobs:
+            if self._view_mode == "grid" and (self._jobs or self._peek_ghosts):
                 self._relayout_grid_cards()
-            elif self._view_mode == "list" and self._card_widgets:
+            elif self._view_mode == "list" and (self._card_widgets or self._peek_ghosts):
                 # Defer until list layout has applied the new viewport width to cards.
                 QTimer.singleShot(0, self._refresh_list_card_widths)
         return super().eventFilter(obj, event)
 
     def _refresh_list_card_widths(self) -> None:
-        if self._view_mode != "list" or not self._card_widgets:
+        if self._view_mode != "list":
             return
         vw = max(1, self._scroll.viewport().width())
-        # Cap cards to the viewport so labels can't paint past the panel edge
-        # (Qt does not clip child widgets to parent bounds by default).
         max_w = max(80, vw - 4)
-        for card in self._card_widgets:
-            if not isinstance(card, QueueJobCard):
+        for card in list(self._card_widgets) + list(self._peek_ghosts):
+            try:
+                card.setMaximumWidth(max_w)
+            except RuntimeError:
                 continue
-            card.setMaximumWidth(max_w)
-            card._compact_level = -1
-            card._adapt_to_width()
+            if isinstance(card, QueueJobCard):
+                card._compact_level = -1
+                card._adapt_to_width()
 
     def _set_view_mode(self, mode: str) -> None:
         if mode not in ("list", "grid") or mode == self._view_mode:
@@ -936,22 +1052,311 @@ class RenderQueuePanel(QWidget):
         self._list_host.setVisible(not is_grid)
         self._grid_host.setVisible(is_grid)
 
+    def _norm_clip(self, path: str) -> str:
+        return os.path.normcase(os.path.normpath(path or ""))
+
+    def _peek_title_for_clip(self, clip_path: str) -> str:
+        folder = os.path.basename(str(clip_path).rstrip("\\/")) or "Clip"
+        try:
+            from steempeg.core.rendered_media import parse_app_id_from_clip_folder
+            from steempeg.core import games
+        except Exception:
+            return folder
+        app_id = parse_app_id_from_clip_folder(folder)
+        if not app_id:
+            return folder
+
+        def _usable(name: object) -> str | None:
+            text = str(name or "").strip()
+            if not text or text.startswith("Unknown Game"):
+                return None
+            return text
+
+        for job in self._jobs:
+            other = parse_app_id_from_clip_folder(
+                os.path.basename(str(getattr(job, "clip_path", "") or ""))
+            )
+            if other == app_id:
+                found = _usable(getattr(job, "game_name", ""))
+                if found:
+                    return found
+        walk = self
+        while walk is not None:
+            getter = getattr(walk, "get_game_name", None)
+            if callable(getter):
+                try:
+                    found = _usable(getter(app_id, allow_fetch=False))
+                except TypeError:
+                    found = _usable(getter(app_id))
+                except Exception:
+                    found = None
+                if found:
+                    return found
+            cache = getattr(walk, "game_names_cache", None)
+            if isinstance(cache, dict):
+                found = _usable(cache.get(str(app_id)))
+                if found:
+                    return found
+            ctrl = getattr(walk, "_controller", None)
+            app = getattr(ctrl, "_app", None) if ctrl is not None else None
+            if app is not None:
+                getter = getattr(app, "get_game_name", None)
+                if callable(getter):
+                    try:
+                        found = _usable(getter(app_id, allow_fetch=False))
+                    except Exception:
+                        found = None
+                    if found:
+                        return found
+                cache = getattr(app, "game_names_cache", None)
+                if isinstance(cache, dict):
+                    found = _usable(cache.get(str(app_id)))
+                    if found:
+                        return found
+            try:
+                walk = walk.parentWidget()
+            except RuntimeError:
+                break
+        try:
+            for top in QApplication.topLevelWidgets():
+                getter = getattr(top, "get_game_name", None)
+                if not callable(getter):
+                    continue
+                found = _usable(getter(app_id, allow_fetch=False))
+                if found:
+                    return found
+                cache = getattr(top, "game_names_cache", None)
+                if isinstance(cache, dict):
+                    found = _usable(cache.get(str(app_id)))
+                    if found:
+                        return found
+        except RuntimeError:
+            pass
+        found = _usable(games.find_local_steam_game_name(app_id))
+        return found or folder
+
+    def _on_queue_scroll(self, value: int) -> None:
+        if self._applying_scroll or self._add_peek_key is not None:
+            return
+        self._rest_vscroll = int(value)
+        self._hold_rest_scroll = False
+
+    def _capture_rest_for_peek(self) -> None:
+        if self._peek_saved_v is not None:
+            return
+        try:
+            value = int(self._scroll.verticalScrollBar().value())
+        except RuntimeError:
+            return
+        self._peek_saved_v = value
+        self._rest_vscroll = value
+
+    def remember_rest_scroll(self) -> None:
+        if self._add_peek_key is not None:
+            return
+        try:
+            self._rest_vscroll = int(self._scroll.verticalScrollBar().value())
+        except RuntimeError:
+            pass
+
+    def restore_rest_scroll(self) -> None:
+        if self._add_peek_key is not None:
+            return
+        self._set_vscroll(self._rest_vscroll)
+
+    def apply_wheel_delta(self, event) -> bool:
+        """Scroll the queue from a wheel event that landed on another widget."""
+        try:
+            bar = self._scroll.verticalScrollBar()
+        except RuntimeError:
+            return False
+        delta = int(event.angleDelta().y())
+        if delta == 0:
+            delta = int(event.pixelDelta().y())
+        if delta == 0:
+            return False
+        self._set_vscroll(bar.value() - delta)
+        return True
+
+    def _set_vscroll(self, value: int) -> None:
+        try:
+            bar = self._scroll.verticalScrollBar()
+        except RuntimeError:
+            return
+        self._applying_scroll = True
+        try:
+            bar.setValue(int(value))
+        except RuntimeError:
+            pass
+        finally:
+            self._applying_scroll = False
+
+    def _scroll_to_peek_target(self, widget, *, to_end: bool = False) -> None:
+        if widget is None:
+            return
+
+        def _go() -> None:
+            if self._add_peek_key is None:
+                return
+            try:
+                self._list_layout.activate()
+                self._grid_layout.activate()
+                self._list_host.updateGeometry()
+                self._grid_inner.updateGeometry()
+                self._content_stack.updateGeometry()
+            except RuntimeError:
+                return
+            try:
+                scroll_w = self._scroll.widget()
+                if scroll_w is not None:
+                    pos = widget.mapTo(scroll_w, QPoint(0, max(0, widget.height() // 2)))
+                    self._applying_scroll = True
+                    try:
+                        self._scroll.ensureVisible(int(pos.x()), int(pos.y()), 8, 48)
+                    finally:
+                        self._applying_scroll = False
+                self._applying_scroll = True
+                try:
+                    self._scroll.ensureWidgetVisible(widget, 8, 32)
+                finally:
+                    self._applying_scroll = False
+                if to_end:
+                    self._set_vscroll(self._scroll.verticalScrollBar().maximum())
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(0, _go)
+        QTimer.singleShot(32, _go)
+        QTimer.singleShot(90, _go)
+
+    def set_add_peek(self, clip_paths: list[str]) -> None:
+        """Pulse existing cards and/or show a ghost for Add-to-queue hover."""
+        paths = [p for p in clip_paths if p]
+        key = tuple(self._norm_clip(p) for p in paths)
+        if key == self._add_peek_key:
+            return
+        self.clear_add_peek(restore_scroll=False)
+        if not key:
+            return
+        self._capture_rest_for_peek()
+        self._add_peek_key = key
+        queued_norms = {
+            self._norm_clip(getattr(job, "clip_path", "")) for job in self._jobs
+        }
+        existing_focus = None
+        for card in self._card_widgets:
+            job = getattr(card, "_job", None)
+            if job is None:
+                continue
+            if self._norm_clip(getattr(job, "clip_path", "")) in key:
+                start_card_peek_pulse(card)
+                if existing_focus is None:
+                    existing_focus = card
+        new_paths = [p for p in paths if self._norm_clip(p) not in queued_norms]
+        if new_paths:
+            self._empty_center.hide()
+            if not self._jobs:
+                self._peek_showed_host = True
+            self._show_active_host()
+            cache_dir = self._queue_cache_dir()
+            grid = self._view_mode == "grid"
+            d = self._density
+            host = self._grid_inner if grid else self._list_host
+            for path in new_paths[:4]:
+                ghost = _QueueAddPeekGhost(
+                    path,
+                    grid=grid,
+                    cache_dir=cache_dir,
+                    title=self._peek_title_for_clip(path),
+                    thumb_w=d.queue_thumb_w,
+                    thumb_h=d.queue_thumb_h,
+                    parent=host,
+                )
+                ghost.show()
+                self._peek_ghosts.append(ghost)
+            if grid:
+                self._relayout_grid_cards()
+            else:
+                layout = self._list_layout
+                stretch_at = -1
+                for i in range(layout.count()):
+                    item = layout.itemAt(i)
+                    if item is not None and item.spacerItem() is not None:
+                        stretch_at = i
+                        break
+                for ghost in self._peek_ghosts:
+                    if stretch_at >= 0:
+                        layout.insertWidget(stretch_at, ghost)
+                        stretch_at += 1
+                    else:
+                        layout.addWidget(ghost)
+                if stretch_at < 0:
+                    layout.addStretch()
+                QTimer.singleShot(0, self._refresh_list_card_widths)
+        # New clip → ghost at insert point. Already queued → blinking card.
+        if self._peek_ghosts:
+            self._scroll_to_peek_target(
+                self._peek_ghosts[0],
+                to_end=self._view_mode != "grid",
+            )
+        elif existing_focus is not None:
+            self._scroll_to_peek_target(existing_focus, to_end=False)
+
+    def clear_add_peek(self, *, restore_scroll: bool = True) -> None:
+        if self._add_peek_key is None and not self._peek_ghosts:
+            for card in self._card_widgets:
+                stop_card_peek_pulse(card)
+            if restore_scroll:
+                self._restore_peek_scroll()
+            return
+        self._add_peek_key = None
+        for card in self._card_widgets:
+            stop_card_peek_pulse(card)
+        for ghost in self._peek_ghosts:
+            stop_card_peek_pulse(ghost)
+            try:
+                ghost.hide()
+                ghost.setParent(None)
+                ghost.deleteLater()
+            except RuntimeError:
+                pass
+        self._peek_ghosts = []
+        if self._peek_showed_host and not self._jobs:
+            self._peek_showed_host = False
+            self._list_host.hide()
+            self._grid_host.hide()
+            if not self._empty_hint_dismissed:
+                self._empty_center.show()
+        self._peek_showed_host = False
+        if restore_scroll:
+            self._restore_peek_scroll()
+
+    def _restore_peek_scroll(self) -> None:
+        saved = self._peek_saved_v
+        if saved is None:
+            return
+        self._rest_vscroll = int(saved)
+        self._set_vscroll(saved)
+        self._peek_saved_v = None
+        self._hold_rest_scroll = True
+
     def _grid_column_count(self) -> int:
         viewport_w = max(1, self._scroll.viewport().width())
         return max(1, viewport_w // (_GRID_CARD_W + _GRID_GAP))
 
     def _relayout_grid_cards(self) -> None:
-        if self._view_mode != "grid" or not self._card_widgets:
+        cards = list(self._card_widgets) + list(self._peek_ghosts)
+        if self._view_mode != "grid" or not cards:
             return
         while self._grid_layout.count():
             item = self._grid_layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(self._grid_inner)
         cols = self._grid_column_count()
-        for index, card in enumerate(self._card_widgets):
+        for index, card in enumerate(cards):
             row, col = divmod(index, cols)
             self._grid_layout.addWidget(card, row, col)
-        rows_used = (len(self._card_widgets) + cols - 1) // cols
+        rows_used = (len(cards) + cols - 1) // cols
         self._grid_layout.setRowStretch(rows_used, 1)
 
     def _queue_cache_dir(self) -> str:
@@ -974,6 +1379,11 @@ class RenderQueuePanel(QWidget):
             dense=d,
         )
 
+    def set_hover_hosted(self, hosted: bool) -> None:
+        """Hover overlay has no in-panel splitter gutter — the handle sits outside."""
+        self._hover_hosted = bool(hosted)
+        self._apply_splitter_gutter()
+
     def set_splitter_gutter_side(self, side: str) -> None:
         """Put the handle gutter on the player-facing edge (``left`` or ``right``)."""
         self._gutter_on_left = str(side or "left").strip().lower() != "right"
@@ -982,7 +1392,7 @@ class RenderQueuePanel(QWidget):
     def _apply_splitter_gutter(self) -> None:
         if getattr(self, "_outer_layout", None) is None:
             return
-        gutter = _SPLITTER_GUTTER
+        gutter = 0 if getattr(self, "_hover_hosted", False) else _SPLITTER_GUTTER
         if getattr(self, "_gutter_on_left", True):
             self._outer_layout.setContentsMargins(
                 gutter, 0, 0, RENDER_QUEUE_BOTTOM_INSET
@@ -1112,6 +1522,9 @@ class RenderQueuePanel(QWidget):
     def _rebuild_cards(self) -> None:
         jobs = list(self._jobs)
         selected = self._selected_id
+        peek_key = self._add_peek_key
+        peek_paths = list(peek_key) if peek_key else []
+        self.clear_add_peek(restore_scroll=False)
         self._clear_cards()
         self._show_active_host()
 
@@ -1122,6 +1535,8 @@ class RenderQueuePanel(QWidget):
                 self._empty_center.show()
             else:
                 self._empty_center.hide()
+            if peek_paths:
+                self.set_add_peek(peek_paths)
             return
 
         self._empty_center.hide()
@@ -1140,6 +1555,8 @@ class RenderQueuePanel(QWidget):
             QTimer.singleShot(0, self._refresh_list_card_widths)
 
         self._scroll_to_selected()
+        if peek_paths:
+            self.set_add_peek(peek_paths)
 
     def _clear_drop_highlights(self) -> None:
         for card in self._card_widgets:
@@ -1211,11 +1628,22 @@ class RenderQueuePanel(QWidget):
             break
 
     def _scroll_to_selected(self) -> None:
+        if self._add_peek_key is not None:
+            return
+        if self._hold_rest_scroll:
+            self._set_vscroll(self._rest_vscroll)
+            return
         if not self._selected_id:
             return
         for card in self._card_widgets:
             if card._job_id == self._selected_id:
-                self._scroll.ensureWidgetVisible(card)
+                self._applying_scroll = True
+                try:
+                    self._scroll.ensureWidgetVisible(card)
+                except RuntimeError:
+                    pass
+                finally:
+                    self._applying_scroll = False
                 break
 
     def _on_card_drop(self, source_id: str, target_id: str) -> None:
