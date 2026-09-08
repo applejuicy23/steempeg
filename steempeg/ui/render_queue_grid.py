@@ -29,6 +29,7 @@ from steempeg.render.queue_display import (
 from steempeg.ui.widgets.elided_label import ElidedLabel
 
 from steempeg.ui.queue_card_shared import (
+    QUEUE_CARD_BORDER_PX,
     _FONT,
     _MIME_JOB_ID,
     queue_menu_stylesheet,
@@ -260,15 +261,16 @@ class QueueGridJobCard(QWidget):
 
     def _apply_border_style(self) -> None:
         _, _, idle_border = ut.clip_card_chrome()
+        ring = QUEUE_CARD_BORDER_PX
         if self._drop_highlight:
-            border = "2px dashed #b29ae7"
+            border = f"{ring}px dashed #b29ae7"
         elif self._selected:
-            border = "3px solid #b29ae7"
+            border = f"{ring}px solid #b29ae7"
         elif self._hovered:
-            border = "2px solid #7a6aa8"
+            border = f"{ring}px solid #7a6aa8"
         else:
             idle = idle_border if ut.get_ui_theme() != ut.UI_THEME_DEFAULT else "#444444"
-            border = f"2px solid {idle}"
+            border = f"{ring}px solid {idle}"
         # Square top (thumb flush), rounded bottom — same as ClipCard.
         self._border_overlay.setStyleSheet(f"""
             QFrame {{

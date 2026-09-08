@@ -1,9 +1,9 @@
 """Shared constants and helpers for render-queue list/grid cards."""
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPropertyAnimation
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
 
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
@@ -20,6 +20,8 @@ _STATUS_DOT = 26
 _QUEUE_CHROME_INSET = 12  # match Clips Manager top_bar horizontal margins
 
 # Pipeline outline (portable + desktop list) — gray waiting · yellow ready · etc.
+# Width is constant: a thicker selected/hover ring used to grow the card.
+QUEUE_CARD_BORDER_PX = 2
 STATUS_BORDER_IDLE = "#555555"
 STATUS_BORDER_READY = "#ffcc00"
 STATUS_BORDER_NEXT = "#d4b84a"
@@ -38,22 +40,24 @@ def status_border_for_job(job: RenderJob, jobs: list[RenderJob]) -> tuple[str, i
 
     Gray = further back · yellow = next ready · soft yellow = up next while
     another job renders · orange = rendering · green = done · red = error.
+    Ring width is always ``QUEUE_CARD_BORDER_PX`` so selection cannot resize the card.
     """
+    w = QUEUE_CARD_BORDER_PX
     st = getattr(job, "status", None)
     if st == JobStatus.COMPLETED:
-        return STATUS_BORDER_DONE, 2
+        return STATUS_BORDER_DONE, w
     if st == JobStatus.ERROR:
-        return STATUS_BORDER_ERROR, 2
+        return STATUS_BORDER_ERROR, w
     if st == JobStatus.RENDERING:
-        return STATUS_BORDER_RENDER, 2
+        return STATUS_BORDER_RENDER, w
 
     rendering = any(getattr(j, "status", None) == JobStatus.RENDERING for j in jobs)
     queued = [j for j in jobs if getattr(j, "status", None) == JobStatus.QUEUED]
     if queued and job.id == queued[0].id:
         if rendering:
-            return STATUS_BORDER_NEXT, 2
-        return STATUS_BORDER_READY, 2
-    return STATUS_BORDER_IDLE, 1
+            return STATUS_BORDER_NEXT, w
+        return STATUS_BORDER_READY, w
+    return STATUS_BORDER_IDLE, w
 
 
 def status_card_background(
@@ -195,3 +199,32 @@ def job_accepts_drop(job: RenderJob) -> bool:
 
 def job_can_remove(job: RenderJob) -> bool:
     return job.status != JobStatus.RENDERING
+
+
+def start_card_peek_pulse(widget: QWidget) -> None:
+    """Looping opacity blink for Add-to-queue hover preview."""
+    stop_card_peek_pulse(widget)
+    effect = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(effect)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setDuration(900)
+    anim.setStartValue(1.0)
+    anim.setKeyValueAt(0.5, 0.34)
+    anim.setEndValue(1.0)
+    anim.setLoopCount(-1)
+    anim.start()
+    widget._peek_pulse_anim = anim
+
+
+def stop_card_peek_pulse(widget: QWidget) -> None:
+    anim = getattr(widget, "_peek_pulse_anim", None)
+    if anim is not None:
+        try:
+            anim.stop()
+        except RuntimeError:
+            pass
+        widget._peek_pulse_anim = None
+    try:
+        widget.setGraphicsEffect(None)
+    except RuntimeError:
+        pass
