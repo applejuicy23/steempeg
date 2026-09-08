@@ -322,21 +322,42 @@ class SplitterRulesMixin:
             and getattr(ui, "right_panel", None) is not None
         )
 
+    def _queue_dock_widget(self):
+        """Splitter child for the queue slot — real panel, or hover placeholder."""
+        slot = getattr(self, "_queue_hover_slot", None)
+        panel = getattr(self, "render_queue_panel", None)
+        rhs = getattr(self, "right_h_splitter", None)
+        main = getattr(getattr(self, "ui", None), "main_splitter", None)
+        for widget in (slot, panel):
+            if widget is None:
+                continue
+            for splitter in (rhs, main):
+                if splitter is None:
+                    continue
+                try:
+                    if splitter.indexOf(widget) >= 0:
+                        return widget
+                except RuntimeError:
+                    continue
+        return panel
+
     def _queue_on_left(self) -> bool:
         """True when Render Queue is the outer (left) pane."""
-        queue = getattr(self, "render_queue_panel", None)
+        dock = self._queue_dock_widget()
         main = getattr(getattr(self, "ui", None), "main_splitter", None)
-        if queue is None or main is None:
-            return False
-        try:
-            return main.indexOf(queue) == 0
-        except RuntimeError:
-            return False
+        if dock is not None and main is not None:
+            try:
+                idx = main.indexOf(dock)
+                if idx >= 0:
+                    return idx == 0
+            except RuntimeError:
+                pass
+        return bool(getattr(self, "_shell_queue_on_left", False))
 
     def _queue_splitter_and_index(self):
-        """Splitter that currently owns Render Queue, and that child's index."""
-        queue = getattr(self, "render_queue_panel", None)
-        if queue is None:
+        """Splitter that currently owns the queue slot, and that child's index."""
+        dock = self._queue_dock_widget()
+        if dock is None:
             return None, -1
         rhs = getattr(self, "right_h_splitter", None)
         main = getattr(getattr(self, "ui", None), "main_splitter", None)
@@ -344,7 +365,7 @@ class SplitterRulesMixin:
             if splitter is None:
                 continue
             try:
-                idx = splitter.indexOf(queue)
+                idx = splitter.indexOf(dock)
             except RuntimeError:
                 continue
             if idx >= 0:

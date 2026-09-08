@@ -511,9 +511,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
             load_timeline_strip_size_from_settings(_settings0)
             load_player_boost_from_settings(_settings0)
-            from steempeg.ui.settings_prefs import load_shell_side_layout
+            from steempeg.ui.settings_prefs import load_queue_hover, load_shell_side_layout
 
             load_shell_side_layout(_settings0)
+            load_queue_hover(_settings0)
             from steempeg.ui.settings_prefs import (
                 KEY_PERMANENT_EXPORT_FOLDER,
                 apply_export_folder,
@@ -2719,6 +2720,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     # Restore last-session open/closed — do not force open yet.
                     # Geometry settle (_ensure_startup_queue_open) applies width.
                     self._restore_queue_panel_collapsed_from_settings()
+                    self.apply_queue_hover()
                     self.refresh_render_queue_panel(sync_splitter=True)
 
                 # Shared Desktop/Portable panel snapshot (render_export_settings).
@@ -4399,6 +4401,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             return
         if getattr(self, "is_theater", False) or getattr(self, "is_fullscreen", False):
             return
+        if self._queue_hover_is_floating():
+            return
         jobs = getattr(self, "render_queue", None)
         if jobs is None or len(jobs) == 0:
             return
@@ -5042,7 +5046,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         main = getattr(ui, "main_splitter", None) if ui is not None else None
         rhs = getattr(self, "right_h_splitter", None)
         lib = getattr(ui, "left_panel", None) if ui is not None else None
-        queue = getattr(self, "render_queue_panel", None)
+        queue = (
+            self._queue_dock_widget()
+            if hasattr(self, "_queue_dock_widget")
+            else getattr(self, "render_queue_panel", None)
+        )
         player = getattr(ui, "right_panel", None) if ui is not None else None
         if None in (main, rhs, lib, queue, player):
             return
@@ -5059,6 +5067,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if already_left == queue_left:
             self._shell_queue_on_left = queue_left
             self.sync_shell_side_gutters()
+            self._sync_queue_hover_after_sides()
             return
 
         lib_w = 0
@@ -5115,6 +5124,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if not restore_widths:
             if hasattr(self, "sync_queue_minimum"):
                 self.sync_queue_minimum()
+            if self._queue_hover_is_floating():
+                self._set_queue_pane_width(0)
+            self._sync_queue_hover_after_sides()
             return
 
         main_total = sum(main.sizes()) if sum(main.sizes()) > 0 else int(main.width() or 0)
@@ -5136,11 +5148,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             rhs.setSizes([max(rhs_total - applied_q, 0), applied_q])
         if hasattr(self, "sync_queue_minimum"):
             self.sync_queue_minimum()
+        if self._queue_hover_is_floating():
+            self._set_queue_pane_width(0)
         logging.info(
             "Shell side layout → %s (queue_left=%s)",
             normalize_shell_side_layout(wanted),
             queue_left,
         )
+        self._sync_queue_hover_after_sides()
 
     def sync_shell_side_gutters(self) -> None:
         """Keep handle-facing insets on Library and Queue after a side swap.
@@ -5192,6 +5207,48 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def refresh_shell_side_layout(self, layout: str | None = None) -> None:
         self.apply_shell_side_layout(layout, restore_widths=True)
 
+    def _queue_hover_is_floating(self) -> bool:
+        ctrl = getattr(self, "_queue_hover", None)
+        return ctrl is not None and bool(getattr(ctrl, "is_enabled", lambda: False)())
+
+    def _sync_queue_hover_after_sides(self) -> None:
+        ctrl = getattr(self, "_queue_hover", None)
+        if ctrl is None:
+            return
+        try:
+            ctrl.sync_side()
+        except Exception:
+            logging.debug("queue hover side sync skipped", exc_info=True)
+
+    def apply_queue_hover(self, enabled: bool | None = None) -> None:
+        """Float Render Queue as an edge slide-out, or dock it back in the splitter."""
+        from steempeg.ui.settings_prefs import get_queue_hover, set_queue_hover
+
+        if getattr(self, "_portable_shell", False):
+            return
+        wanted = set_queue_hover(enabled if enabled is not None else get_queue_hover())
+        ctrl = getattr(self, "_queue_hover", None)
+        if ctrl is None:
+            from steempeg.ui.queue_hover import QueueHoverController
+
+            ctrl = QueueHoverController(self)
+            self._queue_hover = ctrl
+        immersive = bool(getattr(self, "is_theater", False)) or bool(
+            getattr(self, "is_fullscreen", False)
+        )
+        ctrl.set_enabled(wanted)
+        if wanted and immersive:
+            ctrl.set_suspended(True)
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, ctrl.sync_geometry)
+        host = getattr(ctrl, "_host", None)
+        host_name = host.objectName() if host is not None else "?"
+        logging.info("Queue hover → %s (host=%s)", wanted, host_name)
+
+    def refresh_queue_hover(self, enabled: bool | None = None) -> None:
+        self.apply_queue_hover(enabled)
+
     def _set_queue_pane_width(self, queue_w: int) -> None:
         """Set Render Queue's splitter slot to ``queue_w`` (0 = closed)."""
         from steempeg.ui.layout_defaults import PLAYER_COLUMN_FLOOR
@@ -5222,6 +5279,16 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._set_queue_pane_closed(True)
 
     def _set_queue_pane_closed(self, closed: bool) -> None:
+        if self._queue_hover_is_floating():
+            ctrl = getattr(self, "_queue_hover", None)
+            if closed:
+                if ctrl is not None:
+                    ctrl.conceal()
+                self._set_queue_pane_width(0)
+                return
+            if ctrl is not None:
+                ctrl.reveal()
+                return
         if closed:
             self._set_queue_pane_width(0)
             return
@@ -5230,6 +5297,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
     def _open_queue_in_right_splitter(self) -> None:
         """Open the queue pane to the last saved width (else layout default)."""
+        if self._queue_hover_is_floating():
+            ctrl = getattr(self, "_queue_hover", None)
+            if ctrl is not None:
+                ctrl.reveal()
+            return
         from steempeg.ui.layout_defaults import (
             PLAYER_COLUMN_FLOOR,
             queue_panel_min_width,

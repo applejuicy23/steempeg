@@ -1585,6 +1585,14 @@ class PlayerMixin:
 
     def _clamp_queue_panel_for_immersive(self, collapsed: bool) -> None:
         """Collapse queue without hide() so the right_h handle survives Qt layout."""
+        hover = getattr(self, "_queue_hover", None)
+        if hover is not None and hasattr(hover, "set_suspended"):
+            try:
+                hover.set_suspended(bool(collapsed))
+            except Exception:
+                pass
+        if hasattr(self, "_queue_hover_is_floating") and self._queue_hover_is_floating():
+            return
         panel = getattr(self, "render_queue_panel", None)
         if panel is None:
             return

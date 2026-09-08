@@ -67,6 +67,46 @@ def paint_desktop_splitter_handles(app) -> None:
         _hide_middle_handle(app)
     else:
         _restore_handle_cursors(app, names=_SHELL_SPLITTER_NAMES)
+    _hide_queue_handle_for_hover(app)
+
+
+def _hide_queue_handle_for_hover(app) -> None:
+    """Hover slide-out owns the queue edge — keep that splitter handle gone."""
+    check = getattr(app, "_queue_hover_is_floating", None)
+    if not callable(check):
+        return
+    try:
+        if not bool(check()):
+            return
+    except Exception:
+        return
+    setter = getattr(app, "_set_splitter_handle_visible", None)
+    if not callable(setter):
+        return
+    queue_left = False
+    side = getattr(app, "_queue_on_left", None)
+    if callable(side):
+        try:
+            queue_left = bool(side())
+        except Exception:
+            queue_left = False
+    if queue_left:
+        splitter = getattr(getattr(app, "ui", None), "main_splitter", None)
+    else:
+        splitter = getattr(app, "right_h_splitter", None)
+    setter(splitter, False, 1)
+    if isinstance(splitter, QSplitter):
+        try:
+            live = int(splitter.handleWidth() or 0)
+            if live > 0:
+                app._queue_hover_saved_handle_w = live
+            splitter.setHandleWidth(0)
+            if splitter.count() >= 2:
+                handle = splitter.handle(1)
+                if handle is not None:
+                    handle.setVisible(False)
+        except RuntimeError:
+            pass
 
 
 def ensure_right_h_handle_chrome(app) -> None:
