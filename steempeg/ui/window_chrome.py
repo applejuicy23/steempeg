@@ -132,6 +132,9 @@ class _MSG(ctypes.Structure):
     ]
 
 
+_TRAFFIC_DOT_PX = 13
+
+
 class _TrafficLight(QPushButton):
     """macOS-style window control dot with a thin painted glyph (no Unicode junk).
 
@@ -148,7 +151,7 @@ class _TrafficLight(QPushButton):
         # "close" | "minimize" | "maximize"
         self._glyph = glyph
         self._hovered = False
-        self.setFixedSize(13, 13)
+        self.setFixedSize(_TRAFFIC_DOT_PX, _TRAFFIC_DOT_PX)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Hover* events still fire on an inactive top-level (enter/leave often do not
@@ -159,15 +162,16 @@ class _TrafficLight(QPushButton):
         self.setMouseTracking(True)
         self.setText("")
         # Static chrome only — fill + glyph are drawn in paintEvent.
+        r = max(1, _TRAFFIC_DOT_PX // 2)
         self.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background-color: transparent;
                 border: none;
-                border-radius: 6px;
+                border-radius: {r}px;
                 padding: 0;
                 margin: 0;
-            }
+            }}
             """
         )
 
@@ -238,13 +242,13 @@ class _TrafficLight(QPushButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(self._hover if self._hovered else self._base))
-        painter.drawEllipse(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0))
+        # Fill the hitbox — inset on 13px discs used to read a size smaller.
+        painter.drawEllipse(QRectF(0.25, 0.25, self.width() - 0.5, self.height() - 0.5))
 
         if not self._hovered:
             painter.end()
             return
 
-        # Hairlines stay crisp without AA mush on a 13px dot.
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         if self._glyph == "close":
@@ -264,7 +268,7 @@ class _TrafficLight(QPushButton):
         cx = self.width() / 2.0
         cy = self.height() / 2.0
         # Close / minimize stay near the rim; maximize glyphs sit smaller in the center.
-        inset = 3.0
+        inset = max(3.0, self.width() * 0.25)
         left = inset
         right = self.width() - inset
         top = inset
@@ -277,7 +281,7 @@ class _TrafficLight(QPushButton):
             painter.drawLine(QPointF(left, cy), QPointF(right, cy))
         elif self._glyph == "restore":
             # Two offset squares; group bbox centered on (cx, cy).
-            s = 3.0
+            s = max(3.0, self.width() * 0.22)
             gap = 2.0
             group = s + gap
             ox = cx - group / 2.0
@@ -292,7 +296,7 @@ class _TrafficLight(QPushButton):
             painter.drawRect(front)
         else:
             # True geometric center: path midpoint == widget midpoint. No optical nudge.
-            side = 5.0
+            side = max(5.0, self.width() * 0.38)
             painter.drawRect(QRectF(cx - side / 2.0, cy - side / 2.0, side, side))
 
         painter.end()
@@ -696,8 +700,7 @@ class SteempegTitleBar(QWidget):
         root.addSpacing(8)
 
         controls = QHBoxLayout()
-        # Gap ≈ diameter of the 13px dots — matches the airier Linux/macOS-style look;
-        # 8 felt packed on Windows DPI.
+        # Gap ≈ diameter of the dots — airier than packing them on Windows DPI.
         controls.setSpacing(12)
         self.btn_minimize = _TrafficLight(tok.TRAFFIC_MINIMIZE, tok.TRAFFIC_MINIMIZE_HOVER, "minimize")
         self.btn_maximize = _TrafficLight(tok.TRAFFIC_MAXIMIZE, tok.TRAFFIC_MAXIMIZE_HOVER, "maximize")
