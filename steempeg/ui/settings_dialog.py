@@ -161,6 +161,7 @@ from steempeg.ui.settings_prefs import (
     KEY_PORTABLE_LIKE_MIDDLE_SPLITTER,
     KEY_REMEMBER_LIBRARY_TAB,
     KEY_SCREENSHOTS_FOLDER,
+    KEY_QUEUE_HOVER,
     KEY_SHELL_SIDE_LAYOUT,
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
@@ -199,6 +200,7 @@ from steempeg.ui.settings_prefs import (
     load_media_cache_limit_gb,
     load_mpv_log_level,
     load_remember_library_tab,
+    load_queue_hover,
     load_shell_side_layout,
     load_startup_library_scan,
     load_test_new_fullscreen,
@@ -217,6 +219,7 @@ from steempeg.ui.settings_prefs import (
     normalize_media_cache_limit_gb,
     normalize_render_tab,
     normalize_screenshots_folder,
+    normalize_queue_hover,
     normalize_shell_side_layout,
     normalize_startup_library_scan,
     normalize_update_check_interval,
@@ -225,8 +228,11 @@ from steempeg.ui.settings_prefs import (
     resolve_screenshots_folder,
     resolve_update_check_interval,
     set_markers_on_strip,
+    set_queue_hover,
     set_shell_side_layout,
+    get_queue_hover,
     get_shell_side_layout,
+    DEFAULT_QUEUE_HOVER,
     DEFAULT_APP_LOG_LEVEL,
     DEFAULT_FFMPEG_LOG_LEVEL,
     DEFAULT_MPV_LOG_LEVEL,
@@ -650,6 +656,30 @@ class SettingsDialog(SteempegDialog):
                     "Combo previews live; Save persists. Cancel restores the last saved sides."
                 )
             )
+
+        self._chk_queue_hover = SteempegCheckBox("Hover Render Queue")
+        cur_hover = load_queue_hover(settings)
+        self._committed_queue_hover = cur_hover
+        self._chk_queue_hover.setChecked(cur_hover)
+        v.addWidget(self._chk_queue_hover)
+        if portable_shell:
+            self._chk_queue_hover.setEnabled(False)
+            v.addWidget(
+                self._hint(
+                    "Desktop only. Hover the window edge to slide Render Queue out. "
+                    "On by default. Off keeps the docked splitter pane."
+                )
+            )
+        else:
+            v.addWidget(
+                self._hint(
+                    "On (default): hover the window edge on the Render Queue side "
+                    "to slide a rounded copy out. Drag the inner edge to resize. "
+                    "Off keeps the docked splitter pane. "
+                    "Checkbox previews live; Save persists. Cancel restores."
+                )
+            )
+            self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
         self._shell_sides_preview_timer = QTimer(self)
         self._shell_sides_preview_timer.setSingleShot(True)
         self._shell_sides_preview_timer.setInterval(200)
@@ -1790,6 +1820,23 @@ class SettingsDialog(SteempegDialog):
 
                 logging.exception("Shell side layout refresh failed for %s", layout)
 
+    def _preview_queue_hover(self, *_args) -> None:
+        import logging
+
+        enabled = normalize_queue_hover(self._chk_queue_hover.isChecked())
+        set_queue_hover(enabled)
+        logging.info("Queue hover preview → %s", enabled)
+        self._refresh_queue_hover(enabled)
+
+    def _refresh_queue_hover(self, enabled: bool) -> None:
+        if hasattr(self._app, "refresh_queue_hover"):
+            try:
+                self._app.refresh_queue_hover(enabled)
+            except Exception:
+                import logging
+
+                logging.exception("Queue hover refresh failed for %s", enabled)
+
     def _preview_header_layout(self, *_args) -> None:
         self._header_layout_preview_timer.start()
 
@@ -1993,6 +2040,26 @@ class SettingsDialog(SteempegDialog):
         logging.info("Shell side layout cancelled → restored %s", committed)
         self._refresh_shell_sides(committed)
 
+    def _restore_queue_hover_on_cancel(self) -> None:
+        """Undo live queue-hover preview that was never Saved."""
+        import logging
+
+        chk = getattr(self, "_chk_queue_hover", None)
+        if chk is None:
+            return
+        committed = normalize_queue_hover(
+            getattr(self, "_committed_queue_hover", DEFAULT_QUEUE_HOVER)
+        )
+        live = normalize_queue_hover(chk.isChecked())
+        if live == committed:
+            return
+        chk.blockSignals(True)
+        chk.setChecked(committed)
+        chk.blockSignals(False)
+        set_queue_hover(committed)
+        logging.info("Queue hover cancelled → restored %s", committed)
+        self._refresh_queue_hover(committed)
+
     def _restore_header_layout_on_cancel(self) -> None:
         """Undo live header-layout preview that was never Saved."""
         import logging
@@ -2120,6 +2187,7 @@ class SettingsDialog(SteempegDialog):
         self._restore_icon_shape_on_cancel()
         self._restore_clip_card_style_on_cancel()
         self._restore_shell_sides_on_cancel()
+        self._restore_queue_hover_on_cancel()
         self._restore_header_layout_on_cancel()
         self._restore_header_size_on_cancel()
         self._restore_player_layout_on_cancel()
@@ -2269,6 +2337,13 @@ class SettingsDialog(SteempegDialog):
         if sides != getattr(self, "_committed_shell_sides", sides):
             deferred.append(lambda s=sides: self._refresh_shell_sides(s))
         self._committed_shell_sides = sides
+
+        hover = normalize_queue_hover(self._chk_queue_hover.isChecked())
+        pending[KEY_QUEUE_HOVER] = hover
+        set_queue_hover(hover)
+        if hover != getattr(self, "_committed_queue_hover", hover):
+            deferred.append(lambda h=hover: self._refresh_queue_hover(h))
+        self._committed_queue_hover = hover
 
         header_layout = normalize_header_layout(self._combo_header_layout.currentData())
         pending[KEY_PLAYER_HEADER_LAYOUT] = header_layout

@@ -110,6 +110,47 @@ def shell_queue_on_left(settings: dict | None = None) -> bool:
         (settings or {}).get(KEY_SHELL_SIDE_LAYOUT, DEFAULT_SHELL_SIDE_LAYOUT)
     ) == SHELL_SIDE_QUEUE_LEFT
 
+
+# ----- Desktop shell: hover slide-out for Render Queue -----
+
+KEY_QUEUE_HOVER = "queue_hover"
+DEFAULT_QUEUE_HOVER = True
+
+_current_queue_hover: bool = DEFAULT_QUEUE_HOVER
+
+
+def normalize_queue_hover(value: object | None) -> bool:
+    """Stock ON. Only an explicit off value disables the slide-out."""
+    if value is None:
+        return DEFAULT_QUEUE_HOVER
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("0", "false", "no", "off"):
+        return False
+    if text in ("1", "true", "yes", "on"):
+        return True
+    return DEFAULT_QUEUE_HOVER
+
+
+def get_queue_hover() -> bool:
+    return bool(_current_queue_hover)
+
+
+def set_queue_hover(value: object | None) -> bool:
+    global _current_queue_hover
+    _current_queue_hover = normalize_queue_hover(value)
+    return _current_queue_hover
+
+
+def load_queue_hover(settings: dict | None = None) -> bool:
+    raw = DEFAULT_QUEUE_HOVER
+    if settings is not None and KEY_QUEUE_HOVER in settings:
+        raw = settings.get(KEY_QUEUE_HOVER)
+    return set_queue_hover(raw)
+
 # ----- Permanent export folder -----
 
 KEY_PERMANENT_EXPORT_FOLDER = "permanent_export_folder"
