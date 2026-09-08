@@ -1433,33 +1433,16 @@ def tooltip_stylesheet() -> str:
 
 
 def floating_tooltip_chip_stylesheet() -> str:
-    """Timeline marker hover chip (icon + title) — same tokens as QToolTip."""
+    """Timeline marker hover chip labels. Frame chrome is painted in the widget."""
     p = _active
     return (
         "QFrame#timelineMarkerTip {"
-        f" background-color: {p.tooltip_bg};"
-        f" color: {p.tooltip_fg};"
-        f" border: 1px solid {p.tooltip_border};"
-        " border-radius: 6px; }"
+        " background: transparent; border: none; }"
         "QFrame#timelineMarkerTip QLabel {"
         " background: transparent; border: none;"
         f" color: {p.tooltip_fg};"
         f" font-family: {tok.FONT_APP};"
         " font-size: 12px; font-weight: bold; }"
-    )
-
-    p = _active
-    return (
-        "QLabel {"
-        f" background-color: {p.tooltip_bg};"
-        f" color: {p.tooltip_fg};"
-        f" border: 1px solid {p.tooltip_border};"
-        " border-radius: 6px;"
-        " padding: 5px 9px;"
-        f" font-family: {tok.FONT_APP};"
-        " font-size: 12px;"
-        " font-weight: bold;"
-        "}"
     )
 
 

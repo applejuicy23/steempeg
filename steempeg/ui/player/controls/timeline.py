@@ -24,7 +24,19 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QCursor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -86,6 +98,32 @@ def _paint_timeline_marker_pixmap(
     target = QRectF(draw_x, draw_y, lw, lh)
     source = QRectF(0.0, 0.0, float(pix.width()), float(pix.height()))
     painter.drawPixmap(target, pix, source)
+
+
+class _TimelineMarkerTip(QFrame):
+    """Marker hover chip. QSS radius on a Tool HWND leaves square corner fill."""
+
+    _RADIUS = 8.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("timelineMarkerTip")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+    def paintEvent(self, event):
+        from steempeg.ui import ui_theme as ut
+
+        pal = ut.active_palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(rect, self._RADIUS, self._RADIUS)
+        painter.fillPath(path, QColor(pal.tooltip_bg))
+        painter.setPen(QPen(QColor(pal.tooltip_border), 1.0))
+        painter.drawPath(path)
 
 
 class TimelineCanvas(QWidget):
@@ -213,8 +251,7 @@ class TimelineCanvas(QWidget):
         # NEW FLOATING TOOLTIP (Will reside beneath the scrollbar)
         from steempeg.ui import ui_theme as ut
 
-        self.text_tooltip = QFrame(self)
-        self.text_tooltip.setObjectName("timelineMarkerTip")
+        self.text_tooltip = _TimelineMarkerTip(self)
         # No WindowStaysOnTopHint — owned TOPMOST Tools yank the Steempeg shell
         # over Explorer / browser when the tip shows. Tool alone still stacks
         # above the shell (incl. native mpv) without promoting other apps under us.
@@ -223,6 +260,9 @@ class TimelineCanvas(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint
         )
+        # Flags recreate the HWND; re-apply translucent so QSS cannot leak squares.
+        self.text_tooltip.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.text_tooltip.setAttribute(Qt.WA_NoSystemBackground, True)
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
         self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.text_tooltip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
@@ -324,6 +364,7 @@ class TimelineCanvas(QWidget):
             tip = getattr(self, "text_tooltip", None)
             if tip is not None:
                 tip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
+                tip.update()
             pw = getattr(self, "preview_widget", None)
             if pw is not None and hasattr(pw, "apply_theme"):
                 pw.apply_theme()
