@@ -97,6 +97,9 @@ def _sniper_pixmap_from_frame(frame) -> QPixmap | None:
 
 class PreviewSniperWorker(QThread):
     preview_ready = Signal(int, QPixmap)
+    # Cursor-bucket decode lifecycle for the hover tip sensor:
+    # sec, state ("gen"|"ok"|"miss"), elapsed_ms
+    preview_status = Signal(int, str, float)
 
     def __init__(self):
         super().__init__()
@@ -136,6 +139,12 @@ class PreviewSniperWorker(QThread):
         self.max_chunk_number = 1
         self.rep_id = "1"
 
+        # --- In-RAM init-segment cache ---
+        # Maps abs init-path → bytes.  Populated on first read, cleared on clip
+        # switch (_decode_gen bump).  A DASH init segment is typically 1–4 KB, so
+        # the whole-session memory cost is negligible even for many clips.
+        self._init_bytes_cache: dict[str, bytes] = {}
+
     def _kill_ffmpeg_subprocess(self) -> None:
         proc = self._ffmpeg_proc
         self._ffmpeg_proc = None
@@ -164,6 +173,7 @@ class PreviewSniperWorker(QThread):
         self.base_dir = ""
         self.init_filename = ""
         self.chunk_template = ""
+        self._init_bytes_cache.clear()
         # Do not wait/terminate on the UI thread during clip switches — ffmpeg
         # was already killed above; the worker exits on its next loop check.
 
@@ -537,8 +547,14 @@ class PreviewSniperWorker(QThread):
         gen = self._decode_gen
         t0 = time.perf_counter()
         try:
-            with open(init_path, 'rb') as f:
-                init_bytes = f.read()
+            # Re-use the already-loaded init segment when possible (same clip,
+            # different chunk).  The file is tiny (1–4 KB) and never changes for
+            # the lifetime of a clip, so one read per clip is enough.
+            init_bytes = self._init_bytes_cache.get(init_path)
+            if init_bytes is None:
+                with open(init_path, 'rb') as f:
+                    init_bytes = f.read()
+                self._init_bytes_cache[init_path] = init_bytes
             with open(chunk_path, 'rb') as f:
                 chunk_bytes = f.read()
 
@@ -772,7 +788,11 @@ class PreviewSniperWorker(QThread):
                 continue
 
             self._in_flight_sec = sec
+            if self.target_sec == sec:
+                self.preview_status.emit(sec, "gen", 0.0)
+            t0 = time.perf_counter()
             pixmap = decode_fn(sec)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
             self._in_flight_sec = -1
 
             if self._is_killed:
@@ -783,9 +803,12 @@ class PreviewSniperWorker(QThread):
                 # Keep valid frames even if the cursor already moved — they warm the trail.
                 self._remember_cache(sec, pixmap)
                 if self.target_sec == sec:
+                    self.preview_status.emit(sec, "ok", elapsed_ms)
                     self.preview_ready.emit(sec, pixmap)
             else:
                 self._fail_until[sec] = time.monotonic() + 2.0
+                if self.target_sec == sec:
+                    self.preview_status.emit(sec, "miss", elapsed_ms)
                 self.msleep(200)
 
     def run(self):
