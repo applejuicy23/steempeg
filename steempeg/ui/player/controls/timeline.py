@@ -10,6 +10,7 @@ import json
 import os
 import re
 import logging
+import sys
 import time
 
 import PySide6.QtWidgets as qtw
@@ -58,6 +59,78 @@ from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec, MAX_BATCH_SEC
 from steempeg.core.steam_screenshots import timeline_json_start_utc
 from steempeg.services.steam_markers import MarkerIconStore, app_id_from_clip_paths
+
+
+def _detach_timeline_tool(widget) -> None:
+    """Drop Win32 owner so Tool ``show()`` cannot bury Explorer/browser tabs."""
+    if sys.platform != "win32" or widget is None:
+        return
+    try:
+        from steempeg.infra.window_focus import detach_tool_ownership
+
+        detach_tool_ownership(widget)
+    except Exception:
+        pass
+
+
+def _show_timeline_tool(widget) -> None:
+    """Show a frameless timeline Tool without activating / re-stacking the shell."""
+    if widget is None:
+        return
+    try:
+        widget.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    except Exception:
+        pass
+    _detach_timeline_tool(widget)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            widget.createWinId()
+            hwnd = int(widget.winId())
+            if hwnd:
+                # SW_SHOWNOACTIVATE — same path as queue hover / buffering overlay.
+                ctypes.windll.user32.ShowWindow(hwnd, 4)
+                if not widget.isVisible():
+                    widget.setVisible(True)
+                return
+        except Exception:
+            pass
+    widget.show()
+
+
+# Dev Tools opt-in: hover tip PyAV/DISK badge. Stock default = off.
+_sniper_sensor_on: bool | None = None
+
+
+def sniper_sensor_enabled() -> bool:
+    """True when Developer Tools → Show PyAV preview sensor is on."""
+    global _sniper_sensor_on
+    if _sniper_sensor_on is not None:
+        return bool(_sniper_sensor_on)
+    return False
+
+
+def set_sniper_sensor_enabled(enabled: bool) -> None:
+    global _sniper_sensor_on
+    _sniper_sensor_on = bool(enabled)
+
+
+def sync_sniper_sensor_pref_from_host(host) -> bool:
+    """Load ``dev_sniper_sensor`` from settings.json (default off)."""
+    global _sniper_sensor_on
+    enabled = False
+    try:
+        from steempeg.ui.settings_prefs import load_dev_sniper_sensor
+
+        settings = {}
+        if host is not None and hasattr(host, "load_user_settings"):
+            settings = host.load_user_settings() or {}
+        enabled = bool(load_dev_sniper_sensor(settings))
+    except Exception:
+        enabled = False
+    _sniper_sensor_on = enabled
+    return enabled
 from steempeg.ui.timeline_strip_size import (
     TimelineStripMetrics,
     metrics_for_current,
@@ -159,10 +232,13 @@ class TimelineCanvas(QWidget):
         self.duration_ms = 0
         self.setMouseTracking(True)
 
-        # Parent to the canvas so the Tool window is owned by the player HWND.
-        # A parentless Qt.ToolTip often stacks *under* the native mpv surface in
-        # Portable theatre (and fullscreen HUD), so hover previews look "dead".
-        self.preview_widget = ThumbnailPreviewWidget(self)
+        # Parent for QObject lifetime; on Windows Win32 owner is detached so
+        # repeated hover ``show()`` cannot bury Explorer / browser tabs.
+        self.preview_widget = ThumbnailPreviewWidget(
+            None if sys.platform == "win32" else self
+        )
+        if sys.platform == "win32":
+            _detach_timeline_tool(self.preview_widget)
 
         self.visual_ms = 0.0  
         self.target_ms = 0.0  
@@ -220,6 +296,7 @@ class TimelineCanvas(QWidget):
         self._batch_thumbs_busy = False
         self.sniper = PreviewSniperWorker()
         self.sniper.preview_ready.connect(self.on_preview_ready)
+        self.sniper.preview_status.connect(self.on_preview_status)
 
         self.sniper_timer = QTimer(self)
         self.sniper_timer.setSingleShot(True)
@@ -259,6 +336,7 @@ class TimelineCanvas(QWidget):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         # Flags recreate the HWND; re-apply translucent so QSS cannot leak squares.
         self.text_tooltip.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -266,6 +344,7 @@ class TimelineCanvas(QWidget):
         self.text_tooltip.setAttribute(Qt.WA_ShowWithoutActivating)
         self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.text_tooltip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
+        _detach_timeline_tool(self.text_tooltip)
         tip_row = QHBoxLayout(self.text_tooltip)
         tip_row.setContentsMargins(7, 4, 9, 4)
         tip_row.setSpacing(6)
@@ -978,8 +1057,7 @@ class TimelineCanvas(QWidget):
         max_x = min_x + max(0, anchor.width() - pw.width())
         pw.move(max(min_x, min(target_x, max_x)), target_y)
         # No raise_() — owned Tool raise re-stacks the Steempeg shell over Explorer.
-        pw.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        pw.show()
+        _show_timeline_tool(pw)
 
     def on_preview_ready(self, sec, pixmap):
         if self.duration_ms <= 0:
@@ -1004,6 +1082,25 @@ class TimelineCanvas(QWidget):
                 return
         if hasattr(self, 'preview_widget') and self.preview_widget.isVisible():
             self.preview_widget.update_image_from_ram(pixmap)
+
+    def on_preview_status(self, sec, state, elapsed_ms):
+        """Hover tip sensor: show whether sniper PyAV decode is running / ok / miss."""
+        if not getattr(self, "is_hovering", False):
+            return
+        if getattr(self, "hovered_marker", None):
+            return
+        if getattr(self, "sniper", None) and not self._sniper_path_matches():
+            return
+        if self.duration_ms <= 0:
+            return
+        hover_ms = max(0.0, min(self.x_to_ms(self.hover_x), float(self.duration_ms)))
+        current_target_sec = preview_bucket_sec(hover_ms, self.duration_ms)
+        if int(sec) != int(current_target_sec):
+            return
+        pw = getattr(self, "preview_widget", None)
+        if pw is None or not pw.isVisible():
+            return
+        pw.set_sniper_sensor(state, elapsed_ms)
 
     def _norm_media_path(self, path) -> str:
         if not path:
@@ -1934,7 +2031,7 @@ class TimelineCanvas(QWidget):
                     global_x = self.mapToGlobal(QPoint(int(tip_x), 0)).x() - (self.text_tooltip.width() // 2)
                     
                     self.text_tooltip.move(global_x, global_y)
-                    self.text_tooltip.show()
+                    _show_timeline_tool(self.text_tooltip)
                 else:
                     self.text_tooltip.hide()
         
@@ -1984,12 +2081,15 @@ class TimelineCanvas(QWidget):
                 if has_disk_thumb:
                     if bucket_changed or getattr(self, '_batch_thumbs_busy', False):
                         self.preview_widget.load_disk_thumbnail(hover_ms, current_thumb_dir, self.duration_ms)
+                    self.preview_widget.set_sniper_sensor("disk")
                 elif bucket_changed:
                     if bucket_sec in sniper_cache:
                         self.preview_widget.set_preview_pixmap(sniper_cache[bucket_sec])
+                        self.preview_widget.set_sniper_sensor("ok", 0.0)
                     else:
                         self.preview_widget.clear_for_new_media()
                         self.preview_widget.start_loading()
+                        self.preview_widget.set_sniper_sensor("gen")
 
                 if not has_disk_thumb and self.current_video_path and bucket_changed:
                     self.pending_sec = bucket_sec
@@ -2551,6 +2651,69 @@ class PreviewSpinnerOverlay(QWidget):
         )
 
 
+class SniperSensorBadge(QWidget):
+    """Tiny corner sensor on the hover tip: DISK / … / PyAV / MISS."""
+
+    _PAD_X = 6
+    _PAD_Y = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._text = ""
+        self._bg = QColor(0, 0, 0, 0)
+        self._fg = QColor("#ffffff")
+        self.hide()
+
+    def set_state(self, state: str, elapsed_ms: float = 0.0) -> None:
+        key = (state or "").strip().lower()
+        if key in ("", "idle", "hide"):
+            self.hide()
+            return
+        if key == "disk":
+            self._text = "DISK"
+            self._bg = QColor(40, 44, 52, 210)
+            self._fg = QColor("#c8cdd6")
+        elif key == "gen":
+            self._text = "…"
+            self._bg = QColor(120, 78, 18, 220)
+            self._fg = QColor("#ffd27a")
+        elif key == "ok":
+            ms = int(round(float(elapsed_ms or 0.0)))
+            self._text = f"PyAV {ms}ms" if ms > 0 else "PyAV"
+            self._bg = QColor(18, 92, 48, 220)
+            self._fg = QColor("#b6f2c8")
+        elif key in ("miss", "err", "error"):
+            ms = int(round(float(elapsed_ms or 0.0)))
+            self._text = f"MISS {ms}ms" if ms > 0 else "MISS"
+            self._bg = QColor(120, 28, 28, 220)
+            self._fg = QColor("#ffb4b4")
+        else:
+            self._text = key.upper()
+            self._bg = QColor(40, 44, 52, 210)
+            self._fg = QColor("#ffffff")
+
+        fm = QFontMetrics(self.font())
+        w = fm.horizontalAdvance(self._text) + self._PAD_X * 2
+        h = fm.height() + self._PAD_Y * 2
+        self.setFixedSize(max(28, w), max(16, h))
+        self.move(4, 4)
+        self.show()
+        self.raise_()
+        self.update()
+
+    def paintEvent(self, event):
+        if not self._text:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._bg)
+        painter.drawRoundedRect(self.rect(), 4, 4)
+        painter.setPen(self._fg)
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+
+
 # --- FLOATING TIMELINE PREVIEW WIDGET ---
 class ThumbnailPreviewWidget(QWidget):
     """A floating tooltip-like widget that shows a video frame and time on hover."""
@@ -2568,10 +2731,12 @@ class ThumbnailPreviewWidget(QWidget):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        _detach_timeline_tool(self)
 
         self._in_trim = False
         self._trim_icon_pm = self._load_trim_icon()
@@ -2594,6 +2759,9 @@ class ThumbnailPreviewWidget(QWidget):
 
         self._loading_overlay = PreviewSpinnerOverlay(self._thumb_host)
         self._loading_overlay.setGeometry(0, 0, self._THUMB_W, self._THUMB_H)
+
+        self._sniper_sensor = SniperSensorBadge(self._thumb_host)
+        self._sniper_sensor.raise_()
 
         self._time_row = QWidget()
         time_row_layout = QHBoxLayout(self._time_row)
@@ -2650,6 +2818,7 @@ class ThumbnailPreviewWidget(QWidget):
 
     def hideEvent(self, event):
         self._loading_overlay.stop()
+        self._sniper_sensor.set_state("idle")
         super().hideEvent(event)
 
     def clear_for_new_media(self):
@@ -2699,6 +2868,7 @@ class ThumbnailPreviewWidget(QWidget):
         self.img_label.clear()
         self.img_label.setPixmap(QPixmap())
         self._loading_overlay.start()
+        self._sniper_sensor.raise_()
 
     def set_preview_pixmap(self, pixmap):
         if pixmap is not None and not pixmap.isNull():
@@ -2707,6 +2877,18 @@ class ThumbnailPreviewWidget(QWidget):
     def update_image_from_ram(self, pixmap):
         """Instantly applies a generated QPixmap from the Sniper's RAM cache."""
         self.set_preview_pixmap(pixmap)
+
+    def set_sniper_sensor(self, state: str, elapsed_ms: float = 0.0) -> None:
+        """Corner sensor: disk batch vs live PyAV sniper decode (Dev Tools opt-in)."""
+        if not sniper_sensor_enabled():
+            self._sniper_sensor.set_state("idle")
+            if (state or "").strip().lower() in ("ok", "miss", "err", "error", "disk"):
+                self._loading_overlay.stop()
+            return
+        self._sniper_sensor.set_state(state, elapsed_ms)
+        if (state or "").strip().lower() in ("ok", "miss", "err", "error", "disk"):
+            self._loading_overlay.stop()
+        self._sniper_sensor.raise_()
 
     def update_info(self, time_str, is_in_trim, hover_ms, thumb_dir):
         """Legacy entry point — updates time and loads a disk thumb when available."""

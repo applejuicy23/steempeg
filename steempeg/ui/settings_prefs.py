@@ -1069,8 +1069,10 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
 # "PlayStation home" nav style beside this full Console mapping.
 
 KEY_DEV_MODE = "dev_mode"
+KEY_DEV_SNIPER_SENSOR = "dev_sniper_sensor"
 KEY_DECK_CONTROLS = "deck_controls"
 DEFAULT_DEV_MODE = False
+DEFAULT_DEV_SNIPER_SENSOR = False
 
 
 def default_deck_controls() -> bool:
@@ -1101,6 +1103,26 @@ def normalize_dev_mode(value: object | None) -> bool:
 
 def load_dev_mode(settings: dict | None) -> bool:
     return normalize_dev_mode((settings or {}).get(KEY_DEV_MODE, DEFAULT_DEV_MODE))
+
+
+def normalize_dev_sniper_sensor(value: object | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_DEV_SNIPER_SENSOR
+
+
+def load_dev_sniper_sensor(settings: dict | None) -> bool:
+    """Hover tip PyAV/DISK sensor — stock off; Dev Tools opt-in."""
+    return normalize_dev_sniper_sensor(
+        (settings or {}).get(KEY_DEV_SNIPER_SENSOR, DEFAULT_DEV_SNIPER_SENSOR)
+    )
 
 
 def normalize_deck_controls(value: object | None) -> bool:

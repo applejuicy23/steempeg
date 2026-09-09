@@ -1137,6 +1137,28 @@ class DevModeDialog(SteempegDialog):
         )
         self._sync_splitter_tel_checkboxes()
 
+        # -- Timeline sniper sensor (PyAV hover tip badge) --
+        g_sniper = QGroupBox("Timeline sniper sensor")
+        g_sniper_lay = QVBoxLayout(g_sniper)
+        g_sniper_lay.addWidget(
+            QLabel(
+                "Corner badge on the timeline hover tip: DISK / … / PyAV / MISS. "
+                "Stock builds keep this off."
+            )
+        )
+        tip_sniper = g_sniper_lay.itemAt(0).widget()
+        if isinstance(tip_sniper, QLabel):
+            tip_sniper.setWordWrap(True)
+            tip_sniper.setStyleSheet("color: #b0b0b0; font-weight: normal;")
+        self._chk_sniper_sensor = QCheckBox("Show PyAV preview sensor on hover tip")
+        self._chk_sniper_sensor.setToolTip(
+            "Persists as dev_sniper_sensor in settings.json. Default off."
+        )
+        g_sniper_lay.addWidget(self._chk_sniper_sensor)
+        lay.addWidget(g_sniper)
+        self._chk_sniper_sensor.toggled.connect(self._on_sniper_sensor_toggled)
+        self._sync_sniper_sensor_checkbox()
+
         self._tools_log = QPlainTextEdit()
         self._tools_log.setReadOnly(True)
         self._tools_log.setMaximumBlockCount(5000)
@@ -1460,6 +1482,37 @@ class DevModeDialog(SteempegDialog):
         finally:
             if not was_on:
                 ctl.set_enabled(False, overlay=ctl.overlay_enabled, persist=False)
+
+    def _sync_sniper_sensor_checkbox(self) -> None:
+        from steempeg.ui.player.controls.timeline import (
+            sniper_sensor_enabled,
+            sync_sniper_sensor_pref_from_host,
+        )
+
+        host = self._resolve_app_host()
+        if host is not None:
+            sync_sniper_sensor_pref_from_host(host)
+        chk = getattr(self, "_chk_sniper_sensor", None)
+        if chk is None:
+            return
+        chk.blockSignals(True)
+        chk.setChecked(bool(sniper_sensor_enabled()))
+        chk.blockSignals(False)
+
+    def _on_sniper_sensor_toggled(self, checked: bool) -> None:
+        from steempeg.ui.player.controls.timeline import set_sniper_sensor_enabled
+        from steempeg.ui.settings_prefs import KEY_DEV_SNIPER_SENSOR
+
+        host = self._resolve_app_host()
+        set_sniper_sensor_enabled(bool(checked))
+        if host is not None and hasattr(host, "save_user_settings"):
+            try:
+                host.save_user_settings(KEY_DEV_SNIPER_SENSOR, bool(checked))
+            except Exception:
+                pass
+        self._tools_log.appendPlainText(
+            "Sniper hover sensor " + ("ON." if checked else "OFF (stock).")
+        )
 
     def _simulate_ffmpeg_error_dialog(self):
         """Open the real Render Failed chrome with classified sample logs (theme QA)."""
