@@ -635,7 +635,17 @@ def collect_queue_add_payload(
     same_preview = bool(preview and os.path.normpath(preview) == clip_path)
     enc_codec, enc_display, enc_speed = _ui_encoder_snapshot(app)
 
-    settings = snapshot_settings_from_ui(app) if same_preview else None
+    already_queued = False
+    if hasattr(app, "render_queue"):
+        try:
+            already_queued = bool(app.render_queue.contains_clip(clip_path))
+        except Exception:
+            already_queued = False
+    # Live RS only for the open clip's first enqueue. Other clips and
+    # duplicates start at Original — one preset for everyone is Presets in RS.
+    settings = (
+        snapshot_settings_from_ui(app) if same_preview and not already_queued else None
+    )
     save_dir = ""
     if settings is not None:
         save_dir = str(settings.save_dir or "")

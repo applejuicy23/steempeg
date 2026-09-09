@@ -1782,6 +1782,7 @@ class RenderMixin:
             self.activate_queue_job(queue_job.id)
             return
 
+        prev_preview = getattr(self, "_preview_clip_path", None)
         self._preview_clip_path = clip_path
         trim_restore = self._session_state_for_clip(clip_path)
         self._selected_queue_job_id = None
@@ -1794,7 +1795,14 @@ class RenderMixin:
         self.generate_and_play_preview(
             clip_path, trim_restore=trim_restore, remount=True
         )
-        self._schedule_quality_populate_after_open(clip_path, trim_restore)
+        same_clip = bool(
+            prev_preview
+            and hasattr(self, "_norm_clip_path_key")
+            and self._norm_clip_path_key(prev_preview) == self._norm_clip_path_key(clip_path)
+        )
+        self._schedule_quality_populate_after_open(
+            clip_path, trim_restore, preserve_ui_selection=same_clip
+        )
         # Selection only — never inflate Render Queue from a library click.
         self.refresh_render_queue_panel(sync_splitter=False)
         self.update_playback_badge()
@@ -3337,7 +3345,7 @@ class RenderMixin:
         self._sync_active_queue_job_from_ui()
 
     def _populate_quality_options_for_clip(
-        self, clip_path: str, *, preserve_ui_selection: bool = True,
+        self, clip_path: str, *, preserve_ui_selection: bool = False,
     ) -> None:
         """Fill render settings combos from clip metadata (no preview/header)."""
         clip_path = os.path.normpath(clip_path)
@@ -3896,6 +3904,7 @@ class RenderMixin:
         if hasattr(self, "_clear_rendered_selection_visual"):
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
+        prev_preview = getattr(self, "_preview_clip_path", None)
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
         # While Left with jobs kept, keep diversion so Resume does not snap the
@@ -3935,7 +3944,14 @@ class RenderMixin:
         self._selected_queue_job_id = None
         # Play first — Source Info / quality populate deferred off the open stack.
         self.generate_and_play_preview(clip_path, trim_restore=session)
-        self._schedule_quality_populate_after_open(clip_path, session)
+        same_clip = bool(
+            prev_preview
+            and hasattr(self, "_norm_clip_path_key")
+            and self._norm_clip_path_key(prev_preview) == self._norm_clip_path_key(clip_path)
+        )
+        self._schedule_quality_populate_after_open(
+            clip_path, session, preserve_ui_selection=same_clip
+        )
         self._update_start_button_label()
         if hasattr(self, "_schedule_persist_library_ui_state"):
             self._schedule_persist_library_ui_state()
@@ -3943,12 +3959,14 @@ class RenderMixin:
             self._persist_library_ui_state()
 
     def _schedule_quality_populate_after_open(
-        self, clip_path: str, session=None
+        self, clip_path: str, session=None, *, preserve_ui_selection: bool = False
     ) -> None:
         """Fill Source Info / quality combos after first frame (keeps open responsive)."""
         self._clips_quality_gen = getattr(self, "_clips_quality_gen", 0) + 1
         gen = self._clips_quality_gen
-        self._pending_quality_populate = (gen, clip_path, session)
+        self._pending_quality_populate = (
+            gen, clip_path, session, bool(preserve_ui_selection)
+        )
         # Already revealed / idle — flush on next tick; otherwise finish does it.
         if not getattr(self, "_awaiting_first_frame", False) and not getattr(
             self, "_is_switching", False
@@ -3962,7 +3980,9 @@ class RenderMixin:
                 else None,
             )
 
-    def _run_quality_populate_after_open(self, gen: int, clip_path: str, session) -> None:
+    def _run_quality_populate_after_open(
+        self, gen: int, clip_path: str, session, preserve_ui_selection: bool = False
+    ) -> None:
         if gen != getattr(self, "_clips_quality_gen", 0):
             return
         want = (
@@ -3978,10 +3998,18 @@ class RenderMixin:
         )
         if want and active_key and want != active_key:
             return
-        self._populate_quality_options_for_clip(clip_path)
+        self._populate_quality_options_for_clip(
+            clip_path, preserve_ui_selection=bool(preserve_ui_selection)
+        )
         if session is not None:
             # Export/settings only — trim/markers restore after duration is known.
             self._apply_export_session_state(session, silent=True)
+        if not preserve_ui_selection and hasattr(self, "_resolve_queue_job_for_library_clip"):
+            job = self._resolve_queue_job_for_library_clip(clip_path)
+            if job is not None:
+                from steempeg.ui.render_job_builder import apply_job_settings_to_ui
+
+                apply_job_settings_to_ui(self, job.settings)
         self.update_final_setup()
         if hasattr(self, "update_playback_badge"):
             self.update_playback_badge()
@@ -5298,10 +5326,10 @@ class RenderMixin:
             self.save_user_settings("render_queue_duplicate_notice_dismissed", True)
 
     def add_clips_to_render_queue(self, clip_paths):
-        """Add one or more clips using the current render settings snapshot.
+        """Add clips. New jobs start at Original; live RS applies only to the open clip.
 
-        Duplicates are allowed (same clip, different presets). No success popup —
-        only failures and an optional one-time duplicate notice.
+        Duplicates are allowed (same clip, different presets) and also start at
+        Original. Same settings for everyone lives in Presets in Render Settings.
         """
         added = 0
         failed = []
