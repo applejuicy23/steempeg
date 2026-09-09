@@ -138,13 +138,14 @@ def _clear_topmost(hwnd: int, *, reshuffle_z: bool = False) -> None:
             flags = _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE
             user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags)
         else:
+            # Never SWP_FRAMECHANGED here: frameless + mpv wid= treats it as
+            # WM_NCCALCSIZE and can orphan the embed / restack the shell.
             flags = (
                 _SWP_NOMOVE
                 | _SWP_NOSIZE
                 | _SWP_NOZORDER
                 | _SWP_NOOWNERZORDER
                 | _SWP_NOACTIVATE
-                | _SWP_FRAMECHANGED
             )
             user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
     except Exception as exc:
@@ -274,6 +275,13 @@ def detach_tool_ownership(widget) -> None:
                 wh.setTransientParent(None)
         except Exception:
             pass
+        # Stop the Tool itself from activating / promoting the owner group.
+        try:
+            ex = int(user32.GetWindowLongW(hwnd, _GWL_EXSTYLE))
+            if not (ex & _WS_EX_NOACTIVATE):
+                user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, ex | _WS_EX_NOACTIVATE)
+        except Exception:
+            pass
     except Exception as exc:
         _log.debug("detach_tool_ownership failed: %s", exc)
 
@@ -314,7 +322,6 @@ def mark_embed_noactivate(widget) -> bool:
             | _SWP_NOZORDER
             | _SWP_NOOWNERZORDER
             | _SWP_NOACTIVATE
-            | _SWP_FRAMECHANGED
         )
         user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
         return True
