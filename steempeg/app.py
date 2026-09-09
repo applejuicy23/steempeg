@@ -2713,6 +2713,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     install_splitter_telemetry(self)
                 except Exception:
                     logging.debug("splitter telemetry install skipped", exc_info=True)
+                try:
+                    from steempeg.ui.player.controls.timeline import (
+                        sync_sniper_sensor_pref_from_host,
+                    )
+
+                    sync_sniper_sensor_pref_from_host(self)
+                except Exception:
+                    logging.debug("sniper sensor pref sync skipped", exc_info=True)
 
                 if hasattr(self, "_load_persisted_render_queue"):
                     self._load_persisted_render_queue()
@@ -5167,7 +5175,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.layout_defaults import (
             QUEUE_SPLITTER_GUTTER,
             RIGHT_PANEL_BOTTOM_INSET,
-            RIGHT_PANEL_PLAYER_TOP_INSET,
             RIGHT_PANEL_SIDE_INSET,
         )
 
@@ -5194,22 +5201,73 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         right_panel = getattr(ui, "right_panel", None) if ui is not None else None
         right_layout = right_panel.layout() if right_panel is not None else None
         if right_layout is not None:
+            from steempeg.ui.layout_defaults import shell_edge_inset
+
+            hover = False
+            check = getattr(self, "_queue_hover_is_floating", None)
+            if callable(check):
+                try:
+                    hover = bool(check())
+                except Exception:
+                    hover = False
+            # Hover: match window-edge air on both sides of the player (no 12px
+            # left + 9px right mismatch, and no docked queue gutter on the right).
+            left_inset = (
+                int(shell_edge_inset(ui))
+                if hover and not queue_left
+                else int(RIGHT_PANEL_SIDE_INSET)
+            )
             right_layout.setContentsMargins(
-                RIGHT_PANEL_SIDE_INSET, 0, 0, RIGHT_PANEL_BOTTOM_INSET
+                left_inset, 0, 0, RIGHT_PANEL_BOTTOM_INSET
             )
+        self.sync_player_wrap_insets()
+
+    def sync_player_wrap_insets(self, *, theater: bool | None = None) -> None:
+        """Keep player + old Render Settings off the hover edge (same inset as clips)."""
         wrap = getattr(self, "right_content_wrap", None)
-        wrap_lay = wrap.layout() if wrap is not None else None
-        if wrap_lay is not None:
-            wrap_lay.setContentsMargins(
-                0, RIGHT_PANEL_PLAYER_TOP_INSET, QUEUE_SPLITTER_GUTTER, 0
+        lay = wrap.layout() if wrap is not None else None
+        if lay is None:
+            return
+        from steempeg.ui.layout_defaults import player_wrap_side_margins, shell_edge_inset
+
+        if theater is None:
+            theater = bool(getattr(self, "is_theater", False))
+        ui = getattr(self, "ui", None)
+        theater_right = shell_edge_inset(ui)
+        queue_left = False
+        if hasattr(self, "_queue_on_left"):
+            try:
+                queue_left = bool(self._queue_on_left())
+            except Exception:
+                queue_left = False
+        hover = False
+        check = getattr(self, "_queue_hover_is_floating", None)
+        if callable(check):
+            try:
+                hover = bool(check())
+            except Exception:
+                hover = False
+        lay.setContentsMargins(
+            *player_wrap_side_margins(
+                hover_floating=hover,
+                queue_on_left=queue_left,
+                theater=bool(theater),
+                fullscreen=bool(getattr(self, "is_fullscreen", False)),
+                theater_right=theater_right,
             )
+        )
 
     def refresh_shell_side_layout(self, layout: str | None = None) -> None:
         self.apply_shell_side_layout(layout, restore_widths=True)
 
     def _queue_hover_is_floating(self) -> bool:
+        """True while Hover Queue mode is on (even if suspended for immersive).
+
+        Use ``_enabled``, not ``is_enabled()`` — suspend hides the hotspot for
+        fullscreen/theatre but must not re-apply the docked splitter gutter.
+        """
         ctrl = getattr(self, "_queue_hover", None)
-        return ctrl is not None and bool(getattr(ctrl, "is_enabled", lambda: False)())
+        return ctrl is not None and bool(getattr(ctrl, "_enabled", False))
 
     def _sync_queue_hover_after_sides(self) -> None:
         ctrl = getattr(self, "_queue_hover", None)
@@ -5239,6 +5297,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ctrl.set_enabled(wanted)
         if wanted and immersive:
             ctrl.set_suspended(True)
+        if hasattr(self, "sync_shell_side_gutters"):
+            self.sync_shell_side_gutters()
         from PySide6.QtCore import QTimer
 
         QTimer.singleShot(0, ctrl.sync_geometry)

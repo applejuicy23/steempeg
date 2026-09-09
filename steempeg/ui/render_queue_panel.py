@@ -33,10 +33,7 @@ from steempeg.ui.layout_defaults import (
     LIBRARY_TAB_TO_TOOLBAR_SPACING,
     RENDER_QUEUE_BOTTOM_INSET,
 )
-from steempeg.ui.library.library_styles import (
-    LIBRARY_SCROLLBAR_VERTICAL,
-    install_library_vertical_scrollbar,
-)
+from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
 from steempeg.ui.library.library_tab import LibraryTabWidget
 from steempeg.ui.widgets.elided_label import ElidedLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -896,7 +893,14 @@ class RenderQueuePanel(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setStyleSheet(_SCROLL_STYLE)
-        install_library_vertical_scrollbar(self._scroll)
+        from steempeg.ui.widgets.vertical_scrollbar import (
+            ensure_steempg_vertical_scrollbar,
+            queue_scrollbar_chrome,
+        )
+
+        ensure_steempg_vertical_scrollbar(
+            self._scroll, chrome=queue_scrollbar_chrome()
+        )
         self._scroll.verticalScrollBar().valueChanged.connect(self._on_queue_scroll)
 
         self._list_host = QueueListHost()
@@ -1693,6 +1697,17 @@ class RenderQueuePanel(QWidget):
         box = getattr(self, "_list_container", None)
         if box is not None:
             box.setStyleSheet(ut.queue_list_panel_stylesheet())
+
+        scroll = getattr(self, "_scroll", None)
+        if scroll is not None:
+            from steempeg.ui.widgets.vertical_scrollbar import (
+                ensure_steempg_vertical_scrollbar,
+                queue_scrollbar_chrome,
+            )
+
+            ensure_steempg_vertical_scrollbar(
+                scroll, chrome=queue_scrollbar_chrome()
+            )
 
         tab = getattr(self, "_tab", None)
         if tab is not None and hasattr(tab, "_apply_style"):

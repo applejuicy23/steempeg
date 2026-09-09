@@ -56,6 +56,9 @@ DEFAULT_RIGHT_H_SPLITTER_SIZES = [1200, 0]
 MIN_QUEUE_PANEL_WIDTH = 380
 MIN_QUEUE_PANEL_WIDTH_COMPACT = 320
 DEFAULT_QUEUE_PANEL_WIDTH = 380
+# Hover overlay floats over mpv — do not inherit compact 320. List cards need
+# badge + 128px thumb + readable title/path (saved 380 left ~110px for text).
+MIN_QUEUE_HOVER_WIDTH = 520
 
 # "grid" or "list"
 DEFAULT_LIBRARY_VIEW = "grid"
@@ -70,6 +73,47 @@ RIGHT_PANEL_SIDE_INSET = 12
 RIGHT_PANEL_BOTTOM_INSET = 0
 RIGHT_PANEL_PLAYER_TOP_INSET = 0
 QUEUE_SPLITTER_GUTTER = 10
+# appContent layout margins (window_chrome) — ClipCards / About footer sit this
+# far from the window. Player + old Render Settings must match on the far edge.
+SHELL_EDGE_INSET = 9
+
+
+def shell_edge_inset(ui=None, *, side: str = "right") -> int:
+    """Air between the window edge and the splitter (same as clips / footer)."""
+    custom = getattr(ui, "_custom_content_margins", None) if ui is not None else None
+    if custom and len(custom) >= 4:
+        idx = 0 if side == "left" else 2
+        try:
+            return max(0, int(custom[idx]))
+        except (TypeError, ValueError):
+            pass
+    return SHELL_EDGE_INSET
+
+
+def player_wrap_side_margins(
+    *,
+    hover_floating: bool,
+    queue_on_left: bool,
+    theater: bool = False,
+    fullscreen: bool = False,
+    theater_right: int = 9,
+) -> tuple[int, int, int, int]:
+    """Player column + old Render Settings stack insets (``right_content_wrap``).
+
+    Docked queue keeps the handle gutter. Hover / theatre / fullscreen stay
+    flush on the right — shell air comes only from ``appContent`` margins
+    (``SHELL_EDGE_INSET``). Never stack ``theater_right`` on top of that or the
+    right edge reads fatter than the left.
+    """
+    del theater_right  # kept for call-site compat; content-wrap owns edge air
+    if fullscreen or theater:
+        return (0, 0, 0, 0)
+    top = RIGHT_PANEL_PLAYER_TOP_INSET
+    if hover_floating and not queue_on_left:
+        return (0, top, 0, 0)
+    return (0, top, QUEUE_SPLITTER_GUTTER, 0)
+
+
 LIBRARY_TAB_TO_TOOLBAR_SPACING = 5  # left_master_layout spacing (tab row → toolbar)
 # Clips Manager elevated panel ↔ About/Updates/Settings footer (verticalLayout_left).
 # Matches Qt PM_LayoutVerticalSpacing on Windows; pin explicitly so player↔dash can mirror it.
@@ -354,6 +398,12 @@ def queue_panel_min_width(window_width: int, *, widget=None, screen=None) -> int
         MIN_QUEUE_PANEL_WIDTH,
         shell_layout_scale(window_width, widget=widget, screen=screen),
     )
+
+
+def queue_hover_min_width(window_width: int, *, widget=None, screen=None) -> int:
+    """Hover overlay floor — wider than the docked pane so List cards can breathe."""
+    docked = queue_panel_min_width(window_width, widget=widget, screen=screen)
+    return max(MIN_QUEUE_HOVER_WIDTH, int(docked))
 
 
 # Soft floor for the player/settings column inside right_h_splitter.

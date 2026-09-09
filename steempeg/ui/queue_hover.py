@@ -1,10 +1,7 @@
 """Desktop hover slide-out for Render Queue.
 
-The real queue widget is reparented into a rounded overlay. A zero-width
-placeholder keeps the nested splitter nest valid. Cursor to the window edge
-on the queue's side slides the overlay in; leaving it slides it back out.
-Resize is a short protruding handle on the player-facing edge — not a
-full-height gutter inside the panel.
+Same panel as the splitter pane, clipped into a rounded overlay over mpv.
+No drop shadow — Windows fills unpainted mask leftovers with black squares.
 """
 from __future__ import annotations
 
@@ -32,16 +29,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_HOTSPOT_W = 22
-# Round ear — short enough not to read as a strip, tall enough to grab.
-_BULGE_OUT = 16
-_BULGE_OVERLAP = 10
-_BULGE_H = 108
-_RADIUS = 20
-_SHEET_INSET_Y = 36
-_SHEET_INSET_OUTER = 10
-_SHADOW = 14
-_BORDER_W = 2.2
+def _hotspot_width(app=None) -> int:
+    """Window-edge chrome only — same air as ClipCards / footer, not a second gutter."""
+    try:
+        from steempeg.ui.layout_defaults import shell_edge_inset
+
+        ui = getattr(app, "ui", None) if app is not None else None
+        return max(6, int(shell_edge_inset(ui)))
+    except Exception:
+        return 9
+
+
+_PAD = 14
+_BULGE_OUT = 22
+_BULGE_OVERLAP = 12
+_BULGE_H = 128
+_RADIUS = 16
+_SHEET_INSET_Y = 18
+_SHEET_INSET_OUTER = 8
 _ANIM_MS = 240
 _HIDE_MS = 160
 _WATCH_MS = 50
@@ -62,46 +67,71 @@ def _contains_global(widget: QWidget | None, pos) -> bool:
 
 
 def _overlay_chrome() -> tuple[QColor, QColor, QColor, QColor]:
-    """Lifted plate + visible rim so TrueDark does not swallow the sheet."""
+    """Plate fill + the same 1px hairline the player / Render Settings use."""
     try:
         from steempeg.ui import ui_theme as ut
 
         pal = ut.active_palette()
-        if pal.name == ut.UI_THEME_DEFAULT:
-            return (
-                QColor("#2a2a2a"),
-                QColor("#5a5a5a"),
-                QColor("#666666"),
-                QColor("#888888"),
-            )
         return (
-            QColor("#1a1a1a"),
-            QColor("#4a4a4a"),
-            QColor("#777777"),
-            QColor("#b0b0b0"),
+            QColor(pal.bg_shell),
+            QColor(ut.player_chrome_border_color()),
+            QColor("#888888"),
+            QColor("#c0c0c0"),
         )
     except Exception:
         return (
-            QColor("#1a1a1a"),
-            QColor("#4a4a4a"),
-            QColor("#777777"),
-            QColor("#b0b0b0"),
+            QColor("#121212"),
+            QColor("#383838"),
+            QColor("#888888"),
+            QColor("#c0c0c0"),
         )
 
 
-def _rail_path(card: QRect, bulge: QRect, *, radius: int) -> QPainterPath:
+def _rail_path(
+    card: QRect, bulge: QRect, *, radius: int, inflate: float = 0.0
+) -> QPainterPath:
     path = QPainterPath()
-    cr = QRectF(card)
+    path.setFillRule(Qt.FillRule.WindingFill)
+    cr = QRectF(card).adjusted(-inflate, -inflate, inflate, inflate)
     rad = float(max(0, radius))
     if rad > 0:
         path.addRoundedRect(cr, rad, rad)
     else:
         path.addRect(cr)
     if bulge.width() > 2 and bulge.height() > 2:
-        br = QRectF(bulge)
+        br = QRectF(bulge).adjusted(-inflate, -inflate, inflate, inflate)
         tab_r = min(br.width(), br.height()) * 0.5
         path.addRoundedRect(br, tab_r, tab_r)
     return path
+
+
+def _round_region(rect: QRect, radius: float) -> QRegion:
+    if rect.width() < 2 or rect.height() < 2:
+        return QRegion()
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(rect), float(radius), float(radius))
+    poly = path.toFillPolygon().toPolygon()
+    return QRegion(poly) if not poly.isEmpty() else QRegion()
+
+
+def _shape_mask(card: QRect, bulge: QRect, *, radius: int) -> QRegion:
+    """Union card + grip as separate regions.
+
+    ``toFillPolygon`` on a two-subpath path can bite a pill-shaped hole
+    opposite the handle; Win32 then fills that leftover black.
+    """
+    # +1px so the hairline sits inside the HWND mask (else DWM paints a
+    # black halo around the grip).
+    pad = 1
+    region = _round_region(
+        card.adjusted(-pad, -pad, pad, pad), float(max(0, radius))
+    )
+    if bulge.width() > 2 and bulge.height() > 2:
+        tab_r = min(bulge.width(), bulge.height()) * 0.5
+        region = region.united(
+            _round_region(bulge.adjusted(-pad, -pad, pad, pad), tab_r)
+        )
+    return region
 
 
 def _strip_overlay_dwm(widget: QWidget) -> None:
@@ -278,12 +308,19 @@ class QueueHoverOverlay(QWidget):
         self.setAutoFillBackground(False)
         self.setMouseTracking(True)
         self.hide()
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                detach_tool_ownership(self)
+            except Exception:
+                pass
 
         self._body = QFrame(self)
         self._body.setObjectName("queueHoverBody")
         self._body.setStyleSheet("background: transparent; border: none;")
         self._body_lay = QVBoxLayout(self._body)
-        self._body_lay.setContentsMargins(0, 0, 0, 0)
+        self._body_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         self._body_lay.setSpacing(0)
 
         self._grip = _Grip(self, self)
@@ -311,17 +348,16 @@ class QueueHoverOverlay(QWidget):
         app = self._controller._app
         win = getattr(app, "ui", None)
         win_w = int(win.width() or 0) if win is not None else 0
-        min_w = 280
+        min_w = 520
         floor = 360
         try:
             from steempeg.ui.layout_defaults import (
                 PLAYER_COLUMN_FLOOR,
-                queue_panel_min_width,
+                queue_hover_min_width,
             )
 
             floor = int(PLAYER_COLUMN_FLOOR)
-            if win_w:
-                min_w = queue_panel_min_width(win_w, widget=win)
+            min_w = int(queue_hover_min_width(win_w, widget=win) if win_w else min_w)
         except Exception:
             pass
         max_w = max(min_w, win_w - floor - 80) if win_w else max(min_w, int(width))
@@ -359,11 +395,10 @@ class QueueHoverOverlay(QWidget):
         if span.width() <= 0 or span.height() <= 0:
             return
         card_w = int(self._panel_w)
-        inset_y = min(_SHEET_INSET_Y, max(24, int(span.height() * 0.06)))
+        inset_y = min(_SHEET_INSET_Y, max(12, int(span.height() * 0.03)))
         card_h = max(180, int(span.height()) - inset_y * 2)
         shown = int(round(card_w * self._slide))
         bulge_out = _BULGE_OUT
-        sh, sv = _SHADOW, _SHADOW
         outer = _SHEET_INSET_OUTER
         if self.isWindow():
             origin = host.mapToGlobal(span.topLeft())
@@ -376,20 +411,28 @@ class QueueHoverOverlay(QWidget):
             ox, oy = int(top_left.x()), int(top_left.y())
         if self._from_left:
             card_x = ox + shown - card_w + outer
-            overlay_x = card_x - sh
-            overlay_w = sh + card_w + bulge_out + sh
-            local_x = sh
+            overlay_x = card_x
+            overlay_w = card_w + bulge_out
+            local_x = 0
         else:
             card_x = ox + int(span.width()) - shown - outer
-            overlay_x = card_x - bulge_out - sh
-            overlay_w = sh + bulge_out + card_w + sh
-            local_x = sh + bulge_out
-        overlay_y = oy + inset_y - sv
-        overlay_h = card_h + sv * 2
-        local_y = sv
+            overlay_x = card_x - bulge_out
+            overlay_w = card_w + bulge_out
+            local_x = bulge_out
+        overlay_y = oy + inset_y
+        overlay_h = card_h
+        local_y = 0
         self.setGeometry(overlay_x, overlay_y, overlay_w, overlay_h)
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                # setGeometry can re-own the Tool to the shell HWND.
+                detach_tool_ownership(self)
+            except Exception:
+                pass
         self._card = QRect(local_x, local_y, card_w, card_h)
-        grip_h = min(_BULGE_H, max(48, card_h - 48))
+        grip_h = min(_BULGE_H, max(64, card_h - 48))
         grip_y = local_y + max(8, (card_h - grip_h) // 2)
         if self._from_left:
             self._bulge = QRect(
@@ -408,15 +451,8 @@ class QueueHoverOverlay(QWidget):
         self._body.setGeometry(self._card)
         self._grip.setGeometry(self._bulge)
         self._grip.raise_()
-        # Keep click-through on the player; allow shadow on the outer/top/bottom.
-        if self._from_left:
-            halo = self._card.adjusted(-sh, -sv, 0, sv)
-        else:
-            halo = self._card.adjusted(0, -sv, sh, sv)
-        region = QRegion(halo)
-        if not self._bulge.isEmpty():
-            region = region.united(QRegion(self._bulge))
         try:
+            region = _shape_mask(self._card, self._bulge, radius=_RADIUS)
             if region.isEmpty():
                 self.clearMask()
             else:
@@ -431,67 +467,35 @@ class QueueHoverOverlay(QWidget):
         if card.width() <= 2 or card.height() <= 2:
             return
         bg, border, grip_idle, grip_hot = _overlay_chrome()
-        path = _rail_path(card, self._bulge, radius=_RADIUS)
+        # Fill 1px past the plate so the mask/stroke halo is panel colour, not black.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        plate = QRectF(card)
-        for i in range(8, 0, -1):
-            grow = float(i)
-            shadow = QRectF(plate).adjusted(-grow, -grow, grow, grow)
-            sp = QPainterPath()
-            sp.addRoundedRect(shadow, _RADIUS + grow * 0.12, _RADIUS + grow * 0.12)
-            painter.fillPath(sp, QColor(0, 0, 0, max(6, int(28 * (i / 8.0)))))
-        painter.fillPath(path, bg)
+        painter.fillPath(
+            _rail_path(card, self._bulge, radius=_RADIUS, inflate=1.0), bg
+        )
         rim = QPen(border)
-        rim.setWidthF(_BORDER_W)
+        rim.setWidthF(1.0)
+        rim.setCosmetic(True)
         painter.setPen(rim)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(
-            plate.adjusted(1.0, 1.0, -1.0, -1.0),
-            float(_RADIUS),
-            float(_RADIUS),
-        )
-        hi = QPen(QColor(255, 255, 255, 36))
-        hi.setWidthF(1.2)
-        painter.setPen(hi)
-        painter.drawLine(
-            int(card.left() + _RADIUS),
-            int(card.top() + 2),
-            int(card.right() - _RADIUS),
-            int(card.top() + 2),
-        )
+        painter.drawPath(_rail_path(card, self._bulge, radius=_RADIUS))
         bulge = QRectF(self._bulge)
         if bulge.width() > 2 and bulge.height() > 2:
-            tab_r = min(bulge.width(), bulge.height()) * 0.5
-            painter.save()
+            line_w = 5.0
+            pad = 26.0
             if self._from_left:
-                painter.setClipRect(
-                    QRect(card.right(), 0, _BULGE_OUT + _SHADOW, self.height())
-                )
+                cx = bulge.left() + _BULGE_OVERLAP + _BULGE_OUT * 0.5
             else:
-                painter.setClipRect(QRect(0, 0, card.left() + 1, self.height()))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(bg)
-            painter.drawRoundedRect(bulge, tab_r, tab_r)
-            painter.setPen(rim)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(bulge.adjusted(0.6, 0.6, -0.6, -0.6), tab_r, tab_r)
-            painter.restore()
-            line_w = 3.5
-            pad = 22.0
-            if self._from_left:
-                cx = bulge.left() + _BULGE_OVERLAP + _BULGE_OUT * 0.48
-            else:
-                cx = bulge.left() + _BULGE_OUT * 0.48
+                cx = bulge.left() + _BULGE_OUT * 0.5
             line = QRectF(
                 cx - line_w * 0.5,
                 bulge.top() + pad,
                 line_w,
-                max(20.0, bulge.height() - pad * 2.0),
+                max(24.0, bulge.height() - pad * 2.0),
             )
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(grip_hot if self._grip._hovered else grip_idle)
-            painter.drawRoundedRect(line, 1.75, 1.75)
+            painter.drawRoundedRect(line, 2.5, 2.5)
         painter.end()
 
 
@@ -536,6 +540,7 @@ class QueueHoverController(QObject):
     def peek_add_to_queue(self, clip_paths: list[str]) -> None:
         """Open the hover drawer and preview where Add to queue would land."""
         self._add_peek = True
+        self._set_peek_click_through(True)
         if self.is_enabled():
             self.reveal()
         panel = getattr(self._app, "render_queue_panel", None)
@@ -548,6 +553,7 @@ class QueueHoverController(QObject):
     def clear_add_peek(self) -> None:
         was = self._add_peek
         self._add_peek = False
+        self._set_peek_click_through(False)
         panel = getattr(self._app, "render_queue_panel", None)
         if panel is not None and hasattr(panel, "clear_add_peek"):
             try:
@@ -557,6 +563,26 @@ class QueueHoverController(QObject):
         if was and self._revealed:
             self._on_hot_leave()
 
+    def _set_peek_click_through(self, enabled: bool) -> None:
+        """Menu + Tool HWND click is a Win32 hang. Peek is preview-only."""
+        targets = [self._overlay]
+        grip = getattr(self._overlay, "_grip", None)
+        if grip is not None:
+            targets.append(grip)
+        body = getattr(self._overlay, "_body", None)
+        if body is not None:
+            targets.append(body)
+        panel = getattr(self._app, "render_queue_panel", None)
+        if panel is not None:
+            targets.append(panel)
+        for widget in targets:
+            try:
+                widget.setAttribute(
+                    Qt.WidgetAttribute.WA_TransparentForMouseEvents, bool(enabled)
+                )
+            except RuntimeError:
+                pass
+
     def _forward_peek_wheel(self, event) -> bool:
         panel = getattr(self._app, "render_queue_panel", None)
         if panel is None or not hasattr(panel, "apply_wheel_delta"):
@@ -565,6 +591,23 @@ class QueueHoverController(QObject):
             return bool(panel.apply_wheel_delta(event))
         except RuntimeError:
             return False
+
+    def _obj_is_peek_chrome(self, obj) -> bool:
+        roots = (
+            self._overlay,
+            getattr(self._overlay, "_body", None),
+            getattr(self._overlay, "_grip", None),
+            getattr(self._app, "render_queue_panel", None),
+        )
+        walk = obj
+        while walk is not None:
+            if walk in roots:
+                return True
+            try:
+                walk = walk.parentWidget() if hasattr(walk, "parentWidget") else None
+            except RuntimeError:
+                break
+        return False
 
     def _popup_belongs_to_queue(self, popup) -> bool:
         roots = {self._overlay, getattr(self._app, "render_queue_panel", None)}
@@ -595,7 +638,6 @@ class QueueHoverController(QObject):
             self.sync_side()
             self.sync_geometry()
             self._hotspot.show()
-            self._hotspot.raise_()
             self.conceal(animated=False)
         else:
             was_open = self._revealed
@@ -607,6 +649,11 @@ class QueueHoverController(QObject):
     def set_suspended(self, suspended: bool) -> None:
         suspended = bool(suspended)
         if self._suspended == suspended:
+            if suspended:
+                try:
+                    self._hotspot.hide()
+                except RuntimeError:
+                    pass
             return
         self._suspended = suspended
         if not self._enabled:
@@ -615,8 +662,6 @@ class QueueHoverController(QObject):
             self.conceal(animated=False)
             self._hotspot.hide()
         else:
-            self._hotspot.show()
-            self._hotspot.raise_()
             self.sync_geometry()
 
     def reveal(self, *, animated: bool = True) -> None:
@@ -640,7 +685,6 @@ class QueueHoverController(QObject):
             self._overlay.set_panel_width(self._current_width())
         self._overlay._apply_geometry()
         self._show_overlay()
-        self._hotspot.raise_()
         self._revealed = True
         self._watch.start()
         self._run_slide(1.0, animated=animated)
@@ -683,6 +727,17 @@ class QueueHoverController(QObject):
         ):
             self.sync_geometry()
             return False
+        if (
+            self._add_peek
+            and et
+            in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick,
+            )
+            and self._obj_is_peek_chrome(obj)
+        ):
+            return True
         if et == QEvent.Type.Wheel and self._add_peek:
             return self._forward_peek_wheel(event)
         if not self.is_enabled():
@@ -740,12 +795,12 @@ class QueueHoverController(QObject):
                     if not overlay.isVisible():
                         overlay.setVisible(True)
                     _strip_overlay_dwm(overlay)
-                    overlay.raise_()
+                    # No raise_() — that re-stacks the shell over other apps
+                    # without touching the mpv embed HWND.
                     return
             except Exception:
                 pass
         overlay.show()
-        overlay.raise_()
         _strip_overlay_dwm(overlay)
 
     def _run_slide(self, target: float, *, animated: bool) -> None:
@@ -883,22 +938,32 @@ class QueueHoverController(QObject):
             h = int(hr.height()) - int(margins[1]) - int(margins[3])
         return QRect(int(hr.x()), y, int(hr.width()), max(0, h))
 
+    def _immersive_chrome(self) -> bool:
+        """Fullscreen / theatre — no hover strip (hover is suspended)."""
+        app = self._app
+        return bool(getattr(app, "is_fullscreen", False)) or bool(
+            getattr(app, "is_theater", False)
+        )
+
     def _place_hotspot(self) -> None:
         span = self._span_rect()
         if span.width() <= 0:
             return
+        strip = _hotspot_width(self._app)
         if _queue_on_left(self._app):
-            self._hotspot.setGeometry(span.x(), span.y(), _HOTSPOT_W, span.height())
+            self._hotspot.setGeometry(span.x(), span.y(), strip, span.height())
         else:
             self._hotspot.setGeometry(
-                span.x() + span.width() - _HOTSPOT_W,
+                span.x() + span.width() - strip,
                 span.y(),
-                _HOTSPOT_W,
+                strip,
                 span.height(),
             )
-        if self.is_enabled():
+        # Resize / sync_geometry must not resurrect the strip in immersive.
+        if self.is_enabled() and not self._immersive_chrome():
             self._hotspot.show()
-            self._hotspot.raise_()
+        else:
+            self._hotspot.hide()
 
     def _current_width(self) -> int:
         app = self._app
@@ -910,15 +975,26 @@ class QueueHoverController(QObject):
         except (TypeError, ValueError):
             saved_w = 0
         if saved_w > 48:
-            return saved_w
+            try:
+                from steempeg.ui.layout_defaults import queue_hover_min_width
+
+                win = getattr(app, "ui", None)
+                win_w = int(win.width() or 0) if win is not None else 0
+                return max(saved_w, int(queue_hover_min_width(win_w, widget=win)))
+            except Exception:
+                return max(saved_w, 520)
         win = getattr(app, "ui", None)
         win_w = int(win.width() or 0) if win is not None else 0
         try:
-            from steempeg.ui.layout_defaults import queue_panel_open_width
+            from steempeg.ui.layout_defaults import (
+                queue_hover_min_width,
+                queue_panel_open_width,
+            )
 
-            return int(queue_panel_open_width(win_w) if win_w else 360)
+            opened = int(queue_panel_open_width(win_w) if win_w else 520)
+            return max(opened, int(queue_hover_min_width(win_w, widget=win)))
         except Exception:
-            return 360
+            return 520
 
     def _persist_width(self) -> None:
         app = self._app

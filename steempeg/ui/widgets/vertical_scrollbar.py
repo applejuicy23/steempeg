@@ -46,6 +46,30 @@ def _library_chrome() -> VerticalScrollbarChrome:
     )
 
 
+def queue_scrollbar_chrome() -> VerticalScrollbarChrome:
+    """Render Queue (dock + hover overlay) — thumb never smaller than one List card."""
+    from steempeg.ui.library.library_styles import (
+        SCROLLBAR_THUMB,
+        SCROLLBAR_THUMB_HOVER,
+        SCROLLBAR_TRACK,
+        SCROLLBAR_WIDTH,
+    )
+    from steempeg.ui.queue_card_shared import _LIST_THUMB_H
+
+    return VerticalScrollbarChrome(
+        track_color=QColor(SCROLLBAR_TRACK),
+        thumb_color=QColor(SCROLLBAR_THUMB),
+        thumb_hover_color=QColor(SCROLLBAR_THUMB_HOVER),
+        width=SCROLLBAR_WIDTH,
+        margin_left=2,
+        margin_right=2,
+        margin_top=4,
+        margin_bottom=4,
+        # List card is thumb + 12px pad. Longer queues keep this grab size.
+        min_thumb_extent=_LIST_THUMB_H + 12,
+    )
+
+
 def settings_scrollbar_chrome() -> VerticalScrollbarChrome:
     """Render settings panel — invisible track, rounded thumb only."""
     return VerticalScrollbarChrome(

@@ -1093,6 +1093,13 @@ class PlayerMixin:
             ready = True
 
         self._awaiting_first_frame = False
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import mark_embed_noactivate
+
+                mark_embed_noactivate(getattr(self, "mpv_screen", None))
+            except Exception:
+                pass
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
         self._kick_linux_embed_surface()
@@ -1414,20 +1421,9 @@ class PlayerMixin:
                 margin_bottom = 10 if dock_visible else 0
             self.top_v_wrap.layout().setContentsMargins(0, 0, 0, margin_bottom)
 
-        # Player top inset + right margin: in theatre keep a symmetric right inset
-        # matching the custom content padding (same visual spacing as left side).
-        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
-            from steempeg.ui.layout_defaults import (
-                QUEUE_SPLITTER_GUTTER,
-                RIGHT_PANEL_PLAYER_TOP_INSET,
-            )
-            margin_top = 0 if self.is_theater else RIGHT_PANEL_PLAYER_TOP_INSET
-            right_inset = 9
-            custom_margins = getattr(self.ui, '_custom_content_margins', None)
-            if custom_margins and len(custom_margins) >= 3:
-                right_inset = int(custom_margins[2])
-            margin_right = right_inset if self.is_theater else QUEUE_SPLITTER_GUTTER
-            self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
+        # Player top inset + queue-edge margin (hover uses ClipCard-side inset).
+        if hasattr(self, "sync_player_wrap_insets"):
+            self.sync_player_wrap_insets(theater=self.is_theater)
 
         # Restore the queue splitter handle after leaving theatre (we zeroed it on enter).
         if hasattr(self, 'right_h_splitter') and not self.is_theater:
@@ -1591,6 +1587,19 @@ class PlayerMixin:
                 hover.set_suspended(bool(collapsed))
             except Exception:
                 pass
+        if collapsed and hasattr(self, "_hide_right_h_splitter_handle"):
+            try:
+                self._hide_right_h_splitter_handle()
+            except Exception:
+                pass
+        if hasattr(self, "sync_player_wrap_insets"):
+            try:
+                self.sync_player_wrap_insets(
+                    theater=bool(getattr(self, "is_theater", False))
+                )
+            except Exception:
+                pass
+        # Floating hover keeps the panel in the overlay — nothing to clamp in the splitter.
         if hasattr(self, "_queue_hover_is_floating") and self._queue_hover_is_floating():
             return
         panel = getattr(self, "render_queue_panel", None)
@@ -2046,19 +2055,9 @@ class PlayerMixin:
             right_layout.setContentsMargins(self.original_right_margins)
             right_layout.setSpacing(getattr(self, 'original_right_spacing', 8))
 
-        # Restore player inset + right margin when returning from immersive mode.
-        if hasattr(self, 'right_content_wrap') and self.right_content_wrap.layout():
-            from steempeg.ui.layout_defaults import (
-                QUEUE_SPLITTER_GUTTER,
-                RIGHT_PANEL_PLAYER_TOP_INSET,
-            )
-            margin_top = 0 if is_t else RIGHT_PANEL_PLAYER_TOP_INSET
-            right_inset = 9
-            custom_margins = getattr(self.ui, '_custom_content_margins', None)
-            if custom_margins and len(custom_margins) >= 3:
-                right_inset = int(custom_margins[2])
-            margin_right = right_inset if is_t else QUEUE_SPLITTER_GUTTER
-            self.right_content_wrap.layout().setContentsMargins(0, margin_top, margin_right, 0)
+        # Restore player inset + queue-edge margin when returning from immersive mode.
+        if hasattr(self, "sync_player_wrap_insets"):
+            self.sync_player_wrap_insets(theater=is_t)
 
         # Both theatre and windowed keep the normal content padding; only the
         # dedicated fullscreen mode collapses it (handled in toggle_fullscreen).
@@ -2447,6 +2446,13 @@ class PlayerMixin:
         self._playback_loading_active = False
         self._playback_recover_at = None
         self._hide_screenshot_toast()
+        hover = getattr(self, "_queue_hover", None)
+        if hover is not None and getattr(hover, "conceal", None) is not None:
+            try:
+                if hover.is_enabled() and hover.is_revealed():
+                    hover.conceal(animated=False)
+            except RuntimeError:
+                pass
         # Timeline hover Tools are owned by the shell — hide on focus loss so a
         # leftover tip cannot re-stack Steempeg over Explorer.
         tl = getattr(self, "custom_timeline", None)
@@ -4251,11 +4257,15 @@ class PlayerMixin:
         pending_quality = getattr(self, "_pending_quality_populate", None)
         if pending_quality and hasattr(self, "_run_quality_populate_after_open"):
             self._pending_quality_populate = None
-            q_gen, clip_path, session = pending_quality
+            preserve = False
+            if len(pending_quality) >= 4:
+                q_gen, clip_path, session, preserve = pending_quality[:4]
+            else:
+                q_gen, clip_path, session = pending_quality[:3]
             QTimer.singleShot(
                 0,
-                lambda g=q_gen, p=clip_path, s=session: self._run_quality_populate_after_open(
-                    g, p, s
+                lambda g=q_gen, p=clip_path, s=session, keep=bool(preserve): (
+                    self._run_quality_populate_after_open(g, p, s, keep)
                 ),
             )
         pending_thumbs = getattr(self, "_pending_timeline_thumbs", None)
