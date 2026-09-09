@@ -10,7 +10,15 @@ import os
 import re
 import shutil
 
-from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QItemSelection, QItemSelectionModel
+from PySide6.QtCore import (
+    Qt,
+    QPoint,
+    QRect,
+    QSize,
+    QTimer,
+    QItemSelection,
+    QItemSelectionModel,
+)
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -3790,49 +3798,100 @@ class LibraryMixin:
         cell = 260
         return max(1, (viewport_w + spacing) // (cell + spacing))
 
+    def _ensure_clip_edge_role_hooks(self) -> None:
+        """Re-shelf ClipCards when the grid scrollbar moves (viewport flush)."""
+        if getattr(self, "_clip_edge_role_timer", None) is None:
+            parent = getattr(self, "ui", None)
+            timer = QTimer(parent)
+            timer.setSingleShot(True)
+            timer.setInterval(16)
+            timer.timeout.connect(self.sync_clip_card_edge_roles)
+            self._clip_edge_role_timer = timer
+        connected = getattr(self, "_clip_edge_role_bars", None)
+        if connected is None:
+            connected = set()
+            self._clip_edge_role_bars = connected
+        for name in ("grid_clips", "grid_rendered"):
+            grid = getattr(self, name, None)
+            if grid is None:
+                continue
+            bar = grid.verticalScrollBar()
+            if bar is None or id(bar) in connected:
+                continue
+            bar.valueChanged.connect(self._schedule_clip_card_edge_sync)
+            connected.add(id(bar))
+
+    def _schedule_clip_card_edge_sync(self, *_args) -> None:
+        self._ensure_clip_edge_role_hooks()
+        timer = getattr(self, "_clip_edge_role_timer", None)
+        if timer is not None:
+            timer.start()
+
     def sync_clip_card_edge_roles(self) -> None:
-        """SteempegUI: square shelf flush on top/bottom rows (Clips + Rendered)."""
+        """SteempegUI: square shelf flush on the rows kissing the panel.
+
+        First/last *on-screen* rows, not first/last in the filtered dataset —
+        otherwise a last-row card keeps a square bottom after filters move it
+        into the middle, and the row on the panel floor stays fully round.
+        """
         from steempeg.ui.clip_card_style import (
             CARD_STYLE_STEEMPEG_UI,
             get_clip_card_style,
         )
         from steempeg.ui.library.grid_view import ClipCard
 
+        self._ensure_clip_edge_role_hooks()
         shelf = get_clip_card_style() == CARD_STYLE_STEEMPEG_UI
 
         for grid_name in ("grid_clips", "grid_rendered"):
             grid = getattr(self, grid_name, None)
             if grid is None:
                 continue
-            visible: list = []
+            vp = grid.viewport()
+            vp_rect = vp.rect() if vp is not None else QRect()
+            spacing = max(0, int(grid.spacing()))
+            cell_h = max(1, _CLIP_CARD_SIZE.height() + spacing)
+            on_screen: list[tuple[int, ClipCard]] = []
+            off_screen: list = []
             for i in range(grid.count()):
                 item = grid.item(i)
                 if item is None or item.isHidden():
                     continue
                 card = grid.itemWidget(item)
-                if isinstance(card, ClipCard):
-                    visible.append(card)
-            if not visible:
+                if not isinstance(card, ClipCard):
+                    continue
+                if not shelf:
+                    off_screen.append(card)
+                    continue
+                idx = grid.indexFromItem(item)
+                vr = grid.visualRect(idx) if idx.isValid() else QRect()
+                if vr.width() <= 0 or vr.height() <= 0:
+                    off_screen.append(card)
+                    continue
+                if vp_rect.isValid() and not vr.intersects(vp_rect):
+                    off_screen.append(card)
+                    continue
+                on_screen.append((int(vr.y()), card))
+            for card in off_screen:
+                card.set_edge_role("mid")
+            if not shelf or not on_screen:
                 continue
-            if not shelf:
-                # Square / Round ignore shelf roles — keep mid so a later
-                # SteempegUI switch re-applies cleanly.
-                for card in visible:
-                    card.set_edge_role("mid")
-                continue
-            cols = self._clip_grid_column_count_for(grid)
-            last_row = (len(visible) - 1) // cols
-            for idx, card in enumerate(visible):
-                row = idx // cols
-                if last_row == 0:
+            buckets: dict[int, list] = {}
+            for y, card in on_screen:
+                buckets.setdefault(y // cell_h, []).append(card)
+            keys = sorted(buckets)
+            top_k, bot_k = keys[0], keys[-1]
+            for key, row_cards in buckets.items():
+                if top_k == bot_k:
                     role = "both"
-                elif row == 0:
+                elif key == top_k:
                     role = "top"
-                elif row == last_row:
+                elif key == bot_k:
                     role = "bottom"
                 else:
                     role = "mid"
-                card.set_edge_role(role)
+                for card in row_cards:
+                    card.set_edge_role(role)
 
     def refresh_clip_card_styles(self, style: str | None = None) -> str:
         """Apply SteempegUI / Square / Round chrome across Clips + Rendered grids."""
@@ -4452,6 +4511,7 @@ class LibraryMixin:
             self.update_status_indicator("Ready", "ready")
 
     def _on_clips_scroll(self, *_args) -> None:
+        self._schedule_clip_card_edge_sync()
         if not getattr(self, "_clips_progressive_active", False):
             return
         self._clips_scroll_active = True

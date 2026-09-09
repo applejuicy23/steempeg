@@ -308,7 +308,7 @@ class ClipCard(qtw.QWidget):
         self._apply_edge_radii()
 
     def set_edge_role(self, role: str) -> None:
-        """Shelf flush for SteempegUI: top/bottom rows square against the panel."""
+        """Shelf flush for SteempegUI: on-screen top/bottom rows square against the panel."""
         role = (role or "mid").lower()
         if role not in ("top", "mid", "bottom", "both"):
             role = "mid"

@@ -2,8 +2,9 @@
 
 Three modes (Settings → Visual), default SteempegUI:
 
-* ``steempeg_ui`` — shelf / row edge roles: first row flat top + round bottom;
-  middle rows fully round; last row round top + flat bottom
+* ``steempeg_ui`` — shelf / row edge roles against the *visible panel*:
+  top on-screen row flat top + round bottom; middle rows fully round;
+  bottom on-screen row round top + flat bottom
 * ``square`` — square top, round bottom on every card
 * ``round`` — round top and round bottom everywhere (no shelf variation)
 """
