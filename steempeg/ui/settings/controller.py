@@ -118,7 +118,11 @@ class SettingsMixin:
     # Always persist these even when REMEMBER_LAYOUT_BETWEEN_SESSIONS is False.
     # (Queue width/open + Desktop player↔settings vertical dock.)
     _ALWAYS_REMEMBER_LAYOUT_KEYS = frozenset(
-        {"queue_panel_width", "queue_panel_open", "main_v_splitter_sizes"}
+        {
+            "queue_panel_width",
+            "queue_panel_open",
+            "main_v_splitter_sizes",
+        }
     )
 
     def get_layout_setting(self, key: str, default):
