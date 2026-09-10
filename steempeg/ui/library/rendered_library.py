@@ -294,6 +294,10 @@ class RenderedLibraryMixin:
         self._screenshots_filter_folders: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
+        from steempeg.ui.library.card_sizes import DEFAULT_LIBRARY_CARD_SIZE
+
+        self._clips_card_size = DEFAULT_LIBRARY_CARD_SIZE
+        self._rendered_card_size = DEFAULT_LIBRARY_CARD_SIZE
         self._saved_clips_selection_path = ""
         self._saved_rendered_selection_path = ""
         self._library_ui_restored = False
@@ -1453,6 +1457,8 @@ class RenderedLibraryMixin:
             "library_panel_mode": getattr(self, "_library_panel_mode", "clips") or "",
             "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
             "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
+            "clips_card_size": getattr(self, "_clips_card_size", "big"),
+            "rendered_card_size": getattr(self, "_rendered_card_size", "big"),
             "clips_tab_open": clips_tab_open,
             "rendered_tab_open": rendered_tab_open,
             "screenshots_tab_open": screenshots_tab_open,
@@ -1605,10 +1611,39 @@ class RenderedLibraryMixin:
         try:
             clips_vm = state.get("clips_view_mode")
             rendered_vm = state.get("rendered_view_mode")
+            from steempeg.ui.library.card_sizes import normalize_card_size
+            from steempeg.ui.settings_prefs import load_library_allow_list_view
+
+            allow_list = False
+            try:
+                allow_list = load_library_allow_list_view(self.load_user_settings() or {})
+            except Exception:
+                allow_list = False
+
             if clips_vm in ("grid", "list"):
+                # Migrate orphan List → grid unless Settings restored List.
+                if clips_vm == "list" and not allow_list:
+                    clips_vm = "grid"
                 self._clips_view_mode = clips_vm
             if rendered_vm in ("grid", "list"):
+                if rendered_vm == "list" and not allow_list:
+                    rendered_vm = "grid"
                 self._rendered_view_mode = rendered_vm
+
+            self._clips_card_size = normalize_card_size(state.get("clips_card_size"))
+            self._rendered_card_size = normalize_card_size(state.get("rendered_card_size"))
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    self.set_card_size(
+                        getattr(self, "_clips_card_size", "big"), persist=False
+                    )
+                    if getattr(self, "_library_panel_mode", "clips") != "rendered"
+                    else self.set_card_size(
+                        getattr(self, "_rendered_card_size", "big"), persist=False
+                    )
+                ),
+            )
 
             if not hasattr(self, "_sort_index_by_panel"):
                 self._sort_index_by_panel = {}
@@ -4672,7 +4707,9 @@ class RenderedLibraryMixin:
         footer = f"Unknown • {size_str}" if is_unknown else f"{date_str} • {size_str}"
 
         item = QListWidgetItem(self.grid_rendered)
-        item.setSizeHint(QSize(260, 190))
+        from steempeg.ui.library.card_sizes import card_cell_size
+
+        item.setSizeHint(card_cell_size(getattr(self, "_rendered_card_size", None)))
         item.setData(Qt.ItemDataRole.UserRole, row)
         item.setData(Qt.ItemDataRole.UserRole + 1, file_path)
 
@@ -4689,6 +4726,8 @@ class RenderedLibraryMixin:
                 grid_item, ev
             ),
             on_right_click=lambda ev, grid_item=item: self._handle_rendered_grid_card_context_menu(grid_item, ev),
+            card_size=getattr(self, "_rendered_card_size", None),
+            info_tip=f"{display_title}\n{footer}".strip(),
         )
         self.grid_rendered.setItemWidget(item, card)
         if self.table_rendered.isRowHidden(row):
@@ -4876,8 +4915,10 @@ class RenderedLibraryMixin:
             if relayout:
                 self.grid_rendered.doItemsLayout()
 
-        chrome = getattr(self, "view_mode_chrome", None)
-        if chrome is not None:
+        chrome = getattr(self, "card_size_chrome", None) or getattr(
+            self, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_mode"):
             chrome.set_mode(mode, emit=False)
         elif mode == "list":
             self.btn_view_list.setStyleSheet(self.toggle_style_active)
@@ -5580,6 +5621,16 @@ class RenderedLibraryMixin:
             # Screenshots is Grid-only (Emily 13 Aug) — ignore List.
             self._sync_library_view_toggle_for_mode()
             return
+        if mode == "list":
+            from steempeg.ui.settings_prefs import load_library_allow_list_view
+
+            allow = False
+            try:
+                allow = load_library_allow_list_view(self.load_user_settings() or {})
+            except Exception:
+                allow = False
+            if not allow:
+                mode = "grid"
         if getattr(self, "_library_panel_mode", "clips") == "rendered":
             self._rendered_view_mode = mode
             self._apply_rendered_view_mode(relayout=True)
@@ -5590,28 +5641,132 @@ class RenderedLibraryMixin:
         LibraryMixin.set_view_mode(self, mode, relayout=True)
         self._schedule_persist_library_ui_state()
 
+    def set_card_size(self, size: str, *, persist: bool = True) -> None:
+        """Apply Big/Medium/Small to the active library panel grid."""
+        from steempeg.ui.library.card_sizes import normalize_card_size
+        from steempeg.ui.library.controller import LibraryMixin
+
+        key = normalize_card_size(size)
+        mode = getattr(self, "_library_panel_mode", "clips")
+        if mode == "screenshots":
+            # Screenshots keep their own photo size for v1.
+            chrome = getattr(self, "card_size_chrome", None) or getattr(
+                self, "view_mode_chrome", None
+            )
+            if chrome is not None and hasattr(chrome, "set_size"):
+                chrome.set_size(key, emit=False)
+            return
+        if mode == "rendered":
+            if getattr(self, "_rendered_card_size", None) == key:
+                chrome = getattr(self, "card_size_chrome", None) or getattr(
+                    self, "view_mode_chrome", None
+                )
+                if chrome is not None and hasattr(chrome, "set_size"):
+                    chrome.set_size(key, emit=False)
+                return
+            self._rendered_card_size = key
+            self._apply_rendered_card_size()
+        else:
+            if getattr(self, "_clips_card_size", None) == key:
+                chrome = getattr(self, "card_size_chrome", None) or getattr(
+                    self, "view_mode_chrome", None
+                )
+                if chrome is not None and hasattr(chrome, "set_size"):
+                    chrome.set_size(key, emit=False)
+                return
+            self._clips_card_size = key
+            LibraryMixin.apply_clips_card_size(self)
+        chrome = getattr(self, "card_size_chrome", None) or getattr(
+            self, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_size"):
+            chrome.set_size(key, emit=False)
+        if persist:
+            self._schedule_persist_library_ui_state()
+
+    def _apply_rendered_card_size(self) -> None:
+        from steempeg.ui.library.card_sizes import card_cell_size, card_grid_size, card_size_spec
+
+        grid = getattr(self, "grid_rendered", None)
+        if grid is None:
+            return
+        size = getattr(self, "_rendered_card_size", "big")
+        spec = card_size_spec(size)
+        grid.setSpacing(spec.spacing)
+        grid.setGridSize(card_grid_size(size))
+        # Force rematerialize so ClipCards rebuild at the new footprint.
+        if hasattr(self, "_rendered_live_paths"):
+            try:
+                self._rendered_live_paths.clear()
+            except Exception:
+                pass
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            item.setSizeHint(card_cell_size(size))
+            w = grid.itemWidget(item)
+            if w is not None:
+                grid.removeItemWidget(item)
+                w.deleteLater()
+        # Rebuild cards from the table rows at the new footprint.
+        if hasattr(self, "build_rendered_grid"):
+            self.build_rendered_grid()
+        grid.doItemsLayout()
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+
     def _sync_library_view_toggle_for_mode(self) -> None:
-        """Screenshots: Grid-only in the RQ track shell. Clips/Rendered: both segments."""
+        """Screenshots: size-only. Clips/Rendered: Size + optional List."""
         if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
             return
         mode = getattr(self, "_library_panel_mode", "clips")
-        chrome = getattr(self, "view_mode_chrome", None)
+        chrome = getattr(self, "card_size_chrome", None) or getattr(
+            self, "view_mode_chrome", None
+        )
+        from steempeg.ui.settings_prefs import load_library_allow_list_view
+
+        allow_list = False
+        try:
+            allow_list = load_library_allow_list_view(self.load_user_settings() or {})
+        except Exception:
+            allow_list = False
+
         if chrome is not None:
-            chrome.set_grid_only(mode == "screenshots")
+            if hasattr(chrome, "set_grid_only"):
+                chrome.set_grid_only(mode == "screenshots")
+            if hasattr(chrome, "set_allow_list"):
+                chrome.set_allow_list(allow_list and mode != "screenshots")
             if mode == "screenshots":
-                chrome.set_mode("grid", emit=False)
+                if hasattr(chrome, "set_mode"):
+                    chrome.set_mode("grid", emit=False)
             elif mode == "rendered":
-                chrome.set_mode(getattr(self, "_rendered_view_mode", "grid"), emit=False)
+                if hasattr(chrome, "set_size"):
+                    chrome.set_size(
+                        getattr(self, "_rendered_card_size", "big"), emit=False
+                    )
+                if hasattr(chrome, "set_mode"):
+                    chrome.set_mode(
+                        getattr(self, "_rendered_view_mode", "grid"), emit=False
+                    )
             else:
-                chrome.set_mode(getattr(self, "_clips_view_mode", "grid"), emit=False)
-            self.toggle_style_active = chrome.toggle_style_active
-            self.toggle_style_inactive = chrome.toggle_style_inactive
+                if hasattr(chrome, "set_size"):
+                    chrome.set_size(getattr(self, "_clips_card_size", "big"), emit=False)
+                if hasattr(chrome, "set_mode"):
+                    chrome.set_mode(
+                        getattr(self, "_clips_view_mode", "grid"), emit=False
+                    )
+            self.toggle_style_active = getattr(
+                chrome, "toggle_style_active", self.toggle_style_active
+            )
+            self.toggle_style_inactive = getattr(
+                chrome, "toggle_style_inactive", self.toggle_style_inactive
+            )
             return
         list_btn = getattr(self, "btn_view_list", None)
         grid_btn = getattr(self, "btn_view_grid", None)
         if list_btn is None or grid_btn is None:
             return
-        if mode == "screenshots":
+        if mode == "screenshots" or not allow_list:
             list_btn.hide()
             grid_btn.show()
             grid_btn.setStyleSheet(self.toggle_style_active)
