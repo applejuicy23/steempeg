@@ -12,10 +12,12 @@ from steempeg.ui.widgets.view_mode_toggle import (
     format_library_count,
     format_view_count,
 )
+from steempeg.ui.widgets.card_size_chrome import CardSizeChrome
 
 __all__ = [
     "AnimatedRenderBar",
     "BlockCombo",
+    "CardSizeChrome",
     "ElidedLabel",
     "FilterPillButton",
     "FlowLayout",
