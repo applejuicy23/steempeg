@@ -1,6 +1,8 @@
 """A square icon button that opens the filter panel (matches sort-combo chrome)."""
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QIcon
+from __future__ import annotations
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import QPushButton, QWidget
 
 from steempeg.infra.paths import get_resource_path
@@ -18,7 +20,7 @@ class _FilterBadgeSticker(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._text = ""
-        self._font_px = 7
+        self._font_px = 9
         self._bg = QColor(ACCENT_PRIMARY)
         self._fg = QColor("#1a1228")
 
@@ -55,6 +57,10 @@ class FilterPillButton(QWidget):
     ``libraryToolbarPill`` (sibling of the capsule) — the pill's
     ``border-radius`` clips descendants at the round end, which is exactly
     where the filter sits.
+
+    Because the sticker is not a child of this widget, splitter / layout moves
+    on ancestors do not fire our ``moveEvent`` — we event-filter the chain up
+    to the float host so the badge cannot ghost in place (v49.1).
     """
 
     clicked = Signal()
@@ -66,7 +72,8 @@ class FilterPillButton(QWidget):
         self.setAutoFillBackground(False)
         self._active_count = 0
         self._dense = COMFORT
-        self._badge_side = 12
+        self._badge_side = 17
+        self._watched: list[QObject] = []
 
         self._btn = QPushButton(self)
         self._btn.setObjectName("FilterPill")
@@ -79,6 +86,22 @@ class FilterPillButton(QWidget):
 
         self._badge = _FilterBadgeSticker()
         self._badge.hide()
+        # Floated sticker outlives this chip's parent chain — delete with us.
+        badge = self._badge
+        pill = self
+
+        def _cleanup_floated(_: QObject | None = None) -> None:
+            try:
+                badge.hide()
+                badge.deleteLater()
+            except RuntimeError:
+                pass
+            try:
+                pill._clear_watchers()
+            except RuntimeError:
+                pass
+
+        self.destroyed.connect(_cleanup_floated)
 
         self.apply_density(COMFORT)
 
@@ -91,7 +114,8 @@ class FilterPillButton(QWidget):
         border = 1 if dense.compact else 2
         radius = 6 if dense.compact else 8
         pad = 1 if dense.compact else 2
-        self._badge_side = 11 if dense.compact else 12
+        # Readable digit; still fits the square without eating the funnel.
+        self._badge_side = 14 if dense.compact else 17
 
         self.setFixedSize(sz, sz)
         self.setMinimumSize(sz, sz)
@@ -182,8 +206,27 @@ class FilterPillButton(QWidget):
         self._badge.hide()
         super().hideEvent(event)
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        et = event.type()
+        if et in (
+            QEvent.Type.Move,
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+            QEvent.Type.ZOrderChange,
+        ):
+            if self._active_count > 0 and self.isVisible():
+                self._place_badge()
+            elif not self.isVisible():
+                self._badge.hide()
+        elif et == QEvent.Type.Hide:
+            # Ancestor hidden (tab switch / panel collapse) — park the sticker.
+            if watched is not self._badge:
+                self._badge.hide()
+        return super().eventFilter(watched, event)
+
     def _font_px(self) -> int:
-        return 7
+        return 9 if self._dense.compact else 10
 
     def _badge_float_host(self) -> QWidget | None:
         """Parent of libraryToolbarPill — sibling layer, no radius clip."""
@@ -195,12 +238,40 @@ class FilterPillButton(QWidget):
             w = w.parentWidget()
         return self.window()
 
+    def _clear_watchers(self) -> None:
+        for obj in self._watched:
+            try:
+                obj.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self._watched = []
+
+    def _watch_ancestors(self, host: QWidget) -> None:
+        """Follow splitter / layout moves between the chip and the float host."""
+        chain: list[QObject] = []
+        w: QWidget | None = self
+        while w is not None:
+            chain.append(w)
+            if w is host:
+                break
+            w = w.parentWidget()
+        if host not in chain:
+            chain.append(host)
+        # Replace watchers when the float host changes (rare).
+        if chain == self._watched:
+            return
+        self._clear_watchers()
+        for obj in chain:
+            obj.installEventFilter(self)
+        self._watched = chain
+
     def _ensure_badge_host(self) -> None:
         host = self._badge_float_host()
         if host is None:
             return
         if self._badge.parentWidget() is not host:
             self._badge.setParent(host)
+        self._watch_ancestors(host)
 
     def _refresh_badge_chrome(self) -> None:
         if self._active_count <= 0:
@@ -211,7 +282,7 @@ class FilterPillButton(QWidget):
         self._place_badge()
 
     def _place_badge(self) -> None:
-        if self._active_count <= 0:
+        if self._active_count <= 0 or not self.isVisible():
             self._badge.hide()
             return
         self._ensure_badge_host()
@@ -219,12 +290,13 @@ class FilterPillButton(QWidget):
         if host is None:
             return
         side = self._badge_side
-        # Corner sticker like the reference shot — small lip, full unclipped circle.
-        lip = 4 if not self._dense.compact else 3
+        # Park on the top-right corner: slight peek past the rim so the funnel
+        # stays clear, without floating far off the chip.
+        out_x = 5 if not self._dense.compact else 4
+        out_y = 4 if not self._dense.compact else 3
         corner = self.mapTo(host, QPoint(self.width(), 0))
-        x = int(corner.x() - side + lip)
-        y = int(corner.y() - lip)
+        x = int(corner.x() - side + out_x)
+        y = int(corner.y() - out_y)
         self._badge.move(x, y)
-        if self.isVisible():
-            self._badge.show()
-            self._badge.raise_()
+        self._badge.show()
+        self._badge.raise_()
