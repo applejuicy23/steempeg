@@ -60,10 +60,8 @@ DEFAULT_QUEUE_PANEL_WIDTH = 380
 # badge + 128px thumb + readable title/path (saved 380 left ~110px for text).
 MIN_QUEUE_HOVER_WIDTH = 520
 
-# "grid" or "list"
+# Legacy — prefer card_sizes.DEFAULT_* ; kept for older imports.
 DEFAULT_LIBRARY_VIEW = "grid"
-
-# "grid" or "list" — render queue cards
 DEFAULT_QUEUE_VIEW = "list"
 
 # Right column chrome — keep in sync with app.py right_layout / right_content_wrap.
