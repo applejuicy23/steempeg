@@ -112,6 +112,8 @@ class _QueueAddPeekGhost(QFrame):
         title: str,
         thumb_w: int = _LIST_THUMB_W,
         thumb_h: int = _LIST_THUMB_H,
+        card_w: int | None = None,
+        card_h: int | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -132,7 +134,7 @@ class _QueueAddPeekGhost(QFrame):
             """
         )
         if grid:
-            self.setFixedSize(_GRID_CARD_W, _GRID_CARD_H)
+            self.setFixedSize(card_w or _GRID_CARD_W, card_h or _GRID_CARD_H)
             lay = QVBoxLayout(self)
             lay.setContentsMargins(10, 10, 10, 10)
             lay.setSpacing(4)
@@ -860,7 +862,7 @@ class RenderQueuePanel(QWidget):
         actions_layout.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
         actions_layout.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # View · Grid/List · (N) — shared chrome with Clips / Rendered / Screenshots
+        # View · Grid/List · (N) — same pill language as Clips Manager
         self._view_chrome = ViewModeChrome(
             toolbar,
             initial_mode=self._view_mode,
@@ -931,7 +933,9 @@ class RenderQueuePanel(QWidget):
         self._content_stack_layout.setContentsMargins(0, 0, 0, 0)
         self._content_stack_layout.addWidget(self._list_host)
         self._content_stack_layout.addWidget(self._grid_host)
-        self._grid_host.hide()
+        is_grid = self._view_mode == "grid"
+        self._list_host.setVisible(not is_grid)
+        self._grid_host.setVisible(is_grid)
 
         self._empty_center = QWidget()
         self._empty_center.setObjectName("queueEmptyCenter")
