@@ -84,12 +84,17 @@ from steempeg.ui import ui_theme as ut
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
-_CLIP_CARD_SIZE = QSize(260, 190)
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
 # Once a card has been seen it stays (scroll-back should not hitch).
 # Cap is only a RAM safety valve — farthest from the viewport go first.
 _CLIP_MAX_LIVE_WIDGETS = 256
+
+
+def _clips_card_cell_size(app) -> QSize:
+    from steempeg.ui.library.card_sizes import card_cell_size
+
+    return card_cell_size(getattr(app, "_clips_card_size", None))
 
 
 class LibraryMixin:
@@ -3475,7 +3480,7 @@ class LibraryMixin:
         clip_path = title_item.data(Qt.UserRole)
 
         item = QListWidgetItem(self.grid_clips)
-        item.setSizeHint(_CLIP_CARD_SIZE)
+        item.setSizeHint(_clips_card_cell_size(self))
         item.setData(Qt.UserRole, row)
         item.setData(Qt.UserRole + 1, clip_path)
         if table.isRowHidden(row):
@@ -3591,6 +3596,8 @@ class LibraryMixin:
             round_icon=is_unknown_clip,
             on_left_click=lambda ev, grid_item=item: self._defer_grid_select_item(grid_item, ev),
             on_right_click=lambda ev, grid_item=item: self._handle_grid_card_context_menu(grid_item, ev),
+            card_size=getattr(self, "_clips_card_size", None),
+            info_tip=f"{title.strip()}\n{footer_right}".strip(),
         )
         if queue_membership:
             card.set_queue_badge(membership=queue_membership)
@@ -3794,8 +3801,7 @@ class LibraryMixin:
             return 1
         viewport_w = max(1, grid.viewport().width())
         spacing = max(0, int(grid.spacing()))
-        # ClipCard cell is ~260 wide (sizeHint).
-        cell = 260
+        cell = max(1, _clips_card_cell_size(self).width())
         return max(1, (viewport_w + spacing) // (cell + spacing))
 
     def _ensure_clip_edge_role_hooks(self) -> None:
@@ -3850,7 +3856,7 @@ class LibraryMixin:
             vp = grid.viewport()
             vp_rect = vp.rect() if vp is not None else QRect()
             spacing = max(0, int(grid.spacing()))
-            cell_h = max(1, _CLIP_CARD_SIZE.height() + spacing)
+            cell_h = max(1, _clips_card_cell_size(self).height() + spacing)
             on_screen: list[tuple[int, ClipCard]] = []
             off_screen: list = []
             for i in range(grid.count()):
@@ -4560,7 +4566,7 @@ class LibraryMixin:
         cols_fn = getattr(self, "_clip_grid_column_count_for", None)
         cols = int(cols_fn(grid)) if callable(cols_fn) else 6
         cols = max(1, cols)
-        cell_h = max(1, _CLIP_CARD_SIZE.height() + max(0, int(grid.spacing())))
+        cell_h = max(1, _clips_card_cell_size(self).height() + max(0, int(grid.spacing())))
         rows = max(2, (vp.height() + _CLIP_VIEWPORT_OVERSCAN_PX) // cell_h + 1)
         expect = min(grid.count(), cols * rows)
         if len(out) >= expect:
@@ -5866,8 +5872,10 @@ class LibraryMixin:
             if self.grid_clips.selectedItems():
                 self.grid_clips.scrollToItem(self.grid_clips.selectedItems()[0])
 
-        chrome = getattr(self, "view_mode_chrome", None)
-        if chrome is not None:
+        chrome = getattr(self, "card_size_chrome", None) or getattr(
+            self, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_mode"):
             chrome.set_mode(mode, emit=False)
         elif mode == "list":
             self.btn_view_list.setStyleSheet(self.toggle_style_active)
@@ -5876,4 +5884,32 @@ class LibraryMixin:
             self.btn_view_list.setStyleSheet(self.toggle_style_inactive)
             self.btn_view_grid.setStyleSheet(self.toggle_style_active)
 
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+
+    def apply_clips_card_size(self) -> None:
+        """Re-grid Clips cards for the current ``_clips_card_size``."""
+        from steempeg.ui.library.card_sizes import card_grid_size, card_size_spec
+
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        size = getattr(self, "_clips_card_size", "big")
+        spec = card_size_spec(size)
+        grid.setSpacing(spec.spacing)
+        grid.setGridSize(card_grid_size(size))
+        live = getattr(self, "_clip_live_paths", None)
+        if isinstance(live, set):
+            live.clear()
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            item.setSizeHint(_clips_card_cell_size(self))
+            w = grid.itemWidget(item)
+            if w is not None:
+                grid.removeItemWidget(item)
+                w.deleteLater()
+        if hasattr(self, "_clips_refresh_viewport"):
+            self._clips_refresh_viewport()
+        grid.doItemsLayout()
         QTimer.singleShot(0, self._sync_library_scrollbars)
