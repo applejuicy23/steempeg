@@ -744,11 +744,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 toolbar_mega_pill_style,
             )
             from steempeg.ui.layout_defaults import (
-                DEFAULT_LIBRARY_VIEW,
                 LIBRARY_FOOTER_GAP,
                 LIBRARY_TAB_TO_TOOLBAR_SPACING,
             )
-            from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
+            from steempeg.ui.library.card_sizes import DEFAULT_LIBRARY_CARD_SIZE
+            from steempeg.ui.settings_prefs import load_library_allow_list_view
+            from steempeg.ui.widgets.card_size_chrome import CardSizeChrome
 
             mega_top_pill.setStyleSheet(
                 toolbar_mega_pill_style(_DENSITY_COMFORT, object_name="libraryToolbarPill")
@@ -756,17 +757,26 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             top_pill_layout = qtw.QHBoxLayout(mega_top_pill)
             top_pill_layout.setContentsMargins(16, 6, 16, 6)  # Capsule Internal Padding
-            # Match Render Queue View-plug spacing (View · track · count).
+            # Match Render Queue Size-plug spacing (Size · track · count).
             top_pill_layout.setSpacing(8)
             self._top_pill_layout = top_pill_layout
 
-            # View · Grid/List · • N Clips — RQ pill on the toggle; library count wording
-            self.view_mode_chrome = ViewModeChrome(
+            _allow_list = False
+            try:
+                _allow_list = load_library_allow_list_view(self.load_user_settings() or {})
+            except Exception:
+                _allow_list = False
+
+            # Size · Big/Medium/Small · • N Clips — List only if Settings restores it.
+            self.view_mode_chrome = CardSizeChrome(
                 mega_top_pill,
-                initial_mode=DEFAULT_LIBRARY_VIEW,
+                initial_size=DEFAULT_LIBRARY_CARD_SIZE,
+                initial_mode="grid",
+                allow_list=_allow_list,
                 dense=_DENSITY_COMFORT,
                 initial_count="• 0 Clips",
             )
+            self.card_size_chrome = self.view_mode_chrome
             self._lbl_view = self.view_mode_chrome.lbl_view
             self.toggle_pill = self.view_mode_chrome.toggle_pill
             self.btn_view_grid = self.view_mode_chrome.btn_view_grid
@@ -884,9 +894,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 else: 
                     original_parent_layout.addLayout(self.left_master_layout)
 
-            # 6. View mode — chrome already owns Grid/List clicks
+            # 6. Size / view mode — chrome owns Size popup + optional List
+            self.view_mode_chrome.size_changed.connect(self.set_card_size)
             self.view_mode_chrome.mode_changed.connect(self.set_view_mode)
-            self.set_view_mode(DEFAULT_LIBRARY_VIEW)
+            self._clips_card_size = DEFAULT_LIBRARY_CARD_SIZE
+            self._rendered_card_size = DEFAULT_LIBRARY_CARD_SIZE
+            self.set_view_mode("grid")
+            self.set_card_size(DEFAULT_LIBRARY_CARD_SIZE, persist=False)
 
         # --- UI INJECTION: SORTING PANEL (NEXT TO FILTER BUTTON) ---
         from PySide6.QtWidgets import QLabel, QComboBox, QSizePolicy
