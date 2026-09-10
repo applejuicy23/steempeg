@@ -998,6 +998,10 @@ DEFAULT_CONFIRM_BEFORE_DELETE = True
 KEY_REMEMBER_LIBRARY_TAB = "remember_library_tab"
 DEFAULT_REMEMBER_LIBRARY_TAB = True
 
+# Classic List tables for Clips/Rendered — off by default (Kill List / Size picker).
+KEY_LIBRARY_ALLOW_LIST_VIEW = "library_allow_list_view"
+DEFAULT_LIBRARY_ALLOW_LIST_VIEW = False
+
 KEY_SCREENSHOTS_FOLDER = "screenshots_folder"
 
 KEY_HWDEC_PREVIEW = "hwdec_preview"
@@ -1049,6 +1053,12 @@ def load_remember_library_tab(settings: dict | None) -> bool:
     if KEY_REMEMBER_LIBRARY_TAB not in (settings or {}):
         return DEFAULT_REMEMBER_LIBRARY_TAB
     return bool((settings or {}).get(KEY_REMEMBER_LIBRARY_TAB))
+
+
+def load_library_allow_list_view(settings: dict | None) -> bool:
+    if KEY_LIBRARY_ALLOW_LIST_VIEW not in (settings or {}):
+        return DEFAULT_LIBRARY_ALLOW_LIST_VIEW
+    return bool((settings or {}).get(KEY_LIBRARY_ALLOW_LIST_VIEW))
 
 
 # Experimental: skip the grey #1e1e1e flash cover on immersive fullscreen
