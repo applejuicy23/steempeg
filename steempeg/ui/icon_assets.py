@@ -511,6 +511,58 @@ def queue_chip_icon(size: int = 16, *, color: str = "#ffcc00") -> QIcon:
     return tinted_icon("queue.png", color, size)
 
 
+# Library Size picker — density glyphs (1 / 2×2 / 3×3 cells).
+# Same BW→tint pipeline as player-header Queue / Rendering / Completed plaques.
+CARD_SIZE_GRID_ASSETS: dict[str, str] = {
+    "big": "grid_high.png",
+    "medium": "grid_mid.png",
+    "small": "grid_low.png",
+}
+# Soft purple — matches addclip / accent plaque language.
+CARD_SIZE_GRID_TINT = "#b29ae7"
+CARD_SIZE_GRID_TINT_HOT = "#d4c8f5"
+VIEW_MODE_LIST_ASSET = "defaultsort.png"
+
+
+def card_size_grid_pixmap(
+    size_key: str,
+    size: int = 18,
+    *,
+    color: str | QColor | None = None,
+) -> QPixmap:
+    """BW grid_*.png → tinted glyph (same pipeline as In queue / Rendering plaques)."""
+    name = CARD_SIZE_GRID_ASSETS.get(str(size_key or "").strip().lower(), "grid_high.png")
+    fill = color if color is not None else CARD_SIZE_GRID_TINT
+    return _status_glyph_pixmap(name, fill, size)
+
+
+def card_size_grid_icon(
+    size_key: str,
+    size: int = 18,
+    *,
+    color: str | QColor | None = None,
+) -> QIcon:
+    return _icon_from_pixmap(card_size_grid_pixmap(size_key, size, color=color))
+
+
+def view_mode_list_pixmap(
+    size: int = 18,
+    *,
+    color: str | QColor | None = None,
+) -> QPixmap:
+    """BW defaultsort.png → tinted list glyph for View · List."""
+    fill = color if color is not None else CARD_SIZE_GRID_TINT
+    return _status_glyph_pixmap(VIEW_MODE_LIST_ASSET, fill, size)
+
+
+def view_mode_list_icon(
+    size: int = 18,
+    *,
+    color: str | QColor | None = None,
+) -> QIcon:
+    return _icon_from_pixmap(view_mode_list_pixmap(size, color=color))
+
+
 def _glyph_pixmap_from_bw(name: str, size: int = 16, *, color: str = "#ffffff") -> QPixmap:
     """Black-bg white line art → tinted glyph with alpha (black becomes transparent)."""
     src = QPixmap(get_resource_path(name))
