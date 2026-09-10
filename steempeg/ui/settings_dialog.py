@@ -160,6 +160,7 @@ from steempeg.ui.settings_prefs import (
     KEY_PERMANENT_EXPORT_FOLDER,
     KEY_PORTABLE_LIKE_MIDDLE_SPLITTER,
     KEY_REMEMBER_LIBRARY_TAB,
+    KEY_LIBRARY_ALLOW_LIST_VIEW,
     KEY_SCREENSHOTS_FOLDER,
     KEY_QUEUE_HOVER,
     KEY_SHELL_SIDE_LAYOUT,
@@ -200,6 +201,7 @@ from steempeg.ui.settings_prefs import (
     load_media_cache_limit_gb,
     load_mpv_log_level,
     load_remember_library_tab,
+    load_library_allow_list_view,
     load_queue_hover,
     load_shell_side_layout,
     load_startup_library_scan,
@@ -1272,6 +1274,15 @@ class SettingsDialog(SteempegDialog):
         a.addWidget(self._chk_remember_tab)
         a.addWidget(
             self._hint("Off = always open Clips Manager. On = restore Clips / Rendered.")
+        )
+        self._chk_allow_list = SteempegCheckBox("Restore classic List view (Clips / Rendered)")
+        self._chk_allow_list.setChecked(load_library_allow_list_view(settings))
+        a.addWidget(self._chk_allow_list)
+        a.addWidget(
+            self._hint(
+                "Off (default) = Size Big/Medium/Small only. "
+                "On = show a List toggle for the old table layout."
+            )
         )
 
         a.addWidget(self._section("Screenshots"))
@@ -2454,6 +2465,7 @@ class SettingsDialog(SteempegDialog):
         )
         pending[KEY_CONFIRM_BEFORE_DELETE] = self._chk_confirm_delete.isChecked()
         pending[KEY_REMEMBER_LIBRARY_TAB] = self._chk_remember_tab.isChecked()
+        pending[KEY_LIBRARY_ALLOW_LIST_VIEW] = self._chk_allow_list.isChecked()
         pending[KEY_TEST_NEW_FULLSCREEN] = self._chk_test_new_fullscreen.isChecked()
 
         shots = normalize_screenshots_folder(self._edit_screenshots.text())
@@ -2477,6 +2489,8 @@ class SettingsDialog(SteempegDialog):
         pending[KEY_DECK_CONTROLS] = deck_controls
         if hasattr(self._app, "_refresh_dev_button_visibility"):
             deferred.append(self._app._refresh_dev_button_visibility)
+        if hasattr(self._app, "_sync_library_view_toggle_for_mode"):
+            deferred.append(self._app._sync_library_view_toggle_for_mode)
 
         shell = self._combo_shell.currentData()
         if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
