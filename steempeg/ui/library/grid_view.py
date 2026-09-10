@@ -125,9 +125,17 @@ class ClipCard(qtw.QWidget):
         queue_color: Optional[str] = None,
         on_left_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[qtc.QMouseEvent], None]] = None,
+        card_size: Optional[str] = None,
+        info_tip: Optional[str] = None,
         parent=None,
     ):
         super().__init__(parent)
+        from steempeg.ui.library.card_sizes import (
+            CARD_SIZE_BIG,
+            card_size_spec,
+            normalize_card_size,
+        )
+
         self.row_idx = row_idx
         self._on_left_click = on_left_click
         self._on_right_click = on_right_click
@@ -142,15 +150,21 @@ class ClipCard(qtw.QWidget):
         self._press_hidden_children: list[qtw.QWidget] = []
         self.setObjectName("ClipCard")
 
-        # Cell 260, border 3px. That means the inside is exactly 254 by 184!
-        self.setFixedSize(254, 184)
+        self._card_size = normalize_card_size(card_size, default=CARD_SIZE_BIG)
+        self._spec = card_size_spec(self._card_size)
+        self._info_tip = (info_tip or "").strip()
+        cw, ch = self._spec.card_w, self._spec.card_h
+        tw, th = self._spec.thumb_w, self._spec.thumb_h
+        self._cw, self._ch, self._tw, self._th = cw, ch, tw, th
+
+        self.setFixedSize(cw, ch)
 
         layout = qtw.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.thumb_label = qtw.QLabel(self)
-        self.thumb_label.setFixedSize(254, 144)
+        self.thumb_label.setFixedSize(tw, th)
         self.thumb_label.setAttribute(qtc.Qt.WidgetAttribute.WA_TranslucentBackground, True)
         # Transparent so baked corner alpha shows the panel behind, not a square fill.
         self.thumb_label.setStyleSheet("background-color: transparent; border: none;")
@@ -162,15 +176,16 @@ class ClipCard(qtw.QWidget):
             pixmap = qtg.QPixmap(thumb_path)
             if not pixmap.isNull():
                 scaled_thumb = pixmap.scaled(
-                    254, 144,
+                    tw, th,
                     qtc.Qt.KeepAspectRatioByExpanding,
                     qtc.Qt.SmoothTransformation,
                 )
                 self._thumb_raw = scaled_thumb
 
+        icon_px = self._spec.icon_px
         self.icon_label = qtw.QLabel(self.thumb_label)
-        self.icon_label.setFixedSize(24, 24)
-        self.icon_label.move(8, 8)
+        self.icon_label.setFixedSize(icon_px, icon_px)
+        self.icon_label.move(6 if self._spec.footer_mode == "info" else 8, 6 if self._spec.footer_mode == "info" else 8)
         self.icon_label.setStyleSheet("background: transparent; border: none;")
         pix_path = icon_path if icon_path and os.path.exists(icon_path) else get_resource_path("unknown_icon.png")
         from steempeg.ui.icon_shape import (
@@ -188,46 +203,50 @@ class ClipCard(qtw.QWidget):
             from steempeg.ui.icon_utils import apply_square_icon
 
             src = qtg.QPixmap(pix_path)
-            shaped = shaped_game_icon_pixmap(src, 24, shape) if not src.isNull() else None
-            apply_square_icon(self.icon_label, shaped, 24)
+            shaped = shaped_game_icon_pixmap(src, icon_px, shape) if not src.isNull() else None
+            apply_square_icon(self.icon_label, shaped, icon_px)
 
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
         self.badge_label.setStyleSheet(
-            "background-color: #b29ae7; color: black; font-weight: bold; font-size: 11px;"
+            f"background-color: #b29ae7; color: black; font-weight: bold; font-size: {self._spec.badge_font}px;"
             "border-radius: 4px; padding: 2px 6px;"
         )
         self.badge_label.adjustSize()
         badge_w = self.badge_label.width()
-        self.badge_label.move(254 - badge_w - 6, 144 - 24)
+        self.badge_label.move(tw - badge_w - 6, th - 24)
+        if self._spec.footer_mode == "info":
+            self.badge_label.hide()
 
         footer_bg = _clip_footer_color()
         plate = _clip_plate_color()
 
-        if status_badge:
+        if status_badge and self._spec.footer_mode != "info":
             self.status_badge_label = qtw.QLabel(status_badge, self.thumb_label)
             self.status_badge_label.setStyleSheet(
                 "background-color: #555555; color: #e0e0e0; font-weight: bold; font-size: 10px;"
                 "border-radius: 4px; padding: 2px 6px;"
             )
             self.status_badge_label.adjustSize()
-            self.status_badge_label.move(6, 144 - 22)
+            self.status_badge_label.move(6, th - 22)
 
         if health_color:
             # True circle: radius = half the box (border counts toward the box).
+            hd = self._spec.health_dot
             self.health_dot = qtw.QLabel(self.thumb_label)
-            self.health_dot.setFixedSize(14, 14)
+            self.health_dot.setFixedSize(hd, hd)
             self.health_dot.setStyleSheet(
                 f"background-color: {health_color};"
                 f"border: 2px solid {plate};"
-                "border-radius: 7px;"
+                f"border-radius: {hd // 2}px;"
             )
-            self.health_dot.move(254 - 20, 6)
+            self.health_dot.move(tw - hd - 6, 6)
 
         # Queue index (portable Choose a clip) — bottom-left; game icon stays top-left.
+        qb = self._spec.queue_badge
         self.queue_index_badge = qtw.QLabel(self.thumb_label)
-        self.queue_index_badge.setFixedSize(26, 26)
+        self.queue_index_badge.setFixedSize(qb, qb)
         self.queue_index_badge.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
-        self.queue_index_badge.move(6, 144 - 32)
+        self.queue_index_badge.move(6, th - qb - 6)
         self.queue_index_badge.hide()
         self._queue_badge_entries: list[tuple[int, str]] = []
         self._queue_badge_cycle_i = 0
@@ -248,27 +267,54 @@ class ClipCard(qtw.QWidget):
         """)
 
         text_layout = qtw.QHBoxLayout(text_widget)
-        text_layout.setContentsMargins(12, 0, 12, 0)
-        text_layout.setSpacing(8)
+        pad = self._spec.footer_pad_h
+        text_layout.setContentsMargins(pad, 0, pad, 0)
+        text_layout.setSpacing(6 if self._spec.footer_mode == "info" else 8)
 
         title_lbl = OverflowMarqueeLabel(title.strip())
         title_lbl.setStyleSheet(
-            "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; background: transparent; border: none; }"
+            f"QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {self._spec.title_font}px; "
+            "background: transparent; border: none; }"
         )
         self.title_lbl = title_lbl
 
         date_lbl = qtw.QLabel(date_str)
         date_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
         date_lbl.setStyleSheet(
-            "QLabel { color: #888888; font-size: 11px; background: transparent; border: none; }"
+            f"QLabel {{ color: #888888; font-size: {self._spec.meta_font}px; "
+            "background: transparent; border: none; }"
         )
         date_lbl.setSizePolicy(
             qtw.QSizePolicy.Policy.Maximum, qtw.QSizePolicy.Policy.Preferred
         )
         self.date_lbl = date_lbl
 
-        text_layout.addWidget(title_lbl, 1)
-        text_layout.addWidget(date_lbl, 0)
+        if self._spec.footer_mode == "info":
+            tip = self._info_tip or f"{title.strip()}\n{date_str}".strip()
+            info_btn = qtw.QLabel("ⓘ")
+            info_btn.setStyleSheet(
+                f"QLabel {{ color: #b29ae7; font-weight: bold; font-size: {self._spec.title_font}px; "
+                "background: transparent; border: none; }"
+            )
+            info_btn.setToolTip(tip)
+            info_btn.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
+            self._info_label = info_btn
+            text_layout.addStretch(1)
+            text_layout.addWidget(info_btn, 0)
+            text_layout.addStretch(1)
+            title_lbl.hide()
+            date_lbl.hide()
+            self.setToolTip(tip)
+        elif self._spec.footer_mode == "compact":
+            text_layout.addWidget(title_lbl, 1)
+            # Date tucked into tooltip; keep a short meta if it fits.
+            date_lbl.setToolTip(date_str)
+            if len(date_str) > 18:
+                date_lbl.setText(date_str.split("•")[0].strip() or date_str[:14])
+            text_layout.addWidget(date_lbl, 0)
+        else:
+            text_layout.addWidget(title_lbl, 1)
+            text_layout.addWidget(date_lbl, 0)
 
         layout.addWidget(self.thumb_label)
         layout.addWidget(text_widget)
@@ -278,7 +324,7 @@ class ClipCard(qtw.QWidget):
         # is hidden behind the thumbnail/text children. This transparent overlay draws
         # the whole border (default / hover / selected) on top of everything instead.
         self._border_overlay = qtw.QFrame(self)
-        self._border_overlay.setGeometry(0, 0, 254, 184)
+        self._border_overlay.setGeometry(0, 0, cw, ch)
 
         # Clicks must hit the card, not child labels — viewport filters never see child events.
         for child in self.findChildren(qtw.QWidget):
@@ -290,7 +336,7 @@ class ClipCard(qtw.QWidget):
         # Dim overlay (not QGraphicsOpacityEffect) — opacity made the QListWidgetItem
         # sort-key text ("000084") bleed through empty thumbs.
         self._dim_veil = qtw.QFrame(self)
-        self._dim_veil.setGeometry(0, 0, 254, 184)
+        self._dim_veil.setGeometry(0, 0, cw, ch)
         self._dim_veil.setStyleSheet("background-color: rgba(0, 0, 0, 140); border: none;")
         self._dim_veil.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._dim_veil.hide()
@@ -301,7 +347,7 @@ class ClipCard(qtw.QWidget):
         # Opening spinner sits on the thumbnail banner only.
         self._loading = False
         self._load_overlay = ThumbLoadingOverlay(self.thumb_label, radius=16.0, pen_w=4)
-        self._load_overlay.setGeometry(0, 0, 254, 144)
+        self._load_overlay.setGeometry(0, 0, tw, th)
         self._load_overlay.hide()
 
         self._border_overlay.raise_()
@@ -399,13 +445,15 @@ class ClipCard(qtw.QWidget):
     def _refresh_clipped_thumb(self) -> None:
         """Re-bake thumbnail with current corner radii for the active ClipCard style."""
         ttl, ttr, tbr, tbl = self._radius_plan()["thumb"]
+        tw = getattr(self, "_tw", 254)
+        th = getattr(self, "_th", 144)
         raw = getattr(self, "_thumb_raw", None)
         if raw is None or raw.isNull():
             # Empty well still needs a dark plate matching the style.
-            plate = qtg.QPixmap(254, 144)
+            plate = qtg.QPixmap(tw, th)
             plate.fill(qtc.Qt.GlobalColor.transparent)
             path = _asymmetric_round_rect(
-                254.0, 144.0, float(ttl), float(ttr), float(tbr), float(tbl)
+                float(tw), float(th), float(ttl), float(ttr), float(tbr), float(tbl)
             )
             painter = qtg.QPainter(plate)
             painter.setRenderHint(qtg.QPainter.RenderHint.Antialiasing, True)
@@ -415,7 +463,13 @@ class ClipCard(qtw.QWidget):
             return
         self.thumb_label.setPixmap(
             _clip_pixmap_to_corners(
-                raw, float(ttl), float(ttr), float(tbr), float(tbl)
+                raw,
+                float(ttl),
+                float(ttr),
+                float(tbr),
+                float(tbl),
+                w=tw,
+                h=th,
             )
         )
 
@@ -485,9 +539,11 @@ class ClipCard(qtw.QWidget):
         i = int(getattr(self, "_queue_badge_cycle_i", 0) or 0) % len(entries)
         idx, color = entries[i]
         badge.setText(str(idx))
-        badge.setStyleSheet(status_dot_style(color, size=26))
+        qb = getattr(self, "_spec", None).queue_badge if getattr(self, "_spec", None) else 26
+        th = getattr(self, "_th", 144)
+        badge.setStyleSheet(status_dot_style(color, size=qb))
         # Bottom-left of the thumbnail, clear of the FG/CLIP tag on the right.
-        badge.move(6, 144 - 32)
+        badge.move(6, th - qb - 6)
         badge.show()
         badge.raise_()
 
@@ -596,8 +652,10 @@ class ClipCard(qtw.QWidget):
         if thumb_path and os.path.exists(thumb_path):
             pixmap = qtg.QPixmap(thumb_path)
             if not pixmap.isNull():
+                tw = getattr(self, "_tw", 254)
+                th = getattr(self, "_th", 144)
                 scaled_thumb = pixmap.scaled(
-                    254, 144,
+                    tw, th,
                     qtc.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     qtc.Qt.TransformationMode.SmoothTransformation,
                 )
