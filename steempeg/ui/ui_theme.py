@@ -2215,9 +2215,50 @@ def about_dialog_stylesheet() -> str:
         border-radius: 8px;
     }}
     QLabel {{ background: transparent; }}
-    QLabel#AboutTitle {{ color: {c["title"]}; font-size: 22px; font-weight: bold; }}
+    QLabel#AboutTitle {{
+        color: {c["title"]};
+        font-size: 26px;
+        font-weight: bold;
+    }}
     QLabel#AboutDim {{ color: {c["dim"]}; font-size: 11px; }}
     QLabel#AboutText {{ color: {c["text"]}; font-size: 12px; }}
+    QLabel#AboutSectionLabel {{
+        color: {c["dim"]};
+        font-size: 11px;
+        font-weight: bold;
+        letter-spacing: 0.4px;
+    }}
+    QLabel#AboutThanksHeart {{
+        color: {c["title"]};
+        font-size: 13px;
+        font-weight: bold;
+        padding-bottom: 1px;
+    }}
+    QLabel#AboutThanksHeart:hover {{
+        color: #d4c4f5;
+    }}
+    QLabel#AboutPoweredName {{
+        color: {c["text"]};
+        font-size: 11px;
+        font-weight: bold;
+    }}
+    QLabel#AboutAmp {{
+        color: {c["dim"]};
+        font-size: 16px;
+        font-weight: bold;
+        padding: 0 4px;
+    }}
+    QFrame#AboutLinksBox {{
+        background-color: {c["btn_bg"]};
+        border: 1px solid {c["btn_border"]};
+        border-radius: 10px;
+    }}
+    QFrame#AboutHairline {{
+        background-color: {c["card_border"]};
+        border: none;
+        max-height: 1px;
+        min-height: 1px;
+    }}
     QLabel#AboutDisclaimer {{
         color: {c["disclaimer"]};
         font-size: 10px;
