@@ -13,10 +13,11 @@ import sys
 import psutil
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -38,11 +39,122 @@ def _crisp_icon(path, size, dpr=2.0):
     if pix.isNull():
         return pix
     scaled = pix.scaled(
-        int(size * dpr), int(size * dpr),
-        Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        int(size * dpr),
+        int(size * dpr),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
     )
     scaled.setDevicePixelRatio(dpr)
     return scaled
+
+
+def _round_pixmap(
+    path: str,
+    size: int,
+    *,
+    plate: QColor | None = None,
+    ring: QColor | None = None,
+    ring_width: float = 2.5,
+    content_scale: float = 1.0,
+) -> QPixmap:
+    """Circular crop for About developer / powered-by badges.
+
+    Optional ``plate`` fills the disc; optional ``ring`` strokes the rim
+    (FFmpeg: dark plate + green rim so the disc reads on charcoal).
+    ``content_scale`` < 1 insets the mark inside the disc.
+    """
+    raw = QPixmap(path)
+    if raw.isNull():
+        return QPixmap()
+    square = raw.scaled(
+        size,
+        size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    if square.width() > size or square.height() > size:
+        x = max(0, (square.width() - size) // 2)
+        y = max(0, (square.height() - size) // 2)
+        square = square.copy(x, y, size, size)
+    scale = max(0.2, min(1.0, float(content_scale)))
+    if scale < 1.0:
+        mark_size = max(1, int(round(size * scale)))
+        square = square.scaled(
+            mark_size,
+            mark_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path_clip = QPainterPath()
+    path_clip.addEllipse(0.0, 0.0, float(size), float(size))
+    if plate is not None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(plate)
+        painter.drawEllipse(0, 0, size, size)
+    painter.setClipPath(path_clip)
+    ox = (size - square.width()) // 2
+    oy = (size - square.height()) // 2
+    painter.drawPixmap(ox, oy, square)
+    if ring is not None and ring_width > 0:
+        # Stroke after the mark so the rim stays visible on top.
+        painter.setClipping(False)
+        pen = QPen(ring)
+        pen.setWidthF(float(ring_width))
+        pen.setCosmetic(False)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        inset = float(ring_width) / 2.0
+        painter.drawEllipse(inset, inset, float(size) - float(ring_width), float(size) - float(ring_width))
+    painter.end()
+    return out
+
+
+class _AboutLinkLabel(QLabel):
+    """Clickable label that opens an external URL."""
+
+    def __init__(self, url: str, parent=None):
+        super().__init__(parent)
+        self._url = url
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._url:
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl(self._url))
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class _AboutThanksHeart(QLabel):
+    """Unicode ♥ next to Powered by — hover/click shows the special-thanks note."""
+
+    _THANKS = (
+        "Special thanks to these projects — without them Steempeg "
+        "simply wouldn't exist."
+    )
+
+    def __init__(self, parent=None):
+        super().__init__("♥", parent)
+        self.setObjectName("AboutThanksHeart")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip(self._THANKS)
+        self.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            from PySide6.QtGui import QCursor
+            from PySide6.QtWidgets import QToolTip
+
+            QToolTip.showText(QCursor.pos(), self._THANKS, self)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _AboutEggLogo(QLabel):
@@ -60,9 +172,8 @@ class _AboutEggLogo(QLabel):
         self._egg_on = False
         if not normal.isNull():
             self.setPixmap(normal)
-        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        self.setFixedWidth(128)
-        self.setMinimumHeight(120)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedSize(128, 128)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Transparent look is fine; do not let clicks pierce the dialog.
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -528,22 +639,73 @@ class LifecycleMixin:
         """A crisp icon + clickable rich-text label, laid out in one row."""
         row = QHBoxLayout()
         row.setSpacing(8)
+        row.setContentsMargins(0, 0, 0, 0)
 
         icon = QLabel()
         pix = _crisp_icon(get_resource_path(icon_file), 18)
         if not pix.isNull():
             icon.setPixmap(pix)
         icon.setFixedWidth(20)
-        icon.setAlignment(Qt.AlignVCenter)
+        icon.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(icon)
 
         text = QLabel(html_text)
         text.setObjectName("AboutText")
         text.setOpenExternalLinks(True)
         text.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        row.addWidget(text)
-        row.addStretch()
+        row.addWidget(text, 1)
         return row
+
+    def _about_powered_badge(
+        self,
+        icon_file: str,
+        name: str,
+        url: str,
+        *,
+        size: int = 64,
+        plate: QColor | None = None,
+        ring: QColor | None = None,
+        ring_width: float = 2.5,
+        content_scale: float = 1.0,
+    ) -> QWidget:
+        """Circular project logo + caption under it (clickable)."""
+        cell = QWidget()
+        lay = QVBoxLayout(cell)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(8)
+        lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        icon = _AboutLinkLabel(url)
+        pix = _round_pixmap(
+            get_resource_path(icon_file),
+            int(size),
+            plate=plate,
+            ring=ring,
+            ring_width=ring_width,
+            content_scale=content_scale,
+        )
+        if not pix.isNull():
+            icon.setPixmap(pix)
+        icon.setFixedSize(int(size), int(size))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setToolTip(url)
+
+        caption = _AboutLinkLabel(url)
+        caption.setObjectName("AboutPoweredName")
+        caption.setText(name)
+        caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        return cell
+
+    @staticmethod
+    def _about_hairline() -> QFrame:
+        line = QFrame()
+        line.setObjectName("AboutHairline")
+        line.setFrameShape(QFrame.Shape.NoFrame)
+        line.setFixedHeight(1)
+        return line
 
     def show_settings_dialog(self):
         """App-wide Settings (library footer) — updates, shell, notify, hints, performance."""
@@ -568,7 +730,7 @@ class LifecycleMixin:
         show_marker_settings_dialog(self)
 
     def show_about_dialog(self):
-        """ Frameless About dialog styled like the FFmpeg render-error window. """
+        """Frameless About dialog — centered logo + developer / powered-by layout."""
         if getattr(self, '_about_is_open', False):
             return  # Block if already open
         self._about_is_open = True
@@ -595,11 +757,11 @@ class LifecycleMixin:
             except Exception:
                 shell_w = 0
             if shell_w <= 1600:
-                dialog.setFixedSize(720, 500)
+                dialog.setFixedSize(560, 640)
             else:
-                dialog.setFixedSize(*scaled_dialog_size(660, 480, parent=self.ui))
+                dialog.setFixedSize(*scaled_dialog_size(540, 620, parent=self.ui))
         else:
-            dialog.setFixedSize(*scaled_dialog_size(620, 470, parent=self.ui))
+            dialog.setFixedSize(*scaled_dialog_size(520, 600, parent=self.ui))
         dialog.setStyleSheet(ut.about_dialog_stylesheet())
 
         shell_layout = QVBoxLayout(dialog)
@@ -614,46 +776,29 @@ class LifecycleMixin:
         card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         shell_layout.addWidget(card)
 
-        main_layout = QHBoxLayout(card)
-        main_layout.setContentsMargins(26, 26, 26, 22)
-        main_layout.setSpacing(24)
+        content = QVBoxLayout(card)
+        content.setContentsMargins(28, 28, 28, 22)
+        content.setSpacing(10)
 
-        # --- Left: the program logo (smoothly scaled, never pixelated) ---
-        logo_normal = _crisp_icon(get_resource_path("logo.png"), 120, dpr=1.0)
-        logo_egg = _crisp_icon(get_resource_path("phibechipeegg.png"), 120, dpr=1.0)
+        # --- Centered brand ---
+        logo_row = QHBoxLayout()
+        logo_row.addStretch(1)
+        logo_normal = _crisp_icon(get_resource_path("logo.png"), 110, dpr=1.0)
+        logo_egg = _crisp_icon(get_resource_path("phibechipeegg.png"), 110, dpr=1.0)
         logo_label = _AboutEggLogo(logo_normal, logo_egg)
-        main_layout.addWidget(logo_label)
+        logo_row.addWidget(logo_label)
+        logo_row.addStretch(1)
+        content.addLayout(logo_row)
 
-        # --- Right: the content column ---
-        content = QVBoxLayout()
-        content.setSpacing(9)
-
-        title = QLabel(f"Steempeg v{APP_VERSION_STR}")
+        title = QLabel("Steempeg")
         title.setObjectName("AboutTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         content.addWidget(title)
 
         build = QLabel(f"Build: v{APP_VERSION_STR}")
         build.setObjectName("AboutDim")
+        build.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         content.addWidget(build)
-
-        dev = QLabel(
-            'Developer: <b>Emily</b> 🎀 '
-            f'<span style="color:{muted};">@applejuicy23</span>'
-        )
-        dev.setObjectName("AboutText")
-        content.addWidget(dev)
-
-        github_row = self._about_icon_row(
-            "github.jpg",
-            f'<b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg" '
-            f'style="{link}">applejuicy23/steempeg</a>',
-        )
-        content.addLayout(github_row)
-        content.addLayout(self._about_icon_row(
-            "steam.png",
-            f'<b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/" '
-            f'style="{link}">applejuicy23</a>',
-        ))
 
         desc = QLabel(
             "A smart, elegant, and fast hardware-accelerated video renderer "
@@ -661,43 +806,124 @@ class LifecycleMixin:
         )
         desc.setObjectName("AboutText")
         desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         content.addWidget(desc)
 
-        powered = QLabel(
-            'Powered by '
-            f'<a href="https://github.com/ffmpeg/ffmpeg" style="{link}">FFmpeg</a>, '
-            f'<a href="https://github.com/pyav-org/pyav" style="{link}">PyAV</a> &amp; '
-            f'<a href="https://github.com/mpv-player/mpv" style="{link}">MPV</a>.'
+        content.addSpacing(10)
+
+        # --- Developer + links: match description column width ---
+        mid_wrap = QWidget()
+        mid_wrap_lay = QHBoxLayout(mid_wrap)
+        mid_wrap_lay.setContentsMargins(18, 0, 18, 0)
+        mid_wrap_lay.setSpacing(0)
+
+        mid = QHBoxLayout()
+        mid.setSpacing(12)
+
+        dev_col = QVBoxLayout()
+        dev_col.setSpacing(8)
+        dev_head = QLabel("Developer")
+        dev_head.setObjectName("AboutSectionLabel")
+        dev_col.addWidget(dev_head)
+
+        dev_row = QHBoxLayout()
+        dev_row.setSpacing(10)
+        avatar = QLabel()
+        av_pix = _round_pixmap(get_resource_path("applejuicy23.png"), 48)
+        if not av_pix.isNull():
+            avatar.setPixmap(av_pix)
+        avatar.setFixedSize(48, 48)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dev_row.addWidget(avatar)
+
+        dev = QLabel(
+            f'<b>Emily</b> 🎀<br>'
+            f'<span style="color:{muted};">@applejuicy23</span>'
         )
-        powered.setObjectName("AboutText")
-        powered.setWordWrap(True)
-        powered.setOpenExternalLinks(True)
-        powered.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        content.addWidget(powered)
+        dev.setObjectName("AboutText")
+        dev.setTextFormat(Qt.TextFormat.RichText)
+        dev_row.addWidget(dev, 1)
+        dev_col.addLayout(dev_row)
+        mid.addLayout(dev_col, 1)
 
-        thanks = QLabel(
-            "Special thanks to these projects — without them Steempeg "
-            "simply wouldn't exist. 💜"
-        )
-        thanks.setObjectName("AboutDim")
-        thanks.setWordWrap(True)
-        content.addWidget(thanks)
+        links_col = QVBoxLayout()
+        links_col.setSpacing(8)
+        links_head = QLabel("Links")
+        links_head.setObjectName("AboutSectionLabel")
+        links_col.addWidget(links_head)
+        links_col.addLayout(self._about_icon_row(
+            "github.jpg",
+            f'<b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg" '
+            f'style="{link}">applejuicy23/steempeg</a>',
+        ))
+        links_col.addLayout(self._about_icon_row(
+            "steam.png",
+            f'<b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/" '
+            f'style="{link}">applejuicy23</a>',
+        ))
+        links_col.addStretch(1)
+        mid.addLayout(links_col, 1)
+        mid_wrap_lay.addLayout(mid)
+        content.addWidget(mid_wrap)
 
-        content.addSpacing(18)
+        content.addSpacing(8)
 
-        disclaimer = QLabel(
-            "Steempeg is an unofficial, community-created tool.\n"
-            "Not affiliated with, associated with, authorized, or endorsed by "
-            "Valve Corporation or Steam."
-        )
-        disclaimer.setObjectName("AboutDisclaimer")
-        disclaimer.setWordWrap(True)
-        content.addWidget(disclaimer)
+        # --- Powered by ♥ (thanks lives on the heart tooltip/click) ---
+        powered_head_row = QHBoxLayout()
+        powered_head_row.setSpacing(6)
+        powered_head_row.addStretch(1)
+        powered_head = QLabel("Powered by")
+        powered_head.setObjectName("AboutSectionLabel")
+        powered_head_row.addWidget(powered_head)
+        powered_heart = _AboutThanksHeart()
+        powered_head_row.addWidget(powered_heart)
+        powered_head_row.addStretch(1)
+        content.addLayout(powered_head_row)
 
-        content.addStretch()
+        powered_row = QHBoxLayout()
+        powered_row.setSpacing(6)
+        powered_row.addStretch(1)
+        powered_row.addWidget(self._about_powered_badge(
+            "ffmpeg.png",
+            "FFmpeg",
+            "https://github.com/FFmpeg/FFmpeg",
+            size=68,
+            # Dark disc like PyAV; thin green rim; mark slightly inset.
+            plate=QColor("#121317"),
+            ring=QColor("#2f9a35"),
+            ring_width=1.25,
+            content_scale=0.72,
+        ))
+        amp1 = QLabel("&")
+        amp1.setObjectName("AboutAmp")
+        amp1.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        powered_row.addWidget(amp1)
+        powered_row.addWidget(self._about_powered_badge(
+            "pyav.png", "PyAV", "https://github.com/PyAV-Org/PyAV", size=68,
+        ))
+        amp2 = QLabel("&")
+        amp2.setObjectName("AboutAmp")
+        amp2.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        powered_row.addWidget(amp2)
+        powered_row.addWidget(self._about_powered_badge(
+            "mpv.png", "MPV", "https://github.com/mpv-player/mpv", size=68,
+        ))
+        powered_row.addStretch(1)
+        content.addLayout(powered_row)
 
+        # Hairline under the three logos only.
+        hair_wrap = QHBoxLayout()
+        hair_wrap.setContentsMargins(36, 8, 36, 2)
+        hair_wrap.addWidget(self._about_hairline())
+        content.addLayout(hair_wrap)
+
+        # Keep the old "Special thanks…" band as empty air (text lives on ♥).
+        content.addSpacing(36)
+        content.addStretch(1)
+
+        # Buttons above the Valve disclaimer (cleaner hierarchy).
         btn_row = QHBoxLayout()
-        btn_row.addStretch()
+        btn_row.addStretch(1)
         btn_report = QPushButton("🐛  Report a bug")
         btn_report.setObjectName("AboutReportBtn")
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -706,21 +932,58 @@ class LifecycleMixin:
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
-        # Portable: Check for updates lives in the title bar (Updates chip).
-        # Desktop still has the left-panel Updates button.
         btn_row.addWidget(btn_close)
+        btn_row.addStretch(1)
         content.addLayout(btn_row)
 
-        main_layout.addLayout(content)
+        content.addSpacing(8)
+
+        disclaimer = QLabel(
+            "Steempeg is an unofficial, community-created tool.\n"
+            "Not affiliated with, associated with, authorized, or endorsed by "
+            "Valve Corporation or Steam."
+        )
+        disclaimer.setObjectName("AboutDisclaimer")
+        disclaimer.setWordWrap(True)
+        disclaimer.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        content.addWidget(disclaimer)
 
         def apply_ui_theme_chrome() -> None:
             """Live-retint if Settings switches theme while About is open."""
             dialog.setStyleSheet(ut.about_dialog_stylesheet())
             new_muted = ut.about_dialog_muted_span_color()
+            new_link = ut.about_dialog_link_style()
             dev.setText(
-                'Developer: <b>Emily</b> 🎀 '
+                f'<b>Emily</b> 🎀<br>'
                 f'<span style="color:{new_muted};">@applejuicy23</span>'
             )
+            # Rebuild link rows so accent color matches the active theme.
+            while links_col.count():
+                item = links_col.takeAt(0)
+                if item.layout() is not None:
+                    nested = item.layout()
+                    while nested.count():
+                        child = nested.takeAt(0)
+                        w = child.widget()
+                        if w is not None:
+                            w.deleteLater()
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+            links_head = QLabel("Links")
+            links_head.setObjectName("AboutSectionLabel")
+            links_col.addWidget(links_head)
+            links_col.addLayout(self._about_icon_row(
+                "github.jpg",
+                f'<b>GitHub:</b> <a href="https://github.com/applejuicy23/steempeg" '
+                f'style="{new_link}">applejuicy23/steempeg</a>',
+            ))
+            links_col.addLayout(self._about_icon_row(
+                "steam.png",
+                f'<b>Steam:</b> <a href="https://steamcommunity.com/id/applejuicy23/" '
+                f'style="{new_link}">applejuicy23</a>',
+            ))
+            links_col.addStretch(1)
 
         dialog.apply_ui_theme_chrome = apply_ui_theme_chrome  # type: ignore[attr-defined]
 
