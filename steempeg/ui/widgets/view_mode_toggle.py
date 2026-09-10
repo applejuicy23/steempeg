@@ -1,7 +1,7 @@
-"""Shared View + Grid/List track chrome (Render Queue language).
+"""Shared View + Grid/List chrome (Render Queue).
 
-Used by the library toolbar (Clips / Rendered / Screenshots) and Render Queue
-so the Grid/List track reads as one design: rounder RQ pill, same density.
+Minimal transparent icon chips — same language as Clips Size:
+Grid → ``grid_high.png``, List → ``defaultsort.png``, plaque-purple when active.
 
 Count *text* stays per-surface: library ``• 253 Clips`` / Files / Shots;
 Render Queue ``(N)`` only.
@@ -13,21 +13,49 @@ between track and count.
 from __future__ import annotations
 
 from steempeg.ui import design_tokens as tok
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QSize, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
+from steempeg.ui.icon_assets import (
+    CARD_SIZE_GRID_TINT,
+    card_size_grid_icon,
+    view_mode_list_icon,
+)
 from steempeg.ui.ui_density import (
     COMFORT,
     VIEW_TOGGLE_SEG_NAME,
-    VIEW_TOGGLE_TRACK_NAME,
     UiDensity,
     toggle_segment_min_height,
     view_toggle_button_styles,
-    view_toggle_track_style,
 )
+
+_IDLE_GLYPH = "#9a9a9a"
+_ACTIVE_GLYPH = CARD_SIZE_GRID_TINT
+_GHOST_BTN_NAME = "ViewModeGhostBtn"
+
 
 def _font_css() -> str:
     return "font-family: " + tok.FONT_APP + ";"
+
+
+def _ghost_button_style(*, radius: int = 6) -> str:
+    """Minimal transparent chip — no purple plate, soft hover only."""
+    return f"""
+        QPushButton#{_GHOST_BTN_NAME} {{
+            background-color: transparent;
+            border: 1px solid transparent;
+            border-radius: {radius}px;
+            padding: 2px;
+        }}
+        QPushButton#{_GHOST_BTN_NAME}:hover {{
+            background-color: rgba(178, 154, 231, 0.12);
+            border: 1px solid #6b5a8e;
+        }}
+        QPushButton#{_GHOST_BTN_NAME}:pressed {{
+            background-color: rgba(178, 154, 231, 0.22);
+            border: 1px solid #b29ae7;
+        }}
+    """
 
 
 def format_view_count(value) -> str:
@@ -63,7 +91,7 @@ def format_library_count(value, noun: str) -> str:
 
 
 class ViewModeChrome(QObject):
-    """Owns View label + Grid/List track + count; RQ pill metrics on the toggle."""
+    """Owns View label + Grid/List icon chips + count."""
 
     mode_changed = Signal(str)
 
@@ -88,29 +116,41 @@ class ViewModeChrome(QObject):
         self._apply_label_style(self.lbl_view)
 
         self.toggle_pill = QFrame(parent)
-        self.toggle_pill.setObjectName(VIEW_TOGGLE_TRACK_NAME)
+        self.toggle_pill.setObjectName("ViewModeChromeHost")
         self.toggle_pill.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.toggle_pill.setSizePolicy(
             QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
         )
-        self.toggle_pill.setStyleSheet(view_toggle_track_style(self._density))
+        self.toggle_pill.setStyleSheet(
+            "QFrame#ViewModeChromeHost { background: transparent; border: none; }"
+        )
         toggle_layout = QHBoxLayout(self.toggle_pill)
-        toggle_layout.setContentsMargins(2, 2, 2, 2)
-        toggle_layout.setSpacing(0)
+        toggle_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_layout.setSpacing(2)
 
-        self.btn_view_grid = QPushButton("Grid", self.toggle_pill)
-        self.btn_view_list = QPushButton("List", self.toggle_pill)
-        for btn in (self.btn_view_grid, self.btn_view_list):
-            btn.setObjectName(VIEW_TOGGLE_SEG_NAME)
+        self.btn_view_grid = QPushButton(self.toggle_pill)
+        self.btn_view_list = QPushButton(self.toggle_pill)
+        for btn, tip in (
+            (self.btn_view_grid, "Grid"),
+            (self.btn_view_list, "List"),
+        ):
+            btn.setObjectName(_GHOST_BTN_NAME)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFlat(True)
             btn.setAutoDefault(False)
             btn.setDefault(False)
-            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            btn.setText("")
+            btn.setToolTip(tip)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
+        # Compat: some callers still read these (List restore / density).
         self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(
             self._density
         )
+        # Keep legacy object-name alias for sheets that looked up ViewToggleSeg.
+        self.btn_view_grid.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
+        self.btn_view_list.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
+
         self.btn_view_grid.clicked.connect(lambda: self.set_mode("grid"))
         self.btn_view_list.clicked.connect(lambda: self.set_mode("list"))
 
@@ -126,16 +166,12 @@ class ViewModeChrome(QObject):
         self._sync_buttons()
         self.set_grid_only(self._grid_only)
 
-    # --- Layout helpers -----------------------------------------------------
-
     def add_to_layout(self, layout, *, include_count: bool = True) -> None:
         """Append View · track · count in Render Queue order."""
         layout.addWidget(self.lbl_view)
         layout.addWidget(self.toggle_pill)
         if include_count:
             layout.addWidget(self.lbl_count)
-
-    # --- Public API ---------------------------------------------------------
 
     @property
     def mode(self) -> str:
@@ -153,7 +189,7 @@ class ViewModeChrome(QObject):
             self.mode_changed.emit(mode)
 
     def set_grid_only(self, grid_only: bool) -> None:
-        """Screenshots: same track shell with a single Grid segment (no List)."""
+        """Screenshots: same shell with a single Grid chip (no List)."""
         self._grid_only = bool(grid_only)
         if self._grid_only:
             self.btn_view_list.hide()
@@ -179,7 +215,9 @@ class ViewModeChrome(QObject):
         self._apply_label_style(self.lbl_view)
         self._apply_count_style(self.lbl_count)
         self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(dense)
-        self.toggle_pill.setStyleSheet(view_toggle_track_style(dense))
+        self.toggle_pill.setStyleSheet(
+            "QFrame#ViewModeChromeHost { background: transparent; border: none; }"
+        )
         self._apply_segment_metrics(dense)
         self._sync_buttons()
 
@@ -187,29 +225,38 @@ class ViewModeChrome(QObject):
         """Re-apply active/inactive styles for the current mode (after external style swap)."""
         self._sync_buttons()
 
-    # --- Internals ----------------------------------------------------------
+    def _glyph_px(self) -> int:
+        h = toggle_segment_min_height(self._density)
+        return max(16, min(22, h - 4))
 
     def _apply_segment_metrics(self, dense: UiDensity) -> None:
-        """Lock Grid/List to RQ pill height so a crowded library toolbar cannot squash them."""
         h = toggle_segment_min_height(dense)
-        font_px = dense.toggle_font
+        glyph = self._glyph_px()
+        side = max(h, glyph + 6)
+        style = _ghost_button_style(radius=max(4, side // 4))
         for btn in (self.btn_view_grid, self.btn_view_list):
-            btn.setMinimumHeight(h)
-            fnt = btn.font()
-            fnt = tok.pin_ui_font(fnt)
-            fnt.setBold(True)
-            fnt.setPixelSize(font_px)
-            btn.setFont(fnt)
+            btn.setFixedSize(side, side)
+            btn.setIconSize(QSize(glyph, glyph))
+            btn.setStyleSheet(style)
 
     def _sync_buttons(self) -> None:
-        active = self.toggle_style_active
-        inactive = self.toggle_style_inactive
-        if self._mode == "list" and not self._grid_only:
-            self.btn_view_list.setStyleSheet(active)
-            self.btn_view_grid.setStyleSheet(inactive)
-        else:
-            self.btn_view_grid.setStyleSheet(active)
-            self.btn_view_list.setStyleSheet(inactive)
+        glyph_px = self._glyph_px()
+        side = max(toggle_segment_min_height(self._density), glyph_px + 6)
+        style = _ghost_button_style(radius=max(4, side // 4))
+        list_on = self._mode == "list" and not self._grid_only
+        grid_color = _IDLE_GLYPH if list_on else _ACTIVE_GLYPH
+        list_color = _ACTIVE_GLYPH if list_on else _IDLE_GLYPH
+        for btn, icon in (
+            (self.btn_view_grid, card_size_grid_icon("big", glyph_px, color=grid_color)),
+            (self.btn_view_list, view_mode_list_icon(glyph_px, color=list_color)),
+        ):
+            btn.setFixedSize(side, side)
+            btn.setStyleSheet(style)
+            btn.setText("")
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(glyph_px, glyph_px))
+        self.btn_view_grid.setToolTip("Grid")
+        self.btn_view_list.setToolTip("List")
 
     def _apply_label_style(self, lbl: QLabel) -> None:
         d = self._density
