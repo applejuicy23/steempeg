@@ -39,6 +39,10 @@ from steempeg.ui.queue_card_shared import (
 )
 from steempeg.ui.ui_density import COMFORT, UiDensity
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.library.card_sizes import (
+    CARD_SIZE_BIG,
+    queue_card_size_spec,
+)
 
 # Match library grid card width; queue footer is taller (more metadata lines).
 _CARD_W = 280
@@ -80,10 +84,16 @@ class QueueGridJobCard(QWidget):
         parent=None,
         *,
         dense: UiDensity | None = None,
+        card_size: str | None = None,
     ):
         super().__init__(parent)
         self._cache_dir = cache_dir or os.path.join(get_save_directory(), "cache")
         self._dense = dense or COMFORT
+        self._size_spec = queue_card_size_spec(card_size, default=CARD_SIZE_BIG)
+        card_w = self._size_spec.card_w
+        thumb_h = self._size_spec.thumb_h
+        text_h = self._size_spec.text_h
+        card_h = self._size_spec.card_h
         self.setObjectName("QueueGridJobCard")
         self._job = job
         self._job_id = job.id
@@ -92,7 +102,7 @@ class QueueGridJobCard(QWidget):
         self._hovered = False
         self._drop_highlight = False
         self._press_on_remove = False
-        self.setFixedSize(_CARD_W, _CARD_H)
+        self.setFixedSize(card_w, card_h)
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptDrops(_job_accepts_drop(job))
 
@@ -101,7 +111,7 @@ class QueueGridJobCard(QWidget):
         layout.setSpacing(0)
 
         self._thumb_label = QLabel()
-        self._thumb_label.setFixedSize(_CARD_W, _THUMB_H)
+        self._thumb_label.setFixedSize(card_w, thumb_h)
         self._thumb_label.setStyleSheet("background-color: #1a1a1a; border: none;")
 
         thumb_path = resolve_clip_thumbnail(
@@ -112,15 +122,15 @@ class QueueGridJobCard(QWidget):
             if not pixmap.isNull():
                 self._thumb_label.setPixmap(
                     pixmap.scaled(
-                        _CARD_W,
-                        _THUMB_H,
+                        card_w,
+                        thumb_h,
                         Qt.KeepAspectRatioByExpanding,
                         Qt.SmoothTransformation,
                     )
                 )
 
         thumb_wrap = QWidget()
-        thumb_wrap.setFixedSize(_CARD_W, _THUMB_H)
+        thumb_wrap.setFixedSize(card_w, thumb_h)
         thumb_lay = QVBoxLayout(thumb_wrap)
         thumb_lay.setContentsMargins(0, 0, 0, 0)
         thumb_lay.addWidget(self._thumb_label)
@@ -138,7 +148,7 @@ class QueueGridJobCard(QWidget):
         from steempeg.ui.icon_utils import apply_square_icon
 
         self._icon_label = QLabel(thumb_wrap)
-        self._icon_label.move(8, _THUMB_H - 32)
+        self._icon_label.move(8, thumb_h - 32)
         shaped = None
         if pix_path and os.path.exists(pix_path):
             from steempeg.ui.icon_shape import shaped_game_icon_pixmap
@@ -157,19 +167,33 @@ class QueueGridJobCard(QWidget):
             self._btn_remove.setToolTip("Remove from queue")
             self._btn_remove.setStyleSheet(_REMOVE_BTN_STYLE)
             self._btn_remove.clicked.connect(self._on_remove_clicked)
-            self._btn_remove.move(_CARD_W - 34, 8)
+            self._btn_remove.move(card_w - 34, 8)
 
         text_widget = QWidget()
-        text_widget.setFixedHeight(_TEXT_H)
+        text_widget.setFixedHeight(text_h)
         self._text_widget = text_widget
         self._apply_footer_style()
         text_layout = QVBoxLayout(text_widget)
         # Padding matched to the comfortable 3-line reference block (12px sides, ~8/10 vertical).
-        text_layout.setContentsMargins(12, 8, 12, 10)
-        text_layout.setSpacing(3)
+        pad = 8 if self._size_spec.footer_mode != "info" else 4
+        text_layout.setContentsMargins(pad, 6, pad, 6)
+        text_layout.setSpacing(2 if self._size_spec.footer_mode != "full" else 3)
+
+        title_text = job.game_name.strip() or os.path.basename(job.clip_path)
+        tip = "\n".join(
+            p
+            for p in (
+                title_text,
+                format_job_datetime_line(job),
+                format_job_preset(job.settings),
+                format_job_output(job),
+            )
+            if p
+        )
+        self.setToolTip(tip)
 
         self._title_label = ElidedLabel()
-        self._title_label.setText(job.game_name.strip() or os.path.basename(job.clip_path))
+        self._title_label.setText(title_text)
         self._title_label.setStyleSheet(
             "QLabel { color: #e0e0e0; font-weight: bold; font-size: 13px; "
             "background: transparent; border: none; }"
@@ -200,17 +224,38 @@ class QueueGridJobCard(QWidget):
         )
         self._output_label.setText(format_job_output(job))
 
-        text_layout.addWidget(self._title_label)
-        text_layout.addWidget(self._meta_label)
-        text_layout.addWidget(self._preset_label)
-        text_layout.addWidget(self._trim_label)
-        text_layout.addWidget(self._output_label)
+        if self._size_spec.footer_mode == "info":
+            info = QLabel("ⓘ")
+            info.setStyleSheet(
+                "QLabel { color: #b29ae7; font-weight: bold; font-size: 12px; "
+                "background: transparent; border: none; }"
+            )
+            info.setAlignment(Qt.AlignCenter)
+            info.setToolTip(tip)
+            text_layout.addWidget(info)
+            self._title_label.hide()
+            self._meta_label.hide()
+            self._preset_label.hide()
+            self._trim_label.hide()
+            self._output_label.hide()
+        elif self._size_spec.footer_mode == "compact":
+            text_layout.addWidget(self._title_label)
+            text_layout.addWidget(self._meta_label)
+            self._preset_label.hide()
+            self._trim_label.hide()
+            self._output_label.hide()
+        else:
+            text_layout.addWidget(self._title_label)
+            text_layout.addWidget(self._meta_label)
+            text_layout.addWidget(self._preset_label)
+            text_layout.addWidget(self._trim_label)
+            text_layout.addWidget(self._output_label)
 
         layout.addWidget(thumb_wrap)
         layout.addWidget(text_widget)
 
         self._border_overlay = QFrame(self)
-        self._border_overlay.setGeometry(0, 0, _CARD_W, _CARD_H)
+        self._border_overlay.setGeometry(0, 0, card_w, card_h)
         self._border_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         for child in self.findChildren(QWidget):
