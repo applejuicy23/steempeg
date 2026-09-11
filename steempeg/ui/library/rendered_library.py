@@ -55,12 +55,7 @@ from steempeg.ui.library.rendered_poster_backfill import RenderedPosterBackfillW
 from steempeg.ui.library.rendered_scan_worker import RenderedScanWorker
 from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.ui.library.grid_view import ClipCard
-from steempeg.ui.library.screenshot_photo import (
-    SCREENSHOT_PHOTO_H,
-    SCREENSHOT_PHOTO_SIZE,
-    SCREENSHOT_PHOTO_W,
-    ScreenshotPhoto,
-)
+from steempeg.ui.library.screenshot_photo import ScreenshotPhoto
 from steempeg.ui.library.library_tab import LibraryTabStrip, LibraryTabWidget
 from steempeg.ui.library.library_styles import (
     install_library_vertical_scrollbar,
@@ -294,10 +289,14 @@ class RenderedLibraryMixin:
         self._screenshots_filter_folders: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
-        from steempeg.ui.library.card_sizes import DEFAULT_LIBRARY_CARD_SIZE
+        from steempeg.ui.library.card_sizes import (
+            DEFAULT_LIBRARY_CARD_SIZE,
+            DEFAULT_SCREENSHOTS_CARD_SIZE,
+        )
 
         self._clips_card_size = DEFAULT_LIBRARY_CARD_SIZE
         self._rendered_card_size = DEFAULT_LIBRARY_CARD_SIZE
+        self._screenshots_card_size = DEFAULT_SCREENSHOTS_CARD_SIZE
         self._saved_clips_selection_path = ""
         self._saved_rendered_selection_path = ""
         self._library_ui_restored = False
@@ -760,13 +759,22 @@ class RenderedLibraryMixin:
                 self._saved_clips_selection_path = ""
 
     def _clear_clips_selection_visual(self) -> None:
-        selected_rows: set[int] = set()
+        # Bookkeeping + grid/table can diverge after Size rebuild / tab hide —
+        # union everything that might still show a purple ring.
+        to_clear: set[int] = set(getattr(self, "_clips_visual_selected_rows", None) or set())
         if hasattr(self, "grid_clips"):
             for item in self.grid_clips.selectedItems():
                 row = item.data(Qt.ItemDataRole.UserRole)
                 if row is not None:
-                    selected_rows.add(int(row))
+                    try:
+                        to_clear.add(int(row))
+                    except (TypeError, ValueError):
+                        pass
         if hasattr(self.ui, "table_clips"):
+            sm = self.ui.table_clips.selectionModel()
+            if sm is not None:
+                for idx in sm.selectedRows():
+                    to_clear.add(int(idx.row()))
             self.ui.table_clips.blockSignals(True)
             self.ui.table_clips.clearSelection()
             self.ui.table_clips.setCurrentCell(-1, -1)
@@ -774,19 +782,32 @@ class RenderedLibraryMixin:
         if hasattr(self, "grid_clips"):
             self.grid_clips.blockSignals(True)
             self.grid_clips.clearSelection()
+            self.grid_clips.setCurrentItem(None)
             self.grid_clips.blockSignals(False)
-            # Only repaint cards that were selected — full-grid sync is slow on tab switch.
-            if selected_rows:
-                for i in range(self.grid_clips.count()):
-                    item = self.grid_clips.item(i)
-                    if item is None:
-                        continue
-                    row = item.data(Qt.ItemDataRole.UserRole)
-                    if row not in selected_rows:
-                        continue
-                    card = self.grid_clips.itemWidget(item)
-                    if card is not None and hasattr(card, "set_selected"):
-                        card.set_selected(False)
+            from steempeg.ui.library.grid_view import ClipCard
+
+            # Sweep live cards — clearSelection alone never touches ClipCard chrome.
+            for i in range(self.grid_clips.count()):
+                item = self.grid_clips.item(i)
+                if item is None:
+                    continue
+                card = self.grid_clips.itemWidget(item)
+                if not isinstance(card, ClipCard):
+                    continue
+                row = item.data(Qt.ItemDataRole.UserRole)
+                try:
+                    row_i = int(row) if row is not None else None
+                except (TypeError, ValueError):
+                    row_i = None
+                needs = (
+                    getattr(card, "_selected", False)
+                    or getattr(card, "_hovered", False)
+                    or (row_i is not None and row_i in to_clear)
+                )
+                if not needs:
+                    continue
+                card.set_selected(False)
+                card.clear_chrome_hover()
         self._clips_visual_selected_rows = set()
 
     def _clear_rendered_selection_visual(self) -> None:
@@ -1459,6 +1480,7 @@ class RenderedLibraryMixin:
             "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
             "clips_card_size": getattr(self, "_clips_card_size", "big"),
             "rendered_card_size": getattr(self, "_rendered_card_size", "big"),
+            "screenshots_card_size": getattr(self, "_screenshots_card_size", "medium"),
             "clips_tab_open": clips_tab_open,
             "rendered_tab_open": rendered_tab_open,
             "screenshots_tab_open": screenshots_tab_open,
@@ -1632,18 +1654,24 @@ class RenderedLibraryMixin:
 
             self._clips_card_size = normalize_card_size(state.get("clips_card_size"))
             self._rendered_card_size = normalize_card_size(state.get("rendered_card_size"))
-            QTimer.singleShot(
-                0,
-                lambda: (
-                    self.set_card_size(
-                        getattr(self, "_clips_card_size", "big"), persist=False
-                    )
-                    if getattr(self, "_library_panel_mode", "clips") != "rendered"
-                    else self.set_card_size(
-                        getattr(self, "_rendered_card_size", "big"), persist=False
-                    )
-                ),
+            from steempeg.ui.library.card_sizes import DEFAULT_SCREENSHOTS_CARD_SIZE
+
+            self._screenshots_card_size = normalize_card_size(
+                state.get("screenshots_card_size"),
+                default=DEFAULT_SCREENSHOTS_CARD_SIZE,
             )
+
+            def _restore_active_card_size() -> None:
+                mode = getattr(self, "_library_panel_mode", "clips")
+                if mode == "rendered":
+                    key = getattr(self, "_rendered_card_size", "big")
+                elif mode == "screenshots":
+                    key = getattr(self, "_screenshots_card_size", "medium")
+                else:
+                    key = getattr(self, "_clips_card_size", "big")
+                self.set_card_size(key, persist=False)
+
+            QTimer.singleShot(0, _restore_active_card_size)
 
             if not hasattr(self, "_sort_index_by_panel"):
                 self._sort_index_by_panel = {}
@@ -2058,7 +2086,18 @@ class RenderedLibraryMixin:
         self.grid_screenshots.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid_screenshots.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.grid_screenshots.setWrapping(True)
-        self.grid_screenshots.setSpacing(14)
+        from steempeg.ui.library.card_sizes import (
+            screenshot_card_size_spec,
+            screenshot_grid_size,
+        )
+
+        _ss_spec = screenshot_card_size_spec(
+            getattr(self, "_screenshots_card_size", "medium")
+        )
+        self.grid_screenshots.setSpacing(_ss_spec.spacing)
+        self.grid_screenshots.setGridSize(
+            screenshot_grid_size(getattr(self, "_screenshots_card_size", "medium"))
+        )
         self.grid_screenshots.setUniformItemSizes(True)
         # Extended multi-select for paint-drag; keep rubber-band ghost off
         # (SelectionRectVisible False + viewport MouseMove swallow in lifecycle).
@@ -2135,19 +2174,53 @@ class RenderedLibraryMixin:
         source: str = "steempeg",
         app_id: str = "",
     ) -> ScreenshotPhoto:
+        from steempeg.ui.library.card_sizes import screenshot_card_size_spec
+
         label = (title or "").strip() or os.path.splitext(os.path.basename(path))[0]
         source_key = (source or "steempeg").strip().lower()
         source_label = "Steam" if source_key == "steam" else "Steempeg"
-        subtitle = source_label
+        card_size = getattr(self, "_screenshots_card_size", "medium")
+        spec = screenshot_card_size_spec(card_size)
+
+        when_date = ""
+        when_time = ""
         if mtime:
             try:
                 from datetime import datetime
 
                 dt = to_display_datetime(datetime.fromtimestamp(float(mtime)))
-                when = dt.strftime("%d %b %Y")
-                subtitle = f"{source_label} · {when}"
+                when_date = dt.strftime("%d %b %Y")
+                when_time = dt.strftime("%I:%M %p").lstrip("0")
             except (OSError, OverflowError, ValueError, TypeError):
-                subtitle = source_label
+                when_date = ""
+                when_time = ""
+
+        size_str = ""
+        try:
+            size_str = _format_file_size(int(os.path.getsize(path)))
+        except OSError:
+            size_str = ""
+
+        if spec.footer_mode == "full":
+            # Big: created time + file size (source via icon).
+            bits = [b for b in (when_date, when_time, size_str) if b]
+            subtitle = " · ".join(bits) if bits else source_label
+        elif spec.footer_mode == "info":
+            bits = [source_label]
+            if when_date:
+                bits.append(when_date)
+            if when_time:
+                bits.append(when_time)
+            if size_str:
+                bits.append(size_str)
+            subtitle = " · ".join(bits)
+        else:
+            # Medium stock: Steam · date
+            subtitle = source_label
+            if when_date:
+                subtitle = f"{source_label} · {when_date}"
+
+        info_tip = f"{label}\n{subtitle}".strip()
         icon_path = ""
         resolved_id = self._screenshot_app_id_for_game_label(
             label, app_id=app_id, source=source_key
@@ -2159,6 +2232,8 @@ class RenderedLibraryMixin:
             title=label,
             subtitle=subtitle,
             game_icon_path=icon_path,
+            card_size=card_size,
+            info_tip=info_tip,
             source=source_key,
             on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
                 grid_item, ev, force_single=True
@@ -2198,11 +2273,16 @@ class RenderedLibraryMixin:
         photo.deleteLater()
         # Keep UniformItemSizes / IconMode wrap on the photo cell, not a stale
         # widget footprint after removeItemWidget.
-        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
+        item.setSizeHint(self._screenshots_cell_qsize())
         if path:
             live = getattr(self, "_screenshot_live_paths", None)
             if isinstance(live, set):
                 live.discard(self._screenshot_path_key(path))
+
+    def _screenshots_cell_qsize(self) -> QSize:
+        from steempeg.ui.library.card_sizes import screenshot_cell_size
+
+        return screenshot_cell_size(getattr(self, "_screenshots_card_size", "medium"))
 
     def _materialize_screenshot_item(
         self, item: QListWidgetItem, *, load_thumb: bool = True
@@ -2229,7 +2309,7 @@ class RenderedLibraryMixin:
         item.setData(_SHOT_GAME_ROLE, game)
         item.setData(_SHOT_APP_ID_ROLE, app_id)
         thumb = str(item.data(_SHOT_THUMB_ROLE) or "")
-        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
+        item.setSizeHint(self._screenshots_cell_qsize())
         photo = self._attach_screenshot_photo(
             item,
             path,
@@ -2292,9 +2372,11 @@ class RenderedLibraryMixin:
         scroll_val = int(bar.value()) if bar is not None else 0
 
         spacing = max(0, int(grid.spacing()))
+        from steempeg.ui.library.card_sizes import screenshot_grid_size
+
         # Explicit cell size + wrapping toggle invalidates Qt's IconMode cache
         # more reliably than spacing nudge alone when width *increases*.
-        grid.setGridSize(QSize(SCREENSHOT_PHOTO_W + spacing, SCREENSHOT_PHOTO_H + spacing))
+        grid.setGridSize(screenshot_grid_size(getattr(self, "_screenshots_card_size", "medium")))
         grid.setWrapping(False)
         grid.setWrapping(True)
         grid.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -3766,7 +3848,7 @@ class RenderedLibraryMixin:
         item.setData(_SHOT_SOURCE_ROLE, (source or "steempeg").strip().lower() or "steempeg")
         item.setData(_SHOT_APP_ID_ROLE, str(app_id or ""))
         item.setToolTip(path)
-        item.setSizeHint(SCREENSHOT_PHOTO_SIZE)
+        item.setSizeHint(self._screenshots_cell_qsize())
         return item
 
     def _apply_screenshot_thumb(self, item: QListWidgetItem, thumb_path: str) -> None:
@@ -5649,14 +5731,16 @@ class RenderedLibraryMixin:
         key = normalize_card_size(size)
         mode = getattr(self, "_library_panel_mode", "clips")
         if mode == "screenshots":
-            # Screenshots keep their own photo size for v1.
-            chrome = getattr(self, "card_size_chrome", None) or getattr(
-                self, "view_mode_chrome", None
-            )
-            if chrome is not None and hasattr(chrome, "set_size"):
-                chrome.set_size(key, emit=False)
-            return
-        if mode == "rendered":
+            if getattr(self, "_screenshots_card_size", None) == key:
+                chrome = getattr(self, "card_size_chrome", None) or getattr(
+                    self, "view_mode_chrome", None
+                )
+                if chrome is not None and hasattr(chrome, "set_size"):
+                    chrome.set_size(key, emit=False)
+                return
+            self._screenshots_card_size = key
+            self._apply_screenshots_card_size()
+        elif mode == "rendered":
             if getattr(self, "_rendered_card_size", None) == key:
                 chrome = getattr(self, "card_size_chrome", None) or getattr(
                     self, "view_mode_chrome", None
@@ -5683,6 +5767,42 @@ class RenderedLibraryMixin:
             chrome.set_size(key, emit=False)
         if persist:
             self._schedule_persist_library_ui_state()
+
+    def _apply_screenshots_card_size(self) -> None:
+        """Re-grid Screenshots photos for the current ``_screenshots_card_size``."""
+        from steempeg.ui.library.card_sizes import (
+            screenshot_card_size_spec,
+            screenshot_cell_size,
+            screenshot_grid_size,
+        )
+
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is None:
+            return
+        size = getattr(self, "_screenshots_card_size", "medium")
+        spec = screenshot_card_size_spec(size)
+        cell = screenshot_cell_size(size)
+        grid.setSpacing(spec.spacing)
+        grid.setGridSize(screenshot_grid_size(size))
+        live = getattr(self, "_screenshot_live_paths", None)
+        if isinstance(live, set):
+            live.clear()
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None:
+                continue
+            item.setSizeHint(cell)
+            w = grid.itemWidget(item)
+            if w is not None:
+                grid.removeItemWidget(item)
+                w.deleteLater()
+        self._screenshots_last_reflow_w = None
+        if hasattr(self, "_schedule_screenshots_grid_reflow"):
+            self._schedule_screenshots_grid_reflow(0)
+        elif hasattr(self, "_schedule_screenshots_viewport_refresh"):
+            self._schedule_screenshots_viewport_refresh(0)
+        grid.doItemsLayout()
+        QTimer.singleShot(0, self._sync_library_scrollbars)
 
     def _apply_rendered_card_size(self) -> None:
         from steempeg.ui.library.card_sizes import card_cell_size, card_grid_size, card_size_spec
@@ -5737,6 +5857,10 @@ class RenderedLibraryMixin:
             if hasattr(chrome, "set_allow_list"):
                 chrome.set_allow_list(allow_list and mode != "screenshots")
             if mode == "screenshots":
+                if hasattr(chrome, "set_size"):
+                    chrome.set_size(
+                        getattr(self, "_screenshots_card_size", "medium"), emit=False
+                    )
                 if hasattr(chrome, "set_mode"):
                     chrome.set_mode("grid", emit=False)
             elif mode == "rendered":
