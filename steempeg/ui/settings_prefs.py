@@ -151,6 +151,50 @@ def load_queue_hover(settings: dict | None = None) -> bool:
         raw = settings.get(KEY_QUEUE_HOVER)
     return set_queue_hover(raw)
 
+
+# ----- Desktop shell: About / Updates / Settings in title bar -----
+
+KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR = "desktop_shell_tools_in_title_bar"
+DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR = False
+
+_current_desktop_shell_tools_in_title_bar: bool = DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
+
+
+def normalize_desktop_shell_tools_in_title_bar(value: object | None) -> bool:
+    """Stock OFF (footer mega-pill). Explicit true enables Portable-style title bar."""
+    if value is None:
+        return DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
+
+
+def get_desktop_shell_tools_in_title_bar() -> bool:
+    return bool(_current_desktop_shell_tools_in_title_bar)
+
+
+def set_desktop_shell_tools_in_title_bar(value: object | None) -> bool:
+    global _current_desktop_shell_tools_in_title_bar
+    _current_desktop_shell_tools_in_title_bar = normalize_desktop_shell_tools_in_title_bar(
+        value
+    )
+    return _current_desktop_shell_tools_in_title_bar
+
+
+def load_desktop_shell_tools_in_title_bar(settings: dict | None = None) -> bool:
+    raw = DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
+    if settings is not None and KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR in settings:
+        raw = settings.get(KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR)
+    return set_desktop_shell_tools_in_title_bar(raw)
+
+
 # ----- Permanent export folder -----
 
 KEY_PERMANENT_EXPORT_FOLDER = "permanent_export_folder"
@@ -1080,9 +1124,11 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
 
 KEY_DEV_MODE = "dev_mode"
 KEY_DEV_SNIPER_SENSOR = "dev_sniper_sensor"
+KEY_STEEMPEG_PRO = "steempeg_pro"
 KEY_DECK_CONTROLS = "deck_controls"
 DEFAULT_DEV_MODE = False
 DEFAULT_DEV_SNIPER_SENSOR = False
+DEFAULT_STEEMPEG_PRO = False
 
 
 def default_deck_controls() -> bool:
@@ -1113,6 +1159,49 @@ def normalize_dev_mode(value: object | None) -> bool:
 
 def load_dev_mode(settings: dict | None) -> bool:
     return normalize_dev_mode((settings or {}).get(KEY_DEV_MODE, DEFAULT_DEV_MODE))
+
+
+def normalize_steempeg_pro(value: object | None) -> bool:
+    """Steempeg PRO brand / seed gate (v50 draft — free unlock later)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on", "pro"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_STEEMPEG_PRO
+
+
+def load_steempeg_pro(settings: dict | None) -> bool:
+    return normalize_steempeg_pro(
+        (settings or {}).get(KEY_STEEMPEG_PRO, DEFAULT_STEEMPEG_PRO)
+    )
+
+
+def resolve_steempeg_pro(settings: dict | None = None) -> bool:
+    """Env ``STEEMPEG_PRO=1`` wins; else settings / on-disk cache prefs."""
+    import os
+
+    env = os.environ.get("STEEMPEG_PRO", "").strip().lower()
+    if env in ("1", "true", "yes", "on", "pro"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    if settings is not None:
+        return load_steempeg_pro(settings)
+    try:
+        from steempeg.infra.paths import get_save_directory
+        from steempeg.infra import cache as _cache
+
+        path = os.path.join(get_save_directory(), "cache", "settings.json")
+        if os.path.isfile(path):
+            return load_steempeg_pro(_cache.read_json(path) or {})
+    except Exception:
+        pass
+    return DEFAULT_STEEMPEG_PRO
 
 
 def normalize_dev_sniper_sensor(value: object | None) -> bool:
