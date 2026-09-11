@@ -2048,18 +2048,23 @@ class LibraryMixin:
             getattr(self, "_library_panel_mode", "clips") == "clips"
             and hasattr(self.ui, "table_clips")
         ):
-            selected_rows = {
-                idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()
-            }
+            sm = self.ui.table_clips.selectionModel()
+            if sm is not None:
+                selected_rows = {int(idx.row()) for idx in sm.selectedRows()}
         prev = getattr(self, "_clips_visual_selected_rows", None)
         if prev == selected_rows:
             return
         # Only restyle cards that entered or left selection — full-grid paint
         # is noticeable on large libraries during select / tab restore.
-        changed = selected_rows if prev is None else (prev | selected_rows)
+        changed = selected_rows if prev is None else (set(prev) | selected_rows)
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
-            row = item.data(Qt.UserRole)
+            if item is None:
+                continue
+            try:
+                row = int(item.data(Qt.UserRole))
+            except (TypeError, ValueError):
+                continue
             if row not in changed:
                 continue
             card = self.grid_clips.itemWidget(item)
@@ -3614,6 +3619,22 @@ class LibraryMixin:
             card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
         self.grid_clips.setItemWidget(item, card)
 
+        # Progressive rematerialize / Size rebuild must re-apply the purple ring —
+        # new ClipCards start unselected while `_clips_visual_selected_rows` can
+        # still claim this row (early-return then leaves a ghost on the old widget).
+        try:
+            want = False
+            if (
+                getattr(self, "_library_panel_mode", "clips") == "clips"
+                and hasattr(self.ui, "table_clips")
+            ):
+                sm = self.ui.table_clips.selectionModel()
+                if sm is not None:
+                    want = any(int(idx.row()) == int(row) for idx in sm.selectedRows())
+            card.set_selected(want)
+        except Exception:
+            pass
+
         live = getattr(self, "_clip_live_paths", None)
         if not isinstance(live, set):
             live = set()
@@ -4266,11 +4287,18 @@ class LibraryMixin:
         if snapshot_restore and want_append:
             # Quiet top-up long after paint — must not compete with first frame.
             QTimer.singleShot(2500, self._append_new_clips_only)
-        if getattr(self, "_clips_progressive_active", False):
-            pass  # Progressive: no duration/poster flood — Refresh does a full scan.
+        if quiet_append:
+            # New folders often land before MPD duration is written — backfill
+            # after a short settle, then once more for still-recording clips.
+            QTimer.singleShot(800, self._schedule_clip_duration_backfill)
+            QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
+        elif getattr(self, "_clips_progressive_active", False):
+            # Progressive discover paints ``--:--`` placeholders; durations are
+            # filled from MPD after discover finishes (see progressive finished).
+            pass
         elif snapshot_restore:
             QTimer.singleShot(400, self._schedule_clip_duration_backfill)
-        elif not quiet_append:
+        else:
             QTimer.singleShot(0, self._schedule_clip_duration_backfill)
 
         if announce_duplicates and stats.duplicate_count:
@@ -4499,6 +4527,9 @@ class LibraryMixin:
         QTimer.singleShot(0, self._sync_library_scrollbars)
         QTimer.singleShot(1500, self._persist_clips_library_snapshot)
         self._schedule_clips_viewport_refresh(0)
+        # Lightweight rows always start as ``--:--`` — fill from MPD off-thread.
+        QTimer.singleShot(600, self._schedule_clip_duration_backfill)
+        QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
         if getattr(self, "_startup_library_scan_active", False) and hasattr(
             self, "preload_render_history"
         ):
@@ -5911,5 +5942,10 @@ class LibraryMixin:
                 w.deleteLater()
         if hasattr(self, "_clips_refresh_viewport"):
             self._clips_refresh_viewport()
+        # Force selection chrome onto the new widgets (bookkeeping may still
+        # match the table and early-return otherwise).
+        self._clips_visual_selected_rows = None
+        if hasattr(self, "_sync_grid_card_visuals"):
+            self._sync_grid_card_visuals()
         grid.doItemsLayout()
         QTimer.singleShot(0, self._sync_library_scrollbars)
