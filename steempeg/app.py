@@ -224,7 +224,11 @@ QSlider#slider_timeline::handle:horizontal:hover {
 
 class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, PlayerMixin, LibraryMixin, RenderMixin, SettingsMixin, UpdaterMixin, QObject):
     def _refresh_dev_button_visibility(self) -> None:
-        """Show/hide Dev entry points from cache/settings.json dev_mode."""
+        """Show/hide Dev entry points from cache/settings.json dev_mode.
+
+        Footer on stock Desktop; title bar on Portable and when Desktop shell
+        tools live in the title bar (same pref as About / Updates / Settings).
+        """
         enabled = False
         try:
             settings = self.load_user_settings() or {}
@@ -233,12 +237,36 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         except Exception:
             enabled = False
         portable = bool(getattr(self, "_portable_shell", False))
+        in_title = portable
+        if not portable:
+            try:
+                from steempeg.ui.settings_prefs import get_desktop_shell_tools_in_title_bar
+
+                in_title = bool(get_desktop_shell_tools_in_title_bar())
+            except Exception:
+                in_title = False
+        theater = bool(getattr(self, "is_theater", False))
         btn_dev = getattr(getattr(self, "ui", None), "btn_dev", None)
         if btn_dev is not None:
-            btn_dev.setVisible(enabled and not portable)
+            # Footer Dev only when tools stay in the mega-pill and docks are visible.
+            btn_dev.setVisible(enabled and (not in_title) and (not theater))
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
         if tb is not None and hasattr(tb, "set_dev_button_visible"):
-            tb.set_dev_button_visible(enabled and portable)
+            tb.set_dev_button_visible(enabled and in_title)
+
+    def _refresh_steempeg_pro_chrome(self) -> None:
+        """Show/hide title-bar PRO badge from settings / STEEMPEG_PRO env."""
+        try:
+            from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+            enabled = resolve_steempeg_pro(self.load_user_settings() or {})
+        except Exception:
+            enabled = False
+        tb = getattr(getattr(self, "ui", None), "title_bar", None)
+        if tb is None:
+            tb = getattr(self, "title_bar", None)
+        if tb is not None and hasattr(tb, "set_pro_enabled"):
+            tb.set_pro_enabled(enabled)
 
     def _apply_playback_button_styles(self):
         """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
@@ -511,10 +539,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
             load_timeline_strip_size_from_settings(_settings0)
             load_player_boost_from_settings(_settings0)
-            from steempeg.ui.settings_prefs import load_queue_hover, load_shell_side_layout
+            from steempeg.ui.settings_prefs import (
+                load_desktop_shell_tools_in_title_bar,
+                load_queue_hover,
+                load_shell_side_layout,
+            )
 
             load_shell_side_layout(_settings0)
             load_queue_hover(_settings0)
+            load_desktop_shell_tools_in_title_bar(_settings0)
             from steempeg.ui.settings_prefs import (
                 KEY_PERMANENT_EXPORT_FOLDER,
                 apply_export_folder,
@@ -1477,6 +1510,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         btn_dev.clicked.connect(self.show_dev_dialog)
         if hasattr(self, "_wire_title_bar_about_updates"):
             self._wire_title_bar_about_updates()
+        if hasattr(self, "apply_desktop_shell_tools_placement"):
+            self.apply_desktop_shell_tools_placement()
         self.ui.btn_start.clicked.connect(self.start_render_thread)
         self.ui.btn_start.setEnabled(False)
 
@@ -5322,6 +5357,45 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
     def refresh_queue_hover(self, enabled: bool | None = None) -> None:
         self.apply_queue_hover(enabled)
+
+    def apply_desktop_shell_tools_placement(self, enabled: bool | None = None) -> None:
+        """Desktop: About / Updates / Settings / Dev in title bar or library footer.
+
+        Stock = footer. Pref ON mirrors Portable title-bar tools. Portable always
+        keeps title-bar tools; theatre hides footer tools only.
+        """
+        from steempeg.ui.settings_prefs import (
+            get_desktop_shell_tools_in_title_bar,
+            set_desktop_shell_tools_in_title_bar,
+        )
+
+        portable = bool(getattr(self, "_portable_shell", False))
+        theater = bool(getattr(self, "is_theater", False))
+        if portable:
+            in_title = True
+        else:
+            in_title = set_desktop_shell_tools_in_title_bar(
+                enabled
+                if enabled is not None
+                else get_desktop_shell_tools_in_title_bar()
+            )
+
+        tb = getattr(getattr(self, "ui", None), "title_bar", None)
+        if tb is not None and hasattr(tb, "set_shell_tools_visible"):
+            tb.set_shell_tools_visible(in_title)
+
+        show_footer_tools = (not portable) and (not in_title) and (not theater)
+        ui = getattr(self, "ui", None)
+        for name in ("btn_about", "btn_update_check", "btn_settings"):
+            btn = getattr(ui, name, None) if ui is not None else None
+            if btn is not None:
+                btn.setVisible(show_footer_tools)
+        # Dev follows the same placement (footer vs title bar).
+        if hasattr(self, "_refresh_dev_button_visibility"):
+            self._refresh_dev_button_visibility()
+
+    def refresh_desktop_shell_tools_placement(self, enabled: bool | None = None) -> None:
+        self.apply_desktop_shell_tools_placement(enabled)
 
     def _set_queue_pane_width(self, queue_w: int) -> None:
         """Set Render Queue's splitter slot to ``queue_w`` (0 = closed)."""
