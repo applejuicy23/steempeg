@@ -1378,9 +1378,16 @@ class PlayerMixin:
         if footer is not None:
             footer.setVisible(not self.is_theater)
 
-        if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(not self.is_theater)
-        if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(not self.is_theater)
-        if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.setVisible(not self.is_theater)
+        if hasattr(self, "apply_desktop_shell_tools_placement"):
+            self.apply_desktop_shell_tools_placement()
+        elif not self.is_theater:
+            if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(True)
+            if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(True)
+            if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.setVisible(True)
+        else:
+            if hasattr(self.ui, 'btn_about'): self.ui.btn_about.setVisible(False)
+            if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.setVisible(False)
+            if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.setVisible(False)
 
         if hasattr(self, 'video_wrapper'):
             try:
@@ -2024,6 +2031,9 @@ class PlayerMixin:
         footer = getattr(self, "_footer_mega_pill", None)
         if footer is not None:
             footer.setVisible(not is_t)
+        if hasattr(self, "apply_desktop_shell_tools_placement"):
+            self.apply_desktop_shell_tools_placement()
+        else:
             if hasattr(self.ui, 'btn_about'):
                 self.ui.btn_about.setVisible(not is_t)
             if hasattr(self.ui, 'btn_update_check'):
@@ -2300,9 +2310,12 @@ class PlayerMixin:
             footer = getattr(self, "_footer_mega_pill", None)
             if footer is not None:
                 footer.hide()
-            if hasattr(self.ui, 'btn_about'): self.ui.btn_about.hide()
-            if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.hide()
-            if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.hide()
+            if hasattr(self, "apply_desktop_shell_tools_placement"):
+                self.apply_desktop_shell_tools_placement()
+            else:
+                if hasattr(self.ui, 'btn_about'): self.ui.btn_about.hide()
+                if hasattr(self.ui, 'btn_update_check'): self.ui.btn_update_check.hide()
+                if hasattr(self.ui, 'btn_settings'): self.ui.btn_settings.hide()
 
             if hasattr(self.ui, 'main_splitter'):
                 self._set_splitter_handle_visible(self.ui.main_splitter, False)
