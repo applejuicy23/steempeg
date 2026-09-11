@@ -40,11 +40,15 @@ from steempeg.version import APP_VERSION_STR
 _BG = "#2a2a2a"
 _BG_EDGE = QColor("#1a1a1a")
 _BG_EDGE_PURPLE = QColor("#2a2240")
+_BG_EDGE_RED = QColor("#3a1c1c")
 _BG_MID = QColor(_BG)
+_BG_MID_PRO = QColor("#322222")
 _BG_BOTTOM = QColor("#222222")
 _TRACK = QColor("#3a3a3a")
 _FILL_A = QColor("#6b5a8e")
 _FILL_B = QColor("#b29ae7")
+_FILL_A_PRO = QColor("#8a3a3a")
+_FILL_B_PRO = QColor("#e85a5a")
 _SHIMMER = QColor(255, 255, 255, 72)
 _LERP = 0.28
 # Cap how far the visible % can jump per frame → reads 10,11,12… not 10→30.
@@ -126,10 +130,11 @@ def _soft_ceiling_for(percent: float) -> float:
 class _SplashProgressBar(QWidget):
     """Eased fill that ticks up in small steps (smooth %), shimmer while busy."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, pro: bool = False):
         super().__init__(parent)
         self.setFixedHeight(10)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._pro = bool(pro)
         self._display = 0.0
         self._target = 0.0
         self._soft_ceiling = 8.0
@@ -139,6 +144,10 @@ class _SplashProgressBar(QWidget):
         self._tick.setInterval(16)
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
+
+    def set_pro(self, pro: bool) -> None:
+        self._pro = bool(pro)
+        self.update()
 
     def set_progress(self, value: float, *, soft_ceiling: float | None = None) -> None:
         self._target = max(0.0, min(100.0, float(value)))
@@ -219,8 +228,12 @@ class _SplashProgressBar(QWidget):
         fill_w = max(r.height(), r.width() * frac)
         fr = QRectF(r.left(), r.top(), fill_w, r.height())
         grad = QLinearGradient(fr.topLeft(), fr.topRight())
-        grad.setColorAt(0.0, _FILL_A)
-        grad.setColorAt(1.0, _FILL_B)
+        if self._pro:
+            grad.setColorAt(0.0, _FILL_A_PRO)
+            grad.setColorAt(1.0, _FILL_B_PRO)
+        else:
+            grad.setColorAt(0.0, _FILL_A)
+            grad.setColorAt(1.0, _FILL_B)
         p.setBrush(grad)
         p.drawRoundedRect(fr, radius, radius)
         if self._busy or frac < 0.995:
@@ -241,16 +254,21 @@ class _SplashProgressBar(QWidget):
 
 
 class _SplashBusySpinner(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, pro: bool = False):
         super().__init__(parent)
         self.setFixedSize(_SPINNER_SIZE, _SPINNER_SIZE)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._pro = bool(pro)
         self._angle = 0
         self._step = _SPINNER_STEP
         self._tick = QTimer(self)
         self._tick.setInterval(_SPINNER_INTERVAL_MS)
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
+
+    def set_pro(self, pro: bool) -> None:
+        self._pro = bool(pro)
+        self.update()
 
     def set_fast(self, fast: bool) -> None:
         """High-speed spin during «Preparing workspace…»."""
@@ -277,7 +295,7 @@ class _SplashBusySpinner(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
-        pen = QPen(_FILL_B)
+        pen = QPen(_FILL_B_PRO if self._pro else _FILL_B)
         pen.setWidthF(1.75)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
@@ -382,7 +400,7 @@ class _SplashRepoMark(QWidget):
 class LaunchSplash(QWidget):
     """Frameless centered splash card."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, pro: bool = False):
         super().__init__(parent)
         self.setObjectName("SteempegLaunchSplash")
         self.setWindowFlags(
@@ -395,6 +413,7 @@ class LaunchSplash(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setFixedSize(520, 300)
         self._wash_t = 0.0
+        self._pro = bool(pro)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(36, 36, 36, 28)
@@ -417,6 +436,10 @@ class LaunchSplash(QWidget):
         root.addLayout(logo_row)
         root.addSpacing(14)
 
+        # [ Steempeg ][ PRO ] — chip only when PRO seed is on.
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.addStretch(1)
         self._title = QLabel("Steempeg")
         self._title.setObjectName("LaunchSplashTitle")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -427,7 +450,16 @@ class LaunchSplash(QWidget):
         title_font.setPointSize(22)
         title_font.setWeight(QFont.Weight.DemiBold)
         self._title.setFont(title_font)
-        root.addWidget(self._title)
+        title_row.addWidget(self._title, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._pro_badge = None
+        if self._pro:
+            from steempeg.ui.widgets.pro_badge import ProBadge
+
+            self._pro_badge = ProBadge(size="splash", parent=self)
+            title_row.addWidget(self._pro_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addStretch(1)
+        root.addLayout(title_row)
 
         self._version = QLabel(f"v{APP_VERSION_STR}")
         self._version.setObjectName("LaunchSplashVersion")
@@ -442,7 +474,7 @@ class LaunchSplash(QWidget):
         meta = QHBoxLayout()
         meta.setContentsMargins(0, 0, 0, 6)
         meta.setSpacing(8)
-        self._spinner = _SplashBusySpinner()
+        self._spinner = _SplashBusySpinner(pro=self._pro)
         self._status = QLabel("Starting…")
         self._status.setObjectName("LaunchSplashStatus")
         status_font = QFont()
@@ -463,9 +495,10 @@ class LaunchSplash(QWidget):
         meta.addWidget(self._percent, 0)
         root.addLayout(meta)
 
-        self._bar = _SplashProgressBar()
+        self._bar = _SplashProgressBar(pro=self._pro)
         root.addWidget(self._bar)
 
+        accent = "#e85a5a" if self._pro else tok.ACCENT_PRIMARY
         self.setStyleSheet(
             f"""
             QWidget#SteempegLaunchSplash {{
@@ -488,7 +521,7 @@ class LaunchSplash(QWidget):
                 border: none;
             }}
             QLabel#LaunchSplashPercent {{
-                color: {tok.ACCENT_PRIMARY};
+                color: {accent};
                 background: transparent;
                 border: none;
                 font-weight: bold;
@@ -525,8 +558,12 @@ class LaunchSplash(QWidget):
         r = QRectF(self.rect())
         path = QPainterPath()
         path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 14, 14)
-        top = _lerp_color(_BG_EDGE, _BG_EDGE_PURPLE, self._wash_t)
-        mid = _lerp_color(_BG_MID, QColor("#2c2836"), self._wash_t * 0.55)
+        if self._pro:
+            top = _lerp_color(_BG_EDGE, _BG_EDGE_RED, self._wash_t)
+            mid = _lerp_color(_BG_MID, _BG_MID_PRO, self._wash_t * 0.55)
+        else:
+            top = _lerp_color(_BG_EDGE, _BG_EDGE_PURPLE, self._wash_t)
+            mid = _lerp_color(_BG_MID, QColor("#2c2836"), self._wash_t * 0.55)
         grad = QLinearGradient(r.topLeft(), r.bottomLeft())
         grad.setColorAt(0.0, top)
         grad.setColorAt(0.4, mid)
@@ -571,7 +608,7 @@ class LaunchSplash(QWidget):
         )
 
 
-def show_launch_splash(*, force: bool = False) -> LaunchSplash | None:
+def show_launch_splash(*, force: bool = False, pro: bool | None = None) -> LaunchSplash | None:
     global _splash
     if _splash_disabled() and not force:
         return None
@@ -581,7 +618,14 @@ def show_launch_splash(*, force: bool = False) -> LaunchSplash | None:
                 return _splash
         except RuntimeError:
             _splash = None
-    splash = LaunchSplash()
+    if pro is None:
+        try:
+            from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+            pro = resolve_steempeg_pro()
+        except Exception:
+            pro = False
+    splash = LaunchSplash(pro=bool(pro))
     splash.center_on_screen()
     splash.set_progress(0, "Starting…")
     splash.show()
@@ -700,7 +744,9 @@ def cancel_launch_splash_simulation() -> None:
     _sim_index = 0
 
 
-def simulate_launch_splash(*, hold_open: bool = False, step_ms: int = 380) -> None:
+def simulate_launch_splash(
+    *, hold_open: bool = False, step_ms: int = 380, pro: bool | None = None
+) -> None:
     """DEV: replay cold-start script. Esc closes (clicks do not kill the bar)."""
     global _sim_timer, _sim_steps, _sim_index, _sim_hold, _splash
 
@@ -714,7 +760,7 @@ def simulate_launch_splash(*, hold_open: bool = False, step_ms: int = 380) -> No
             pass
         _splash = None
 
-    splash = show_launch_splash(force=True)
+    splash = show_launch_splash(force=True, pro=pro)
     if splash is None:
         return
 
