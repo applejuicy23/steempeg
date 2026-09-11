@@ -1347,6 +1347,60 @@ def menu_popup_colors() -> MenuPopupColors:
     )
 
 
+@dataclass(frozen=True)
+class CardSizePopupChrome:
+    """Size · Big/Medium/Small(+List) floating picker — Default gray; TrueDark elevated."""
+
+    panel_bg: str
+    panel_border: str
+    tile_bg: str
+    tile_hover_bg: str
+    tile_selected_bg: str
+    tile_border: str
+    tile_hover_border: str
+    tile_selected_border: str
+    label: str
+    label_selected: str
+    glyph: str
+    glyph_selected: str
+
+
+def card_size_popup_chrome() -> CardSizePopupChrome:
+    """Theme plate for the library / queue Size popup (not hardcoded mid-gray)."""
+    p = _active
+    if p.name == UI_THEME_DEFAULT:
+        # Legacy Size popup — same mid-gray family as before theming.
+        return CardSizePopupChrome(
+            panel_bg="#2a2a2a",
+            panel_border="#555555",
+            tile_bg="#303030",
+            tile_hover_bg="#404040",
+            tile_selected_bg="#3a324a",
+            tile_border="#4a4a4a",
+            tile_hover_border="#6b5a8e",
+            tile_selected_border="#b29ae7",
+            label="#c0c0c0",
+            label_selected="#f0ecff",
+            glyph="#9a9a9a",
+            glyph_selected="#d4c8f5",
+        )
+    # TrueDark / OLED — elevated panel, inset plate tiles, shared purple accent.
+    return CardSizePopupChrome(
+        panel_bg=p.bg_elevated,
+        panel_border=p.border_card,
+        tile_bg=p.bg_timeline_strip,
+        tile_hover_bg=p.neo_nav_hover_bg,
+        tile_selected_bg=p.button_secondary_pressed_bg,
+        tile_border=p.border_card,
+        tile_hover_border=p.neo_nav_hover_border,
+        tile_selected_border="#b29ae7",
+        label="#a8a8a8",
+        label_selected="#f0ecff",
+        glyph="#8a8a8a",
+        glyph_selected="#d4c8f5",
+    )
+
+
 def menu_stylesheet(
     *,
     item_padding: str = "6px 24px 6px 24px",
