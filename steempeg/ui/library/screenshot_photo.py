@@ -1,12 +1,7 @@
-"""Compact screenshot tiles — photo size × ClipCard language.
+"""Screenshot tiles — Size ladder × ClipCard language.
 
-Size matches the classic Screenshots grid (~160×90 image + caption).
-Chrome borrows ClipCard: footer bar, purple hover/selection ring, press scale,
-inline source logo in the meta row (Steam vs Steempeg), and a persistent
-«just opened» accent — without the large 254×184 clip cards.
-
-Steempeg-shot cards get a light purple wash + thin idle ring so they read on a
-dense grid; Steam-shot cards stay neutral gray. Folder filter chips are untouched.
+Medium = classic Screenshots photo (~168×142). Big ≈ Clips Big (time + size).
+Small ≈ Clips Small (thumb logo + marquee title + info). List → v51.
 """
 from __future__ import annotations
 
@@ -24,18 +19,22 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
-    QFont,
     QFontMetrics,
     QMouseEvent,
     QPainter,
     QPainterPath,
     QPixmap,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QLabel, QWidget
 
 from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
+from steempeg.ui.library.card_sizes import (
+    DEFAULT_SCREENSHOTS_CARD_SIZE,
+    screenshot_card_size_spec,
+)
+from steempeg.ui.widgets.overflow_marquee import OverflowMarqueeLabel
 
 # ClipCard accent family
 _ACCENT = QColor("#b29ae7")
@@ -54,28 +53,27 @@ def _photo_chrome() -> tuple[QColor, QColor, QColor]:
 
     footer, plate, idle = ut.clip_card_chrome()
     return QColor(plate), QColor(footer), QColor(idle)
+
+
 _TITLE_FG = QColor("#e0e0e0")
 _META_FG = QColor("#888888")
 
-# Photo-scale (pre-enlargement footprint); footer stays roomy for text padding
-_W = 168
-_IMG_H = 94
-_FOOTER_H = 48
-_H = _IMG_H + _FOOTER_H
-# Public cell size for QListWidget sizeHints (must match setFixedSize).
+# Legacy aliases = Medium (stock Screenshots before Size ladder).
+_MED = screenshot_card_size_spec(DEFAULT_SCREENSHOTS_CARD_SIZE)
+_W = _MED.card_w
+_IMG_H = _MED.thumb_h
+_FOOTER_H = _MED.footer_h
+_H = _MED.card_h
 SCREENSHOT_PHOTO_W = _W
 SCREENSHOT_PHOTO_H = _H
 SCREENSHOT_PHOTO_SIZE = QSize(_W, _H)
 _RADIUS = 10.0
-_PAD_X = 12
-_PAD_TOP = 8
-_PAD_BOTTOM = 8
 _TITLE_GAP = 3
-_DRAG_SLOP = 6
-_ICON_PX = 16
 _ICON_GAP = 5
 _SOURCE_ICON_PX = 14
 _SOURCE_ICON_GAP = 4
+_DRAG_SLOP = 6
+_INFO_PX = 14
 
 _source_icon_cache: dict[str, QPixmap] = {}
 
@@ -93,40 +91,29 @@ def _load_source_icon(source: str, dpr: float = 1.0) -> QPixmap:
         try:
             from steempeg.ui.icon_utils import app_logo_pixmap
 
-            logo = app_logo_pixmap(_SOURCE_ICON_PX, dpr=dpr)
-            if logo is not None and not logo.isNull():
-                pix = logo
+            pix = app_logo_pixmap(_SOURCE_ICON_PX, dpr=dpr)
         except Exception:
             pix = QPixmap()
     if pix.isNull():
-        asset = "steam.png" if key == "steam" else "logo.png"
-        path = get_resource_path(asset)
+        name = "steam.png" if key == "steam" else "logo.png"
+        path = get_resource_path(name)
         if path and os.path.isfile(path):
-            src = QPixmap(path)
-            if not src.isNull():
-                phys = max(1, int(round(_SOURCE_ICON_PX * dpr)))
-                try:
-                    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
-
-                    shaped = shaped_game_icon_pixmap(src, phys, ICON_SHAPE_CIRCLE)
-                    if shaped is not None and not shaped.isNull():
-                        pix = shaped
-                        pix.setDevicePixelRatio(dpr)
-                except Exception:
-                    pix = src.scaled(
-                        phys,
-                        phys,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    pix.setDevicePixelRatio(dpr)
+            raw = QPixmap(path)
+            if not raw.isNull():
+                pix = raw.scaled(
+                    int(_SOURCE_ICON_PX * dpr),
+                    int(_SOURCE_ICON_PX * dpr),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                pix.setDevicePixelRatio(dpr)
     if not pix.isNull():
         _source_icon_cache[cache_key] = pix
     return pix
 
 
 class ScreenshotPhoto(QWidget):
-    """Mini photo card: rounded thumb + ClipCard-style footer."""
+    """Photo card: rounded thumb + ClipCard-style footer (Size-aware)."""
 
     def __init__(
         self,
@@ -135,6 +122,8 @@ class ScreenshotPhoto(QWidget):
         title: str = "",
         subtitle: str = "",
         game_icon_path: str = "",
+        card_size: str | None = None,
+        info_tip: str = "",
         on_left_click: Optional[Callable[[QMouseEvent], None]] = None,
         on_right_click: Optional[Callable[[QMouseEvent], None]] = None,
         on_activate: Optional[Callable[[], None]] = None,
@@ -149,9 +138,18 @@ class ScreenshotPhoto(QWidget):
         self._on_drag_over = on_drag_over
         self._title = (title or "").strip()
         self._subtitle = (subtitle or "").strip()
+        self._info_tip = (info_tip or "").strip()
         self._source = self._normalize_source(source)
+        self._spec = screenshot_card_size_spec(card_size)
+        self._w = int(self._spec.card_w)
+        self._h = int(self._spec.card_h)
+        self._img_h = int(self._spec.thumb_h)
+        self._footer_h = int(self._spec.footer_h)
         self._pix = QPixmap()
         self._icon = QPixmap()
+        self._info_pix = QPixmap()
+        self._title_marquee: OverflowMarqueeLabel | None = None
+        self._info_btn: QLabel | None = None
         self._hovered = False
         self._pressed = False
         self._selected = False
@@ -160,20 +158,91 @@ class ScreenshotPhoto(QWidget):
         self._press_pos: QPoint | None = None
         self._dragged = False
         self._anim: QVariantAnimation | None = None
-        self.setFixedSize(_W, _H)
+        self.setFixedSize(self._w, self._h)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setMouseTracking(True)
+        if self._spec.footer_mode == "info":
+            tip = self._info_tip or f"{self._title}\n{self._subtitle}".strip()
+            self.setToolTip(tip)
+            self._load_info_glyph()
+            self._build_info_footer_widgets(tip)
         if thumb_path:
             self.set_thumbnail(thumb_path)
         if game_icon_path:
             self.set_game_icon(game_icon_path)
+
+    def _load_info_glyph(self) -> None:
+        try:
+            from steempeg.ui.icon_assets import title_bar_info_pixmap
+
+            self._info_pix = title_bar_info_pixmap("#b29ae7", _INFO_PX)
+        except Exception:
+            self._info_pix = QPixmap()
+
+    def _build_info_footer_widgets(self, tip: str) -> None:
+        """Small: [marquee title | info] — game logo paints on the thumb."""
+        pad_h = int(self._spec.pad_h)
+        pad_v = int(self._spec.pad_v)
+        foot_top = self._img_h
+        foot_h = self._footer_h
+        info_w = _INFO_PX if not self._info_pix.isNull() else 0
+        gap = 4 if info_w else 0
+        title_w = max(
+            24, self._w - pad_h * 2 - info_w - gap - 3
+        )  # outer inset ~1.5/side
+
+        marquee = OverflowMarqueeLabel(self._title, self)
+        marquee.setStyleSheet(
+            f"QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {int(self._spec.title_font)}px; "
+            f"font-family: {tok.FONT_APP}; background: transparent; border: none; }}"
+        )
+        marquee.setGeometry(
+            pad_h + 2,
+            foot_top + pad_v,
+            title_w,
+            max(12, foot_h - pad_v * 2),
+        )
+        marquee.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._title_marquee = marquee
+
+        if info_w:
+            btn = QLabel(self)
+            btn.setFixedSize(_INFO_PX, _INFO_PX)
+            btn.setPixmap(self._info_pix)
+            btn.setToolTip(tip)
+            btn.setStyleSheet("QLabel { background: transparent; border: none; }")
+            btn.move(
+                self._w - pad_h - _INFO_PX - 2,
+                foot_top + max(0, (foot_h - _INFO_PX) // 2),
+            )
+            btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self._info_btn = btn
+
+    def _info_footer_widgets_visible(self) -> bool:
+        """Hide child chrome while press-scale paints (children don't transform)."""
+        return abs(float(self._scale) - 1.0) < 0.001 and not self._pressed
+
+    def _sync_info_footer_widgets(self) -> None:
+        show = self._info_footer_widgets_visible()
+        for w in (self._title_marquee, self._info_btn):
+            if w is None:
+                continue
+            if w.isVisible() != show:
+                w.setVisible(show)
 
     def set_title(self, title: str) -> None:
         text = (title or "").strip()
         if text == self._title:
             return
         self._title = text
+        if self._title_marquee is not None:
+            self._title_marquee.setText(text)
+        if self._spec.footer_mode == "info":
+            tip = self._info_tip or f"{self._title}\n{self._subtitle}".strip()
+            self.setToolTip(tip)
+            if self._info_btn is not None:
+                self._info_btn.setToolTip(tip)
         self.update()
 
     def set_subtitle(self, subtitle: str) -> None:
@@ -181,6 +250,11 @@ class ScreenshotPhoto(QWidget):
         if text == self._subtitle:
             return
         self._subtitle = text
+        if self._spec.footer_mode == "info":
+            tip = self._info_tip or f"{self._title}\n{self._subtitle}".strip()
+            self.setToolTip(tip)
+            if self._info_btn is not None:
+                self._info_btn.setToolTip(tip)
         self.update()
 
     @staticmethod
@@ -210,13 +284,14 @@ class ScreenshotPhoto(QWidget):
 
     def set_game_icon(self, icon_path: str) -> None:
         """Optional ClipCard-style game logo in the footer (local path only)."""
+        icon_px = int(self._spec.icon_px)
         if icon_path and os.path.isfile(icon_path):
             try:
                 from steempeg.ui.icon_shape import shaped_game_icon_pixmap
 
                 src = QPixmap(icon_path)
                 if not src.isNull():
-                    shaped = shaped_game_icon_pixmap(src, _ICON_PX)
+                    shaped = shaped_game_icon_pixmap(src, icon_px)
                     if shaped is not None and not shaped.isNull():
                         self._icon = shaped
                         self.update()
@@ -225,8 +300,8 @@ class ScreenshotPhoto(QWidget):
                 pix = QPixmap(icon_path)
                 if not pix.isNull():
                     self._icon = pix.scaled(
-                        _ICON_PX,
-                        _ICON_PX,
+                        icon_px,
+                        icon_px,
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation,
                     )
@@ -283,6 +358,7 @@ class ScreenshotPhoto(QWidget):
         self._pressed = True
         self._dragged = False
         self._press_pos = QPoint(local_pos)
+        self._sync_info_footer_widgets()
         self._animate_to(float(CARD_PRESS_SCALE))
         self.grabMouse()
 
@@ -324,6 +400,7 @@ class ScreenshotPhoto(QWidget):
         start = float(self._scale)
         if abs(start - target) < 0.01:
             self._scale = target
+            self._sync_info_footer_widgets()
             self.update()
             return
         anim = QVariantAnimation(self)
@@ -334,16 +411,22 @@ class ScreenshotPhoto(QWidget):
             QEasingCurve.Type.OutCubic if target >= start else QEasingCurve.Type.InCubic
         )
         anim.valueChanged.connect(self._on_scale)
-        anim.finished.connect(lambda: setattr(self, "_anim", None))
+        anim.finished.connect(self._on_scale_anim_finished)
         self._anim = anim
         anim.start()
 
     def _on_scale(self, value) -> None:
         self._scale = float(value)
+        self._sync_info_footer_widgets()
+        self.update()
+
+    def _on_scale_anim_finished(self) -> None:
+        self._anim = None
+        self._sync_info_footer_widgets()
         self.update()
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(_W, _H)
+        return QSize(self._w, self._h)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         del event
@@ -353,22 +436,27 @@ class ScreenshotPhoto(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
+        w, h, img_h = self._w, self._h, self._img_h
+        pad_h = int(self._spec.pad_h)
+        pad_v = int(self._spec.pad_v)
+        icon_px = int(self._spec.icon_px)
+
         # Whole-card press: scale the entire tile (not only the image well).
         scale = float(self._scale)
         if abs(scale - 1.0) > 0.001:
-            cx = _W / 2.0
-            cy = _H / 2.0
+            cx = w / 2.0
+            cy = h / 2.0
             p.translate(cx, cy)
             p.scale(scale, scale)
             p.translate(-cx, -cy)
 
         # Inset so a 3px ClipCard-style ring never clips.
-        outer = QRectF(1.5, 1.5, _W - 3.0, _H - 3.0)
+        outer = QRectF(1.5, 1.5, w - 3.0, h - 3.0)
         card = QPainterPath()
         card.addRoundedRect(outer, _RADIUS, _RADIUS)
 
         # --- image well (rounded top, square join into footer) ---
-        img = QRectF(outer.left(), outer.top(), outer.width(), float(_IMG_H))
+        img = QRectF(outer.left(), outer.top(), outer.width(), float(img_h))
         img_path = QPainterPath()
         img_path.addRoundedRect(img, _RADIUS, _RADIUS)
         flat = QPainterPath()
@@ -390,13 +478,16 @@ class ScreenshotPhoto(QWidget):
             x = int(round(img.left() + (img.width() - target.width()) / 2))
             y = int(round(img.top() + (img.height() - target.height()) / 2))
             p.drawPixmap(x, y, target)
-        # Light purple veil over the thumb — readable on a dense grid, not a fill.
         if is_steempeg:
             p.fillRect(img, _STEEMPEG_IMG_WASH)
+        # Small: game logo on the thumb (Clips Small language) — frees the strip.
+        if self._spec.footer_mode == "info" and not self._icon.isNull():
+            inset = 6
+            p.drawPixmap(int(img.left()) + inset, int(img.top()) + inset, self._icon)
         p.restore()
 
         # --- ClipCard footer ---
-        foot = QRectF(outer.left(), outer.top() + _IMG_H, outer.width(), float(_FOOTER_H))
+        foot = QRectF(outer.left(), outer.top() + img_h, outer.width(), float(self._footer_h))
         foot_path = QPainterPath()
         foot_path.addRoundedRect(foot, _RADIUS, _RADIUS)
         top_sq = QPainterPath()
@@ -407,87 +498,134 @@ class ScreenshotPhoto(QWidget):
         if is_steempeg:
             p.fillPath(foot_clip, _STEEMPEG_FOOTER_WASH)
 
-        # Match ClipCard title/date faces (13px bold / 11px meta) with real padding
-        # so text doesn't glue to the image edge or the card bottom.
         from PySide6.QtGui import QFont as _QF
 
-        title_font = tok.ui_qfont(pixel_size=13, weight=_QF.Weight.Bold)
-        meta_font = tok.ui_qfont(pixel_size=11)
+        title_font = tok.ui_qfont(pixel_size=int(self._spec.title_font), weight=_QF.Weight.Bold)
+        meta_font = tok.ui_qfont(pixel_size=int(self._spec.meta_font))
         fm_title = QFontMetrics(title_font)
         fm_meta = QFontMetrics(meta_font)
 
-        text_left = int(foot.left()) + _PAD_X
-        text_width = int(foot.width()) - _PAD_X * 2
-        title_top = int(foot.top()) + _PAD_TOP
+        text_left = int(foot.left()) + pad_h
+        text_width = int(foot.width()) - pad_h * 2
+        title_top = int(foot.top()) + pad_v
         title_left = text_left
         title_width = text_width
 
-        if not self._icon.isNull():
-            icon_y = title_top + max(0, (fm_title.height() - _ICON_PX) // 2)
-            p.drawPixmap(text_left, icon_y, self._icon)
-            title_left = text_left + _ICON_PX + _ICON_GAP
-            title_width = max(24, text_width - _ICON_PX - _ICON_GAP)
+        # Clip footer chrome so oversized logos can't bleed into the meta row.
+        p.save()
+        p.setClipPath(foot_clip)
 
-        if self._subtitle:
-            # Meta uses full footer text width (under the logo) so the date is
-            # not squeezed by the icon; game name elides first if needed.
-            title_rect = QRect(title_left, title_top, title_width, fm_title.height())
-            meta_rect = QRect(
-                text_left,
-                title_rect.bottom() + _TITLE_GAP,
-                text_width,
-                fm_meta.height(),
-            )
-            # Keep date clear of the bottom curve.
-            max_meta_bottom = int(foot.bottom()) - _PAD_BOTTOM
-            if meta_rect.bottom() > max_meta_bottom:
-                meta_rect.moveBottom(max_meta_bottom)
-            p.setFont(title_font)
-            p.setPen(_TITLE_FG)
-            p.drawText(
-                title_rect,
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
-            )
-            source_icon = _load_source_icon(
-                self._source, dpr=max(1.0, float(self.devicePixelRatioF()))
-            )
-            meta_left = text_left
-            meta_text_width = text_width
-            if not source_icon.isNull():
-                icon_y = meta_rect.top() + max(0, (meta_rect.height() - _SOURCE_ICON_PX) // 2)
-                p.drawPixmap(text_left, icon_y, source_icon)
-                meta_left = text_left + _SOURCE_ICON_PX + _SOURCE_ICON_GAP
-                meta_text_width = max(24, text_width - _SOURCE_ICON_PX - _SOURCE_ICON_GAP)
-            meta_draw = QRect(
-                meta_left,
-                meta_rect.top(),
-                meta_text_width,
-                meta_rect.height(),
-            )
-            p.setFont(meta_font)
-            p.setPen(_STEEMPEG_META_FG if is_steempeg else _META_FG)
-            p.drawText(
-                meta_draw,
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_meta.elidedText(
-                    self._subtitle, Qt.TextElideMode.ElideRight, meta_text_width
-                ),
-            )
+        if self._spec.footer_mode == "info":
+            # Child marquee + info handle idle; paint fallback while press-scaling.
+            if not self._info_footer_widgets_visible():
+                info_w = _INFO_PX if not self._info_pix.isNull() else 0
+                gap = 4 if info_w else 0
+                title_width = max(24, text_width - info_w - gap)
+                title_rect = QRect(
+                    title_left,
+                    title_top,
+                    title_width,
+                    int(foot.height()) - pad_v * 2,
+                )
+                p.setFont(title_font)
+                p.setPen(_TITLE_FG)
+                p.drawText(
+                    title_rect,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
+                )
+                if not self._info_pix.isNull():
+                    ix = int(foot.right()) - pad_h - _INFO_PX
+                    iy = int(foot.center().y() - _INFO_PX / 2)
+                    p.drawPixmap(ix, iy, self._info_pix)
         else:
-            title_rect = QRect(
-                title_left,
-                title_top,
-                title_width,
-                int(foot.height()) - _PAD_TOP - _PAD_BOTTOM,
-            )
-            p.setFont(title_font)
-            p.setPen(_TITLE_FG)
-            p.drawText(
-                title_rect,
-                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                fm_title.elidedText(self._title, Qt.TextElideMode.ElideRight, title_width),
-            )
+            title_line_h = fm_title.height()
+            if not self._icon.isNull():
+                draw_icon_px = min(icon_px, title_line_h)
+                icon_y = title_top + max(0, (title_line_h - draw_icon_px) // 2)
+                if draw_icon_px == icon_px:
+                    p.drawPixmap(text_left, icon_y, self._icon)
+                else:
+                    p.drawPixmap(
+                        text_left,
+                        icon_y,
+                        self._icon.scaled(
+                            draw_icon_px,
+                            draw_icon_px,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        ),
+                    )
+                title_left = text_left + draw_icon_px + _ICON_GAP
+                title_width = max(24, text_width - draw_icon_px - _ICON_GAP)
+
+            if self._subtitle:
+                title_rect = QRect(title_left, title_top, title_width, title_line_h)
+                meta_rect = QRect(
+                    text_left,
+                    title_rect.bottom() + _TITLE_GAP,
+                    text_width,
+                    fm_meta.height(),
+                )
+                max_meta_bottom = int(foot.bottom()) - pad_v
+                if meta_rect.bottom() > max_meta_bottom:
+                    meta_rect.moveBottom(max_meta_bottom)
+                p.setFont(title_font)
+                p.setPen(_TITLE_FG)
+                p.drawText(
+                    title_rect,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    fm_title.elidedText(
+                        self._title, Qt.TextElideMode.ElideRight, title_width
+                    ),
+                )
+                source_icon = _load_source_icon(
+                    self._source, dpr=max(1.0, float(self.devicePixelRatioF()))
+                )
+                meta_left = text_left
+                meta_text_width = text_width
+                if not source_icon.isNull():
+                    icon_y = meta_rect.top() + max(
+                        0, (meta_rect.height() - _SOURCE_ICON_PX) // 2
+                    )
+                    p.drawPixmap(text_left, icon_y, source_icon)
+                    meta_left = text_left + _SOURCE_ICON_PX + _SOURCE_ICON_GAP
+                    meta_text_width = max(
+                        24, text_width - _SOURCE_ICON_PX - _SOURCE_ICON_GAP
+                    )
+                meta_draw = QRect(
+                    meta_left,
+                    meta_rect.top(),
+                    meta_text_width,
+                    meta_rect.height(),
+                )
+                p.setFont(meta_font)
+                p.setPen(_STEEMPEG_META_FG if is_steempeg else _META_FG)
+                p.drawText(
+                    meta_draw,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    fm_meta.elidedText(
+                        self._subtitle, Qt.TextElideMode.ElideRight, meta_text_width
+                    ),
+                )
+            else:
+                title_rect = QRect(
+                    title_left,
+                    title_top,
+                    title_width,
+                    int(foot.height()) - pad_v * 2,
+                )
+                p.setFont(title_font)
+                p.setPen(_TITLE_FG)
+                p.drawText(
+                    title_rect,
+                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                    fm_title.elidedText(
+                        self._title, Qt.TextElideMode.ElideRight, title_width
+                    ),
+                )
+
+        p.restore()
 
         # --- ClipCard border overlay ---
         if self._opened:
@@ -497,10 +635,8 @@ class ScreenshotPhoto(QWidget):
         elif self._hovered:
             border, width = _ACCENT_HOVER, 2.0
         elif is_steempeg:
-            # Thin purple ring — source cue without competing with selection.
             border, width = _STEEMPEG_IDLE_BORDER, 1.5
         else:
-            # Soft idle ring — photo float, but still reads as a card.
             border, width = idle_border, 1.0
 
         pen = p.pen()
