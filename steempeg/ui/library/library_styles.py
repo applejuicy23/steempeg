@@ -108,25 +108,26 @@ def library_table_stylesheet() -> str:
 
 
 def library_grid_stylesheet() -> str:
-    """Grid item slot fill — ``BG_CARD`` from the active UI theme."""
-    from steempeg.ui import design_tokens as tok
+    """Transparent item slots — ClipCard paints its own chrome.
 
-    card = tok.BG_CARD
-    return f"""
-    QListWidget {{ background: transparent; border: none; outline: none; }}
-    QListWidget::item {{
+    A solid ``BG_CARD`` fill here drew a sharp rectangle under rounded card
+    corners (OLED “phantom square”), especially when cell > card.
+    """
+    return """
+    QListWidget { background: transparent; border: none; outline: none; }
+    QListWidget::item {
         border-radius: 0px;
         border: none;
-        background-color: {card};
+        background-color: transparent;
         padding: 0px;
         margin: 0px;
-    }}
-    QListWidget::item:selected {{
-        background-color: {card};
-    }}
-    QListWidget::item:focus {{
+    }
+    QListWidget::item:selected {
+        background-color: transparent;
+    }
+    QListWidget::item:focus {
         outline: none;
-    }}
+    }
 """ + LIBRARY_SCROLLBAR_VERTICAL
 
 
