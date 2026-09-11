@@ -266,6 +266,7 @@ def steempeg_alert_actions(
     message: str,
     buttons: tuple[DialogButton, ...],
     *,
+    detail: str | None = None,
     rich_text: bool = False,
     min_width: int = 420,
 ) -> int:
@@ -274,7 +275,35 @@ def steempeg_alert_actions(
         parent,
         title,
         message,
+        detail=detail,
         buttons=buttons,
         rich_text=rich_text,
         min_width=min_width,
     )
+
+
+def steempeg_save_discard_cancel(
+    parent,
+    title: str,
+    message: str,
+    *,
+    detail: str | None = None,
+) -> Literal["save", "discard", "cancel"]:
+    """Unsaved-changes chooser. Close / Esc → cancel."""
+    idx = steempeg_alert_actions(
+        parent,
+        title,
+        message,
+        (
+            DialogButton("Save", "primary", accept=True),
+            DialogButton("Don't save", "secondary", accept=False),
+            DialogButton("Cancel", "secondary", accept=False),
+        ),
+        detail=detail,
+        min_width=420,
+    )
+    if idx == 0:
+        return "save"
+    if idx == 1:
+        return "discard"
+    return "cancel"
