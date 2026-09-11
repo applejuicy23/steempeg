@@ -556,6 +556,15 @@ class SteempegTitleBar(QWidget):
         title_lbl.setContentsMargins(0, 0, 0, 2)
         title_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         root.addWidget(title_lbl)
+        self._title_lbl = title_lbl
+
+        # PRO chip sits between name and vXX (hidden until seed enabled).
+        from steempeg.ui.widgets.pro_badge import ProBadge
+
+        self._pro_badge = ProBadge(size="title", parent=self)
+        self._pro_badge.hide()
+        root.addSpacing(6)
+        root.addWidget(self._pro_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
         if subtitle:
             sub_lbl = QLabel(subtitle)
@@ -569,6 +578,9 @@ class SteempegTitleBar(QWidget):
             sub_lbl.setContentsMargins(0, 0, 0, 2)
             sub_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             root.addWidget(sub_lbl)
+            self._subtitle_lbl = sub_lbl
+        else:
+            self._subtitle_lbl = None
 
         # Portable shell tools: (i) near version | Settings + Check for updates.
         # Hidden until ``set_shell_tools_visible(True)`` from the portable theatre path.
@@ -1006,10 +1018,20 @@ class SteempegTitleBar(QWidget):
         self._apply_bar_style(bg_color)
 
     def set_shell_tools_visible(self, visible: bool) -> None:
-        """Show About (i) | Settings + Updates in the title bar (Portable only)."""
+        """Show About (i) | Settings + Updates in the title bar.
+
+        Used by Portable theatre and by Desktop when
+        ``desktop_shell_tools_in_title_bar`` is on.
+        """
         tools = getattr(self, "_shell_tools", None)
         if tools is not None:
             tools.setVisible(bool(visible))
+
+    def set_pro_enabled(self, enabled: bool) -> None:
+        """Show/hide the Steempeg PRO chip after the word Steempeg."""
+        badge = getattr(self, "_pro_badge", None)
+        if badge is not None:
+            badge.setVisible(bool(enabled))
 
     def set_dev_button_visible(self, visible: bool) -> None:
         """Show portable title-bar Dev (</>) next to the traffic lights."""
@@ -1154,6 +1176,12 @@ def install_title_bar(main_window) -> SteempegTitleBar:
         title="Steempeg",
         subtitle=f"v{APP_VERSION_STR}",
     )
+    try:
+        from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+        title_bar.set_pro_enabled(resolve_steempeg_pro())
+    except Exception:
+        pass
     shell_layout.addWidget(title_bar)
 
     # Title bar stays flush to the window edges; the content keeps the old
