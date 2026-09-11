@@ -150,6 +150,7 @@ from steempeg.ui.settings_prefs import (
     KEY_DECK_CONTROLS,
     KEY_DESKTOP_RENDER_LAYOUT,
     KEY_DEV_MODE,
+    KEY_STEEMPEG_PRO,
     KEY_DISPLAY_TIMEZONE,
     KEY_FFMPEG_LOG_LEVEL,
     KEY_HWDEC_PREVIEW,
@@ -163,6 +164,7 @@ from steempeg.ui.settings_prefs import (
     KEY_LIBRARY_ALLOW_LIST_VIEW,
     KEY_SCREENSHOTS_FOLDER,
     KEY_QUEUE_HOVER,
+    KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR,
     KEY_SHELL_SIDE_LAYOUT,
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
@@ -191,6 +193,7 @@ from steempeg.ui.settings_prefs import (
     load_default_render_tab,
     load_deck_controls,
     load_dev_mode,
+    load_steempeg_pro,
     load_desktop_render_layout,
     load_display_timezone,
     load_ffmpeg_log_level,
@@ -203,6 +206,7 @@ from steempeg.ui.settings_prefs import (
     load_remember_library_tab,
     load_library_allow_list_view,
     load_queue_hover,
+    load_desktop_shell_tools_in_title_bar,
     load_shell_side_layout,
     load_startup_library_scan,
     load_test_new_fullscreen,
@@ -210,7 +214,9 @@ from steempeg.ui.settings_prefs import (
     normalize_date_format,
     normalize_deck_controls,
     normalize_dev_mode,
+    normalize_steempeg_pro,
     normalize_desktop_render_layout,
+    normalize_desktop_shell_tools_in_title_bar,
     normalize_display_timezone,
     normalize_export_folder,
     normalize_hide_update_available_badge,
@@ -231,10 +237,13 @@ from steempeg.ui.settings_prefs import (
     resolve_update_check_interval,
     set_markers_on_strip,
     set_queue_hover,
+    set_desktop_shell_tools_in_title_bar,
     set_shell_side_layout,
     get_queue_hover,
+    get_desktop_shell_tools_in_title_bar,
     get_shell_side_layout,
     DEFAULT_QUEUE_HOVER,
+    DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR,
     DEFAULT_APP_LOG_LEVEL,
     DEFAULT_FFMPEG_LOG_LEVEL,
     DEFAULT_MPV_LOG_LEVEL,
@@ -566,7 +575,10 @@ class SettingsDialog(SteempegDialog):
         btn_restart.clicked.connect(self._restart_app)
         restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         restart_row.addWidget(
-            self._hint("Quit and relaunch. Use after changing shell."),
+            self._hint(
+                "Quit and relaunch. If this window has unsaved choices, "
+                "you'll be asked to Save, Don't save, or Cancel."
+            ),
             1,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -682,6 +694,33 @@ class SettingsDialog(SteempegDialog):
                 )
             )
             self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
+
+        self._chk_shell_tools_title = SteempegCheckBox(
+            "About / Updates / Settings / Dev in title bar"
+        )
+        cur_shell_tools = load_desktop_shell_tools_in_title_bar(settings)
+        self._committed_shell_tools_title = cur_shell_tools
+        self._chk_shell_tools_title.setChecked(cur_shell_tools)
+        v.addWidget(self._chk_shell_tools_title)
+        if portable_shell:
+            self._chk_shell_tools_title.setEnabled(False)
+            v.addWidget(
+                self._hint(
+                    "Desktop only. Portable already keeps About / Updates / Settings "
+                    "in the title bar. Stock Desktop keeps them in the library footer."
+                )
+            )
+        else:
+            v.addWidget(
+                self._hint(
+                    "Off (default): About · Check for updates · Settings · Dev stay in the "
+                    "library footer mega-pill. On: same tools move to the window title "
+                    "bar (Portable language). Folder / Refresh stay in the footer. "
+                    "Checkbox previews live; Save persists. Cancel restores."
+                )
+            )
+            self._chk_shell_tools_title.toggled.connect(self._preview_shell_tools_title)
+
         self._shell_sides_preview_timer = QTimer(self)
         self._shell_sides_preview_timer.setSingleShot(True)
         self._shell_sides_preview_timer.setInterval(200)
@@ -1281,7 +1320,7 @@ class SettingsDialog(SteempegDialog):
         a.addWidget(
             self._hint(
                 "Off (default) = Size Big/Medium/Small only. "
-                "On = show a List toggle for the old table layout."
+                "On = add a List tile inside the Size popup (classic table layout)."
             )
         )
 
@@ -1332,10 +1371,18 @@ class SettingsDialog(SteempegDialog):
             "Also enables Console gamepad actions for QA."
         )
         a.addWidget(self._chk_dev_mode)
+        self._chk_steempeg_pro = SteempegCheckBox("Steempeg PRO (preview)")
+        self._chk_steempeg_pro.setChecked(load_steempeg_pro(settings))
+        self._chk_steempeg_pro.setToolTip(
+            "v50 seed: show the PRO badge in the title bar and a red splash wash. "
+            "Does not unlock converter knobs yet. Env STEEMPEG_PRO=1 also works."
+        )
+        a.addWidget(self._chk_steempeg_pro)
         a.addWidget(
             self._hint(
                 "Console mode lives under General → Shell. "
-                "Dev Mode → Deck pad emulates the controller."
+                "Dev Mode → Deck pad emulates the controller. "
+                "PRO preview is brand chrome only for now."
             )
         )
 
@@ -1635,24 +1682,202 @@ class SettingsDialog(SteempegDialog):
             except Exception:
                 pass
 
-    def _restart_app(self) -> None:
-        from steempeg.ui.message_dialog import steempeg_question
+    def _form_has_unsaved_changes(self) -> bool:
+        """True when current widgets differ from last Save / dialog open baseline."""
+        from steempeg.ui.shell_chooser import load_ask_ui_shell, load_ui_shell
 
-        if not steempeg_question(
-            self,
-            "Restart Steempeg?",
-            "Steempeg will quit and open again.",
-            detail="Unsaved dialog choices in this window are discarded. Save first if needed.",
+        # Shell — Restart's main reason to care about dirty.
+        current_shell = load_ui_shell() or UI_SHELL_DESKTOP
+        if self._combo_shell.currentData() != current_shell:
+            return True
+        ask_chk = getattr(self, "_chk_ask_shell", None)
+        if ask_chk is not None and ask_chk.isEnabled():
+            if bool(ask_chk.isChecked()) != bool(load_ask_ui_shell()):
+                return True
+
+        def _combo_diff(combo_attr: str, committed_attr: str, normalize) -> bool:
+            combo = getattr(self, combo_attr, None)
+            if combo is None:
+                return False
+            cur = normalize(combo.currentData())
+            opened = normalize(getattr(self, committed_attr, cur))
+            return cur != opened
+
+        from steempeg.ui.clip_card_style import normalize_clip_card_style
+        from steempeg.ui.design_tokens import normalize_ui_font
+        from steempeg.ui.icon_shape import normalize_icon_shape
+        from steempeg.ui.player_boost import (
+            normalize_speed_boost_ceiling,
+            normalize_volume_boost_ceiling,
+        )
+        from steempeg.ui.player_header_layout import normalize_header_layout
+        from steempeg.ui.player_header_size import normalize_player_header_size
+        from steempeg.ui.player_layout import normalize_player_layout
+        from steempeg.ui.player_outline import normalize_player_outline
+        from steempeg.ui.settings_prefs import (
+            normalize_desktop_render_layout,
+            normalize_desktop_shell_tools_in_title_bar,
+            normalize_markers_on_strip,
+            normalize_queue_hover,
+            normalize_render_tab,
+            normalize_shell_side_layout,
+        )
+        from steempeg.ui.timeline_strip_size import normalize_timeline_strip_size
+        from steempeg.ui.ui_theme import normalize_ui_theme
+
+        checks = (
+            ("_combo_ui_theme", "_committed_ui_theme", normalize_ui_theme),
+            ("_combo_shell_sides", "_committed_shell_sides", normalize_shell_side_layout),
+            (
+                "_combo_desktop_render",
+                "_committed_desktop_render",
+                normalize_desktop_render_layout,
+            ),
+            ("_combo_icon_shape", "_committed_icon_shape", normalize_icon_shape),
+            (
+                "_combo_clip_card_style",
+                "_committed_clip_card_style",
+                normalize_clip_card_style,
+            ),
+            ("_combo_header_layout", "_committed_header_layout", normalize_header_layout),
+            (
+                "_combo_header_size",
+                "_committed_header_size",
+                normalize_player_header_size,
+            ),
+            ("_combo_player_layout", "_committed_player_layout", normalize_player_layout),
+            (
+                "_combo_player_outline",
+                "_committed_player_outline",
+                normalize_player_outline,
+            ),
+            (
+                "_combo_timeline_strip",
+                "_committed_timeline_strip",
+                normalize_timeline_strip_size,
+            ),
+            (
+                "_combo_volume_ceiling",
+                "_committed_volume_ceiling",
+                normalize_volume_boost_ceiling,
+            ),
+            (
+                "_combo_speed_ceiling",
+                "_committed_speed_ceiling",
+                normalize_speed_boost_ceiling,
+            ),
+            ("_combo_render_tab", "_committed_render_tab", normalize_render_tab),
+        )
+        for combo_attr, committed_attr, normalize in checks:
+            if _combo_diff(combo_attr, committed_attr, normalize):
+                return True
+
+        if self._combo_ui_font is not None and _combo_diff(
+            "_combo_ui_font", "_committed_ui_font", normalize_ui_font
         ):
-            return
+            return True
+
+        chk_hover = getattr(self, "_chk_queue_hover", None)
+        if chk_hover is not None:
+            if normalize_queue_hover(chk_hover.isChecked()) != normalize_queue_hover(
+                getattr(self, "_committed_queue_hover", chk_hover.isChecked())
+            ):
+                return True
+
+        chk_tools = getattr(self, "_chk_shell_tools_title", None)
+        if chk_tools is not None:
+            if normalize_desktop_shell_tools_in_title_bar(
+                chk_tools.isChecked()
+            ) != normalize_desktop_shell_tools_in_title_bar(
+                getattr(
+                    self,
+                    "_committed_shell_tools_title",
+                    chk_tools.isChecked(),
+                )
+            ):
+                return True
+
+        chk_markers = getattr(self, "_chk_markers_on_strip", None)
+        if chk_markers is not None:
+            if normalize_markers_on_strip(
+                chk_markers.isChecked()
+            ) != normalize_markers_on_strip(
+                getattr(self, "_committed_markers_on_strip", chk_markers.isChecked())
+            ):
+                return True
+
+        # Export folder text vs committed path.
+        edit = getattr(self, "_edit_export_folder", None)
+        committed_export = getattr(self, "_committed_export_folder", None)
+        if edit is not None and committed_export is not None:
+            from steempeg.ui.settings_prefs import normalize_export_folder
+
+            if normalize_export_folder(edit.text()) != normalize_export_folder(
+                committed_export
+            ):
+                return True
+
+        # Allow-list + other Advanced toggles vs disk (no committed_*).
+        prev: dict = {}
+        if hasattr(self._app, "load_user_settings"):
+            try:
+                prev = self._app.load_user_settings() or {}
+            except Exception:
+                prev = {}
+        chk_allow = getattr(self, "_chk_allow_list", None)
+        if chk_allow is not None:
+            from steempeg.ui.settings_prefs import load_library_allow_list_view
+
+            if bool(chk_allow.isChecked()) != bool(load_library_allow_list_view(prev)):
+                return True
+
+        chk_notify = getattr(self, "_chk_notify", None)
+        if chk_notify is not None:
+            if bool(chk_notify.isChecked()) != bool(
+                prev.get(KEY_NOTIFY_ON_RENDER_COMPLETE, True)
+            ):
+                return True
+
+        return False
+
+    def _restart_app(self) -> None:
+        from steempeg.ui.message_dialog import (
+            steempeg_question,
+            steempeg_save_discard_cancel,
+        )
+
+        if self._form_has_unsaved_changes():
+            choice = steempeg_save_discard_cancel(
+                self,
+                "Unsaved changes",
+                "You have unsaved settings. Save before restarting?",
+                detail="Save keeps these choices. Don't save restarts with the last saved settings.",
+            )
+            if choice == "cancel":
+                return
+            if choice == "save":
+                deferred = self._persist_settings()
+                if deferred is None:
+                    return
+                for fn in deferred:
+                    try:
+                        fn()
+                    except Exception:
+                        import logging
+
+                        logging.exception(
+                            "Settings Save deferred apply failed before restart"
+                        )
+            # discard → leave disk as-is; process restart drops live previews
+        else:
+            if not steempeg_question(
+                self,
+                "Restart Steempeg?",
+                "Steempeg will quit and open again.",
+            ):
+                return
+
         app = self._app
-        # Persist shell prefs before relaunch so Restart after a shell change works
-        # even if the user forgot Save.
-        shell = self._combo_shell.currentData()
-        if shell in (UI_SHELL_DESKTOP, UI_SHELL_PORTABLE):
-            save_ui_shell(shell, app)
-        if getattr(self, "_chk_ask_shell", None) is not None and self._chk_ask_shell.isEnabled():
-            save_ask_ui_shell(self._chk_ask_shell.isChecked(), app)
         # Flush queue + panel before relaunch so the other shell sees the same state.
         if hasattr(app, "_persist_render_queue"):
             try:
@@ -1847,6 +2072,29 @@ class SettingsDialog(SteempegDialog):
                 import logging
 
                 logging.exception("Queue hover refresh failed for %s", enabled)
+
+    def _preview_shell_tools_title(self, *_args) -> None:
+        import logging
+
+        if getattr(self._app, "_portable_shell", False):
+            return
+        enabled = normalize_desktop_shell_tools_in_title_bar(
+            self._chk_shell_tools_title.isChecked()
+        )
+        set_desktop_shell_tools_in_title_bar(enabled)
+        logging.info("Desktop shell tools title-bar preview → %s", enabled)
+        self._refresh_shell_tools_title(enabled)
+
+    def _refresh_shell_tools_title(self, enabled: bool) -> None:
+        if hasattr(self._app, "refresh_desktop_shell_tools_placement"):
+            try:
+                self._app.refresh_desktop_shell_tools_placement(enabled)
+            except Exception:
+                import logging
+
+                logging.exception(
+                    "Desktop shell tools title-bar refresh failed for %s", enabled
+                )
 
     def _preview_header_layout(self, *_args) -> None:
         self._header_layout_preview_timer.start()
@@ -2071,6 +2319,30 @@ class SettingsDialog(SteempegDialog):
         logging.info("Queue hover cancelled → restored %s", committed)
         self._refresh_queue_hover(committed)
 
+    def _restore_shell_tools_title_on_cancel(self) -> None:
+        """Undo live title-bar shell-tools preview that was never Saved."""
+        import logging
+
+        chk = getattr(self, "_chk_shell_tools_title", None)
+        if chk is None:
+            return
+        committed = normalize_desktop_shell_tools_in_title_bar(
+            getattr(
+                self,
+                "_committed_shell_tools_title",
+                DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR,
+            )
+        )
+        live = normalize_desktop_shell_tools_in_title_bar(chk.isChecked())
+        if live == committed:
+            return
+        chk.blockSignals(True)
+        chk.setChecked(committed)
+        chk.blockSignals(False)
+        set_desktop_shell_tools_in_title_bar(committed)
+        logging.info("Desktop shell tools title-bar cancelled → restored %s", committed)
+        self._refresh_shell_tools_title(committed)
+
     def _restore_header_layout_on_cancel(self) -> None:
         """Undo live header-layout preview that was never Saved."""
         import logging
@@ -2199,6 +2471,7 @@ class SettingsDialog(SteempegDialog):
         self._restore_clip_card_style_on_cancel()
         self._restore_shell_sides_on_cancel()
         self._restore_queue_hover_on_cancel()
+        self._restore_shell_tools_title_on_cancel()
         self._restore_header_layout_on_cancel()
         self._restore_header_size_on_cancel()
         self._restore_player_layout_on_cancel()
@@ -2356,6 +2629,15 @@ class SettingsDialog(SteempegDialog):
             deferred.append(lambda h=hover: self._refresh_queue_hover(h))
         self._committed_queue_hover = hover
 
+        shell_tools = normalize_desktop_shell_tools_in_title_bar(
+            self._chk_shell_tools_title.isChecked()
+        )
+        pending[KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR] = shell_tools
+        set_desktop_shell_tools_in_title_bar(shell_tools)
+        if shell_tools != getattr(self, "_committed_shell_tools_title", shell_tools):
+            deferred.append(lambda e=shell_tools: self._refresh_shell_tools_title(e))
+        self._committed_shell_tools_title = shell_tools
+
         header_layout = normalize_header_layout(self._combo_header_layout.currentData())
         pending[KEY_PLAYER_HEADER_LAYOUT] = header_layout
         set_header_layout(header_layout)
@@ -2484,11 +2766,15 @@ class SettingsDialog(SteempegDialog):
         pending[KEY_HWDEC_PREVIEW] = normalize_hwdec_preview(self._combo_hwdec.currentData())
 
         dev_mode = normalize_dev_mode(self._chk_dev_mode.isChecked())
+        steempeg_pro = normalize_steempeg_pro(self._chk_steempeg_pro.isChecked())
         deck_controls = normalize_deck_controls(self._chk_deck_controls.isChecked())
         pending[KEY_DEV_MODE] = dev_mode
+        pending[KEY_STEEMPEG_PRO] = steempeg_pro
         pending[KEY_DECK_CONTROLS] = deck_controls
         if hasattr(self._app, "_refresh_dev_button_visibility"):
             deferred.append(self._app._refresh_dev_button_visibility)
+        if hasattr(self._app, "_refresh_steempeg_pro_chrome"):
+            deferred.append(self._app._refresh_steempeg_pro_chrome)
         if hasattr(self._app, "_sync_library_view_toggle_for_mode"):
             deferred.append(self._app._sync_library_view_toggle_for_mode)
 
