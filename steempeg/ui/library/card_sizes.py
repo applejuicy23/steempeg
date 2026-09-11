@@ -16,6 +16,8 @@ CARD_SIZES = (CARD_SIZE_BIG, CARD_SIZE_MEDIUM, CARD_SIZE_SMALL)
 
 DEFAULT_LIBRARY_CARD_SIZE = CARD_SIZE_BIG
 DEFAULT_QUEUE_CARD_SIZE = CARD_SIZE_MEDIUM
+# Screenshots stock = today's photo card (was the only size).
+DEFAULT_SCREENSHOTS_CARD_SIZE = CARD_SIZE_MEDIUM
 
 CARD_SIZE_LABELS = {
     CARD_SIZE_BIG: "Big",
@@ -35,7 +37,7 @@ class CardSizeSpec:
     cell_w: int
     cell_h: int
     spacing: int
-    # full = title+date · compact = title (+ short meta) · info = ⓘ only
+    # full = title+date · compact = title + meta · info = title marquee + info glyph
     footer_mode: str
     title_font: int
     meta_font: int
@@ -46,7 +48,7 @@ class CardSizeSpec:
     footer_pad_h: int
 
 
-# Big = today's ClipCard. Medium ≈ ScreenshotPhoto. Small = dense thumb + ⓘ.
+# Big = today's ClipCard. Medium ≈ ScreenshotPhoto. Small = dense thumb + title/info.
 _SPECS: dict[str, CardSizeSpec] = {
     CARD_SIZE_BIG: CardSizeSpec(
         key=CARD_SIZE_BIG,
@@ -55,8 +57,9 @@ _SPECS: dict[str, CardSizeSpec] = {
         card_h=184,
         thumb_w=254,
         thumb_h=144,
-        cell_w=260,
-        cell_h=190,
+        # Cell == card; spacing alone owns the gutter (no phantom item plate).
+        cell_w=254,
+        cell_h=184,
         spacing=15,
         footer_mode="full",
         title_font=13,
@@ -71,14 +74,15 @@ _SPECS: dict[str, CardSizeSpec] = {
         key=CARD_SIZE_MEDIUM,
         label="Medium",
         card_w=168,
-        card_h=142,
+        # Room for title+meta pads without killing 3-col at a slim splitter.
+        card_h=136,
         thumb_w=168,
         thumb_h=94,
-        cell_w=182,
-        cell_h=156,
-        spacing=14,
+        cell_w=168,
+        cell_h=136,
+        spacing=10,
         footer_mode="compact",
-        title_font=12,
+        title_font=13,  # same face size as Big
         meta_font=10,
         icon_px=20,
         badge_font=10,
@@ -89,13 +93,14 @@ _SPECS: dict[str, CardSizeSpec] = {
     CARD_SIZE_SMALL: CardSizeSpec(
         key=CARD_SIZE_SMALL,
         label="Small",
-        card_w=112,
-        card_h=88,
-        thumb_w=112,
-        thumb_h=68,
-        cell_w=124,
-        cell_h=100,
-        spacing=10,
+        # Between old micro (112) and Medium (168): title + info strip fits.
+        card_w=128,
+        card_h=108,
+        thumb_w=128,
+        thumb_h=78,
+        cell_w=128,
+        cell_h=108,
+        spacing=8,
         footer_mode="info",
         title_font=11,
         meta_font=9,
@@ -186,3 +191,96 @@ def queue_card_size_spec(
     size: str | None, *, default: str = DEFAULT_QUEUE_CARD_SIZE
 ) -> QueueCardSizeSpec:
     return _QUEUE_SPECS[normalize_card_size(size, default=default)]
+
+
+# --- Screenshots (Grid-only for now; List → v51) -----------------------------
+
+@dataclass(frozen=True)
+class ScreenshotCardSizeSpec:
+    key: str
+    label: str
+    card_w: int
+    card_h: int
+    thumb_h: int
+    footer_h: int
+    spacing: int
+    # full = title + date/time/size · compact = title + source·date · info = title + ⓘ
+    footer_mode: str
+    title_font: int
+    meta_font: int
+    icon_px: int
+    pad_h: int
+    pad_v: int
+
+
+_SCREENSHOT_SPECS: dict[str, ScreenshotCardSizeSpec] = {
+    CARD_SIZE_BIG: ScreenshotCardSizeSpec(
+        key=CARD_SIZE_BIG,
+        label="Big",
+        # Same outer footprint as Clips Big; taller footer so game logo +
+        # title stay above source icon / date (40px + 24px icon overlapped).
+        card_w=254,
+        card_h=184,
+        thumb_h=134,
+        footer_h=50,
+        spacing=15,
+        footer_mode="full",
+        title_font=13,
+        meta_font=11,
+        icon_px=18,
+        pad_h=12,
+        pad_v=6,
+    ),
+    CARD_SIZE_MEDIUM: ScreenshotCardSizeSpec(
+        key=CARD_SIZE_MEDIUM,
+        label="Medium",
+        # Stock Screenshots photo card (pre-Size ladder).
+        card_w=168,
+        card_h=142,
+        thumb_h=94,
+        footer_h=48,
+        spacing=14,
+        footer_mode="compact",
+        title_font=13,
+        meta_font=11,
+        icon_px=16,
+        pad_h=12,
+        pad_v=8,
+    ),
+    CARD_SIZE_SMALL: ScreenshotCardSizeSpec(
+        key=CARD_SIZE_SMALL,
+        label="Small",
+        # Match Clips Small — game logo on thumb + marquee title + info glyph.
+        card_w=128,
+        card_h=108,
+        thumb_h=78,
+        footer_h=30,
+        spacing=8,
+        footer_mode="info",
+        title_font=11,
+        meta_font=9,
+        icon_px=16,
+        pad_h=6,
+        pad_v=4,
+    ),
+}
+
+
+def screenshot_card_size_spec(
+    size: str | None, *, default: str = DEFAULT_SCREENSHOTS_CARD_SIZE
+) -> ScreenshotCardSizeSpec:
+    return _SCREENSHOT_SPECS[normalize_card_size(size, default=default)]
+
+
+def screenshot_cell_size(
+    size: str | None, *, default: str = DEFAULT_SCREENSHOTS_CARD_SIZE
+) -> QSize:
+    spec = screenshot_card_size_spec(size, default=default)
+    return QSize(spec.card_w, spec.card_h)
+
+
+def screenshot_grid_size(
+    size: str | None, *, default: str = DEFAULT_SCREENSHOTS_CARD_SIZE
+) -> QSize:
+    spec = screenshot_card_size_spec(size, default=default)
+    return QSize(spec.card_w + spec.spacing, spec.card_h + spec.spacing)
