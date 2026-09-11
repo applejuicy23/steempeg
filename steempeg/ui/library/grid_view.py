@@ -9,6 +9,7 @@ import PySide6.QtGui as qtg
 import PySide6.QtWidgets as qtw
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import design_tokens as tok
 from steempeg.ui import ui_theme as _ut
 from steempeg.ui.widgets.overflow_marquee import OverflowMarqueeLabel
 
@@ -21,10 +22,36 @@ def _clip_footer_color() -> str:
     return _ut.clip_card_chrome()[0]
 
 
+def _overlay_inset(spec) -> int:
+    """Keep CLIP / queue badges off the thumb bottom seam (Medium felt glued)."""
+    if getattr(spec, "footer_mode", "") == "info":
+        return 5
+    if getattr(spec, "footer_mode", "") == "compact":
+        return 8
+    return 6
+
+
+def _title_label_style(font_px: int) -> str:
+    return (
+        f"QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {font_px}px; "
+        f"font-family: {tok.FONT_APP}; background: transparent; border: none; }}"
+    )
+
+
+def _meta_label_style(font_px: int) -> str:
+    return (
+        f"QLabel {{ color: #888888; font-size: {font_px}px; "
+        f"font-family: {tok.FONT_APP}; background: transparent; border: none; }}"
+    )
+
+
 from steempeg.ui.design_tokens import CARD_PRESS_DURATION_MS, CARD_PRESS_SCALE
 from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 
 _QUEUE_BADGE_CYCLE_MS = 1000
+# Small ClipCard: hover thumb this long → fade game icon / CLIP / queue / health.
+_THUMB_PEEK_DELAY_MS = 2000
+_THUMB_PEEK_FADE_MS = 220
 
 
 def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
@@ -107,6 +134,29 @@ def _clip_pixmap_to_corners(
     painter.drawPixmap(0, 0, cropped)
     painter.end()
     return out
+
+
+def _format_compact_meta(date_str: str) -> str:
+    """Single-line meta for Medium: ``date · time · duration`` (drop empties)."""
+    raw = (date_str or "").strip()
+    if not raw:
+        return ""
+    dur = ""
+    main = raw
+    if "•" in raw:
+        main, _, rest = raw.partition("•")
+        dur = rest.strip()
+        if dur in ("--:--", "—", "--"):
+            dur = ""
+    lines = [ln.strip() for ln in main.replace("\r", "").split("\n") if ln.strip()]
+    parts: list[str] = []
+    if lines:
+        parts.append(lines[0])
+    if len(lines) > 1:
+        parts.append(lines[1])
+    if dur:
+        parts.append(dur)
+    return " · ".join(parts)
 
 
 class ClipCard(qtw.QWidget):
@@ -206,16 +256,19 @@ class ClipCard(qtw.QWidget):
             shaped = shaped_game_icon_pixmap(src, icon_px, shape) if not src.isNull() else None
             apply_square_icon(self.icon_label, shaped, icon_px)
 
+        inset = _overlay_inset(self._spec)
         self.badge_label = qtw.QLabel(badge_text, self.thumb_label)
         self.badge_label.setStyleSheet(
             f"background-color: #b29ae7; color: black; font-weight: bold; font-size: {self._spec.badge_font}px;"
-            "border-radius: 4px; padding: 2px 6px;"
+            f"font-family: {tok.FONT_APP}; border-radius: 4px; padding: 2px 6px;"
         )
         self.badge_label.adjustSize()
         badge_w = self.badge_label.width()
-        self.badge_label.move(tw - badge_w - 6, th - 24)
-        if self._spec.footer_mode == "info":
-            self.badge_label.hide()
+        self.badge_label.move(
+            tw - badge_w - inset,
+            th - self.badge_label.height() - inset,
+        )
+        # Small keeps CLIP — only the old ⓘ-only strip hid it.
 
         footer_bg = _clip_footer_color()
         plate = _clip_plate_color()
@@ -223,11 +276,14 @@ class ClipCard(qtw.QWidget):
         if status_badge and self._spec.footer_mode != "info":
             self.status_badge_label = qtw.QLabel(status_badge, self.thumb_label)
             self.status_badge_label.setStyleSheet(
-                "background-color: #555555; color: #e0e0e0; font-weight: bold; font-size: 10px;"
-                "border-radius: 4px; padding: 2px 6px;"
+                f"background-color: #555555; color: #e0e0e0; font-weight: bold; font-size: 10px;"
+                f"font-family: {tok.FONT_APP}; border-radius: 4px; padding: 2px 6px;"
             )
             self.status_badge_label.adjustSize()
-            self.status_badge_label.move(6, th - 22)
+            self.status_badge_label.move(
+                inset,
+                th - self.status_badge_label.height() - inset,
+            )
 
         if health_color:
             # True circle: radius = half the box (border counts toward the box).
@@ -239,14 +295,14 @@ class ClipCard(qtw.QWidget):
                 f"border: 2px solid {plate};"
                 f"border-radius: {hd // 2}px;"
             )
-            self.health_dot.move(tw - hd - 6, 6)
+            self.health_dot.move(tw - hd - inset, inset)
 
         # Queue index (portable Choose a clip) — bottom-left; game icon stays top-left.
         qb = self._spec.queue_badge
         self.queue_index_badge = qtw.QLabel(self.thumb_label)
         self.queue_index_badge.setFixedSize(qb, qb)
         self.queue_index_badge.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
-        self.queue_index_badge.move(6, th - qb - 6)
+        self.queue_index_badge.move(inset, th - qb - inset)
         self.queue_index_badge.hide()
         self._queue_badge_entries: list[tuple[int, str]] = []
         self._queue_badge_cycle_i = 0
@@ -266,55 +322,74 @@ class ClipCard(qtw.QWidget):
             }}
         """)
 
-        text_layout = qtw.QHBoxLayout(text_widget)
         pad = self._spec.footer_pad_h
-        text_layout.setContentsMargins(pad, 0, pad, 0)
-        text_layout.setSpacing(6 if self._spec.footer_mode == "info" else 8)
-
         title_lbl = OverflowMarqueeLabel(title.strip())
-        title_lbl.setStyleSheet(
-            f"QLabel {{ color: #e0e0e0; font-weight: bold; font-size: {self._spec.title_font}px; "
-            "background: transparent; border: none; }"
-        )
+        title_lbl.setStyleSheet(_title_label_style(self._spec.title_font))
         self.title_lbl = title_lbl
 
         date_lbl = qtw.QLabel(date_str)
         date_lbl.setTextInteractionFlags(qtc.Qt.TextInteractionFlag.NoTextInteraction)
-        date_lbl.setStyleSheet(
-            f"QLabel {{ color: #888888; font-size: {self._spec.meta_font}px; "
-            "background: transparent; border: none; }"
-        )
+        date_lbl.setStyleSheet(_meta_label_style(self._spec.meta_font))
         date_lbl.setSizePolicy(
             qtw.QSizePolicy.Policy.Maximum, qtw.QSizePolicy.Policy.Preferred
         )
         self.date_lbl = date_lbl
 
-        if self._spec.footer_mode == "info":
-            tip = self._info_tip or f"{title.strip()}\n{date_str}".strip()
-            info_btn = qtw.QLabel("ⓘ")
-            info_btn.setStyleSheet(
-                f"QLabel {{ color: #b29ae7; font-weight: bold; font-size: {self._spec.title_font}px; "
-                "background: transparent; border: none; }"
+        if self._spec.footer_mode == "compact":
+            # Title + meta — roomier pads; title face matches Big (13px + FONT_APP).
+            text_layout = qtw.QVBoxLayout(text_widget)
+            text_layout.setContentsMargins(pad, 6, pad, 6)
+            text_layout.setSpacing(3)
+            title_lbl.setSizePolicy(
+                qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
             )
-            info_btn.setToolTip(tip)
-            info_btn.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
-            self._info_label = info_btn
-            text_layout.addStretch(1)
-            text_layout.addWidget(info_btn, 0)
-            text_layout.addStretch(1)
-            title_lbl.hide()
-            date_lbl.hide()
-            self.setToolTip(tip)
-        elif self._spec.footer_mode == "compact":
-            text_layout.addWidget(title_lbl, 1)
-            # Date tucked into tooltip; keep a short meta if it fits.
+            date_lbl.setSizePolicy(
+                qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
+            )
             date_lbl.setToolTip(date_str)
-            if len(date_str) > 18:
-                date_lbl.setText(date_str.split("•")[0].strip() or date_str[:14])
-            text_layout.addWidget(date_lbl, 0)
+            date_lbl.setText(_format_compact_meta(date_str))
+            text_layout.addWidget(title_lbl)
+            text_layout.addWidget(date_lbl)
         else:
-            text_layout.addWidget(title_lbl, 1)
-            text_layout.addWidget(date_lbl, 0)
+            text_layout = qtw.QHBoxLayout(text_widget)
+            text_layout.setContentsMargins(pad, 0, pad, 0)
+            text_layout.setSpacing(6 if self._spec.footer_mode == "info" else 8)
+
+            if self._spec.footer_mode == "info":
+                # [ game name marquee | info.png ] — one strip; tip holds date/duration.
+                tip = self._info_tip or f"{title.strip()}\n{date_str}".strip()
+                text_layout.setContentsMargins(pad, 4, max(4, pad - 2), 4)
+                text_layout.setSpacing(4)
+                title_lbl.setSizePolicy(
+                    qtw.QSizePolicy.Policy.Expanding, qtw.QSizePolicy.Policy.Preferred
+                )
+                from steempeg.ui.icon_assets import title_bar_info_pixmap
+
+                info_px = max(12, min(14, int(self._spec.icon_px) - 2))
+                info_btn = qtw.QLabel()
+                info_btn.setFixedSize(info_px, info_px)
+                info_btn.setAlignment(qtc.Qt.AlignmentFlag.AlignCenter)
+                info_btn.setStyleSheet(
+                    "QLabel { background: transparent; border: none; }"
+                )
+                info_pix = title_bar_info_pixmap("#b29ae7", info_px)
+                if not info_pix.isNull():
+                    info_btn.setPixmap(info_pix)
+                else:
+                    info_btn.setText("i")
+                    info_btn.setStyleSheet(
+                        f"QLabel {{ color: #b29ae7; font-weight: bold; font-size: {info_px}px; "
+                        f"font-family: {tok.FONT_APP}; background: transparent; border: none; }}"
+                    )
+                info_btn.setToolTip(tip)
+                self._info_label = info_btn
+                text_layout.addWidget(title_lbl, 1)
+                text_layout.addWidget(info_btn, 0, qtc.Qt.AlignmentFlag.AlignVCenter)
+                date_lbl.hide()
+                self.setToolTip(tip)
+            else:
+                text_layout.addWidget(title_lbl, 1)
+                text_layout.addWidget(date_lbl, 0)
 
         layout.addWidget(self.thumb_label)
         layout.addWidget(text_widget)
@@ -352,6 +427,20 @@ class ClipCard(qtw.QWidget):
 
         self._border_overlay.raise_()
         self._apply_edge_radii()
+
+        # Small only (v50): linger on thumb → fade plaques to inspect the preview.
+        # v51: Settings toggle for Big/Medium too (not stock unless Emily flips it).
+        self._thumb_peek_enabled = self._spec.footer_mode == "info"
+        self._thumb_hovering = False
+        self._thumb_overlays_peeked = False
+        self._peek_targets: list[qtw.QWidget] = []
+        self._peek_fade_group: Optional[qtc.QParallelAnimationGroup] = None
+        self._peek_timer = qtc.QTimer(self)
+        self._peek_timer.setSingleShot(True)
+        self._peek_timer.setInterval(_THUMB_PEEK_DELAY_MS)
+        self._peek_timer.timeout.connect(self._fade_thumb_plaques_out)
+        if self._thumb_peek_enabled:
+            self.setMouseTracking(True)
 
     def set_edge_role(self, role: str) -> None:
         """Shelf flush for SteempegUI: on-screen top/bottom rows square against the panel."""
@@ -543,7 +632,8 @@ class ClipCard(qtw.QWidget):
         th = getattr(self, "_th", 144)
         badge.setStyleSheet(status_dot_style(color, size=qb))
         # Bottom-left of the thumbnail, clear of the FG/CLIP tag on the right.
-        badge.move(6, th - qb - 6)
+        inset = _overlay_inset(getattr(self, "_spec", None))
+        badge.move(inset, th - qb - inset)
         badge.show()
         badge.raise_()
 
@@ -614,8 +704,14 @@ class ClipCard(qtw.QWidget):
     def set_date_footer(self, text: str) -> None:
         """Update the muted date/duration strip without rebuilding the card."""
         lbl = getattr(self, "date_lbl", None)
-        if lbl is not None:
-            lbl.setText(text)
+        if lbl is None:
+            return
+        raw = text or ""
+        if getattr(self, "_spec", None) is not None and self._spec.footer_mode == "compact":
+            lbl.setToolTip(raw)
+            lbl.setText(_format_compact_meta(raw))
+        else:
+            lbl.setText(raw)
 
     def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
         """Dim dead / empty-thumb cards without relying on Qt disabled look."""
@@ -643,10 +739,33 @@ class ClipCard(qtw.QWidget):
             self.setGraphicsEffect(None)
 
     def set_selected(self, selected: bool) -> None:
+        selected = bool(selected)
+        # Tab hide / stack swap can skip leaveEvent — hover ring then sticks forever.
+        hover_dirty = False
+        if not self.underMouse() and self._hovered:
+            self._hovered = False
+            hover_dirty = True
+            if getattr(self, "_thumb_peek_enabled", False):
+                self._set_thumb_hover(False)
         if self._selected == selected:
+            if hover_dirty:
+                self._apply_selection_style()
             return
         self._selected = selected
         self._apply_selection_style()
+
+    def clear_chrome_hover(self) -> None:
+        """Drop hover / thumb-peek chrome (tab switch, selection clear)."""
+        dirty = bool(self._hovered)
+        self._hovered = False
+        if getattr(self, "_thumb_peek_enabled", False):
+            self._set_thumb_hover(False)
+        if dirty or self._selected:
+            self._apply_selection_style()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self.clear_chrome_hover()
+        super().hideEvent(event)
 
     def set_thumbnail(self, thumb_path: str) -> None:
         if thumb_path and os.path.exists(thumb_path):
@@ -667,6 +786,9 @@ class ClipCard(qtw.QWidget):
     def enterEvent(self, event) -> None:
         self._hovered = True
         self._apply_selection_style()
+        if getattr(self, "_thumb_peek_enabled", False):
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self._set_thumb_hover(self.thumb_label.geometry().contains(pos))
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -675,8 +797,94 @@ class ClipCard(qtw.QWidget):
         # release still arrives on this widget (same as ScreenshotPhoto).
         if self._pressed and self.mouseGrabber() is not self:
             self._finish_press()
+        if getattr(self, "_thumb_peek_enabled", False):
+            self._set_thumb_hover(False)
         self._apply_selection_style()
         super().leaveEvent(event)
+
+    def mouseMoveEvent(self, event: qtc.QMouseEvent) -> None:
+        if getattr(self, "_thumb_peek_enabled", False):
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self._set_thumb_hover(self.thumb_label.geometry().contains(pos))
+        super().mouseMoveEvent(event)
+
+    def _set_thumb_hover(self, over: bool) -> None:
+        if not getattr(self, "_thumb_peek_enabled", False):
+            return
+        if bool(over) == bool(getattr(self, "_thumb_hovering", False)):
+            return
+        self._thumb_hovering = bool(over)
+        timer = getattr(self, "_peek_timer", None)
+        if over:
+            if timer is not None:
+                timer.start()
+            return
+        if timer is not None:
+            timer.stop()
+        self._fade_thumb_plaques_in()
+
+    def _thumb_plaque_widgets(self) -> list[qtw.QWidget]:
+        out: list[qtw.QWidget] = []
+        for attr in (
+            "icon_label",
+            "badge_label",
+            "health_dot",
+            "queue_index_badge",
+            "status_badge_label",
+        ):
+            w = getattr(self, attr, None)
+            if w is not None and w.isVisible():
+                out.append(w)
+        return out
+
+    def _stop_peek_fade(self) -> None:
+        group = getattr(self, "_peek_fade_group", None)
+        if group is not None:
+            try:
+                group.stop()
+            except RuntimeError:
+                pass
+        self._peek_fade_group = None
+
+    def _animate_plaque_opacity(self, widgets: list[qtw.QWidget], end: float) -> None:
+        self._stop_peek_fade()
+        if not widgets:
+            return
+        group = qtc.QParallelAnimationGroup(self)
+        for w in widgets:
+            eff = w.graphicsEffect()
+            if not isinstance(eff, qtw.QGraphicsOpacityEffect):
+                eff = qtw.QGraphicsOpacityEffect(w)
+                w.setGraphicsEffect(eff)
+            start = float(eff.opacity())
+            anim = qtc.QPropertyAnimation(eff, b"opacity", group)
+            anim.setDuration(_THUMB_PEEK_FADE_MS)
+            anim.setStartValue(start)
+            anim.setEndValue(float(end))
+            anim.setEasingCurve(qtc.QEasingCurve.Type.InOutQuad)
+            group.addAnimation(anim)
+        self._peek_fade_group = group
+        group.start()
+
+    def _fade_thumb_plaques_out(self) -> None:
+        if not getattr(self, "_thumb_hovering", False):
+            return
+        targets = self._thumb_plaque_widgets()
+        self._peek_targets = list(targets)
+        if not targets:
+            return
+        self._thumb_overlays_peeked = True
+        self._animate_plaque_opacity(targets, 0.0)
+
+    def _fade_thumb_plaques_in(self) -> None:
+        targets = list(getattr(self, "_peek_targets", None) or [])
+        if not targets:
+            targets = self._thumb_plaque_widgets()
+        self._thumb_overlays_peeked = False
+        self._peek_targets = []
+        if not targets:
+            return
+        self._animate_plaque_opacity(targets, 1.0)
 
     def _apply_selection_style(self) -> None:
         _, _, idle_border = _ut.clip_card_chrome()
