@@ -236,7 +236,11 @@ def create_class(
     cls = {
         "id": f"cls_{uuid.uuid4().hex[:8]}",
         "name": (name or f"Class {idx}").strip() or f"Class {idx}",
-        "color": color or next_class_color(len(scoped)),
+        "color": (
+            next_class_color(len(scoped))
+            if color is None
+            else str(color).strip()
+        ),
         "icon": icon or "",
         "app_id": aid,
     }
@@ -245,6 +249,20 @@ def create_class(
     data["classes"] = classes
     save_marker_prefs(data)
     return cls
+
+
+def duplicate_class(class_id: str) -> dict | None:
+    """Clone name/color/icon/app_id under a new id (same game scope)."""
+    src = get_class(class_id)
+    if not src:
+        return None
+    base = str(src.get("name") or "Class").strip() or "Class"
+    return create_class(
+        f"{base} copy",
+        color=str(src.get("color") or ""),
+        icon=str(src.get("icon") or "") or None,
+        app_id=class_app_id(src) or None,
+    )
 
 
 def delete_class(class_id: str) -> None:
@@ -305,6 +323,7 @@ def marker_override(marker_key: str, prefs: dict | None = None) -> dict:
         "class_id": str(raw.get("class_id") or ""),
         "custom_icon": str(raw.get("custom_icon") or ""),
         "label": str(raw.get("label") or ""),
+        "description": str(raw.get("description") or ""),
         # Exception: stay in a colored class but keep the glyph / art untinted.
         "no_tint": bool(raw.get("no_tint")),
     }
@@ -316,6 +335,7 @@ def set_marker_override(
     class_id: str | None = None,
     custom_icon: str | None = None,
     label: str | None = None,
+    description: str | None = None,
     no_tint: bool | None = None,
     clear_missing: bool = False,
 ) -> dict:
@@ -338,6 +358,10 @@ def set_marker_override(
         ov["label"] = str(label)
     elif clear_missing:
         ov.pop("label", None)
+    if description is not None:
+        ov["description"] = str(description)
+    elif clear_missing:
+        ov.pop("description", None)
     if no_tint is not None:
         if no_tint:
             ov["no_tint"] = True
