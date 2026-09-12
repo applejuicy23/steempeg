@@ -4,21 +4,24 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QColorDialog,
     QComboBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -64,7 +67,37 @@ _ICON_BTN = """
 """
 _CLASS_ROW_H = 36
 _CLASS_ICON = 22
-_SHOT_EXPAND_AT = 5
+_COL_ICON = 0
+_COL_TIME = 1
+_COL_NAME = 2
+_COL_KIND = 3
+_TABLE_ICON = 22
+_TABLE_ROW_H = 36
+
+
+def _kind_label(kind: str) -> str:
+    key = str(kind or "").strip().lower()
+    if key == "user":
+        return "Custom"
+    if key == "screenshot":
+        return "Screenshot"
+    if key in ("steam", "legacy"):
+        return "Game"
+    return key.title() or "Marker"
+
+
+class _SortableTableItem(QTableWidgetItem):
+    """Numeric-aware sort via UserRole payload."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:
+        a = self.data(Qt.ItemDataRole.UserRole + 1)
+        b = other.data(Qt.ItemDataRole.UserRole + 1) if other is not None else None
+        if a is not None and b is not None:
+            try:
+                return a < b
+            except TypeError:
+                pass
+        return super().__lt__(other)
 
 
 def _marker_tabs_stylesheet() -> str:
@@ -86,132 +119,6 @@ def _marker_tabs_stylesheet() -> str:
     QTabBar::tab:selected {{ background: #4a3d66; color: #fff; }}
     QTabBar::tab:hover:!selected {{ background: {tab_hover}; color: #ddd; }}
 """
-
-
-class _MarkerPickRow(QFrame):
-    """One selectable marker instance row in the On clip list (icon + label)."""
-
-    activated = Signal(str)
-
-    def __init__(
-        self,
-        row_id: str,
-        label: str,
-        *,
-        icon_pix=None,
-        indent: int = 0,
-        tip: str = "",
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._row_id = row_id
-        # Backward-compat alias used by ScreenshotGroup selection helpers.
-        self._key = row_id
-        self.setObjectName("mkPick")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(ut.marker_settings_pick_row_stylesheet())
-        if tip:
-            self.setToolTip(tip)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8 + indent * 14, 4, 8, 4)
-        lay.setSpacing(10)
-        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        icon_lbl = QLabel()
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_lbl.setStyleSheet("background: transparent; border: none;")
-        apply_square_icon(icon_lbl, icon_pix, _CLASS_ICON)
-        lay.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self._lbl = QLabel(label)
-        self._lbl.setStyleSheet(
-            f"color: {tok.TEXT_PRIMARY}; font-size: 13px; background: transparent; "
-            f"font-family: {tok.FONT_APP};"
-        )
-        lay.addWidget(self._lbl, 1, Qt.AlignmentFlag.AlignVCenter)
-
-    def set_selected(self, selected: bool) -> None:
-        self.setStyleSheet(ut.marker_settings_pick_row_stylesheet(selected=selected))
-
-    def set_label(self, text: str) -> None:
-        self._lbl.setText(text)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.activated.emit(self._row_id)
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-
-class _ScreenshotGroup(QWidget):
-    """Collapsed by default when many screenshots — expand like Update Center."""
-
-    activated = Signal(str)
-
-    def __init__(self, rows: list[dict], parent=None):
-        super().__init__(parent)
-        self._rows = rows
-        self._expanded = False
-        self._pick_rows: list[_MarkerPickRow] = []
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(2)
-
-        header = QFrame()
-        header.setObjectName("mkPick")
-        header.setStyleSheet(ut.marker_settings_pick_row_stylesheet())
-        h = QHBoxLayout(header)
-        h.setContentsMargins(8, 6, 8, 6)
-        h.setSpacing(6)
-        title = QLabel(f"Screenshots ({len(rows)})")
-        title.setStyleSheet(
-            f"color: {tok.TEXT_PRIMARY}; font-size: 12px; font-weight: 600; "
-            f"background: transparent; font-family: {tok.FONT_APP};"
-        )
-        h.addWidget(title, 1)
-        self._expand_btn = QPushButton("▸")
-        self._expand_btn.setToolTip("Show all screenshots on this clip")
-        self._expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._expand_btn.setStyleSheet(_ICON_BTN)
-        self._expand_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._expand_btn.clicked.connect(self._toggle)
-        h.addWidget(self._expand_btn)
-        root.addWidget(header)
-
-        self._child_host = QWidget()
-        child = QVBoxLayout(self._child_host)
-        child.setContentsMargins(0, 0, 0, 0)
-        child.setSpacing(2)
-        for row in rows:
-            pick = _MarkerPickRow(
-                row.get("row_id") or row["key"],
-                row.get("_display") or row["label"],
-                icon_pix=row.get("_icon"),
-                indent=1,
-                tip=row.get("_tip") or row["key"],
-            )
-            pick.activated.connect(self.activated.emit)
-            child.addWidget(pick)
-            self._pick_rows.append(pick)
-        root.addWidget(self._child_host)
-        self._child_host.hide()
-
-    def _toggle(self) -> None:
-        self._expanded = not self._expanded
-        self._child_host.setVisible(self._expanded)
-        self._expand_btn.setText("▾" if self._expanded else "▸")
-
-    def expand(self) -> None:
-        if not self._expanded:
-            self._toggle()
-
-    def set_selected_key(self, key: str | None) -> None:
-        for pick in self._pick_rows:
-            pick.set_selected(pick._key == key)
-        if key and any(p._key == key for p in self._pick_rows):
-            self.expand()
 
 
 def _scroll_page(inner: QWidget) -> QScrollArea:
@@ -257,14 +164,17 @@ class MarkerSettingsDialog(SteempegDialog):
         self._app_id = str(app_id or "") or None
         self._clip_markers = list(clip_markers or [])
         self._is_cs2_clip = str(self._app_id or "") == mprefs.CS2_APP_ID
-        self.setMinimumSize(900, 680)
-        self.resize(1000, 780)
+        self.setMinimumSize(960, 680)
+        self.resize(1080, 780)
 
         self._prefs = mprefs.load_marker_prefs()
         self._clip_rows = mprefs.clip_marker_setting_rows(self._clip_markers)
         self._selected_row_id: str | None = None
         self._selected_key: str | None = None
         self._list_icon_cache: dict[str, object] = {}
+        self._shot_file_path: str | None = None
+        self._shot_folder_path: str | None = None
+        self._suppress_marker_seek = False
 
         root = self.content_layout
         root.setSpacing(10)
@@ -294,21 +204,6 @@ class MarkerSettingsDialog(SteempegDialog):
         title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
         root.addLayout(title_row)
-
-        if self._is_cs2_clip:
-            intro_text = (
-                "Configure timeline marker icons here. Open a CS2 clip to see its "
-                "markers on the On clip tab."
-            )
-        else:
-            intro_text = (
-                "Configure timeline marker icons here. Open a clip in the player to "
-                "edit its markers on the On clip tab."
-            )
-        intro = QLabel(intro_text)
-        intro.setWordWrap(True)
-        intro.setStyleSheet(tok.STYLE_PANEL_SUBTITLE)
-        root.addWidget(intro)
 
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(_marker_tabs_stylesheet())
@@ -352,9 +247,8 @@ class MarkerSettingsDialog(SteempegDialog):
         )
 
         field_qss = ut.marker_settings_field_stylesheet()
-        list_qss = ut.marker_settings_list_stylesheet()
-        class_list_qss = ut.marker_settings_list_stylesheet(item_padding="0px")
         host_qss = ut.marker_settings_list_host_stylesheet()
+        class_list_qss = ut.marker_settings_class_list_stylesheet()
         preview_qss = ut.marker_settings_preview_plate_stylesheet()
         primary = ut.update_center_btn_primary_stylesheet()
         secondary = ut.settings_dialog_secondary_button_stylesheet()
@@ -371,11 +265,9 @@ class MarkerSettingsDialog(SteempegDialog):
                 tok.dialog_scroll_stylesheet(tok.BG_SHELL) + LIBRARY_SCROLLBAR_VERTICAL
             )
             install_library_vertical_scrollbar(scroll)
-        if hasattr(self, "_marker_scroll"):
-            self._marker_scroll.setStyleSheet(host_qss + LIBRARY_SCROLLBAR_VERTICAL)
-            tok.apply_dialog_scroll_bg(
-                self._marker_scroll, ut.active_palette().bg_elevated
-            )
+        if hasattr(self, "_marker_table"):
+            self._marker_table.setStyleSheet(host_qss)
+            install_library_vertical_scrollbar(self._marker_table)
         if hasattr(self, "_class_list"):
             self._class_list.setStyleSheet(class_list_qss)
         for edit in self.findChildren(QLineEdit):
@@ -407,20 +299,6 @@ class MarkerSettingsDialog(SteempegDialog):
                 btn.setStyleSheet(danger)
             else:
                 btn.setStyleSheet(secondary)
-        for rid, pick in getattr(self, "_pick_rows", {}).items():
-            pick.setStyleSheet(
-                ut.marker_settings_pick_row_stylesheet(
-                    selected=(rid == getattr(self, "_selected_row_id", None))
-                )
-            )
-        shot_group = getattr(self, "_shot_group", None)
-        if shot_group is not None:
-            for pick in getattr(shot_group, "_pick_rows", []):
-                pick.setStyleSheet(
-                    ut.marker_settings_pick_row_stylesheet(
-                        selected=(pick._row_id == getattr(self, "_selected_row_id", None))
-                    )
-                )
 
     def _build_cs2_tab(self) -> QWidget:
         page = QWidget()
@@ -460,10 +338,18 @@ class MarkerSettingsDialog(SteempegDialog):
         left = QVBoxLayout()
         left.addWidget(self._section("Class list"))
         self._class_list = QListWidget()
+        self._class_list.setObjectName("markerClassList")
+        self._class_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self._class_list.setSelectionRectVisible(True)
+        self._class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._class_list.customContextMenuRequested.connect(self._class_context_menu)
         self._class_list.setMinimumWidth(200)
         self._class_list.setMinimumHeight(220)
         self._class_list.setSpacing(0)
         self._class_list.currentRowChanged.connect(self._on_class_row)
+        self._class_list.itemSelectionChanged.connect(self._on_class_selection_changed)
         left.addWidget(self._class_list, 1)
         btn_row = QHBoxLayout()
         btn_add = QPushButton("+ Create")
@@ -473,18 +359,6 @@ class MarkerSettingsDialog(SteempegDialog):
         btn_row.addWidget(btn_add)
         btn_row.addWidget(btn_del)
         left.addLayout(btn_row)
-        scope = str(self._app_id or "").strip()
-        if scope:
-            scope_hint = (
-                f"Classes for this game only (Steam app {scope}). "
-                "New classes stay under this game — not shared with every clip."
-            )
-        else:
-            scope_hint = (
-                "Open a clip with a known game to create classes for that game. "
-                "Older classes without a game still show until recreated."
-            )
-        left.addWidget(self._hint(scope_hint))
         row.addLayout(left, 1)
 
         right = QVBoxLayout()
@@ -530,7 +404,6 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addLayout(icon_row)
         ed.addStretch(1)
 
-        # Always visible — empty/disabled when nothing is selected on the left.
         right.addWidget(self._cls_editor, 1)
         row.addLayout(right, 2)
         lay.addLayout(row, 1)
@@ -550,59 +423,48 @@ class MarkerSettingsDialog(SteempegDialog):
                 f"color: {tok.TEXT_MUTED}; font-size: 13px; background: transparent; "
                 f"font-family: {tok.FONT_APP};"
             )
-            hint = QLabel("Nothing to select")
-            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setStyleSheet(_HINT)
             lay.addStretch(1)
             lay.addWidget(empty)
-            lay.addWidget(hint)
             lay.addStretch(2)
             return _scroll_page(page)
-
-        lay.addWidget(
-            self._hint(
-                "Every marker instance on this clip is listed (with its icon). "
-                "Custom pins and screenshots edit one instance. Game events "
-                "(kill, death, …) still share icon/class settings by type — "
-                "the editor shows how many markers that change affects. "
-                "If there are more than 5 screenshots, expand the Screenshots group."
-            )
-        )
 
         row = QHBoxLayout()
         row.setSpacing(12)
 
         left = QVBoxLayout()
         left.addWidget(self._section("Markers on clip"))
-        self._marker_scroll = QScrollArea()
-        self._marker_scroll.setWidgetResizable(True)
-        self._marker_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        self._marker_table = QTableWidget(0, 4)
+        self._marker_table.setObjectName("markerOnClipTable")
+        self._marker_table.setHorizontalHeaderLabels(["", "Time", "Name", "Kind"])
+        self._marker_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
         )
-        self._marker_scroll.setMinimumWidth(220)
-        self._marker_scroll.setMinimumHeight(240)
-        tok.apply_dialog_scroll_bg(self._marker_scroll, tok.BG_SHELL)
-        from steempeg.ui.library.library_styles import (
-            LIBRARY_SCROLLBAR_VERTICAL,
-            install_library_vertical_scrollbar,
+        self._marker_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
         )
-
-        self._marker_scroll.setStyleSheet(
-            ut.marker_settings_list_host_stylesheet() + LIBRARY_SCROLLBAR_VERTICAL
-        )
-        install_library_vertical_scrollbar(self._marker_scroll)
-        self._marker_list_inner = QWidget()
-        self._marker_list_inner.setObjectName("markerListInner")
-        self._marker_list_inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self._marker_list_layout = QVBoxLayout(self._marker_list_inner)
-        self._marker_list_layout.setContentsMargins(4, 4, 4, 4)
-        self._marker_list_layout.setSpacing(2)
-        self._marker_list_layout.addStretch(1)
-        self._marker_scroll.setWidget(self._marker_list_inner)
-        left.addWidget(self._marker_scroll, 1)
-        self._pick_rows: dict[str, _MarkerPickRow] = {}
-        self._shot_group: _ScreenshotGroup | None = None
-        row.addLayout(left, 1)
+        self._marker_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._marker_table.setAlternatingRowColors(False)
+        self._marker_table.setShowGrid(False)
+        self._marker_table.setWordWrap(False)
+        self._marker_table.setIconSize(QSize(_TABLE_ICON, _TABLE_ICON))
+        self._marker_table.verticalHeader().setVisible(False)
+        self._marker_table.verticalHeader().setDefaultSectionSize(_TABLE_ROW_H)
+        self._marker_table.setSortingEnabled(True)
+        hdr = self._marker_table.horizontalHeader()
+        hdr.setSectionsClickable(True)
+        hdr.setSortIndicatorShown(True)
+        hdr.setMinimumSectionSize(28)
+        hdr.setSectionResizeMode(_COL_ICON, QHeaderView.ResizeMode.Fixed)
+        self._marker_table.setColumnWidth(_COL_ICON, 40)
+        hdr.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(_COL_KIND, QHeaderView.ResizeMode.ResizeToContents)
+        self._marker_table.setMinimumWidth(320)
+        self._marker_table.setMinimumHeight(240)
+        self._marker_table.itemSelectionChanged.connect(self._on_marker_table_selection)
+        self._marker_table.itemDoubleClicked.connect(self._on_marker_table_double_clicked)
+        left.addWidget(self._marker_table, 1)
+        row.addLayout(left, 3)
 
         right = QVBoxLayout()
         right.setSpacing(8)
@@ -626,22 +488,20 @@ class MarkerSettingsDialog(SteempegDialog):
         prev_row.addWidget(self._mk_id_lbl, 1)
         ed.addLayout(prev_row)
 
-        self._mk_type_hint = QLabel("")
-        self._mk_type_hint.setWordWrap(True)
-        self._mk_type_hint.setStyleSheet(_HINT)
-        self._mk_type_hint.hide()
-        ed.addWidget(self._mk_type_hint)
-
-        ed.addWidget(QLabel("Label (optional)"))
+        ed.addWidget(QLabel("Name"))
         self._mk_label = QLineEdit()
-        self._mk_label.setPlaceholderText("How to show in tooltips")
+        self._mk_label.setPlaceholderText("Display name")
         self._mk_label.editingFinished.connect(self._save_marker_fields)
         ed.addWidget(self._mk_label)
 
+        ed.addWidget(QLabel("Description"))
+        self._mk_description = QLineEdit()
+        self._mk_description.setPlaceholderText("Optional notes")
+        self._mk_description.editingFinished.connect(self._save_marker_fields)
+        ed.addWidget(self._mk_description)
+
         ed.addWidget(QLabel("Class"))
         self._mk_class = QComboBox()
-        from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
-
         apply_dark_combo_popup(self._mk_class)
         self._mk_class.currentIndexChanged.connect(self._save_marker_fields)
         ed.addWidget(self._mk_class)
@@ -709,7 +569,6 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addWidget(self._mk_reset_btn)
         ed.addStretch(1)
 
-        # Always visible — empty/disabled when nothing is selected on the left.
         right.addWidget(self._mk_editor, 1)
         row.addLayout(right, 2)
         lay.addLayout(row, 1)
@@ -905,17 +764,74 @@ class MarkerSettingsDialog(SteempegDialog):
         self._class_list.setCurrentRow(self._class_list.count() - 1)
         self._on_class_row(self._class_list.currentRow())
 
-    def _delete_class(self) -> None:
-        cid = self._current_class_id()
-        if not cid:
+    def _selected_class_ids(self) -> list[str]:
+        ids: list[str] = []
+        for item in self._class_list.selectedItems():
+            cid = item.data(Qt.ItemDataRole.UserRole)
+            if cid:
+                ids.append(str(cid))
+        return ids
+
+    def _on_class_selection_changed(self) -> None:
+        # Keep editor on the current (focused) row within a multi-selection.
+        row = self._class_list.currentRow()
+        if row < 0:
+            self._clear_class_editor()
+        else:
+            self._on_class_row(row)
+
+    def _class_context_menu(self, pos) -> None:
+        item = self._class_list.itemAt(pos)
+        if item is None:
             return
-        if not steempeg_question(
-            self, "Delete class?", "Markers will stay, but without this class."
-        ):
+        if item not in self._class_list.selectedItems():
+            self._class_list.setCurrentItem(item)
+        menu = QMenu(self)
+        act_dup = menu.addAction("Duplicate")
+        act_del = menu.addAction("Delete")
+        chosen = menu.exec(self._class_list.mapToGlobal(pos))
+        if chosen is act_dup:
+            self._duplicate_selected_classes()
+        elif chosen is act_del:
+            self._delete_class()
+
+    def _duplicate_selected_classes(self) -> None:
+        ids = self._selected_class_ids()
+        if not ids:
             return
-        mprefs.delete_class(cid)
+        last = None
+        for cid in ids:
+            last = mprefs.duplicate_class(cid)
         self._emit_changed()
         self._reload_classes()
+        if last and last.get("id"):
+            target = str(last["id"])
+            for i in range(self._class_list.count()):
+                it = self._class_list.item(i)
+                if it and it.data(Qt.ItemDataRole.UserRole) == target:
+                    self._class_list.setCurrentRow(i)
+                    break
+
+    def _delete_class(self) -> None:
+        ids = self._selected_class_ids()
+        if not ids:
+            return
+        for cid in ids:
+            mprefs.delete_class(cid)
+        self._emit_changed()
+        self._reload_classes()
+
+    def keyPressEvent(self, event):
+        if (
+            event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and hasattr(self, "_class_list")
+            and self._class_list.hasFocus()
+            and self._selected_class_ids()
+        ):
+            self._delete_class()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _save_class_fields(self) -> None:
         cid = self._current_class_id()
@@ -1031,94 +947,126 @@ class MarkerSettingsDialog(SteempegDialog):
         return pix
 
     def _repopulate_markers(self) -> None:
-        if not hasattr(self, "_marker_list_layout"):
+        if not hasattr(self, "_marker_table"):
             return
         prev = self._selected_row_id
-        # Clear previous widgets (keep trailing stretch).
-        while self._marker_list_layout.count() > 1:
-            item = self._marker_list_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        self._pick_rows = {}
-        self._shot_group = None
+        self._suppress_marker_seek = True
+        self._marker_table.blockSignals(True)
+        self._marker_table.setSortingEnabled(False)
+        self._marker_table.setRowCount(0)
         self._list_icon_cache = {}
 
-        users: list[dict] = []
-        shots: list[dict] = []
-        others: list[dict] = []
         for row in self._clip_rows:
             row_id = row.get("row_id") or row["key"]
             key = row["key"]
             ov = mprefs.marker_override(key, self._prefs)
-            display = (ov.get("label") or "").strip() or row["label"]
-            if ov.get("class_id"):
-                cls = mprefs.get_class(ov["class_id"], self._prefs)
-                if cls:
-                    display = f"{display}  ·  {cls.get('name')}"
-            if row.get("time_ms") is not None:
-                tc = mprefs.format_marker_timecode(row.get("time_ms"))
-                display = f"{display}  ·  {tc}"
+            name = (ov.get("label") or "").strip() or row["label"]
+            time_ms = row.get("time_ms")
+            tc = (
+                mprefs.format_marker_timecode(time_ms)
+                if time_ms is not None
+                else "—"
+            )
+            kind = _kind_label(str(row.get("kind") or ""))
             tip = key
-            if row.get("time_ms") is not None:
-                tip = f"{key}  ·  {int(row['time_ms'])} ms"
-            decorated = {
-                **row,
-                "row_id": row_id,
-                "_display": display,
-                "_tip": tip,
-                "_icon": self._list_icon_for_row(row),
-            }
-            kind = row.get("kind")
-            if kind == "user":
-                users.append(decorated)
-            elif kind == "screenshot":
-                shots.append(decorated)
-            else:
-                others.append(decorated)
+            if time_ms is not None:
+                tip = f"{key}  ·  {int(time_ms)} ms"
 
-        def _add_pick(row: dict, *, indent: int = 0) -> None:
-            rid = row["row_id"]
-            pick = _MarkerPickRow(
-                rid,
-                row["_display"],
-                icon_pix=row.get("_icon"),
-                indent=indent,
-                tip=row["_tip"],
-            )
-            pick.activated.connect(self._on_marker_selected)
-            self._marker_list_layout.insertWidget(
-                self._marker_list_layout.count() - 1, pick
-            )
-            self._pick_rows[rid] = pick
+            r = self._marker_table.rowCount()
+            self._marker_table.insertRow(r)
+            self._marker_table.setRowHeight(r, _TABLE_ROW_H)
 
-        for row in users:
-            _add_pick(row)
+            icon_item = _SortableTableItem("")
+            pix = self._list_icon_for_row(row)
+            if pix is not None and not pix.isNull():
+                icon_item.setIcon(QIcon(pix))
+            icon_item.setData(Qt.ItemDataRole.UserRole, row_id)
+            icon_item.setData(Qt.ItemDataRole.UserRole + 1, kind.lower())
+            icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_item.setToolTip(tip)
 
-        if len(shots) > _SHOT_EXPAND_AT:
-            group = _ScreenshotGroup(shots)
-            group.activated.connect(self._on_marker_selected)
-            self._marker_list_layout.insertWidget(
-                self._marker_list_layout.count() - 1, group
-            )
-            self._shot_group = group
-            for pick in group._pick_rows:
-                self._pick_rows[pick._row_id] = pick
-        else:
-            for row in shots:
-                _add_pick(row)
+            time_item = _SortableTableItem(tc)
+            time_item.setData(Qt.ItemDataRole.UserRole, row_id)
+            sort_ms = int(time_ms) if time_ms is not None else 10**15
+            time_item.setData(Qt.ItemDataRole.UserRole + 1, sort_ms)
+            time_item.setToolTip(tip)
 
-        for row in others:
-            _add_pick(row)
+            name_item = _SortableTableItem(name)
+            name_item.setData(Qt.ItemDataRole.UserRole, row_id)
+            name_item.setData(Qt.ItemDataRole.UserRole + 1, name.lower())
+            name_item.setToolTip(tip)
 
-        if prev and prev in self._pick_rows:
-            self._on_marker_selected(prev)
+            kind_item = _SortableTableItem(kind)
+            kind_item.setData(Qt.ItemDataRole.UserRole, row_id)
+            kind_item.setData(Qt.ItemDataRole.UserRole + 1, kind.lower())
+            kind_item.setToolTip(tip)
+
+            self._marker_table.setItem(r, _COL_ICON, icon_item)
+            self._marker_table.setItem(r, _COL_TIME, time_item)
+            self._marker_table.setItem(r, _COL_NAME, name_item)
+            self._marker_table.setItem(r, _COL_KIND, kind_item)
+
+        self._marker_table.setSortingEnabled(True)
+        self._marker_table.sortItems(_COL_TIME, Qt.SortOrder.AscendingOrder)
+        self._marker_table.blockSignals(False)
+
+        if prev:
+            self._select_marker_row_id(prev, seek=False)
         else:
             self._on_marker_selected(None)
+        self._suppress_marker_seek = False
+
+    def _select_marker_row_id(self, row_id: str | None, *, seek: bool = False) -> None:
+        if not hasattr(self, "_marker_table") or not row_id:
+            self._on_marker_selected(None)
+            return
+        for r in range(self._marker_table.rowCount()):
+            item = self._marker_table.item(r, _COL_TIME)
+            if item and item.data(Qt.ItemDataRole.UserRole) == row_id:
+                self._marker_table.blockSignals(True)
+                self._marker_table.selectRow(r)
+                self._marker_table.blockSignals(False)
+                self._on_marker_selected(row_id)
+                if seek:
+                    row_info = self._row_by_id(row_id)
+                    if row_info:
+                        self._seek_player_to_ms(row_info.get("time_ms"))
+                return
+        self._on_marker_selected(None)
+
+    def _on_marker_table_selection(self) -> None:
+        items = self._marker_table.selectedItems()
+        if not items:
+            self._on_marker_selected(None)
+            return
+        row_id = items[0].data(Qt.ItemDataRole.UserRole)
+        self._on_marker_selected(str(row_id) if row_id else None)
+
+    def _on_marker_table_double_clicked(self, item) -> None:
+        """Double-click seeks the player timeline; single click only fills the editor."""
+        if item is None:
+            return
+        row_id = item.data(Qt.ItemDataRole.UserRole)
+        row_info = self._row_by_id(str(row_id) if row_id else None)
+        if not row_info:
+            return
+        self._seek_player_to_ms(row_info.get("time_ms"))
+
+    def _seek_player_to_ms(self, time_ms) -> None:
+        if time_ms is None or self._suppress_marker_seek:
+            return
+        try:
+            ms = int(time_ms)
+        except (TypeError, ValueError):
+            return
+        timeline = getattr(self._app, "custom_timeline", None)
+        if timeline is not None and hasattr(timeline, "force_jump"):
+            timeline.force_jump(ms)
 
     def _set_marker_editor_enabled(self, enabled: bool) -> None:
         for w in (
             self._mk_label,
+            self._mk_description,
             self._mk_class,
             self._mk_no_tint,
             self._mk_icon_btn,
@@ -1133,12 +1081,13 @@ class MarkerSettingsDialog(SteempegDialog):
         self._selected_row_id = None
         self._selected_key = None
         self._mk_id_lbl.setText("")
-        if hasattr(self, "_mk_type_hint"):
-            self._mk_type_hint.hide()
-            self._mk_type_hint.setText("")
         self._mk_label.blockSignals(True)
         self._mk_label.clear()
         self._mk_label.blockSignals(False)
+        if hasattr(self, "_mk_description"):
+            self._mk_description.blockSignals(True)
+            self._mk_description.clear()
+            self._mk_description.blockSignals(False)
         self._mk_class.blockSignals(True)
         self._mk_class.setCurrentIndex(0)
         self._mk_class.blockSignals(False)
@@ -1159,10 +1108,6 @@ class MarkerSettingsDialog(SteempegDialog):
         self._selected_row_id = row_id or None
         row_info = self._row_by_id(self._selected_row_id)
         self._selected_key = row_info["key"] if row_info else None
-        for rid, pick in self._pick_rows.items():
-            pick.set_selected(rid == self._selected_row_id)
-        if self._shot_group is not None:
-            self._shot_group.set_selected_key(self._selected_row_id)
 
         if not self._selected_key or not row_info:
             self._clear_marker_editor()
@@ -1182,25 +1127,6 @@ class MarkerSettingsDialog(SteempegDialog):
             id_line = f"{label}  ·  {tc}"
         self._mk_id_lbl.setText(f"{id_line}\nID: {key}")
 
-        if hasattr(self, "_mk_type_hint"):
-            shared = bool(row_info.get("shared_type"))
-            count = int(row_info.get("type_count") or 1)
-            if shared and count > 1:
-                self._mk_type_hint.setText(
-                    f"Applies to {count} markers of this type on the clip."
-                )
-                self._mk_type_hint.show()
-            elif shared:
-                self._mk_type_hint.setText(
-                    "Game event type — settings apply to every match of this type."
-                )
-                self._mk_type_hint.show()
-            else:
-                self._mk_type_hint.setText(
-                    "Edits apply to this marker instance only."
-                )
-                self._mk_type_hint.show()
-
         if hasattr(self, "_mk_reset_btn"):
             if row_info.get("shared_type"):
                 self._mk_reset_btn.setText("Reset this type")
@@ -1210,6 +1136,10 @@ class MarkerSettingsDialog(SteempegDialog):
         self._mk_label.blockSignals(True)
         self._mk_label.setText(ov.get("label") or "")
         self._mk_label.blockSignals(False)
+        if hasattr(self, "_mk_description"):
+            self._mk_description.blockSignals(True)
+            self._mk_description.setText(ov.get("description") or "")
+            self._mk_description.blockSignals(False)
         self._mk_class.blockSignals(True)
         idx = self._mk_class.findData(ov.get("class_id") or "")
         self._mk_class.setCurrentIndex(max(0, idx))
@@ -1396,13 +1326,16 @@ class MarkerSettingsDialog(SteempegDialog):
             key,
             class_id=self._mk_class.currentData() or "",
             label=self._mk_label.text().strip(),
+            description=self._mk_description.text().strip()
+            if hasattr(self, "_mk_description")
+            else "",
             no_tint=bool(
                 getattr(self, "_mk_no_tint", None) and self._mk_no_tint.isChecked()
             ),
         )
         self._emit_changed()
         self._repopulate_markers()
-        self._on_marker_selected(row_id)
+        self._select_marker_row_id(row_id, seek=False)
 
     def _pick_marker_icon(self) -> None:
         key = self._selected_key
@@ -1417,7 +1350,7 @@ class MarkerSettingsDialog(SteempegDialog):
             self._emit_changed()
             self._refresh_marker_preview()
             self._repopulate_markers()
-            self._on_marker_selected(row_id)
+            self._select_marker_row_id(row_id, seek=False)
 
     def _clear_marker_icon(self) -> None:
         key = self._selected_key
@@ -1428,7 +1361,7 @@ class MarkerSettingsDialog(SteempegDialog):
         self._emit_changed()
         self._refresh_marker_preview()
         self._repopulate_markers()
-        self._on_marker_selected(row_id)
+        self._select_marker_row_id(row_id, seek=False)
 
     def _reset_one_marker(self) -> None:
         key = self._selected_key
@@ -1438,7 +1371,7 @@ class MarkerSettingsDialog(SteempegDialog):
         mprefs.reset_marker_override(key)
         self._emit_changed()
         self._repopulate_markers()
-        self._on_marker_selected(row_id)
+        self._select_marker_row_id(row_id, seek=False)
 
     def _reset_steam(self) -> None:
         if not steempeg_question(
