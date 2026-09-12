@@ -2184,13 +2184,23 @@ class TimelineCanvas(QWidget):
 
 
 class TimelineOverviewScrollBar(QScrollBar):
-    """Rounded zoom overview strip + white playhead stick on full duration."""
+    """Rounded zoom overview strip + white playhead stick on full duration.
+
+    Thumb keeps a grab-friendly minimum width. Past that zoom, a lighter
+    inner pill shrinks/moves inside the outer thumb to show true viewport
+    scale and position (giga-zoom nest).
+    """
 
     # Match the filled pill look from the player chrome screenshots.
     _TRACK = QColor("#4a4a4a")
     _THUMB = QColor("#9f8dba")
     _THUMB_HOVER = QColor("#cdbfe6")
+    # Inner nest — darker violet so it reads against the outer thumb
+    # (white is reserved for the playhead stick).
+    _THUMB_INNER = QColor("#5c4d7a")
+    _THUMB_INNER_HOVER = QColor("#6e5c91")
     _MARK = QColor("#ffffff")
+    _MIN_THUMB_W = 30
     _M_L = 4
     _M_R = 4
     _M_T = 0
@@ -2218,6 +2228,23 @@ class TimelineOverviewScrollBar(QScrollBar):
     def _groove_rect(self) -> QRect:
         return self.rect().adjusted(self._M_L, self._M_T, -self._M_R, -self._M_B)
 
+    def _scroll_fraction(self) -> float:
+        gmin, gmax = int(self.minimum()), int(self.maximum())
+        span = gmax - gmin
+        if span <= 0:
+            return 0.0
+        return max(0.0, min(1.0, (int(self.value()) - gmin) / float(span)))
+
+    def _true_thumb_width(self, groove: QRect) -> float:
+        """Unclamped viewport width in groove px (can be < min grab width)."""
+        gmin, gmax = int(self.minimum()), int(self.maximum())
+        page = max(1, int(self.pageStep()))
+        span = gmax - gmin
+        gw = max(1, float(groove.width()))
+        if span <= 0:
+            return gw
+        return gw * float(page) / float(span + page)
+
     def _thumb_rect(self, groove: QRect) -> QRect:
         opt = QStyleOptionSlider()
         self.initStyleOption(opt)
@@ -2236,7 +2263,7 @@ class TimelineOverviewScrollBar(QScrollBar):
         gw = max(1, groove.width())
         if span <= 0:
             return QRect(groove.left(), groove.top(), gw, groove.height())
-        thumb_w = max(30, int(round(gw * page / float(span + page))))
+        thumb_w = max(self._MIN_THUMB_W, int(round(gw * page / float(span + page))))
         thumb_w = min(thumb_w, gw)
         usable = max(0, gw - thumb_w)
         x = groove.left() + int(round(usable * (int(self.value()) - gmin) / float(span)))
@@ -2259,10 +2286,37 @@ class TimelineOverviewScrollBar(QScrollBar):
         painter.drawRoundedRect(QRectF(groove), radius, radius)
 
         thumb = self._thumb_rect(groove)
+        active = self.underMouse() or self.isSliderDown()
         if thumb.width() > 0 and thumb.height() > 0:
-            active = self.underMouse() or self.isSliderDown()
             painter.setBrush(self._THUMB_HOVER if active else self._THUMB)
             painter.drawRoundedRect(QRectF(thumb), radius, radius)
+
+            # Giga-zoom nest: outer stays at min grab width; inner shows true scale.
+            true_w = self._true_thumb_width(groove)
+            outer_w = float(thumb.width())
+            if true_w + 0.5 < outer_w:
+                t = self._scroll_fraction()
+                # Ideal thumb would sit further along as it shrinks; map that
+                # offset into the clamped outer pill (0 at start → flush right).
+                slack = outer_w - true_w
+                inner_w = max(2.0, true_w)
+                # Keep a visible sliver even at extreme zoom.
+                if inner_w > outer_w - 1.0:
+                    inner_w = max(2.0, outer_w - 1.0)
+                    slack = outer_w - inner_w
+                inner_x = float(thumb.left()) + t * slack
+                inset = 1.0
+                inner_h = max(2.0, float(thumb.height()) - inset * 2.0)
+                inner_y = float(thumb.top()) + inset
+                inner_r = max(1.0, inner_h * 0.5)
+                painter.setBrush(
+                    self._THUMB_INNER_HOVER if active else self._THUMB_INNER
+                )
+                painter.drawRoundedRect(
+                    QRectF(inner_x, inner_y, inner_w, inner_h),
+                    inner_r,
+                    inner_r,
+                )
 
         canvas = self._canvas
         if canvas is not None:
