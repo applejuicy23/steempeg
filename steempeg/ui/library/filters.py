@@ -1866,20 +1866,19 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             os.path.normcase(os.path.normpath(p)) for p in sel_folders if p
         }
 
-        # Mid-rebuild (no pills yet) → keep the full total, not a flash of 0.
-        building = (
-            self.games_layout.count() == 0
-            or self.types_layout.count() == 0
-            or self.health_layout.count() == 0
-        )
-        if building:
+        # Mid-rebuild only while Games pills are not painted yet. Empty Type with
+        # Games present is the cascade after all games off — that must show 0,
+        # not the full library total (Apply Filters (286) with every game dark).
+        if self.games_layout.count() == 0 or self.health_layout.count() == 0:
             self.btn_apply.setText(f"Apply Filters ({total})")
             return
 
         # Intentional empty category (incl. all Folders off) → honest 0.
-        # Do NOT substitute the library total — that looked like the filter
-        # "forgot" a pending Folders selection (Apply Filters (258)).
-        if not sel_games or not sel_types or not sel_health:
+        # Type may be empty when no games are checked (cascade cleared it).
+        if not sel_games or not sel_health:
+            self.btn_apply.setText("Apply Filters (0)")
+            return
+        if self.types_layout.count() > 0 and not sel_types:
             self.btn_apply.setText("Apply Filters (0)")
             return
         if self.folders_layout.count() > 0 and not sel_folder_keys:
@@ -1901,7 +1900,8 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             r_dur = table.item(row, 3)
 
             if show and r_g and r_g.text().strip() not in sel_games: show = False
-            if show and r_t and r_t.text().strip() not in sel_types: show = False
+            if show and sel_types and r_t and r_t.text().strip() not in sel_types:
+                show = False
             if show and r_g:
                 row_health = _row_display_health_level(r_g)
                 if row_health not in sel_health:
@@ -1943,13 +1943,25 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         selected_health = self._get_checked_health_levels()
         selected_folders = self._get_checked_names(self.folders_layout)
         roots = self._configured_library_roots()
-        folder_filter_on = bool(selected_folders) or self.folders_layout.count() == 0
+        folder_pills = self.folders_layout.count() > 0
+        type_pills = self.types_layout.count() > 0
 
-        filter_active = bool(
-            selected_games and selected_types and selected_health and folder_filter_on
+        # Pills exist but none checked → match nothing (not "show everything").
+        # Empty Type after all-games-off is the same intentional zero.
+        empty_selection = (
+            (self.games_layout.count() > 0 and not selected_games)
+            or (type_pills and not selected_types)
+            or (not selected_health)
+            or (folder_pills and not selected_folders)
+        )
+        filter_active = (not empty_selection) and bool(
+            selected_games
+            and selected_health
+            and (selected_types or not type_pills)
+            and (selected_folders or not folder_pills)
         )
 
-        if not filter_active:
+        if empty_selection or not filter_active:
             full_stats = self._compute_stats()
             self._reset_bounds_to_stats(full_stats)
             min_dur_sec = full_stats['min_sec']
@@ -1975,7 +1987,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             max_time = self.input_max_time.time()
 
         saved = {
-            'active': filter_active,
+            'active': bool(filter_active),
             'min_date': min_date,
             'max_date': max_date,
             'min_time': min_time,
@@ -1995,8 +2007,11 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             self.app._persist_library_filter_memory()
 
         visible_count = 0
-        if not filter_active:
-            # No games/types/health/folders selected → treat as "show everything".
+        if empty_selection:
+            for row in range(table.rowCount()):
+                table.setRowHidden(row, True)
+            visible_count = 0
+        elif not filter_active:
             for row in range(table.rowCount()):
                 table.setRowHidden(row, False)
             visible_count = table.rowCount()
@@ -2016,8 +2031,10 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 item_date = table.item(row, 2)
                 item_dur = table.item(row, 3)
 
-                if show and item_game and item_game.text().strip() not in selected_games: show = False
-                if show and item_type and item_type.text().strip() not in selected_types: show = False
+                if show and item_game and item_game.text().strip() not in selected_games:
+                    show = False
+                if show and selected_types and item_type and item_type.text().strip() not in selected_types:
+                    show = False
                 if show and item_game:
                     row_health = _row_display_health_level(item_game)
                     if row_health not in selected_health:
