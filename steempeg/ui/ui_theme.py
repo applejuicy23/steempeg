@@ -1109,19 +1109,106 @@ def marker_settings_list_stylesheet(*, item_padding: str = "6px 8px") -> str:
 
 
 def marker_settings_list_host_stylesheet() -> str:
-    """On-clip marker picker scroll host."""
+    """On-clip marker table — Clips Manager List energy + dialog plate."""
+    from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
+
     p = _active
-    bg = "#242424" if p.name == UI_THEME_DEFAULT else p.bg_elevated
-    border = "#444444" if p.name == UI_THEME_DEFAULT else p.border_card
+    if p.name == UI_THEME_DEFAULT:
+        bg = "#2a2a2a"
+        border = "#555555"
+        row_border = "#282828"
+        row_hover = "#303030"
+    else:
+        bg = p.bg_elevated
+        border = p.border_default
+        row_border = p.border_panel
+        row_hover = p.neo_nav_hover_bg
     return f"""
     QScrollArea {{
-        background-color: {bg}; border: none;
+        background-color: {bg}; border: 1px solid {border}; border-radius: 8px;
     }}
     QScrollArea > QWidget {{
         background-color: {bg};
     }}
     QWidget#markerListInner {{
-        background-color: {bg}; border: 1px solid {border}; border-radius: 8px;
+        background-color: {bg}; border: none; border-radius: 8px;
+    }}
+    QTableWidget#markerOnClipTable {{
+        background-color: {bg};
+        border: 1px solid {border};
+        border-radius: 8px;
+        outline: none;
+        gridline-color: transparent;
+        color: #d1d1d1;
+        font-family: {tok.FONT_APP};
+        font-size: 13px;
+    }}
+    QTableWidget#markerOnClipTable::item {{
+        padding: 4px 12px;
+        border-bottom: 1px solid {row_border};
+        color: #d1d1d1;
+        font-size: 13px;
+        font-family: {tok.FONT_APP};
+    }}
+    QTableWidget#markerOnClipTable::item:hover {{
+        background-color: {row_hover};
+    }}
+    QTableWidget#markerOnClipTable::item:selected {{
+        background-color: #3a2e54;
+        color: #ffffff;
+    }}
+    QHeaderView {{
+        background-color: transparent;
+        border: none;
+    }}
+    QHeaderView::section {{
+        background-color: transparent;
+        color: #d1d1d1;
+        padding: 6px 12px;
+        border: none;
+        border-bottom: 1px solid {tok.BORDER_DEFAULT};
+        font-family: {tok.FONT_APP};
+        font-size: 13px;
+        font-weight: bold;
+    }}
+    QHeaderView::section:hover {{
+        color: #ffffff;
+    }}
+    QHeaderView::section:checked {{
+        color: #b29ae7;
+    }}
+    QHeaderView::up-arrow, QHeaderView::down-arrow {{
+        width: 0px; height: 0px;
+    }}
+""" + LIBRARY_SCROLLBAR_VERTICAL
+
+
+def marker_settings_class_list_stylesheet() -> str:
+    """Classes list plate — readable against dialog shell."""
+    p = _active
+    bg = "#2a2a2a" if p.name == UI_THEME_DEFAULT else p.bg_elevated
+    border = "#555555" if p.name == UI_THEME_DEFAULT else p.border_default
+    hover = "#333333" if p.name == UI_THEME_DEFAULT else p.neo_nav_hover_bg
+    sel = "#4a3d66"
+    return f"""
+    QListWidget#markerClassList {{
+        background-color: {bg};
+        border: 1px solid {border};
+        border-radius: 8px;
+        color: #e8e8e8;
+        font-family: {tok.FONT_APP};
+        outline: none;
+        padding: 4px;
+    }}
+    QListWidget#markerClassList::item {{
+        border-radius: 6px;
+        margin: 1px 0;
+    }}
+    QListWidget#markerClassList::item:selected {{
+        background-color: {sel}; color: #ffffff;
+    }}
+    QListWidget#markerClassList::item:hover:!selected {{
+        background-color: {hover};
     }}
 """
 
