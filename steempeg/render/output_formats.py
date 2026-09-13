@@ -11,8 +11,8 @@ from steempeg.render.encode_speed import video_encoder_extra_args  # noqa: F401 
 CONTAINERS = ("MP4", "MKV", "MOV", "WebM")
 
 VIDEO_CODEC_ITEMS = (
-    "H.264 (AVC)",
     "H.265 (HEVC)",
+    "H.264 (AVC)",
     "AV1",
     "VP9",
 )
