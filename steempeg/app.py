@@ -2809,6 +2809,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.custom_timeline.open_steam_screenshot_folder_requested.connect(
                     self.open_steam_screenshot_folder_for_marker
                 )
+                self.custom_timeline.open_marker_settings_requested.connect(
+                    self.open_marker_settings_for_marker
+                )
+                self.custom_timeline.duplicate_marker_requested.connect(
+                    self.duplicate_user_marker
+                )
         
         _launch_splash_progress(74, "Starting video engine…")
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
