@@ -48,6 +48,7 @@ from steempeg.ui.message_dialog import (
 )
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
+from steempeg.ui.widgets.overflow_marquee import OverflowMarqueeLabel
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 _SECTION = (
@@ -69,10 +70,12 @@ _CLASS_ROW_H = 36
 _CLASS_ICON = 22
 _COL_ICON = 0
 _COL_TIME = 1
-_COL_NAME = 2
-_COL_KIND = 3
+_COL_KIND = 2
+_COL_NAME = 3
 _TABLE_ICON = 22
 _TABLE_ROW_H = 36
+_KIND_COL_W = 78
+_TIME_COL_W = 56  # default ≤ 9:59; see mprefs.time_column_width_for_duration_ms
 
 
 def _kind_label(kind: str) -> str:
@@ -175,6 +178,10 @@ class MarkerSettingsDialog(SteempegDialog):
         self._shot_file_path: str | None = None
         self._shot_folder_path: str | None = None
         self._suppress_marker_seek = False
+        # Modeless — keep player / timeline / dash clickable underneath
+        # (same pattern as Desktop Render Settings).
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
 
         root = self.content_layout
         root.setSpacing(10)
@@ -435,7 +442,7 @@ class MarkerSettingsDialog(SteempegDialog):
         left.addWidget(self._section("Markers on clip"))
         self._marker_table = QTableWidget(0, 4)
         self._marker_table.setObjectName("markerOnClipTable")
-        self._marker_table.setHorizontalHeaderLabels(["", "Time", "Name", "Kind"])
+        self._marker_table.setHorizontalHeaderLabels(["", "Time", "Kind", "Name"])
         self._marker_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -454,17 +461,27 @@ class MarkerSettingsDialog(SteempegDialog):
         hdr.setSectionsClickable(True)
         hdr.setSortIndicatorShown(True)
         hdr.setMinimumSectionSize(28)
+        hdr.setStretchLastSection(True)
         hdr.setSectionResizeMode(_COL_ICON, QHeaderView.ResizeMode.Fixed)
         self._marker_table.setColumnWidth(_COL_ICON, 40)
-        hdr.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.Fixed)
+        self._marker_table.setColumnWidth(_COL_TIME, _TIME_COL_W)
+        hdr.setSectionResizeMode(_COL_KIND, QHeaderView.ResizeMode.Fixed)
+        self._marker_table.setColumnWidth(_COL_KIND, _KIND_COL_W)
         hdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(_COL_KIND, QHeaderView.ResizeMode.ResizeToContents)
-        self._marker_table.setMinimumWidth(320)
+        self._marker_table.setMinimumWidth(280)
         self._marker_table.setMinimumHeight(240)
+        self._marker_table.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self._marker_table.customContextMenuRequested.connect(
+            self._on_marker_table_context_menu
+        )
         self._marker_table.itemSelectionChanged.connect(self._on_marker_table_selection)
         self._marker_table.itemDoubleClicked.connect(self._on_marker_table_double_clicked)
+        self._apply_time_column_width()
         left.addWidget(self._marker_table, 1)
-        row.addLayout(left, 3)
+        row.addLayout(left, 2)
 
         right = QVBoxLayout()
         right.setSpacing(8)
@@ -570,7 +587,7 @@ class MarkerSettingsDialog(SteempegDialog):
         ed.addStretch(1)
 
         right.addWidget(self._mk_editor, 1)
-        row.addLayout(right, 2)
+        row.addLayout(right, 3)
         lay.addLayout(row, 1)
         self._clear_marker_editor()
         return _scroll_page(page)
@@ -901,6 +918,130 @@ class MarkerSettingsDialog(SteempegDialog):
                 return r
         return None
 
+    def _canvas(self):
+        return getattr(getattr(self._app, "custom_timeline", None), "canvas", None)
+
+    def _clip_duration_ms(self) -> int:
+        canvas = self._canvas()
+        dur = int(getattr(canvas, "duration_ms", 0) or 0) if canvas is not None else 0
+        if dur > 0:
+            return dur
+        times = [
+            int(m.get("time_ms") or 0)
+            for m in (self._clip_markers or [])
+            if m.get("time_ms") is not None
+        ]
+        return max(times) if times else 0
+
+    def _apply_time_column_width(self) -> None:
+        if not hasattr(self, "_marker_table"):
+            return
+        w = mprefs.time_column_width_for_duration_ms(self._clip_duration_ms())
+        self._marker_table.setColumnWidth(_COL_TIME, w)
+
+    def _sync_clip_markers_from_canvas(self) -> None:
+        canvas = self._canvas()
+        if canvas is None:
+            return
+        self._clip_markers = list(getattr(canvas, "markers", []) or [])
+        self._clip_rows = mprefs.clip_marker_setting_rows(self._clip_markers)
+        self._prefs = mprefs.load_marker_prefs()
+        self._apply_time_column_width()
+        self._repopulate_markers()
+
+    def _canvas_marker_for_row(self, row_info: dict | None) -> dict | None:
+        if not row_info:
+            return None
+        canvas = self._canvas()
+        if canvas is None:
+            return None
+        mid = str(row_info.get("marker_id") or "")
+        for m in getattr(canvas, "markers", []) or []:
+            if mid and str(m.get("id") or "") == mid:
+                return m
+            if mprefs.is_user_marker(m):
+                key = mprefs.user_instance_prefs_key(
+                    m.get("id"), time_ms=m.get("time_ms")
+                )
+                if key == row_info.get("key"):
+                    return m
+        return None
+
+    def _selected_marker_row_info(self) -> dict | None:
+        return self._row_by_id(self._selected_row_id)
+
+    def _on_marker_table_context_menu(self, pos) -> None:
+        table = self._marker_table
+        item = table.itemAt(pos)
+        if item is None:
+            return
+        row = item.row()
+        # Select the row under the cursor (same feel as Classes list).
+        id_item = table.item(row, _COL_ICON) or table.item(row, _COL_TIME)
+        row_id = id_item.data(Qt.ItemDataRole.UserRole) if id_item else None
+        if row_id:
+            self._select_marker_row_id(str(row_id), seek=False)
+        row_info = self._row_by_id(str(row_id) if row_id else None)
+        if not row_info:
+            return
+
+        is_user = str(row_info.get("kind") or "") == "user"
+        if not is_user:
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
+        act_dup = menu.addAction("Duplicate")
+        act_del = menu.addAction("Delete")
+        chosen = menu.exec(table.viewport().mapToGlobal(pos))
+        if chosen is act_dup:
+            self._duplicate_on_clip_marker(row_info)
+        elif chosen is act_del:
+            self._delete_on_clip_marker(row_info)
+
+    def _delete_on_clip_marker(self, row_info: dict) -> None:
+        canvas = self._canvas()
+        marker = self._canvas_marker_for_row(row_info)
+        if canvas is None or marker is None:
+            return
+        if not mprefs.is_user_marker(marker):
+            return
+        if hasattr(canvas, "delete_user_marker"):
+            canvas.delete_user_marker(marker)
+        self._sync_clip_markers_from_canvas()
+        self._emit_changed()
+
+    def _duplicate_on_clip_marker(self, row_info: dict) -> None:
+        app = self._app
+        if app is None or not hasattr(app, "duplicate_user_marker"):
+            return
+        src = self._canvas_marker_for_row(row_info)
+        if src is None:
+            return
+        new_marker = app.duplicate_user_marker(src, parent=self)
+        self._sync_clip_markers_from_canvas()
+        self._emit_changed()
+        if not new_marker:
+            return
+        for r in self._clip_rows:
+            if str(r.get("marker_id") or "") == str(new_marker.get("id") or ""):
+                self._select_marker_row_id(
+                    r.get("row_id") or r.get("key"), seek=False
+                )
+                break
+
+    def select_canvas_marker(self, marker: dict | None) -> None:
+        """Focus On clip on the timeline pin (stock / custom / screenshot)."""
+        if not marker:
+            return
+        self._sync_clip_markers_from_canvas()
+        row_id = mprefs.row_id_for_canvas_marker(marker)
+        if hasattr(self, "_tabs"):
+            self._tabs.setCurrentIndex(0)
+        if not row_id or not hasattr(self, "_marker_table"):
+            return
+        self._select_marker_row_id(row_id, seek=False)
+
     def _list_icon_for_row(self, row: dict):
         """Resolve a small pixmap for an On clip list row (cached by prefs key)."""
         key = str(row.get("key") or "")
@@ -955,6 +1096,7 @@ class MarkerSettingsDialog(SteempegDialog):
         self._marker_table.setSortingEnabled(False)
         self._marker_table.setRowCount(0)
         self._list_icon_cache = {}
+        self._apply_time_column_width()
 
         for row in self._clip_rows:
             row_id = row.get("row_id") or row["key"]
@@ -991,30 +1133,65 @@ class MarkerSettingsDialog(SteempegDialog):
             time_item.setData(Qt.ItemDataRole.UserRole + 1, sort_ms)
             time_item.setToolTip(tip)
 
-            name_item = _SortableTableItem(name)
-            name_item.setData(Qt.ItemDataRole.UserRole, row_id)
-            name_item.setData(Qt.ItemDataRole.UserRole + 1, name.lower())
-            name_item.setToolTip(tip)
-
             kind_item = _SortableTableItem(kind)
             kind_item.setData(Qt.ItemDataRole.UserRole, row_id)
             kind_item.setData(Qt.ItemDataRole.UserRole + 1, kind.lower())
             kind_item.setToolTip(tip)
 
+            # Display text lives in the marquee cell widget; item keeps sort key.
+            name_item = _SortableTableItem("")
+            name_item.setData(Qt.ItemDataRole.UserRole, row_id)
+            name_item.setData(Qt.ItemDataRole.UserRole + 1, name.lower())
+            name_item.setToolTip(tip)
+
             self._marker_table.setItem(r, _COL_ICON, icon_item)
             self._marker_table.setItem(r, _COL_TIME, time_item)
-            self._marker_table.setItem(r, _COL_NAME, name_item)
             self._marker_table.setItem(r, _COL_KIND, kind_item)
+            self._marker_table.setItem(r, _COL_NAME, name_item)
+            self._marker_table.setCellWidget(
+                r, _COL_NAME, self._make_name_marquee(name)
+            )
 
         self._marker_table.setSortingEnabled(True)
         self._marker_table.sortItems(_COL_TIME, Qt.SortOrder.AscendingOrder)
         self._marker_table.blockSignals(False)
+        self._sync_name_marquee_selection()
 
         if prev:
             self._select_marker_row_id(prev, seek=False)
         else:
             self._on_marker_selected(None)
         self._suppress_marker_seek = False
+
+    @staticmethod
+    def _name_marquee_stylesheet(*, selected: bool) -> str:
+        color = "#ffffff" if selected else "#d1d1d1"
+        return (
+            f"background: transparent; border: none; padding: 0 2px; "
+            f"color: {color}; font-size: 13px; font-family: {tok.FONT_APP};"
+        )
+
+    def _make_name_marquee(self, text: str) -> OverflowMarqueeLabel:
+        marquee = OverflowMarqueeLabel(
+            text, align=Qt.AlignmentFlag.AlignHCenter
+        )
+        marquee.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        marquee.setStyleSheet(self._name_marquee_stylesheet(selected=False))
+        return marquee
+
+    def _sync_name_marquee_selection(self) -> None:
+        if not hasattr(self, "_marker_table"):
+            return
+        selected_rows: set[int] = set()
+        sm = self._marker_table.selectionModel()
+        if sm is not None:
+            selected_rows = {idx.row() for idx in sm.selectedRows()}
+        for r in range(self._marker_table.rowCount()):
+            w = self._marker_table.cellWidget(r, _COL_NAME)
+            if isinstance(w, OverflowMarqueeLabel):
+                w.setStyleSheet(
+                    self._name_marquee_stylesheet(selected=(r in selected_rows))
+                )
 
     def _select_marker_row_id(self, row_id: str | None, *, seek: bool = False) -> None:
         if not hasattr(self, "_marker_table") or not row_id:
@@ -1026,6 +1203,7 @@ class MarkerSettingsDialog(SteempegDialog):
                 self._marker_table.blockSignals(True)
                 self._marker_table.selectRow(r)
                 self._marker_table.blockSignals(False)
+                self._sync_name_marquee_selection()
                 self._on_marker_selected(row_id)
                 if seek:
                     row_info = self._row_by_id(row_id)
@@ -1036,6 +1214,7 @@ class MarkerSettingsDialog(SteempegDialog):
 
     def _on_marker_table_selection(self) -> None:
         items = self._marker_table.selectedItems()
+        self._sync_name_marquee_selection()
         if not items:
             self._on_marker_selected(None)
             return
@@ -1399,7 +1578,32 @@ class MarkerSettingsDialog(SteempegDialog):
         self._repopulate_markers()
 
 
-def show_marker_settings_dialog(app) -> None:
+def show_marker_settings_dialog(app, *, select_marker=None) -> None:
+    """Open Marker Settings modeless so the player underneath stays usable.
+
+    ``select_marker`` — optional live timeline marker dict; focuses that On clip row.
+    """
+    existing = getattr(app, "_marker_settings_dlg", None)
+    if existing is not None:
+        try:
+            if existing.isVisible():
+                # Empty-on-open shell has no table — rebuild if we need a row.
+                if select_marker is not None and not hasattr(
+                    existing, "_marker_table"
+                ):
+                    existing.close()
+                else:
+                    if select_marker is not None:
+                        existing.select_canvas_marker(select_marker)
+                    elif hasattr(existing, "_sync_clip_markers_from_canvas"):
+                        existing._sync_clip_markers_from_canvas()
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+        except RuntimeError:
+            pass
+        app._marker_settings_dlg = None
+
     canvas = getattr(getattr(app, "custom_timeline", None), "canvas", None)
     app_id = getattr(canvas, "current_app_id", None) if canvas else None
     markers = list(getattr(canvas, "markers", []) or []) if canvas else []
@@ -1409,11 +1613,21 @@ def show_marker_settings_dialog(app) -> None:
         app_id=app_id,
         clip_markers=markers,
     )
+    dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    app._marker_settings_dlg = dlg
 
     def _on_changed():
-        if canvas is not None and hasattr(canvas, "invalidate_marker_prefs_cache"):
-            canvas.invalidate_marker_prefs_cache()
+        live = getattr(getattr(app, "custom_timeline", None), "canvas", None)
+        if live is not None and hasattr(live, "invalidate_marker_prefs_cache"):
+            live.invalidate_marker_prefs_cache()
+
+    def _on_finished(*_args):
+        if getattr(app, "_marker_settings_dlg", None) is dlg:
+            app._marker_settings_dlg = None
+        _on_changed()
 
     dlg.prefs_changed.connect(_on_changed)
-    dlg.exec()
-    _on_changed()
+    dlg.finished.connect(_on_finished)
+    dlg.show()
+    if select_marker is not None:
+        dlg.select_canvas_marker(select_marker)
