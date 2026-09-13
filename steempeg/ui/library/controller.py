@@ -3051,6 +3051,13 @@ class LibraryMixin:
         selected_folders = list(saved.get("folders") or [])
         roots = list(getattr(self, "clips_folders", None) or [])
 
+        if saved.get("match_none"):
+            return False
+
+        # Active filter with an explicit empty games list = match nothing.
+        if "games" in saved and not selected_games:
+            return False
+
         if selected_games and item_game and item_game.text().strip() not in selected_games:
             return False
         if selected_types and item_type and item_type.text().strip() not in selected_types:
@@ -3123,17 +3130,14 @@ class LibraryMixin:
             if not active:
                 for row in range(table.rowCount()):
                     table.setRowHidden(row, False)
+            elif saved.get("match_none"):
+                for row in range(table.rowCount()):
+                    table.setRowHidden(row, True)
             else:
                 for row in range(table.rowCount()):
                     table.setRowHidden(row, not self._library_filter_row_matches(row, saved))
-                # Preview / queue selection may be outside the filter — keep those
-                # cards visible so Choose-a-Clip doesn't scroll into empty space.
-                sm = table.selectionModel()
-                if sm is not None:
-                    for idx in sm.selectedRows():
-                        row = idx.row()
-                        if table.isRowHidden(row):
-                            table.setRowHidden(row, False)
+                # Do not force-show selected / preview / queue rows that fall
+                # outside the filter — filtered-out stays filtered-out.
         finally:
             table.setUpdatesEnabled(True)
 
@@ -3254,6 +3258,23 @@ class LibraryMixin:
         if not (max_dur <= 0 and min_dur <= 0) and min_sec is not None and max_sec is not None:
             if min_dur > int(min_sec) or (max_dur > 0 and max_dur < int(max_sec)):
                 n += 1
+
+        # All chips fully selected and every row still matches bounds → ghost badge
+        # (leftover date/duration snap after match-none). Treat as inactive.
+        chips_full = (
+            (not all_games or sel_games == all_games)
+            and (not all_types or sel_types == all_types)
+            and (not all_health or sel_health == all_health)
+            and (not all_folders or sel_folders == all_folders)
+        )
+        if chips_full and n > 0 and table.rowCount() > 0:
+            any_excluded = False
+            for row in range(table.rowCount()):
+                if not self._library_filter_row_matches(row, saved):
+                    any_excluded = True
+                    break
+            if not any_excluded:
+                return 0
         return n
 
     def _count_active_rendered_filter_categories(self) -> int:
@@ -5888,6 +5909,8 @@ class LibraryMixin:
         return icon
 
     def set_view_mode(self, mode, *, relayout: bool = True):
+        # Always apply table/grid visibility — chrome mode can desync from the
+        # real view after restore, and a silent "already grid" must still flip.
         if mode == "list":
             self.grid_clips.hide()
             self.ui.table_clips.show()
