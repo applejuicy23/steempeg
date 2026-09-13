@@ -645,6 +645,87 @@ def format_marker_timecode(time_ms: int | None) -> str:
     return f"{m}:{s:02d}"
 
 
+def time_column_width_for_duration_ms(duration_ms: int | None) -> int:
+    """On clip Time column width from clip length (longest displayable timecode)."""
+    total_s = max(0, int(duration_ms or 0) // 1000)
+    # Buckets match Emily: grow with m:ss → h:mm:ss → day-scale hours.
+    if total_s < 10 * 60:  # ≤ 9:59
+        return 56
+    if total_s < 60 * 60:  # ≤ 59:59
+        return 64
+    if total_s < 10 * 3600:  # ≤ 9:59:59
+        return 78
+    if total_s < 24 * 3600:  # ≤ 23:59:59
+        return 90
+    return 108  # ≥ 1 day
+
+
+def next_free_marker_time_ms(
+    markers: list | None,
+    preferred_ms: int,
+    *,
+    duration_ms: int | None = None,
+    step_ms: int = 1000,
+) -> int | None:
+    """Pick a free marker time near ``preferred_ms`` (step forward, then back).
+
+    A second is occupied when any marker falls in that whole second — same
+    resolution as the On clip Time column — so duplicates do not stack.
+    """
+    step = max(1, int(step_ms))
+    preferred = max(0, int(preferred_ms))
+    dur = int(duration_ms) if duration_ms is not None else None
+    if dur is not None and dur > 0:
+        preferred = min(preferred, max(0, dur - 1))
+
+    occupied_sec: set[int] = set()
+    occupied_ms: set[int] = set()
+    for m in markers or ():
+        try:
+            t = int(m.get("time_ms") or 0)
+        except (TypeError, ValueError):
+            continue
+        occupied_ms.add(t)
+        occupied_sec.add(t // 1000)
+
+    def _ok(ms: int) -> bool:
+        if ms < 0:
+            return False
+        if dur is not None and dur > 0 and ms >= dur:
+            return False
+        if ms in occupied_ms:
+            return False
+        if (ms // 1000) in occupied_sec:
+            return False
+        return True
+
+    if _ok(preferred):
+        return preferred
+
+    # Nudge forward by whole seconds, then backward.
+    start_sec = preferred // 1000
+    max_sec = (max(0, (dur or 0) - 1) // 1000) if dur and dur > 0 else start_sec + 10_000
+    for s in range(start_sec + 1, max_sec + 1):
+        cand = s * step
+        if _ok(cand):
+            return cand
+    for s in range(start_sec - 1, -1, -1):
+        cand = s * step
+        if _ok(cand):
+            return cand
+    return None
+
+
+def row_id_for_canvas_marker(marker: dict | None) -> str | None:
+    """Prefs / On clip ``row_id`` for a live timeline marker dict, or None."""
+    if not marker or marker.get("is_round"):
+        return None
+    rows = clip_marker_setting_rows([marker])
+    if not rows:
+        return None
+    return str(rows[0].get("row_id") or rows[0].get("key") or "") or None
+
+
 def clip_marker_setting_rows(clip_markers: list | None) -> list[dict]:
     """Configurable rows from the open clip — one row per marker instance.
 
