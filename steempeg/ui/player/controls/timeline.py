@@ -224,6 +224,8 @@ class TimelineCanvas(QWidget):
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
     open_steam_screenshot_folder_requested = Signal(object)
+    open_marker_settings_requested = Signal(object)
+    duplicate_marker_requested = Signal(object)
     # Host chrome (Marker settings gear) follows empty vs non-empty pin list.
     marker_chrome_changed = Signal()
 
@@ -1723,6 +1725,8 @@ class TimelineCanvas(QWidget):
         # Declare variables in advance so the code doesn't crash if the buttons are missing
         action_edit = None
         action_delete = None
+        action_duplicate = None
+        action_goto_settings = None
         
         # Check whether the marker is custom or system-defined
         is_user_marker = marker.get('icon_key') == 'usermarker'
@@ -1730,6 +1734,7 @@ class TimelineCanvas(QWidget):
         
         if is_user_marker:
             action_edit = menu.addAction("✏️ Edit Marker")
+            action_duplicate = menu.addAction("Duplicate")
             action_delete = menu.addAction("🗑️ Delete Marker")
             menu.addSeparator() 
 
@@ -1738,6 +1743,11 @@ class TimelineCanvas(QWidget):
         if is_screenshot_marker:
             action_open_screenshot = menu.addAction("🖼 Open Screenshot")
             action_open_screenshot_folder = menu.addAction("📂 Open Screenshot folder")
+            menu.addSeparator()
+
+        # Stock + custom + screenshots — jump into Marker Settings on the same pin.
+        if not marker.get("is_round"):
+            action_goto_settings = menu.addAction("Go to Marker Settings")
             menu.addSeparator()
             
         action_trim = menu.addAction("✂️ Set Trim Start Here")
@@ -1757,12 +1767,16 @@ class TimelineCanvas(QWidget):
         # Handle clicks
         if action_edit and action == action_edit:
             self.edit_user_marker(marker)
+        elif action_duplicate and action == action_duplicate:
+            self.duplicate_marker_requested.emit(marker)
         elif action_delete and action == action_delete:
             self.delete_user_marker(marker)
         elif action_open_screenshot and action == action_open_screenshot:
             self.open_steam_screenshot_requested.emit(marker)
         elif action_open_screenshot_folder and action == action_open_screenshot_folder:
             self.open_steam_screenshot_folder_requested.emit(marker)
+        elif action_goto_settings and action == action_goto_settings:
+            self.open_marker_settings_requested.emit(marker)
         elif action == action_trim:
             self.set_trim_start_from_marker(marker)
         elif action == action_screenshot: # Sending the order to take a screenshot
@@ -2353,6 +2367,8 @@ class CustomTimelineWidget(QScrollArea):
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
     open_steam_screenshot_folder_requested = Signal(object)
+    open_marker_settings_requested = Signal(object)
+    duplicate_marker_requested = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2382,6 +2398,12 @@ class CustomTimelineWidget(QScrollArea):
         self.canvas.open_steam_screenshot_requested.connect(self.open_steam_screenshot_requested.emit)
         self.canvas.open_steam_screenshot_folder_requested.connect(
             self.open_steam_screenshot_folder_requested.emit
+        )
+        self.canvas.open_marker_settings_requested.connect(
+            self.open_marker_settings_requested.emit
+        )
+        self.canvas.duplicate_marker_requested.connect(
+            self.duplicate_marker_requested.emit
         )
 
         # The CONTAINER is rigidly and permanently set to 38px! No changes when zooming, nothing will creep up!        self.setFixedHeight(38)
