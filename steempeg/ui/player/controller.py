@@ -4967,11 +4967,11 @@ class PlayerMixin:
     def add_user_marker(self, target_ms=None):
         """ Sets a tag according to Gaben's GOST standard and saves it to JSON. """
         
-        if not hasattr(self, 'custom_timeline'): return
+        if not hasattr(self, 'custom_timeline'): return None
         canvas = self.custom_timeline.canvas
         
         markers_list = getattr(canvas, 'markers', None)
-        if markers_list is None: return
+        if markers_list is None: return None
 
         # FIX: The "clicked" signal of QPushButton passes a boolean (False). 
         # We must ignore it so the marker doesn't fly to 0:00!
@@ -4982,7 +4982,7 @@ class PlayerMixin:
             
         for m in markers_list:
             if m.get('time_ms', -1) == current_time:
-                return 
+                return None
 
         # Generate a powerful, unique ID
         new_id = str(int(time.time() * 1000))
@@ -5013,7 +5013,7 @@ class PlayerMixin:
                 rendered_path,
                 canvas_markers_to_sidecar(markers_list),
             )
-            return
+            return internal_marker
 
         # 2. Persist: Steam timeline → app cache; missing Steam JSON → steempeg_timeline.json
         from steempeg.core.clip_markers_cache import (
@@ -5050,7 +5050,7 @@ class PlayerMixin:
             )
             if not ok:
                 logging.warning("Failed to persist user marker to %s", json_path)
-            return
+            return internal_marker
 
         if hasattr(self, "cache_dir") and self.cache_dir:
             canvas._markers_cache_dir = self.cache_dir
@@ -5068,6 +5068,150 @@ class PlayerMixin:
                 )
         else:
             logging.warning("No cache_dir — user marker not persisted")
+        return internal_marker
+
+    def duplicate_user_marker(self, marker, *, parent=None):
+        """Clone a custom pin at +1s (nudge forward/back if that second is taken).
+
+        Copies title / description / class / icon prefs onto the new instance.
+        Returns the new marker dict, or None if nothing was created.
+        """
+        from steempeg.services import marker_prefs as mprefs
+        from steempeg.ui.message_dialog import steempeg_information
+
+        if not mprefs.is_user_marker(marker):
+            return None
+        if not hasattr(self, "custom_timeline"):
+            return None
+        canvas = self.custom_timeline.canvas
+        markers_list = getattr(canvas, "markers", None)
+        if markers_list is None:
+            return None
+
+        src_ms = int(marker.get("time_ms") or 0)
+        preferred = src_ms + 1000
+        duration_ms = int(getattr(canvas, "duration_ms", 0) or 0)
+        target = mprefs.next_free_marker_time_ms(
+            markers_list,
+            preferred,
+            duration_ms=duration_ms if duration_ms > 0 else None,
+        )
+        if target is None:
+            host = parent or getattr(self, "ui", None)
+            steempeg_information(
+                host,
+                "No free second",
+                "Every second on this clip already has a marker — "
+                "nothing left to duplicate into.",
+            )
+            return None
+
+        before_ids = {str(m.get("id") or "") for m in markers_list}
+        created = self.add_user_marker(target)
+        new_marker = created
+        if new_marker is None:
+            for m in markers_list:
+                mid = str(m.get("id") or "")
+                if mid and mid not in before_ids:
+                    new_marker = m
+                    break
+        if new_marker is None:
+            return None
+
+        src_key = mprefs.user_instance_prefs_key(
+            marker.get("id"), time_ms=marker.get("time_ms")
+        )
+        ov = mprefs.marker_override(src_key)
+        title = (
+            str(marker.get("title") or "").strip()
+            or str(ov.get("label") or "").strip()
+        )
+        desc = (
+            str(marker.get("desc") or "").strip()
+            or str(ov.get("description") or "").strip()
+        )
+        if title:
+            new_marker["title"] = title
+        if desc:
+            new_marker["desc"] = desc
+
+        new_key = mprefs.user_instance_prefs_key(
+            new_marker.get("id"), time_ms=new_marker.get("time_ms")
+        )
+        if any(
+            [
+                ov.get("label"),
+                ov.get("description"),
+                ov.get("class_id"),
+                ov.get("custom_icon"),
+                ov.get("no_tint"),
+            ]
+        ) or title or desc:
+            mprefs.set_marker_override(
+                new_key,
+                class_id=ov.get("class_id") or "",
+                custom_icon=ov.get("custom_icon") or "",
+                label=ov.get("label") or title or "",
+                description=ov.get("description") or desc or "",
+                no_tint=bool(ov.get("no_tint")),
+            )
+
+        try:
+            from steempeg.core.clip_markers_cache import (
+                is_steempeg_timeline_json,
+                sync_user_markers_to_steempeg_timeline,
+                update_user_marker_fields,
+            )
+
+            rendered_path = getattr(canvas, "rendered_media_path", None)
+            if rendered_path and os.path.isfile(rendered_path) and hasattr(
+                self, "cache_dir"
+            ):
+                from steempeg.core.rendered_media import (
+                    canvas_markers_to_sidecar,
+                    save_markers_sidecar,
+                )
+
+                save_markers_sidecar(
+                    self.cache_dir,
+                    rendered_path,
+                    canvas_markers_to_sidecar(
+                        [
+                            m
+                            for m in markers_list
+                            if m.get("icon_key") == "usermarker"
+                        ]
+                    ),
+                )
+            else:
+                json_path = getattr(canvas, "current_json_path", None)
+                if is_steempeg_timeline_json(json_path):
+                    sync_user_markers_to_steempeg_timeline(
+                        json_path,
+                        markers_list,
+                        offset_ms=int(
+                            getattr(canvas, "current_offset_ms", 0) or 0
+                        ),
+                    )
+                else:
+                    update_user_marker_fields(
+                        getattr(self, "cache_dir", None)
+                        or getattr(canvas, "_markers_cache_dir", None),
+                        new_marker,
+                        clip_path=getattr(canvas, "current_clip_path", None),
+                        json_path=json_path,
+                    )
+        except Exception:
+            logging.exception("Failed to persist duplicated marker fields")
+
+        if hasattr(canvas, "invalidate_marker_prefs_cache"):
+            canvas.invalidate_marker_prefs_cache()
+        if hasattr(canvas, "notify_markers_changed"):
+            canvas.notify_markers_changed()
+        else:
+            canvas.update()
+        return new_marker
+
     def take_screenshot(self, target_ms=None):
         """ Takes a clean screenshot directly from MPV and saves it to the global folder. """
         if not hasattr(self, 'player') or not self.player: return
@@ -5248,6 +5392,12 @@ class PlayerMixin:
                 lambda _checked=False, p=path: self._open_file_with_default_app(p)
             )
         pick.exec(QCursor.pos())
+
+    def open_marker_settings_for_marker(self, marker):
+        """Open Marker Settings modeless and select this timeline pin (stock or custom)."""
+        from steempeg.ui.marker_settings_dialog import show_marker_settings_dialog
+
+        show_marker_settings_dialog(self, select_marker=marker)
 
     def open_steam_screenshot_folder_for_marker(self, marker):
         """Open the Steam screenshots folder with the matching screenshot selected."""
