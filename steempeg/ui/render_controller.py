@@ -40,7 +40,7 @@ _DEFAULT_CLIP_SESSION = {
     "zoom_level": 1.0,
     "scroll_x": 0,
     "container": "MP4",
-    "codec_text": "H.264 (AVC)",
+    "codec_text": "H.265 (HEVC)",
     "audio_format": "AAC",
     "output_preset": "Custom",
     "audio_only": False,
@@ -427,7 +427,7 @@ class RenderMixin:
                     continue
                 ui.combo_codec.addItem(item)
             if ui.combo_codec.count():
-                ui.combo_codec.setCurrentIndex(min(1, ui.combo_codec.count() - 1))
+                ui.combo_codec.setCurrentIndex(0)
 
         if hasattr(ui, "combo_audio_format"):
             ui.combo_audio_format.clear()
@@ -3228,7 +3228,7 @@ class RenderMixin:
             self.update_final_setup()
 
     def _reset_export_to_custom_defaults(self) -> None:
-        """When the user picks Custom preset, start from standard MP4/H.264/AAC."""
+        """When the user picks Custom preset, start from standard MP4/H.265/AAC."""
         self._apply_export_session_state(dict(_DEFAULT_CLIP_SESSION), silent=True)
 
     def _apply_clip_session_state(self, state: dict | None, *, silent: bool = True) -> None:
