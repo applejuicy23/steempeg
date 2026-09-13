@@ -1269,6 +1269,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         return super().eventFilter(source, event)
 
     def _on_games_paint_changed(self):
+        self._revive_filters_after_game_pick()
         self._refresh_cascade_after_games()
         self.update_live_count()
 
@@ -1356,15 +1357,18 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 names.append(w.property("raw_name"))
         return names
 
-    def _heal_all_off_pills(self, layout) -> bool:
+    def _heal_all_off_pills(self, layout, *, allow_all_off: bool = False) -> bool:
         """If pills exist but none are checked, turn them all on.
 
         Stale ``saved_filter_state`` (renamed games, moved library roots, old
         type labels like ``🎬 Clip`` vs FG/BG) can reopen with every chip off —
         which made Apply Filters show ``(0)`` while the chips still listed
         games/folders. Return True when a heal ran.
+
+        ``allow_all_off`` — intentional match-none (user applied with every
+        game/folder chip off); do not resurrect all-on.
         """
-        if layout.count() == 0:
+        if allow_all_off or layout.count() == 0:
             return False
         any_on = False
         widgets = []
@@ -1480,20 +1484,34 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 item.widget().deleteLater()
 
         roots = sorted(available_roots)
-        if (
+        match_none = bool(
             saved_state
             and saved_state.get("active")
-            and saved_state.get("folders")
+            and saved_state.get("match_none")
+        )
+        if match_none:
+            for root in roots:
+                self._folder_checked_memory[root] = False
+        elif (
+            saved_state
+            and saved_state.get("active")
+            and saved_state.get("folders") is not None
+            and "folders" in saved_state
         ):
             # normcase: Windows path case must not drop saved folder pills on reopen.
             saved = {
                 os.path.normcase(os.path.normpath(p))
-                for p in saved_state["folders"]
+                for p in (saved_state.get("folders") or [])
                 if p
             }
             # Stale paths (moved Steam library / different drive letter) would
             # otherwise leave every Folders chip off → Apply Filters (0).
-            if any(os.path.normcase(root) in saved for root in roots):
+            # Explicit empty folders list = match none (keep all off).
+            if not saved:
+                for root in roots:
+                    self._folder_checked_memory[root] = False
+                match_none = True
+            elif any(os.path.normcase(root) in saved for root in roots):
                 for root in roots:
                     self._folder_checked_memory[root] = os.path.normcase(root) in saved
 
@@ -1501,7 +1519,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             label = _folder_pill_label(root)
             btn = QPushButton(f" {label}")
             btn.setCheckable(True)
-            checked = self._folder_checked_memory.get(root, True)
+            checked = self._folder_checked_memory.get(root, not match_none)
             btn.setChecked(checked)
             self._folder_checked_memory[root] = checked
             btn.setCursor(Qt.PointingHandCursor)
@@ -1512,7 +1530,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             btn.clicked.connect(self._on_folder_toggled)
             self._wire_pill_paint_button(btn)
             self.folders_layout.addWidget(btn)
-        if self._heal_all_off_pills(self.folders_layout):
+        if self._heal_all_off_pills(self.folders_layout, allow_all_off=match_none):
             self._sync_folder_memory()
 
     def _configured_library_roots(self):
@@ -1610,8 +1628,44 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self._is_gathering = False
 
     def _on_game_toggled(self):
+        self._revive_filters_after_game_pick()
         self._refresh_cascade_after_games()
         self.update_live_count()
+
+    def _revive_filters_after_game_pick(self) -> None:
+        """After match-none / all-off Apply, picking a game must not leave
+        Type/Folders/Health stuck empty — that freezes Apply Filters at (0).
+        """
+        if getattr(self, "_is_gathering", False):
+            return
+        if not self._get_checked_names(self.games_layout):
+            return
+
+        saved = getattr(getattr(self, "app", None), "saved_filter_state", None)
+        if isinstance(saved, dict) and saved.get("match_none"):
+            saved = dict(saved)
+            saved["match_none"] = False
+            # Keep active until Apply; just stop restoring all-off chips.
+            self.app.saved_filter_state = saved
+
+        # Sticky all-False type memory from match-none → default back to on.
+        if self._type_checked_memory and not any(self._type_checked_memory.values()):
+            self._type_checked_memory = {k: True for k in self._type_checked_memory}
+
+        if self.folders_layout.count() > 0 and not self._get_checked_names(
+            self.folders_layout
+        ):
+            for i in range(self.folders_layout.count()):
+                w = self.folders_layout.itemAt(i).widget()
+                if w is not None:
+                    w.setChecked(True)
+            self._sync_folder_memory()
+
+        if self.health_layout.count() > 0 and not self._get_checked_health_levels():
+            for i in range(self.health_layout.count()):
+                w = self.health_layout.itemAt(i).widget()
+                if w is not None and not w.isHidden():
+                    w.setChecked(True)
 
     def _on_type_toggled(self):
         self._refresh_cascade_after_types()
@@ -1633,14 +1687,17 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             return
 
         stats = self._compute_stats(games=games)
-        self._rebuild_type_buttons(stats['types'])
+        # If game names somehow yield no types, fall back to full library types
+        # so the Type row never goes blank while games are selected.
+        types = stats["types"] or self._compute_stats().get("types") or set()
+        self._rebuild_type_buttons(types)
         self._ensure_types_checked_if_none()
 
         active_types = self._get_checked_names(self.types_layout)
         if active_types:
             bounds_stats = self._compute_stats(games=games, types=active_types)
         else:
-            bounds_stats = stats
+            bounds_stats = stats if stats["types"] else self._compute_stats(games=games)
         self._apply_bounds(bounds_stats, clamp=True)
 
     def _refresh_cascade_after_types(self):
@@ -1676,10 +1733,21 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 item.widget().deleteLater()
 
         saved_state = getattr(self.app, 'saved_filter_state', None)
+        match_none = bool(
+            saved_state
+            and saved_state.get("active")
+            and saved_state.get("match_none")
+        )
         saved_games = None
-        if saved_state and saved_state.get('active') and saved_state.get('games'):
-            saved_set = {str(n).strip() for n in saved_state['games'] if str(n).strip()}
-            if saved_set & set(unique_games):
+        if match_none:
+            saved_games = set()
+        elif saved_state and saved_state.get('active') and 'games' in saved_state:
+            saved_set = {str(n).strip() for n in (saved_state.get('games') or []) if str(n).strip()}
+            if not saved_set:
+                # Active filter with explicit empty games list = match none.
+                saved_games = set()
+                match_none = True
+            elif saved_set & set(unique_games):
                 saved_games = saved_set
         for name, icon in unique_games.items():
             short_name = name[:14] + '...' if len(name) > 14 else name
@@ -1695,11 +1763,13 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             btn.clicked.connect(self._on_game_toggled)
             self._wire_pill_paint_button(btn)
             self.games_layout.addWidget(btn)
-        self._heal_all_off_pills(self.games_layout)
+        self._heal_all_off_pills(self.games_layout, allow_all_off=match_none)
 
         # Seed the type memory: only honor a non-empty saved list on an active filter.
         # Ignore stale labels that no longer exist in the library (e.g. old "🎬 Clip").
-        if (
+        if match_none:
+            self._type_checked_memory = {t: False for t in full_stats['types']}
+        elif (
             saved_state
             and saved_state.get('active')
             and saved_state.get('types')
@@ -1754,12 +1824,14 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             if not w:
                 continue
             level = w.property("health_level")
-            if saved_state and saved_state.get('active') and saved_state.get('health'):
+            if match_none:
+                w.setChecked(False)
+            elif saved_state and saved_state.get('active') and saved_state.get('health'):
                 w.setChecked(level in saved_state['health'])
             else:
                 w.setChecked(True)
         # Stale health labels → every chip off → Apply Filters (0).
-        self._heal_all_off_pills(self.health_layout)
+        self._heal_all_off_pills(self.health_layout, allow_all_off=match_none)
 
         self._sync_cured_health_pill()
 
@@ -1774,7 +1846,9 @@ class FilterMenu(PillPaintDragMixin, QWidget):
 
         self._refresh_cascade_after_games()
         # Cascade may rebuild types; heal again if stale type labels wiped them.
-        self._ensure_types_checked_if_none()
+        # Match-none intentionally keeps every type chip off — do not heal.
+        if not match_none:
+            self._ensure_types_checked_if_none()
         self.update_live_count()
 
     def clear_filters(self):
@@ -1931,6 +2005,152 @@ class FilterMenu(PillPaintDragMixin, QWidget):
 
         self.btn_apply.setText(f"Apply Filters ({count})")
 
+    def _selection_is_identity_filter(
+        self,
+        selected_games,
+        selected_types,
+        selected_health,
+        selected_folders,
+        *,
+        min_date,
+        max_date,
+        min_time,
+        max_time,
+        min_dur_sec: int,
+        max_dur_sec: int,
+    ) -> bool:
+        """True when chips + bounds match the full library (same as Clear)."""
+        table = self.app.ui.table_clips
+        all_games: set[str] = set()
+        all_types: set[str] = set()
+        all_health: set[str] = set()
+        all_folders: set[str] = set()
+        roots = self._configured_library_roots()
+        min_dt = None
+        max_dt = None
+        min_sec = None
+        max_sec = None
+        for row in range(table.rowCount()):
+            g = table.item(row, 0)
+            t = table.item(row, 1)
+            d = table.item(row, 2)
+            dur = table.item(row, 3)
+            if g is not None:
+                name = g.text().strip()
+                if name:
+                    all_games.add(name)
+                all_health.add(_row_display_health_level(g))
+                clip_path = g.data(Qt.UserRole) or ""
+                root = _library_root_for_clip(clip_path, roots)
+                if root:
+                    all_folders.add(os.path.normcase(os.path.normpath(root)))
+            if t is not None:
+                tl = t.text().strip()
+                if tl:
+                    all_types.add(tl)
+            if d is not None:
+                q_dt = self._parse_row_datetime(d.text())
+                if q_dt is not None:
+                    if min_dt is None or q_dt < min_dt:
+                        min_dt = q_dt
+                    if max_dt is None or q_dt > max_dt:
+                        max_dt = q_dt
+            if dur is not None:
+                sec = self._parse_row_duration(dur.text())
+                if min_sec is None or sec < min_sec:
+                    min_sec = sec
+                if max_sec is None or sec > max_sec:
+                    max_sec = sec
+
+        if all_games and set(selected_games or []) != all_games:
+            return False
+        if all_types and set(selected_types or []) != all_types:
+            return False
+        # Health: only require every *visible* chip on. Hidden Cured stays
+        # auto-checked when unused; cured rows still count in all_health.
+        visible_health: set[str] = set()
+        for i in range(self.health_layout.count()):
+            w = self.health_layout.itemAt(i).widget()
+            if w is None or w.isHidden():
+                continue
+            visible_health.add(w.property("health_level"))
+        sel_health = set(selected_health or [])
+        if visible_health and not visible_health.issubset(sel_health):
+            return False
+        if all_health - {ClipHealth.CURED.value} and not (
+            all_health - {ClipHealth.CURED.value}
+        ).issubset(sel_health):
+            # Non-cured library levels must be selected.
+            return False
+        if ClipHealth.CURED.value in all_health and ClipHealth.CURED.value not in sel_health:
+            # Cured clips exist but Cured chip off → not identity.
+            return False
+        sel_folders = {
+            os.path.normcase(os.path.normpath(p)) for p in (selected_folders or []) if p
+        }
+        if all_folders and sel_folders != all_folders:
+            return False
+
+        # Bounds: either exactly at library extent, or slightly snapped but still
+        # matching every row (ghost date/duration after match-none round-trips).
+        bounds_exact = True
+        if min_dt is not None and max_dt is not None:
+            if (
+                min_date is None
+                or not hasattr(min_date, "isValid")
+                or not min_date.isValid()
+                or min_date > min_dt.date()
+            ):
+                bounds_exact = False
+            if (
+                max_date is None
+                or not hasattr(max_date, "isValid")
+                or not max_date.isValid()
+                or max_date < max_dt.date()
+            ):
+                bounds_exact = False
+
+        min_t = self._qtime_to_sec(min_time) if min_time is not None else 0
+        max_t = (
+            self._qtime_to_sec(max_time) if max_time is not None else 24 * 3600 - 1
+        )
+        if min_t > 0 or max_t < 24 * 3600 - 1:
+            bounds_exact = False
+
+        if min_sec is not None and max_sec is not None:
+            # 0:00–0:00 means “use full extent” in pickers.
+            if not (int(min_dur_sec) <= 0 and int(max_dur_sec) <= 0):
+                if int(min_dur_sec) > int(min_sec):
+                    bounds_exact = False
+                if int(max_dur_sec) > 0 and int(max_dur_sec) < int(max_sec):
+                    bounds_exact = False
+
+        if bounds_exact:
+            return True
+
+        # Chips already verified full; tolerate picker snap if nothing is hidden.
+        probe = {
+            "active": True,
+            "games": list(selected_games or []),
+            "types": list(selected_types or []),
+            "health": list(selected_health or []),
+            "folders": list(selected_folders or []),
+            "min_date": min_date,
+            "max_date": max_date,
+            "min_time": min_time,
+            "max_time": max_time,
+            "min_dur": self._sec_to_qtime(int(min_dur_sec)),
+            "max_dur": self._sec_to_qtime(int(max_dur_sec)),
+        }
+        app = getattr(self, "app", None)
+        row_ok = getattr(app, "_library_filter_row_matches", None)
+        if not callable(row_ok):
+            return False
+        for row in range(table.rowCount()):
+            if not row_ok(row, probe):
+                return False
+        return True
+
     def apply_filters(self):
         """ LIGHTNING FAST FILTERING (NO SORTING, NO LAGS) """
         if not hasattr(self, 'app'): return
@@ -1986,8 +2206,30 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             min_time = self.input_min_time.time()
             max_time = self.input_max_time.time()
 
+        # Everything selected + bounds at full library extent → same as Clear.
+        # Otherwise the badge stays at 1 from a leftover date/duration clamp after
+        # match-none round-trips even though Apply (N) equals the whole library.
+        if (
+            filter_active
+            and not empty_selection
+            and self._selection_is_identity_filter(
+                selected_games,
+                selected_types,
+                selected_health,
+                selected_folders,
+                min_date=min_date,
+                max_date=max_date,
+                min_time=min_time,
+                max_time=max_time,
+                min_dur_sec=min_dur_sec,
+                max_dur_sec=max_dur_sec,
+            )
+        ):
+            filter_active = False
+
         saved = {
-            'active': bool(filter_active),
+            'active': bool(filter_active) or bool(empty_selection),
+            'match_none': bool(empty_selection),
             'min_date': min_date,
             'max_date': max_date,
             'min_time': min_time,
@@ -1995,13 +2237,20 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             'min_dur': self._sec_to_qtime(min_dur_sec),
             'max_dur': self._sec_to_qtime(max_dur_sec),
         }
-        if filter_active:
+        if empty_selection:
+            # Intentional show-nothing — reopen must keep every chip off.
+            saved['games'] = []
+            saved['types'] = []
+            saved['health'] = []
+            saved['folders'] = []
+        elif filter_active:
             saved['games'] = selected_games
             saved['types'] = selected_types
             saved['health'] = selected_health
             saved['folders'] = selected_folders
         else:
-            saved['games'] = []
+            # Identity / cleared — drop remembered filter so the badge stays off.
+            saved = None
         self.app.saved_filter_state = saved
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
