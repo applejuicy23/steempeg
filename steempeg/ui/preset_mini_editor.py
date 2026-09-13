@@ -475,7 +475,7 @@ class PresetMiniEditor(SteempegDialog):
         if qdata == "original":
             quality_text = original_quality_label(None)
             bitrate_text = "Unknown Mbps (Original)"
-            codec_text = "H.264 (AVC)"
+            codec_text = "H.265 (HEVC)"
             encoder_codec = "libx264"
             encoder_display = "CPU (Software)"
             encode_speed = "balanced"
@@ -492,7 +492,7 @@ class PresetMiniEditor(SteempegDialog):
                 bitrate_text = f"{level} - 0 Mbps"
             else:
                 bitrate_text = f"{level} - {mbps:g} Mbps"
-            codec_text = self._codec.currentText() or "H.264 (AVC)"
+            codec_text = self._codec.currentText() or "H.265 (HEVC)"
             encoder_codec = str(self._encoder.currentData() or "libx264")
             encoder_display = self._encoder.currentText() or ""
             encode_speed = normalize_encode_speed(
