@@ -237,19 +237,34 @@ _TICKER = _MarqueeTicker()
 
 
 class OverflowMarqueeLabel(QLabel):
-    """Left-aligned label that marquees when text is wider than the widget."""
+    """Label that marquees when text is wider than the widget.
 
-    def __init__(self, text: str = "", parent: Optional[QWidget] = None):
+    Short text can be left- or center-aligned; overflow always scrolls.
+    """
+
+    def __init__(
+        self,
+        text: str = "",
+        parent: Optional[QWidget] = None,
+        *,
+        align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignLeft,
+    ):
         super().__init__(parent)
         self._full_text = ""
         self._offset = 0.0
         self._max_offset = 0.0
         self._active = False
+        self._h_align = align
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setMinimumWidth(0)
         if text:
             self.setText(text)
+
+    def set_marquee_align(self, align: Qt.AlignmentFlag) -> None:
+        """Align short (non-overflow) text; overflow still marquees."""
+        self._h_align = align
+        self.update()
 
     def setText(self, text: str) -> None:  # noqa: N802 — Qt API
         self._full_text = text or ""
@@ -307,11 +322,14 @@ class OverflowMarqueeLabel(QLabel):
         text = self._full_text
         if self._max_offset <= 0:
             painter.setClipRect(rect)
-            painter.drawText(
-                rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                text,
-            )
+            flags = Qt.AlignmentFlag.AlignVCenter
+            if self._h_align & Qt.AlignmentFlag.AlignHCenter:
+                flags |= Qt.AlignmentFlag.AlignHCenter
+            elif self._h_align & Qt.AlignmentFlag.AlignRight:
+                flags |= Qt.AlignmentFlag.AlignRight
+            else:
+                flags |= Qt.AlignmentFlag.AlignLeft
+            painter.drawText(rect, flags, text)
             return
 
         # Snap to the global phase on every paint (scroll-back / click stay in sync).
