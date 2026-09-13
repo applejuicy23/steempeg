@@ -249,17 +249,16 @@ class CardSizeChrome(QObject):
         return self._mode
 
     def set_size(self, size: str, *, emit: bool = True) -> None:
+        """Update remembered card size (Big/Medium/Small). Does not leave List.
+
+        Picking a size tile in the popup switches to grid via ``_on_popup_choice``.
+        """
         key = normalize_card_size(size)
         size_changed = key != self._size
-        mode_was_list = self._mode == "list"
         self._size = key
-        if mode_was_list:
-            self._mode = "grid"
         self._sync_buttons()
         if size_changed and emit:
             self.size_changed.emit(key)
-        if mode_was_list and emit:
-            self.mode_changed.emit("grid")
 
     def set_mode(self, mode: str, *, emit: bool = True) -> None:
         if mode not in ("list", "grid"):
@@ -329,7 +328,12 @@ class CardSizeChrome(QObject):
         if key == _LIST_KEY:
             self.set_mode("list")
             return
-        # Size tile: leave List if needed, then apply size.
+        # Always emit grid — chrome can already say "grid" while the library
+        # table is still List (desync after restore / set_size). Silent no-op
+        # would trap the user in List forever.
+        self._mode = "grid"
+        self._sync_buttons()
+        self.mode_changed.emit("grid")
         self.set_size(key)
 
     def _open_size_popup(self) -> None:
