@@ -1672,14 +1672,35 @@ def clip_info_popup_colors() -> tuple[str, str, str, str]:
 
 
 def clip_info_popup_stylesheet() -> str:
-    """Player-header Clip info QMenu plate — Default legacy; TrueDark near-black."""
-    bg, border, _, _ = clip_info_popup_colors()
+    """Player-header Clip info QMenu — transparent shell; plate is the host widget.
+
+    Putting ``border`` + ``border-radius`` on ``QMenu`` itself often paints only
+    the top edge on Windows (bottom/sides clip). Border lives on
+    ``#clipInfoPopupHost`` instead.
+    """
     return (
         "QMenu#clipInfoPopup {"
+        " background-color: transparent;"
+        " border: none;"
+        " padding: 0px;"
+        "}"
+        "QMenu#clipInfoPopup::item {"
+        " background: transparent;"
+        " padding: 0px;"
+        " margin: 0px;"
+        " border: none;"
+        "}"
+    )
+
+
+def clip_info_popup_host_stylesheet() -> str:
+    """Rounded plate for the Clip info body (border lives here, not on QMenu)."""
+    bg, border, _, _ = clip_info_popup_colors()
+    return (
+        "QWidget#clipInfoPopupHost {"
         f" background-color: {bg};"
         f" border: 1px solid {border};"
         " border-radius: 8px;"
-        " padding: 0px;"
         "}"
     )
 
