@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QCursor,
     QFont,
     QFontMetrics,
+    QIcon,
     QImage,
     QPainter,
     QPainterPath,
@@ -258,6 +259,9 @@ class TimelineCanvas(QWidget):
         self.trim_end_ms = 0.0
         
         self.drag_state = 'none'
+        # LMB on a custom pin: arm → click (jump) or drag past threshold.
+        self._marker_press = None  # {marker, x, y, jump_ok, on_strip}
+        self._MARKER_DRAG_THRESHOLD_PX = 6.0
         self.last_frame_time = time.time()
         
         # 60 FPS Engine — PreciseTimer so high-Hz monitors don't cluster ticks.
@@ -1630,19 +1634,44 @@ class TimelineCanvas(QWidget):
                 self.show_track_context_menu(event.globalPosition().toPoint(), ms)
             return
 
-        # --- HANDLING LEFT-CLICK ON LABEL ---
-        # Above-row (default): click jumps. On-strip overlay: plain click scrubs;
-        # Ctrl+click jumps so seek isn't stolen (Emily: click-vs-scrub awkward).
-        if getattr(self, 'hovered_marker', None) and event.button() == Qt.LeftButton:
-            on_strip = self._markers_on_strip()
-            mods = event.modifiers()
-            jump_ok = (not on_strip) or bool(
-                mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
-            )
-            if jump_ok:
-                jump_time = max(0, self.hovered_marker['time_ms'] - 2000)
-                self.force_jump(jump_time)
-                return
+        # --- LMB on a marker ---
+        # Custom pins: press arms; small move → drag time_ms; release without
+        # move → same jump/scrub as before. Stock pins stay click-only.
+        if event.button() == Qt.LeftButton:
+            marker = self._marker_at(x, y)
+            if marker is None:
+                marker = getattr(self, "hovered_marker", None)
+            if marker is not None:
+                on_strip = self._markers_on_strip()
+                mods = event.modifiers()
+                jump_ok = (not on_strip) or bool(
+                    mods
+                    & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                    )
+                )
+                is_user = marker.get("icon_key") == "usermarker"
+                if is_user:
+                    self.hovered_marker = marker
+                    self._marker_press = {
+                        "marker": marker,
+                        "x": float(x),
+                        "y": float(y),
+                        "jump_ok": jump_ok,
+                        "on_strip": on_strip,
+                        "orig_ms": int(marker.get("time_ms") or 0),
+                    }
+                    self.drag_state = "marker_arm"
+                    if hasattr(self, "text_tooltip"):
+                        self.text_tooltip.hide()
+                    self._hide_hover_preview()
+                    self.update()
+                    return
+                if jump_ok:
+                    jump_time = max(0, int(marker.get("time_ms") or 0) - 2000)
+                    self.force_jump(jump_time)
+                    return
 
         # Disable the other buttons if we are not on the icon.
         if event.button() != Qt.LeftButton: return
@@ -1734,8 +1763,9 @@ class TimelineCanvas(QWidget):
         
         if is_user_marker:
             action_edit = menu.addAction("✏️ Edit Marker")
-            action_duplicate = menu.addAction("Duplicate")
+            action_duplicate = self._menu_action_duplicate(menu, "Duplicate")
             action_delete = menu.addAction("🗑️ Delete Marker")
+            action_delete.setForeground(QBrush(QColor("#ff8a8a")))
             menu.addSeparator() 
 
         action_open_screenshot = None
@@ -1747,7 +1777,7 @@ class TimelineCanvas(QWidget):
 
         # Stock + custom + screenshots — jump into Marker Settings on the same pin.
         if not marker.get("is_round"):
-            action_goto_settings = menu.addAction("Go to Marker Settings")
+            action_goto_settings = menu.addAction("➡️ Go to Marker Settings")
             menu.addSeparator()
             
         action_trim = menu.addAction("✂️ Set Trim Start Here")
@@ -1781,6 +1811,19 @@ class TimelineCanvas(QWidget):
             self.set_trim_start_from_marker(marker)
         elif action == action_screenshot: # Sending the order to take a screenshot
             self.screenshot_requested.emit(float(marker.get('time_ms', 0)))
+
+    @staticmethod
+    def _menu_action_duplicate(menu: QMenu, label: str):
+        """Duplicate row — RS ``copyfile.png``, else clipboard emoji."""
+        try:
+            from steempeg.infra.paths import get_resource_path
+
+            path = get_resource_path("copyfile.png")
+            if path and os.path.isfile(path):
+                return menu.addAction(QIcon(path), label)
+        except Exception:
+            pass
+        return menu.addAction(f"📋  {label}")
     
     def show_track_context_menu(self, pos, time_ms):
         from steempeg.ui import ui_theme as ut
@@ -1995,9 +2038,11 @@ class TimelineCanvas(QWidget):
 
         found_marker = None
         on_strip = self._markers_on_strip()
-        # Skip marker hover while actively scrubbing / dragging trim.
+        # Skip marker hover while actively scrubbing / dragging trim / dragging pin.
         if self.drag_state == "none":
             found_marker = self._marker_at(x, y)
+        elif self.drag_state in ("marker_arm", "marker") and self._marker_press:
+            found_marker = self._marker_press.get("marker")
         
         # Updating the UI when the icon focus changes.
         if found_marker != getattr(self, 'hovered_marker', None):
@@ -2018,7 +2063,17 @@ class TimelineCanvas(QWidget):
                         
                     html_text = f"<b>{title}</b>"
                     if desc: html_text += f"<br>{desc}"
-                    if on_strip:
+                    if found_marker.get("icon_key") == "usermarker":
+                        hint = (
+                            "Drag to move · Ctrl+click to jump"
+                            if on_strip
+                            else "Drag to move · click to jump"
+                        )
+                        html_text += (
+                            "<br><span style='font-weight:normal;opacity:0.85'>"
+                            f"{hint}</span>"
+                        )
+                    elif on_strip:
                         html_text += "<br><span style='font-weight:normal;opacity:0.85'>Ctrl+click to jump</span>"
 
                     pix = self.get_icon_pixmap(found_marker)
@@ -2060,11 +2115,16 @@ class TimelineCanvas(QWidget):
                 
         if self.drag_state in ['trim_l', 'trim_r']:
             current_cursor, self.is_hovering_trim_handle = Qt.SizeHorCursor, True
+        elif self.drag_state in ("marker_arm", "marker"):
+            current_cursor = Qt.SizeHorCursor
             
         self.setCursor(current_cursor)
         
         if hasattr(self, 'preview_widget'):
-            if getattr(self, 'hovered_marker', None):
+            if getattr(self, 'hovered_marker', None) or self.drag_state in (
+                "marker_arm",
+                "marker",
+            ):
                 if self.preview_widget.isVisible():
                     self._hide_hover_preview()
             else:
@@ -2118,6 +2178,28 @@ class TimelineCanvas(QWidget):
         if self.drag_state == 'none':
             self.update() 
             return
+
+        # Custom-pin drag: arm → drag after a few pixels so click still jumps.
+        if self.drag_state == "marker_arm" and self._marker_press:
+            press = self._marker_press
+            dx = float(x) - float(press["x"])
+            dy = float(y) - float(press["y"])
+            if (dx * dx + dy * dy) ** 0.5 >= self._MARKER_DRAG_THRESHOLD_PX:
+                self.drag_state = "marker"
+                self.pause_requested.emit()
+                if hasattr(self, "text_tooltip"):
+                    self.text_tooltip.hide()
+
+        if self.drag_state == "marker" and self._marker_press:
+            marker = self._marker_press.get("marker")
+            if marker is not None:
+                new_ms = int(max(0.0, min(self.x_to_ms(x), float(self.duration_ms))))
+                marker["time_ms"] = new_ms
+                offset = int(getattr(self, "current_offset_ms", 0) or 0)
+                marker["raw_time_ms"] = new_ms + offset
+                self.hovered_marker = marker
+                self.update()
+            return
             
         if self.drag_state == 'playhead':
             self.update_playhead(x)
@@ -2126,6 +2208,9 @@ class TimelineCanvas(QWidget):
             self.update()
         elif self.drag_state == 'trim_r':
             self.trim_end_ms = min(float(self.duration_ms), max(ms, self.trim_start_ms + 1000))
+            self.update()
+        elif self.drag_state == "marker_arm":
+            # Still under threshold — wait for release (click) or more move.
             self.update()
     
     def mouseReleaseEvent(self, event):
@@ -2137,7 +2222,111 @@ class TimelineCanvas(QWidget):
         elif self.drag_state in ['trim_l', 'trim_r']:
             self.trim_changed.emit(int(self.trim_start_ms), int(self.trim_end_ms))
             self.update()
+        elif self.drag_state == "marker":
+            press = self._marker_press or {}
+            marker = press.get("marker")
+            if marker is not None:
+                self._finalize_marker_drag(marker)
+            self.resume_requested.emit()
+        elif self.drag_state == "marker_arm":
+            # Click without drag — keep prior jump / strip seek behavior.
+            press = self._marker_press or {}
+            marker = press.get("marker")
+            if marker is not None and press.get("jump_ok"):
+                jump_time = max(0, int(marker.get("time_ms") or 0) - 2000)
+                self.force_jump(jump_time)
+            elif press.get("on_strip"):
+                self.pause_requested.emit()
+                self.update_playhead(press.get("x", event.position().x()))
+                self.resume_requested.emit()
         self.drag_state = 'none'
+        self._marker_press = None
+
+    def _finalize_marker_drag(self, marker: dict) -> None:
+        """Clamp, de-dupe exact ms, persist, refresh open Marker Settings."""
+        try:
+            ms = int(marker.get("time_ms") or 0)
+        except (TypeError, ValueError):
+            ms = 0
+        ms = max(0, min(ms, max(0, int(self.duration_ms) - 1)))
+        occupied = {
+            int(m.get("time_ms") or 0)
+            for m in getattr(self, "markers", []) or []
+            if m is not marker
+        }
+        while ms in occupied and ms < int(self.duration_ms):
+            ms += 1
+        marker["time_ms"] = ms
+        offset = int(getattr(self, "current_offset_ms", 0) or 0)
+        marker["raw_time_ms"] = ms + offset
+
+        markers = getattr(self, "markers", None)
+        if isinstance(markers, list):
+            markers.sort(key=lambda m: int(m.get("time_ms") or 0))
+
+        self._persist_user_marker_position(marker)
+        if hasattr(self, "notify_markers_changed"):
+            self.notify_markers_changed(animate=False)
+        else:
+            self.update()
+        self._sync_open_marker_settings()
+
+    def _persist_user_marker_position(self, marker: dict) -> None:
+        """Write moved custom pin time into sidecar / steempeg timeline / cache."""
+        rendered_path = getattr(self, "rendered_media_path", None)
+        if rendered_path and os.path.isfile(rendered_path):
+            cache_dir = getattr(self, "_markers_cache_dir", None)
+            if cache_dir:
+                from steempeg.core.rendered_media import (
+                    canvas_markers_to_sidecar,
+                    save_markers_sidecar,
+                )
+
+                save_markers_sidecar(
+                    cache_dir,
+                    rendered_path,
+                    canvas_markers_to_sidecar(
+                        [
+                            m
+                            for m in getattr(self, "markers", []) or []
+                            if m.get("icon_key") == "usermarker"
+                        ]
+                    ),
+                )
+            return
+
+        from steempeg.core.clip_markers_cache import (
+            is_steempeg_timeline_json,
+            sync_user_markers_to_steempeg_timeline,
+            upsert_user_marker,
+        )
+
+        json_path = getattr(self, "current_json_path", None)
+        if is_steempeg_timeline_json(json_path):
+            sync_user_markers_to_steempeg_timeline(
+                json_path,
+                getattr(self, "markers", []) or [],
+                offset_ms=int(getattr(self, "current_offset_ms", 0) or 0),
+            )
+            return
+
+        upsert_user_marker(
+            getattr(self, "_markers_cache_dir", None),
+            marker,
+            clip_path=getattr(self, "current_clip_path", None),
+            json_path=json_path,
+        )
+
+    def _sync_open_marker_settings(self) -> None:
+        try:
+            from steempeg.ui.marker_settings_dialog import MarkerSettingsDialog
+
+            for w in qtw.QApplication.topLevelWidgets():
+                if isinstance(w, MarkerSettingsDialog) and w.isVisible():
+                    if hasattr(w, "_sync_clip_markers_from_canvas"):
+                        w._sync_clip_markers_from_canvas()
+        except Exception:
+            pass
 
     def update_playhead(self, mouse_x):
         # Use the SAME padded mapping as x_to_ms/ms_to_x, otherwise the playhead is
