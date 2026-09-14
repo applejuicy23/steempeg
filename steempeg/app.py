@@ -3366,11 +3366,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         menu = QMenu(btn)
         self._clip_info_popup = menu
         menu.setObjectName("clipInfoPopup")
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         menu.setStyleSheet(ut.clip_info_popup_stylesheet())
         _, _, info_value_fg, info_muted_fg = ut.clip_info_popup_colors()
 
         host = QWidget()
-        host.setStyleSheet("background: transparent;")
+        host.setObjectName("clipInfoPopupHost")
+        host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        host.setStyleSheet(ut.clip_info_popup_host_stylesheet())
         host.setMinimumWidth(348)
         lay = QVBoxLayout(host)
         lay.setContentsMargins(14, 12, 14, 12)
