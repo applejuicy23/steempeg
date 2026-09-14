@@ -3895,6 +3895,14 @@ class LibraryMixin:
             grid = getattr(self, grid_name, None)
             if grid is None:
                 continue
+            if shelf:
+                # Startup / Progressive: items often still have 0×0 visualRect until
+                # layout — without this, only the first painted row is "on-screen"
+                # and its bottom gets square flush that sticks after more cards load.
+                try:
+                    grid.doItemsLayout()
+                except Exception:
+                    pass
             vp = grid.viewport()
             vp_rect = vp.rect() if vp is not None else QRect()
             spacing = max(0, int(grid.spacing()))
@@ -4187,6 +4195,8 @@ class LibraryMixin:
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
 
+        self._schedule_clip_card_edge_sync()
+
         if pending:
             self._scan_flush_scheduled = True
             # Yield so maximize / density layout can paint between batches.
@@ -4201,6 +4211,8 @@ class LibraryMixin:
             if gen == getattr(self, "_scan_generation", 0):
                 self._scan_finalize_pending = None
                 self._finalize_scan_finished(stats, gen, announce)
+                QTimer.singleShot(0, self.sync_clip_card_edge_roles)
+                QTimer.singleShot(50, self.sync_clip_card_edge_roles)
 
     def _on_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         if generation != getattr(self, "_scan_generation", 0):
@@ -4529,6 +4541,9 @@ class LibraryMixin:
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
         self._schedule_clips_viewport_refresh(50)
+        # Progressive appends grow the shelf — recompute on-screen top/bottom
+        # flush or the last batch row keeps square bottoms after more cards land.
+        self._schedule_clip_card_edge_sync()
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
@@ -4548,6 +4563,10 @@ class LibraryMixin:
         QTimer.singleShot(0, self._sync_library_scrollbars)
         QTimer.singleShot(1500, self._persist_clips_library_snapshot)
         self._schedule_clips_viewport_refresh(0)
+        # Layout settles after placeholders + fast_sync — catch leftover bottom flush.
+        self._schedule_clip_card_edge_sync()
+        QTimer.singleShot(50, self.sync_clip_card_edge_roles)
+        QTimer.singleShot(200, self.sync_clip_card_edge_roles)
         # Lightweight rows always start as ``--:--`` — fill from MPD off-thread.
         QTimer.singleShot(600, self._schedule_clip_duration_backfill)
         QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
@@ -4690,6 +4709,9 @@ class LibraryMixin:
             if path:
                 keep_keys.add(os.path.normcase(os.path.normpath(path)))
             self._materialize_clip_grid_item(item)
+
+        # visualRect was often 0×0 until this layout pass — shelf flush needs a redo.
+        self._schedule_clip_card_edge_sync()
 
         live = getattr(self, "_clip_live_paths", None)
         if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
