@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QBrush, QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QColorDialog,
@@ -69,9 +69,9 @@ _ICON_BTN = """
 _CLASS_ROW_H = 36
 _CLASS_ICON = 22
 _COL_ICON = 0
-_COL_TIME = 1
-_COL_KIND = 2
-_COL_NAME = 3
+_COL_NAME = 1
+_COL_TIME = 2
+_COL_KIND = 3
 _TABLE_ICON = 22
 _TABLE_ROW_H = 36
 _KIND_COL_W = 78
@@ -302,7 +302,12 @@ class MarkerSettingsDialog(SteempegDialog):
             label = (btn.text() or "").strip().lower()
             if label in ("close", "+ create"):
                 btn.setStyleSheet(primary)
-            elif "delete" in label or label == "reset all":
+            elif (
+                "delete" in label
+                or label == "reset all"
+                or label == "remove"
+                or label.startswith("reset this")
+            ):
                 btn.setStyleSheet(danger)
             else:
                 btn.setStyleSheet(secondary)
@@ -442,7 +447,7 @@ class MarkerSettingsDialog(SteempegDialog):
         left.addWidget(self._section("Markers on clip"))
         self._marker_table = QTableWidget(0, 4)
         self._marker_table.setObjectName("markerOnClipTable")
-        self._marker_table.setHorizontalHeaderLabels(["", "Time", "Kind", "Name"])
+        self._marker_table.setHorizontalHeaderLabels(["", "Name", "Time", "Kind"])
         self._marker_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -461,14 +466,14 @@ class MarkerSettingsDialog(SteempegDialog):
         hdr.setSectionsClickable(True)
         hdr.setSortIndicatorShown(True)
         hdr.setMinimumSectionSize(28)
-        hdr.setStretchLastSection(True)
+        hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(_COL_ICON, QHeaderView.ResizeMode.Fixed)
         self._marker_table.setColumnWidth(_COL_ICON, 40)
+        hdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(_COL_TIME, QHeaderView.ResizeMode.Fixed)
         self._marker_table.setColumnWidth(_COL_TIME, _TIME_COL_W)
         hdr.setSectionResizeMode(_COL_KIND, QHeaderView.ResizeMode.Fixed)
         self._marker_table.setColumnWidth(_COL_KIND, _KIND_COL_W)
-        hdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
         self._marker_table.setMinimumWidth(280)
         self._marker_table.setMinimumHeight(240)
         self._marker_table.setContextMenuPolicy(
@@ -804,8 +809,9 @@ class MarkerSettingsDialog(SteempegDialog):
         if item not in self._class_list.selectedItems():
             self._class_list.setCurrentItem(item)
         menu = QMenu(self)
-        act_dup = menu.addAction("Duplicate")
-        act_del = menu.addAction("Delete")
+        menu.setStyleSheet(ut.library_menu_stylesheet())
+        act_dup = self._add_dup_del_action(menu, "Duplicate", kind="duplicate")
+        act_del = self._add_dup_del_action(menu, "Delete", kind="delete")
         chosen = menu.exec(self._class_list.mapToGlobal(pos))
         if chosen is act_dup:
             self._duplicate_selected_classes()
@@ -991,13 +997,25 @@ class MarkerSettingsDialog(SteempegDialog):
 
         menu = QMenu(self)
         menu.setStyleSheet(ut.library_menu_stylesheet())
-        act_dup = menu.addAction("Duplicate")
-        act_del = menu.addAction("Delete")
+        act_dup = self._add_dup_del_action(menu, "Duplicate", kind="duplicate")
+        act_del = self._add_dup_del_action(menu, "Delete", kind="delete")
         chosen = menu.exec(table.viewport().mapToGlobal(pos))
         if chosen is act_dup:
             self._duplicate_on_clip_marker(row_info)
         elif chosen is act_del:
             self._delete_on_clip_marker(row_info)
+
+    @staticmethod
+    def _add_dup_del_action(menu: QMenu, label: str, *, kind: str):
+        """Duplicate uses RS ``copyfile.png``; Delete uses the trash emoji (red)."""
+        if kind == "duplicate":
+            path = get_resource_path("copyfile.png")
+            if path and os.path.isfile(path):
+                return menu.addAction(QIcon(path), label)
+            return menu.addAction(f"📋  {label}")
+        act = menu.addAction(f"🗑️  {label}")
+        act.setForeground(QBrush(QColor("#ff8a8a")))
+        return act
 
     def _delete_on_clip_marker(self, row_info: dict) -> None:
         canvas = self._canvas()
@@ -1145,9 +1163,9 @@ class MarkerSettingsDialog(SteempegDialog):
             name_item.setToolTip(tip)
 
             self._marker_table.setItem(r, _COL_ICON, icon_item)
+            self._marker_table.setItem(r, _COL_NAME, name_item)
             self._marker_table.setItem(r, _COL_TIME, time_item)
             self._marker_table.setItem(r, _COL_KIND, kind_item)
-            self._marker_table.setItem(r, _COL_NAME, name_item)
             self._marker_table.setCellWidget(
                 r, _COL_NAME, self._make_name_marquee(name)
             )
