@@ -12,7 +12,7 @@ import sys
 
 import psutil
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,13 +54,19 @@ def _round_pixmap(
     *,
     plate: QColor | None = None,
     ring: QColor | None = None,
+    ring_pair: tuple[QColor, QColor] | None = None,
+    ring_split_deg: float = 45.0,
     ring_width: float = 2.5,
     content_scale: float = 1.0,
 ) -> QPixmap:
     """Circular crop for About developer / powered-by badges.
 
-    Optional ``plate`` fills the disc; optional ``ring`` strokes the rim
-    (FFmpeg: dark plate + green rim so the disc reads on charcoal).
+    Optional ``plate`` fills the disc; ``ring`` strokes a solid rim
+    (FFmpeg: dark plate + green rim). ``ring_pair`` draws a hard two-tone
+    rim split along a diameter (PyAV blue/yellow along the logo slant).
+    ``ring_split_deg`` is the Qt arc start for the first colour (0° = 3
+    o'clock, CCW); 45° puts the split on the PyAV top-right→bottom-left
+    diagonal with colour[0] on the NW half.
     ``content_scale`` < 1 insets the mark inside the disc.
     """
     raw = QPixmap(path)
@@ -99,16 +105,36 @@ def _round_pixmap(
     ox = (size - square.width()) // 2
     oy = (size - square.height()) // 2
     painter.drawPixmap(ox, oy, square)
-    if ring is not None and ring_width > 0:
+    if ring_width > 0 and (ring_pair is not None or ring is not None):
         # Stroke after the mark so the rim stays visible on top.
         painter.setClipping(False)
-        pen = QPen(ring)
-        pen.setWidthF(float(ring_width))
-        pen.setCosmetic(False)
-        painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         inset = float(ring_width) / 2.0
-        painter.drawEllipse(inset, inset, float(size) - float(ring_width), float(size) - float(ring_width))
+        rim = QRectF(
+            inset,
+            inset,
+            float(size) - float(ring_width),
+            float(size) - float(ring_width),
+        )
+        if ring_pair is not None:
+            # Two flat-cap semicircles → hard split on the logo diagonal.
+            start = float(ring_split_deg)
+            for color, arc_start in (
+                (ring_pair[0], start),
+                (ring_pair[1], start + 180.0),
+            ):
+                pen = QPen(color)
+                pen.setWidthF(float(ring_width))
+                pen.setCosmetic(False)
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                painter.setPen(pen)
+                painter.drawArc(rim, int(round(arc_start * 16)), 180 * 16)
+        else:
+            pen = QPen(ring)
+            pen.setWidthF(float(ring_width))
+            pen.setCosmetic(False)
+            painter.setPen(pen)
+            painter.drawEllipse(rim)
     painter.end()
     return out
 
@@ -665,6 +691,8 @@ class LifecycleMixin:
         size: int = 64,
         plate: QColor | None = None,
         ring: QColor | None = None,
+        ring_pair: tuple[QColor, QColor] | None = None,
+        ring_split_deg: float = 45.0,
         ring_width: float = 2.5,
         content_scale: float = 1.0,
     ) -> QWidget:
@@ -681,6 +709,8 @@ class LifecycleMixin:
             int(size),
             plate=plate,
             ring=ring,
+            ring_pair=ring_pair,
+            ring_split_deg=ring_split_deg,
             ring_width=ring_width,
             content_scale=content_scale,
         )
@@ -899,14 +929,30 @@ class LifecycleMixin:
         amp1.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         powered_row.addWidget(amp1)
         powered_row.addWidget(self._about_powered_badge(
-            "pyav.png", "PyAV", "https://github.com/PyAV-Org/PyAV", size=68,
+            "pyav.png",
+            "PyAV",
+            "https://github.com/PyAV-Org/PyAV",
+            size=68,
+            plate=QColor("#121317"),
+            # Blue NW / yellow SE — split along the logo's \ diagonal (~45°).
+            ring_pair=(QColor("#4A84C4"), QColor("#E4B53A")),
+            ring_split_deg=45.0,
+            ring_width=1.25,
+            content_scale=0.72,
         ))
         amp2 = QLabel("&")
         amp2.setObjectName("AboutAmp")
         amp2.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         powered_row.addWidget(amp2)
         powered_row.addWidget(self._about_powered_badge(
-            "mpv.png", "MPV", "https://github.com/mpv-player/mpv", size=68,
+            "mpv.png",
+            "MPV",
+            "https://github.com/mpv-player/mpv",
+            size=68,
+            plate=QColor("#121317"),
+            ring=QColor("#8B3DB8"),
+            ring_width=1.25,
+            content_scale=0.72,
         ))
         powered_row.addStretch(1)
         content.addLayout(powered_row)
