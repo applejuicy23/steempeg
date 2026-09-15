@@ -1701,6 +1701,11 @@ class PlayerMixin:
             refresh_windows_edge_resize(self.ui)
         except Exception:
             pass
+        # Square DWM corners for edge-to-edge fill (normal shell uses ROUND).
+        try:
+            refresh_dwm_chrome(self.ui)
+        except Exception:
+            pass
         self.ui.raise_()
         self.ui.activateWindow()
 
@@ -2471,14 +2476,18 @@ class PlayerMixin:
         tl = getattr(self, "custom_timeline", None)
         if tl is not None:
             try:
-                pw = getattr(tl, "preview_widget", None)
-                if pw is not None:
-                    pw.hide()
-                tip = getattr(getattr(tl, "canvas", None), "text_tooltip", None)
-                if tip is None:
-                    tip = getattr(tl, "text_tooltip", None)
-                if tip is not None:
-                    tip.hide()
+                canvas = getattr(tl, "canvas", None)
+                if canvas is not None and hasattr(canvas, "dismiss_hover_tools"):
+                    canvas.dismiss_hover_tools()
+                else:
+                    pw = getattr(tl, "preview_widget", None)
+                    if pw is not None:
+                        pw.hide()
+                    tip = getattr(canvas, "text_tooltip", None) if canvas else None
+                    if tip is None:
+                        tip = getattr(tl, "text_tooltip", None)
+                    if tip is not None:
+                        tip.hide()
             except RuntimeError:
                 pass
 
