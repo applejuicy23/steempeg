@@ -3077,6 +3077,13 @@ class RenderMixin:
             from steempeg.ui.portable import sync_portable_render_button
 
             sync_portable_render_button(self)
+            # Queue rail Add ＋ enable tracks the live clip, not only queue fingerprint.
+            sidebar = getattr(self, "_portable_queue_sidebar", None)
+            if sidebar is not None and hasattr(sidebar, "_sync_add_enabled"):
+                try:
+                    sidebar._sync_add_enabled()
+                except RuntimeError:
+                    pass
         elif hasattr(self, "_sync_portable_render_strip"):
             self._sync_portable_render_strip()
 
