@@ -1,28 +1,22 @@
-"""Linux remux bridge for Steam DASH manifests.
+"""Linux remux bridge for Steam DASH manifests (fallback only from v50).
 
 Older Homebrew / some distro libmpv stacks lack DASH demux (``E dash`` only —
 mux, no read). Windows Steempeg ships ``DE dash`` and plays ``.mpd`` natively.
-Bazzite/Fedora ``mpv-libs`` + matching lavf now have demux; v50 aims to open
-``.mpd`` natively (live DASH like Windows) and retire this bridge.
+Bazzite/Fedora ``mpv-libs`` + matching lavf (and a correctly harvested pack
+``bin/mpv``) have demux — v50 opens ``.mpd`` live like Windows.
 
-Default through 49.x: remux into ``cache/mpd_playback/*.mkv`` via the bundled
-ffmpeg (BtbN, has demux). Cache hits are instant; cold height remux is
-multi-second for large clips (49.1 polish: faster preview encode + clearer UI).
-
-Preview-quality gear (1080p / 360p / …) is keyed into the cache path. Source
-uses a fast ``-c copy`` remux; lower presets scale during remux so libmpv
-decodes the selected height (MPV ``vf`` alone is unreliable under Linux
-hwdec / xv). Windows keeps native DASH + live ``vf`` and never enters this
-bridge.
+**v50 default:** native live DASH when lavf can demux. Preview gear uses live
+MPV ``vf`` (same idea as Windows). Remux into ``cache/mpd_playback/*.mkv``
+remains only as a fallback when demux is missing, or when forced via env.
 
 Cache is capped (default 8 GiB, ``STEEMPEG_MPD_CACHE_GB``).
 
 ``STEEMPEG_MPD_REMUX``:
-  ``1`` / unset — always remux on Linux (production default through 49.x)
-  ``0`` — never remux (native ``.mpd`` only; fails without demux)
-  ``auto`` — experimental hybrid: native Source when lavf has demux;
-             remux for height presets and when demux is missing
-             (not the 49.x default; v50 goal is remux gone, not hybrid forever)
+  unset / ``native`` — remux only if lavf lacks DASH demux (v50 production)
+  ``1`` / ``force`` — always remux on Linux (49.x / emergency)
+  ``0`` / ``off`` — never remux (native ``.mpd`` only; fails without demux)
+  ``auto`` — hybrid: native Source when demux exists; remux for height
+             presets and when demux is missing (debug / old packs)
 """
 from __future__ import annotations
 
@@ -61,13 +55,16 @@ def _lock_for_mpd(lock_key: str) -> threading.Lock:
 
 
 def _remux_env_mode() -> str:
-    """Return ``force``, ``off``, or ``auto`` from ``STEEMPEG_MPD_REMUX``."""
-    raw = (os.environ.get("STEEMPEG_MPD_REMUX") or "1").strip().lower()
+    """Return ``native``, ``force``, ``off``, or ``auto`` from ``STEEMPEG_MPD_REMUX``."""
+    raw = (os.environ.get("STEEMPEG_MPD_REMUX") or "").strip().lower()
     if raw in ("0", "false", "no", "off"):
         return "off"
     if raw in ("auto", "detect", "hybrid"):
         return "auto"
-    return "force"
+    if raw in ("1", "true", "yes", "on", "force"):
+        return "force"
+    # unset / native / anything else → v50 live DASH default
+    return "native"
 
 
 def _lavf_blob_has_dash_demux(path: str) -> bool:
@@ -155,15 +152,24 @@ def libmpv_has_dash_demux() -> bool:
 
 
 def host_libmpv_needs_mpd_bridge() -> bool:
-    """True when Linux may use the remux bridge for Steam ``.mpd``.
+    """True when Linux may still remux Steam ``.mpd`` (fallback / forced / hybrid).
 
-    Remains True under ``STEEMPEG_MPD_REMUX=auto`` so quality-gear remux and
-    sniper/timeline paths stay available; use ``should_remux_mpd_for_playback``
-    to decide whether a given open must remux.
+    Under the v50 ``native`` default this is False when lavf has DASH demux —
+    playback and preview gear stay on the live ``.mpd`` + ``vf`` path.
+    Use ``should_remux_mpd_for_playback`` for each open.
     """
     if sys.platform == "win32":
         return False
-    return _remux_env_mode() != "off"
+    mode = _remux_env_mode()
+    if mode == "off":
+        return False
+    if mode == "force":
+        return True
+    if mode == "auto":
+        # Hybrid may remux height presets even when demux exists.
+        return True
+    # native: bridge only when demux is missing (fallback remux).
+    return not libmpv_has_dash_demux()
 
 
 def should_remux_mpd_for_playback(quality_id: str | None = None) -> bool:
@@ -175,10 +181,13 @@ def should_remux_mpd_for_playback(quality_id: str | None = None) -> bool:
         return False
     if mode == "force":
         return True
-    # auto / hybrid (experimental — 49.x default remains force remux)
-    if not libmpv_has_dash_demux():
-        return True
-    return normalize_remux_quality_id(quality_id) != "source"
+    if mode == "auto":
+        # Hybrid: remux when demux is missing, or for height presets.
+        if not libmpv_has_dash_demux():
+            return True
+        return normalize_remux_quality_id(quality_id) != "source"
+    # native (v50): remux only as fallback without demux — gear uses live vf.
+    return not libmpv_has_dash_demux()
 
 
 def normalize_remux_quality_id(quality_id: str | None) -> str:
