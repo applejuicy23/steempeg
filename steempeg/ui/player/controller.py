@@ -1290,6 +1290,14 @@ class PlayerMixin:
             return
         if not getattr(self, "is_theater", False):
             self.toggle_theater_mode()
+        # Re-assert after fullscreen exit: immersive restore can flash desktop handles
+        # before this runs (is_theater already True → toggle_theater_mode no-ops).
+        if hasattr(self.ui, "main_splitter"):
+            self._set_splitter_handle_visible(self.ui.main_splitter, False)
+        if hasattr(self, "main_v_splitter"):
+            self._set_splitter_handle_visible(self.main_v_splitter, False)
+        if hasattr(self, "_hide_right_h_splitter_handle"):
+            self._hide_right_h_splitter_handle()
         if hasattr(self, "btn_theater"):
             self.btn_theater.hide()
         from steempeg.ui.portable import ensure_portable_chrome
@@ -1719,7 +1727,7 @@ class PlayerMixin:
 
     def _show_immersive_transition_cover(self):
         # The cover masks whatever the enter/exit switch still flashes. Disable via
-        # Settings → Advanced → TEST NEW FULLSCREEN, or STEEMPEG_FS_COVER=0.
+        # Settings → Advanced → Skip grey flash, or STEEMPEG_FS_COVER=0.
         try:
             from steempeg.ui.settings_prefs import immersive_transition_cover_enabled
 
@@ -2114,7 +2122,17 @@ class PlayerMixin:
 
         self._exit_immersive_layout(is_t)
 
-        self._restore_right_h_splitter_handle()
+        # Theatre / Portable: keep queue seam collapsed — never re-show the
+        # desktop player|queue handle after fullscreen exit.
+        if is_t or getattr(self, "_portable_shell", False):
+            if hasattr(self, "_hide_right_h_splitter_handle"):
+                self._hide_right_h_splitter_handle()
+            if hasattr(self.ui, "main_splitter"):
+                self._set_splitter_handle_visible(self.ui.main_splitter, False)
+            if hasattr(self, "main_v_splitter"):
+                self._set_splitter_handle_visible(self.main_v_splitter, False)
+        else:
+            self._restore_right_h_splitter_handle()
 
         if not is_t:
             if hasattr(self, 'bottom_v_wrap'):
@@ -2273,7 +2291,9 @@ class PlayerMixin:
             # above is degenerate. Swap in the expanded sizes captured on theatre
             # entry, otherwise exiting fullscreen lands in a broken "panels visible
             # but zero-width" layout.
-            if came_from_theater:
+            # Portable stays single-pane: keep the collapsed theatre snapshot and
+            # never restore desktop dock/handle widths on exit.
+            if came_from_theater and not getattr(self, "_portable_shell", False):
                 if hasattr(self, '_pre_theater_main_sizes'):
                     self._immersive_main_splitter_sizes = list(self._pre_theater_main_sizes)
                 if hasattr(self, '_pre_theater_v_sizes'):
@@ -2287,6 +2307,9 @@ class PlayerMixin:
                 self._immersive_right_h_handle_visible = bool(
                     getattr(self, "_pre_theater_right_handle_visible", True)
                 )
+            elif came_from_theater and getattr(self, "_portable_shell", False):
+                self._immersive_right_h_handle_width = 0
+                self._immersive_right_h_handle_visible = False
             elif hasattr(self, 'right_h_splitter'):
                 self._save_right_h_splitter_handle(
                     '_immersive_right_h_handle_width',
