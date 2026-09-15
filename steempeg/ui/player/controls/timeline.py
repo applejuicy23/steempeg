@@ -31,7 +31,6 @@ from PySide6.QtGui import (
     QCursor,
     QFont,
     QFontMetrics,
-    QIcon,
     QImage,
     QPainter,
     QPainterPath,
@@ -1041,6 +1040,21 @@ class TimelineCanvas(QWidget):
         if hasattr(self, "preview_widget"):
             self.preview_widget.hide()
 
+    def dismiss_hover_tools(self) -> None:
+        """Hide timeline Tool tips (preview + marker chip).
+
+        Call when a modeless dialog takes the cursor — Leave on the strip is
+        unreliable once a Tool already stacks above the dialog.
+        """
+        self._hide_hover_preview()
+        tip = getattr(self, "text_tooltip", None)
+        if tip is not None:
+            tip.hide()
+        self.is_hovering = False
+        self.hover_x = -1.0
+        self.hovered_marker = None
+        self.update()
+
     def _preview_anchor(self) -> QWidget:
         """Scroll host used to pin the hover thumb above the strip."""
         w = self.parentWidget()
@@ -1765,7 +1779,6 @@ class TimelineCanvas(QWidget):
             action_edit = menu.addAction("✏️ Edit Marker")
             action_duplicate = self._menu_action_duplicate(menu, "Duplicate")
             action_delete = menu.addAction("🗑️ Delete Marker")
-            action_delete.setForeground(QBrush(QColor("#ff8a8a")))
             menu.addSeparator() 
 
         action_open_screenshot = None
@@ -1814,15 +1827,7 @@ class TimelineCanvas(QWidget):
 
     @staticmethod
     def _menu_action_duplicate(menu: QMenu, label: str):
-        """Duplicate row — RS ``copyfile.png``, else clipboard emoji."""
-        try:
-            from steempeg.infra.paths import get_resource_path
-
-            path = get_resource_path("copyfile.png")
-            if path and os.path.isfile(path):
-                return menu.addAction(QIcon(path), label)
-        except Exception:
-            pass
+        """Duplicate row — emoji in text (same as ClipCard; QIcon blows out the gutter)."""
         return menu.addAction(f"📋  {label}")
     
     def show_track_context_menu(self, pos, time_ms):
@@ -2054,12 +2059,28 @@ class TimelineCanvas(QWidget):
             # Logic for a Pop-up Tooltip Beneath the Scrollbar
             if hasattr(self, 'text_tooltip'):
                 if found_marker:
-                    title = found_marker.get('title', '')
-                    desc = found_marker.get('desc', '')
-                    
+                    title = found_marker.get('title', '') or ''
+                    desc = found_marker.get('desc', '') or ''
+                    try:
+                        from steempeg.services import marker_prefs as mprefs
+
+                        keys = mprefs.marker_resolve_keys(found_marker)
+                        if keys:
+                            key = keys[0]
+                            title = mprefs.resolve_display_label(
+                                key, fallback=title
+                            )
+                            ov = mprefs.marker_override(key)
+                            ov_desc = str(ov.get("description") or "").strip()
+                            if ov_desc:
+                                desc = ov_desc
+                    except Exception:
+                        pass
+
                     # Filling the void and adding a hint!
                     if found_marker.get('icon_key') == 'usermarker':
-                        if not title: title = "User Marker"
+                        if not title:
+                            title = "User Marker"
                         
                     html_text = f"<b>{title}</b>"
                     if desc: html_text += f"<br>{desc}"
@@ -2353,21 +2374,26 @@ class TimelineCanvas(QWidget):
         if getattr(self, "_context_menu_open", False):
             super().leaveEvent(event)
             return
+        # Floating Tools (preview / tip) stack above modeless dialogs — always
+        # dismiss them on Leave. Keeping them for "still on strip" left a stuck
+        # thumb over Marker Settings after a synthetic Leave + real move.
+        self._hide_hover_preview()
+        if hasattr(self, "text_tooltip"):
+            self.text_tooltip.hide()
         # Native mpv / floating Tool chrome can synthesize Leave while the cursor
-        # is still on the strip (common in Portable theatre). Don't tear down.
+        # is still on the strip (common in Portable theatre). Keep hover state;
+        # the next mouseMove restores the preview if needed.
         if self.rect().contains(self.mapFromGlobal(QCursor.pos())):
             super().leaveEvent(event)
             return
         self.is_hovering = False
         self.hover_x = -1.0
         self.hovered_marker = None
-        self._hide_hover_preview()
         # Debounced: after a real leave, sniper warms ±15s for ~15s wall time, then idles.
         if hasattr(self, "_sniper_leave_timer"):
             self._sniper_leave_timer.start(280)
         elif hasattr(self, 'sniper') and self.sniper:
             self.sniper.pause_hover()
-        if hasattr(self, 'text_tooltip'): self.text_tooltip.hide()
         self.setCursor(Qt.ArrowCursor) 
         self.update() 
         super().leaveEvent(event)
