@@ -2367,6 +2367,78 @@ def _frameless_card_dialog_colors() -> dict[str, str]:
     }
 
 
+def about_secondary_button_stylesheet() -> str:
+    """About Close / Report-sibling gray pill — use on dialog footers app-wide."""
+    c = _frameless_card_dialog_colors()
+    p = _active
+    dis_bg = "#2a2a2a" if p.name == UI_THEME_DEFAULT else p.button_disabled_bg
+    dis_border = "#444444" if p.name == UI_THEME_DEFAULT else p.button_disabled_border
+    return f"""
+    QPushButton {{
+        background-color: {c["btn_bg"]};
+        color: white;
+        border: 1px solid {c["btn_border"]};
+        border-radius: 16px;
+        padding: 6px 24px;
+        font-weight: bold;
+        font-size: 12px;
+        font-family: {tok.FONT_APP};
+        min-height: 32px;
+        outline: none;
+    }}
+    QPushButton:hover {{
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid {c["btn_hover_border"]};
+    }}
+    QPushButton:pressed {{
+        background-color: {c["btn_pressed_bg"]};
+    }}
+    QPushButton:disabled {{
+        background-color: {dis_bg};
+        color: #666666;
+        border: 1px solid {dis_border};
+    }}
+"""
+
+
+def about_danger_button_stylesheet() -> str:
+    """About Report-a-bug red pill — destructive footer actions."""
+    c = _frameless_card_dialog_colors()
+    return about_secondary_button_stylesheet() + f"""
+    QPushButton {{
+        background-color: {c["danger_bg"]};
+        border: 1px solid {c["danger_border"]};
+        color: #ffffff;
+    }}
+    QPushButton:hover {{
+        background-color: {c["danger_hover_bg"]};
+        border: 1px solid {c["danger_hover_border"]};
+    }}
+    QPushButton:pressed {{
+        background-color: {c["danger_pressed_bg"]};
+    }}
+"""
+
+
+def about_accent_button_stylesheet() -> str:
+    """About accent pill — primary CTA (Save / Install-family)."""
+    c = _frameless_card_dialog_colors()
+    return about_secondary_button_stylesheet() + f"""
+    QPushButton {{
+        background-color: {c["accent_bg"]};
+        border: 1px solid {c["accent_border"]};
+        color: {c["accent_fg"]};
+    }}
+    QPushButton:hover {{
+        background-color: {c["accent_hover_bg"]};
+        border: 1px solid #b29ae7;
+    }}
+    QPushButton:pressed {{
+        background-color: {c["accent_pressed_bg"]};
+    }}
+"""
+
+
 def about_dialog_stylesheet() -> str:
     """About frameless card — Default legacy plate; TrueDark elevated tokens."""
     c = _frameless_card_dialog_colors()
@@ -2426,24 +2498,7 @@ def about_dialog_stylesheet() -> str:
         font-size: 10px;
         font-style: italic;
     }}
-    QPushButton {{
-        background-color: {c["btn_bg"]};
-        color: white;
-        border: 1px solid {c["btn_border"]};
-        border-radius: 16px;
-        padding: 6px 24px;
-        font-weight: bold;
-        font-size: 12px;
-        min-height: 32px;
-        outline: none;
-    }}
-    QPushButton:hover {{
-        background-color: {c["btn_hover_bg"]};
-        border: 1px solid {c["btn_hover_border"]};
-    }}
-    QPushButton:pressed {{
-        background-color: {c["btn_pressed_bg"]};
-    }}
+""" + about_secondary_button_stylesheet() + f"""
     QPushButton#AboutReportBtn {{
         background-color: {c["danger_bg"]};
         border: 1px solid {c["danger_border"]};
@@ -2917,32 +2972,8 @@ def render_history_pill_button_stylesheet(*, bold: bool = True) -> str:
 
 
 def render_history_close_button_stylesheet() -> str:
-    """Footer Close — accent tint in Default; dark secondary in TrueDark."""
-    p = _active
-    if p.name == UI_THEME_DEFAULT:
-        return """
-    QPushButton {
-        background-color: #3a324a; color: #e0d4ff; border: 1px solid #6b5a8e;
-        border-radius: 8px; padding: 8px 16px; font-weight: bold;
-    }
-    QPushButton:hover { background-color: #4a3f5c; }
-"""
-    return f"""
-    QPushButton {{
-        background-color: {p.button_secondary_bg}; color: #e0e0e0;
-        border: 2px solid {p.button_secondary_border};
-        border-radius: 8px; padding: 8px 16px; font-weight: bold;
-    }}
-    QPushButton:hover {{
-        background-color: {p.button_secondary_hover_bg};
-        color: #ffffff;
-        border: 2px solid #6b5a8e;
-    }}
-    QPushButton:pressed {{
-        background-color: {p.button_secondary_pressed_bg};
-        border: 2px solid #b29ae7;
-    }}
-"""
+    """Footer Close — About gray pill (same face as About → Close)."""
+    return about_secondary_button_stylesheet()
 
 
 def about_dialog_link_style() -> str:
