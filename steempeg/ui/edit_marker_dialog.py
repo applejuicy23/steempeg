@@ -64,6 +64,12 @@ class EditSteamMarkerDialog(SteempegDialog):
         prefs = mprefs.load_marker_prefs()
         ov = mprefs.marker_override(self._marker_key, prefs)
         self._custom_icon = ov.get("custom_icon") or ""
+        # Prefs label/description are the display source of truth (Marker Settings).
+        # Canvas title/desc can lag after Settings edits or clip reloads.
+        if "label" in ov:
+            title_text = str(ov.get("label") or "")
+        if "description" in ov:
+            description = str(ov.get("description") or "")
 
         # Icon preview + pick
         icon_row = QHBoxLayout()
@@ -143,6 +149,7 @@ class EditSteamMarkerDialog(SteempegDialog):
         self.content_layout.addWidget(title_lbl)
 
         self._title_edit = QLineEdit(title_text)
+        self._title_edit.setPlaceholderText("User Marker")
         self._title_edit.setStyleSheet(_FIELD_STYLE)
         self.content_layout.addWidget(self._title_edit)
 
