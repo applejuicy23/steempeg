@@ -536,10 +536,11 @@ class PortableRenderSettingsDialog(SteempegDialog):
         footer_lay.setContentsMargins(12, 10, 12, 12)
         footer_lay.setSpacing(8)
 
-        sec_btn = ut.settings_dialog_secondary_button_stylesheet()
+        about_sec = ut.about_secondary_button_stylesheet()
+        about_accent = ut.about_accent_button_stylesheet()
         btn_choose = QPushButton("Choose a Clip")
         btn_choose.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_choose.setStyleSheet(sec_btn)
+        btn_choose.setStyleSheet(about_sec)
         btn_choose.setToolTip("Open Clips Manager without closing Render settings")
         btn_choose.clicked.connect(self._on_choose_clip)
         footer_lay.addWidget(btn_choose, 0)
@@ -548,7 +549,7 @@ class PortableRenderSettingsDialog(SteempegDialog):
 
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setStyleSheet(sec_btn)
+        btn_save.setStyleSheet(about_accent)
         btn_save.clicked.connect(self._on_save)
         footer_lay.addWidget(btn_save)
         self.content_layout.addWidget(footer, 0)
