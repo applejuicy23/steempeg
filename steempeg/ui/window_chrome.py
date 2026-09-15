@@ -84,6 +84,34 @@ _SC_MINIMIZE = 0xF020
 _SC_MAXIMIZE = 0xF030
 _SC_RESTORE = 0xF120
 
+_SW_SHOWNORMAL = 1
+_SW_SHOWMAXIMIZED = 3
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+class _WINDOWPLACEMENT(ctypes.Structure):
+    _fields_ = [
+        ("length", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("showCmd", ctypes.c_uint),
+        ("ptMinPosition", _POINT),
+        ("ptMaxPosition", _POINT),
+        ("rcNormalPosition", _RECT),
+    ]
+
+
 _SM_CXSIZEFRAME = 32
 _SM_CXPADDEDBORDER = 92
 
@@ -91,6 +119,8 @@ _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_BORDER_COLOR = 34
 _DWMWA_WINDOW_CORNER_PREFERENCE = 33
 _DWMWCP_DONOTROUND = 1
+_DWMWCP_ROUND = 2  # Win11 default app radius (VS Code / Explorer / Cursor)
+_DWMWCP_ROUNDSMALL = 3
 _DWMWA_COLOR_NONE = 0xFFFFFFFE  # removes the window border line entirely (Win11)
 
 HTCLIENT = 1
@@ -1222,12 +1252,14 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
 _WIN_RESIZE_BORDER = 8
 _WIN_RESIZE_CORNER = 14
-# Top corners stay tiny so traffic-light dots stay clickable.
-_WIN_RESIZE_TOP_CORNER = 8
+# Top corners must sit *above* the chrome shell or title-bar drag eats them.
+# Top-right stays modest so traffic lights can raise() back on top of the grip.
+_WIN_RESIZE_TOP_CORNER = 16
+_WIN_RESIZE_TOP_LEFT_CORNER = 20
 _LINUX_RESIZE_BORDER = 8
 _LINUX_RESIZE_CORNER = 18
-# Top corners stay tiny so title-bar traffic lights stay clickable (match Windows).
-_LINUX_RESIZE_TOP_CORNER = 8
+_LINUX_RESIZE_TOP_CORNER = 16
+_LINUX_RESIZE_TOP_LEFT_CORNER = 20
 
 
 def _nearly_maximized(window: QWidget) -> bool:
@@ -1547,6 +1579,49 @@ def _apply_manual_resize(
 # border; HTLEFT/… system resize was also unreliable with our NCCALCSIZE chrome.
 
 
+def _raise_top_corner_resize_grips(window: QWidget, grips: list) -> None:
+    """Re-raise traffic lights above the top-right corner grip after stack layout.
+
+    Top edge + corners sit above the chrome shell for resize. Close / min / max
+    must still win hover and clicks over the outer top-right grip pixels.
+    """
+    _ = grips
+    tb = getattr(window, "title_bar", None)
+    if tb is None:
+        return
+    for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+        btn = getattr(tb, attr, None)
+        if btn is None:
+            continue
+        try:
+            btn.raise_()
+        except RuntimeError:
+            pass
+
+
+def _layout_chrome_resize_grip_stack(window: QWidget, grips: list) -> None:
+    """Shell under resize grips; traffic lights stay above the top-right corner."""
+    shell = getattr(window, "_custom_chrome_shell", None)
+    if shell is not None:
+        try:
+            shell.raise_()
+        except RuntimeError:
+            pass
+        # Raise every grip (top edge + corners + sides + bottom) above the shell
+        # so SizeVerCursor works on the title-bar top strip. Window move still
+        # works on the rest of the title bar below the ~8px border grip.
+        for grip in grips:
+            try:
+                if grip.isEnabled() and grip.isVisible():
+                    grip.raise_()
+            except RuntimeError:
+                pass
+    _raise_top_corner_resize_grips(window, grips)
+    tb = getattr(window, "title_bar", None)
+    if tb is not None and hasattr(tb, "reset_traffic_lights"):
+        tb.reset_traffic_lights()
+
+
 class _WinResizeGrip(QWidget):
     """Invisible hit target for one edge or corner on Windows."""
 
@@ -1637,18 +1712,19 @@ class _WindowsEdgeResizeController(QObject):
         w, h = window.width(), window.height()
         b, c = _WIN_RESIZE_BORDER, _WIN_RESIZE_CORNER
         tc = _WIN_RESIZE_TOP_CORNER
+        tl = _WIN_RESIZE_TOP_LEFT_CORNER
         # Leave the traffic-light strip alone — top grips used to sit above the
         # shell and steal HoverEnter from the close/min/max dots (glyph only
         # came back after clicking a light).
         strip = _CONTROL_STRIP_WIDTH
         # Order matches specs in __init__.
-        # Top corners stay small — a big square ate the close/min/max dots.
+        # Top-left is a usable resize handle; top-right stays tiny near lights.
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, max(0, w - tc - strip), b),  # top (no control strip)
+            (tl, 0, max(0, w - tl - strip), b),  # top (no control strip)
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
-            (0, 0, tc, tc),  # top-left
+            (0, 0, tl, tl),  # top-left
             (max(0, w - tc), 0, tc, tc),  # top-right (outer margin only)
             (0, max(0, h - c), c, c),  # bottom-left
             (max(0, w - c), max(0, h - c), c, c),  # bottom-right
@@ -1662,33 +1738,7 @@ class _WindowsEdgeResizeController(QObject):
             grip.setEnabled(True)
             grip.show()
             grip.raise_()
-        # Raise the chrome shell above top grips so traffic lights receive hover.
-        # Then put side/bottom grips back on top for resize (top strip stays under
-        # the shell — title-bar drag covers move; strip is punched from top grip).
-        shell = getattr(window, "_custom_chrome_shell", None)
-        if shell is not None:
-            try:
-                shell.raise_()
-            except RuntimeError:
-                pass
-            for grip in self._grips:
-                edges = getattr(grip, "_edges", None)
-                if edges is None:
-                    continue
-                top_only = edges == Qt.Edge.TopEdge
-                top_corner = edges in (
-                    Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
-                    Qt.Edge.TopEdge | Qt.Edge.RightEdge,
-                )
-                if top_only or top_corner:
-                    continue
-                try:
-                    grip.raise_()
-                except RuntimeError:
-                    pass
-        tb = getattr(window, "title_bar", None)
-        if tb is not None and hasattr(tb, "reset_traffic_lights"):
-            tb.reset_traffic_lights()
+        _layout_chrome_resize_grip_stack(window, self._grips)
 
 
 def enable_windows_edge_resize(window: QWidget) -> None:
@@ -1849,13 +1899,14 @@ class _LinuxEdgeResizeGrips(QObject):
         w, h = window.width(), window.height()
         b, c = _LINUX_RESIZE_BORDER, _LINUX_RESIZE_CORNER
         tc = _LINUX_RESIZE_TOP_CORNER
+        tl = _LINUX_RESIZE_TOP_LEFT_CORNER
         strip = _CONTROL_STRIP_WIDTH
         geos = (
             (0, c, b, max(0, h - 2 * c)),  # left
             (max(0, w - b), c, b, max(0, h - 2 * c)),  # right
-            (tc, 0, max(0, w - tc - strip), b),  # top (no traffic-light strip)
+            (tl, 0, max(0, w - tl - strip), b),  # top (no traffic-light strip)
             (c, max(0, h - b), max(0, w - 2 * c), b),  # bottom
-            (0, 0, tc, tc),  # top-left
+            (0, 0, tl, tl),  # top-left
             (max(0, w - tc), 0, tc, tc),  # top-right
             (0, max(0, h - c), c, c),  # bottom-left
             (max(0, w - c), max(0, h - c), c, c),  # bottom-right
@@ -1869,30 +1920,7 @@ class _LinuxEdgeResizeGrips(QObject):
             grip.setEnabled(True)
             grip.show()
             grip.raise_()
-        shell = getattr(window, "_custom_chrome_shell", None)
-        if shell is not None:
-            try:
-                shell.raise_()
-            except RuntimeError:
-                pass
-            for grip in self._grips:
-                edges = getattr(grip, "_edges", None)
-                if edges is None:
-                    continue
-                top_only = edges == Qt.Edge.TopEdge
-                top_corner = edges in (
-                    Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
-                    Qt.Edge.TopEdge | Qt.Edge.RightEdge,
-                )
-                if top_only or top_corner:
-                    continue
-                try:
-                    grip.raise_()
-                except RuntimeError:
-                    pass
-        tb = getattr(window, "title_bar", None)
-        if tb is not None and hasattr(tb, "reset_traffic_lights"):
-            tb.reset_traffic_lights()
+        _layout_chrome_resize_grip_stack(window, self._grips)
 
 
 def enable_linux_edge_resize(window: QWidget) -> None:
@@ -1916,6 +1944,77 @@ def _hex_to_colorref(hex_color: str) -> int:
 def _resize_border_thickness(window: QWidget) -> int:
     gsm = ctypes.windll.user32.GetSystemMetrics
     return gsm(_SM_CXSIZEFRAME) + gsm(_SM_CXPADDEDBORDER)
+
+
+def seed_windows_restore_geometry(window: QWidget, restore: QRect) -> bool:
+    """Stamp Win32 ``rcNormalPosition`` without changing the current frame size.
+
+    Startup fills the work area then ``showMaximized()``. That overwrites Qt's
+    normalGeometry with ~fullscreen, so the first green-button Restore does
+    nothing useful. Seeding ``WINDOWPLACEMENT.rcNormalPosition`` keeps the
+    maximized first paint while teaching Windows the real restore size.
+    """
+    if os.name != "nt":
+        return False
+    if not isinstance(restore, QRect) or not restore.isValid():
+        return False
+    if restore.width() < 200 or restore.height() < 200:
+        return False
+    try:
+        hwnd = int(window.winId())
+        wp = _WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(_WINDOWPLACEMENT)
+        if not ctypes.windll.user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return False
+        wp.rcNormalPosition.left = int(restore.left())
+        wp.rcNormalPosition.top = int(restore.top())
+        wp.rcNormalPosition.right = int(restore.left() + restore.width())
+        wp.rcNormalPosition.bottom = int(restore.top() + restore.height())
+        if not ctypes.windll.user32.SetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return False
+        window._win_restore_geometry = QRect(restore)
+        return True
+    except Exception:
+        return False
+
+
+def _sanitize_windows_restored_geometry(window: QWidget) -> None:
+    """If Restore left a near-fullscreen shell, snap to stock / last restore."""
+    if os.name != "nt":
+        return
+    try:
+        if window.isMaximized() or bool(
+            ctypes.windll.user32.IsZoomed(int(window.winId()))
+        ):
+            return
+    except Exception:
+        if window.isMaximized():
+            return
+    screen = window.screen() or QApplication.primaryScreen()
+    if screen is None:
+        return
+    avail = screen.availableGeometry()
+    geo = window.geometry()
+    nearly_full = (
+        abs(geo.width() - avail.width()) <= 48
+        and abs(geo.height() - avail.height()) <= 48
+    )
+    if not nearly_full:
+        window._win_restore_geometry = QRect(geo)
+        return
+    from steempeg.ui.layout_defaults import stock_restore_geometry
+
+    saved = getattr(window, "_win_restore_geometry", None)
+    target = stock_restore_geometry(avail)
+    if (
+        isinstance(saved, QRect)
+        and saved.isValid()
+        and saved.width() <= avail.width() - 80
+        and saved.height() <= avail.height() - 60
+    ):
+        target = QRect(saved)
+    window.setGeometry(target)
+    window._win_restore_geometry = QRect(target)
 
 
 def win32_window_command(window: QWidget, action: str) -> None:
@@ -1947,7 +2046,9 @@ def win32_window_command(window: QWidget, action: str) -> None:
                 if isinstance(restore, QRect) and restore.isValid():
                     window.setGeometry(restore)
                 else:
-                    window.setGeometry(avail.adjusted(80, 60, -80, -60))
+                    from steempeg.ui.layout_defaults import stock_restore_geometry
+
+                    window.setGeometry(stock_restore_geometry(avail))
             else:
                 window._linux_restore_geometry = QRect(window.geometry())
                 if window.isMaximized():
@@ -1961,8 +2062,21 @@ def win32_window_command(window: QWidget, action: str) -> None:
     elif action == "minimize":
         ctypes.windll.user32.SendMessageW(hwnd, _WM_SYSCOMMAND, _SC_MINIMIZE, 0)
     elif action == "maximize_toggle":
-        cmd = _SC_RESTORE if window.isMaximized() else _SC_MAXIMIZE
-        ctypes.windll.user32.SendMessageW(hwnd, _WM_SYSCOMMAND, cmd, 0)
+        try:
+            zoomed = bool(ctypes.windll.user32.IsZoomed(hwnd))
+        except Exception:
+            zoomed = bool(window.isMaximized())
+        if zoomed or window.isMaximized():
+            ctypes.windll.user32.SendMessageW(hwnd, _WM_SYSCOMMAND, _SC_RESTORE, 0)
+            QTimer.singleShot(
+                0, lambda w=window: _sanitize_windows_restored_geometry(w)
+            )
+        else:
+            # Remember the user-sized frame so a polluted normalGeometry can
+            # still fall back after Restore.
+            window._win_restore_geometry = QRect(window.geometry())
+            seed_windows_restore_geometry(window, window._win_restore_geometry)
+            ctypes.windll.user32.SendMessageW(hwnd, _WM_SYSCOMMAND, _SC_MAXIMIZE, 0)
 
 
 class _AltF4NativeCloseFilter(QAbstractNativeEventFilter):
@@ -2221,6 +2335,18 @@ def poke_frame(window: QWidget) -> None:
         pass
 
 
+def _want_rounded_shell_corners(window: QWidget) -> bool:
+    """Win11 DWM round corners for normal shells; square in immersive edge-fill."""
+    host = getattr(window, "_app_host", None)
+    if host is None and hasattr(window, "is_fullscreen"):
+        host = window
+    # Theatre only collapses docks — still a normal framed shell. Fullscreen
+    # grows to the monitor edge-to-edge, where round corners leave dark gaps.
+    if host is not None and getattr(host, "is_fullscreen", False):
+        return False
+    return True
+
+
 def refresh_dwm_chrome(window: QWidget) -> None:
     """Dark immersive mode + matching border color (no glass, no frame extend)."""
     if os.name != "nt":
@@ -2240,12 +2366,18 @@ def refresh_dwm_chrome(window: QWidget) -> None:
             )
         except Exception:
             pass
-        # Square corners — Win11 otherwise rounds the window, showing dark gaps at
-        # the corners (most visible in borderless fullscreen / theatre).
-        square = ctypes.c_int(_DWMWCP_DONOTROUND)
+        # Restored / maximized desktop: round like VS Code / Explorer. Immersive
+        # fullscreen stays square so edge-to-edge fill has no dark gaps.
+        prefer = (
+            _DWMWCP_ROUND if _want_rounded_shell_corners(window) else _DWMWCP_DONOTROUND
+        )
+        corner = ctypes.c_int(prefer)
         try:
             dwm.DwmSetWindowAttribute(
-                hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(square), ctypes.sizeof(square),
+                hwnd,
+                _DWMWA_WINDOW_CORNER_PREFERENCE,
+                ctypes.byref(corner),
+                ctypes.sizeof(corner),
             )
         except Exception:
             pass
@@ -2347,13 +2479,14 @@ def _on_nchittest(window, msg):
         border = max(int(round(_WIN_RESIZE_BORDER * dpr)), 8)
         corner = max(int(round(_WIN_RESIZE_CORNER * dpr)), 12)
         top_corner = max(int(round(_WIN_RESIZE_TOP_CORNER * dpr)), 8)
+        top_left = max(int(round(_WIN_RESIZE_TOP_LEFT_CORNER * dpr)), 12)
         left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
         on_edge = (
             left <= x < left + border
             or right - border <= x < right
             or top <= y < top + border
             or bottom - border <= y < bottom
-            or (left <= x < left + top_corner and top <= y < top + top_corner)
+            or (left <= x < left + top_left and top <= y < top + top_left)
             or (right - top_corner <= x < right and top <= y < top + top_corner)
             or (left <= x < left + corner and bottom - corner <= y < bottom)
             or (right - corner <= x < right and bottom - corner <= y < bottom)
