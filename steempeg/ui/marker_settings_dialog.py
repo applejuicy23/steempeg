@@ -1346,11 +1346,21 @@ class MarkerSettingsDialog(SteempegDialog):
                 self._mk_reset_btn.setText("Reset this marker")
 
         self._mk_label.blockSignals(True)
-        self._mk_label.setText(ov.get("label") or "")
+        # Prefs label wins; else canvas title so Settings matches the pin.
+        self._mk_label.setText(
+            (ov.get("label") or "").strip()
+            or str(row_info.get("title") or "").strip()
+        )
         self._mk_label.blockSignals(False)
         if hasattr(self, "_mk_description"):
             self._mk_description.blockSignals(True)
-            self._mk_description.setText(ov.get("description") or "")
+            canvas_desc = ""
+            live = self._canvas_marker_for_row(row_info)
+            if live is not None:
+                canvas_desc = str(live.get("desc") or "").strip()
+            self._mk_description.setText(
+                (ov.get("description") or "").strip() or canvas_desc
+            )
             self._mk_description.blockSignals(False)
         self._mk_class.blockSignals(True)
         idx = self._mk_class.findData(ov.get("class_id") or "")
@@ -1549,7 +1559,8 @@ class MarkerSettingsDialog(SteempegDialog):
                 getattr(self, "_mk_no_tint", None) and self._mk_no_tint.isChecked()
             ),
         )
-        # Keep live canvas pin title/desc in sync — tip used to read only those.
+        # Keep live canvas + clip cache in sync with prefs (Edit Marker used to
+        # read only title/desc and drift apart from Marker Settings).
         row_info = self._selected_marker_row_info()
         marker = self._canvas_marker_for_row(row_info)
         if marker is not None and mprefs.is_user_marker(marker):
@@ -1560,6 +1571,19 @@ class MarkerSettingsDialog(SteempegDialog):
                 if hasattr(canvas, "text_tooltip"):
                     canvas.text_tooltip.hide()
                 canvas.update()
+                try:
+                    from steempeg.core.clip_markers_cache import (
+                        update_user_marker_fields,
+                    )
+
+                    update_user_marker_fields(
+                        getattr(canvas, "_markers_cache_dir", None),
+                        marker,
+                        clip_path=getattr(canvas, "current_clip_path", None),
+                        json_path=getattr(canvas, "current_json_path", None),
+                    )
+                except Exception:
+                    pass
         self._emit_changed()
         self._repopulate_markers()
         self._select_marker_row_id(row_id, seek=False)
