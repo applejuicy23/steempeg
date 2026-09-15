@@ -2042,7 +2042,6 @@ class TimelineCanvas(QWidget):
             self.sniper._cancel_background_warm()
 
         found_marker = None
-        on_strip = self._markers_on_strip()
         # Skip marker hover while actively scrubbing / dragging trim / dragging pin.
         if self.drag_state == "none":
             found_marker = self._marker_at(x, y)
@@ -2077,25 +2076,22 @@ class TimelineCanvas(QWidget):
                     except Exception:
                         pass
 
-                    # Filling the void and adding a hint!
-                    if found_marker.get('icon_key') == 'usermarker':
-                        if not title:
+                    # Title + description only (no drag/jump chrome).
+                    if (
+                        found_marker.get("icon_key") == "usermarker"
+                        or (
+                            isinstance(title, str)
+                            and title.startswith("user_")
+                        )
+                    ):
+                        if not title or (
+                            isinstance(title, str) and title.startswith("user_")
+                        ):
                             title = "User Marker"
                         
                     html_text = f"<b>{title}</b>"
-                    if desc: html_text += f"<br>{desc}"
-                    if found_marker.get("icon_key") == "usermarker":
-                        hint = (
-                            "Drag to move · Ctrl+click to jump"
-                            if on_strip
-                            else "Drag to move · click to jump"
-                        )
-                        html_text += (
-                            "<br><span style='font-weight:normal;opacity:0.85'>"
-                            f"{hint}</span>"
-                        )
-                    elif on_strip:
-                        html_text += "<br><span style='font-weight:normal;opacity:0.85'>Ctrl+click to jump</span>"
+                    if desc:
+                        html_text += f"<br>{desc}"
 
                     pix = self.get_icon_pixmap(found_marker)
                     icon = getattr(self, "_tooltip_icon", None)
