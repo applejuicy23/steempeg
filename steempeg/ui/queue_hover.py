@@ -42,7 +42,6 @@ def _hotspot_width(app=None) -> int:
 
 _PAD = 14
 _BULGE_OUT = 22
-_BULGE_OVERLAP = 12
 _BULGE_H = 128
 _RADIUS = 16
 _SHEET_INSET_Y = 18
@@ -72,37 +71,20 @@ def _overlay_chrome() -> tuple[QColor, QColor, QColor, QColor]:
         from steempeg.ui import ui_theme as ut
 
         pal = ut.active_palette()
-        return (
-            QColor(pal.bg_shell),
-            QColor(ut.player_chrome_border_color()),
-            QColor("#888888"),
-            QColor("#c0c0c0"),
-        )
+        bg = QColor(pal.bg_shell)
+        border = QColor(ut.player_chrome_border_color())
     except Exception:
-        return (
-            QColor("#121212"),
-            QColor("#383838"),
-            QColor("#888888"),
-            QColor("#c0c0c0"),
-        )
-
-
-def _rail_path(
-    card: QRect, bulge: QRect, *, radius: int, inflate: float = 0.0
-) -> QPainterPath:
-    path = QPainterPath()
-    path.setFillRule(Qt.FillRule.WindingFill)
-    cr = QRectF(card).adjusted(-inflate, -inflate, inflate, inflate)
-    rad = float(max(0, radius))
-    if rad > 0:
-        path.addRoundedRect(cr, rad, rad)
-    else:
-        path.addRect(cr)
-    if bulge.width() > 2 and bulge.height() > 2:
-        br = QRectF(bulge).adjusted(-inflate, -inflate, inflate, inflate)
-        tab_r = min(br.width(), br.height()) * 0.5
-        path.addRoundedRect(br, tab_r, tab_r)
-    return path
+        bg = QColor("#121212")
+        border = QColor("#383838")
+    # Layered Tool + translucent parent: any alpha < 255 reads as the "ghost strip".
+    bg.setAlpha(255)
+    border.setAlpha(255)
+    return (
+        bg,
+        border,
+        QColor(136, 136, 136, 255),
+        QColor(192, 192, 192, 255),
+    )
 
 
 def _round_region(rect: QRect, radius: float) -> QRegion:
@@ -112,26 +94,6 @@ def _round_region(rect: QRect, radius: float) -> QRegion:
     path.addRoundedRect(QRectF(rect), float(radius), float(radius))
     poly = path.toFillPolygon().toPolygon()
     return QRegion(poly) if not poly.isEmpty() else QRegion()
-
-
-def _shape_mask(card: QRect, bulge: QRect, *, radius: int) -> QRegion:
-    """Union card + grip as separate regions.
-
-    ``toFillPolygon`` on a two-subpath path can bite a pill-shaped hole
-    opposite the handle; Win32 then fills that leftover black.
-    """
-    # +1px so the hairline sits inside the HWND mask (else DWM paints a
-    # black halo around the grip).
-    pad = 1
-    region = _round_region(
-        card.adjusted(-pad, -pad, pad, pad), float(max(0, radius))
-    )
-    if bulge.width() > 2 and bulge.height() > 2:
-        tab_r = min(bulge.width(), bulge.height()) * 0.5
-        region = region.united(
-            _round_region(bulge.adjusted(-pad, -pad, pad, pad), tab_r)
-        )
-    return region
 
 
 def _strip_overlay_dwm(widget: QWidget) -> None:
@@ -213,29 +175,114 @@ class _Hotspot(QWidget):
 
 
 class _Grip(QWidget):
-    """Short protruding handle on the player-facing edge."""
+    """Protruding resize handle — own Tool HWND (not a strip on the RQ overlay).
 
-    def __init__(self, overlay: "QueueHoverOverlay", parent=None):
-        super().__init__(parent)
+    Keeping the grip as a child of the translucent overlay left a full-height
+    ghost column the width of ``_BULGE_OUT`` (Win ignores mask on that strip).
+    """
+
+    def __init__(self, overlay: "QueueHoverOverlay"):
+        super().__init__(None)
         self._overlay = overlay
         self.setObjectName("queueHoverGrip")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setAutoFillBackground(False)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setMouseTracking(True)
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setStyleSheet("background: transparent; border: none;")
         self._drag_origin = None
         self._start_w = 0
         self._hovered = False
+        self.hide()
+
+    def place(self, global_rect: QRect) -> None:
+        """Move/show this capsule in global screen coords."""
+        if global_rect.width() < 2 or global_rect.height() < 2:
+            self.hide()
+            return
+        self.setGeometry(global_rect)
+        tab_r = min(global_rect.width(), global_rect.height()) * 0.5
+        try:
+            region = _round_region(self.rect(), tab_r)
+            if region.isEmpty():
+                self.clearMask()
+            else:
+                self.setMask(region)
+        except RuntimeError:
+            self.clearMask()
+        if sys.platform == "win32":
+            try:
+                from steempeg.infra.window_focus import detach_tool_ownership
+
+                detach_tool_ownership(self)
+            except Exception:
+                pass
+            try:
+                import ctypes
+
+                self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+                self.createWinId()
+                hwnd = int(self.winId())
+                if hwnd:
+                    ctypes.windll.user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+                    if not self.isVisible():
+                        self.setVisible(True)
+                    return
+            except Exception:
+                pass
+        self.show()
+
+    def paintEvent(self, event):  # noqa: N802
+        bg, border, grip_idle, grip_hot = _overlay_chrome()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(self.rect())
+        if r.width() < 2 or r.height() < 2:
+            painter.end()
+            return
+        tab_r = min(r.width(), r.height()) * 0.5
+        path = QPainterPath()
+        path.addRoundedRect(r, tab_r, tab_r)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg)
+        painter.fillPath(path, bg)
+        rim = QPen(border)
+        rim.setWidthF(1.0)
+        rim.setCosmetic(True)
+        painter.setPen(rim)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+        line_w = 5.0
+        pad = 26.0
+        line = QRectF(
+            r.center().x() - line_w * 0.5,
+            r.top() + pad,
+            line_w,
+            max(24.0, r.height() - pad * 2.0),
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(grip_hot if self._hovered else grip_idle)
+        painter.drawRoundedRect(line, 2.5, 2.5)
+        painter.end()
 
     def enterEvent(self, event):  # noqa: N802
         self._hovered = True
-        self._overlay.update()
+        self.update()
         self._overlay._controller._on_hot_enter()
         super().enterEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802
         self._hovered = False
-        self._overlay.update()
+        self.update()
         if self._drag_origin is None:
             self._overlay._controller._on_hot_leave()
         super().leaveEvent(event)
@@ -323,7 +370,8 @@ class QueueHoverOverlay(QWidget):
         self._body_lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         self._body_lay.setSpacing(0)
 
-        self._grip = _Grip(self, self)
+        # Own Tool HWND — must not share the overlay's full-height translucent strip.
+        self._grip = _Grip(self)
 
         self._anim = QPropertyAnimation(self, b"slide", self)
         self._anim.setDuration(_ANIM_MS)
@@ -386,6 +434,10 @@ class QueueHoverOverlay(QWidget):
     def _on_anim_finished(self) -> None:
         if self._slide <= 0.001 and not self._controller.is_revealed():
             self.hide()
+            try:
+                self._grip.hide()
+            except RuntimeError:
+                pass
 
     def _apply_geometry(self) -> None:
         host = self._controller._host
@@ -398,7 +450,6 @@ class QueueHoverOverlay(QWidget):
         inset_y = min(_SHEET_INSET_Y, max(12, int(span.height() * 0.03)))
         card_h = max(180, int(span.height()) - inset_y * 2)
         shown = int(round(card_w * self._slide))
-        bulge_out = _BULGE_OUT
         outer = _SHEET_INSET_OUTER
         if self.isWindow():
             origin = host.mapToGlobal(span.topLeft())
@@ -409,56 +460,44 @@ class QueueHoverOverlay(QWidget):
                 host.mapTo(parent, span.topLeft()) if parent is not None else span.topLeft()
             )
             ox, oy = int(top_left.x()), int(top_left.y())
+        # Overlay is plate-only — grip is a separate Tool (no full-height ghost strip).
         if self._from_left:
             card_x = ox + shown - card_w + outer
-            overlay_x = card_x
-            overlay_w = card_w + bulge_out
-            local_x = 0
         else:
             card_x = ox + int(span.width()) - shown - outer
-            overlay_x = card_x - bulge_out
-            overlay_w = card_w + bulge_out
-            local_x = bulge_out
         overlay_y = oy + inset_y
-        overlay_h = card_h
-        local_y = 0
-        self.setGeometry(overlay_x, overlay_y, overlay_w, overlay_h)
+        self.setGeometry(card_x, overlay_y, card_w, card_h)
         if sys.platform == "win32":
             try:
                 from steempeg.infra.window_focus import detach_tool_ownership
 
-                # setGeometry can re-own the Tool to the shell HWND.
                 detach_tool_ownership(self)
             except Exception:
                 pass
-        self._card = QRect(local_x, local_y, card_w, card_h)
-        grip_h = min(_BULGE_H, max(64, card_h - 48))
-        grip_y = local_y + max(8, (card_h - grip_h) // 2)
-        if self._from_left:
-            self._bulge = QRect(
-                self._card.right() - _BULGE_OVERLAP,
-                grip_y,
-                bulge_out + _BULGE_OVERLAP,
-                grip_h,
-            )
-        else:
-            self._bulge = QRect(
-                local_x - bulge_out,
-                grip_y,
-                bulge_out + _BULGE_OVERLAP,
-                grip_h,
-            )
+        self._card = QRect(0, 0, card_w, card_h)
         self._body.setGeometry(self._card)
-        self._grip.setGeometry(self._bulge)
-        self._grip.raise_()
+        grip_h = min(_BULGE_H, max(64, card_h - 48))
+        grip_y = max(8, (card_h - grip_h) // 2)
+        if self._from_left:
+            grip_global = QRect(card_x + card_w, overlay_y + grip_y, _BULGE_OUT, grip_h)
+        else:
+            grip_global = QRect(card_x - _BULGE_OUT, overlay_y + grip_y, _BULGE_OUT, grip_h)
+        self._bulge = QRect(0, 0, grip_global.width(), grip_global.height())
         try:
-            region = _shape_mask(self._card, self._bulge, radius=_RADIUS)
+            region = _round_region(self._card, float(_RADIUS))
             if region.isEmpty():
                 self.clearMask()
             else:
                 self.setMask(region)
         except RuntimeError:
             self.clearMask()
+        if self._slide > 0.001 and self.isVisible():
+            self._grip.place(grip_global)
+        else:
+            try:
+                self._grip.hide()
+            except RuntimeError:
+                pass
 
     def paintEvent(self, event):  # noqa: N802
         if self._slide <= 0.0:
@@ -466,36 +505,24 @@ class QueueHoverOverlay(QWidget):
         card = self._card
         if card.width() <= 2 or card.height() <= 2:
             return
-        bg, border, grip_idle, grip_hot = _overlay_chrome()
-        # Fill 1px past the plate so the mask/stroke halo is panel colour, not black.
+        bg, border, _grip_idle, _grip_hot = _overlay_chrome()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillPath(
-            _rail_path(card, self._bulge, radius=_RADIUS, inflate=1.0), bg
+
+        card_path = QPainterPath()
+        cr = QRectF(card)
+        card_path.addRoundedRect(cr, float(_RADIUS), float(_RADIUS))
+        fill_card = QPainterPath()
+        fill_card.addRoundedRect(
+            cr.adjusted(-1.0, -1.0, 1.0, 1.0), float(_RADIUS), float(_RADIUS)
         )
+        painter.fillPath(fill_card, bg)
         rim = QPen(border)
         rim.setWidthF(1.0)
         rim.setCosmetic(True)
         painter.setPen(rim)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(_rail_path(card, self._bulge, radius=_RADIUS))
-        bulge = QRectF(self._bulge)
-        if bulge.width() > 2 and bulge.height() > 2:
-            line_w = 5.0
-            pad = 26.0
-            if self._from_left:
-                cx = bulge.left() + _BULGE_OVERLAP + _BULGE_OUT * 0.5
-            else:
-                cx = bulge.left() + _BULGE_OUT * 0.5
-            line = QRectF(
-                cx - line_w * 0.5,
-                bulge.top() + pad,
-                line_w,
-                max(24.0, bulge.height() - pad * 2.0),
-            )
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(grip_hot if self._grip._hovered else grip_idle)
-            painter.drawRoundedRect(line, 2.5, 2.5)
+        painter.drawPath(card_path)
         painter.end()
 
 
@@ -704,6 +731,10 @@ class QueueHoverController(QObject):
         if not animated or self._overlay._slide <= 0.001:
             self._overlay.set_slide(0.0)
             self._overlay.hide()
+            try:
+                self._overlay._grip.hide()
+            except RuntimeError:
+                pass
             return
         self._run_slide(0.0, animated=True)
 
@@ -813,6 +844,10 @@ class QueueHoverController(QObject):
             self._overlay.set_slide(target)
             if target <= 0.0:
                 self._overlay.hide()
+                try:
+                    self._overlay._grip.hide()
+                except RuntimeError:
+                    pass
             return
         # OutCubic both ways — InCubic hide starts slow then snaps, which reads
         # as "no animation" when the cursor is already far away.
@@ -882,7 +917,7 @@ class QueueHoverController(QObject):
             try:
                 if overlay.isVisible() and float(overlay._slide) > 0.01:
                     local = overlay.mapFromGlobal(pos)
-                    if overlay._card.contains(local) or overlay._bulge.contains(local):
+                    if overlay._card.contains(local):
                         return True
             except RuntimeError:
                 pass
