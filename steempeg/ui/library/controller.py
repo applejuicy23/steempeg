@@ -2052,11 +2052,27 @@ class LibraryMixin:
             if sm is not None:
                 selected_rows = {int(idx.row()) for idx in sm.selectedRows()}
         prev = getattr(self, "_clips_visual_selected_rows", None)
+        # Fast path: bookkeeping matches. Still scan for ghost rings — tab
+        # restore / sort / viewport rematerialize can leave `_selected` on a
+        # card whose row id moved, so `prev|selected` misses it.
         if prev == selected_rows:
-            return
-        # Only restyle cards that entered or left selection — full-grid paint
-        # is noticeable on large libraries during select / tab restore.
-        changed = selected_rows if prev is None else (set(prev) | selected_rows)
+            ghost = False
+            for i in range(self.grid_clips.count()):
+                item = self.grid_clips.item(i)
+                if item is None:
+                    continue
+                try:
+                    row = int(item.data(Qt.UserRole))
+                except (TypeError, ValueError):
+                    continue
+                card = self.grid_clips.itemWidget(item)
+                if isinstance(card, ClipCard) and bool(
+                    getattr(card, "_selected", False)
+                ) != (row in selected_rows):
+                    ghost = True
+                    break
+            if not ghost:
+                return
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
             if item is None:
@@ -2065,11 +2081,12 @@ class LibraryMixin:
                 row = int(item.data(Qt.UserRole))
             except (TypeError, ValueError):
                 continue
-            if row not in changed:
-                continue
             card = self.grid_clips.itemWidget(item)
-            if isinstance(card, ClipCard):
-                card.set_selected(row in selected_rows)
+            if not isinstance(card, ClipCard):
+                continue
+            want = row in selected_rows
+            if bool(getattr(card, "_selected", False)) != want:
+                card.set_selected(want)
         self._clips_visual_selected_rows = set(selected_rows)
 
     def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
