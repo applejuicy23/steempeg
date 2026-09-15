@@ -588,13 +588,20 @@ class SteempegTitleBar(QWidget):
         root.addWidget(title_lbl)
         self._title_lbl = title_lbl
 
-        # PRO chip sits between name and vXX (hidden until seed enabled).
+        # PRO chip between name and vXX — wrap + margins so a hidden badge
+        # does not leave a permanent gap before the version.
         from steempeg.ui.widgets.pro_badge import ProBadge
 
         self._pro_badge = ProBadge(size="title", parent=self)
-        self._pro_badge.hide()
-        root.addSpacing(6)
-        root.addWidget(self._pro_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._pro_wrap = QWidget(self)
+        self._pro_wrap.setObjectName("TitleBarProWrap")
+        self._pro_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pro_lay = QHBoxLayout(self._pro_wrap)
+        pro_lay.setContentsMargins(6, 0, 5, 0)
+        pro_lay.setSpacing(0)
+        pro_lay.addWidget(self._pro_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._pro_wrap.hide()
+        root.addWidget(self._pro_wrap, 0, Qt.AlignmentFlag.AlignVCenter)
 
         if subtitle:
             sub_lbl = QLabel(subtitle)
@@ -1059,6 +1066,10 @@ class SteempegTitleBar(QWidget):
 
     def set_pro_enabled(self, enabled: bool) -> None:
         """Show/hide the Steempeg PRO chip after the word Steempeg."""
+        wrap = getattr(self, "_pro_wrap", None)
+        if wrap is not None:
+            wrap.setVisible(bool(enabled))
+            return
         badge = getattr(self, "_pro_badge", None)
         if badge is not None:
             badge.setVisible(bool(enabled))
