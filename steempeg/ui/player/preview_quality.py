@@ -154,10 +154,45 @@ def source_height(player) -> int:
     return resolve_source_height(player)
 
 
-def _vf_candidates(src_h: int, max_height: int) -> tuple[str, ...]:
-    """Build filter bodies. Windows hwdec needs d3d11vpp with factor from true src."""
+def _hw_pixfmt(player) -> str:
+    """Current hw/software pixfmt string (e.g. ``cuda``, ``nv12``)."""
+    if not player:
+        return ""
+    for key in (
+        "video-params/hw-pixfmt",
+        "video-dec-params/hw-pixfmt",
+        "video-params/pixelformat",
+        "video-dec-params/pixelformat",
+    ):
+        try:
+            val = player[key]
+        except Exception:
+            val = None
+        if val:
+            return str(val).strip().lower()
+    try:
+        params = player["video-params"]
+        if isinstance(params, dict):
+            for key in ("hw-pixfmt", "pixelformat", "hw_pixfmt"):
+                val = params.get(key)
+                if val:
+                    return str(val).strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def _vf_candidates(src_h: int, max_height: int, *, player=None) -> tuple[str, ...]:
+    """Build filter bodies. Windows prefers d3d11vpp; Linux prefers scale_cuda / hwdownload.
+
+    Plain ``scale`` on CUDA frames is accepted then disabled by lavfi
+    (``Impossible to convert … cuda``) — the picture never changes. Prefer
+    ``scale_cuda`` (NVIDIA) or ``hwdownload,format=nv12,scale=…`` first.
+    """
     out: list[str] = []
     h = int(max_height)
+    pix = _hw_pixfmt(player) if player is not None else ""
+    cuda = "cuda" in pix or pix in ("cuda", "cuda[nv12]", "cuda[p010]")
 
     if src_h > max_height and os.name == "nt":
         factor = max_height / float(src_h)
@@ -165,22 +200,43 @@ def _vf_candidates(src_h: int, max_height: int) -> tuple[str, ...]:
             out.append(f"d3d11vpp=scale={factor:.6f}")
 
     if os.name != "nt":
+        # Keep AR + even dims (libx264-style) for CUDA rescale.
+        out.append(
+            f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2:interp_algo=lanczos"
+        )
+        out.append(
+            f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease"
+        )
+        # Download to system memory, then software scale (works when scale_cuda
+        # is missing from a thinner lavf build).
+        out.append(
+            f"hwdownload,format=nv12,scale=-2:{h}:flags=lanczos:"
+            f"force_original_aspect_ratio=decrease"
+        )
+        out.append(
+            f"hwdownload,scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
+        )
+        if not cuda:
+            out.append(
+                f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
+            )
+        # Last: plain scale even on cuda (usually fails — kept for sw-decode hosts).
+        out.append(
+            f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
+        )
+        out.append(
+            f"lavfi=[hwdownload,format=nv12,scale=-2:{h}:force_original_aspect_ratio=decrease]"
+        )
+    else:
+        # Windows software fallbacks after d3d11vpp.
         out.extend(
             (
                 f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease",
-                f"lavfi=[scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease]",
-                f"scale=-2:{h}:force_original_aspect_ratio=decrease",
+                f"lavfi=[hwdownload,format=nv12,scale=-2:{h}:force_original_aspect_ratio=decrease]",
+                f"lavfi=[hwdownload,scale=-2:{h}:force_original_aspect_ratio=decrease]",
             )
         )
-
-    # Last-resort software path (often fails under d3d11va — verified below).
-    out.extend(
-        (
-            f"lavfi=[hwdownload,format=nv12,scale=-2:{h}:force_original_aspect_ratio=decrease]",
-            f"lavfi=[hwdownload,scale=-2:{h}:force_original_aspect_ratio=decrease]",
-            f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease",
-        )
-    )
 
     seen: set[str] = set()
     unique: list[str] = []
@@ -255,6 +311,33 @@ def _preview_vf_alive(player) -> bool:
     return VF_LABEL in str(raw)
 
 
+def _preview_downscale_effective(player, *, src_h: int, max_height: int) -> bool:
+    """True when the live filter stayed enabled and output height actually dropped.
+
+    CUDA ``scale`` is often listed as enabled for a tick, then lavfi disables it —
+    picture never changes. Require a real height drop (or a still-alive non-noop).
+    """
+    deadline = time.time() + 0.35
+    last_out = 0
+    while time.time() < deadline:
+        if not _preview_vf_alive(player):
+            return False
+        last_out = _output_height(player)
+        if last_out > 0 and last_out <= int(max_height) + 8:
+            return True
+        if last_out > 0 and src_h > 0 and last_out < src_h - 16:
+            return True
+        time.sleep(0.025)
+    if not _preview_vf_alive(player):
+        return False
+    # Filter still "alive" but height unchanged → treat as failed (cuda noop).
+    if last_out <= 0:
+        last_out = _output_height(player)
+    if src_h > 0 and last_out >= src_h - 8:
+        return False
+    return True
+
+
 def _wait_source_height(player, *, rounds: int = 10) -> int:
     """After vf remove, params can lag one tick — poll before factor math."""
     src_h = 0
@@ -295,21 +378,19 @@ def apply_mpv_preview_quality(player, preset_id: str) -> bool:
         return True
 
     last_error = ""
-    for body in _vf_candidates(src_h, preset.max_height):
+    for body in _vf_candidates(src_h, preset.max_height, player=player):
         tagged = _labeled(body)
         remove_preview_vf(player)
         try:
             if not _try_add_vf(player, tagged):
                 continue
-            # lavfi can "add" then disable under d3d11 — only accept live filters.
-            alive = False
-            for _ in range(5):
-                time.sleep(0.02)
-                if _preview_vf_alive(player):
-                    alive = True
-                    break
-            if not alive:
-                logging.debug("Preview quality candidate failed (disabled): %s", tagged)
+            if not _preview_downscale_effective(
+                player, src_h=src_h, max_height=int(preset.max_height)
+            ):
+                logging.debug(
+                    "Preview quality candidate failed (no visible downscale): %s",
+                    tagged,
+                )
                 remove_preview_vf(player)
                 continue
             logging.info(
