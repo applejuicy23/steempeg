@@ -2441,7 +2441,24 @@ def about_accent_button_stylesheet() -> str:
 
 def about_dialog_stylesheet() -> str:
     """About frameless card — Default legacy plate; TrueDark elevated tokens."""
+    import sys
+
     c = _frameless_card_dialog_colors()
+    # Linux (and non-Windows): QSS font-size often under-sizes QLabel geometry,
+    # so AboutTitle / Powered captions paint over the logo / circular badges.
+    linux_label_room = ""
+    if sys.platform != "win32":
+        linux_label_room = """
+    QLabel#AboutTitle {
+        min-height: 36px;
+        padding-top: 8px;
+        margin-top: 4px;
+    }
+    QLabel#AboutPoweredName {
+        min-height: 18px;
+        padding-top: 4px;
+    }
+"""
     return f"""
     QWidget#AboutCard {{
         background-color: {c["card_bg"]};
@@ -2498,7 +2515,7 @@ def about_dialog_stylesheet() -> str:
         font-size: 10px;
         font-style: italic;
     }}
-""" + about_secondary_button_stylesheet() + f"""
+""" + linux_label_room + about_secondary_button_stylesheet() + f"""
     QPushButton#AboutReportBtn {{
         background-color: {c["danger_bg"]};
         border: 1px solid {c["danger_border"]};
