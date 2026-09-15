@@ -872,6 +872,8 @@ class PortableQueueSidebar(QWidget):
             (not jobs and not self._row_ids)
             or (jobs and self._row_ids == [j.id for j in jobs])
         ):
+            # Queue list unchanged — still refresh Add ＋ (clip may have changed).
+            self._sync_add_enabled()
             return
         self._queue_refresh_fp = fp
         self._sync_title(jobs)
