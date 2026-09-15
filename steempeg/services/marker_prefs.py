@@ -497,6 +497,10 @@ def friendly_marker_label(key: str, *, title: str = "") -> str:
     k = str(key or "")
     if is_round_number_key(k):
         return f"Round {k}"
+    if k.startswith("user_"):
+        return "User Marker"
+    if k.startswith("shot_"):
+        return "Screenshot"
     if k in FRIENDLY_LABEL_EN:
         return FRIENDLY_LABEL_EN[k]
     if k.startswith("cs2_"):
@@ -854,13 +858,22 @@ def resolve_display_label(
     fallback: str = "",
     prefs: dict | None = None,
 ) -> str:
+    """Human title for tips / settings — never the raw ``user_<id>`` prefs key."""
     ov = marker_override(marker_key, prefs)
-    if ov.get("label"):
-        return ov["label"]
+    label = str(ov.get("label") or "").strip()
+    if label:
+        return label
     cls = get_class(ov.get("class_id"), prefs)
     if cls and cls.get("name"):
         return str(cls["name"])
-    return fallback or marker_key
+    fb = str(fallback or "").strip()
+    if fb:
+        return fb
+    key = str(marker_key or "").strip()
+    # Instance prefs keys are storage ids, not display names.
+    if key.startswith("user_") or key.startswith("shot_"):
+        return ""
+    return key
 
 
 def resolve_tint_color(
