@@ -5696,27 +5696,52 @@ class PlayerMixin:
         preset_id = pq.normalize_quality_id(preset_id)
         # Always re-apply from true decode height (cached), never from post-vf size.
         self._preview_quality_id = preset_id
+        # Product path (Windows + Linux native DASH): live MPV vf, no file reload.
         ok = pq.apply_mpv_preview_quality(getattr(self, "player", None), preset_id)
         if not ok and preset_id != pq.DEFAULT_QUALITY:
             # Defer once playback/dec-params settle — keep menu selection.
             QTimer.singleShot(120, lambda p=preset_id: self._retry_preview_quality(p))
         if persist:
             self.save_user_settings(pq.SETTINGS_KEY, preset_id)
-        # Linux/Steam Deck remux path: gear must switch the quality-keyed mkv
-        # (live MPV vf alone is a no-op on copy-remux under common hwdec/vo).
-        self._maybe_rebind_linux_remux_preview_quality(preset_id)
+        # Remux-keyed mkv switch only when this open still requires the bridge
+        # (force remux / missing demux / experimental auto heights).
+        if self._linux_preview_needs_remux_rebind(preset_id):
+            self._maybe_rebind_linux_remux_preview_quality(preset_id)
+
+    def _linux_preview_needs_remux_rebind(self, preset_id: str) -> bool:
+        """True when gear must rebuild a quality-keyed remux instead of live vf."""
+        if sys.platform == "win32":
+            return False
+        try:
+            from steempeg.core.dash.mpd_playback import should_remux_mpd_for_playback
+
+            if not should_remux_mpd_for_playback(preset_id):
+                return False
+        except Exception:
+            return False
+        return self._playing_linux_dash_remux()
 
     def _playing_linux_dash_remux(self) -> bool:
-        """True when the open clip is a Linux remux of a Steam ``.mpd``."""
-        from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
-
-        if not host_libmpv_needs_mpd_bridge():
+        """True when the open clip is a Linux remux of a Steam ``.mpd`` (not live mpd)."""
+        if sys.platform == "win32":
             return False
         if hasattr(self, "_is_previewing_rendered_media") and self._is_previewing_rendered_media():
             return False
         mpd = getattr(self, "_current_mpd_abs_path", None) or ""
-        return bool(mpd) and mpd.lower().endswith(".mpd")
+        if not (mpd and str(mpd).lower().endswith(".mpd")):
+            return False
+        play = getattr(self, "_current_play_abs_path", None) or ""
+        # Native live DASH: libmpv opened the .mpd directly.
+        if play and str(play).lower().endswith(".mpd"):
+            return False
+        from steempeg.core.dash.mpd_playback import host_libmpv_needs_mpd_bridge
 
+        if not host_libmpv_needs_mpd_bridge():
+            return False
+        # Remux cache / growing tmp derived from the mpd.
+        return bool(play) and os.path.normcase(os.path.normpath(play)) != os.path.normcase(
+            os.path.normpath(mpd)
+        )
     def _arm_remux_quality_hold(self, seek_sec: float, *, message: str | None = None) -> None:
         """Freeze timeline + Buffering overlay while a Linux remux quality switch runs."""
         seek_sec = max(0.0, float(seek_sec or 0.0))
