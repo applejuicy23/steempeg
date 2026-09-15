@@ -1105,13 +1105,15 @@ def load_library_allow_list_view(settings: dict | None) -> bool:
     return bool((settings or {}).get(KEY_LIBRARY_ALLOW_LIST_VIEW))
 
 
-# Experimental: skip the grey #1e1e1e flash cover on immersive fullscreen
-# enter/exit (same as STEEMPEG_FS_COVER=0). Stock default: on (Desktop + Portable).
+# Skip the grey #1e1e1e flash cover on immersive fullscreen enter/exit
+# (same as STEEMPEG_FS_COVER=0). Stock default: on (Desktop + Portable).
+# Settings key kept as test_new_fullscreen for existing settings.json.
 KEY_TEST_NEW_FULLSCREEN = "test_new_fullscreen"
 DEFAULT_TEST_NEW_FULLSCREEN = True
 
 
 def load_test_new_fullscreen(settings: dict | None) -> bool:
+    """True = skip grey fullscreen cover (stock). False = show the cover."""
     if KEY_TEST_NEW_FULLSCREEN not in (settings or {}):
         return DEFAULT_TEST_NEW_FULLSCREEN
     return bool((settings or {}).get(KEY_TEST_NEW_FULLSCREEN))
