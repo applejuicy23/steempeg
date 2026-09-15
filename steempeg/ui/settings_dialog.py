@@ -1282,24 +1282,20 @@ class SettingsDialog(SteempegDialog):
         advanced, a = _tab_page()
         a.addWidget(self._section("Fullscreen"))
         self._chk_test_new_fullscreen = SteempegCheckBox(
-            "TEST NEW FULLSCREEN, no grey flash on enter/exit",
+            "Skip grey flash on fullscreen enter/exit",
             font_size=13,
             label_bold=True,
             label_color="#ffffff",
         )
         self._chk_test_new_fullscreen.setChecked(load_test_new_fullscreen(settings))
         a.addWidget(self._chk_test_new_fullscreen)
-        loud_hint = QLabel(
-            "Stock default: on (Desktop and Portable). Skips the grey transition "
-            "cover on fullscreen enter/exit (same as STEEMPEG_FS_COVER=0). "
-            "May briefly show a black edge on exit — turn off to restore the cover."
+        a.addWidget(
+            self._hint(
+                "On by default (Desktop and Portable). Skips the grey transition "
+                "cover on fullscreen enter/exit (same as STEEMPEG_FS_COVER=0). "
+                "May briefly show a black edge on exit — turn off to restore the cover."
+            )
         )
-        loud_hint.setWordWrap(True)
-        loud_hint.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-size: 12px; font-weight: bold; "
-            f"background: transparent; font-family: {tok.FONT_APP};"
-        )
-        a.addWidget(loud_hint)
 
         a.addWidget(self._section("Safety"))
         self._chk_confirm_delete = SteempegCheckBox("Confirm before deleting clips / renders")
