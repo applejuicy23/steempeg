@@ -15,7 +15,7 @@ TARGET_MIN_WINDOW_HEIGHT = STEAM_DECK_HEIGHT
 
 # Continuous layout scale: t=0 at Deck width, t=1 at comfort width and above.
 LAYOUT_SCALE_MIN_WIDTH = STEAM_DECK_WIDTH  # full compact
-LAYOUT_SCALE_MAX_WIDTH = 1520  # full comfort
+LAYOUT_SCALE_MAX_WIDTH = 1520  # full comfort — densify starts below this
 LAYOUT_SCALE_MIN_HEIGHT = STEAM_DECK_HEIGHT
 LAYOUT_SCALE_MAX_HEIGHT = 960
 
@@ -26,6 +26,117 @@ COMPACT_DENSITY_WIDTH = LAYOUT_SCALE_MIN_WIDTH + (LAYOUT_SCALE_MAX_WIDTH - LAYOU
 # Typical maximized 1080p (taskbar steals height, not width). Hard floor so PPI
 # cannot pull this class into compact labels / Deck chrome.
 FHD_SHELL_WIDTH = 1920
+# Physical / full-screen width that counts as «1K class» (1080p) or larger (2K).
+# Below this: Deck floor only. At/above: lock shell min to densify-start so
+# desktop users cannot drag into the compact shrink band.
+MONITOR_1K_WIDTH = FHD_SHELL_WIDTH  # 1920
+
+# Desktop absolute minimum when the monitor is ≥1K — equals densify start
+# (LAYOUT_SCALE_MAX_*). Restored + resized shells stay in full-comfort chrome.
+DESKTOP_COMFORT_MIN_WIDTH = LAYOUT_SCALE_MAX_WIDTH  # 1520
+DESKTOP_COMFORT_MIN_HEIGHT = LAYOUT_SCALE_MAX_HEIGHT  # 960
+
+# Restored (non-maximized) shell after the green traffic-light. On ≥1K monitors
+# this matches the comfort floor so Restore is not clamped up by minimumSize.
+STOCK_RESTORE_WINDOW_WIDTH = DESKTOP_COMFORT_MIN_WIDTH
+STOCK_RESTORE_WINDOW_HEIGHT = DESKTOP_COMFORT_MIN_HEIGHT
+
+
+def screen_is_at_least_1k(screen=None, *, avail=None) -> bool:
+    """True for 1080p / 1440p / … monitors; False for Deck / sub-FHD panels."""
+    w = 0
+    if screen is not None:
+        try:
+            geo = screen.geometry()
+            w = max(w, int(geo.width()))
+        except Exception:
+            pass
+        try:
+            sz = screen.size()
+            w = max(w, int(sz.width()))
+        except Exception:
+            pass
+        try:
+            ag = screen.availableGeometry()
+            w = max(w, int(ag.width()))
+        except Exception:
+            pass
+    if avail is not None and hasattr(avail, "width"):
+        w = max(w, int(avail.width()))
+    return w >= MONITOR_1K_WIDTH
+
+
+def desktop_shell_minimum_size(
+    avail=None,
+    *,
+    screen=None,
+    portable: bool = False,
+) -> tuple[int, int]:
+    """Main-window ``setMinimumSize`` for desktop vs portable / small screens.
+
+    * Desktop on ≥1K / 2K: floor at densify-start (**1520×960**) so the UI
+      cannot be dragged into the shrink band.
+    * Desktop on &lt;1K, or portable: Steam Deck floor (**1280×800**), clamped
+      to the work area so tiny panels still fit.
+    """
+    aw = ah = 0
+    if avail is not None and hasattr(avail, "width"):
+        aw = max(0, int(avail.width()))
+        ah = max(0, int(avail.height()))
+    if screen is not None and (aw <= 0 or ah <= 0):
+        try:
+            ag = screen.availableGeometry()
+            aw = max(aw, int(ag.width()))
+            ah = max(ah, int(ag.height()))
+        except Exception:
+            pass
+
+    if portable or not screen_is_at_least_1k(screen, avail=avail):
+        mw = TARGET_MIN_WINDOW_WIDTH
+        mh = TARGET_MIN_WINDOW_HEIGHT
+    else:
+        mw = DESKTOP_COMFORT_MIN_WIDTH
+        mh = DESKTOP_COMFORT_MIN_HEIGHT
+
+    if aw > 0:
+        mw = min(mw, max(640, aw))
+    if ah > 0:
+        mh = min(mh, max(480, ah))
+    return int(mw), int(mh)
+
+
+def stock_restore_geometry(avail) -> "QRect":
+    """Centered restore size for leaving maximize (Windows green-button).
+
+    ``avail`` is a screen ``availableGeometry()`` QRect. Clamps to the work
+    area with a visible inset on small displays so restore ≠ maximize.
+    On ≥1K screens the ideal size matches the comfort floor (no densify).
+    """
+    from PySide6.QtCore import QRect
+
+    if avail is None or not hasattr(avail, "width"):
+        return QRect(0, 0, TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
+
+    aw = max(1, int(avail.width()))
+    ah = max(1, int(avail.height()))
+    if screen_is_at_least_1k(avail=avail):
+        ideal_w, ideal_h = STOCK_RESTORE_WINDOW_WIDTH, STOCK_RESTORE_WINDOW_HEIGHT
+    else:
+        ideal_w, ideal_h = TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT
+    margin_x, margin_y = 80, 60
+    max_w = max(640, aw - 2 * margin_x)
+    max_h = max(480, ah - 2 * margin_y)
+    w = min(ideal_w, max_w)
+    h = min(ideal_h, max_h)
+    # Tiny / already-narrow work areas: still leave a readable inset.
+    if w >= aw - 24:
+        w = max(640, int(aw * 0.88))
+    if h >= ah - 24:
+        h = max(480, int(ah * 0.88))
+    x = int(avail.x()) + (aw - w) // 2
+    y = int(avail.y()) + (ah - h) // 2
+    return QRect(x, y, w, h)
+
 
 # Legacy cliff alias (~1360). Prefer layout_scale(); kept for call sites / docs.
 COMPACT_LAYOUT_WIDTH = STEAM_DECK_WIDTH + 80
