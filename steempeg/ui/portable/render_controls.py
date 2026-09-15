@@ -20,7 +20,11 @@ from steempeg.infra.paths import get_resource_path
 from steempeg.ui import ui_theme as ut
 from steempeg.ui.widgets.animated_render_bar import AnimatedRenderBar
 
-# Same templates as desktop render dashboard (app.py), compact padding.
+# Exact copies of desktop render-dashboard templates (app.py).
+_DASH_BTN_H = 36  # desktop default dense.dash_btn_h
+_DASH_FONT = 14  # desktop default dense.dash_font
+_DASH_PAD = "6px 14px"
+
 _DASH_START = (
     "QPushButton {{ font-family: <<FONT>>; "
     "font-size: {font}px; font-weight: bold; background-color: #2e6b32; color: #ffffff; "
@@ -36,6 +40,7 @@ _DASH_PAUSE = (
     "QPushButton:hover {{ background-color: #a88b11; border: 2px solid #c9a716; }}"
     "QPushButton:pressed {{ background-color: #6b570d; border: 2px solid #a88b11; }}"
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+    "QPushButton::menu-indicator {{ image: none; }}"
 )
 _DASH_CANCEL = (
     "QPushButton {{ font-family: <<FONT>>; "
@@ -44,14 +49,7 @@ _DASH_CANCEL = (
     "QPushButton:hover {{ background-color: #a82e2e; border: 2px solid #cc3939; }}"
     "QPushButton:pressed {{ background-color: #661a1a; border: 2px solid #a82e2e; }}"
     "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
-)
-_DASH_LEAVE = (
-    "QPushButton {{ font-family: <<FONT>>; "
-    "font-size: {font}px; font-weight: bold; background-color: #383838; color: #e0e0e0; "
-    "border: 2px solid #4a4a4a; border-radius: {radius}px; padding: {pad}; }}"
-    "QPushButton:hover {{ background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }}"
-    "QPushButton:pressed {{ background-color: #3a324a; border: 2px solid #b29ae7; }}"
-    "QPushButton:disabled {{ background-color: #222222; color: #555555; border: 2px solid #2d2d2d; }}"
+    "QPushButton::menu-indicator {{ image: none; }}"
 )
 _DASH_RESUME = (
     "QPushButton {{ font-family: <<FONT>>; "
@@ -92,7 +90,16 @@ def _font_css() -> str:
     return "font-family: " + tok.FONT_APP + ";"
 
 
-def _fmt_dash(template: str, *, font: int = 13, radius: int = 8, pad: str = "6px 12px") -> str:
+def _fmt_dash(
+    template: str,
+    *,
+    font: int = _DASH_FONT,
+    radius: int | None = None,
+    pad: str = _DASH_PAD,
+) -> str:
+    # Desktop density: radius = max(8, dash_btn_h // 2) → pill corners.
+    if radius is None:
+        radius = max(8, _DASH_BTN_H // 2)
     return template.replace("<<FONT>>", tok.FONT_APP).format(
         font=font, radius=radius, pad=pad
     )
@@ -237,7 +244,8 @@ class PortableRenderControlStrip(QFrame):
             self.btn_logs,
         ):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(34)
+            btn.setMinimumSize(0, 0)
+            btn.setFixedHeight(_DASH_BTN_H)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn_row.addWidget(btn)
 
@@ -247,30 +255,42 @@ class PortableRenderControlStrip(QFrame):
         self.sync_from_app()
 
     def _dash_fmt(self, template: str) -> str:
-        return _fmt_dash(template, font=13, radius=8, pad="6px 12px")
+        # Same geometry as desktop ``_fmt_dash_btn`` + density radius.
+        return _fmt_dash(template)
+
+    def _secondary_dash_qss(self) -> str:
+        """Leave / Logs — theme-aware secondary like desktop dash."""
+        radius = max(8, _DASH_BTN_H // 2)
+        if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
+            return ut.dash_secondary_button_stylesheet(
+                font=_DASH_FONT, radius=radius, pad=_DASH_PAD
+            )
+        return self._dash_fmt(_DASH_LOGS)
 
     def _apply_button_chrome(self) -> None:
-        """Semantic greens/yellows/reds stay; secondary actions follow active theme."""
+        """Desktop render-dashboard Start / Pause / Cancel / Leave / Logs."""
         if not hasattr(self, "btn_start"):
             return
+        for btn in (
+            self.btn_start,
+            self.btn_leave,
+            self.btn_pause,
+            self.btn_cancel,
+            self.btn_logs,
+        ):
+            btn.setMinimumSize(0, 0)
+            btn.setFixedHeight(_DASH_BTN_H)
         self.btn_start.setStyleSheet(self._dash_fmt(_DASH_START))
         self.btn_pause.setStyleSheet(self._dash_fmt(_DASH_PAUSE))
         self.btn_cancel.setStyleSheet(self._dash_fmt(_DASH_CANCEL))
-        sec = ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
-        self.btn_logs.setStyleSheet(sec)
+        self.btn_logs.setStyleSheet(self._secondary_dash_qss())
         btn = getattr(self, "btn_leave", None) or getattr(self, "btn_resume", None)
-        if btn is not None and btn.isVisible():
+        if btn is not None:
             deferred = " Resume" in (btn.text() or "")
             if deferred:
                 btn.setStyleSheet(self._dash_fmt(_DASH_RESUME))
             else:
-                btn.setStyleSheet(
-                    ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
-                )
-        elif btn is not None:
-            btn.setStyleSheet(
-                ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
-            )
+                btn.setStyleSheet(self._secondary_dash_qss())
 
     def apply_ui_theme_chrome(self) -> None:
         """Default mid-gray strip → TrueDark elevated tokens + action buttons."""
@@ -544,6 +564,8 @@ class PortableRenderControlStrip(QFrame):
         btn.setEnabled(show and not bool(busy))
         if not show:
             return
+        btn.setFixedHeight(_DASH_BTN_H)
+        btn.setIconSize(QSize(16, 16))
         if deferred:
             btn.setText(" Resume")
             btn.setToolTip("Return to queue mode with the same jobs and order")
@@ -551,19 +573,15 @@ class PortableRenderControlStrip(QFrame):
             resume_icon = get_resource_path("resume.png")
             if resume_icon and os.path.isfile(resume_icon):
                 btn.setIcon(QIcon(resume_icon))
-                btn.setIconSize(QSize(16, 16))
         else:
             btn.setText(" Leave")
             btn.setToolTip(
                 "Leave queue mode — keep all jobs. Preview or render something else, then Resume."
             )
-            btn.setStyleSheet(
-                ut.dash_secondary_button_stylesheet(font=13, radius=8, pad="6px 12px")
-            )
+            btn.setStyleSheet(self._secondary_dash_qss())
             leave_icon = get_resource_path("exit.png")
             if leave_icon and os.path.isfile(leave_icon):
                 btn.setIcon(QIcon(leave_icon))
-                btn.setIconSize(QSize(16, 16))
 
     def _on_leave_resume(self) -> None:
         if hasattr(self._app, "toggle_render_queue_scheme"):
