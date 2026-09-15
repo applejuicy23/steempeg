@@ -870,6 +870,9 @@ class RenderedLibraryMixin:
             # Screenshots grid selection is independent; do not re-paint Clips.
             return
         else:
+            # Force a full card chrome pass after tab restore — row ids / widgets
+            # may have shifted while Clips was hidden (sort, viewport refresh).
+            self._clips_visual_selected_rows = None
             path = getattr(self, "_saved_clips_selection_path", "")
             if path:
                 self._highlight_clip_path(path)
