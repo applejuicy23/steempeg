@@ -112,7 +112,6 @@ from steempeg.ui.timeline_strip_size import (
     set_timeline_strip_size,
 )
 from steempeg.ui.message_dialog import (
-    _BTN_PRIMARY,
     dialog_theme,
     steempeg_information,
     steempeg_question,
@@ -1398,7 +1397,6 @@ class SettingsDialog(SteempegDialog):
         btn_save = QPushButton("Save")
         btn_save.setObjectName("settingsPrimaryBtn")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setStyleSheet(_BTN_PRIMARY)
         btn_save.clicked.connect(self._save)
         self._btn_cancel = btn_cancel
         self._btn_save = btn_save
@@ -1910,6 +1908,8 @@ class SettingsDialog(SteempegDialog):
             edit.setStyleSheet(edit_qss)
 
         sec_qss = ut.settings_dialog_secondary_button_stylesheet()
+        about_sec = ut.about_secondary_button_stylesheet()
+        about_accent = ut.about_accent_button_stylesheet()
         for btn in self.findChildren(QPushButton):
             # Title-bar traffic lights are QPushButtons — never restyle them as
             # form secondary buttons (idle becomes a gray square outline; they
@@ -1917,8 +1917,13 @@ class SettingsDialog(SteempegDialog):
             if isinstance(btn, _TrafficLight):
                 btn.update()
                 continue
-            if btn.objectName() == "settingsPrimaryBtn":
-                btn.setStyleSheet(_BTN_PRIMARY)
+            if btn.objectName() == "settingsPrimaryBtn" or btn is getattr(
+                self, "_btn_save", None
+            ):
+                btn.setStyleSheet(about_accent)
+                continue
+            if btn is getattr(self, "_btn_cancel", None):
+                btn.setStyleSheet(about_sec)
                 continue
             btn.setStyleSheet(sec_qss)
 
