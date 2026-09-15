@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QColorDialog,
@@ -222,15 +222,18 @@ class MarkerSettingsDialog(SteempegDialog):
 
         foot = QHBoxLayout()
         btn_reset_steam = QPushButton("Reset game markers")
+        btn_reset_steam.setObjectName("markerFooterSecondary")
         btn_reset_steam.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset_steam.clicked.connect(self._reset_steam)
         btn_reset_all = QPushButton("Reset all")
+        btn_reset_all.setObjectName("markerFooterDanger")
         btn_reset_all.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset_all.clicked.connect(self._reset_all)
         foot.addWidget(btn_reset_steam)
         foot.addWidget(btn_reset_all)
         foot.addStretch(1)
         btn_close = QPushButton("Close")
+        btn_close.setObjectName("markerFooterSecondary")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(self.accept)
         foot.addWidget(btn_close)
@@ -260,6 +263,8 @@ class MarkerSettingsDialog(SteempegDialog):
         primary = ut.update_center_btn_primary_stylesheet()
         secondary = ut.settings_dialog_secondary_button_stylesheet()
         danger = ut.dialog_btn_danger_stylesheet()
+        about_sec = ut.about_secondary_button_stylesheet()
+        about_danger = ut.about_danger_button_stylesheet()
 
         if hasattr(self, "_tabs"):
             self._tabs.setStyleSheet(_marker_tabs_stylesheet())
@@ -298,6 +303,13 @@ class MarkerSettingsDialog(SteempegDialog):
                 btn.update()
                 continue
             if btn.styleSheet().strip() == _ICON_BTN.strip():
+                continue
+            name = (btn.objectName() or "").strip()
+            if name == "markerFooterSecondary":
+                btn.setStyleSheet(about_sec)
+                continue
+            if name == "markerFooterDanger":
+                btn.setStyleSheet(about_danger)
                 continue
             label = (btn.text() or "").strip().lower()
             if label in ("close", "+ create"):
@@ -613,6 +625,14 @@ class MarkerSettingsDialog(SteempegDialog):
     def _emit_changed(self) -> None:
         self._prefs = mprefs.load_marker_prefs()
         self.prefs_changed.emit()
+
+    def showEvent(self, event) -> None:
+        _dismiss_timeline_hover_tools(self._app)
+        super().showEvent(event)
+
+    def enterEvent(self, event) -> None:
+        _dismiss_timeline_hover_tools(self._app)
+        super().enterEvent(event)
 
     def _on_pack_toggled(self, checked: bool) -> None:
         mprefs.set_cs2_icon_pack(
@@ -1007,15 +1027,10 @@ class MarkerSettingsDialog(SteempegDialog):
 
     @staticmethod
     def _add_dup_del_action(menu: QMenu, label: str, *, kind: str):
-        """Duplicate uses RS ``copyfile.png``; Delete uses the trash emoji (red)."""
+        """Emoji-in-text like ClipCard — QIcon on one row alone makes a huge left gutter."""
         if kind == "duplicate":
-            path = get_resource_path("copyfile.png")
-            if path and os.path.isfile(path):
-                return menu.addAction(QIcon(path), label)
             return menu.addAction(f"📋  {label}")
-        act = menu.addAction(f"🗑️  {label}")
-        act.setForeground(QBrush(QColor("#ff8a8a")))
-        return act
+        return menu.addAction(f"🗑️  {label}")
 
     def _delete_on_clip_marker(self, row_info: dict) -> None:
         canvas = self._canvas()
@@ -1519,17 +1534,32 @@ class MarkerSettingsDialog(SteempegDialog):
         row_id = self._selected_row_id
         if not key:
             return
+        label = self._mk_label.text().strip()
+        description = (
+            self._mk_description.text().strip()
+            if hasattr(self, "_mk_description")
+            else ""
+        )
         mprefs.set_marker_override(
             key,
             class_id=self._mk_class.currentData() or "",
-            label=self._mk_label.text().strip(),
-            description=self._mk_description.text().strip()
-            if hasattr(self, "_mk_description")
-            else "",
+            label=label,
+            description=description,
             no_tint=bool(
                 getattr(self, "_mk_no_tint", None) and self._mk_no_tint.isChecked()
             ),
         )
+        # Keep live canvas pin title/desc in sync — tip used to read only those.
+        row_info = self._selected_marker_row_info()
+        marker = self._canvas_marker_for_row(row_info)
+        if marker is not None and mprefs.is_user_marker(marker):
+            marker["title"] = label
+            marker["desc"] = description
+            canvas = self._canvas()
+            if canvas is not None:
+                if hasattr(canvas, "text_tooltip"):
+                    canvas.text_tooltip.hide()
+                canvas.update()
         self._emit_changed()
         self._repopulate_markers()
         self._select_marker_row_id(row_id, seek=False)
@@ -1596,11 +1626,33 @@ class MarkerSettingsDialog(SteempegDialog):
         self._repopulate_markers()
 
 
+def _dismiss_timeline_hover_tools(app) -> None:
+    """Drop strip preview/tip so they cannot float over Marker Settings."""
+    tl = getattr(app, "custom_timeline", None)
+    canvas = getattr(tl, "canvas", None) if tl is not None else None
+    if canvas is not None and hasattr(canvas, "dismiss_hover_tools"):
+        try:
+            canvas.dismiss_hover_tools()
+            return
+        except RuntimeError:
+            pass
+    if canvas is not None:
+        try:
+            if hasattr(canvas, "_hide_hover_preview"):
+                canvas._hide_hover_preview()
+            tip = getattr(canvas, "text_tooltip", None)
+            if tip is not None:
+                tip.hide()
+        except RuntimeError:
+            pass
+
+
 def show_marker_settings_dialog(app, *, select_marker=None) -> None:
     """Open Marker Settings modeless so the player underneath stays usable.
 
     ``select_marker`` — optional live timeline marker dict; focuses that On clip row.
     """
+    _dismiss_timeline_hover_tools(app)
     existing = getattr(app, "_marker_settings_dlg", None)
     if existing is not None:
         try:
