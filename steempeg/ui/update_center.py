@@ -89,19 +89,20 @@ def _notes_style() -> str:
 def _btn_primary_style() -> str:
     from steempeg.ui import ui_theme as ut
 
-    return ut.update_center_btn_primary_stylesheet()
+    return ut.about_accent_button_stylesheet()
 
 
 def _btn_secondary_style() -> str:
     from steempeg.ui import ui_theme as ut
 
-    return ut.update_center_btn_secondary_stylesheet()
+    return ut.about_secondary_button_stylesheet()
 
 
 def _btn_current_style() -> str:
     from steempeg.ui import ui_theme as ut
 
-    return ut.update_center_btn_current_stylesheet()
+    # Same About pill — disabled face handles "Current version".
+    return ut.about_secondary_button_stylesheet()
 
 
 def _icon_btn_style() -> str:
