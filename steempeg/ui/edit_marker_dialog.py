@@ -226,6 +226,8 @@ class EditSteamMarkerDialog(SteempegDialog):
             class_id=self._class_combo.currentData() or "",
             custom_icon=self._custom_icon,
             no_tint=bool(self._no_tint.isChecked()) if hasattr(self, "_no_tint") else False,
+            label=self.title_text,
+            description=self.description_text,
         )
         self.accept()
 
