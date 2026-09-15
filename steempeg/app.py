@@ -6519,18 +6519,18 @@ def main():
         # Pre-size to the screen work area BEFORE showing.
         window._apply_dark_shell()
         _splash_keepalive()
-        from steempeg.ui.layout_defaults import (
-            TARGET_MIN_WINDOW_HEIGHT,
-            TARGET_MIN_WINDOW_WIDTH,
-        )
+        from steempeg.ui.layout_defaults import desktop_shell_minimum_size
 
         _screen = app.primaryScreen()
         if _screen is not None:
             _avail = _screen.availableGeometry()
-            # Portable + Desktop share the Deck floor (1280×800). On smaller
-            # work areas the min clamps to the screen so the shell still fits.
-            _min_w = min(TARGET_MIN_WINDOW_WIDTH, max(640, _avail.width()))
-            _min_h = min(TARGET_MIN_WINDOW_HEIGHT, max(480, _avail.height()))
+            # ≥1K / 2K desktop: floor at densify-start (1520×960). Sub-FHD /
+            # portable: Deck floor (1280×800), clamped to the work area.
+            _min_w, _min_h = desktop_shell_minimum_size(
+                _avail,
+                screen=_screen,
+                portable=(ui_shell == UI_SHELL_PORTABLE),
+            )
             window.ui.setMinimumSize(_min_w, _min_h)
             # Match the work area immediately so the first paint is never an
             # inset "half screen" that then jumps after showMaximized settles.
@@ -6543,10 +6543,12 @@ def main():
             window._density_resize_defer_ms = 0
             window._apply_startup_splitter_sizes()
             logging.info(
-                "Primary screen %r avail=%sx%s",
+                "Primary screen %r avail=%sx%s min=%sx%s",
                 _screen.name(),
                 _avail.width(),
                 _avail.height(),
+                _min_w,
+                _min_h,
             )
             try:
                 from steempeg.ui.screen_metrics import describe_screen
@@ -6555,6 +6557,11 @@ def main():
             except Exception:
                 logging.exception("Display metrics: failed to read PPI")
         else:
+            from steempeg.ui.layout_defaults import (
+                TARGET_MIN_WINDOW_HEIGHT,
+                TARGET_MIN_WINDOW_WIDTH,
+            )
+
             window.ui.setMinimumSize(TARGET_MIN_WINDOW_WIDTH, TARGET_MIN_WINDOW_HEIGHT)
 
         # Portable: enter theatre BEFORE the first paint so desktop chrome never flashes.
@@ -6626,9 +6633,30 @@ def main():
             # and maximizing right after gives Windows no state change to record,
             # so the first green-button restore snaps with no DWM transition —
             # every later toggle animates because that first one seeded it.
+            #
+            # Pre-size above still fills the work area (density / first paint).
+            # That would also become Qt/Windows normalGeometry — Restore would
+            # stay ~fullscreen. Seed rcNormalPosition to the stock restore size
+            # before showMaximized so the green button shrinks to ~1400×900.
+            from steempeg.ui.layout_defaults import stock_restore_geometry
+            from steempeg.ui.window_chrome import seed_windows_restore_geometry
+
+            _screen = app.primaryScreen()
+            if _screen is not None:
+                seed_windows_restore_geometry(
+                    window.ui, stock_restore_geometry(_screen.availableGeometry())
+                )
             window.ui.showMaximized()
         else:
             # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
+            # Seed a restore size so the first fake-unmaximize is not "still full".
+            from steempeg.ui.layout_defaults import stock_restore_geometry
+
+            _screen = app.primaryScreen()
+            if _screen is not None:
+                window.ui._linux_restore_geometry = stock_restore_geometry(
+                    _screen.availableGeometry()
+                )
             window.ui.show()
             logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
 
