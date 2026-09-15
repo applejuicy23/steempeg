@@ -700,7 +700,8 @@ class LifecycleMixin:
         cell = QWidget()
         lay = QVBoxLayout(cell)
         lay.setContentsMargins(4, 0, 4, 0)
-        lay.setSpacing(8)
+        # Linux QSS captions under-size and paint into the disc; give more air.
+        lay.setSpacing(12 if sys.platform != "win32" else 8)
         lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         icon = _AboutLinkLabel(url)
@@ -724,6 +725,8 @@ class LifecycleMixin:
         caption.setObjectName("AboutPoweredName")
         caption.setText(name)
         caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        if sys.platform != "win32":
+            caption.setMinimumHeight(18)
 
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
         lay.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -819,10 +822,15 @@ class LifecycleMixin:
         logo_row.addWidget(logo_label)
         logo_row.addStretch(1)
         content.addLayout(logo_row)
+        # Linux: stylesheet title paints into the logo without reserved height.
+        if sys.platform != "win32":
+            content.addSpacing(8)
 
         title = QLabel("Steempeg")
         title.setObjectName("AboutTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        if sys.platform != "win32":
+            title.setMinimumHeight(36)
         content.addWidget(title)
 
         build = QLabel(f"Build: v{APP_VERSION_STR}")
