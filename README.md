@@ -182,9 +182,10 @@ In-app updates on Deck follow the **steamdeck** channel only (`*_steamdeck.zip`)
 
 - **Windows 10 / 11** (64-bit), or **64-bit Linux** / **SteamOS** (Desktop Mode)
 - **NVIDIA GPU** — optional, for NVENC hardware encoding (also probed on Linux when available)
-- **Steam Game Recording** clips (`clip_`* folders with `.mpd` manifests)
+- **Steam Game Recording** clips (`clip_*` folders with `.mpd` manifests)
 
-**Alternative: download with GitHub CLI**
+<details>
+<summary><b>Alternative: download with GitHub CLI</b></summary>
 
 If you have [GitHub CLI](https://cli.github.com/) installed:
 
@@ -202,7 +203,7 @@ gh release download -R applejuicy23/steempeg --pattern "*_steamdeck.zip" --dir .
 
 Then extract and run the launcher for your platform.
 
-
+</details>
 
 ---
 
