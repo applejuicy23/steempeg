@@ -605,8 +605,9 @@ class SettingsDialog(SteempegDialog):
         v.addWidget(
             self._hint(
                 "TrueDark is the stock look (new installs). Default keeps the classic "
-                "Steempeg chrome. TrueDark OLED uses pure black shell and player canvas "
-                "with slightly elevated cards. Save applies; Cancel keeps the last saved theme."
+                "Steempeg chrome. TrueDark OLED uses pure black shell with hairline "
+                "panel borders (less matte fill). Save applies; Cancel keeps the last "
+                "saved theme."
             )
         )
 
