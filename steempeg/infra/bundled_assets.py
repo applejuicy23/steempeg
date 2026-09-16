@@ -127,7 +127,16 @@ _BASE_ASSETS = (
 
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
 
-BUNDLED_ASSET_FILES: tuple[str, ...] = _BASE_ASSETS + _HEALTH_ASSETS
+# Library Size picker glyphs (must match CARD_SIZE_GRID_ASSETS in icon_assets).
+_SIZE_GRID_ASSETS = (
+    "grid_high.png",
+    "grid_mid.png",
+    "grid_low.png",
+)
+
+BUNDLED_ASSET_FILES: tuple[str, ...] = (
+    _BASE_ASSETS + _HEALTH_ASSETS + _SIZE_GRID_ASSETS
+)
 
 # Per-game DASH init donors live under assets/donors/<app_id>/ (not flat filenames).
 # PyInstaller adds the whole tree via ``BUNDLED_DONOR_TREE``; Linux packs copy assets/.
