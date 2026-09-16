@@ -361,6 +361,17 @@ class RenderedLibraryMixin:
                 continue
             host.insertWidget(i, tab)
             tab.show()
+        self._pin_library_add_button_last()
+
+    def _pin_library_add_button_last(self) -> None:
+        """Keep ``+`` after every library tab (never between tabs)."""
+        host = getattr(self, "library_tabs_host", None)
+        btn = getattr(self, "btn_library_add", None)
+        if host is None or btn is None:
+            return
+        host.removeWidget(btn)
+        host.addWidget(btn)
+        btn.show()
 
     def _reorder_library_tab_at(self, source: str, insert_idx: int) -> None:
         tabs = getattr(self, "_library_tabs", {})
@@ -959,9 +970,19 @@ class RenderedLibraryMixin:
         elif mode == "screenshots":
             self._ensure_screenshots_widgets()
         tab = self._make_library_tab_button(labels[mode], mode)
-        # New tabs go at the end (Chrome-like). Restore applies saved visual order later.
-        self.library_tabs_host.addWidget(tab)
+        # Insert before ``+`` so the add button stays last (Chrome-like).
+        host = self.library_tabs_host
+        add_btn = getattr(self, "btn_library_add", None)
+        insert_at = host.count()
+        if add_btn is not None:
+            for i in range(host.count()):
+                item = host.itemAt(i)
+                if item is not None and item.widget() is add_btn:
+                    insert_at = i
+                    break
+        host.insertWidget(insert_at, tab)
         self._library_tabs[mode] = tab
+        self._pin_library_add_button_last()
         self._sync_library_add_button()
         # Leaving empty chrome — restore toolbar + footer folder/refresh.
         if getattr(self, "_library_panel_mode", None) == "":
