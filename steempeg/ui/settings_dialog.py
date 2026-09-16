@@ -707,15 +707,15 @@ class SettingsDialog(SteempegDialog):
             v.addWidget(
                 self._hint(
                     "Desktop only. Portable already keeps About / Updates / Settings "
-                    "in the title bar. Stock Desktop keeps them in the library footer."
+                    "in the title bar (same as stock Desktop)."
                 )
             )
         else:
             v.addWidget(
                 self._hint(
-                    "Off (default): About · Check for updates · Settings · Dev stay in the "
-                    "library footer mega-pill. On: same tools move to the window title "
-                    "bar (Portable language). Folder / Refresh stay in the footer. "
+                    "On (default): About · Check for updates · Settings · Dev in the "
+                    "window title bar. Off: same tools stay in the library footer "
+                    "mega-pill. Folder / Refresh always stay in the footer. "
                     "Checkbox previews live; Save persists. Cancel restores."
                 )
             )
