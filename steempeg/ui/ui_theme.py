@@ -164,50 +164,50 @@ _PALETTE_TRUE_DARK = UiThemePalette(
     border_library_tab_hover="#444444",
 )
 
-# TrueDark OLED — pure black shell/player canvas; cards stay slightly elevated.
+# TrueDark OLED — pure black shell; panels separated by hairlines, not matte fills.
 _PALETTE_TRUE_DARK_OLED = UiThemePalette(
     name=UI_THEME_TRUE_DARK_OLED,
     chrome_title_bar="#000000",
     chrome_app_bg="#000000",
     bg_shell="#000000",
     bg_player_canvas="#000000",
-    bg_card="#141414",
-    bg_settings_panel="#141414",
-    bg_player_header="#141414",
+    bg_card="#0a0a0a",
+    bg_settings_panel="#0a0a0a",
+    bg_player_header="#0a0a0a",
     bg_placeholder_canvas="#000000",
-    bg_elevated="#141414",
-    border_card="#222222",
-    border_panel="#222222",
+    bg_elevated="#0a0a0a",
+    border_card="#2a2a2a",
+    border_panel="#2a2a2a",
     border_default="#333333",
     border_subtle="#000000",
-    # Pure black tip for OLED.
+    # Pure black tip; hairline border for readability on OLED black.
     tooltip_bg="#000000",
-    tooltip_border="#141414",
+    tooltip_border="#222222",
     tooltip_fg="#e8e8e8",
-    neo_nav_hover_bg="#1a1a1a",
-    neo_nav_checked_bg="#111111",
+    neo_nav_hover_bg="#111111",
+    neo_nav_checked_bg="#0a0a0a",
     neo_nav_idle="#888888",
     neo_nav_hover_border="#5a4b7a",
     neo_nav_checked_border="#8e7cc3",
-    settings_btn_bg="#1a1a1a",
+    settings_btn_bg="#0a0a0a",
     settings_btn_border="#2a2a2a",
-    settings_btn_hover_bg="#141414",
+    settings_btn_hover_bg="#111111",
     settings_btn_pressed_bg="#000000",
-    button_secondary_bg="#1a1a1a",
+    button_secondary_bg="#0a0a0a",
     button_secondary_border="#333333",
-    button_secondary_hover_bg="#222222",
+    button_secondary_hover_bg="#141414",
     button_secondary_pressed_bg="#2a2438",
-    button_disabled_bg="#0a0a0a",
+    button_disabled_bg="#000000",
     button_disabled_border="#1a1a1a",
     bg_player_footer="#000000",
-    bg_timeline_strip="#141414",
-    bg_clip_card_footer="#1a1a1a",
-    bg_clip_card_plate="#141414",
-    bg_library_toolbar="#141414",
-    bg_library_tab="#141414",
-    bg_view_toggle_track="#0a0a0a",
-    border_library_tab_idle="#222222",
-    border_library_tab_hover="#333333",
+    bg_timeline_strip="#000000",
+    bg_clip_card_footer="#111111",
+    bg_clip_card_plate="#0a0a0a",
+    bg_library_toolbar="#0a0a0a",
+    bg_library_tab="#0a0a0a",
+    bg_view_toggle_track="#000000",
+    border_library_tab_idle="#2a2a2a",
+    border_library_tab_hover="#3a3a3a",
 )
 
 UI_THEMES: Final[dict[str, UiThemePalette]] = {
@@ -228,6 +228,12 @@ def normalize_ui_theme(value: object | None) -> str:
 
 def get_ui_theme() -> str:
     return _active.name
+
+
+def is_true_dark_family(name: str | None = None) -> bool:
+    """TrueDark or TrueDark OLED — shared dark-family chrome (borders, tips)."""
+    n = name if name is not None else _active.name
+    return n in (UI_THEME_TRUE_DARK, UI_THEME_TRUE_DARK_OLED)
 
 
 def active_palette() -> UiThemePalette:
@@ -943,9 +949,9 @@ def player_chrome_pill_stylesheet(*, radius: int) -> str:
     if p.name == UI_THEME_DEFAULT:
         bg = "#4e4e4e"
         border = "none"
-    elif p.name == UI_THEME_TRUE_DARK:
-        # Darker than bg_player_footer (#161616) so pills read as controls, not panel.
-        bg = p.bg_timeline_strip
+    elif is_true_dark_family(p.name):
+        # TrueDark / OLED: hairline so pills read as controls on near-black footer.
+        bg = p.bg_timeline_strip if p.name == UI_THEME_TRUE_DARK else p.button_secondary_bg
         border = f"1px solid {p.button_secondary_border}"
     else:
         bg = p.button_secondary_bg
@@ -961,8 +967,11 @@ def player_chrome_round_button_stylesheet(*, radius: int) -> str:
     if p.name == UI_THEME_DEFAULT:
         bg, hover = "#4e4e4e", "#5a5a5a"
         border = "none"
-    elif p.name == UI_THEME_TRUE_DARK:
-        bg = p.bg_timeline_strip
+    elif is_true_dark_family(p.name):
+        if p.name == UI_THEME_TRUE_DARK:
+            bg = p.bg_timeline_strip
+        else:
+            bg = p.button_secondary_bg
         hover = p.neo_nav_hover_bg
         border = f"1px solid {p.button_secondary_border}"
     else:
