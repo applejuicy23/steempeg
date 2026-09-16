@@ -1,0 +1,66 @@
+# Deploy GitHub Pages (landing + MkDocs)
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "assets/logo.png"
+      - "docs/readme/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: website/requirements.txt
+
+      - name: Install MkDocs
+        run: pip install -r website/requirements.txt
+
+      - name: Assemble public site
+        run: |
+          set -euo pipefail
+          rm -rf public
+          mkdir -p public/assets public/media
+          cp website/landing/index.html website/landing/styles.css public/
+          cp assets/logo.png public/assets/logo.png
+          # Product screenshots (README gallery) — swap later as needed
+          cp docs/readme/steempeg40_1.png public/media/
+          cp docs/readme/steempeg40_2.png public/media/
+          cp docs/readme/steempeg40_4.png public/media/
+          # MkDocs → /docs/
+          mkdocs build -f website/mkdocs.yml -d "$PWD/public/docs" --clean
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
