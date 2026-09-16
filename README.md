@@ -1,15 +1,43 @@
-![Steempeg](assets/logo.png)
+<p align="center">
+  <img src="assets/logo.png" alt="Steempeg" width="88">
+</p>
 
-# Steempeg
+<h1 align="center">Steempeg</h1>
 
-**A fast, hardware-accelerated renderer for Steam Game Recording clips.**  
-Recover broken recordings, trim with precision, and export in one click — no Python, no command line.
+<p align="center">
+  <strong>A fast, hardware-accelerated renderer for Steam Game Recording clips.</strong><br>
+  Recover broken recordings, trim with precision, and export in one click — no Python, no command line.
+</p>
 
-![Latest release](https://img.shields.io/github/v/release/applejuicy23/steempeg?label=version&color=8b7cc8)![Windows](https://img.shields.io/badge/Windows-2d2d2d?style=flat-square&logo=windows&logoColor=white)![Linux](https://img.shields.io/badge/Linux-2d2d2d?style=flat-square&logo=linux&logoColor=white)![Steam Deck](https://img.shields.io/badge/Steam%20Deck-1b2838?style=flat-square&logo=steam&logoColor=white)![GPL-3.0](https://img.shields.io/github/license/applejuicy23/steempeg?style=flat-square&color=3d8b40) [](https://github.com/applejuicy23/steempeg/stargazers)![GitHub stars](https://img.shields.io/github/stars/applejuicy23/steempeg?style=social)[ ](https://github.com/applejuicy23/steempeg/stargazers)![Total downloads](https://img.shields.io/github/downloads/applejuicy23/steempeg/total?label=downloads&color=555555&style=flat-square)[
+<p align="center">
+  <a href="https://github.com/applejuicy23/steempeg/releases/latest">
+    <img src="https://img.shields.io/github/v/release/applejuicy23/steempeg?label=version&color=8b7cc8" alt="Latest release">
+  </a>
+  <img src="https://img.shields.io/badge/Windows-2d2d2d?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/Linux-2d2d2d?style=flat-square&logo=linux&logoColor=white" alt="Linux">
+  <img src="https://img.shields.io/badge/Steam%20Deck-1b2838?style=flat-square&logo=steam&logoColor=white" alt="Steam Deck">
+  <img src="https://img.shields.io/github/license/applejuicy23/steempeg?style=flat-square&color=3d8b40" alt="GPL-3.0">
+  <a href="https://github.com/applejuicy23/steempeg/stargazers">
+    <img src="https://img.shields.io/github/stars/applejuicy23/steempeg?style=social" alt="GitHub stars">
+  </a>
+  <a href="https://github.com/applejuicy23/steempeg/releases">
+    <img src="https://img.shields.io/github/downloads/applejuicy23/steempeg/total?label=downloads&color=555555&style=flat-square" alt="Total downloads">
+  </a>
+</p>
 
-![Now on Windows, Linux, and Steam Deck](https://img.shields.io/badge/Now%20on-Windows%20·%20Linux%20·%20Steam%20Deck-8b7cc8?style=for-the-badge)
+<p align="center">
+  <img src="https://img.shields.io/badge/Now%20on-Windows%20·%20Linux%20·%20Steam%20Deck-8b7cc8?style=for-the-badge" alt="Now on Windows, Linux, and Steam Deck">
+</p>
 
-[Features](#-features) · [Screenshots](#-screenshots) · [Getting Started](#-getting-started) · [Website](https://applejuicy23.github.io/steempeg/) · [Docs](https://applejuicy23.github.io/steempeg/docs/) · [Changelog](#-changelog) · [Credits](#-credits)
+<p align="center">
+  <a href="#-features">Features</a> ·
+  <a href="#-screenshots">Screenshots</a> ·
+  <a href="#-getting-started">Getting Started</a> ·
+  <a href="https://applejuicy23.github.io/steempeg/">Website</a> ·
+  <a href="https://applejuicy23.github.io/steempeg/docs/">Docs</a> ·
+  <a href="#-changelog">Changelog</a> ·
+  <a href="#-credits">Credits</a>
+</p>
 
 ---
 
@@ -76,21 +104,25 @@ Recover broken recordings, trim with precision, and export in one click — no P
 
 ## 📸 Screenshots
 
-*Clips manager with filters, cards & render queue*
+<p align="center"><em>Clips manager with filters, cards & render queue</em></p>
+<p align="center">
+  <img src="docs/readme/steempeg40_1.png" alt="Steempeg — filters, cards and render queue" width="92%">
+</p>
 
-![Steempeg — filters, cards and render queue](docs/readme/steempeg40_1.png)
+<p align="center"><em>Markers, queue & batch export</em></p>
+<p align="center">
+  <img src="docs/readme/steempeg40_2.png" alt="Steempeg — markers and queue" width="92%">
+</p>
 
-*Markers, queue & batch export*
+<p align="center"><em>Clip cards & source info</em></p>
+<p align="center">
+  <img src="docs/readme/steempeg40_3.png" alt="Steempeg — clip cards library" width="92%">
+</p>
 
-![Steempeg — markers and queue](docs/readme/steempeg40_2.png)
-
-*Clip cards & source info*
-
-![Steempeg — clip cards library](docs/readme/steempeg40_3.png)
-
-*Theatre / Portable — immersive playback*
-
-![Steempeg — theatre mode](docs/readme/steempeg40_4.png)
+<p align="center"><em>Theatre / Portable — immersive playback</em></p>
+<p align="center">
+  <img src="docs/readme/steempeg40_4.png" alt="Steempeg — theatre mode" width="92%">
+</p>
 
 ---
 
