@@ -1,0 +1,31 @@
+:root {
+  --md-primary-fg-color: #b29ae7;
+  --md-primary-fg-color--light: #c4b0f0;
+  --md-primary-fg-color--dark: #6b5a8e;
+  --md-accent-fg-color: #b29ae7;
+  --md-typeset-a-color: #b29ae7;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #0a0a0c;
+  --md-default-bg-color--light: #121214;
+  --md-default-bg-color--lighter: #1a1a1e;
+  --md-default-bg-color--lightest: #222228;
+  --md-default-fg-color: #f2f0eb;
+  --md-default-fg-color--light: #c8c4bc;
+  --md-default-fg-color--lighter: #9a9690;
+  --md-code-bg-color: #141418;
+}
+
+.md-header {
+  background-color: #000000;
+}
+
+.md-tabs {
+  background-color: #000000;
+}
+
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+}
