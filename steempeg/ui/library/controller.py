@@ -4649,13 +4649,16 @@ class LibraryMixin:
                 continue
             if area.intersects(grid.visualRect(idx)):
                 out.append(item)
-        if grid.count() <= 0 or vp.height() <= 0:
+        if grid.count() <= 0:
             return out
         cols_fn = getattr(self, "_clip_grid_column_count_for", None)
         cols = int(cols_fn(grid)) if callable(cols_fn) else 6
         cols = max(1, cols)
         cell_h = max(1, _clips_card_cell_size(self).height() + max(0, int(grid.spacing())))
-        rows = max(2, (vp.height() + _CLIP_VIEWPORT_OVERSCAN_PX) // cell_h + 1)
+        # Mid size-change reflow viewport can briefly report height 0 — still
+        # seed a first screen so cards are not left as invisible placeholders.
+        vp_h = max(1, int(vp.height()))
+        rows = max(2, (vp_h + _CLIP_VIEWPORT_OVERSCAN_PX) // cell_h + 1)
         expect = min(grid.count(), cols * rows)
         if len(out) >= expect:
             return out
@@ -6002,12 +6005,28 @@ class LibraryMixin:
             if w is not None:
                 grid.removeItemWidget(item)
                 w.deleteLater()
-        if hasattr(self, "_clips_refresh_viewport"):
+        # Layout first — visualRect is often 0×0 until this pass, and the old
+        # order (refresh then layout) left empty placeholders after Small.
+        try:
+            grid.doItemsLayout()
+        except Exception:
+            pass
+        # Size change must rematerialize even when progressive is off (full
+        # Refresh) or scroll-idle gating would skip the viewport pass.
+        self._clips_scroll_active = False
+        if getattr(self, "_clips_progressive_active", False):
             self._clips_refresh_viewport()
+            # Second chance after Qt settles the new grid geometry.
+            QTimer.singleShot(0, self._clips_refresh_viewport)
+            QTimer.singleShot(50, self._clips_refresh_viewport)
+        else:
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is not None and not item.isHidden():
+                    self._attach_clip_card_to_grid_item(item)
         # Force selection chrome onto the new widgets (bookkeeping may still
         # match the table and early-return otherwise).
         self._clips_visual_selected_rows = None
         if hasattr(self, "_sync_grid_card_visuals"):
             self._sync_grid_card_visuals()
-        grid.doItemsLayout()
         QTimer.singleShot(0, self._sync_library_scrollbars)
