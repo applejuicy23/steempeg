@@ -43,10 +43,10 @@ jobs:
           mkdir -p public/assets public/media
           cp website/landing/index.html website/landing/styles.css public/
           cp assets/logo.png public/assets/logo.png
-          # Product screenshots (README gallery) — swap later as needed
-          cp docs/readme/steempeg40_1.png public/media/
-          cp docs/readme/steempeg40_2.png public/media/
-          cp docs/readme/steempeg40_4.png public/media/
+          # Product screenshots (README gallery)
+          cp docs/readme/steempeg50_1.png public/media/
+          cp docs/readme/steempeg50_2.png public/media/
+          cp docs/readme/steempeg50_4.png public/media/
           # MkDocs → /docs/
           mkdocs build -f website/mkdocs.yml -d "$PWD/public/docs" --clean
 
