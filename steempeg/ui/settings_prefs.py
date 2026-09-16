@@ -155,13 +155,14 @@ def load_queue_hover(settings: dict | None = None) -> bool:
 # ----- Desktop shell: About / Updates / Settings in title bar -----
 
 KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR = "desktop_shell_tools_in_title_bar"
-DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR = False
+# Stock ON — About / Updates / Settings / Dev in the title bar (Portable language).
+DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR = True
 
 _current_desktop_shell_tools_in_title_bar: bool = DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
 
 
 def normalize_desktop_shell_tools_in_title_bar(value: object | None) -> bool:
-    """Stock OFF (footer mega-pill). Explicit true enables Portable-style title bar."""
+    """Stock ON (title bar). Explicit false keeps tools in the footer mega-pill."""
     if value is None:
         return DEFAULT_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR
     if isinstance(value, bool):
