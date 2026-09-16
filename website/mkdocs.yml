@@ -1,0 +1,58 @@
+site_name: Steempeg Docs
+site_description: Guides for Steempeg — Steam Game Recording trim & export
+site_url: https://applejuicy23.github.io/steempeg/docs/
+repo_url: https://github.com/applejuicy23/steempeg
+repo_name: applejuicy23/steempeg
+edit_uri: edit/main/website/docs/
+
+docs_dir: docs
+# site_dir overridden in CI to public/docs
+
+theme:
+  name: material
+  language: en
+  favicon: assets/logo.png
+  logo: assets/logo.png
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Dark
+  font:
+    text: Outfit
+    code: JetBrains Mono
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/applejuicy23/steempeg
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - More docs:
+      - Coming soon: more/index.md
