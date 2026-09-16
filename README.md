@@ -26,10 +26,6 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Now%20on-Windows%20·%20Linux%20·%20Steam%20Deck-8b7cc8?style=for-the-badge" alt="Now on Windows, Linux, and Steam Deck">
-</p>
-
-<p align="center">
   <a href="#-features">Features</a> ·
   <a href="#-screenshots">Screenshots</a> ·
   <a href="#-getting-started">Getting Started</a> ·
@@ -106,22 +102,22 @@
 
 <p align="center"><em>Clips manager with filters, cards & render queue</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg40_1.png" alt="Steempeg — filters, cards and render queue" width="92%">
+  <img src="docs/readme/steempeg50_1.png" alt="Steempeg — filters, cards and render queue" width="92%">
 </p>
 
 <p align="center"><em>Markers, queue & batch export</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg40_2.png" alt="Steempeg — markers and queue" width="92%">
+  <img src="docs/readme/steempeg50_2.png" alt="Steempeg — markers and queue" width="92%">
 </p>
 
 <p align="center"><em>Clip cards & source info</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg40_3.png" alt="Steempeg — clip cards library" width="92%">
+  <img src="docs/readme/steempeg50_3.png" alt="Steempeg — clip cards library" width="92%">
 </p>
 
 <p align="center"><em>Theatre / Portable — immersive playback</em></p>
 <p align="center">
-  <img src="docs/readme/steempeg40_4.png" alt="Steempeg — theatre mode" width="92%">
+  <img src="docs/readme/steempeg50_4.png" alt="Steempeg — theatre mode" width="92%">
 </p>
 
 ---
