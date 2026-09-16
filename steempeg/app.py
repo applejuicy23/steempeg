@@ -226,8 +226,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
     def _refresh_dev_button_visibility(self) -> None:
         """Show/hide Dev entry points from cache/settings.json dev_mode.
 
-        Footer on stock Desktop; title bar on Portable and when Desktop shell
-        tools live in the title bar (same pref as About / Updates / Settings).
+        Title bar is stock (Desktop + Portable); footer mega-pill only when
+        Desktop shell tools are explicitly moved out of the title bar.
         """
         enabled = False
         try:
