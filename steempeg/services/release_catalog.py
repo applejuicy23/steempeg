@@ -99,6 +99,12 @@ class VersionMilestone:
 # (i) badge = keyed Early v8–v11, or any v12+ version listed here.
 VERSION_MILESTONES: tuple[VersionMilestone, ...] = (
     VersionMilestone(
+        50.0,
+        "🌐",
+        "Product site",
+        "GitHub Pages landing + Docs; library Size chrome; stock Desktop title-bar tools; TrueDark OLED.",
+    ),
+    VersionMilestone(
         49.0,
         "📚",
         "Progressive library",
