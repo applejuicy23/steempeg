@@ -5874,10 +5874,16 @@ class RenderedLibraryMixin:
             allow_list = load_library_allow_list_view(self.load_user_settings() or {})
         except Exception:
             allow_list = False
+        # Choose a Clip (Portable): Size yes, List never — grid picker only.
+        if getattr(self, "_portable_clip_picker_open", False):
+            allow_list = False
 
         if chrome is not None:
             if hasattr(chrome, "set_grid_only"):
-                chrome.set_grid_only(mode == "screenshots")
+                chrome.set_grid_only(
+                    mode == "screenshots"
+                    or bool(getattr(self, "_portable_clip_picker_open", False))
+                )
             if hasattr(chrome, "set_allow_list"):
                 chrome.set_allow_list(allow_list and mode != "screenshots")
             if mode == "screenshots":
