@@ -22,6 +22,7 @@ from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 UI_SHELL_KEY = "ui_shell"
 UI_SHELL_ASK_KEY = "ui_shell_ask_on_startup"
+UI_SHELL_SKIP_ASK_ONCE_KEY = "ui_shell_skip_ask_once"
 UI_SHELL_DESKTOP = "desktop"
 UI_SHELL_PORTABLE = "portable"
 
@@ -74,6 +75,30 @@ def save_ask_ui_shell(ask: bool, app=None) -> bool:
     return cache.write_json(path, data)
 
 
+def set_shell_skip_ask_once(skip: bool, app=None) -> bool:
+    """One-shot: next launch skips the chooser after Settings → Restart shell change."""
+    value = bool(skip)
+    if app is not None and hasattr(app, "save_user_settings"):
+        return bool(app.save_user_settings(UI_SHELL_SKIP_ASK_ONCE_KEY, value))
+    path = _settings_path()
+    data = cache.read_json(path)
+    if not isinstance(data, dict):
+        data = {}
+    data[UI_SHELL_SKIP_ASK_ONCE_KEY] = value
+    return cache.write_json(path, data)
+
+
+def consume_shell_skip_ask_once() -> bool:
+    """Return True once if Settings restart requested a shell switch without Ask."""
+    path = _settings_path()
+    data = cache.read_json(path)
+    if not isinstance(data, dict) or not data.get(UI_SHELL_SKIP_ASK_ONCE_KEY):
+        return False
+    data[UI_SHELL_SKIP_ASK_ONCE_KEY] = False
+    cache.write_json(path, data)
+    return True
+
+
 def is_steamdeck_build() -> bool:
     """True for steamdeck update-channel builds (Deck zip / baked channel)."""
     try:
@@ -88,11 +113,15 @@ def resolve_startup_ui_shell() -> str | None:
     """Shell to use without showing the chooser, or None to ask.
 
     Steam Deck builds skip the chooser (Portable by default; Settings can still
-    override). Other builds skip only when the user checked Don't ask again.
+    override). Other builds skip when the user checked Don't ask again, or for
+    one launch after Settings → Restart with a different shell (does not flip
+    the ask-on-startup pref).
     """
     saved = load_ui_shell()
     if is_steamdeck_build():
         return saved or UI_SHELL_PORTABLE
+    if consume_shell_skip_ask_once() and saved:
+        return saved
     if not load_ask_ui_shell() and saved:
         return saved
     return None
