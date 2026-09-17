@@ -940,9 +940,40 @@ class PortableClipPickerDialog(SteempegDialog):
                 )
                 self.content_layout.addWidget(self._panel, 1)
         else:
+            # Warm reopen: panel stays embedded, but theatre hide Size again on
+            # close — re-show Size + remount Folder/Refresh order every open.
             self._wire_pick_signals()
-        self._mount_folder_refresh_in_toolbar()
+            self._show_size_chrome_for_picker()
+            self._mount_folder_refresh_in_toolbar()
+            if hasattr(self._app, "sync_library_filter_view"):
+                self._app.sync_library_filter_view()
+            chrome = getattr(self._app, "card_size_chrome", None) or getattr(
+                self._app, "view_mode_chrome", None
+            )
+            if chrome is not None and hasattr(chrome, "set_grid_only"):
+                chrome.set_grid_only(True)
         QTimer.singleShot(200, self._arm_selection_close)
+
+    def _show_size_chrome_for_picker(self) -> None:
+        """Reveal Size label + ghost chip for Choose a Clip (grid-only)."""
+        app = self._app
+        chrome = getattr(app, "card_size_chrome", None) or getattr(
+            app, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_grid_only"):
+            chrome.set_grid_only(True)
+        toggle = getattr(app, "toggle_pill", None) or getattr(
+            chrome, "toggle_pill", None
+        )
+        lbl = getattr(app, "_lbl_view", None) or getattr(chrome, "lbl_view", None)
+        btn = getattr(chrome, "btn_size", None) if chrome is not None else None
+        if toggle is not None:
+            self._toggle_was_visible = toggle.isVisible()
+            toggle.show()
+        if lbl is not None:
+            lbl.show()
+        if btn is not None:
+            btn.show()
 
     def dispose_warm(self) -> None:
         self._warm = False
@@ -962,13 +993,9 @@ class PortableClipPickerDialog(SteempegDialog):
         if hasattr(app, "_apply_rendered_view_mode"):
             app._apply_rendered_view_mode()
 
-        toggle = getattr(app, "toggle_pill", None)
-        lbl = getattr(app, "_lbl_view", None)
-        if toggle is not None:
-            self._toggle_was_visible = toggle.isVisible()
-            toggle.hide()
-        if lbl is not None:
-            lbl.hide()
+        # Size chrome stays available in Choose a Clip (Desktop parity). List
+        # stays off — portable picker is grid-only.
+        self._show_size_chrome_for_picker()
 
         # Keep ExtendedSelection so Ctrl/Alt/Shift+LMB multi-select works.
         # Plain LMB still closes the sheet via _on_pick; modifier clicks stay open.
@@ -992,11 +1019,16 @@ class PortableClipPickerDialog(SteempegDialog):
         self._mount_folder_refresh_in_toolbar()
         if hasattr(app, "sync_library_filter_view"):
             app.sync_library_filter_view()
+        # After sync (which restores List when Settings allows it) — keep the
+        # Choose a Clip Size popup grid-only.
+        chrome = getattr(app, "card_size_chrome", None) or getattr(
+            app, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_grid_only"):
+            chrome.set_grid_only(True)
 
     def _mount_folder_refresh_in_toolbar(self) -> None:
-        """Place View → Choose Folder → Refresh → count in the library toolbar."""
-        if self._folder_refresh_mounted:
-            return
+        """Place Choose Folder · Refresh · Size · count in the library toolbar."""
         app = self._app
         layout = getattr(app, "_top_pill_layout", None)
         folder = getattr(app, "folder_picker", None)
@@ -1004,30 +1036,45 @@ class PortableClipPickerDialog(SteempegDialog):
         if layout is None or folder is None or refresh is None:
             return
 
-        self._folder_home = _borrow_widget(folder)
-        self._refresh_home = _borrow_widget(refresh)
-        self._folder_size_policy = folder.sizePolicy()
-        self._refresh_size_policy = refresh.sizePolicy()
-        self._folder_max_width = folder.maximumWidth()
-        self._refresh_max_width = refresh.maximumWidth()
+        if not self._folder_refresh_mounted:
+            self._folder_home = _borrow_widget(folder)
+            self._refresh_home = _borrow_widget(refresh)
+            self._folder_size_policy = folder.sizePolicy()
+            self._refresh_size_policy = refresh.sizePolicy()
+            self._folder_max_width = folder.maximumWidth()
+            self._refresh_max_width = refresh.maximumWidth()
 
-        folder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        folder.setMaximumWidth(320)
-        refresh.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        refresh.setMaximumWidth(160)
-        # Density passes while the footer was parked can leave ▾ hidden; restore.
-        if hasattr(refresh, "set_menu_visible"):
-            refresh.set_menu_visible(True)
+            folder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            folder.setMaximumWidth(320)
+            refresh.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            refresh.setMaximumWidth(160)
+            # Density passes while the footer was parked can leave ▾ hidden; restore.
+            if hasattr(refresh, "set_menu_visible"):
+                refresh.set_menu_visible(True)
 
-        # View and its Grid/List toggle already lead the row. Mount the borrowed
-        # folder controls immediately after them so the count stays after Refresh:
-        # View · Choose Folder · Refresh · count.
-        toggle = getattr(app, "toggle_pill", None)
-        insert_at = layout.indexOf(toggle) + 1 if toggle is not None else 0
-        layout.insertWidget(insert_at, folder)
-        layout.insertWidget(insert_at + 1, refresh)
-        folder.show()
-        refresh.show()
+        chrome = getattr(app, "card_size_chrome", None) or getattr(
+            app, "view_mode_chrome", None
+        )
+        size_lbl = getattr(app, "_lbl_view", None) or getattr(chrome, "lbl_view", None)
+        size_pill = getattr(app, "toggle_pill", None) or getattr(
+            chrome, "toggle_pill", None
+        )
+        count = getattr(app, "lbl_clip_count", None) or getattr(chrome, "lbl_count", None)
+
+        # Rebuild the left cluster every open: Folder · Refresh · Size · count.
+        # Leave stretch + Sorting/Filter group on the right untouched.
+        left_cluster = [
+            w
+            for w in (folder, refresh, size_lbl, size_pill, count)
+            if w is not None
+        ]
+        for w in left_cluster:
+            idx = layout.indexOf(w)
+            if idx >= 0:
+                layout.takeAt(idx)
+        for i, w in enumerate(left_cluster):
+            layout.insertWidget(i, w)
+            w.show()
 
         footer = getattr(app, "_footer_mega_pill", None)
         if footer is not None:
@@ -1068,6 +1115,35 @@ class PortableClipPickerDialog(SteempegDialog):
                 refresh.setMaximumWidth(self._refresh_max_width)
             parent, lay, index, kind = self._refresh_home
             _return_widget(refresh, parent, lay, index, kind, visible=False)
+
+        # Desktop order: Size · count · (stretch · Sorting). Put Size chrome
+        # back before the count after we borrowed space for Folder/Refresh.
+        chrome = getattr(app, "card_size_chrome", None) or getattr(
+            app, "view_mode_chrome", None
+        )
+        size_lbl = getattr(app, "_lbl_view", None) or getattr(chrome, "lbl_view", None)
+        size_pill = getattr(app, "toggle_pill", None) or getattr(
+            chrome, "toggle_pill", None
+        )
+        count = getattr(app, "lbl_clip_count", None) or getattr(chrome, "lbl_count", None)
+        if layout is not None and count is not None:
+            count_idx = layout.indexOf(count)
+            if count_idx < 0:
+                count_idx = 0
+            for w in (size_pill, size_lbl):
+                if w is None:
+                    continue
+                idx = layout.indexOf(w)
+                if idx >= 0:
+                    layout.takeAt(idx)
+                    if idx < count_idx:
+                        count_idx -= 1
+            insert_at = max(0, layout.indexOf(count))
+            if size_lbl is not None:
+                layout.insertWidget(insert_at, size_lbl)
+                insert_at += 1
+            if size_pill is not None:
+                layout.insertWidget(insert_at, size_pill)
 
         self._folder_refresh_mounted = False
         self._folder_home = None
@@ -1171,11 +1247,38 @@ class PortableClipPickerDialog(SteempegDialog):
         self._prev_sel_modes = []
 
         toggle = getattr(app, "toggle_pill", None)
-        lbl = getattr(app, "_lbl_view", None)
-        if toggle is not None and self._toggle_was_visible:
-            toggle.show()
-        if lbl is not None and self._toggle_was_visible:
-            lbl.show()
+        lbl = getattr(app, "_lbl_view", None) or getattr(
+            getattr(app, "view_mode_chrome", None), "lbl_view", None
+        )
+        # Portable theatre keeps Size hidden until Choose a Clip opens it.
+        if getattr(app, "_portable_shell", False):
+            if toggle is not None:
+                toggle.hide()
+            if lbl is not None:
+                lbl.hide()
+            chrome = getattr(app, "card_size_chrome", None) or getattr(
+                app, "view_mode_chrome", None
+            )
+            # Restore List availability for Desktop next time (sheet set grid-only).
+            if chrome is not None and hasattr(chrome, "set_grid_only"):
+                from steempeg.ui.settings_prefs import load_library_allow_list_view
+
+                allow_list = False
+                try:
+                    allow_list = load_library_allow_list_view(
+                        app.load_user_settings() or {}
+                    )
+                except Exception:
+                    allow_list = False
+                panel = getattr(app, "_library_panel_mode", "clips")
+                chrome.set_grid_only(panel == "screenshots")
+                if hasattr(chrome, "set_allow_list"):
+                    chrome.set_allow_list(bool(allow_list) and panel != "screenshots")
+        else:
+            if toggle is not None and self._toggle_was_visible:
+                toggle.show()
+            if lbl is not None and self._toggle_was_visible:
+                lbl.show()
 
         # Keep grid in portable shell — don't restore list mode.
         if not getattr(app, "_portable_shell", False):
