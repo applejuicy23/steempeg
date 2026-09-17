@@ -1873,6 +1873,12 @@ class SettingsDialog(SteempegDialog):
                 return
 
         app = self._app
+        from steempeg.ui.shell_chooser import load_ui_shell, set_shell_skip_ask_once
+
+        running_shell = getattr(app, "_ui_shell", None)
+        saved_shell = load_ui_shell()
+        if running_shell and saved_shell and saved_shell != running_shell:
+            set_shell_skip_ask_once(True, app=app)
         # Flush queue + panel before relaunch so the other shell sees the same state.
         if hasattr(app, "_persist_render_queue"):
             try:
