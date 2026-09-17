@@ -5328,6 +5328,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         return ctrl is not None and bool(getattr(ctrl, "_enabled", False))
 
     def _sync_queue_hover_after_sides(self) -> None:
+        """After Library↔Queue side swap: rebind Hover edge + which handle is hidden.
+
+        Hover hides the *queue* splitter handle. After a swap the queue moves
+        between ``main_splitter`` and ``right_h_splitter`` — without a resync the
+        old hide sticks (handle stuck on the left edge) and the player|Clips
+        handle stays missing.
+        """
         ctrl = getattr(self, "_queue_hover", None)
         if ctrl is None:
             return
@@ -5335,6 +5342,31 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             ctrl.sync_side()
         except Exception:
             logging.debug("queue hover side sync skipped", exc_info=True)
+        if not self._queue_hover_is_floating():
+            return
+        main = getattr(getattr(self, "ui", None), "main_splitter", None)
+        rhs = getattr(self, "right_h_splitter", None)
+        setter = getattr(self, "_set_splitter_handle_visible", None)
+        # Restore both dock handles, then hide only the current queue side.
+        for splitter in (main, rhs):
+            if splitter is None:
+                continue
+            try:
+                live = int(splitter.handleWidth() or 0)
+                saved = int(getattr(self, "_queue_hover_saved_handle_w", 0) or 0)
+                width = saved if saved > 0 else (live if live > 0 else 6)
+                splitter.setHandleWidth(width)
+                if callable(setter):
+                    setter(splitter, True, 1)
+                handle = splitter.handle(1) if splitter.count() >= 2 else None
+                if handle is not None:
+                    handle.setVisible(True)
+            except RuntimeError:
+                pass
+        try:
+            ctrl._set_queue_handle_visible(False)
+        except Exception:
+            logging.debug("queue hover handle rebind skipped", exc_info=True)
 
     def apply_queue_hover(self, enabled: bool | None = None) -> None:
         """Float Render Queue as an edge slide-out, or dock it back in the splitter."""
