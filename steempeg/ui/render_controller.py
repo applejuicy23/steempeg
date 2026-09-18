@@ -939,6 +939,26 @@ class RenderMixin:
 
         strip_state = "ready" if state == "accent" else state
         self._sync_portable_render_strip(full_text, strip_state, percent)
+        self._maybe_reglue_dash_after_startup_status()
+
+    def _maybe_reglue_dash_after_startup_status(self) -> None:
+        """Ready / queue badge can grow the dash after it was glued — re-pin.
+
+        Cold start used to glue the Like a Portable strip, then stamp Ready
+        (12px dot → 24px queue badge). The pane stayed locked to the short
+        height — Ready peeked above a sunken panel until a later timer fixed it.
+        """
+        if not (
+            getattr(self, "_startup_settle_active", False)
+            or getattr(self, "_startup_dash_glue_grace", False)
+        ):
+            return
+        try:
+            if not self._desktop_render_layout_is_portable_like():
+                return
+            self._settle_portable_like_dash()
+        except Exception:
+            logging.debug("startup Ready→dash re-glue skipped", exc_info=True)
 
     def _status_dot_widget(self):
         """Visible status chrome dot — portable strip when shell is active."""
@@ -1162,6 +1182,22 @@ class RenderMixin:
         dot.setFixedSize(sz, sz)
         dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
         dot.setText(str(max(1, int(index))))
+        # Construction pins Ready cluster to 24px (plain 12px dot). Grow with badge
+        # so «Ready» + digit are not clipped — that clip read as READY above a
+        # sunken button strip on cold start.
+        cluster = None
+        try:
+            cluster = dot.parentWidget()
+            if cluster is not None:
+                cluster = cluster.parentWidget()
+            if cluster is not None and cluster.maximumHeight() < sz:
+                cluster.setFixedHeight(sz)
+            col = dot.parentWidget()
+            if col is not None and col.maximumHeight() < sz:
+                col.setFixedHeight(sz)
+                col.setMinimumWidth(max(int(col.minimumWidth()), 40))
+        except RuntimeError:
+            pass
         radius = sz // 2
         # Dark digit on bright badge colours (yellow/orange/green); light on red.
         ink = "#ffffff" if color.lower() in ("#ff4444", "#ff0000") else "#1a1a1a"
@@ -1250,6 +1286,7 @@ class RenderMixin:
                     bar.set_state("ready")
         if hasattr(self, "label_pct") and not getattr(self, "_is_rendering", False):
             self.label_pct.setText("0%")
+        self._maybe_reglue_dash_after_startup_status()
         return True
 
     def _sync_portable_render_strip(
@@ -2294,7 +2331,14 @@ class RenderMixin:
             pass
         if portable_like:
             # Second pass after layout settles — keep user close, else glue open.
-            QTimer.singleShot(0, self._settle_portable_like_dash)
+            # During startup settle / post-unveil grace a deferred tick paints one
+            # sunken-dash frame (Ready / density after the first pin). Glue sync.
+            if getattr(self, "_startup_settle_active", False) or getattr(
+                self, "_startup_dash_glue_grace", False
+            ):
+                self._settle_portable_like_dash()
+            else:
+                QTimer.singleShot(0, self._settle_portable_like_dash)
         elif leaving_portable:
             # Second pass: neo stretch + splitter sizes after reparent/show.
             QTimer.singleShot(0, self._settle_desktop_dock_layout)
@@ -2420,31 +2464,104 @@ class RenderMixin:
         self._restore_neo_to_dock_layout()
 
     def _dash_content_height(self) -> int:
-        """Uncompressed render-dashboard height (density metrics, not live geometry).
+        """Uncompressed render-dashboard height (density metrics + free sizeHint).
 
         Like a Portable glue used to accept any live ``dash.height()`` in
         ``[80, hint+24]``. Mid-layout that locked a too-short pane and vertically
         squashed Start / Render Settings / Pause / Cancel / Logs.
+
+        Critical: after a glue pass ``bottom_v_wrap`` maxHeight equals the pin, so
+        ``dash.sizeHint()`` collapses to that same short value. Re-glue then
+        "confirms" the sunken height forever. Measure with constraints lifted.
         """
         dense = getattr(self, "_ui_density", None)
         btn_h = int(getattr(dense, "dash_btn_h", 36) or 36) if dense else 36
         mv = int(getattr(dense, "dash_margin_v", 16) or 16) if dense else 16
         sp = int(getattr(dense, "dash_spacing", 12) or 12) if dense else 12
-        # status row 24 + %/bar row (label taller than the 6px bar) + 2px card border
+        # status row ≥24 (queue badge can be 24) + %/bar row + 2px card border
         font = int(getattr(dense, "dash_font", 13) or 13) if dense else 13
+        status_row = 24
         pct_row = max(6, font + 6)
-        metric = (mv * 2) + (sp * 2) + 24 + pct_row + btn_h + 2
+        metric = (mv * 2) + (sp * 2) + status_row + pct_row + btn_h + 2
         metric = max(metric, 120)
         dash = getattr(self, "render_dashboard", None)
         if dash is None:
             return metric
-        hint = int(dash.sizeHint().height() or 0)
-        if hint < 80:
-            hint = int(dash.minimumSizeHint().height() or 0)
-        # Honour sizeHint when it is close to metrics; ignore stretch-inflated values.
-        if 80 <= hint <= metric + 48:
-            return max(hint, metric)
+        hint = self._unconstrained_dash_height_hint()
+        if hint >= 80:
+            # Honour free hint when it is in a sane band; never let a glued
+            # (collapsed) hint shrink us below metrics.
+            if hint <= metric + 64:
+                return max(hint, metric)
+            # Huge stretch-inflated hint — trust metrics only.
+            return metric
         return metric
+
+    def _unconstrained_dash_height_hint(self) -> int:
+        """sizeHint with Like a Portable min/max height locks temporarily lifted."""
+        dash = getattr(self, "render_dashboard", None)
+        if dash is None:
+            return 0
+        bottom = getattr(self, "bottom_v_wrap", None)
+        saved = []
+        try:
+            for widget in (bottom, dash):
+                if widget is None:
+                    continue
+                saved.append(
+                    (
+                        widget,
+                        int(widget.minimumHeight()),
+                        int(widget.maximumHeight()),
+                    )
+                )
+                widget.setMinimumHeight(0)
+                widget.setMaximumHeight(16777215)
+            try:
+                dash.ensurePolished()
+            except Exception:
+                pass
+            lay = dash.layout()
+            if lay is not None:
+                try:
+                    lay.activate()
+                except Exception:
+                    pass
+            hint = int(dash.sizeHint().height() or 0)
+            if hint < 80:
+                hint = int(dash.minimumSizeHint().height() or 0)
+            return hint
+        except RuntimeError:
+            return 0
+        finally:
+            for widget, mn, mx in saved:
+                try:
+                    widget.setMinimumHeight(mn)
+                    widget.setMaximumHeight(mx)
+                except RuntimeError:
+                    pass
+
+    def _finalize_startup_dash_geometry(self) -> None:
+        """Last pin before unveil — Ready + unconstrained measure + glue (cheap)."""
+        if not self._desktop_render_layout_is_portable_like():
+            return
+        try:
+            if hasattr(self, "update_status_indicator"):
+                label = getattr(getattr(self, "ui", None), "label_status", None)
+                text = label.text() if label is not None else "Ready"
+                if not str(text or "").strip():
+                    text = "Ready"
+                busy = (
+                    getattr(self, "_clips_scan_active", False)
+                    or getattr(self, "_rendered_scan_active", False)
+                    or getattr(self, "_update_check_busy", False)
+                    or getattr(self, "_is_rendering", False)
+                )
+                if not busy and "Ready" in str(text):
+                    self.update_status_indicator(str(text), "ready")
+        except Exception:
+            logging.debug("startup dash Ready stamp failed", exc_info=True)
+        self._settle_portable_like_dash()
 
     def _dash_only_bottom_height(self) -> int:
         """Exact height for the glued render-control strip (no black padding)."""
@@ -2669,7 +2786,11 @@ class RenderMixin:
         if v_split is None:
             return
         sizes = v_split.sizes()
-        total = sum(sizes) if sizes and sum(sizes) > 0 else max(int(v_split.height() or 0), 1)
+        total = sum(sizes) if sizes and sum(sizes) > 0 else 0
+        live_h = max(int(v_split.height() or 0), 1)
+        # After showMaximized, sizes can still be the pre-maximize total for a
+        # tick — prefer the live splitter height so the pin is not short.
+        total = max(int(total), live_h)
         dash_h = max(int(self._dash_only_bottom_height()), 1)
         self._portable_like_dash_closed = bool(closed)
         self._portable_like_snap_lock = True
