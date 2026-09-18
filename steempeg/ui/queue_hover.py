@@ -688,6 +688,10 @@ class QueueHoverController(QObject):
         if suspended:
             self.conceal(animated=False)
             self._hotspot.hide()
+            try:
+                self._hotspot.setGeometry(0, 0, 0, 0)
+            except RuntimeError:
+                pass
         else:
             self.sync_geometry()
 
@@ -999,6 +1003,11 @@ class QueueHoverController(QObject):
             self._hotspot.show()
         else:
             self._hotspot.hide()
+            # Zero geometry so a hidden hotspot cannot leave a dead hit/paint band.
+            try:
+                self._hotspot.setGeometry(0, 0, 0, 0)
+            except RuntimeError:
+                pass
 
     def _current_width(self) -> int:
         app = self._app
