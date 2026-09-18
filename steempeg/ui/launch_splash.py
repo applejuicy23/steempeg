@@ -693,7 +693,13 @@ def launch_splash_is_holding() -> bool:
 def hold_launch_splash_opening(
     *, status: str = "Preparing workspace…", force: bool = False, hold_s: float = 1.0
 ) -> None:
-    """100% + fast spin for ``hold_s``, then close — spinner never waits on QTimer."""
+    """100% + fast spin for ``hold_s``, then close — spinner never waits on QTimer.
+
+    Must close here (before the main shell maps). Leaving the translucent card
+    up over ``showMaximized`` paints a black void behind it and breaks the
+    loading → Preparing workspace handoff. Sunken dash after reveal is fixed
+    by sync glue in ``startup_settle``, not by holding this window open.
+    """
     global _splash
     if (_splash_disabled() and not force) or _splash is None:
         return
@@ -729,6 +735,17 @@ def finish_launch_splash(*, status: str = "Opening…", force: bool = False) -> 
     except RuntimeError:
         pass
     _splash = None
+
+
+def raise_launch_splash() -> None:
+    """Keep Preparing splash above the main shell until settle reveals."""
+    global _splash
+    if _splash is None:
+        return
+    try:
+        _splash.raise_()
+    except RuntimeError:
+        _splash = None
 
 
 def cancel_launch_splash_simulation() -> None:
