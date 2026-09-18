@@ -15,11 +15,9 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 # Failsafe — never leave the shell covered forever.
 STARTUP_SETTLE_TIMEOUT_MS = 4000
-# After maximize: density defer + dock settle tick + Skip screenshot restore (300ms).
-STARTUP_SETTLE_REVEAL_MS = 420
-# Quick/Full: no opaque veil — only a short post-show settle pass (Skip thrash
-# is the crooked-chrome path; Quick/Full flash of "Preparing workspace…" felt
-# unnecessary).
+# After maximize: density + one dash glue under the veil, then reveal.
+STARTUP_SETTLE_REVEAL_MS = 280
+# Quick/Full: no opaque veil — short post-show settle only.
 STARTUP_SETTLE_REVEAL_MS_NO_VEIL = 80
 
 
@@ -43,6 +41,7 @@ def begin_startup_settle(app, *, use_veil: bool = True) -> None:
         return
     app._startup_settle_active = True
     app._startup_settle_use_veil = bool(use_veil)
+    app._startup_dash_glue_grace = False
     app._startup_settle_gen = int(getattr(app, "_startup_settle_gen", 0) or 0) + 1
     gen = app._startup_settle_gen
     if use_veil:
@@ -66,7 +65,7 @@ def kick_startup_settle_after_show(app) -> None:
         return
     _run_startup_settle_pass(app)
     gen = int(getattr(app, "_startup_settle_gen", 0) or 0)
-    # Splash already closed itself after the 1s Preparing spin in hold_launch_splash.
+    # Splash already closed after the 1s Preparing spin in hold_launch_splash.
     reveal_ms = (
         STARTUP_SETTLE_REVEAL_MS
         if getattr(app, "_startup_settle_use_veil", True)
@@ -96,6 +95,22 @@ def _finish_startup_settle(app, gen: int, *, reason: str = "settle") -> None:
             app._restore_library_ui_state()
         except Exception:
             logging.debug("startup settle: library UI restore failed", exc_info=True)
+    # One more glue after density/library restore — last chance before unveil.
+    # Measure with maxHeight lifted so a prior short pin cannot freeze sizeHint.
+    if hasattr(app, "_finalize_startup_dash_geometry"):
+        try:
+            app._finalize_startup_dash_geometry()
+        except Exception:
+            logging.debug(
+                "startup settle: finalize dash geometry failed", exc_info=True
+            )
+    elif hasattr(app, "_settle_portable_like_dash"):
+        try:
+            app._settle_portable_like_dash()
+        except Exception:
+            logging.debug(
+                "startup settle: final portable-like dash glue failed", exc_info=True
+            )
     _reveal_startup_settle_if(app, gen, reason=reason)
 
 
@@ -106,7 +121,18 @@ def _reveal_startup_settle_if(app, gen: int, *, reason: str) -> None:
         return
     app._startup_settle_done = True
     app._startup_settle_active = False
-    app._density_resize_defer_ms = 120
+    # Keep density flush immediate through the grace window so a post-unveil
+    # maximize resize cannot re-sink the dash 120ms later.
+    app._density_resize_defer_ms = 0
+    # Brief grace: Skip screenshot restore stamps Ready ~300ms after show and
+    # can still grow the queue badge after unveil.
+    app._startup_dash_glue_grace = True
+
+    def _end_dash_glue_grace() -> None:
+        app._startup_dash_glue_grace = False
+        app._density_resize_defer_ms = 120
+
+    QTimer.singleShot(350, _end_dash_glue_grace)
     veil = getattr(app, "_startup_settle_veil", None)
     if veil is not None:
         try:
@@ -151,13 +177,12 @@ def _run_startup_settle_pass(app) -> None:
         )
 
         sync_trim_tools_placement(app)
-        # Keep Ready / queue badge painted for the real density.
+        # Ready after layout — queue badge can change dash height.
         if hasattr(app, "update_status_indicator"):
             label = getattr(getattr(app, "ui", None), "label_status", None)
             text = label.text() if label is not None else "Ready"
             if not str(text or "").strip():
                 text = "Ready"
-            # Only re-stamp idle Ready — don't interrupt busy/scan chrome.
             busy = (
                 getattr(app, "_clips_scan_active", False)
                 or getattr(app, "_rendered_scan_active", False)
@@ -166,6 +191,15 @@ def _run_startup_settle_pass(app) -> None:
             )
             if not busy and "Ready" in str(text):
                 app.update_status_indicator(str(text), "ready")
+        # Light glue only — heavy finalize runs once in _finish_startup_settle.
+        if hasattr(app, "_settle_portable_like_dash"):
+            try:
+                app._settle_portable_like_dash()
+            except Exception:
+                logging.debug(
+                    "startup settle: portable-like dash glue failed",
+                    exc_info=True,
+                )
     except Exception:
         logging.debug("startup settle pass failed", exc_info=True)
     veil = getattr(app, "_startup_settle_veil", None)
