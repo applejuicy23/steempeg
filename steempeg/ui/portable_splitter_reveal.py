@@ -68,6 +68,24 @@ def paint_desktop_splitter_handles(app) -> None:
     else:
         _restore_handle_cursors(app, names=_SHELL_SPLITTER_NAMES)
     _hide_queue_handle_for_hover(app)
+    # Theme/layout refresh must not resurrect the dark right seam in FS/theatre.
+    if bool(getattr(app, "is_fullscreen", False)) or bool(
+        getattr(app, "is_theater", False)
+    ):
+        hide = getattr(app, "_hide_right_h_splitter_handle", None)
+        if callable(hide):
+            try:
+                hide()
+            except Exception:
+                pass
+        setter = getattr(app, "_set_splitter_handle_visible", None)
+        if callable(setter):
+            main = getattr(getattr(app, "ui", None), "main_splitter", None)
+            if main is not None:
+                try:
+                    setter(main, False, 1)
+                except Exception:
+                    pass
 
 
 def _hide_queue_handle_for_hover(app) -> None:
@@ -125,12 +143,15 @@ def ensure_right_h_handle_chrome(app) -> None:
     if width <= 0:
         width = 6
     try:
-        splitter.setHandleWidth(width)
         if splitter.count() >= 2:
             handle = splitter.handle(1)
             if handle is not None:
+                handle.setMinimumWidth(0)
+                handle.setMaximumWidth(16777215)
+                handle.setStyleSheet("")
                 handle.setVisible(True)
                 handle.show()
+        splitter.setHandleWidth(width)
     except RuntimeError:
         return
     paint_desktop_splitter_handles(app)
