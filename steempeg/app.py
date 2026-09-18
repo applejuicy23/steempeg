@@ -315,6 +315,66 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.ui.progress_render = bar
         return bar
 
+    def _strip_stock_frame_status_chrome(self, frame) -> None:
+        """Leave only ``render_dashboard`` inside stock ``frame_status``.
+
+        Buttons / progress / status are reparented into the monolith, but the
+        designer rows (old green Ready, empty progress row) stayed above the
+        card and read as a second Ready / sunken chrome on cold start.
+        """
+        if frame is None:
+            return
+        dash = getattr(self, "render_dashboard", None)
+        if dash is None:
+            return
+        lay = frame.layout()
+        if lay is None:
+            return
+        kept = []
+        while lay.count():
+            item = lay.takeAt(0)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is dash:
+                kept.append(w)
+                continue
+            if w is not None:
+                try:
+                    w.hide()
+                    w.setParent(None)
+                    w.deleteLater()
+                except RuntimeError:
+                    pass
+            nested = item.layout()
+            if nested is not None:
+                self._clear_layout_widgets(nested, keep=dash)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        for w in kept:
+            lay.addWidget(w)
+        if lay.indexOf(dash) < 0:
+            lay.addWidget(dash)
+
+    def _clear_layout_widgets(self, layout, *, keep=None) -> None:
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None and w is not keep:
+                try:
+                    w.hide()
+                    w.setParent(None)
+                    w.deleteLater()
+                except RuntimeError:
+                    pass
+            nested = item.layout()
+            if nested is not None:
+                self._clear_layout_widgets(nested, keep=keep)
+
     def __init__(self):
         # 1. LOADING THE INTERFACE
         super().__init__()
@@ -1734,7 +1794,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 status_label.setAlignment(qtc.Qt.AlignRight | qtc.Qt.AlignVCenter)
                 status_label.setMinimumWidth(120)
                 status_label.setMaximumWidth(280)
-                self.ui.label_status.deleteLater()
+                # deleteLater alone leaves the stock green «Ready» painted above
+                # the monolith until the event loop runs — dual Ready on cold start.
+                old_status = self.ui.label_status
+                try:
+                    old_status.hide()
+                    old_status.setParent(None)
+                except RuntimeError:
+                    pass
+                old_status.deleteLater()
                 self.ui.label_status = status_label
                 ready_cluster_layout.addWidget(status_label, 0, qtc.Qt.AlignVCenter)
 
@@ -1799,6 +1867,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 pl.setContentsMargins(0, 0, 0, 0)
                 pl.setSpacing(0)
                 pl.addWidget(self.render_dashboard)
+                # Stock frame_status chrome (summary / empty progress row) must not
+                # sit above the monolith — that was the floating green Ready.
+                self._strip_stock_frame_status_chrome(parent_widget)
 
             if hasattr(self, 'update_status_indicator'):
                 self.update_status_indicator("Ready", "ready")
@@ -4691,11 +4762,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # lerp doesn't thrash queue cards / DWM on every pixel.
         self._apply_responsive_layout_mins(apply_density=False)
         timer = getattr(self, "_density_resize_timer", None)
-        defer_ms = int(getattr(self, "_density_resize_defer_ms", 120) or 120)
-        # While the startup veil is up, keep density flushing immediately so the
-        # post-maximize restyle lands under the cover — not 120ms after unveil.
-        if not getattr(self, "_startup_settle_active", False):
+        # While the startup veil / dash-glue grace is up, keep density flushing
+        # immediately so the post-maximize restyle cannot re-sink the dash.
+        if not getattr(self, "_startup_settle_active", False) and not getattr(
+            self, "_startup_dash_glue_grace", False
+        ):
             self._density_resize_defer_ms = 120
+            defer_ms = 120
+        else:
+            defer_ms = int(getattr(self, "_density_resize_defer_ms", 0) or 0)
         if timer is None:
             from PySide6.QtCore import QTimer
 
@@ -5235,6 +5310,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             RIGHT_PANEL_BOTTOM_INSET,
             RIGHT_PANEL_SIDE_INSET,
         )
+
+        # Fullscreen owns edge-to-edge layout — never re-apply dock gutters here.
+        if bool(getattr(self, "is_fullscreen", False)):
+            self.sync_player_wrap_insets()
+            return
 
         queue_left = bool(hasattr(self, "_queue_on_left") and self._queue_on_left())
         gutter = int(QUEUE_SPLITTER_GUTTER)
