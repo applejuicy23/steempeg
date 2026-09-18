@@ -1452,6 +1452,14 @@ class PlayerMixin:
                 restored_width = 6
             if restored_width <= 0:
                 restored_width = 6
+            handle = self._splitter_handle(self.right_h_splitter, 1)
+            if handle is not None:
+                try:
+                    handle.setMinimumWidth(0)
+                    handle.setMaximumWidth(16777215)
+                    handle.setStyleSheet("")
+                except RuntimeError:
+                    pass
             self.right_h_splitter.setHandleWidth(restored_width)
             restored_visible = getattr(self, '_pre_theater_right_handle_visible', None)
             if restored_visible is None:
@@ -1584,6 +1592,14 @@ class PlayerMixin:
             width = 6
         if visible is None:
             visible = True
+        handle = self._splitter_handle(splitter, 1)
+        if handle is not None:
+            try:
+                handle.setMinimumWidth(0)
+                handle.setMaximumWidth(16777215)
+                handle.setStyleSheet("")
+            except RuntimeError:
+                pass
         splitter.setHandleWidth(width)
         self._set_splitter_handle_visible(splitter, bool(visible))
 
@@ -1593,6 +1609,16 @@ class PlayerMixin:
             return
         self._set_splitter_handle_visible(splitter, False)
         splitter.setHandleWidth(0)
+        # Stylesheet paint can still draw a dark seam when width is 0.
+        handle = self._splitter_handle(splitter, 1)
+        if handle is not None:
+            try:
+                handle.setFixedWidth(0)
+                handle.setStyleSheet(
+                    "background: transparent; border: none; margin: 0px;"
+                )
+            except RuntimeError:
+                pass
 
     def _clamp_queue_panel_for_immersive(self, collapsed: bool) -> None:
         """Collapse queue without hide() so the right_h handle survives Qt layout."""
@@ -1614,6 +1640,18 @@ class PlayerMixin:
                 )
             except Exception:
                 pass
+        # Immersive must stay flush — never leave QUEUE_SPLITTER_GUTTER / Hover air.
+        if collapsed and (
+            bool(getattr(self, "is_fullscreen", False))
+            or bool(getattr(self, "is_theater", False))
+        ):
+            wrap = getattr(self, "right_content_wrap", None)
+            lay = wrap.layout() if wrap is not None else None
+            if lay is not None:
+                try:
+                    lay.setContentsMargins(0, 0, 0, 0)
+                except RuntimeError:
+                    pass
         # Floating hover keeps the panel in the overlay — nothing to clamp in the splitter.
         if hasattr(self, "_queue_hover_is_floating") and self._queue_hover_is_floating():
             return
@@ -1831,11 +1869,28 @@ class PlayerMixin:
             # restore to the old (small) normalGeometry which, with transitions disabled,
             # overrides the setGeometry done in enter_immersive_chrome. Applying it here
             # (after Qt processed the state change) makes the fullscreen size stick.
+            # Windows: must use physical monitor bounds (same path as enter). Qt
+            # setGeometry(logical screen) can leave a ~10px desktop seam on the
+            # right — reads as a dead splitter / Hover strip.
             # Linux: also re-assert WindowFullScreen — setGeometry alone is clamped to
             # the KDE/GNOME work area (panel strip left uncovered).
-            geo = self._immersive_screen_geometry()
-            self.ui.setGeometry(geo)
-            if sys.platform != "win32":
+            if sys.platform == "win32":
+                try:
+                    from steempeg.ui.player.immersive_chrome import (
+                        win32_monitor_bounds,
+                        win32_set_bounds,
+                    )
+
+                    bounds = win32_monitor_bounds(self.ui)
+                    if bounds is not None:
+                        win32_set_bounds(self.ui, *bounds)
+                    else:
+                        self.ui.setGeometry(self._immersive_screen_geometry())
+                except Exception:
+                    self.ui.setGeometry(self._immersive_screen_geometry())
+            else:
+                geo = self._immersive_screen_geometry()
+                self.ui.setGeometry(geo)
                 try:
                     if not (self.ui.windowState() & Qt.WindowState.WindowFullScreen):
                         self.ui.showFullScreen()
