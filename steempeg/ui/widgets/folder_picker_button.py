@@ -1,9 +1,15 @@
 """Composite Choose Folder button with a combobox-style side that opens a panel."""
 from steempeg.ui import design_tokens as tok
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
 
 from steempeg.ui.ui_density import COMFORT, UiDensity
+
+_BUSY_TICK_MS = 40
+_BUSY_DEG_PER_TICK = 18
+_BUSY_ARC_COLOR = QColor("#b29ae7")
+_BUSY_TRACK_COLOR = QColor(80, 80, 80, 160)
 
 
 def _folder_style(dense: UiDensity) -> str:
@@ -69,6 +75,74 @@ def _folder_style(dense: UiDensity) -> str:
 """
 
 
+class _FolderPickerAddButton(QPushButton):
+    """``+`` chip that paints a busy arc while the library is scanning."""
+
+    def __init__(self, parent=None):
+        super().__init__("+", parent)
+        self.setObjectName("FolderPickerAdd")
+        self._busy = False
+        self._angle = 0
+        self._spin = QTimer(self)
+        self._spin.setInterval(_BUSY_TICK_MS)
+        self._spin.timeout.connect(self._on_tick)
+
+    def set_busy(self, busy: bool) -> None:
+        busy = bool(busy)
+        if self._busy == busy:
+            return
+        self._busy = busy
+        if busy:
+            self.setText("")
+            self.setToolTip("Loading library folders…")
+            if not self._spin.isActive():
+                self._spin.start()
+        else:
+            self._spin.stop()
+            self._angle = 0
+            self.setText("+")
+            self.setToolTip("Manage clips folders")
+        self.update()
+
+    def is_busy(self) -> bool:
+        return bool(self._busy)
+
+    def _on_tick(self) -> None:
+        if not self._busy:
+            self._spin.stop()
+            return
+        self._angle = (self._angle + _BUSY_DEG_PER_TICK) % 360
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self._busy:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = min(self.width(), self.height())
+        pad = max(4.0, side * 0.22)
+        rect = QRectF(
+            (self.width() - side) / 2.0 + pad,
+            (self.height() - side) / 2.0 + pad,
+            side - 2.0 * pad,
+            side - 2.0 * pad,
+        )
+        track = QPen(_BUSY_TRACK_COLOR)
+        track.setWidthF(2.2)
+        track.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(track)
+        painter.drawEllipse(rect)
+
+        arc = QPen(_BUSY_ARC_COLOR)
+        arc.setWidthF(2.2)
+        arc.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arc)
+        # Qt arcs: 16ths of a degree, 0 = 3 o'clock, counter-clockwise.
+        painter.drawArc(rect, int((90 - self._angle) * 16), int(-110 * 16))
+        painter.end()
+
+
 class FolderPickerButton(QWidget):
     """Choose Folder… with a combobox-style + cell that opens the folders panel."""
 
@@ -86,8 +160,7 @@ class FolderPickerButton(QWidget):
         self.main_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.main_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.add_btn = QPushButton("+")
-        self.add_btn.setObjectName("FolderPickerAdd")
+        self.add_btn = _FolderPickerAddButton()
         self.add_btn.setToolTip("Manage clips folders")
         self.add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
@@ -123,6 +196,11 @@ class FolderPickerButton(QWidget):
         self._add_visible = bool(visible)
         self.add_btn.setVisible(self._add_visible)
         self._update_main_radius()
+
+    def set_busy(self, busy: bool) -> None:
+        """Spin the + chip while the clips library is loading."""
+        if hasattr(self.add_btn, "set_busy"):
+            self.add_btn.set_busy(bool(busy))
 
     def set_folder_label(self, text, tooltip=""):
         self.main_btn.setText(text)
