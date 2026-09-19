@@ -1344,8 +1344,14 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             w = self.health_layout.itemAt(i).widget()
             if not w or w.property("health_level") != ClipHealth.CURED.value:
                 continue
+            was_hidden = w.isHidden()
             w.setVisible(has_cured)
             if not has_cured:
+                # Keep auto-checked while unused so cured rows aren't excluded
+                # the moment the first salvage lands.
+                w.setChecked(True)
+            elif was_hidden:
+                # First time the chip appears — opt-in so newly cured clips stay visible.
                 w.setChecked(True)
             break
 
