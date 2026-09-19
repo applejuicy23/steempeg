@@ -1718,6 +1718,13 @@ class LibraryMixin:
             if row_path and os.path.normpath(row_path) == norm:
                 item.setData(_CLIP_CURED_ROLE, True)
                 break
+        # Keep Filters → Cured chip in sync (hidden until the first cured row).
+        menu = getattr(self, "filter_menu", None)
+        if menu is not None and hasattr(menu, "_sync_cured_health_pill"):
+            try:
+                menu._sync_cured_health_pill()
+            except Exception:
+                pass
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
         if hasattr(self, "update_clip_health_button"):
@@ -4045,6 +4052,18 @@ class LibraryMixin:
                     except RuntimeError:
                         pass
                     setattr(self, attr, None)
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "set_busy"):
+            try:
+                # Quiet top-ups stay unlocked — don't spin the + for those.
+                picker_busy = bool(busy) and not getattr(
+                    self, "_scan_append_new_only", False
+                )
+                if not picker_busy and getattr(self, "_progressive_clips_worker", None) is not None:
+                    picker_busy = True
+                picker.set_busy(picker_busy)
+            except RuntimeError:
+                pass
         try:
             from steempeg.ui.portable.chrome import sync_portable_library_scan_badge
 
@@ -4453,6 +4472,13 @@ class LibraryMixin:
             worker.requestInterruption()
             worker.wait(2000)
         self._progressive_clips_worker = None
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "set_busy"):
+            try:
+                if not getattr(self, "_clips_scan_active", False):
+                    picker.set_busy(False)
+            except RuntimeError:
+                pass
 
     def start_progressive_clips_library(self) -> bool:
         """Paint Clips placeholders fast; materialize cards as the viewport scrolls."""
@@ -4523,6 +4549,12 @@ class LibraryMixin:
         worker.discover_failed.connect(self._on_progressive_clips_failed)
         worker.start()
         logging.info("Startup library scan: Progressive (viewport-lazy Clips)")
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "set_busy"):
+            try:
+                picker.set_busy(True)
+            except RuntimeError:
+                pass
         return True
 
     def _on_progressive_clips_batch(self, rows) -> None:
@@ -4564,6 +4596,12 @@ class LibraryMixin:
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "set_busy"):
+            try:
+                picker.set_busy(False)
+            except RuntimeError:
+                pass
         if not getattr(self, "_clips_progressive_active", False):
             return
         table = getattr(getattr(self, "ui", None), "table_clips", None)
@@ -4598,6 +4636,12 @@ class LibraryMixin:
 
     def _on_progressive_clips_failed(self, message: str) -> None:
         self._progressive_clips_worker = None
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None and hasattr(picker, "set_busy"):
+            try:
+                picker.set_busy(False)
+            except RuntimeError:
+                pass
         logging.warning("Progressive Clips discover failed: %s", message)
         if getattr(self, "_startup_library_scan_active", False):
             self._startup_library_scan_active = False
@@ -5251,6 +5295,19 @@ class LibraryMixin:
 
         for row in range(self.ui.table_clips.rowCount()):
             self._append_grid_card_for_row(row)
+
+        # Progressive mode only plants empty placeholders — rematerialize the
+        # viewport or a mid-session rebuild (e.g. DEAD→Cured) leaves the grid blank
+        # until the user hits Refresh.
+        if getattr(self, "_clips_progressive_active", False):
+            self._clips_scroll_active = False
+            try:
+                self.grid_clips.doItemsLayout()
+            except Exception:
+                pass
+            self._clips_refresh_viewport()
+            QTimer.singleShot(0, self._clips_refresh_viewport)
+            QTimer.singleShot(50, self._clips_refresh_viewport)
 
         self.sync_grid_from_table_selection()
         QTimer.singleShot(0, self.sync_clip_card_edge_roles)
