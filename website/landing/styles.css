@@ -6,7 +6,7 @@
   --line: #2a2a2e;
   --accent: #b29ae7;
   --accent-deep: #6b5a8e;
-  --font-display: "Syne", system-ui, sans-serif;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
   --font-body: "Outfit", system-ui, sans-serif;
   --max: 1080px;
 }
@@ -75,9 +75,9 @@ main,
   gap: 0.65rem;
   color: var(--ink);
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 1.15rem;
-  letter-spacing: -0.02em;
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: -0.03em;
   text-decoration: none;
 }
 
@@ -117,10 +117,10 @@ main,
 .hero h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: clamp(3.2rem, 10vw, 5.5rem);
-  letter-spacing: -0.045em;
-  line-height: 0.95;
+  font-weight: 700;
+  font-size: clamp(2.75rem, 7.5vw, 4.5rem);
+  letter-spacing: -0.04em;
+  line-height: 1.02;
 }
 
 .lede {
