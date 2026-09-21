@@ -1310,7 +1310,9 @@ class SettingsDialog(SteempegDialog):
         a.addWidget(
             self._hint("Off = always open Clips Manager. On = restore Clips / Rendered.")
         )
-        self._chk_allow_list = SteempegCheckBox("Restore classic List view (Clips / Rendered)")
+        self._chk_allow_list = SteempegCheckBox(
+            "Restore classic List view (Clips / Rendered / Screenshots)"
+        )
         self._chk_allow_list.setChecked(load_library_allow_list_view(settings))
         a.addWidget(self._chk_allow_list)
         a.addWidget(
