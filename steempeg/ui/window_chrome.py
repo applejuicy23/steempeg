@@ -53,6 +53,7 @@ from steempeg.ui.icon_assets import (
     UPDATE_ARROWS_TICK_MS,
     title_bar_dev_icons,
     title_bar_info_icons,
+    title_bar_kofi_icons,
     title_bar_settings_icons,
     title_bar_update_pixmap,
 )
@@ -544,6 +545,7 @@ class SteempegTitleBar(QWidget):
     settings_requested = Signal()
     check_updates_requested = Signal()
     dev_requested = Signal()
+    kofi_requested = Signal()
     update_available_clicked = Signal()
     hide_update_available_requested = Signal()
 
@@ -746,6 +748,15 @@ class SteempegTitleBar(QWidget):
         self.btn_title_dev.clicked.connect(self.dev_requested.emit)
         self.btn_title_dev.hide()
         root.addWidget(self.btn_title_dev, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Always-on tip jar — sits just left of the traffic lights (after Dev when on).
+        self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
+        self.btn_title_kofi = _shell_icon_btn(
+            "TitleBarKofi", self._kofi_icon_idle, "Support on Ko-fi"
+        )
+        self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
+        root.addSpacing(4)
+        root.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addSpacing(8)
 
         controls = QHBoxLayout()
@@ -804,6 +815,11 @@ class SteempegTitleBar(QWidget):
                 getattr(self, "_dev_icon_idle", None),
                 getattr(self, "_dev_icon_hot", None),
             ),
+            (
+                getattr(self, "btn_title_kofi", None),
+                getattr(self, "_kofi_icon_idle", None),
+                getattr(self, "_kofi_icon_hot", None),
+            ),
         )
         for btn, idle, hot in pairs:
             if btn is None or watched is not btn or idle is None or hot is None:
@@ -837,6 +853,10 @@ class SteempegTitleBar(QWidget):
             (
                 getattr(self, "btn_title_dev", None),
                 getattr(self, "_dev_icon_idle", None),
+            ),
+            (
+                getattr(self, "btn_title_kofi", None),
+                getattr(self, "_kofi_icon_idle", None),
             ),
         )
         for btn, idle in pairs:
@@ -977,6 +997,7 @@ class SteempegTitleBar(QWidget):
             QPushButton#TitleBarAboutInfo,
             QPushButton#TitleBarSettings,
             QPushButton#TitleBarDev,
+            QPushButton#TitleBarKofi,
             QPushButton#TitleBarCheckUpdates {{
                 background: transparent;
                 border: none;
@@ -986,13 +1007,15 @@ class SteempegTitleBar(QWidget):
             }}
             QPushButton#TitleBarAboutInfo:hover,
             QPushButton#TitleBarSettings:hover,
-            QPushButton#TitleBarDev:hover {{
+            QPushButton#TitleBarDev:hover,
+            QPushButton#TitleBarKofi:hover {{
                 background-color: rgba(255, 255, 255, 0.08);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
             QPushButton#TitleBarAboutInfo:pressed,
             QPushButton#TitleBarSettings:pressed,
-            QPushButton#TitleBarDev:pressed {{
+            QPushButton#TitleBarDev:pressed,
+            QPushButton#TitleBarKofi:pressed {{
                 background-color: rgba(255, 255, 255, 0.12);
                 border-radius: {getattr(self, "_shell_hit_radius", 11)}px;
             }}
