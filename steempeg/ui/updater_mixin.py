@@ -204,6 +204,8 @@ class UpdaterMixin:
             tb.check_updates_requested.connect(self.check_for_updates)
         if hasattr(tb, "dev_requested"):
             tb.dev_requested.connect(self.show_dev_dialog)
+        if hasattr(tb, "kofi_requested"):
+            tb.kofi_requested.connect(self.show_kofi_dialog)
         if hasattr(tb, "update_available_clicked"):
             tb.update_available_clicked.connect(self.check_for_updates)
         if hasattr(tb, "hide_update_available_requested"):
