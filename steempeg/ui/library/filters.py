@@ -1728,7 +1728,20 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             if g_item:
                 name = g_item.text().strip()
                 if name not in unique_games:
-                    unique_games[name] = g_item.icon()
+                    icon = g_item.icon()
+                    # Progressive used to leave null table icons — resolve from
+                    # local Steam icon cache so filter pills show logos.
+                    if icon.isNull() and hasattr(self.app, "get_game_icon"):
+                        app_id = None
+                        if hasattr(self.app, "_app_id_for_clip_path"):
+                            app_id = self.app._app_id_for_clip_path(
+                                g_item.data(Qt.UserRole)
+                            )
+                        if app_id:
+                            icon = self.app.get_game_icon(
+                                app_id, allow_download=False
+                            )
+                    unique_games[name] = icon
 
         full_stats = self._compute_stats()
 
@@ -1903,14 +1916,16 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         # Wipe session + disk filter memory (do not re-save an "all on" active filter).
         self.app.saved_filter_state = None
         if hasattr(self.app, "reapply_saved_library_filters"):
-            self.app.reapply_saved_library_filters()
+            self.app.reapply_saved_library_filters(scroll_top=True)
         else:
             table = self.app.ui.table_clips
             table.setUpdatesEnabled(False)
             for row in range(table.rowCount()):
                 table.setRowHidden(row, False)
             table.setUpdatesEnabled(True)
-            if hasattr(self.app, "fast_sync_grid"):
+            if hasattr(self.app, "apply_sorting"):
+                self.app.apply_sorting()
+            elif hasattr(self.app, "fast_sync_grid"):
                 self.app.fast_sync_grid()
             if hasattr(self.app, "_update_library_count_label"):
                 self.app._update_library_count_label()
@@ -2003,9 +2018,13 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                     if t_sec > max_time: show = False
 
             if show and r_dur and not skip_duration:
-                sec = self._parse_row_duration(r_dur.text())
-                if sec < min_dur: show = False
-                if sec > max_dur: show = False
+                dur_text = (r_dur.text() or "").strip()
+                if dur_text and dur_text not in ("--:--", "—", "--"):
+                    sec = self._parse_row_duration(dur_text)
+                    if sec < min_dur:
+                        show = False
+                    if sec > max_dur:
+                        show = False
 
             if show: count += 1
 
@@ -2314,9 +2333,13 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                         if r_time > max_time: show = False
 
                 if show and item_dur and not skip_duration:
-                    r_dur = self._parse_row_duration(item_dur.text())
-                    if r_dur < min_dur: show = False
-                    if r_dur > max_dur: show = False
+                    dur_text = (item_dur.text() or "").strip()
+                    if dur_text and dur_text not in ("--:--", "—", "--"):
+                        r_dur = self._parse_row_duration(dur_text)
+                        if r_dur < min_dur:
+                            show = False
+                        if r_dur > max_dur:
+                            show = False
 
                 table.setRowHidden(row, not show)
                 if show: visible_count += 1
@@ -2327,9 +2350,15 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         table.setUpdatesEnabled(True)
         self.hide()
         
-        # 5. THE MOST IMPORTANT PART: REBUILD THE GRID FROM SCRATCH TO KEEP CUSTOM WIDGETS!
-        if hasattr(self.app, 'fast_sync_grid'):
+        # Re-sort full table (Default / current combo), then sync grid hide flags.
+        if hasattr(self.app, "_restore_library_after_filter_change"):
+            self.app._restore_library_after_filter_change(scroll_top=False)
+        elif hasattr(self.app, "apply_sorting"):
+            self.app.apply_sorting()
+        elif hasattr(self.app, 'fast_sync_grid'):
             self.app.fast_sync_grid()
+            if hasattr(self.app, "_sync_progressive_grid_filter_visibility"):
+                self.app._sync_progressive_grid_filter_visibility()
         # Keep the library header • N Clips on the filtered size (not rowCount).
         if hasattr(self.app, '_update_library_count_label'):
             self.app._update_library_count_label()
