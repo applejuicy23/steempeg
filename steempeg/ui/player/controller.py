@@ -1155,8 +1155,13 @@ class PlayerMixin:
         self.ui.btn_play.setIcon(QIcon(icon_path))
 
     # VIDEO PLAYER CONTROLS
-    def toggle_play(self):
-        """ Toggles Play/Pause state in MPV and updates the button icon. """
+    def toggle_play(self, *args, pulse: bool = False):
+        """ Toggles Play/Pause state in MPV and updates the button icon.
+
+        ``*args`` absorbs QPushButton.clicked(bool) so the checked flag is not
+        mistaken for ``pulse``.
+        """
+        del args
         if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled():
             return
         if not getattr(self, 'player', None):
@@ -1186,10 +1191,201 @@ class PlayerMixin:
             else:
                 self._restart_from_eof = False
                 self.player.pause = True
-            self._sync_play_button_icon(paused=self.player.pause)
+            paused = bool(self.player.pause)
+            self._sync_play_button_icon(paused=paused)
+            if pulse:
+                self._pulse_play_pause_on_surface(paused=paused)
         except Exception as exc:
             logging.warning("toggle_play ignored (mpv dead?): %s", exc)
             self._discard_dead_linux_mpv()
+
+    def _pulse_play_pause_on_surface(self, *, paused: bool) -> None:
+        """Brief YouTube-style circle with play/pause glyph over the video."""
+        overlay = getattr(self, "_play_pause_pulse", None)
+        if overlay is None:
+            from steempeg.ui.player.play_pause_pulse import PlayPausePulseOverlay
+
+            overlay = PlayPausePulseOverlay(parent=None)
+            self._play_pause_pulse = overlay
+        anchor = getattr(self, "mpv_wrapper", None) or getattr(
+            getattr(self, "ui", None), "video_container", None
+        )
+        try:
+            newly_mapped = bool(overlay.pulse(anchor, paused=paused))
+        except Exception:
+            logging.debug("play/pause pulse failed", exc_info=True)
+            return
+        # ShowWindow on a fresh Tool HWND often synthesizes a second LMB — that
+        # immediately re-pauses after play (feels like "play needs a double click").
+        if newly_mapped:
+            self._video_surface_ignore_until = time.monotonic() + 0.025
+
+    def _on_video_surface_click(self) -> None:
+        """LMB on the picture → same as footer Play/Pause, with pulse feedback.
+
+        Rapid clicks are allowed: each one toggles playback and **interrupts** the
+        pulse so the new play/pause glyph restarts immediately. A tiny debounce
+        only collapses Win32 duplicate MSG deliveries for the *same* physical click.
+        """
+        if getattr(self, "_is_closing", False):
+            return
+        now = time.monotonic()
+        ignore_until = float(getattr(self, "_video_surface_ignore_until", 0.0) or 0.0)
+        if now < ignore_until:
+            return
+        last = float(getattr(self, "_video_surface_click_at", 0.0) or 0.0)
+        # ~3ms: same-tick double MSG only — not a human-perceptible delay.
+        if now - last < 0.003:
+            return
+        self._video_surface_click_at = now
+        # Don't steal clicks while a modal / popup is up.
+        try:
+            if QApplication.activeModalWidget() is not None:
+                return
+            if QApplication.activePopupWidget() is not None:
+                return
+        except Exception:
+            pass
+        if getattr(self, "is_fullscreen", False) and hasattr(
+            self, "wake_up_fullscreen_controls"
+        ):
+            self.wake_up_fullscreen_controls()
+        self.toggle_play(pulse=True)
+
+    def install_video_surface_click_handler(self) -> None:
+        """Catch LMB on the video surface → play/pause pulse.
+
+        Windows: embedded mpv ``wid=`` HWND — ``WM_LBUTTONUP`` via native filter only
+        (a translucent Qt sibling painted black; Qt mouse on the embed is unreliable).
+        Linux: Qt event filter on ``mpv_screen``.
+        """
+        if getattr(self, "_video_surface_click_handler_installed", False):
+            return
+        self._video_surface_click_handler_installed = True
+
+        if sys.platform == "win32":
+            self._install_video_surface_native_click_filter()
+            screen = getattr(self, "mpv_screen", None)
+            if screen is not None:
+                screen.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+
+        class _VideoSurfaceClickFilter(QObject):
+            def __init__(self, app):
+                super().__init__(app)
+                self._app = app
+
+            def eventFilter(self, obj, event):  # noqa: N802
+                if event.type() != QEvent.Type.MouseButtonRelease:
+                    return False
+                if event.button() != Qt.MouseButton.LeftButton:
+                    return False
+                if obj is not getattr(self._app, "mpv_screen", None):
+                    return False
+                self._app._on_video_surface_click()
+                return True
+
+        filt = _VideoSurfaceClickFilter(self)
+        self._video_surface_click_filter = filt
+        screen = getattr(self, "mpv_screen", None)
+        if screen is not None:
+            screen.installEventFilter(filt)
+            screen.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _install_video_surface_native_click_filter(self) -> None:
+        """Win32: LMB up on the embed (or pulse tool) HWND → play/pause."""
+        if getattr(self, "_video_surface_native_click_filter", None) is not None:
+            return
+        try:
+            from PySide6.QtCore import QAbstractNativeEventFilter
+        except ImportError:
+            return
+
+        from steempeg.ui.window_chrome import _MSG, _native_event_type_bytes
+
+        _WM_LBUTTONDOWN = 0x0201
+        _WM_LBUTTONUP = 0x0202
+
+        class _MpvSurfaceClickNativeFilter(QAbstractNativeEventFilter):
+            def __init__(self, app):
+                super().__init__()
+                self._app = app
+                self._armed = False
+
+            def _mpv_hwnd(self) -> int:
+                screen = getattr(self._app, "mpv_screen", None)
+                if screen is None:
+                    return 0
+                try:
+                    return int(screen.winId()) or 0
+                except RuntimeError:
+                    return 0
+
+            def _pulse_hwnd(self) -> int:
+                pulse = getattr(self._app, "_play_pause_pulse", None)
+                if pulse is None:
+                    return 0
+                try:
+                    if not pulse.isVisible():
+                        return 0
+                    return int(pulse.winId()) or 0
+                except RuntimeError:
+                    return 0
+
+            def _is_surface_click_hwnd(self, hwnd: int) -> bool:
+                """True only for the embed / pulse — never HUD buttons over the picture."""
+                if not hwnd:
+                    return False
+                if hwnd == self._mpv_hwnd():
+                    return True
+                # Fallback if pulse lost WS_EX_TRANSPARENT and ate the click.
+                if hwnd == self._pulse_hwnd():
+                    return True
+                return False
+
+            def nativeEventFilter(self, eventType, message):  # noqa: N802
+                # One channel only — handling both generic + dispatcher double-fires
+                # toggle (play then immediate pause).
+                if _native_event_type_bytes(eventType) != b"windows_generic_MSG":
+                    return False
+                try:
+                    addr = (
+                        int(message)
+                        if not hasattr(message, "__int__")
+                        else int(message.__int__())
+                    )
+                    msg = _MSG.from_address(addr)
+                except Exception:
+                    return False
+
+                hwnd = int(msg.hwnd) if msg.hwnd else 0
+
+                if msg.message == _WM_LBUTTONDOWN:
+                    # Must be the video HWND itself. Point-in-video was wrong: in
+                    # fullscreen the HUD sits over the picture, so every button
+                    # click (and fullscreen enter/exit) also toggled play/pause.
+                    self._armed = self._is_surface_click_hwnd(hwnd)
+                    return False
+                if msg.message != _WM_LBUTTONUP:
+                    return False
+                if not self._armed:
+                    return False
+                self._armed = False
+                if not self._is_surface_click_hwnd(hwnd):
+                    return False
+
+                app = self._app
+                if getattr(app, "_is_closing", False):
+                    return False
+                # Defer so we don't re-enter Win32 dispatch from inside the filter.
+                QTimer.singleShot(0, app._on_video_surface_click)
+                return False
+
+        native = _MpvSurfaceClickNativeFilter(self)
+        self._video_surface_native_click_filter = native
+        app = QApplication.instance()
+        if app is not None:
+            app.installNativeEventFilter(native)
                 
     def set_vlc_volume(self, value):
         """Pass volume to MPV with a perceptual curve (slider may exceed 100% when boost is on)."""
@@ -3492,6 +3688,15 @@ class PlayerMixin:
         """Debounce rendered-file preview so rapid grid clicks don't wedge MPV."""
         if not file_path:
             return
+        # Paint % immediately (debounce still delays MPV) — same energy as Clips.
+        if hasattr(self, "set_clip_open_loading"):
+            self.set_clip_open_loading(file_path, percent=12)
+            grid = getattr(self, "grid_rendered", None)
+            if grid is not None:
+                try:
+                    grid.viewport().repaint()
+                except RuntimeError:
+                    pass
         if not hasattr(self, "_rendered_play_timer"):
             self._rendered_play_timer = QTimer(self.ui)
             self._rendered_play_timer.setSingleShot(True)
@@ -3522,6 +3727,8 @@ class PlayerMixin:
             )
             self._preview_clip_path = file_path
             self._rendered_media_path = file_path
+            if hasattr(self, "clear_clip_open_loading"):
+                self.clear_clip_open_loading()
             return
 
         if hasattr(self, "get_rendered_health_report"):
@@ -3532,6 +3739,8 @@ class PlayerMixin:
                     file_path,
                     report.issues,
                 )
+                if hasattr(self, "clear_clip_open_loading"):
+                    self.clear_clip_open_loading()
                 self._preview_clip_path = file_path
                 self._rendered_media_path = file_path
                 self._active_play_media_path = None
@@ -3583,6 +3792,9 @@ class PlayerMixin:
             canvas.rendered_media_path = file_path
             if hasattr(self, "cache_dir"):
                 canvas._markers_cache_dir = self.cache_dir
+                sniper = getattr(canvas, "sniper", None)
+                if sniper is not None:
+                    sniper.cache_dir = self.cache_dir
                 sidecar_entries = load_markers_sidecar(self.cache_dir, file_path)
                 canvas.markers.extend(markers_to_canvas(sidecar_entries))
             if hasattr(canvas, "notify_markers_changed"):
@@ -3613,11 +3825,19 @@ class PlayerMixin:
         self._playback_stall_since = None
         self._ignore_playback_stall(0.35)
 
+        # Open-% on the Rendered card (DASH remux path doesn't run for flat MP4).
+        if hasattr(self, "set_clip_open_loading"):
+            self.set_clip_open_loading(file_path, percent=28)
+        if hasattr(self, "_nudge_clip_open_loading"):
+            self._nudge_clip_open_loading(48)
+
         # Pre-seed timeline from probed file length — never trim/source sidecar guesses.
         seed_dur = probe_media_duration_sec(file_path)
         if is_sane_media_duration(seed_dur):
             self._apply_playback_duration(float(seed_dur))
             self._rendered_duration_cache = (os.path.normpath(file_path), float(seed_dur))
+            if hasattr(self, "_nudge_clip_open_loading"):
+                self._nudge_clip_open_loading(60)
 
         try:
             self._ensure_linux_mpv_vo()
@@ -3625,6 +3845,8 @@ class PlayerMixin:
             self.player.pause = False
         except Exception as exc:
             logging.error("MPV play file failed for %s: %s", abs_path, exc)
+            if hasattr(self, "clear_clip_open_loading"):
+                self.clear_clip_open_loading()
             self._clear_preview_switch_gates()
             return
 
@@ -3639,6 +3861,9 @@ class PlayerMixin:
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             self.custom_timeline.canvas.playback_speed = float(getattr(self.player, "speed", 1.0) or 1.0)
 
+        self._clip_open_play_t0 = time.time()
+        if hasattr(self, "_nudge_clip_open_loading"):
+            self._nudge_clip_open_loading(70)
         self._first_frame_deadline = time.time() + 0.6
         QTimer.singleShot(30, self._reveal_video_when_ready)
         # Soft finish + hard watchdog — rendered path previously lacked both, so a
@@ -3772,6 +3997,18 @@ class PlayerMixin:
                         card.set_loading(False)
             except RuntimeError:
                 pass
+        grid_r = getattr(self, "grid_rendered", None)
+        if grid_r is not None:
+            try:
+                for i in range(grid_r.count()):
+                    item = grid_r.item(i)
+                    if item is None:
+                        continue
+                    card = grid_r.itemWidget(item)
+                    if card is not None and hasattr(card, "set_loading"):
+                        card.set_loading(False)
+            except RuntimeError:
+                pass
         panel = getattr(self, "render_queue_panel", None)
         if panel is not None:
             for card in getattr(panel, "_card_widgets", None) or ():
@@ -3820,7 +4057,7 @@ class PlayerMixin:
     def _attach_library_open_loading_host(
         self, clip_path: str | None, *, percent: int | None, hosts: list
     ) -> None:
-        """Ensure the Clips Manager ClipCard for ``clip_path`` is a loading host."""
+        """Ensure the Clips / Rendered ClipCard for ``clip_path`` is a loading host."""
         key = self._norm_clip_path_key(clip_path)
         if not key:
             return
@@ -3833,30 +4070,31 @@ class PlayerMixin:
                     return
             except RuntimeError:
                 continue
-        grid = getattr(self, "grid_clips", None)
-        if grid is None:
-            return
         pct = 0 if percent is None else percent
         # Prefer current progress if the open is mid-flight.
         last = int(getattr(self, "_clip_open_load_pct", -1) or -1)
         if last >= 0:
             pct = last
-        try:
-            for i in range(grid.count()):
-                item = grid.item(i)
-                if item is None:
-                    continue
-                path = item.data(Qt.UserRole + 1)
-                if self._norm_clip_path_key(path) != key:
-                    continue
-                card = grid.itemWidget(item)
-                if card is not None and hasattr(card, "set_loading"):
-                    card.set_loading(True, percent=pct)
-                    if card not in hosts:
-                        hosts.insert(0, card)
-                break
-        except RuntimeError:
-            pass
+        for grid_name in ("grid_clips", "grid_rendered"):
+            grid = getattr(self, grid_name, None)
+            if grid is None:
+                continue
+            try:
+                for i in range(grid.count()):
+                    item = grid.item(i)
+                    if item is None:
+                        continue
+                    path = item.data(Qt.UserRole + 1)
+                    if self._norm_clip_path_key(path) != key:
+                        continue
+                    card = grid.itemWidget(item)
+                    if card is not None and hasattr(card, "set_loading"):
+                        card.set_loading(True, percent=pct)
+                        if card not in hosts:
+                            hosts.insert(0, card)
+                    return
+            except RuntimeError:
+                pass
 
     def _attach_queue_open_loading_hosts(
         self, jid: str, *, percent: int | None, hosts: list
@@ -3974,8 +4212,10 @@ class PlayerMixin:
             self._clip_open_loading_hosts = alive or None
             return
         # Fallback: full scan (hosts unset / rebuilt mid-open).
-        grid = getattr(self, "grid_clips", None)
-        if grid is not None:
+        for grid_name in ("grid_clips", "grid_rendered"):
+            grid = getattr(self, grid_name, None)
+            if grid is None:
+                continue
             try:
                 for i in range(grid.count()):
                     item = grid.item(i)
@@ -5141,6 +5381,9 @@ class PlayerMixin:
 
         if hasattr(self, "cache_dir") and self.cache_dir:
             canvas._markers_cache_dir = self.cache_dir
+            sniper = getattr(canvas, "sniper", None)
+            if sniper is not None:
+                sniper.cache_dir = self.cache_dir
             ok = upsert_user_marker(
                 self.cache_dir,
                 internal_marker,
