@@ -713,6 +713,38 @@ class ClipCard(qtw.QWidget):
         else:
             lbl.setText(raw)
 
+    def set_title(self, text: str) -> None:
+        """Update the game-name marquee without rebuilding the card."""
+        lbl = getattr(self, "title_lbl", None)
+        if lbl is None:
+            return
+        lbl.setText((text or "").strip())
+
+    def set_game_icon(self, icon_path: str, *, force_circle: bool = False) -> None:
+        """Swap the corner game logo without rebuilding the card."""
+        lbl = getattr(self, "icon_label", None)
+        if lbl is None:
+            return
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_shape import get_icon_shape, shaped_game_icon_pixmap
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE
+        from steempeg.ui.icon_utils import apply_square_icon
+
+        icon_px = getattr(getattr(self, "_spec", None), "icon_px", 32) or 32
+        pix_path = icon_path if icon_path and os.path.exists(icon_path) else get_resource_path(
+            "unknown_icon.png"
+        )
+        use_force_circle = bool(force_circle) or (
+            pix_path and os.path.basename(pix_path).lower() == "unknown_icon.png"
+        )
+        shape = ICON_SHAPE_CIRCLE if use_force_circle else get_icon_shape()
+        if pix_path and os.path.exists(pix_path):
+            src = qtg.QPixmap(pix_path)
+            shaped = shaped_game_icon_pixmap(src, icon_px, shape) if not src.isNull() else None
+            apply_square_icon(lbl, shaped, icon_px)
+        else:
+            apply_square_icon(lbl, None, icon_px)
+
     def set_unavailable(self, *, dead: bool | None = None, no_preview: bool | None = None) -> None:
         """Dim dead / empty-thumb cards without relying on Qt disabled look."""
         if dead is not None:
