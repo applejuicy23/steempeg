@@ -1,8 +1,11 @@
 """Background worker threads that produce video thumbnails.
 
 PreviewSniperWorker decodes single DASH chunks with PyAV on demand to feed the
-timeline's hover preview, emitting each frame as a QPixmap. ThumbnailBatchThread
-shells out to ffmpeg once per clip to render the full strip of timeline thumbnails.
+timeline's hover preview. After the tip is shown, a tip-sized JPEG is written
+under ``cache/timeline_previews/`` so a revisit skips PyAV. (Full source-res
+encode on the decode path was too expensive — +20–60 ms on first hit.)
+ThumbnailBatchThread shells out to ffmpeg once per clip to render the full
+strip of timeline thumbnails.
 """
 import glob
 import hashlib
@@ -18,11 +21,12 @@ import xml.etree.ElementTree as ET
 
 import av
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from steempeg.core.rendered_media import resolve_ffmpeg_exe
 from steempeg.infra.logging import ffmpeg_cli_loglevel
+from steempeg.infra import timeline_preview_cache as tpc
 
 _log = logging.getLogger(__name__)
 
@@ -72,6 +76,27 @@ def _ensure_thumb_dir(path: str) -> None:
         except OSError:
             shutil.rmtree(path, ignore_errors=True)
     os.makedirs(path, exist_ok=True)
+
+
+def _sniper_pixmap_from_qimage(qimg: QImage) -> QPixmap | None:
+    if qimg is None or qimg.isNull():
+        return None
+    if qimg.width() != _SNIPER_W or qimg.height() != _SNIPER_H:
+        qimg = qimg.scaled(
+            _SNIPER_W,
+            _SNIPER_H,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    pm = QPixmap.fromImage(qimg)
+    return pm if not pm.isNull() else None
+
+
+def _sniper_pixmap_from_jpeg_bytes(data: bytes) -> QPixmap | None:
+    if not data:
+        return None
+    qimg = QImage.fromData(data, "JPEG")
+    return _sniper_pixmap_from_qimage(qimg)
 
 
 def _sniper_pixmap_from_frame(frame) -> QPixmap | None:
@@ -144,6 +169,8 @@ class PreviewSniperWorker(QThread):
         # switch (_decode_gen bump).  A DASH init segment is typically 1–4 KB, so
         # the whole-session memory cost is negligible even for many clips.
         self._init_bytes_cache: dict[str, bytes] = {}
+        # App cache/ dir — tip JPEGs under timeline_previews/ (written after emit).
+        self.cache_dir: str | None = None
 
     def _kill_ffmpeg_subprocess(self) -> None:
         proc = self._ffmpeg_proc
@@ -336,6 +363,26 @@ class PreviewSniperWorker(QThread):
             self.cache.pop(oldest, None)
         self.cache[sec] = pixmap
         self._cache_order.append(sec)
+
+    def _load_disk_preview(self, sec: int) -> QPixmap | None:
+        """Cheap hit: tip JPEG from media cache (no PyAV)."""
+        data = tpc.load_preview_bytes(self.cache_dir, self.video_path, sec)
+        if not data:
+            return None
+        return _sniper_pixmap_from_jpeg_bytes(data)
+
+    def _store_disk_preview_pixmap(self, sec: int, pixmap: QPixmap) -> None:
+        """Persist tip JPEG after the tip is shown — never on the decode clock."""
+        if not self.cache_dir or not self.video_path:
+            return
+        if pixmap is None or pixmap.isNull():
+            return
+        existing = tpc.preview_path(self.cache_dir, self.video_path, sec)
+        if existing and os.path.isfile(existing):
+            return
+        tpc.save_preview_qimage(
+            self.cache_dir, self.video_path, sec, pixmap.toImage()
+        )
 
     def _decode_frame_ffmpeg(self, media_path: str, sec: int):
         """Single-frame extract for plain media files (rendered mp4, etc.)."""
@@ -682,6 +729,20 @@ class PreviewSniperWorker(QThread):
             neighbors.append(n)
         return neighbors
 
+    def _decode_with_disk(self, sec: int, decode_fn):
+        """Disk source-frame first; PyAV/ffmpeg only on miss."""
+        t0 = time.perf_counter()
+        cached = self._load_disk_preview(sec)
+        if cached is not None and not cached.isNull():
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            _log.info("Sniper disk hit sec=%s (%.0fms)", sec, elapsed_ms)
+            return cached, "disk", elapsed_ms
+        pixmap = decode_fn(sec)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap, "ok", elapsed_ms
+        return None, "miss", elapsed_ms
+
     def _run_on_demand(self, decode_fn):
         """Decode the cursor bucket; warm ±3s neighbors only after the cursor parks."""
         while not self._is_killed:
@@ -729,13 +790,15 @@ class PreviewSniperWorker(QThread):
                     if retry_at and time.monotonic() < retry_at:
                         continue
                     self._in_flight_sec = next_sec
-                    pixmap = decode_fn(next_sec)
+                    pixmap, state, _ms = self._decode_with_disk(next_sec, decode_fn)
                     self._in_flight_sec = -1
                     if self._is_killed:
                         continue
                     if pixmap is not None and not pixmap.isNull():
                         self._fail_until.pop(next_sec, None)
                         self._remember_cache(next_sec, pixmap)
+                        if state == "ok":
+                            self._store_disk_preview_pixmap(next_sec, pixmap)
                         self._background_done_count += 1
                     else:
                         self._fail_until[next_sec] = time.monotonic() + 2.0
@@ -761,7 +824,7 @@ class PreviewSniperWorker(QThread):
                         if retry_at and time.monotonic() < retry_at:
                             continue
                         self._in_flight_sec = neighbor
-                        pixmap = decode_fn(neighbor)
+                        pixmap, state, _ms = self._decode_with_disk(neighbor, decode_fn)
                         self._in_flight_sec = -1
                         if self._is_killed:
                             break
@@ -770,6 +833,9 @@ class PreviewSniperWorker(QThread):
                             self._remember_cache(neighbor, pixmap)
                             if self.target_sec == neighbor:
                                 self.preview_ready.emit(neighbor, pixmap)
+                            if state == "ok":
+                                self._store_disk_preview_pixmap(neighbor, pixmap)
+                            if self.target_sec == neighbor:
                                 break
                         else:
                             self._fail_until[neighbor] = time.monotonic() + 2.0
@@ -790,9 +856,7 @@ class PreviewSniperWorker(QThread):
             self._in_flight_sec = sec
             if self.target_sec == sec:
                 self.preview_status.emit(sec, "gen", 0.0)
-            t0 = time.perf_counter()
-            pixmap = decode_fn(sec)
-            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            pixmap, state, elapsed_ms = self._decode_with_disk(sec, decode_fn)
             self._in_flight_sec = -1
 
             if self._is_killed:
@@ -803,8 +867,11 @@ class PreviewSniperWorker(QThread):
                 # Keep valid frames even if the cursor already moved — they warm the trail.
                 self._remember_cache(sec, pixmap)
                 if self.target_sec == sec:
-                    self.preview_status.emit(sec, "ok", elapsed_ms)
+                    self.preview_status.emit(sec, state, elapsed_ms)
                     self.preview_ready.emit(sec, pixmap)
+                # After tip — tip-sized JPEG only (full-res sync encode slowed first hit).
+                if state == "ok":
+                    self._store_disk_preview_pixmap(sec, pixmap)
             else:
                 self._fail_until[sec] = time.monotonic() + 2.0
                 if self.target_sec == sec:
