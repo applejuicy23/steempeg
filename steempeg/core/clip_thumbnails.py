@@ -57,6 +57,64 @@ def find_clip_thumbnail(clip_path: str) -> str:
     return ""
 
 
+def find_clip_thumbnail_fast(clip_path: str) -> str:
+    """UI-thread safe thumb probe — canonical Steam names only, no listdir/walk.
+
+    Steam writes ``thumbnail.jpg`` in the clip root. Checking those three paths
+    via ``isfile`` is enough for Progressive; full ``find_clip_thumbnail`` walks
+    the folder and freezes marquees on cold HDDs.
+    """
+    if not clip_path:
+        return ""
+    clip_path = os.path.normpath(clip_path)
+    for name in _THUMB_NAMES:
+        candidate = os.path.join(clip_path, name)
+        try:
+            if os.path.isfile(candidate):
+                return candidate
+        except OSError:
+            continue
+    return ""
+
+
+def probe_clip_poster_cache(cache_dir: str, clip_path: str) -> str:
+    """Return an existing ffmpeg poster path without ``makedirs`` or folder walks.
+
+    Tries path-only key first (Skip/Progressive), then mtime-keyed (Refresh).
+    """
+    if not cache_dir or not clip_path:
+        return ""
+    folder = os.path.join(cache_dir, "clip_posters")
+    candidates = [clip_poster_cache_path_nostat(cache_dir, clip_path)]
+    # mtime-keyed name — one ``stat`` of the clip folder, no listdir.
+    try:
+        key = hashlib.sha256(
+            _clip_folder_identity(clip_path).encode("utf-8")
+        ).hexdigest()[:20]
+        candidates.append(os.path.join(folder, f"{key}.jpg"))
+    except OSError:
+        pass
+    for candidate in candidates:
+        try:
+            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                return candidate
+        except OSError:
+            continue
+    return ""
+
+
+def resolve_clip_thumbnail_ui_safe(
+    clip_path: str, cache_dir: str | None = None
+) -> str:
+    """Progressive/Skip paint path: Steam thumb + poster cache, no folder walk."""
+    thumb = find_clip_thumbnail_fast(clip_path)
+    if thumb:
+        return thumb
+    if cache_dir:
+        return probe_clip_poster_cache(cache_dir, clip_path)
+    return ""
+
+
 def _clip_folder_identity(clip_path: str) -> str:
     norm = os.path.normcase(os.path.normpath(clip_path))
     try:
