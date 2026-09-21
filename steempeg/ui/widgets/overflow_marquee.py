@@ -37,7 +37,7 @@ _COLOR_RE = re.compile(r"color:\s*([^;}\s]+)", re.IGNORECASE)
 _PAUSE_MS = 900
 _TRAVEL_MS = 2000  # fixed cruise duration → sync reverse; speed = max_offset / travel
 _CYCLE_MS = 2 * _PAUSE_MS + 2 * _TRAVEL_MS
-_TICK_MS = 16  # ~60 fps refresh; position comes from QElapsedTimer, not tick count
+_TICK_MS = 16  # ~60 fps; position from QElapsedTimer, not tick count
 _MIN_OVERFLOW_PX = 4
 # Soft glyph dissolve at clipped edges (logical px; scaled by DPR in paint).
 _EDGE_FADE_PX = 10.0
@@ -175,6 +175,7 @@ class _MarqueeTicker:
         self._timer: Optional[QTimer] = None
         self._clock = QElapsedTimer()
         self._clock_started = False
+        self._suspend_depth = 0
 
     def elapsed_ms(self) -> int:
         if not self._clock_started:
@@ -183,6 +184,31 @@ class _MarqueeTicker:
 
     def scroll_factor(self) -> float:
         return _scroll_factor(self.elapsed_ms())
+
+    def set_busy(self, busy: bool) -> None:
+        """No-op retained for callers — never leave marquees on a permanent slow tick."""
+        del busy
+        timer = self._timer
+        if timer is not None:
+            timer.setInterval(_TICK_MS)
+            timer.setTimerType(Qt.TimerType.PreciseTimer)
+
+    def suspend(self) -> None:
+        """Pause all marquees (startup settle / heavy rematerialize). Nestable."""
+        self._suspend_depth += 1
+        if self._timer is not None and self._timer.isActive():
+            self._timer.stop()
+
+    def resume(self) -> None:
+        if self._suspend_depth <= 0:
+            self._suspend_depth = 0
+            return
+        self._suspend_depth -= 1
+        if self._suspend_depth == 0 and self._refs:
+            timer = self._ensure_timer()
+            timer.setInterval(_TICK_MS)
+            timer.setTimerType(Qt.TimerType.PreciseTimer)
+            timer.start()
 
     def _ensure_timer(self) -> QTimer:
         if self._timer is None:
@@ -200,10 +226,12 @@ class _MarqueeTicker:
             self._clock_started = True
         for ref in self._refs:
             if ref() is label:
-                self._ensure_timer().start()
+                if self._suspend_depth <= 0:
+                    self._ensure_timer().start()
                 return
         self._refs.append(weakref.ref(label))
-        self._ensure_timer().start()
+        if self._suspend_depth <= 0:
+            self._ensure_timer().start()
 
     def unregister(self, label: "OverflowMarqueeLabel") -> None:
         self._refs = [
@@ -216,6 +244,10 @@ class _MarqueeTicker:
         self._refs = [ref for ref in self._refs if ref() is not None]
 
     def _on_tick(self) -> None:
+        if self._suspend_depth > 0:
+            if self._timer is not None:
+                self._timer.stop()
+            return
         self._prune()
         if not self._refs:
             if self._timer is not None:
@@ -234,6 +266,20 @@ class _MarqueeTicker:
 
 
 _TICKER = _MarqueeTicker()
+
+
+def suspend_clip_marquees() -> None:
+    """Stop title marquees while Clips Manager is doing heavy UI work."""
+    _TICKER.suspend()
+
+
+def resume_clip_marquees() -> None:
+    _TICKER.resume()
+
+
+def set_clip_marquees_busy(busy: bool) -> None:
+    """Ensure marquees stay at full tick rate (busy flag no longer throttles)."""
+    _TICKER.set_busy(bool(busy))
 
 
 class OverflowMarqueeLabel(QLabel):
@@ -308,8 +354,9 @@ class OverflowMarqueeLabel(QLabel):
         if rect.width() <= 1:
             return
 
-        self._recompute_overflow()
-        # Painting implies on-screen — join the shared clock if we overflow.
+        # Overflow width only needs a recompute on resize/setText — not every paint.
+        if self._max_offset <= 0 and self._full_text:
+            self._recompute_overflow()
         if self._max_offset > 0 and not self._active:
             self._activate()
 
@@ -332,39 +379,11 @@ class OverflowMarqueeLabel(QLabel):
             painter.drawText(rect, flags, text)
             return
 
-        # Snap to the global phase on every paint (scroll-back / click stay in sync).
         elapsed = _TICKER.elapsed_ms()
         self._offset = _scroll_factor(elapsed) * self._max_offset
-        fade_px = _edge_fade_width(float(rect.width()))
-        left_s, right_s = _edge_fade_strengths(
-            self._offset, self._max_offset, fade_px
-        )
-
-        # Paint glyphs on a transparent layer, dissolve edge columns, then blit.
-        # (DestinationIn on the widget painted a visible fog band over the footer.)
-        dpr = max(1.0, float(self.devicePixelRatioF()))
-        phys_w = max(1, int(round(rect.width() * dpr)))
-        phys_h = max(1, int(round(rect.height() * dpr)))
-        layer = QImage(phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied)
-        layer.setDevicePixelRatio(dpr)
-        layer.fill(Qt.GlobalColor.transparent)
-
-        lp = QPainter(layer)
-        lp.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-        lp.setFont(self.font())
-        lp.setPen(self._text_color())
+        painter.setClipRect(rect)
         y = (rect.height() + metrics.ascent() - metrics.descent()) // 2
-        lp.translate(-self._offset, 0.0)
-        lp.drawText(0, y, text)
-        lp.end()
-
-        _dissolve_layer_edges(
-            layer,
-            left_strength=left_s,
-            right_strength=right_s,
-            fade_px=fade_px,
-        )
-        painter.drawImage(rect.topLeft(), layer)
+        painter.drawText(int(round(-self._offset)), y, text)
 
     def _text_color(self) -> QColor:
         match = _COLOR_RE.search(self.styleSheet() or "")
@@ -426,12 +445,23 @@ class OverflowMarqueeLabel(QLabel):
     def _on_shared_tick(self) -> bool:
         """Refresh from the shared clock. Return False to unregister."""
         try:
-            if self._max_offset <= 0 or not self._viewport_visible():
+            if self._max_offset <= 0:
+                self._deactivate()
+                return False
+            # Visibility is expensive (mapTo) — check ~4×/sec, not 60×.
+            n = int(getattr(self, "_vis_tick", 0)) + 1
+            self._vis_tick = n
+            if n % 15 == 1 and not self._viewport_visible():
                 self._deactivate()
                 return False
         except RuntimeError:
             return False
 
-        self._offset = _TICKER.scroll_factor() * self._max_offset
+        new_offset = _TICKER.scroll_factor() * self._max_offset
+        # Pause phases keep a constant offset — skip repaint or titles hitch
+        # whenever anything else briefly owns the UI thread.
+        if abs(new_offset - self._offset) < 0.4:
+            return True
+        self._offset = new_offset
         self.update()
         return True
