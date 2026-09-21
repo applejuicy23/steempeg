@@ -764,6 +764,17 @@ class LifecycleMixin:
         dlg = DevModeDialog(self.cache_dir, parent=getattr(self, "ui", None))
         dlg.exec()
 
+    def show_kofi_dialog(self):
+        """Title-bar tip jar — Donate Me card with Ko-fi link."""
+        from steempeg.ui.kofi_dialog import show_kofi_dialog
+
+        try:
+            show_kofi_dialog(parent=getattr(self, "ui", None))
+        finally:
+            tb = getattr(getattr(self, "ui", None), "title_bar", None)
+            if tb is not None and hasattr(tb, "clear_shell_tool_hover"):
+                tb.clear_shell_tool_hover()
+
     def show_marker_settings(self):
         """Marker classes / CS2 pack / per-ID icon overrides."""
         from steempeg.ui.marker_settings_dialog import show_marker_settings_dialog
