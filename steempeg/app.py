@@ -4692,17 +4692,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         restored_clips = bool(self.start_progressive_clips_library())
                     if not restored_clips:
                         self._startup_library_scan_active = False
-                # Never hydrate Rendered/Screenshots on the same ticks as Progressive
-                # Clips placeholders — full ClipCards + Steam chunks froze launch.
-                # Controller kicks side libs after discover finishes (failsafe below).
+                # Never hydrate Rendered/Screenshots on a timer while Clips is open.
+                # The old singleShot(6000) from Progressive *start* was the delayed
+                # bomb: window shows, ~2–4s later 88 Rendered ClipCards + ffmpeg
+                # posters starve marquees (see session logs: show → +4s chunked restore).
+                # Side shelves stay pending until the user opens that tab.
                 if restored_clips:
                     self._progressive_side_libs_pending = True
-                    # Failsafe if discover never finishes (interrupted / hung).
-                    QTimer.singleShot(6000, self._hydrate_progressive_side_libraries)
                 else:
-                    # No clips Progressive — still paint side shelves quietly.
                     self._progressive_side_libs_pending = True
-                    QTimer.singleShot(800, self._hydrate_progressive_side_libraries)
                     if hasattr(self, "update_status_indicator"):
                         self.update_status_indicator("Ready", "ready")
                 return
@@ -6750,14 +6748,18 @@ def main():
             begin_startup_settle,
             kick_startup_settle_after_show,
         )
+        from steempeg.ui.startup_trace import startup_trace, startup_trace_reset
 
         # Never show the opaque «Preparing workspace…» veil — it stuck for
         # seconds whenever Progressive / Rendered / Screenshots kept the UI
         # busy, and covered tab switches. Settle pass still runs without a
         # cover (density / splitters only).
+        startup_trace_reset()
         begin_startup_settle(window, use_veil=False)
         # Heavy restore stays off-screen; splash keepalive still pumps the bar.
+        startup_trace("sync_startup_layout:begin")
         window._sync_startup_layout()
+        startup_trace("sync_startup_layout:end")
 
         try:
             from steempeg.ui.launch_splash import (
@@ -6844,6 +6846,7 @@ def main():
         # One coherent post-maximize settle under the veil; reveal on timer
         # (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
         kick_startup_settle_after_show(window)
+        startup_trace("main_window_shown")
         try:
             from PySide6.QtCore import QEventLoop
 

@@ -73,14 +73,17 @@ def _markers_meta_path(cache_dir, app_id):
     return os.path.join(_markers_cache_dir(cache_dir, app_id), "meta.json")
 
 
-def fetch_markers_cdn_info(app_id, timeout=20):
+def fetch_markers_cdn_info(app_id, timeout=5):
     """Resolve CDN URL and version stamp for a game's timeline marker sprite.
 
     Returns ``{"url": str, "urls": list[str], "timeline_marker_updated": ...}`` or None.
+
+    Keep the timeout tight — this runs on first open when Steam's local
+    ``markers.svg`` is missing; 20s×3 made pins sit on legacy PNGs for a minute.
     """
     app_id = str(app_id)
     last_err = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             resp = requests.get(
                 _STEAMCMD_INFO_URL.format(app_id=app_id),
@@ -150,7 +153,7 @@ def _write_markers_meta(cache_dir, app_id, info):
         logging.debug("Could not write markers meta for app %s: %s", app_id, exc)
 
 
-def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=20):
+def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=8):
     """Download markers.svg from the Steam CDN. Returns True on success."""
     app_id = str(app_id)
     info = info or fetch_markers_cdn_info(app_id, timeout=timeout)
@@ -215,7 +218,9 @@ def resolve_markers_svg_path_local(app_id, cache_dir=None, steam_path=None):
 def resolve_markers_svg_path(app_id, cache_dir=None, steam_path=None):
     """Best available markers.svg path for ``app_id``, or None.
 
-    Order: Steam install cache → Steempeg cache (if fresh) → CDN download.
+    Order: Steam install cache → Steempeg disk cache → CDN download.
+    Never call steamcmd before serving an existing Steempeg cache file — that
+    freshness check alone blocked marker icons on every cold miss path.
     """
     app_id = str(app_id)
     steam_hit = find_markers_svg(app_id, steam_path=steam_path)
@@ -225,16 +230,12 @@ def resolve_markers_svg_path(app_id, cache_dir=None, steam_path=None):
     if cache_dir is None:
         cache_dir = os.path.join(get_save_directory(), "cache")
 
-    cdn_info = fetch_markers_cdn_info(app_id)
     cached = steempeg_markers_path(cache_dir, app_id)
-    if _steempeg_cache_is_fresh(cache_dir, app_id, cdn_info) and os.path.isfile(cached):
-        return cached
-
-    if cdn_info and download_markers_svg(app_id, cached, info=cdn_info, cache_dir=cache_dir):
-        return cached
-
     if os.path.isfile(cached):
-        logging.debug("Using stale Steempeg markers cache for app %s (CDN unavailable)", app_id)
+        return cached
+
+    cdn_info = fetch_markers_cdn_info(app_id)
+    if cdn_info and download_markers_svg(app_id, cached, info=cdn_info, cache_dir=cache_dir):
         return cached
 
     return None

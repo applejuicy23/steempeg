@@ -44,6 +44,7 @@ from steempeg.core.clip_thumbnails import (
     clip_poster_cache_path_nostat,
     probe_clip_poster_cache,
     resolve_clip_thumbnail,
+    resolve_clip_thumbnail_ui_safe,
 )
 from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
 from steempeg.ui.library.clip_thumb_probe import ClipThumbProbeWorker
@@ -88,17 +89,37 @@ _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
-# Progressive materialize: enough for a first screen without freezing titles.
-_CLIP_MATERIALIZE_CHUNK = 3
-_CLIP_MATERIALIZE_GAP_MS = 12
+# Progressive materialize — first screen fill (v50.1 felt snappy at sync resolve;
+# we stay chunked but larger than the old 3-at-a-time trickle).
+_CLIP_MATERIALIZE_CHUNK = 6
+_CLIP_MATERIALIZE_GAP_MS = 8
 # Once a ClipCard is built in Progressive it stays for the whole session.
 # Never evict on scroll / filter hide — rematerialize was "forgetting" thumbs.
+# Thumb probe / apply pacing (Steam I/O still off UI; decode not one-per-28ms).
+_CLIP_THUMB_PROBE_BATCH = 8
+_CLIP_THUMB_PROBE_GAP_MS = 16
+_CLIP_THUMB_APPLY_BURST = 4
+_CLIP_THUMB_APPLY_GAP_MS = 10
+# Cold-start: smaller bursts / wider gaps so title marquees aren't starved.
+_CLIP_MATERIALIZE_CHUNK_STARTUP = 3
+_CLIP_MATERIALIZE_GAP_STARTUP_MS = 24
+_CLIP_THUMB_APPLY_BURST_STARTUP = 2
+_CLIP_THUMB_APPLY_GAP_STARTUP_MS = 24
 
 
 def _clips_card_cell_size(app) -> QSize:
     from steempeg.ui.library.card_sizes import card_cell_size
 
     return card_cell_size(getattr(app, "_clips_card_size", None))
+
+
+def _library_startup_ui_busy(app) -> bool:
+    """True while post-splash settle / side-lib hydrate still fights the UI thread."""
+    return bool(
+        getattr(app, "_startup_settle_active", False)
+        or getattr(app, "_startup_dash_glue_grace", False)
+        or getattr(app, "_progressive_quiet_hydrate", False)
+    )
 
 
 class LibraryMixin:
@@ -1048,12 +1069,29 @@ class LibraryMixin:
         if missing:
             self._enqueue_clip_poster_paths(missing)
 
-    def _enqueue_clip_poster_paths(self, paths: list[str]) -> None:
-        """Append paths to the lazy poster queue; start worker if idle."""
-        if getattr(self, "_clips_progressive_active", False):
+    def _enqueue_clip_poster_paths(
+        self, paths: list[str], *, allow_progressive_live: bool = False
+    ) -> None:
+        """Append paths to the lazy poster queue; start worker if idle.
+
+        Progressive normally blocks ffmpeg storms. ``allow_progressive_live`` is
+        the viewport exception: cards already on screen with no Steam thumb and
+        no poster cache would otherwise stay gray forever while scrolling.
+        """
+        if getattr(self, "_clips_progressive_active", False) and not allow_progressive_live:
             return
         if not paths or not hasattr(self, "cache_dir"):
             return
+        if allow_progressive_live and getattr(self, "_clips_progressive_active", False):
+            live = getattr(self, "_clip_live_paths", None)
+            if isinstance(live, set) and live:
+                paths = [
+                    p
+                    for p in paths
+                    if os.path.normcase(os.path.normpath(p)) in live
+                ]
+            if not paths:
+                return
         pending = getattr(self, "_clip_poster_pending", None)
         if not isinstance(pending, list):
             pending = []
@@ -1072,16 +1110,15 @@ class LibraryMixin:
 
     def _pump_clip_poster_queue(self) -> None:
         """Run a tiny poster batch so marquee ticks are not starved."""
-        if getattr(self, "_clips_progressive_active", False):
-            self._clip_poster_pending = []
-            return
         pending = getattr(self, "_clip_poster_pending", None)
         if not isinstance(pending, list) or not pending:
             return
         if not hasattr(self, "cache_dir"):
             return
-        batch = pending[:3]
-        del pending[:3]
+        # Progressive: only drain paths already queued as live-viewport exceptions.
+        # (Full-shelf storms still blocked at _enqueue without allow_progressive_live.)
+        batch = pending[:5]
+        del pending[:5]
         self._stop_clip_poster_backfill()
         self._clip_poster_worker = ClipPosterBackfillWorker(
             batch, self.cache_dir, self.ui
@@ -1172,13 +1209,16 @@ class LibraryMixin:
         pending = getattr(self, "_clip_thumb_probe_pending", None)
         if not isinstance(pending, list) or not pending:
             return
-        batch = pending[:4]
-        del pending[:4]
+        batch = pending[:_CLIP_THUMB_PROBE_BATCH]
+        del pending[:_CLIP_THUMB_PROBE_BATCH]
         self._stop_clip_thumb_probe()
         self._clip_thumb_probe_worker = ClipThumbProbeWorker(
             batch, getattr(self, "cache_dir", "") or "", getattr(self, "ui", None)
         )
         self._clip_thumb_probe_worker.thumb_ready.connect(self._on_clip_thumb_probe_ready)
+        self._clip_thumb_probe_worker.thumb_missing.connect(
+            self._on_clip_thumb_probe_missing
+        )
         self._clip_thumb_probe_worker.finished_batch.connect(
             self._on_clip_thumb_probe_batch_done
         )
@@ -1195,16 +1235,41 @@ class LibraryMixin:
         self._clip_thumb_apply_scheduled = True
         QTimer.singleShot(0, self._pump_clip_thumb_apply)
 
+    def _on_clip_thumb_probe_missing(self, clip_path: str) -> None:
+        """No Steam/cache thumb — generate one ffmpeg poster for this live card."""
+        if not clip_path:
+            return
+        self._enqueue_clip_poster_paths(
+            [clip_path], allow_progressive_live=True
+        )
+
     def _pump_clip_thumb_apply(self) -> None:
         pending = getattr(self, "_clip_thumb_apply_pending", None)
         if not isinstance(pending, list) or not pending:
             self._clip_thumb_apply_scheduled = False
             return
-        clip_path, thumb_path = pending.pop(0)
-        self._apply_clip_poster_thumb(clip_path, thumb_path)
+        # Never suspend marquees here — holding the 16ms ticker across the whole
+        # drain looked exactly like «text animation dies for 1–2s then recovers».
+        startup_busy = _library_startup_ui_busy(self)
+        burst = max(
+            1,
+            int(
+                _CLIP_THUMB_APPLY_BURST_STARTUP
+                if startup_busy
+                else _CLIP_THUMB_APPLY_BURST
+            ),
+        )
+        gap_ms = (
+            _CLIP_THUMB_APPLY_GAP_STARTUP_MS
+            if startup_busy
+            else _CLIP_THUMB_APPLY_GAP_MS
+        )
+        n = min(burst, len(pending))
+        for _ in range(n):
+            clip_path, thumb_path = pending.pop(0)
+            self._apply_clip_poster_thumb(clip_path, thumb_path)
         if pending:
-            # One SmoothTransformation decode per tick — keeps marquees alive.
-            QTimer.singleShot(28, self._pump_clip_thumb_apply)
+            QTimer.singleShot(gap_ms, self._pump_clip_thumb_apply)
         else:
             self._clip_thumb_apply_scheduled = False
 
@@ -1212,7 +1277,7 @@ class LibraryMixin:
         self._clip_thumb_probe_worker = None
         pending = getattr(self, "_clip_thumb_probe_pending", None)
         if isinstance(pending, list) and pending:
-            QTimer.singleShot(40, self._pump_clip_thumb_probe_queue)
+            QTimer.singleShot(_CLIP_THUMB_PROBE_GAP_MS, self._pump_clip_thumb_probe_queue)
 
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
@@ -4063,14 +4128,11 @@ class LibraryMixin:
             if not icon_path and len(parts) >= 2 and parts[1].isdigit():
                 icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
 
-            # Progressive: local poster cache ONLY on the UI thread.
-            # Steam thumbnail.jpg + QPixmap decode from the library drive freezes
-            # marquees for seconds (titles stuck mid-scroll as "e Miku…").
+            # Progressive: v50.1 resolved Steam thumb at materialize (sync, could hitch).
+            # Keep UI free of folder walks — only root thumbnail.jpg + local poster cache.
             if progressive:
-                thumb_path = (
-                    probe_clip_poster_cache(self.cache_dir, str(clip_path))
-                    if getattr(self, "cache_dir", None)
-                    else ""
+                thumb_path = resolve_clip_thumbnail_ui_safe(
+                    str(clip_path), getattr(self, "cache_dir", None)
                 )
             elif getattr(self, "_scan_snapshot_restore", False):
                 thumb_path = (
@@ -5047,6 +5109,9 @@ class LibraryMixin:
         worker.discover_failed.connect(self._on_progressive_clips_failed)
         worker.start()
         logging.info("Startup library scan: Progressive (viewport-lazy Clips)")
+        # Parallel: parse Rendered/Screenshots session JSON off-UI while Clips discovers.
+        # If last session was Screenshots, count + placeholders land ASAP.
+        QTimer.singleShot(0, self._start_side_library_prefetch)
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "set_busy"):
             try:
@@ -5106,26 +5171,49 @@ class LibraryMixin:
             self._update_library_count_label()
 
     def _hydrate_progressive_side_libraries(self) -> None:
-        """Deferred Rendered + Screenshots after Progressive Clips settle.
+        """Deferred Rendered (+ optional Screenshots) after Progressive Clips settle.
 
         Restoring every Rendered ClipCard + Steam screenshot chunks on the same
         UI ticks as Progressive placeholders was the main cold-start hitch.
+
+        Screenshots session cache can be huge (8k+ rows). Never auto-drain that
+        onto the UI thread while the user is staring at Clips marquees — wait
+        until the Screenshots tab is opened (or a long idle failsafe).
         """
+        from steempeg.ui.startup_trace import startup_span, startup_trace
+
         if not getattr(self, "_progressive_side_libs_pending", False):
             return
         self._progressive_side_libs_pending = False
         self._progressive_quiet_hydrate = True
         self._progressive_shots_after_rendered = False
+        panel = str(getattr(self, "_library_panel_mode", "clips") or "clips")
+        # While Clips is active, only warm Rendered. Screenshots stay pending.
+        hydrate_shots = panel == "screenshots"
+        startup_trace(
+            "hydrate_side_libs",
+            panel=panel,
+            shots=int(hydrate_shots),
+        )
         try:
             restored = False
             if hasattr(self, "restore_rendered_from_session_cache"):
                 try:
-                    restored = bool(self.restore_rendered_from_session_cache())
+                    with startup_span("restore_rendered_session"):
+                        restored = bool(self.restore_rendered_from_session_cache())
                 except Exception:
                     logging.debug(
                         "Progressive: rendered session restore failed",
                         exc_info=True,
                     )
+            if not hydrate_shots:
+                # Keep a sticky flag so opening Screenshots still session-paints.
+                self._progressive_shots_pending = True
+                # Rendered may still be chunking — leave quiet on until that drip ends.
+                if not getattr(self, "_rendered_restore_chunk_scheduled", False):
+                    self._progressive_quiet_hydrate = False
+                startup_trace("hydrate_side_libs:shots_deferred")
+                return
             # Chunked rendered still running — screenshots wait for finish hook.
             if restored and getattr(self, "_rendered_restore_chunk_scheduled", False):
                 self._progressive_shots_after_rendered = True
@@ -5134,6 +5222,7 @@ class LibraryMixin:
                 QTimer.singleShot(400, self._hydrate_progressive_screenshots)
             else:
                 self._progressive_quiet_hydrate = False
+                self._progressive_shots_pending = False
         except Exception:
             self._progressive_quiet_hydrate = False
             logging.debug(
@@ -5142,9 +5231,14 @@ class LibraryMixin:
             )
 
     def _hydrate_progressive_screenshots(self) -> None:
+        from steempeg.ui.startup_trace import startup_span, startup_trace
+
+        self._progressive_shots_pending = False
+        startup_trace("hydrate_screenshots:begin")
         try:
             if hasattr(self, "restore_screenshots_from_session_cache"):
-                self.restore_screenshots_from_session_cache()
+                with startup_span("restore_screenshots_session"):
+                    self.restore_screenshots_from_session_cache()
         except Exception:
             logging.debug(
                 "Progressive: screenshots session restore failed",
@@ -5152,6 +5246,25 @@ class LibraryMixin:
             )
         finally:
             self._progressive_quiet_hydrate = False
+            # Posters only when Rendered is the active panel — never while on Clips.
+            if str(getattr(self, "_library_panel_mode", "") or "") == "rendered":
+                if hasattr(self, "_schedule_rendered_poster_backfill"):
+                    QTimer.singleShot(400, self._schedule_rendered_poster_backfill)
+            else:
+                self._rendered_posters_pending = True
+            startup_trace("hydrate_screenshots:finally")
+
+    def _kick_pending_progressive_shots_if_needed(self) -> None:
+        """Screenshots tab opened — drain the deferred 8k session paint now."""
+        if not getattr(self, "_progressive_shots_pending", False):
+            return
+        if getattr(self, "_progressive_side_libs_pending", False):
+            # Full side hydrate still waiting — let that path own screenshots.
+            if hasattr(self, "_hydrate_progressive_side_libraries"):
+                self._hydrate_progressive_side_libraries()
+            return
+        self._progressive_quiet_hydrate = True
+        self._hydrate_progressive_screenshots()
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
@@ -5165,43 +5278,217 @@ class LibraryMixin:
             return
         table = getattr(getattr(self, "ui", None), "table_clips", None)
         if table is not None:
-            # Leave Qt auto-sort off — Progressive post_settle runs apply_sorting.
+            # Leave Qt auto-sort off — Progressive keeps discover order; Clear/Apply sorts.
             table.setSortingEnabled(False)
             table.horizontalHeader().setSectionsClickable(False)
         if hasattr(self, "fast_sync_grid"):
-            self.fast_sync_grid()
-        # Defer purge / filter / edge / history — same tick as last batch froze UI.
+            # Defer — sync rebuild of 286 grid items on the finish tick starved
+            # marquees right as the window appeared.
+            QTimer.singleShot(0, self.fast_sync_grid)
+        # Defer purge / light filter — same tick as last batch froze UI.
         QTimer.singleShot(200, self._purge_inferior_session_siblings)
         QTimer.singleShot(280, self._progressive_clips_post_settle)
-        # Side libraries only after Clips placeholders are in — never during discover.
-        if getattr(self, "_progressive_side_libs_pending", False):
-            QTimer.singleShot(2200, self._hydrate_progressive_side_libraries)
+        # Side libraries: NO timed auto-hydrate. app.py used to fire
+        # singleShot(6000) from Progressive start → Rendered ClipCards + ffmpeg
+        # posters ~2–4s after the window appeared. Keep pending until tab open.
         if getattr(self, "_startup_library_scan_active", False) and hasattr(
             self, "preload_render_history"
         ):
             self._startup_library_scan_active = False
-            # Far after side libs — history preload must not compete with hydrate.
-            QTimer.singleShot(3500, lambda: self.preload_render_history(announce=False))
+            # History load is off-thread; still delay so it doesn't contend with
+            # first viewport thumb decode.
+            QTimer.singleShot(8000, lambda: self.preload_render_history(announce=False))
         elif hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
         logging.info("Progressive Clips: %d placeholders ready", int(total or 0))
+        try:
+            from steempeg.ui.startup_trace import startup_trace
+
+            startup_trace("progressive_clips_finished", total=int(total or 0))
+        except Exception:
+            pass
+        logging.info(
+            "Progressive: side-library hydrate deferred until Rendered/Screenshots tab "
+            "(pending=%s)",
+            bool(getattr(self, "_progressive_side_libs_pending", False)),
+        )
+        # Prefetch already kicked at Progressive start — don't double-start.
+
+    def _stop_screenshots_cache_prefetch(self) -> None:
+        worker = getattr(self, "_screenshots_prefetch_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(1500)
+        self._screenshots_prefetch_worker = None
+
+    def _stop_rendered_cache_prefetch(self) -> None:
+        worker = getattr(self, "_rendered_prefetch_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(1500)
+        self._rendered_prefetch_worker = None
+
+    def _start_side_library_prefetch(self) -> None:
+        """Warm Rendered + Screenshots session JSON on worker threads — zero UI paint."""
+        self._start_screenshots_cache_prefetch()
+        self._start_rendered_cache_prefetch()
+
+    def _start_rendered_cache_prefetch(self) -> None:
+        if getattr(self, "_rendered_prefetch_payload", None) is not None:
+            return
+        worker = getattr(self, "_rendered_prefetch_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        cache_dir = getattr(self, "cache_dir", "") or ""
+        if not cache_dir:
+            return
+        from steempeg.ui.library.rendered_cache_prefetch import (
+            RenderedCachePrefetchWorker,
+        )
+
+        self._stop_rendered_cache_prefetch()
+        worker = RenderedCachePrefetchWorker(
+            cache_dir, parent=getattr(self, "ui", None)
+        )
+        self._rendered_prefetch_worker = worker
+
+        def _ok(files) -> None:
+            self._rendered_prefetch_worker = None
+            if isinstance(files, list):
+                self._rendered_prefetch_payload = files
+                logging.info(
+                    "Rendered prefetch ready (%d files) — UI untouched until tab open",
+                    len(files),
+                )
+
+        def _fail(_msg: str) -> None:
+            self._rendered_prefetch_worker = None
+
+        worker.finished_ok.connect(_ok)
+        worker.failed.connect(_fail)
+        worker.start()
+        logging.info("Rendered cache prefetch started (off-UI)")
+
+    def _start_screenshots_cache_prefetch(self) -> None:
+        """Background warm: load screenshots_library_cache.json without UI paint."""
+        if getattr(self, "_screenshots_prefetch_payload", None) is not None:
+            return
+        worker = getattr(self, "_screenshots_prefetch_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        cache_dir = getattr(self, "cache_dir", "") or ""
+        if not cache_dir:
+            return
+        folder = None
+        if hasattr(self, "_screenshots_folder_path"):
+            try:
+                folder = self._screenshots_folder_path()
+            except Exception:
+                folder = None
+        from steempeg.ui.library.screenshots_cache_prefetch import (
+            ScreenshotsCachePrefetchWorker,
+        )
+
+        self._stop_screenshots_cache_prefetch()
+        worker = ScreenshotsCachePrefetchWorker(
+            cache_dir, folder, parent=getattr(self, "ui", None)
+        )
+        self._screenshots_prefetch_worker = worker
+
+        def _ok(payload) -> None:
+            self._screenshots_prefetch_worker = None
+            if not isinstance(payload, dict):
+                return
+            self._screenshots_prefetch_payload = payload
+            steempeg_n = len(payload.get("steempeg_rows") or [])
+            steam_n = len(payload.get("steam_rows") or [])
+            self._screenshots_known_count = steempeg_n + steam_n
+            logging.info(
+                "Screenshots prefetch ready (steempeg=%d steam=%d) — count stamped",
+                steempeg_n,
+                steam_n,
+            )
+            # Stamp Shots count immediately (no widgets required).
+            if hasattr(self, "_update_library_count_label"):
+                try:
+                    self._update_library_count_label()
+                except Exception:
+                    pass
+            # Last session was Screenshots: install placeholders + first viewport now.
+            # Thumbs stay scroll-lazy — this is the old «count then scroll» model.
+            if str(getattr(self, "_library_panel_mode", "") or "") == "screenshots":
+                if not getattr(self, "_screenshots_session_painted", False):
+                    QTimer.singleShot(0, self._paint_screenshots_from_prefetch)
+
+        def _fail(_msg: str) -> None:
+            self._screenshots_prefetch_worker = None
+
+        worker.finished_ok.connect(_ok)
+        worker.failed.connect(_fail)
+        worker.start()
+        logging.info("Screenshots cache prefetch started (off-UI)")
+
+    def _paint_screenshots_from_prefetch(self) -> None:
+        """UI apply of RAM prefetch: light placeholders only, then viewport thumbs."""
+        if getattr(self, "_screenshots_session_painted", False):
+            return
+        if getattr(self, "_screenshots_prefetch_payload", None) is None:
+            return
+        try:
+            if hasattr(self, "restore_screenshots_from_session_cache"):
+                painted = bool(self.restore_screenshots_from_session_cache())
+                self._screenshots_session_painted = bool(painted)
+                if painted:
+                    logging.info(
+                        "Screenshots: placeholders from prefetch "
+                        "(thumbs viewport-lazy)"
+                    )
+        except Exception:
+            logging.debug("Screenshots prefetch paint failed", exc_info=True)
 
     def _progressive_clips_post_settle(self) -> None:
         if not getattr(self, "_clips_progressive_active", False):
             return
-        # One path: apply saved filter hide flags, then Default/current sort.
-        # (Do not sort then reapply — that double-sorted and could desync.)
-        if hasattr(self, "sync_library_filter_view"):
-            self.sync_library_filter_view()
-        elif hasattr(self, "_restore_library_after_filter_change"):
-            self._restore_library_after_filter_change(scroll_top=True)
-        if hasattr(self, "_update_library_count_label"):
-            self._update_library_count_label()
+        from steempeg.ui.startup_trace import startup_span, startup_trace
+
+        # Batches already setRowHidden for non-matches. A full
+        # sync_library_filter_view → apply_sorting (takeItem×286 + fast_sync_grid)
+        # on the same ticks as first marquee paint was the hard 1–2s hitch —
+        # not Screenshots. Only re-assert hide flags + fill the visible shelf.
+        startup_trace("progressive_post_settle:begin")
+        with startup_span("progressive_post_settle_hide"):
+            saved = getattr(self, "saved_filter_state", None)
+            table = getattr(getattr(self, "ui", None), "table_clips", None)
+            if table is not None and isinstance(saved, dict) and saved.get("active"):
+                table.setUpdatesEnabled(False)
+                try:
+                    if saved.get("match_none"):
+                        for row in range(table.rowCount()):
+                            table.setRowHidden(row, True)
+                    else:
+                        for row in range(table.rowCount()):
+                            table.setRowHidden(
+                                row, not self._library_filter_row_matches(row, saved)
+                            )
+                finally:
+                    table.setUpdatesEnabled(True)
+            if hasattr(self, "_sync_progressive_grid_filter_visibility"):
+                self._sync_progressive_grid_filter_visibility()
+            if hasattr(self, "_update_library_count_label"):
+                self._update_library_count_label()
+            if hasattr(self, "sync_filter_pill_badge"):
+                self.sync_filter_pill_badge()
         QTimer.singleShot(0, self._sync_library_scrollbars)
         QTimer.singleShot(2000, self._persist_clips_library_snapshot)
         QTimer.singleShot(80, self._schedule_clip_card_edge_sync)
-        # Fill ``--:--`` footers from MPD for live cards (was blocked entirely).
+        # One rematerialize — the old 0+120ms double pass fought marquees.
+        QTimer.singleShot(0, self._clips_refresh_viewport)
         QTimer.singleShot(500, self._schedule_clip_duration_backfill)
+        startup_trace("progressive_post_settle:scheduled")
 
     def _on_progressive_clips_failed(self, message: str) -> None:
         self._progressive_clips_worker = None
@@ -5215,7 +5502,9 @@ class LibraryMixin:
         if getattr(self, "_startup_library_scan_active", False):
             self._startup_library_scan_active = False
         if getattr(self, "_progressive_side_libs_pending", False):
-            QTimer.singleShot(400, self._hydrate_progressive_side_libraries)
+            logging.info(
+                "Progressive discover failed — side libs stay deferred until tab open"
+            )
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
 
@@ -5353,6 +5642,9 @@ class LibraryMixin:
         if getattr(self, "_library_panel_mode", "clips") != "clips":
             if not grid.isVisible():
                 return
+
+        # Do not suspend marquees across this drain — that froze title scroll for
+        # the whole materialize window (felt like a 1–2s animation death).
         try:
             need_layout = False
             for i in range(min(grid.count(), 6)):
@@ -5376,25 +5668,36 @@ class LibraryMixin:
             for item in visible
             if item is not None and grid.itemWidget(item) is None
         ]
-        chunk = pending[:_CLIP_MATERIALIZE_CHUNK]
+        startup_busy = _library_startup_ui_busy(self)
+        chunk_n = (
+            _CLIP_MATERIALIZE_CHUNK_STARTUP
+            if startup_busy
+            else _CLIP_MATERIALIZE_CHUNK
+        )
+        gap_ms = (
+            _CLIP_MATERIALIZE_GAP_STARTUP_MS
+            if startup_busy
+            else _CLIP_MATERIALIZE_GAP_MS
+        )
+        chunk = pending[:chunk_n]
         for item in chunk:
             self._materialize_clip_grid_item(item)
-        # Also rescue already-live gray cards in view (probe missed / skipped hide).
-        if not pending:
-            rescue: list[str] = []
-            for item in visible:
-                if item is None:
-                    continue
-                card = grid.itemWidget(item)
-                if card is None or not bool(getattr(card, "_dim_no_preview", False)):
-                    continue
-                path = str(item.data(Qt.UserRole + 1) or "")
-                if path:
-                    rescue.append(path)
-            if rescue:
-                self._enqueue_clip_thumb_probe(rescue)
-        if len(pending) > _CLIP_MATERIALIZE_CHUNK:
-            QTimer.singleShot(_CLIP_MATERIALIZE_GAP_MS, self._clips_refresh_viewport)
+        # Rescue gray live cards even while placeholders are still materializing —
+        # previously ``if not pending`` skipped probe/poster on busy scroll fills.
+        rescue: list[str] = []
+        for item in visible:
+            if item is None:
+                continue
+            card = grid.itemWidget(item)
+            if card is None or not bool(getattr(card, "_dim_no_preview", False)):
+                continue
+            path = str(item.data(Qt.UserRole + 1) or "")
+            if path:
+                rescue.append(path)
+        if rescue:
+            self._enqueue_clip_thumb_probe(rescue)
+        if len(pending) > chunk_n:
+            QTimer.singleShot(gap_ms, self._clips_refresh_viewport)
             return
 
         # visualRect was often 0×0 until this layout pass — shelf flush needs a redo.

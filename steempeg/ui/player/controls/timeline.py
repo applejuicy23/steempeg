@@ -694,6 +694,48 @@ class TimelineCanvas(QWidget):
             print(f"Clip markers cache load: {exc}")
         self.notify_markers_changed(reveal=True)
 
+    def apply_preparsed_timeline(
+        self,
+        *,
+        json_path=None,
+        offset_ms: int = 0,
+        clip_path=None,
+        cache_dir=None,
+        markers=None,
+        mode_segments=None,
+        clip_ranges=None,
+        remembered_ids=None,
+        json_start_utc=None,
+        app_id=None,
+        reveal: bool = True,
+    ) -> None:
+        """Paint markers already parsed off-thread — no second json.load on the UI."""
+        self.current_json_path = json_path
+        self.current_offset_ms = int(offset_ms or 0)
+        self.current_clip_path = clip_path
+        self.current_json_start_utc = json_start_utc
+        self.current_app_id = app_id or app_id_from_clip_paths(json_path, clip_path)
+        if cache_dir is not None:
+            self._markers_cache_dir = cache_dir
+
+        self.markers = list(markers or [])
+        self.mode_segments = list(mode_segments or [])
+        self.clip_ranges = list(clip_ranges or [])
+
+        if remembered_ids:
+            try:
+                from steempeg.services import marker_prefs as mprefs
+
+                prefs = mprefs.load_marker_prefs()
+                before_n = len(prefs.get("known_marker_ids") or [])
+                mprefs.remember_marker_ids(remembered_ids, data=prefs, save=True)
+                if len(prefs.get("known_marker_ids") or []) > before_n:
+                    self.invalidate_marker_prefs_cache()
+            except Exception:
+                pass
+
+        self.notify_markers_changed(reveal=reveal)
+
     def load_timeline_json(
         self,
         json_path,
@@ -801,8 +843,14 @@ class TimelineCanvas(QWidget):
                     for m in self.markers
                     if m.get("icon_key")
                 ]
-                mprefs.remember_marker_ids(steam_ids + legacy_ids)
-                self.invalidate_marker_prefs_cache()
+                prefs = mprefs.load_marker_prefs()
+                before_n = len(prefs.get("known_marker_ids") or [])
+                mprefs.remember_marker_ids(
+                    steam_ids + legacy_ids, data=prefs, save=True
+                )
+                # Only bust icon caches when prefs actually learned new ids.
+                if len(prefs.get("known_marker_ids") or []) > before_n:
+                    self.invalidate_marker_prefs_cache()
             except Exception:
                 pass
 

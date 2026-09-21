@@ -418,16 +418,21 @@ def remember_marker_ids(
     data: dict | None = None,
     save: bool = True,
 ) -> list[str]:
+    """Merge discovered marker ids into prefs.
+
+    Only writes disk when the known set actually grows — every clip open used
+    to rewrite ``marker_prefs.json`` and stall the timeline before pins paint.
+    """
     prefs = data if data is not None else load_marker_prefs()
     known = set(prefs.get("known_marker_ids") or [])
+    before = len(known)
     for raw in ids or ():
         s = str(raw or "").strip()
         if s:
             known.add(s)
     prefs["known_marker_ids"] = sorted(known)
-    if save and data is None:
-        save_marker_prefs(prefs)
-    elif save and data is not None:
+    grew = len(known) > before
+    if save and grew:
         save_marker_prefs(prefs)
     return prefs["known_marker_ids"]
 

@@ -515,6 +515,17 @@ def force_app_cursor_resync() -> None:
                         btn.setCursor(Qt.CursorShape.PointingHandCursor)
                     except RuntimeError:
                         pass
+            # Library Chrome tabs are QFrame (not QAbstractButton) — same hand.
+            try:
+                from steempeg.ui.library.library_tab import LibraryTabWidget
+
+                for tab in w.findChildren(LibraryTabWidget):
+                    try:
+                        tab.setCursor(Qt.CursorShape.PointingHandCursor)
+                    except RuntimeError:
+                        pass
+            except Exception:
+                pass
         pos = QCursor.pos()
         QCursor.setPos(pos)
         # Re-query after the nudge; if still a hand, force Arrow for one frame.
@@ -524,9 +535,18 @@ def force_app_cursor_resync() -> None:
                 shape = under2.cursor().shape()
             except RuntimeError:
                 shape = Qt.CursorShape.ArrowCursor
-            if shape == Qt.CursorShape.PointingHandCursor and not isinstance(
-                under2, QAbstractButton
-            ):
+            # Keep intentional hands: buttons, traffic lights, library Chrome tabs.
+            keep_hand = isinstance(under2, QAbstractButton) or isinstance(
+                under2, _TrafficLight
+            )
+            if not keep_hand:
+                try:
+                    from steempeg.ui.library.library_tab import LibraryTabWidget
+
+                    keep_hand = isinstance(under2, LibraryTabWidget)
+                except Exception:
+                    keep_hand = False
+            if shape == Qt.CursorShape.PointingHandCursor and not keep_hand:
                 app.setOverrideCursor(Qt.CursorShape.ArrowCursor)
                 app.restoreOverrideCursor()
         # Geometry hover may still need the hand override (sticky tab UnderMouse).
@@ -741,23 +761,34 @@ class SteempegTitleBar(QWidget):
 
         root.addStretch(1)
 
+        # Tip jar + Dev, then the same thin stick as next to (i), then traffic lights.
+        self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
+        self.btn_title_kofi = _shell_icon_btn(
+            "TitleBarKofi", self._kofi_icon_idle, "Support on Ko-fi"
+        )
+        self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
+        root.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self._dev_icon_idle, self._dev_icon_hot = title_bar_dev_icons(_icon_px)
         self.btn_title_dev = _shell_icon_btn(
             "TitleBarDev", self._dev_icon_idle, "Developer Tools"
         )
         self.btn_title_dev.clicked.connect(self.dev_requested.emit)
         self.btn_title_dev.hide()
+        root.addSpacing(4)
         root.addWidget(self.btn_title_dev, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # Always-on tip jar — sits just left of the traffic lights (after Dev when on).
-        self._kofi_icon_idle, self._kofi_icon_hot = title_bar_kofi_icons(_icon_px)
-        self.btn_title_kofi = _shell_icon_btn(
-            "TitleBarKofi", self._kofi_icon_idle, "Support on Ko-fi"
-        )
-        self.btn_title_kofi.clicked.connect(self.kofi_requested.emit)
-        root.addSpacing(4)
-        root.addWidget(self.btn_title_kofi, 0, Qt.AlignmentFlag.AlignVCenter)
-        root.addSpacing(8)
+        traffic_divider = QFrame()
+        traffic_divider.setObjectName("TitleBarShellDivider")
+        traffic_divider.setFrameShape(QFrame.Shape.VLine)
+        traffic_divider.setFixedWidth(1)
+        traffic_divider.setFixedHeight(14)
+        traffic_divider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        # Left 6 matches glyph→stick air (Dev hitbox is 22 with a 16px icon).
+        # Right needs more: the orange dot is a solid 13px widget with no inset.
+        root.addSpacing(6)
+        root.addWidget(traffic_divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        root.addSpacing(12)
 
         controls = QHBoxLayout()
         # Gap ≈ diameter of the dots — airier than packing them on Windows DPI.

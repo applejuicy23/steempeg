@@ -135,8 +135,11 @@ class LibraryTabWidget(QFrame):
 
     def enterEvent(self, event):
         self._hovered = True
+        # force_app_cursor_resync() unsetCursor's the chain after Leave — restore hand.
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         if self._closable:
             self._close.setStyleSheet(_CLOSE_VISIBLE)
+            self._close.setCursor(Qt.CursorShape.PointingHandCursor)
         self._apply_style()
         super().enterEvent(event)
 

@@ -4404,6 +4404,10 @@ class PlayerMixin:
         if hasattr(self, "video_stack") and hasattr(self, "video_blank_frame"):
             self.video_stack.setCurrentWidget(self.video_blank_frame)
 
+        # Markers first — find+parse off-thread while UI still walks MPD / health.
+        # Waiting until after play left pins 1–2s behind an already-running video.
+        self._start_timeline_markers_load_early(switch_gen, clip_path, "")
+
         # 2. GET THE CLIP FOLDER PATH
         
         # STEP 1: FIND THE VIDEO FOLDER
@@ -4449,15 +4453,14 @@ class PlayerMixin:
         if not pending_remux:
             self._nudge_clip_open_loading(48)
 
-        # Cheap chrome before play — markers load in parallel; health badge after reveal.
+        # Cheap chrome before play — markers already loading above; health after reveal.
         if hasattr(self, "set_player_header_clip_controls_visible"):
             self.set_player_header_clip_controls_visible(True)
         if hasattr(self, 'custom_timeline'):
             self.custom_timeline.setEnabled(True)
 
-        # 3. Open media ASAP — timeline JSON discovery runs off-thread in parallel.
+        # 3. Open media ASAP — timeline parse already running in parallel.
         logging.info("MPV play: %s (clip=%s)", mpd_path, clip_path)
-        self._start_timeline_markers_load_early(switch_gen, clip_path, mpd_path)
         if pending_remux:
             self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
             return
@@ -4511,6 +4514,29 @@ class PlayerMixin:
         self._stop_timeline_markers_worker(invalidate=True)
         load_gen = getattr(self, "_timeline_markers_load_gen", 0)
 
+        # Kick markers.svg fetch NOW (app id is in the clip folder name). Waiting
+        # until after JSON parse left Steam-style pins on legacy PNGs while CDN ran.
+        if hasattr(self, "custom_timeline"):
+            try:
+                from steempeg.services.steam_markers import app_id_from_clip_paths
+
+                app_id = app_id_from_clip_paths(clip_path=clip_path)
+                canvas = self.custom_timeline.canvas
+                if app_id and hasattr(canvas, "marker_store"):
+                    store = canvas.marker_store
+                    want_cache = getattr(self, "cache_dir", None)
+                    if (
+                        want_cache
+                        and hasattr(store, "set_cache_dir")
+                        and getattr(store, "_cache_dir", None) != want_cache
+                    ):
+                        store.set_cache_dir(want_cache)
+                    store.prefetch(app_id, on_ready=canvas.update)
+            except Exception:
+                logging.debug(
+                    "Early markers.svg prefetch failed", exc_info=True
+                )
+
         from steempeg.ui.player.timeline_markers_worker import TimelineMarkersLoadWorker
 
         worker = TimelineMarkersLoadWorker(
@@ -4555,6 +4581,40 @@ class PlayerMixin:
         cache_dir = getattr(self, "cache_dir", None)
         json_path = result.get("json_path")
         offset_ms = int(result.get("offset_ms") or 0)
+        markers = result.get("markers")
+
+        if markers is not None:
+            # Worker already read+parsed — paint only (was re-parsing on UI).
+            use_cache = bool(result.get("use_cache"))
+            if hasattr(canvas, "apply_preparsed_timeline"):
+                canvas.apply_preparsed_timeline(
+                    json_path=json_path,
+                    offset_ms=offset_ms,
+                    clip_path=clip_path,
+                    cache_dir=cache_dir if use_cache else None,
+                    markers=markers,
+                    mode_segments=result.get("mode_segments"),
+                    clip_ranges=result.get("clip_ranges"),
+                    remembered_ids=result.get("remembered_ids"),
+                    json_start_utc=result.get("json_start_utc"),
+                    app_id=result.get("app_id"),
+                    reveal=True,
+                )
+            else:
+                canvas.load_timeline_json(
+                    json_path,
+                    offset_ms,
+                    clip_path=clip_path,
+                    cache_dir=cache_dir if use_cache else None,
+                    merge_marker_cache=use_cache,
+                )
+            app_id = canvas.current_app_id or result.get("app_id")
+            if app_id:
+                canvas.marker_store.prefetch(
+                    app_id,
+                    on_ready=canvas.update,
+                )
+            return
 
         if json_path:
             logging.debug("Timeline JSON: %s", json_path)

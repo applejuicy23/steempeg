@@ -97,6 +97,11 @@ def _cozy_stylesheet(*, support_font: str) -> str:
         border: 1px solid {_LINE};
         border-radius: 18px;
     }}
+    QWidget#KofiMarkBadge {{
+        background-color: {_LINE};
+        border: none;
+        border-radius: 64px;
+    }}
     QLabel {{
         background: transparent;
         color: {_INK};
@@ -141,12 +146,12 @@ def _cozy_stylesheet(*, support_font: str) -> str:
         background-color: transparent;
         color: {_MUTED};
         border: 1px solid {_LINE};
-        border-radius: 18px;
-        padding: 8px 20px;
+        border-radius: 16px;
+        padding: 6px 16px;
         font-family: {_COZY_FALLBACK};
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
-        min-height: 36px;
+        min-height: 30px;
         outline: none;
     }}
     QPushButton#KofiCloseBtn:hover {{
@@ -188,7 +193,7 @@ def show_kofi_dialog(parent=None) -> None:
     shell.addWidget(plate)
 
     plate_lay = QVBoxLayout(plate)
-    plate_lay.setContentsMargins(14, 14, 14, 14)
+    plate_lay.setContentsMargins(14, 14, 14, 8)
     plate_lay.setSpacing(0)
 
     card = QWidget(plate)
@@ -197,16 +202,25 @@ def show_kofi_dialog(parent=None) -> None:
     plate_lay.addWidget(card)
 
     content = QVBoxLayout(card)
-    content.setContentsMargins(32, 36, 32, 28)
+    content.setContentsMargins(32, 36, 32, 24)
     content.setSpacing(12)
 
     logo_row = QHBoxLayout()
     logo_row.addStretch(1)
+    # Soft plate-border disc behind the cup mark (roomy — handle breaks roundness).
+    mark_badge = QWidget()
+    mark_badge.setObjectName("KofiMarkBadge")
+    mark_badge.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    mark_badge.setFixedSize(128, 128)
+    badge_lay = QVBoxLayout(mark_badge)
+    badge_lay.setContentsMargins(16, 16, 16, 16)
+    badge_lay.setSpacing(0)
     logo = QLabel()
     logo.setFixedSize(96, 96)
     logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
     apply_square_icon(logo, load_pixmap(KOFI_MARK, 96), 96)
-    logo_row.addWidget(logo)
+    badge_lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignCenter)
+    logo_row.addWidget(mark_badge)
     logo_row.addStretch(1)
     content.addLayout(logo_row)
     content.addSpacing(4)
@@ -270,16 +284,16 @@ def show_kofi_dialog(parent=None) -> None:
     support_row.addStretch(1)
     content.addLayout(support_row)
 
-    content.addSpacing(6)
-
-    close_row = QHBoxLayout()
-    close_row.addStretch(1)
+    # Close sits on the cream plate — bottom-right, tight to the edge.
     btn_close = QPushButton("Close")
     btn_close.setObjectName("KofiCloseBtn")
     btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_close.clicked.connect(dialog.accept)
-    close_row.addWidget(btn_close)
+    close_row = QHBoxLayout()
+    close_row.setContentsMargins(4, 6, 2, 2)
+    close_row.setSpacing(0)
     close_row.addStretch(1)
-    content.addLayout(close_row)
+    close_row.addWidget(btn_close, 0, Qt.AlignmentFlag.AlignRight)
+    plate_lay.addLayout(close_row)
 
     dialog.exec()

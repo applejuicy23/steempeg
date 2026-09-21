@@ -109,7 +109,8 @@ def _finish_startup_settle(app, gen: int, *, reason: str = "settle") -> None:
             app._settle_portable_like_dash()
         except Exception:
             logging.debug(
-                "startup settle: final portable-like dash glue failed", exc_info=True
+                "startup settle: final portable-like dash glue failed",
+                exc_info=True,
             )
 
 

@@ -1025,21 +1025,51 @@ class RenderedLibraryMixin:
             self._clear_clips_selection_visual()
             self._clear_screenshots_selection_visual()
             self._ensure_rendered_widgets()
+            # User opened Rendered before the deferred Progressive hydrate — don't
+            # leave an empty shelf for seconds (that felt like a first-open freeze).
+            if getattr(self, "_progressive_side_libs_pending", False):
+                if hasattr(self, "_hydrate_progressive_side_libraries"):
+                    self._hydrate_progressive_side_libraries()
+            elif getattr(self, "_rendered_prefetch_payload", None) is not None:
+                # Prefetch ready, pending flag already cleared — paint from RAM.
+                if hasattr(self, "restore_rendered_from_session_cache"):
+                    self.restore_rendered_from_session_cache()
             # Tab flip: show list/grid only — doItemsLayout freezes large shelves.
             self._apply_rendered_view_mode(relayout=False)
+            # Posters wait until chunked restore finishes — force=True at +250ms
+            # used to start ffmpeg while 88 ClipCards were still inserting (tab hitch).
+            if getattr(self, "_rendered_restore_chunk_scheduled", False):
+                self._rendered_posters_pending = True
+            elif hasattr(self, "_schedule_rendered_poster_backfill"):
+                self._rendered_posters_pending = False
+                QTimer.singleShot(
+                    400,
+                    lambda: self._schedule_rendered_poster_backfill(force=True),
+                )
         elif mode == "screenshots":
             self._clear_clips_selection_visual()
             self._clear_rendered_selection_visual()
             self._ensure_screenshots_widgets()
             self._apply_screenshots_view_mode(relayout=False)
-            # Startup restore opens this tab before session-cache paint; a full
-            # Steam+Steempeg refresh here freezes the UI for minutes (8k+ cards).
-            if not getattr(self, "_restoring_library_state", False):
-                self.refresh_screenshots_library(force=False)
+            # Prefetch → light placeholders; thumbs only for the visible strip.
+            if getattr(self, "_screenshots_session_painted", False):
+                self._schedule_screenshots_viewport_refresh(50)
+            elif getattr(self, "_screenshots_prefetch_payload", None) is not None:
+                if hasattr(self, "_paint_screenshots_from_prefetch"):
+                    self._paint_screenshots_from_prefetch()
+                elif hasattr(self, "restore_screenshots_from_session_cache"):
+                    self.restore_screenshots_from_session_cache()
+                    self._screenshots_session_painted = True
+            elif hasattr(self, "_start_screenshots_cache_prefetch"):
+                # Prefetch still running — kick it; paint lands on finished_ok.
+                self._start_screenshots_cache_prefetch()
+            elif not getattr(self, "_restoring_library_state", False):
+                if hasattr(self, "restore_screenshots_from_session_cache"):
+                    self.restore_screenshots_from_session_cache()
+                else:
+                    self.refresh_screenshots_library(force=False)
             else:
                 self._schedule_screenshots_viewport_refresh(50)
-            # Hide/show can leave a stale IconMode wrap at the same width —
-            # force one deferred reflow (not two).
             self._screenshots_last_reflow_w = None
             self._schedule_screenshots_grid_reflow(50)
         else:
@@ -1088,9 +1118,8 @@ class RenderedLibraryMixin:
         self._schedule_persist_library_ui_state()
         # Library tab flips resize chrome / clear hover without a fresh Enter on the
         # traffic lights — re-sync so close/minimize glyphs work after a tab click.
+        # Use module-level QTimer — a local import here makes QTimer unbound above.
         try:
-            from PySide6.QtCore import QTimer
-
             from steempeg.ui.window_chrome import (
                 force_app_cursor_resync,
                 refresh_traffic_lights_under_cursor,
@@ -4096,6 +4125,8 @@ class RenderedLibraryMixin:
             QTimer.singleShot(16, self._flush_steam_screenshot_chunk)
 
     def _flush_steam_screenshot_chunk(self) -> None:
+        from steempeg.ui.startup_trace import startup_trace
+
         pending = getattr(self, "_pending_steam_screenshot_rows", None) or []
         if not pending:
             self._steam_screenshot_chunk_scheduled = False
@@ -4103,27 +4134,42 @@ class RenderedLibraryMixin:
             if getattr(self, "_steam_screenshots_worker", None) is None:
                 QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
             return
-        chunk = pending[:120]
-        del pending[:120]
+        # Placeholders only — big batches, no per-chunk filter/count walks.
+        # Thumbs stay viewport-lazy (scroll). Was 24/100ms → felt broken vs old «count then scroll».
+        on_shots = str(getattr(self, "_library_panel_mode", "") or "") == "screenshots"
+        chunk_n = 600 if on_shots else 400
+        chunk = pending[:chunk_n]
+        del pending[:chunk_n]
         self._pending_steam_screenshot_rows = pending
+        startup_trace(
+            "steam_shot_chunk",
+            n=len(chunk),
+            left=len(pending),
+            quiet=0,
+        )
         self._paint_screenshot_rows(chunk, rebuild_index=False)
-        # Don't refresh_viewport here — that would reset the idle timer every batch
-        # and starve visible tiles until all 8k placeholders land.
-        self._apply_screenshots_filters(refresh_viewport=False)
-        self._update_library_count_label()
-        # First batch: fill what the user can already see. Later batches only
-        # extend the scroll range (placeholders); no rematerialize storm.
-        if not getattr(self, "_screenshots_viewport_primed", False):
+        # Count from prefetch total — don't O(n) walk the grid every batch.
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        if (
+            not getattr(self, "_screenshots_viewport_primed", False)
+            and on_shots
+        ):
             self._screenshots_viewport_primed = True
             self._schedule_screenshots_viewport_refresh(0)
+        elif not getattr(self, "_screenshots_viewport_primed", False):
+            self._screenshots_viewport_primed = True
         if pending:
-            gap = 48 if getattr(self, "_progressive_quiet_hydrate", False) else 16
-            QTimer.singleShot(gap, self._flush_steam_screenshot_chunk)
+            QTimer.singleShot(0, self._flush_steam_screenshot_chunk)
         else:
             self._steam_screenshot_chunk_scheduled = False
+            self._progressive_quiet_hydrate = False
+            self._apply_screenshots_filters(refresh_viewport=False)
+            if hasattr(self, "_update_library_count_label"):
+                self._update_library_count_label()
             if getattr(self, "_steam_screenshots_worker", None) is None:
                 QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
-            else:
+            elif on_shots:
                 self._schedule_screenshots_viewport_refresh(50)
 
     def _on_steam_screenshots_scan_failed(self, message: str) -> None:
@@ -4346,15 +4392,43 @@ class RenderedLibraryMixin:
     def restore_screenshots_from_session_cache(self) -> bool:
         """Skip startup: paint last Screenshots session JSON — no folder walk.
 
-        Steempeg rows paint immediately; Steam rows from the snapshot append in
-        UI chunks so 8k+ cards never hitch the first frame.
+        Prefer an off-UI prefetch payload when available (Progressive warm).
+        Steempeg rows paint immediately; Steam rows append in UI chunks.
         """
         folder = self._screenshots_folder_path()
-        rows = files_from_screenshots_library_cache(
-            getattr(self, "cache_dir", None),
-            folder=folder,
-        )
-        if not rows:
+        prefetched = getattr(self, "_screenshots_prefetch_payload", None)
+        if isinstance(prefetched, dict) and (
+            prefetched.get("steempeg_rows") is not None
+            or prefetched.get("steam_rows") is not None
+        ):
+            steempeg_rows = list(prefetched.get("steempeg_rows") or [])
+            steam_rows = list(prefetched.get("steam_rows") or [])
+            # One-shot — don't reuse a stale snapshot after Refresh.
+            self._screenshots_prefetch_payload = None
+            logging.info(
+                "Screenshots: using off-UI prefetch (steempeg=%d steam=%d)",
+                len(steempeg_rows),
+                len(steam_rows),
+            )
+        else:
+            rows = files_from_screenshots_library_cache(
+                getattr(self, "cache_dir", None),
+                folder=folder,
+            )
+            if not rows:
+                return False
+            steempeg_rows = []
+            steam_rows = []
+            for row in rows:
+                source = str(row.get("source") or "steempeg").strip().lower()
+                if source == "steam":
+                    steam_rows.append(row)
+                else:
+                    steempeg_rows.append(row)
+            steempeg_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
+            steam_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
+
+        if not steempeg_rows and not steam_rows:
             return False
 
         self._ensure_screenshots_widgets()
@@ -4372,17 +4446,6 @@ class RenderedLibraryMixin:
         self._screenshot_items_by_path = {}
         self._screenshot_seen_paths = set()
 
-        steempeg_rows: list[dict] = []
-        steam_rows: list[dict] = []
-        for row in rows:
-            source = str(row.get("source") or "steempeg").strip().lower()
-            if source == "steam":
-                steam_rows.append(row)
-            else:
-                steempeg_rows.append(row)
-
-        steempeg_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
-        steam_rows.sort(key=lambda t: float(t.get("mtime") or 0.0), reverse=True)
         self._paint_screenshot_rows(steempeg_rows, rebuild_index=True)
 
         self._screenshots_scanned_folder = folder if steam_rows else None
@@ -4403,17 +4466,20 @@ class RenderedLibraryMixin:
             len(steam_rows),
         )
         if steempeg_rows:
-            self._screenshots_viewport_primed = True
-            self._schedule_screenshots_viewport_refresh(0)
-            self._schedule_screenshots_grid_reflow(0)
+            # First screen of Steempeg shots — materialize if this tab is active.
+            if str(getattr(self, "_library_panel_mode", "") or "") == "screenshots":
+                self._screenshots_viewport_primed = True
+                self._schedule_screenshots_viewport_refresh(0)
+                self._schedule_screenshots_grid_reflow(0)
+            else:
+                self._screenshots_viewport_primed = False
         else:
             self._screenshots_viewport_primed = False
         if steam_rows:
             self._pending_steam_screenshot_rows = list(steam_rows)
             self._steam_screenshot_chunk_scheduled = True
-            # Progressive quiet hydrate: wait longer so Clips stay responsive.
-            delay = 1200 if getattr(self, "_progressive_quiet_hydrate", False) else 100
-            QTimer.singleShot(delay, self._flush_steam_screenshot_chunk)
+            # Placeholders ASAP so scroll range + count match; thumbs stay lazy.
+            QTimer.singleShot(0, self._flush_steam_screenshot_chunk)
         elif not steempeg_rows:
             return False
         else:
@@ -4973,11 +5039,23 @@ class RenderedLibraryMixin:
             logging.exception("Failed to save rendered library snapshot")
 
     def restore_rendered_from_session_cache(self) -> bool:
-        """Skip startup: paint last Rendered session JSON — no export-folder walk."""
-        files = files_from_rendered_library_cache(
-            getattr(self, "cache_dir", None),
-            require_exists=False,
-        )
+        """Skip startup: paint last Rendered session JSON — no export-folder walk.
+
+        Prefer off-UI prefetch payload when available (Progressive warm).
+        """
+        prefetched = getattr(self, "_rendered_prefetch_payload", None)
+        if isinstance(prefetched, list) and prefetched:
+            files = list(prefetched)
+            self._rendered_prefetch_payload = None
+            logging.info(
+                "Rendered: using off-UI prefetch (%d files)",
+                len(files),
+            )
+        else:
+            files = files_from_rendered_library_cache(
+                getattr(self, "cache_dir", None),
+                require_exists=False,
+            )
         if not files:
             return False
 
@@ -5000,52 +5078,15 @@ class RenderedLibraryMixin:
         self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
         self._rendered_scan_active = False
 
-        # Progressive quiet hydrate: drip ClipCards so Clips stay responsive.
-        if getattr(self, "_progressive_quiet_hydrate", False):
-            self._pending_rendered_restore_files = list(files)
-            self._rendered_restore_chunk_scheduled = True
-            QTimer.singleShot(0, self._flush_rendered_restore_chunk)
-            logging.info(
-                "Progressive: chunked restore of %d rendered files",
-                len(files),
-            )
-            return True
-
-        table = self.table_rendered
-        grid = getattr(self, "grid_rendered", None)
-        table.setUpdatesEnabled(False)
-        if grid is not None:
-            grid.setUpdatesEnabled(False)
-        try:
-            for row in files:
-                table_row = self._insert_rendered_file_row(row)
-                if table_row >= 0:
-                    self._append_rendered_grid_card_for_row(table_row)
-                if hasattr(self, "_seed_rendered_health_cache_row"):
-                    self._seed_rendered_health_cache_row(row)
-        finally:
-            table.setUpdatesEnabled(True)
-            if grid is not None:
-                grid.setUpdatesEnabled(True)
-
-        table.setSortingEnabled(True)
-        table.horizontalHeader().setSectionsClickable(False)
-        if hasattr(self, "apply_rendered_sorting"):
-            self.apply_rendered_sorting()
-        else:
-            self._sync_rendered_grid_from_table()
-
-        self._update_library_count_label()
-        logging.info("Skip: painted %d rendered files from session snapshot", len(files))
-        if not hasattr(self, "_sort_applied_by_panel"):
-            self._sort_applied_by_panel = {}
-        if hasattr(self, "combo_sort"):
-            self._sort_applied_by_panel["rendered"] = int(self.combo_sort.currentIndex())
-        # Quiet poster top-up later (may touch export paths).
-        # Progressive quiet hydrate: no ffmpeg poster storm during launch.
-        if not getattr(self, "_progressive_quiet_hydrate", False):
-            QTimer.singleShot(900, self._schedule_rendered_poster_backfill)
-        QTimer.singleShot(0, self._sync_library_scrollbars)
+        # Always drip ClipCards — never insert all 88 on one UI tick (tab hitch).
+        self._pending_rendered_restore_files = list(files)
+        self._rendered_restore_chunk_scheduled = True
+        self._progressive_quiet_hydrate = True
+        QTimer.singleShot(0, self._flush_rendered_restore_chunk)
+        logging.info(
+            "Progressive: chunked restore of %d rendered files",
+            len(files),
+        )
         return True
 
     def _flush_rendered_restore_chunk(self) -> None:
@@ -5108,6 +5149,21 @@ class RenderedLibraryMixin:
                 QTimer.singleShot(350, self._hydrate_progressive_screenshots)
             else:
                 self._progressive_quiet_hydrate = False
+        else:
+            self._progressive_quiet_hydrate = False
+        # Never kick ffmpeg poster storm while the user is still on Clips —
+        # that was the sustained hitch after the 6s Rendered hydrate bomb.
+        panel = str(getattr(self, "_library_panel_mode", "clips") or "clips")
+        if panel == "rendered" or getattr(self, "_rendered_posters_pending", False):
+            self._rendered_posters_pending = False
+            QTimer.singleShot(400, lambda: self._schedule_rendered_poster_backfill(force=True))
+        else:
+            self._rendered_posters_pending = True
+            logging.info(
+                "Progressive: deferred Rendered poster backfill until Rendered tab "
+                "(%d rows)",
+                int(table.rowCount()),
+            )
         logging.info(
             "Progressive: finished chunked rendered restore (%d rows)",
             int(table.rowCount()),
@@ -5161,7 +5217,20 @@ class RenderedLibraryMixin:
         name_item = QTableWidgetItem(list_icon, f"   {scanned.display_title}")
         name_item.setData(Qt.ItemDataRole.UserRole, scanned.full_path)
         name_item.setData(_RENDERED_GAME_FILTER_ROLE, scanned.game_filter_name)
-        name_item.setData(_RENDERED_THUMB_ROLE, "")
+        # Prefer an existing poster cache hit — Progressive quiet hydrate used to
+        # leave _RENDERED_THUMB_ROLE empty and never schedule ffmpeg backfill.
+        thumb_seed = ""
+        cache_dir = getattr(self, "cache_dir", None)
+        if cache_dir and scanned.full_path:
+            try:
+                from steempeg.core.rendered_media import poster_cache_path
+
+                candidate = poster_cache_path(cache_dir, scanned.full_path)
+                if candidate and os.path.isfile(candidate):
+                    thumb_seed = candidate
+            except Exception:
+                pass
+        name_item.setData(_RENDERED_THUMB_ROLE, thumb_seed)
         name_item.setData(_RENDERED_ICON_ROLE, icon_path or "")
         name_item.setToolTip(scanned.full_path)
         self.table_rendered.setItem(row, 0, name_item)
@@ -5187,8 +5256,8 @@ class RenderedLibraryMixin:
             self.table_rendered.setRowHidden(row, True)
         return row
 
-    def _schedule_rendered_poster_backfill(self) -> None:
-        if getattr(self, "_progressive_quiet_hydrate", False):
+    def _schedule_rendered_poster_backfill(self, *, force: bool = False) -> None:
+        if getattr(self, "_progressive_quiet_hydrate", False) and not force:
             return
         if not hasattr(self, "table_rendered") or not hasattr(self, "cache_dir"):
             return
@@ -5436,10 +5505,15 @@ class RenderedLibraryMixin:
 
         if mode == "screenshots":
             grid = getattr(self, "grid_screenshots", None)
+            known = int(getattr(self, "_screenshots_known_count", 0) or 0)
             if grid is None:
-                _set(0, "Shots")
+                _set(known if known > 0 else 0, "Shots")
                 return
             n = grid.count()
+            # Prefetch already knows the real total — show it while placeholders land.
+            if known > n:
+                _set(known, "Shots")
+                return
             visible = sum(
                 1
                 for i in range(n)
@@ -5456,10 +5530,10 @@ class RenderedLibraryMixin:
                 except RuntimeError:
                     pass
             # Growing count during Steam merge; ellipsis only before first card lands.
-            if steam_busy and visible <= 0:
+            if steam_busy and visible <= 0 and known <= 0:
                 _set("…", "Shots")
             else:
-                _set(visible, "Shots")
+                _set(visible if visible > 0 else known, "Shots")
             return
 
         if not hasattr(self.ui, "table_clips"):

@@ -16,6 +16,7 @@ class ClipThumbProbeWorker(QThread):
     """Resolve folder ``thumbnail.jpg`` / poster cache off the UI thread."""
 
     thumb_ready = Signal(str, str)  # clip_path, thumb_path
+    thumb_missing = Signal(str)  # clip_path — no Steam thumb / poster cache
     finished_batch = Signal()
 
     def __init__(self, clip_paths: list[str], cache_dir: str, parent=None):
@@ -32,8 +33,10 @@ class ClipThumbProbeWorker(QThread):
                 thumb = probe_clip_poster_cache(self._cache_dir, clip_path)
             if thumb and os.path.isfile(thumb):
                 self.thumb_ready.emit(clip_path, thumb)
+            else:
+                self.thumb_missing.emit(clip_path)
             # Yield so marquees keep ticking while we touch a cold library drive.
             if self.isInterruptionRequested():
                 break
-            time.sleep(0.02)
+            time.sleep(0.008)
         self.finished_batch.emit()
