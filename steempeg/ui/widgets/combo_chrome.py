@@ -8,6 +8,67 @@ from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
+
+def fit_combo_popup_to_contents(combo: QComboBox, *, chrome: int = 0) -> int:
+    """Size the dropdown so every visible row label fits without ellipsis.
+
+    Returns the width applied to the view (0 if there is no view).
+    """
+    view = combo.view()
+    if view is None:
+        return 0
+    view.setTextElideMode(Qt.TextElideMode.ElideNone)
+    fm = combo.fontMetrics()
+    icon_sz = combo.iconSize()
+    icon_w = max(16, icon_sz.width() if icon_sz.isValid() else 16)
+    longest = 0
+    for i in range(combo.count()):
+        try:
+            if view.isRowHidden(i):
+                continue
+        except Exception:
+            pass
+        tw = int(fm.horizontalAdvance(combo.itemText(i)))
+        if not combo.itemIcon(i).isNull():
+            tw += icon_w + 12
+        longest = max(longest, tw)
+    # Item/view chrome: horizontal pad, margin, border, list padding, gutter.
+    if chrome <= 0:
+        chrome = 56
+    needed = max(longest + chrome, int(combo.width()), 1)
+    view.setMinimumWidth(needed)
+    return needed
+
+
+class WideContentsComboBox(QComboBox):
+    """QComboBox whose dropdown always fits the longest visible label."""
+
+    def showPopup(self) -> None:
+        needed = fit_combo_popup_to_contents(self)
+        super().showPopup()
+        if needed <= 0:
+            return
+        view = self.view()
+        if view is None:
+            return
+        # Windows/Fusion often keeps the popup frame at the field width unless
+        # the container is forced after showPopup creates it.
+        container = view.parentWidget()
+        if container is not None:
+            container.setMinimumWidth(needed)
+            if container.width() < needed:
+                container.resize(needed, container.height())
+        view.setMinimumWidth(needed)
+
+
+def install_wide_contents_combo_popup(combo: QComboBox | None) -> None:
+    """Promote ``combo`` so its popup never elides labels to ``…``."""
+    if combo is None:
+        return
+    if not isinstance(combo, WideContentsComboBox):
+        combo.__class__ = WideContentsComboBox
+    fit_combo_popup_to_contents(combo)
+
 # Force light ink — Windows light OS theme otherwise paints near-black Text
 # on our dark custom popup (QSS alone is not always enough).
 _POPUP_FG = tok.TEXT_TITLE  # #e8e8e8
