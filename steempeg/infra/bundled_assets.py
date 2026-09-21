@@ -13,6 +13,7 @@ _BASE_ASSETS = (
     "logo.ico",
     "github.jpg",
     "applejuicy23.png",
+    "kofi.png",
     "steam.png",
     "ffmpeg.png",
     "pyav.png",
@@ -141,3 +142,9 @@ BUNDLED_ASSET_FILES: tuple[str, ...] = (
 # Per-game DASH init donors live under assets/donors/<app_id>/ (not flat filenames).
 # PyInstaller adds the whole tree via ``BUNDLED_DONOR_TREE``; Linux packs copy assets/.
 BUNDLED_DONOR_TREE = "donors"
+
+# Nested font folders (OFL) — not in the flat PNG list; freeze must Tree-copy them.
+BUNDLED_FONT_TREES: tuple[str, ...] = (
+    "fonts/fredoka",
+    "fonts/selawik",
+)
