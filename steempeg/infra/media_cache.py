@@ -12,6 +12,7 @@ _MEDIA_CACHE_SUBDIRS: tuple[str, ...] = (
     "clip_posters",
     "rendered_posters",
     "mpd_playback",
+    "timeline_previews",
 )
 
 
@@ -101,3 +102,10 @@ def purge_clip_media_cache(cache_dir: str | None, clip_path: str | None) -> None
             _log.info("Purged clip markers cache: %s", os.path.basename(sidecar))
     except Exception as exc:
         _log.debug("clip markers purge skipped: %s", exc)
+
+    try:
+        from steempeg.infra.timeline_preview_cache import purge_media_timeline_previews
+
+        purge_media_timeline_previews(cache_dir, clip_path)
+    except Exception as exc:
+        _log.debug("timeline preview purge skipped: %s", exc)
