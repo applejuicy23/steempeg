@@ -88,6 +88,8 @@ class ClipDurationBackfillWorker(QThread):
 
     def run(self) -> None:
         try:
+            import time
+
             updated = 0
             for path in self._clip_paths:
                 if self.isInterruptionRequested():
@@ -103,6 +105,8 @@ class ClipDurationBackfillWorker(QThread):
                     continue
                 self.duration_ready.emit(os.path.normpath(path), dur)
                 updated += 1
+                # Small yield so Clips UI / marquees stay responsive on big sets.
+                time.sleep(0.01)
             self.finished_backfill.emit(updated)
         except Exception as exc:
             logging.exception("Clip duration backfill failed")
