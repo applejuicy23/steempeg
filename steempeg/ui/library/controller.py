@@ -89,6 +89,12 @@ _CLIP_SCROLL_IDLE_MS = 120
 # Once a card has been seen it stays (scroll-back should not hitch).
 # Cap is only a RAM safety valve — farthest from the viewport go first.
 _CLIP_MAX_LIVE_WIDGETS = 256
+# Idle background warm: one card at a time, sparse ticks. ClipCards are Qt
+# widgets — must attach on the UI thread; keep this gentle so scroll stays smooth.
+_CLIP_WARM_INTERVAL_MS = 320
+_CLIP_WARM_BATCH = 1
+# Don't steal the first seconds after Progressive discover / settle.
+_CLIP_WARM_START_DELAY_MS = 2500
 
 
 def _clips_card_cell_size(app) -> QSize:
@@ -3146,6 +3152,7 @@ class LibraryMixin:
         ):
             self._schedule_clips_viewport_refresh(0)
             QTimer.singleShot(50, self._clips_refresh_viewport)
+            QTimer.singleShot(80, lambda: self._start_clips_background_warm(delay_ms=0))
 
     def _library_filter_row_matches(self, row: int, saved: dict) -> bool:
         """Whether table row ``row`` should stay visible under ``saved_filter_state``."""
@@ -4544,11 +4551,140 @@ class LibraryMixin:
         self._clips_viewport_timer = idle
         self._clips_scroll_active = False
         self._clip_live_paths = set()
+        warm = QTimer(grid)
+        warm.setInterval(_CLIP_WARM_INTERVAL_MS)
+        try:
+            from PySide6.QtCore import Qt as _Qt
+
+            warm.setTimerType(_Qt.TimerType.CoarseTimer)
+        except Exception:
+            pass
+        warm.timeout.connect(self._clips_background_warm_tick)
+        self._clips_warm_timer = warm
         bar = grid.verticalScrollBar()
         if bar is not None:
             bar.valueChanged.connect(self._on_clips_scroll)
             bar.rangeChanged.connect(self._on_clips_scroll_range)
         self._clips_viewport_hooks_installed = True
+
+    def _pause_clips_background_warm(self) -> None:
+        timer = getattr(self, "_clips_warm_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        pending = getattr(self, "_clips_warm_start_timer", None)
+        if pending is not None and pending.isActive():
+            pending.stop()
+
+    def _start_clips_background_warm(self, *, delay_ms: int | None = None) -> None:
+        """Slow idle materialize of placeholders — yields to the wheel while scrolling.
+
+        ClipCards can only be built on the UI thread; we never spawn a second
+        process for widgets. Instead: defer until settle is done, then drip
+        one card every ``_CLIP_WARM_INTERVAL_MS``.
+        """
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        if getattr(self, "_clips_scroll_active", False):
+            return
+        if getattr(self, "_library_panel_mode", "clips") not in ("clips", ""):
+            grid = getattr(self, "grid_clips", None)
+            if grid is None or not grid.isVisible():
+                return
+        timer = getattr(self, "_clips_warm_timer", None)
+        if timer is None:
+            return
+
+        wait = _CLIP_WARM_START_DELAY_MS if delay_ms is None else max(0, int(delay_ms))
+        if getattr(self, "_startup_settle_active", False):
+            # Settle veil / Preparing — don't build cards under it; retry later.
+            wait = max(wait, _CLIP_WARM_START_DELAY_MS)
+
+        if wait > 0:
+            pending = getattr(self, "_clips_warm_start_timer", None)
+            if pending is None:
+                from PySide6.QtCore import QTimer
+
+                host = getattr(self, "grid_clips", None) or getattr(self, "ui", None)
+                pending = QTimer(host)
+                pending.setSingleShot(True)
+                pending.timeout.connect(
+                    lambda: self._start_clips_background_warm(delay_ms=0)
+                )
+                self._clips_warm_start_timer = pending
+            pending.start(wait)
+            return
+        if not timer.isActive():
+            timer.start()
+
+    def _clips_background_warm_candidates(self, limit: int) -> list:
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or limit <= 0:
+            return []
+        n = grid.count()
+        if n <= 0:
+            return []
+        # Cheap start index — avoid full `_clips_visible_items` (layout thrash).
+        start = 0
+        try:
+            vp = grid.viewport()
+            if vp is not None:
+                hit = grid.itemAt(8, 8)
+                if hit is not None:
+                    start = max(0, int(grid.row(hit)) + 1)
+        except Exception:
+            start = 0
+        order = list(range(start, n)) + list(range(0, start))
+        out: list = []
+        for i in order:
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            if isinstance(grid.itemWidget(item), ClipCard):
+                continue
+            out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    def _clips_background_warm_tick(self) -> None:
+        if not getattr(self, "_clips_progressive_active", False):
+            self._pause_clips_background_warm()
+            return
+        if getattr(self, "_clips_scroll_active", False):
+            return
+        if getattr(self, "_startup_settle_active", False):
+            self._pause_clips_background_warm()
+            return
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            self._pause_clips_background_warm()
+            return
+        if getattr(self, "_library_panel_mode", "clips") != "clips":
+            if not grid.isVisible():
+                return
+
+        live = getattr(self, "_clip_live_paths", None)
+        if isinstance(live, set) and len(live) >= _CLIP_MAX_LIVE_WIDGETS:
+            # Cap full — pause until scroll idle demats far cards, then resume.
+            self._pause_clips_background_warm()
+            return
+
+        batch = self._clips_background_warm_candidates(_CLIP_WARM_BATCH)
+        if not batch:
+            self._pause_clips_background_warm()
+            return
+        for item in batch:
+            if getattr(self, "_clips_scroll_active", False):
+                break
+            live = getattr(self, "_clip_live_paths", None)
+            if isinstance(live, set) and len(live) >= _CLIP_MAX_LIVE_WIDGETS:
+                break
+            self._materialize_clip_grid_item(item)
+        # Edge flush is expensive — only after a handful of warms.
+        n = int(getattr(self, "_clips_warm_edge_counter", 0)) + 1
+        self._clips_warm_edge_counter = n
+        if n % 8 == 0:
+            self._schedule_clip_card_edge_sync()
 
     def _on_clips_scroll_range(self, *_args) -> None:
         """Sheet open / layout grow — scrollbar appears without a wheel tick."""
@@ -4601,6 +4737,7 @@ class LibraryMixin:
         self._preview_clip_path = None
         self._clips_visual_selected_rows = set()
         self._clip_live_paths = set()
+        self._pause_clips_background_warm()
         if hasattr(self, "_clear_clips_selection_visual"):
             self._clear_clips_selection_visual()
 
@@ -4685,6 +4822,7 @@ class LibraryMixin:
         # Progressive appends grow the shelf — recompute on-screen top/bottom
         # flush or the last batch row keeps square bottoms after more cards land.
         self._schedule_clip_card_edge_sync()
+        # Do not warm mid-discover — that stole Preparing/settle UI time.
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
@@ -4717,6 +4855,8 @@ class LibraryMixin:
         # Lightweight rows always start as ``--:--`` — fill from MPD off-thread.
         QTimer.singleShot(600, self._schedule_clip_duration_backfill)
         QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
+        # Deferred idle warm — never race Preparing workspace / settle veil.
+        self._start_clips_background_warm()
         if getattr(self, "_startup_library_scan_active", False) and hasattr(
             self, "preload_render_history"
         ):
@@ -4728,6 +4868,7 @@ class LibraryMixin:
 
     def _on_progressive_clips_failed(self, message: str) -> None:
         self._progressive_clips_worker = None
+        self._pause_clips_background_warm()
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "set_busy"):
             try:
@@ -4745,6 +4886,7 @@ class LibraryMixin:
         if not getattr(self, "_clips_progressive_active", False):
             return
         self._clips_scroll_active = True
+        self._pause_clips_background_warm()
         timer = getattr(self, "_clips_viewport_timer", None)
         if timer is not None:
             timer.start()
@@ -4752,6 +4894,7 @@ class LibraryMixin:
     def _clips_on_scroll_idle(self) -> None:
         self._clips_scroll_active = False
         self._clips_refresh_viewport()
+        self._start_clips_background_warm(delay_ms=0)
 
     def _schedule_clips_viewport_refresh(self, delay_ms: int = 0) -> None:
         if not getattr(self, "_clips_progressive_active", False):
@@ -4959,6 +5102,7 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = True
         self._clips_progressive_active = False
+        self._pause_clips_background_warm()
         self._clip_live_paths = set()
         self._snapshot_append_new_after = bool(append_new)
         self._library_clip_rows = []
@@ -5218,6 +5362,7 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
         self._clips_progressive_active = False
+        self._pause_clips_background_warm()
         self._clip_live_paths = set()
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
@@ -5393,6 +5538,7 @@ class LibraryMixin:
         # until the user hits Refresh.
         if getattr(self, "_clips_progressive_active", False):
             self._clips_scroll_active = False
+            self._clip_live_paths = set()
             try:
                 self.grid_clips.doItemsLayout()
             except Exception:
@@ -5400,10 +5546,7 @@ class LibraryMixin:
             self._clips_refresh_viewport()
             QTimer.singleShot(0, self._clips_refresh_viewport)
             QTimer.singleShot(50, self._clips_refresh_viewport)
-
-        self.sync_grid_from_table_selection()
-        QTimer.singleShot(0, self.sync_clip_card_edge_roles)
-        QTimer.singleShot(0, self._sync_library_scrollbars)
+            self._start_clips_background_warm(delay_ms=400)
 
     def _filter_popup_floor_y(self, menu_y: int) -> int:
         """Bottom Y the filter popup may grow down to (global coords).
