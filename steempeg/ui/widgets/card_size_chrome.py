@@ -279,10 +279,10 @@ class CardSizeChrome(QObject):
         self._sync_buttons()
 
     def set_grid_only(self, grid_only: bool) -> None:
-        """Screenshots: size chrome still works; List never shown.
+        """Portable Choose-a-Clip: size chrome works; List never shown.
 
-        Must clear ``_size_only`` when leaving Screenshots — sticky True
-        used to hide List forever after one Screenshots visit.
+        Must clear ``_size_only`` when leaving that mode — sticky True
+        used to hide List forever after one visit.
         """
         self._size_only = bool(grid_only)
         if grid_only:
