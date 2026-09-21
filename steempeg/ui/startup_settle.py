@@ -65,7 +65,7 @@ def kick_startup_settle_after_show(app) -> None:
         return
     _run_startup_settle_pass(app)
     gen = int(getattr(app, "_startup_settle_gen", 0) or 0)
-    # Splash already closed after the 1s Preparing spin in hold_launch_splash.
+    # Splash already closed; shell is mapped under the veil — reveal soon.
     reveal_ms = (
         STARTUP_SETTLE_REVEAL_MS
         if getattr(app, "_startup_settle_use_veil", True)
@@ -82,9 +82,11 @@ def _finish_startup_settle(app, gen: int, *, reason: str = "settle") -> None:
         return
     if not getattr(app, "_startup_settle_active", False):
         return
-    # Second pass after maximize geometry + deferred density / dock settle.
+    # Unveil FIRST — never leave «Preparing workspace…» up while density /
+    # library restore / Rendered-Screenshots hydrate block the UI thread.
+    _reveal_startup_settle_if(app, gen, reason=reason)
     _run_startup_settle_pass(app)
-    # Flush any pending density timer immediately before uncovering.
+    # Flush any pending density timer immediately after unveil.
     timer = getattr(app, "_density_resize_timer", None)
     if timer is not None and timer.isActive():
         timer.stop()
@@ -95,8 +97,6 @@ def _finish_startup_settle(app, gen: int, *, reason: str = "settle") -> None:
             app._restore_library_ui_state()
         except Exception:
             logging.debug("startup settle: library UI restore failed", exc_info=True)
-    # One more glue after density/library restore — last chance before unveil.
-    # Measure with maxHeight lifted so a prior short pin cannot freeze sizeHint.
     if hasattr(app, "_finalize_startup_dash_geometry"):
         try:
             app._finalize_startup_dash_geometry()
@@ -111,7 +111,6 @@ def _finish_startup_settle(app, gen: int, *, reason: str = "settle") -> None:
             logging.debug(
                 "startup settle: final portable-like dash glue failed", exc_info=True
             )
-    _reveal_startup_settle_if(app, gen, reason=reason)
 
 
 def _reveal_startup_settle_if(app, gen: int, *, reason: str) -> None:
