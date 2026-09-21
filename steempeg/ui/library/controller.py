@@ -582,19 +582,49 @@ class LibraryMixin:
         updated = int(payload.get("updated") or 0)
         total = int(payload.get("total") or 0)
 
-        for row in range(self.ui.table_clips.rowCount()):
-            item = self.ui.table_clips.item(row, 0)
-            if not item:
-                continue
-            clip_path = item.data(Qt.UserRole)
-            if not clip_path:
-                continue
-            parts = os.path.basename(clip_path).split("_")
-            if len(parts) >= 2 and parts[1].isdigit():
-                item.setIcon(self.get_game_icon(parts[1], allow_download=False))
+        # Patch table + live cards — full grid rebuild froze the shell.
+        path_to_app: dict[str, str] = {}
+        table = self.ui.table_clips
+        table.setUpdatesEnabled(False)
+        try:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if not item:
+                    continue
+                clip_path = item.data(Qt.UserRole)
+                if not clip_path:
+                    continue
+                parts = os.path.basename(str(clip_path)).split("_")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    app_id = parts[1]
+                    item.setIcon(self.get_game_icon(app_id, allow_download=False))
+                    path_to_app[self._norm_clip_path_key(clip_path)] = app_id
+        finally:
+            table.setUpdatesEnabled(True)
 
-        if hasattr(self, "build_netflix_grid"):
-            self.build_netflix_grid()
+        grid = getattr(self, "grid_clips", None)
+        if grid is not None and path_to_app:
+            from steempeg.ui.library.grid_view import ClipCard
+
+            grid.setUpdatesEnabled(False)
+            try:
+                for i in range(grid.count()):
+                    gitem = grid.item(i)
+                    if gitem is None:
+                        continue
+                    app_id = path_to_app.get(
+                        self._norm_clip_path_key(gitem.data(Qt.UserRole + 1))
+                    )
+                    if not app_id:
+                        continue
+                    card = grid.itemWidget(gitem)
+                    if not isinstance(card, ClipCard) or not hasattr(card, "set_game_icon"):
+                        continue
+                    icon_path = os.path.join(self.cache_dir, f"{app_id}.jpg")
+                    card.set_game_icon(icon_path)
+            finally:
+                grid.setUpdatesEnabled(True)
+
         msg = f"Refreshed {updated} of {total} game icon(s) from Steam."
         if quiet:
             logging.info("%s", msg)
@@ -645,12 +675,78 @@ class LibraryMixin:
         worker.start()
 
     def _on_steam_names_progress(self, done: int, total: int) -> None:
+        # Throttle status paint — every id was flooding the UI thread.
+        now = time.monotonic()
+        last = float(getattr(self, "_steam_names_progress_paint_at", 0.0) or 0.0)
+        if done < total and (now - last) < 0.12:
+            return
+        self._steam_names_progress_paint_at = now
         self._paint_steam_meta_status(
             f"Refreshing game names from Steam ({done}/{total})",
             done=done,
             total=total,
             stage="names",
         )
+
+    def _apply_steam_names_to_clips_library(self, names: dict) -> int:
+        """Patch table + live ClipCards in place — never rebuild the whole grid."""
+        if not names or not hasattr(self.ui, "table_clips"):
+            return 0
+        by_id = {
+            str(aid): str(name).strip()
+            for aid, name in names.items()
+            if str(aid).strip() and str(name or "").strip()
+        }
+        if not by_id:
+            return 0
+
+        touched = 0
+        path_to_title: dict[str, str] = {}
+        table = self.ui.table_clips
+        table.setUpdatesEnabled(False)
+        try:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if not item:
+                    continue
+                clip_path = item.data(Qt.UserRole)
+                if not clip_path:
+                    continue
+                parts = os.path.basename(str(clip_path)).split("_")
+                if len(parts) < 2 or not parts[1].isdigit():
+                    continue
+                app_id = parts[1]
+                name = by_id.get(app_id)
+                if not name:
+                    continue
+                title = f"   {name}"
+                if item.text() != title:
+                    item.setText(title)
+                    touched += 1
+                path_to_title[self._norm_clip_path_key(clip_path)] = name
+        finally:
+            table.setUpdatesEnabled(True)
+
+        grid = getattr(self, "grid_clips", None)
+        if grid is not None and path_to_title:
+            grid.setUpdatesEnabled(False)
+            try:
+                from steempeg.ui.library.grid_view import ClipCard
+
+                for i in range(grid.count()):
+                    gitem = grid.item(i)
+                    if gitem is None:
+                        continue
+                    key = self._norm_clip_path_key(gitem.data(Qt.UserRole + 1))
+                    title = path_to_title.get(key)
+                    if not title:
+                        continue
+                    card = grid.itemWidget(gitem)
+                    if isinstance(card, ClipCard) and hasattr(card, "set_title"):
+                        card.set_title(title)
+            finally:
+                grid.setUpdatesEnabled(True)
+        return touched
 
     def _on_steam_names_finished(self, payload: dict) -> None:
         self._steam_names_worker = None
@@ -662,21 +758,9 @@ class LibraryMixin:
             self.game_names_cache[app_id] = name
         self.save_json_cache()
 
-        for row in range(self.ui.table_clips.rowCount()):
-            item = self.ui.table_clips.item(row, 0)
-            if not item:
-                continue
-            clip_path = item.data(Qt.UserRole)
-            if not clip_path:
-                continue
-            parts = os.path.basename(clip_path).split("_")
-            if len(parts) >= 2 and parts[1].isdigit():
-                app_id = parts[1]
-                raw_name = self.get_game_name(app_id, allow_fetch=False)
-                item.setText(f"   {raw_name}")
+        # In-place title patch — full build_netflix_grid() froze the shell here.
+        self._apply_steam_names_to_clips_library(names)
 
-        if hasattr(self, "build_netflix_grid"):
-            self.build_netflix_grid()
         if hasattr(self, "apply_screenshot_game_names"):
             try:
                 self.apply_screenshot_game_names(names)
@@ -3054,6 +3138,14 @@ class LibraryMixin:
         grid.setUpdatesEnabled(True)
         if hasattr(self, "sync_clip_card_edge_roles"):
             QTimer.singleShot(0, self.sync_clip_card_edge_roles)
+        # Progressive only attaches ClipCards for the viewport. sortItems moves
+        # placeholders into view without a scroll event — rematerialize or the
+        # first screen stays blank until the user wheels.
+        if getattr(self, "_clips_progressive_active", False) and hasattr(
+            self, "_schedule_clips_viewport_refresh"
+        ):
+            self._schedule_clips_viewport_refresh(0)
+            QTimer.singleShot(50, self._clips_refresh_viewport)
 
     def _library_filter_row_matches(self, row: int, saved: dict) -> bool:
         """Whether table row ``row`` should stay visible under ``saved_filter_state``."""
