@@ -289,6 +289,7 @@ class RenderedLibraryMixin:
         self._screenshots_filter_folders: set[str] | None = None
         self._clips_view_mode = "grid"
         self._rendered_view_mode = "grid"
+        self._screenshots_view_mode = "grid"
         from steempeg.ui.library.card_sizes import (
             DEFAULT_LIBRARY_CARD_SIZE,
             DEFAULT_SCREENSHOTS_CARD_SIZE,
@@ -653,6 +654,9 @@ class RenderedLibraryMixin:
         if mode == "rendered":
             for i in _HEALTH_SORT_INDICES:
                 view.setRowHidden(i, True)
+        from steempeg.ui.widgets.combo_chrome import fit_combo_popup_to_contents
+
+        fit_combo_popup_to_contents(self.combo_sort)
 
     def _rebuild_sort_combo_items(
         self, items: tuple[tuple[str, str], ...], *, mode_key: str
@@ -670,14 +674,9 @@ class RenderedLibraryMixin:
             for icon_name, label in items:
                 combo.addItem(QIcon(get_resource_path(icon_name)), label)
             combo.setMaxVisibleItems(max(14, len(items)))
-            view = combo.view()
-            if view is not None:
-                fm = combo.fontMetrics()
-                longest = max(
-                    (fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
-                    default=0,
-                )
-                view.setMinimumWidth(longest + 78)
+            from steempeg.ui.widgets.combo_chrome import fit_combo_popup_to_contents
+
+            fit_combo_popup_to_contents(combo)
             self._sort_combo_mode = mode_key
         finally:
             combo.blockSignals(False)
@@ -1032,6 +1031,7 @@ class RenderedLibraryMixin:
             self._clear_clips_selection_visual()
             self._clear_rendered_selection_visual()
             self._ensure_screenshots_widgets()
+            self._apply_screenshots_view_mode(relayout=False)
             # Startup restore opens this tab before session-cache paint; a full
             # Steam+Steempeg refresh here freezes the UI for minutes (8k+ cards).
             if not getattr(self, "_restoring_library_state", False):
@@ -1502,6 +1502,7 @@ class RenderedLibraryMixin:
             "library_panel_mode": getattr(self, "_library_panel_mode", "clips") or "",
             "clips_view_mode": getattr(self, "_clips_view_mode", "grid"),
             "rendered_view_mode": getattr(self, "_rendered_view_mode", "grid"),
+            "screenshots_view_mode": getattr(self, "_screenshots_view_mode", "grid"),
             "clips_card_size": getattr(self, "_clips_card_size", "big"),
             "rendered_card_size": getattr(self, "_rendered_card_size", "big"),
             "screenshots_card_size": getattr(self, "_screenshots_card_size", "medium"),
@@ -1657,6 +1658,7 @@ class RenderedLibraryMixin:
         try:
             clips_vm = state.get("clips_view_mode")
             rendered_vm = state.get("rendered_view_mode")
+            screenshots_vm = state.get("screenshots_view_mode")
             from steempeg.ui.library.card_sizes import normalize_card_size
             from steempeg.ui.settings_prefs import load_library_allow_list_view
 
@@ -1675,6 +1677,10 @@ class RenderedLibraryMixin:
                 if rendered_vm == "list" and not allow_list:
                     rendered_vm = "grid"
                 self._rendered_view_mode = rendered_vm
+            if screenshots_vm in ("grid", "list"):
+                if screenshots_vm == "list" and not allow_list:
+                    screenshots_vm = "grid"
+                self._screenshots_view_mode = screenshots_vm
 
             self._clips_card_size = normalize_card_size(state.get("clips_card_size"))
             self._rendered_card_size = normalize_card_size(state.get("rendered_card_size"))
@@ -1859,6 +1865,17 @@ class RenderedLibraryMixin:
         table_row = self._insert_rendered_file_row(scanned)
         if table_row >= 0:
             self._append_rendered_grid_card_for_row(table_row)
+            rows = getattr(self, "_library_rendered_rows", None)
+            if isinstance(rows, list):
+                rows.append(scanned)
+            # Append lands at the bottom — re-apply current sort so Newest/Default
+            # put the fresh export at the top (same as a full scan).
+            if hasattr(self, "_sort_applied_by_panel"):
+                self._sort_applied_by_panel.pop("rendered", None)
+            if hasattr(self, "apply_rendered_sorting"):
+                self.apply_rendered_sorting()
+            if hasattr(self, "_persist_rendered_library_snapshot"):
+                QTimer.singleShot(1500, self._persist_rendered_library_snapshot)
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
         if table_row >= 0 and scanned.needs_poster and hasattr(self, "_schedule_rendered_poster_backfill"):
@@ -2106,6 +2123,55 @@ class RenderedLibraryMixin:
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+            library_table_stylesheet,
+        )
+
+        self.table_screenshots = QTableWidget()
+        self.table_screenshots.setColumnCount(4)
+        self.table_screenshots.setHorizontalHeaderLabels(
+            ["Game Name", "Source", "Date", "Size"]
+        )
+        self.table_screenshots.setShowGrid(False)
+        self.table_screenshots.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table_screenshots.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.table_screenshots.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.table_screenshots.verticalHeader().setVisible(False)
+        self.table_screenshots.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.table_screenshots.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.table_screenshots.setWordWrap(False)
+        self.table_screenshots.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.table_screenshots.setFrameShape(QFrame.Shape.NoFrame)
+        self.table_screenshots.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.table_screenshots.verticalHeader().setDefaultSectionSize(46)
+        self.table_screenshots.setIconSize(QSize(26, 26))
+        self.table_screenshots.setFont(tok.ui_qfont(10, weight=QFont.Weight.DemiBold))
+        header = self.table_screenshots.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setSectionsClickable(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table_screenshots.setColumnWidth(1, 100)
+        self.table_screenshots.setColumnWidth(2, 160)
+        self.table_screenshots.setColumnWidth(3, 100)
+        self.table_screenshots.setStyleSheet(library_table_stylesheet())
+        install_library_vertical_scrollbar(self.table_screenshots)
+        self.table_screenshots.hide()
+
         self.grid_screenshots = QListWidget()
         self.grid_screenshots.setViewMode(QListWidget.ViewMode.IconMode)
         self.grid_screenshots.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -2132,10 +2198,6 @@ class RenderedLibraryMixin:
         self.grid_screenshots.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.grid_screenshots.setMovement(QListWidget.Movement.Static)
         self.grid_screenshots.setDragEnabled(False)
-        from steempeg.ui.library.library_styles import (
-            LIBRARY_SCROLLBAR_VERTICAL,
-            install_library_vertical_scrollbar,
-        )
 
         # Transparent cells — ScreenshotPhoto draws the framed image itself.
         self.grid_screenshots.setStyleSheet(
@@ -2156,11 +2218,29 @@ class RenderedLibraryMixin:
         # Start hidden; sync_screenshots_vertical_scrollbar switches to AlwaysOn
         # once content overflows (stable wrap width — no AsNeeded 3→2 sticky).
         self.grid_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.grid_screenshots.itemSelectionChanged.connect(self._on_screenshots_grid_selection_changed)
+        self.table_screenshots.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.grid_screenshots.itemSelectionChanged.connect(
+            self._on_screenshots_grid_selection_changed
+        )
+        self.table_screenshots.itemSelectionChanged.connect(
+            self._on_screenshots_table_selection_changed
+        )
+        self.table_screenshots.itemDoubleClicked.connect(
+            self._on_screenshots_table_activated
+        )
         self.grid_screenshots.viewport().installEventFilter(self)
         self.grid_screenshots.installEventFilter(self)
+        self.table_screenshots.viewport().installEventFilter(self)
+        self.table_screenshots.installEventFilter(self)
+        self.table_screenshots.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.table_screenshots.customContextMenuRequested.connect(
+            self.show_screenshots_table_context_menu
+        )
         self._screenshots_grid_anchor_index = -1
         self._screenshots_grid_select_in_progress = False
+        self._screenshots_table_select_in_progress = False
         self._last_opened_screenshot_path = ""
         self._screenshot_live_paths = set()
         self._screenshots_scroll_active = False
@@ -2173,19 +2253,288 @@ class RenderedLibraryMixin:
         if bar is not None:
             bar.valueChanged.connect(self._on_screenshots_scroll)
 
+        lay.addWidget(self.table_screenshots)
         lay.addWidget(self.grid_screenshots)
         if hasattr(self, "library_stack"):
             self.library_stack.addWidget(self.screenshots_page)
+        self._apply_screenshots_view_mode(relayout=False)
 
     def _clear_screenshots_selection_visual(self) -> None:
         grid = getattr(self, "grid_screenshots", None)
-        if grid is None:
+        if grid is not None:
+            grid.blockSignals(True)
+            grid.clearSelection()
+            grid.setCurrentItem(None)
+            grid.blockSignals(False)
+            self._sync_screenshot_photo_visuals()
+        table = getattr(self, "table_screenshots", None)
+        if table is not None:
+            table.blockSignals(True)
+            table.clearSelection()
+            table.setCurrentCell(-1, -1)
+            table.blockSignals(False)
+
+    def _apply_screenshots_view_mode(self, *, relayout: bool = True) -> None:
+        mode = getattr(self, "_screenshots_view_mode", "grid")
+        grid = getattr(self, "grid_screenshots", None)
+        table = getattr(self, "table_screenshots", None)
+        if grid is None or table is None:
             return
-        grid.blockSignals(True)
-        grid.clearSelection()
-        grid.setCurrentItem(None)
-        grid.blockSignals(False)
-        self._sync_screenshot_photo_visuals()
+        if mode == "list":
+            grid.hide()
+            table.show()
+            if table.rowCount() != grid.count():
+                self._rebuild_screenshots_table_from_grid()
+        else:
+            table.hide()
+            grid.show()
+            if relayout:
+                try:
+                    grid.doItemsLayout()
+                except Exception:
+                    pass
+                if hasattr(self, "_schedule_screenshots_viewport_refresh"):
+                    self._schedule_screenshots_viewport_refresh(0)
+
+        chrome = getattr(self, "card_size_chrome", None) or getattr(
+            self, "view_mode_chrome", None
+        )
+        if chrome is not None and hasattr(chrome, "set_mode"):
+            chrome.set_mode(mode, emit=False)
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+
+    def _fill_screenshots_table_row(
+        self,
+        row: int,
+        *,
+        path: str,
+        game: str,
+        source: str,
+        mtime: float,
+        app_id: str = "",
+        hidden: bool = False,
+    ) -> None:
+        table = getattr(self, "table_screenshots", None)
+        if table is None:
+            return
+        source_key = (source or "steempeg").strip().lower() or "steempeg"
+        source_label = "Steam" if source_key == "steam" else "Steempeg"
+        label = (game or "").strip() or _parse_screenshot_game_name(path) or "Unknown"
+
+        list_icon = QIcon()
+        resolved_id = self._screenshot_app_id_for_game_label(
+            label, app_id=app_id, source=source_key
+        )
+        if resolved_id:
+            icon_path = self._screenshot_icon_path_for_app_id(resolved_id)
+            if icon_path and os.path.isfile(icon_path):
+                try:
+                    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon
+
+                    pix = QPixmap(icon_path)
+                    if not pix.isNull():
+                        list_icon = shaped_game_icon(pix, ICON_SHAPE_CIRCLE)
+                except Exception:
+                    list_icon = QIcon(icon_path)
+
+        name_item = QTableWidgetItem(list_icon, f"   {label}")
+        name_item.setData(Qt.ItemDataRole.UserRole, path)
+        name_item.setData(_SHOT_GAME_ROLE, label)
+        name_item.setData(_SHOT_SOURCE_ROLE, source_key)
+        name_item.setData(_SHOT_APP_ID_ROLE, str(app_id or ""))
+        name_item.setData(_SHOT_MTIME_ROLE, float(mtime or 0.0))
+        name_item.setToolTip(path)
+        table.setItem(row, 0, name_item)
+
+        src_item = QTableWidgetItem(source_label)
+        src_item.setTextAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        table.setItem(row, 1, src_item)
+
+        when_date = ""
+        when_time = ""
+        if mtime:
+            try:
+                dt = to_display_datetime(datetime.fromtimestamp(float(mtime)))
+                when_date = dt.strftime("%d %b %Y")
+                when_time = dt.strftime("%I:%M %p").lstrip("0")
+            except (OSError, OverflowError, ValueError, TypeError):
+                pass
+        date_item = QTableWidgetItem(
+            f"{when_date}\n{when_time}".strip() if when_date or when_time else ""
+        )
+        date_item.setTextAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        date_item.setData(Qt.ItemDataRole.UserRole, float(mtime or 0.0))
+        table.setItem(row, 2, date_item)
+
+        size_str = ""
+        try:
+            size_str = _format_file_size(int(os.path.getsize(path)))
+        except OSError:
+            size_str = ""
+        size_item = QTableWidgetItem(size_str)
+        size_item.setTextAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        table.setItem(row, 3, size_item)
+        table.setRowHidden(row, bool(hidden))
+
+    def _append_screenshots_table_row_from_grid_item(self, item: QListWidgetItem) -> None:
+        table = getattr(self, "table_screenshots", None)
+        if table is None or item is None:
+            return
+        path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not path:
+            return
+        try:
+            mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+        except (TypeError, ValueError):
+            mtime = 0.0
+        row = table.rowCount()
+        table.insertRow(row)
+        self._fill_screenshots_table_row(
+            row,
+            path=path,
+            game=str(item.data(_SHOT_GAME_ROLE) or ""),
+            source=str(item.data(_SHOT_SOURCE_ROLE) or "steempeg"),
+            mtime=mtime,
+            app_id=str(item.data(_SHOT_APP_ID_ROLE) or ""),
+            hidden=item.isHidden(),
+        )
+
+    def _rebuild_screenshots_table_from_grid(self) -> None:
+        table = getattr(self, "table_screenshots", None)
+        grid = getattr(self, "grid_screenshots", None)
+        if table is None or grid is None:
+            return
+        table.setUpdatesEnabled(False)
+        table.blockSignals(True)
+        try:
+            table.setRowCount(0)
+            n = grid.count()
+            table.setRowCount(n)
+            for i in range(n):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                path = str(item.data(Qt.ItemDataRole.UserRole) or "")
+                try:
+                    mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+                except (TypeError, ValueError):
+                    mtime = 0.0
+                self._fill_screenshots_table_row(
+                    i,
+                    path=path,
+                    game=str(item.data(_SHOT_GAME_ROLE) or ""),
+                    source=str(item.data(_SHOT_SOURCE_ROLE) or "steempeg"),
+                    mtime=mtime,
+                    app_id=str(item.data(_SHOT_APP_ID_ROLE) or ""),
+                    hidden=item.isHidden(),
+                )
+        finally:
+            table.blockSignals(False)
+            table.setUpdatesEnabled(True)
+
+    def _sync_screenshots_table_hidden_from_grid(self) -> None:
+        table = getattr(self, "table_screenshots", None)
+        grid = getattr(self, "grid_screenshots", None)
+        if table is None or grid is None:
+            return
+        n = min(table.rowCount(), grid.count())
+        for i in range(n):
+            item = grid.item(i)
+            if item is None:
+                continue
+            table.setRowHidden(i, item.isHidden())
+
+    def _on_screenshots_table_selection_changed(self) -> None:
+        if getattr(self, "_screenshots_table_select_in_progress", False):
+            return
+        if getattr(self, "_screenshots_grid_select_in_progress", False):
+            return
+        table = getattr(self, "table_screenshots", None)
+        grid = getattr(self, "grid_screenshots", None)
+        if table is None or grid is None:
+            return
+        selected_rows = {
+            idx.row() for idx in table.selectionModel().selectedRows()
+        }
+        self._screenshots_grid_select_in_progress = True
+        try:
+            grid.blockSignals(True)
+            grid.clearSelection()
+            for row in selected_rows:
+                item = grid.item(row)
+                if item is not None and not item.isHidden():
+                    item.setSelected(True)
+            grid.blockSignals(False)
+            self._sync_screenshot_photo_visuals()
+        finally:
+            self._screenshots_grid_select_in_progress = False
+        self._update_library_count_label()
+
+    def _on_screenshots_table_activated(self, table_item: QTableWidgetItem) -> None:
+        if table_item is None:
+            return
+        row = table_item.row()
+        cell = self.table_screenshots.item(row, 0) if hasattr(self, "table_screenshots") else None
+        path = cell.data(Qt.ItemDataRole.UserRole) if cell is not None else None
+        if path:
+            self._on_screenshot_open(str(path))
+
+    def show_screenshots_table_context_menu(self, pos) -> None:
+        table = getattr(self, "table_screenshots", None)
+        if table is None:
+            return
+        # Reuse grid menu path logic via selected table rows → paths.
+        paths: list[str] = []
+        seen: set[str] = set()
+        for idx in table.selectionModel().selectedRows():
+            cell = table.item(idx.row(), 0)
+            path = cell.data(Qt.ItemDataRole.UserRole) if cell else None
+            if not path:
+                continue
+            norm = os.path.normpath(str(path))
+            if norm in seen or not os.path.isfile(str(path)):
+                continue
+            seen.add(norm)
+            paths.append(str(path))
+        if not paths:
+            hit = table.itemAt(pos)
+            if hit is not None:
+                cell = table.item(hit.row(), 0)
+                path = cell.data(Qt.ItemDataRole.UserRole) if cell else None
+                if path and os.path.isfile(str(path)):
+                    paths = [str(path)]
+        if not paths:
+            return
+        from steempeg.ui import ui_theme as ut
+
+        menu = QMenu(table)
+        menu.setStyleSheet(ut.library_menu_stylesheet())
+        action_open = menu.addAction("📂 Open")
+        action_folder = menu.addAction("📁 Open folder")
+        action_related = menu.addAction("🎬 Open related clip")
+        if len(paths) == 1:
+            path = paths[0]
+            action_open.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open(p)
+            )
+            action_folder.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open_folder(p)
+            )
+            action_related.setEnabled(self._screenshot_related_clip_action_enabled(path))
+            action_related.triggered.connect(
+                lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
+            )
+        else:
+            action_open.setEnabled(False)
+            action_folder.setEnabled(False)
+            action_related.setEnabled(False)
+        menu.exec(table.viewport().mapToGlobal(pos))
 
     def _attach_screenshot_photo(
         self,
@@ -3066,6 +3415,26 @@ class RenderedLibraryMixin:
         if getattr(self, "_screenshots_grid_select_in_progress", False):
             return
         self._sync_screenshot_photo_visuals()
+        # Mirror selection into the List table when both views share row order.
+        table = getattr(self, "table_screenshots", None)
+        grid = getattr(self, "grid_screenshots", None)
+        if (
+            table is not None
+            and grid is not None
+            and not getattr(self, "_screenshots_table_select_in_progress", False)
+            and table.rowCount() == grid.count()
+        ):
+            self._screenshots_table_select_in_progress = True
+            try:
+                table.blockSignals(True)
+                table.clearSelection()
+                for item in grid.selectedItems():
+                    row = grid.row(item)
+                    if row >= 0:
+                        table.selectRow(row)
+                table.blockSignals(False)
+            finally:
+                self._screenshots_table_select_in_progress = False
         self._update_library_count_label()
 
     def _screenshot_paint_select_at(self, global_pos: QPoint) -> None:
@@ -3579,6 +3948,9 @@ class RenderedLibraryMixin:
         self._screenshot_live_paths = set()
         self._screenshots_viewport_primed = False
         self.grid_screenshots.clear()
+        table = getattr(self, "table_screenshots", None)
+        if table is not None:
+            table.setRowCount(0)
         self._screenshot_items_by_path = {}
         self._screenshot_seen_paths = set()
         self._screenshots_last_reflow_w = None
@@ -3648,6 +4020,7 @@ class RenderedLibraryMixin:
                 )
                 grid.addItem(item)
                 index[key] = item
+                self._append_screenshots_table_row_from_grid_item(item)
         finally:
             grid.setUpdatesEnabled(True)
         if rebuild_index:
@@ -3992,6 +4365,9 @@ class RenderedLibraryMixin:
         self._screenshot_live_paths = set()
         self._screenshots_viewport_primed = False
         self.grid_screenshots.clear()
+        table = getattr(self, "table_screenshots", None)
+        if table is not None:
+            table.setRowCount(0)
         self._screenshot_items_by_path = {}
         self._screenshot_seen_paths = set()
 
@@ -4294,6 +4670,8 @@ class RenderedLibraryMixin:
 
         self._schedule_screenshots_viewport_refresh(0)
 
+        self._rebuild_screenshots_table_from_grid()
+
     def _row_hidden_by_screenshots_filters(
         self, game_name: str, source: str = "steempeg"
     ) -> bool:
@@ -4337,6 +4715,7 @@ class RenderedLibraryMixin:
             game = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
             source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
             item.setHidden(self._row_hidden_by_screenshots_filters(game, source))
+        self._sync_screenshots_table_hidden_from_grid()
         self._update_library_count_label()
         if refresh_viewport:
             self._schedule_screenshots_viewport_refresh(16)
@@ -5054,8 +5433,22 @@ class RenderedLibraryMixin:
             return item.data(Qt.ItemDataRole.UserRole) if item else ""
 
         reordered = False
+
+        def _rendered_mtime_key(r: int) -> float:
+            item = self.table_rendered.item(r, 2)
+            if item is not None:
+                raw = item.data(Qt.ItemDataRole.UserRole)
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    pass
+            return 0.0
+
         if idx == 0:
-            pass
+            # Match full-scan order: newest file mtime first (register used to
+            # append at the bottom and leave Default unsorted).
+            rows.sort(key=_rendered_mtime_key, reverse=True)
+            reordered = True
         elif idx == 1:
             rows.sort(key=lambda r: cell(r, 0).lower())
             reordered = True
@@ -5069,9 +5462,8 @@ class RenderedLibraryMixin:
             rows.sort(key=lambda r: cell(r, 1).lower(), reverse=True)
             reordered = True
         elif idx in (7, 8):
-            rows.sort(key=lambda r: cell(r, 2))
-            if idx == 8:
-                rows.reverse()
+            # Sort by real mtime (UserRole), not locale display text.
+            rows.sort(key=_rendered_mtime_key, reverse=(idx == 8))
             reordered = True
         elif idx in (9, 10):
             rows.sort(key=lambda r: os.path.getsize(path(r)) if path(r) and os.path.exists(path(r)) else 0)
@@ -5723,10 +6115,6 @@ class RenderedLibraryMixin:
     def set_view_mode(self, mode):
         if self._library_chrome_is_empty() or getattr(self, "_library_panel_mode", "") == "":
             return
-        if getattr(self, "_library_panel_mode", "clips") == "screenshots":
-            # Screenshots is Grid-only (Emily 13 Aug) — ignore List.
-            self._sync_library_view_toggle_for_mode()
-            return
         if mode == "list":
             from steempeg.ui.settings_prefs import load_library_allow_list_view
 
@@ -5737,7 +6125,13 @@ class RenderedLibraryMixin:
                 allow = False
             if not allow:
                 mode = "grid"
-        if getattr(self, "_library_panel_mode", "clips") == "rendered":
+        panel = getattr(self, "_library_panel_mode", "clips")
+        if panel == "screenshots":
+            self._screenshots_view_mode = mode
+            self._apply_screenshots_view_mode(relayout=True)
+            self._schedule_persist_library_ui_state()
+            return
+        if panel == "rendered":
             self._rendered_view_mode = mode
             self._apply_rendered_view_mode(relayout=True)
             self._schedule_persist_library_ui_state()
@@ -5879,20 +6273,21 @@ class RenderedLibraryMixin:
             allow_list = False
 
         if chrome is not None:
+            # Screenshots List is opt-in via the same Settings toggle as Clips/Rendered.
+            portable_picker = bool(getattr(self, "_portable_clip_picker_open", False))
             if hasattr(chrome, "set_grid_only"):
-                chrome.set_grid_only(
-                    mode == "screenshots"
-                    or bool(getattr(self, "_portable_clip_picker_open", False))
-                )
+                chrome.set_grid_only(portable_picker)
             if hasattr(chrome, "set_allow_list"):
-                chrome.set_allow_list(allow_list and mode != "screenshots")
+                chrome.set_allow_list(allow_list and not portable_picker)
             if mode == "screenshots":
                 if hasattr(chrome, "set_size"):
                     chrome.set_size(
                         getattr(self, "_screenshots_card_size", "medium"), emit=False
                     )
                 if hasattr(chrome, "set_mode"):
-                    chrome.set_mode("grid", emit=False)
+                    chrome.set_mode(
+                        getattr(self, "_screenshots_view_mode", "grid"), emit=False
+                    )
             elif mode == "rendered":
                 if hasattr(chrome, "set_size"):
                     chrome.set_size(
@@ -5920,7 +6315,7 @@ class RenderedLibraryMixin:
         grid_btn = getattr(self, "btn_view_grid", None)
         if list_btn is None or grid_btn is None:
             return
-        if mode == "screenshots" or not allow_list:
+        if not allow_list:
             list_btn.hide()
             grid_btn.show()
             grid_btn.setStyleSheet(self.toggle_style_active)
@@ -5928,7 +6323,15 @@ class RenderedLibraryMixin:
             return
         list_btn.show()
         grid_btn.show()
-        if mode == "rendered":
+        if mode == "screenshots":
+            current = getattr(self, "_screenshots_view_mode", "grid")
+            if current == "list":
+                list_btn.setStyleSheet(self.toggle_style_active)
+                grid_btn.setStyleSheet(self.toggle_style_inactive)
+            else:
+                grid_btn.setStyleSheet(self.toggle_style_active)
+                list_btn.setStyleSheet(self.toggle_style_inactive)
+        elif mode == "rendered":
             self._apply_rendered_view_mode()
         else:
             current = getattr(self, "_clips_view_mode", "grid")
