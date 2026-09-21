@@ -553,6 +553,8 @@ class LifecycleMixin:
             self._stop_rendered_scan()
         if hasattr(self, '_stop_clip_poster_backfill'):
             self._stop_clip_poster_backfill()
+        if hasattr(self, '_stop_clip_thumb_probe'):
+            self._stop_clip_thumb_probe()
         if hasattr(self, '_stop_rendered_poster_backfill'):
             self._stop_rendered_poster_backfill()
         if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
