@@ -24,6 +24,8 @@ class ClipPosterBackfillWorker(QThread):
         self._cache_dir = cache_dir
 
     def run(self) -> None:
+        import time
+
         for clip_path in self._clip_paths:
             if self.isInterruptionRequested():
                 break
@@ -40,4 +42,8 @@ class ClipPosterBackfillWorker(QThread):
             thumb = extract_clip_poster_frame(clip_path, self._cache_dir)
             if thumb:
                 self.poster_ready.emit(clip_path, thumb)
+            # Yield so Clips Manager marquees / scroll stay usable on big libraries.
+            if self.isInterruptionRequested():
+                break
+            time.sleep(0.05)
         self.finished_batch.emit()
