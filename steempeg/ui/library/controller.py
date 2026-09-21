@@ -42,9 +42,11 @@ from steempeg.core.clip_identity import (
 )
 from steempeg.core.clip_thumbnails import (
     clip_poster_cache_path_nostat,
+    probe_clip_poster_cache,
     resolve_clip_thumbnail,
 )
 from steempeg.ui.library.clip_poster_backfill import ClipPosterBackfillWorker
+from steempeg.ui.library.clip_thumb_probe import ClipThumbProbeWorker
 from steempeg.ui.library.scan_worker import LibraryScanWorker
 from steempeg.ui.library.refresh_workers import (
     ClipDurationBackfillWorker,
@@ -86,15 +88,11 @@ _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
-# Once a card has been seen it stays (scroll-back should not hitch).
-# Cap is only a RAM safety valve — farthest from the viewport go first.
-_CLIP_MAX_LIVE_WIDGETS = 256
-# Idle background warm: one card at a time, sparse ticks. ClipCards are Qt
-# widgets — must attach on the UI thread; keep this gentle so scroll stays smooth.
-_CLIP_WARM_INTERVAL_MS = 320
-_CLIP_WARM_BATCH = 1
-# Don't steal the first seconds after Progressive discover / settle.
-_CLIP_WARM_START_DELAY_MS = 2500
+# Progressive materialize: enough for a first screen without freezing titles.
+_CLIP_MATERIALIZE_CHUNK = 3
+_CLIP_MATERIALIZE_GAP_MS = 12
+# Once a ClipCard is built in Progressive it stays for the whole session.
+# Never evict on scroll / filter hide — rematerialize was "forgetting" thumbs.
 
 
 def _clips_card_cell_size(app) -> QSize:
@@ -978,37 +976,116 @@ class LibraryMixin:
             worker.wait(3000)
         self._clip_poster_worker = None
 
-    def _schedule_clip_poster_backfill(self, *, skip_ui_probe: bool = False):
-        """Generate ffmpeg posters for clips with no thumbnail.jpg on disk.
+    def _clips_filtered_table_paths(self) -> list[str]:
+        """Clip paths that pass the current filter (non-hidden table rows).
 
-        ``skip_ui_probe`` — Skip startup: don't ``isdir``/resolve 250+ library
-        paths on the GUI thread; hand every row to the worker and let it decide.
+        Background poster/duration work must stay inside this set — filtered-out
+        clips are placeholders only and must not steal ffmpeg / MPD time.
         """
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is None:
+            return []
+        paths: list[str] = []
+        seen: set[str] = set()
+        for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            path = item.data(Qt.UserRole)
+            if not path:
+                continue
+            key = os.path.normcase(os.path.normpath(str(path)))
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(str(path))
+        return paths
+
+    def _prioritize_live_clip_paths(self, paths: list[str]) -> list[str]:
+        """Viewport-live cards first, then the rest of the filtered set."""
+        live = getattr(self, "_clip_live_paths", None)
+        if not isinstance(live, set) or not live:
+            return list(paths)
+        head: list[str] = []
+        tail: list[str] = []
+        for path in paths:
+            key = os.path.normcase(os.path.normpath(path))
+            if key in live:
+                head.append(path)
+            else:
+                tail.append(path)
+        return head + tail
+
+    def _schedule_clip_poster_backfill(self, *, skip_ui_probe: bool = False):
+        """Generate ffmpeg posters for missing thumbs — never during Progressive.
+
+        Progressive is viewport-only: disk thumbs at materialize time, no ffmpeg
+        storm in the background (that was the marquee/UI stutter).
+        """
+        del skip_ui_probe
+        if getattr(self, "_clips_progressive_active", False):
+            return
         if not hasattr(self, "cache_dir") or not hasattr(self.ui, "table_clips"):
             return
 
-        missing = []
-        for row in range(self.ui.table_clips.rowCount()):
-            item = self.ui.table_clips.item(row, 0)
-            if not item:
-                continue
-            clip_path = item.data(Qt.UserRole)
-            if not clip_path:
-                continue
-            if skip_ui_probe:
-                missing.append(clip_path)
-                continue
+        live = getattr(self, "_clip_live_paths", None)
+        if not isinstance(live, set) or not live:
+            return
+        candidates = [
+            p
+            for p in self._clips_filtered_table_paths()
+            if os.path.normcase(os.path.normpath(p)) in live
+        ]
+        missing: list[str] = []
+        for clip_path in candidates:
             if not os.path.isdir(clip_path):
                 continue
             if resolve_clip_thumbnail(clip_path, self.cache_dir, allow_generate=False):
                 continue
             missing.append(clip_path)
+        if missing:
+            self._enqueue_clip_poster_paths(missing)
 
-        if not missing:
+    def _enqueue_clip_poster_paths(self, paths: list[str]) -> None:
+        """Append paths to the lazy poster queue; start worker if idle."""
+        if getattr(self, "_clips_progressive_active", False):
             return
+        if not paths or not hasattr(self, "cache_dir"):
+            return
+        pending = getattr(self, "_clip_poster_pending", None)
+        if not isinstance(pending, list):
+            pending = []
+            self._clip_poster_pending = pending
+        seen = {os.path.normcase(os.path.normpath(p)) for p in pending}
+        for path in paths:
+            key = os.path.normcase(os.path.normpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            pending.append(path)
+        worker = getattr(self, "_clip_poster_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        self._pump_clip_poster_queue()
 
+    def _pump_clip_poster_queue(self) -> None:
+        """Run a tiny poster batch so marquee ticks are not starved."""
+        if getattr(self, "_clips_progressive_active", False):
+            self._clip_poster_pending = []
+            return
+        pending = getattr(self, "_clip_poster_pending", None)
+        if not isinstance(pending, list) or not pending:
+            return
+        if not hasattr(self, "cache_dir"):
+            return
+        batch = pending[:3]
+        del pending[:3]
         self._stop_clip_poster_backfill()
-        self._clip_poster_worker = ClipPosterBackfillWorker(missing, self.cache_dir, self.ui)
+        self._clip_poster_worker = ClipPosterBackfillWorker(
+            batch, self.cache_dir, self.ui
+        )
         self._clip_poster_worker.poster_ready.connect(self._on_clip_poster_ready)
         self._clip_poster_worker.finished_batch.connect(self._on_clip_poster_batch_done)
         self._clip_poster_worker.start()
@@ -1016,18 +1093,30 @@ class LibraryMixin:
     def _on_clip_poster_ready(self, clip_path: str, thumb_path: str):
         if not hasattr(self, "grid_clips"):
             return
-        norm = os.path.normpath(clip_path)
+        QTimer.singleShot(
+            0,
+            lambda p=clip_path, t=thumb_path: self._apply_clip_poster_thumb(p, t),
+        )
+
+    def _apply_clip_poster_thumb(self, clip_path: str, thumb_path: str) -> None:
+        if not hasattr(self, "grid_clips"):
+            return
+        want = os.path.normcase(os.path.normpath(clip_path))
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
             if item is None:
                 continue
             item_path = item.data(Qt.UserRole + 1)
-            if not item_path or os.path.normpath(item_path) != norm:
+            if not item_path:
                 continue
+            if os.path.normcase(os.path.normpath(str(item_path))) != want:
+                continue
+            # Apply even when filtered/hidden — Progressive keeps ClipCards for
+            # the session; skipping hidden left permanent gray thumbs (e.g.
+            # W:\\…\\thumbnail.jpg existed but never painted).
             card = self.grid_clips.itemWidget(item)
             if card is not None and hasattr(card, "set_thumbnail"):
                 card.set_thumbnail(thumb_path)
-            # Keep DEAD dim after poster fill; clear no-preview dim via set_thumbnail.
             if card is not None and hasattr(card, "set_unavailable"):
                 table = getattr(getattr(self, "ui", None), "table_clips", None)
                 row = item.data(Qt.UserRole)
@@ -1035,12 +1124,95 @@ class LibraryMixin:
                 if table is not None and isinstance(row, int):
                     title_item = table.item(row, 0)
                     if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
-                        is_dead = title_item.data(_CLIP_HEALTH_ROLE) == health.ClipHealth.DEAD.value
+                        is_dead = (
+                            title_item.data(_CLIP_HEALTH_ROLE)
+                            == health.ClipHealth.DEAD.value
+                        )
                 card.set_unavailable(dead=is_dead, no_preview=False)
             break
 
     def _on_clip_poster_batch_done(self):
         self._clip_poster_worker = None
+        pending = getattr(self, "_clip_poster_pending", None)
+        if isinstance(pending, list) and pending:
+            QTimer.singleShot(200, self._pump_clip_poster_queue)
+
+    def _stop_clip_thumb_probe(self) -> None:
+        worker = getattr(self, "_clip_thumb_probe_worker", None)
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(2000)
+        self._clip_thumb_probe_worker = None
+
+    def _enqueue_clip_thumb_probe(self, paths: list[str]) -> None:
+        """Queue Steam/cache thumb resolves for Progressive (off UI thread)."""
+        if not paths:
+            return
+        pending = getattr(self, "_clip_thumb_probe_pending", None)
+        if not isinstance(pending, list):
+            pending = []
+            self._clip_thumb_probe_pending = pending
+        seen = {os.path.normcase(os.path.normpath(p)) for p in pending}
+        for path in paths:
+            if not path:
+                continue
+            key = os.path.normcase(os.path.normpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            pending.append(path)
+        worker = getattr(self, "_clip_thumb_probe_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        self._pump_clip_thumb_probe_queue()
+
+    def _pump_clip_thumb_probe_queue(self) -> None:
+        pending = getattr(self, "_clip_thumb_probe_pending", None)
+        if not isinstance(pending, list) or not pending:
+            return
+        batch = pending[:4]
+        del pending[:4]
+        self._stop_clip_thumb_probe()
+        self._clip_thumb_probe_worker = ClipThumbProbeWorker(
+            batch, getattr(self, "cache_dir", "") or "", getattr(self, "ui", None)
+        )
+        self._clip_thumb_probe_worker.thumb_ready.connect(self._on_clip_thumb_probe_ready)
+        self._clip_thumb_probe_worker.finished_batch.connect(
+            self._on_clip_thumb_probe_batch_done
+        )
+        self._clip_thumb_probe_worker.start()
+
+    def _on_clip_thumb_probe_ready(self, clip_path: str, thumb_path: str) -> None:
+        pending = getattr(self, "_clip_thumb_apply_pending", None)
+        if not isinstance(pending, list):
+            pending = []
+            self._clip_thumb_apply_pending = pending
+        pending.append((clip_path, thumb_path))
+        if getattr(self, "_clip_thumb_apply_scheduled", False):
+            return
+        self._clip_thumb_apply_scheduled = True
+        QTimer.singleShot(0, self._pump_clip_thumb_apply)
+
+    def _pump_clip_thumb_apply(self) -> None:
+        pending = getattr(self, "_clip_thumb_apply_pending", None)
+        if not isinstance(pending, list) or not pending:
+            self._clip_thumb_apply_scheduled = False
+            return
+        clip_path, thumb_path = pending.pop(0)
+        self._apply_clip_poster_thumb(clip_path, thumb_path)
+        if pending:
+            # One SmoothTransformation decode per tick — keeps marquees alive.
+            QTimer.singleShot(28, self._pump_clip_thumb_apply)
+        else:
+            self._clip_thumb_apply_scheduled = False
+
+    def _on_clip_thumb_probe_batch_done(self) -> None:
+        self._clip_thumb_probe_worker = None
+        pending = getattr(self, "_clip_thumb_probe_pending", None)
+        if isinstance(pending, list) and pending:
+            QTimer.singleShot(40, self._pump_clip_thumb_probe_queue)
 
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
@@ -3115,16 +3287,23 @@ class LibraryMixin:
             t_item = table.item(row, 0)
             if t_item:
                 clip_path = t_item.data(Qt.UserRole)
-                # Saving the index and visibility status
-                table_order[clip_path] = {'row': row, 'hidden': table.isRowHidden(row)}
+                if clip_path:
+                    key = os.path.normcase(os.path.normpath(str(clip_path)))
+                    # Saving the index and visibility status
+                    table_order[key] = {'row': row, 'hidden': table.isRowHidden(row)}
 
         # 2. Gently update grid elements
         for i in range(grid.count()):
             item = grid.item(i)
             clip_path = item.data(Qt.UserRole + 1)
             hidden = True
-            if clip_path and clip_path in table_order:
-                info = table_order[clip_path]
+            key = (
+                os.path.normcase(os.path.normpath(str(clip_path)))
+                if clip_path
+                else ""
+            )
+            if key and key in table_order:
+                info = table_order[key]
                 # Sort key only — never visible. (Opacity-dimmed cards used to show
                 # this as a ghost "000084" in the thumb area.)
                 item.setText(f"{info['row']:06d}")
@@ -3145,14 +3324,14 @@ class LibraryMixin:
         if hasattr(self, "sync_clip_card_edge_roles"):
             QTimer.singleShot(0, self.sync_clip_card_edge_roles)
         # Progressive only attaches ClipCards for the viewport. sortItems moves
-        # placeholders into view without a scroll event — rematerialize or the
-        # first screen stays blank until the user wheels.
-        if getattr(self, "_clips_progressive_active", False) and hasattr(
-            self, "_schedule_clips_viewport_refresh"
-        ):
-            self._schedule_clips_viewport_refresh(0)
-            QTimer.singleShot(50, self._clips_refresh_viewport)
-            QTimer.singleShot(80, lambda: self._start_clips_background_warm(delay_ms=0))
+        # placeholders into view without a scroll event — rematerialize once or
+        # the first screen stays blank. Do not stack schedule+50ms+warm (startup storm).
+        if getattr(self, "_clips_progressive_active", False):
+            if getattr(self, "_startup_settle_active", False):
+                # Cold-start: wait past the settle veil, then one viewport fill.
+                QTimer.singleShot(400, self._clips_refresh_viewport)
+            else:
+                QTimer.singleShot(0, self._clips_refresh_viewport)
 
     def _library_filter_row_matches(self, row: int, saved: dict) -> bool:
         """Whether table row ``row`` should stay visible under ``saved_filter_state``."""
@@ -3230,17 +3409,102 @@ class LibraryMixin:
                     return False
 
         if item_dur is not None and not skip_duration:
-            r_dur = FilterMenu._parse_row_duration(item_dur.text())
-            if r_dur < min_dur or r_dur > max_dur:
-                return False
+            # Progressive shallow rows keep ``--:--`` until MPD backfill — do not
+            # treat unknown duration as 0s (that hid whole games and made Apply
+            # look broken when unchecking pills).
+            dur_text = (item_dur.text() or "").strip()
+            if dur_text and dur_text not in ("--:--", "—", "--"):
+                r_dur = FilterMenu._parse_row_duration(dur_text)
+                if r_dur < min_dur or r_dur > max_dur:
+                    return False
         return True
 
-    def reapply_saved_library_filters(self) -> None:
+    def _scanned_clip_matches_saved_filter(self, clip: ScannedClip, saved: dict) -> bool:
+        """Same rules as ``_library_filter_row_matches``, for Progressive insert."""
+        from steempeg.ui.library.filters import (
+            FilterMenu,
+            _library_root_for_clip,
+        )
+
+        if not saved or not saved.get("active"):
+            return True
+        if saved.get("match_none"):
+            return False
+
+        selected_games = set(saved.get("games") or [])
+        selected_types = set(saved.get("types") or [])
+        selected_health = set(saved.get("health") or [])
+        selected_folders = list(saved.get("folders") or [])
+        roots = list(getattr(self, "clips_folders", None) or [])
+
+        if "games" in saved and not selected_games:
+            return False
+
+        game = (clip.game_name or "").strip()
+        if selected_games and game not in selected_games:
+            return False
+        rec = (clip.rec_type or "").strip()
+        if selected_types and rec not in selected_types:
+            return False
+        level = str(clip.health_level or "healthy")
+        if selected_health and level not in selected_health:
+            return False
+        if selected_folders:
+            root = _library_root_for_clip(clip.full_path, roots)
+            folder_keys = {
+                os.path.normcase(os.path.normpath(p)) for p in selected_folders if p
+            }
+            if root is None or os.path.normcase(os.path.normpath(root)) not in folder_keys:
+                return False
+
+        min_date = saved.get("min_date")
+        max_date = saved.get("max_date")
+        min_time = saved.get("min_time")
+        max_time = saved.get("max_time")
+        min_dur_t = saved.get("min_dur")
+        max_dur_t = saved.get("max_dur")
+        min_time_sec = FilterMenu._qtime_to_sec(min_time) if min_time is not None else 0
+        max_time_sec = (
+            FilterMenu._qtime_to_sec(max_time) if max_time is not None else 24 * 3600 - 1
+        )
+        min_dur = FilterMenu._qtime_to_sec(min_dur_t) if min_dur_t is not None else 0
+        max_dur = FilterMenu._qtime_to_sec(max_dur_t) if max_dur_t is not None else 0
+        skip_duration = max_dur <= 0 and min_dur <= 0
+
+        q_dt = FilterMenu._parse_row_datetime(clip.date_display or "")
+        if q_dt is not None:
+            r_date = q_dt.date()
+            if min_date is not None and hasattr(min_date, "isValid") and min_date.isValid():
+                if r_date < min_date:
+                    return False
+            if max_date is not None and hasattr(max_date, "isValid") and max_date.isValid():
+                if r_date > max_date:
+                    return False
+            r_time = (
+                q_dt.time().hour() * 3600
+                + q_dt.time().minute() * 60
+                + q_dt.time().second()
+            )
+            if r_time < min_time_sec or r_time > max_time_sec:
+                return False
+
+        if not skip_duration:
+            dur_text = (clip.duration_str or "").strip()
+            if dur_text and dur_text not in ("--:--", "—", "--"):
+                r_dur = FilterMenu._parse_row_duration(dur_text)
+                if r_dur < min_dur or r_dur > max_dur:
+                    return False
+        return True
+
+    def reapply_saved_library_filters(self, *, scroll_top: bool = False) -> None:
         """Push ``saved_filter_state`` onto table + grid (or show everything).
 
         Fixes the portable desync where the filter popup looks cleared (no saved
         active state / defaults) while rows stay hidden from an earlier Apply —
         ghost cards and a blank strip you can still click.
+
+        Always re-runs the current Sorting combo (Default, etc.) so Clear does
+        not leave Progressive/discover order with the old filter block first.
         """
         if not hasattr(self.ui, "table_clips"):
             return
@@ -3264,12 +3528,86 @@ class LibraryMixin:
         finally:
             table.setUpdatesEnabled(True)
 
-        if hasattr(self, "fast_sync_grid"):
-            self.fast_sync_grid()
+        # Full-shelf sort — visibility alone left Progressive insert order, so
+        # Clear looked like «old filter cards, then everyone else».
+        self._restore_library_after_filter_change(scroll_top=scroll_top)
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
         if hasattr(self, "sync_filter_pill_badge"):
             self.sync_filter_pill_badge()
+        # Do NOT kick poster/duration here — reapply runs on every sync and was
+        # restarting ffmpeg storms that stutter ClipCard marquees for 10–20s.
+
+    def _sync_progressive_grid_filter_visibility(self) -> None:
+        """Sync Progressive grid item hidden flags from the table (by clip path).
+
+        Only ``QListWidgetItem.setHidden`` — never ``card.setVisible``. Forcing
+        ``setVisible(False)`` on ClipCards while filtering left widgets invisible
+        after Clear (item unhidden, widget still hidden) so the old filter block
+        stayed painted on top and the rest of the shelf looked bolted on.
+        """
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        grid = getattr(self, "grid_clips", None)
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if grid is None or table is None:
+            return
+        hidden_by_path: dict[str, bool] = {}
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            path = item.data(Qt.UserRole)
+            if not path:
+                continue
+            key = os.path.normcase(os.path.normpath(str(path)))
+            hidden_by_path[key] = bool(table.isRowHidden(row))
+        for i in range(grid.count()):
+            gitem = grid.item(i)
+            if gitem is None:
+                continue
+            path = str(gitem.data(Qt.UserRole + 1) or "")
+            key = os.path.normcase(os.path.normpath(path)) if path else ""
+            hidden = hidden_by_path.get(key, True)
+            gitem.setHidden(hidden)
+            # Repair any card left invisible by older setVisible(False) abuse.
+            card = grid.itemWidget(gitem)
+            if card is not None:
+                try:
+                    if card.isHidden() or not card.isVisibleTo(grid):
+                        card.setVisible(True)
+                except RuntimeError:
+                    pass
+
+    def _restore_library_after_filter_change(self, *, scroll_top: bool = False) -> None:
+        """Unhide/hide already applied on the table — re-assert Sorting + grid order.
+
+        Clear/Apply must end in current combo order (Default = Steam stamp newest
+        first), not Progressive discover order with the previous filter slice first.
+        """
+        if hasattr(self, "apply_sorting"):
+            self.apply_sorting()
+        else:
+            if hasattr(self, "fast_sync_grid"):
+                self.fast_sync_grid()
+            if hasattr(self, "_sync_progressive_grid_filter_visibility"):
+                self._sync_progressive_grid_filter_visibility()
+        if scroll_top:
+            grid = getattr(self, "grid_clips", None)
+            if grid is not None:
+                try:
+                    bar = grid.verticalScrollBar()
+                    if bar is not None:
+                        bar.setValue(0)
+                except RuntimeError:
+                    pass
+                try:
+                    grid.doItemsLayout()
+                except Exception:
+                    pass
+            # New top of shelf after Clear — fill viewport cards under Default order.
+            if getattr(self, "_clips_progressive_active", False):
+                QTimer.singleShot(0, self._clips_refresh_viewport)
 
     def _count_active_clips_filter_categories(self) -> int:
         """How many Clips filter *categories* are narrowed (not match count)."""
@@ -3495,6 +3833,8 @@ class LibraryMixin:
         row_position = table.rowCount()
         table.insertRow(row_position)
 
+        # Local cache icons only — needed for filter pills. Never walk the Steam
+        # library folder here (that was the Progressive UI hitch).
         icon = QIcon()
         if row.use_unknown_icon:
             from steempeg.infra.paths import get_resource_path
@@ -3504,8 +3844,19 @@ class LibraryMixin:
                 icon = QIcon(unknown_icon)
         elif row.app_id:
             icon = self.get_game_icon(row.app_id, allow_download=False)
-            if icon.isNull() and row.icon_disk_path and os.path.isfile(row.icon_disk_path):
-                icon = self._icon_from_disk(row.icon_disk_path, row.app_id)
+            if icon.isNull() and row.icon_disk_path and os.path.isfile(
+                row.icon_disk_path
+            ):
+                # icon_disk_path is under cache_dir when seeded from health/session.
+                try:
+                    cache_root = os.path.normcase(
+                        os.path.normpath(getattr(self, "cache_dir", "") or "")
+                    )
+                    disk = os.path.normcase(os.path.normpath(row.icon_disk_path))
+                    if cache_root and disk.startswith(cache_root):
+                        icon = self._icon_from_disk(row.icon_disk_path, row.app_id)
+                except OSError:
+                    pass
 
         item_game = QTableWidgetItem(icon, row.game_name)
         item_game.setData(Qt.UserRole, row.full_path)
@@ -3648,7 +3999,16 @@ class LibraryMixin:
             return None
         existing = self.grid_clips.itemWidget(item)
         if isinstance(existing, ClipCard):
+            # Already built this session — if still gray, kick thumb probe again.
+            if getattr(self, "_clips_progressive_active", False) and bool(
+                getattr(existing, "_dim_no_preview", False)
+            ):
+                path = str(item.data(Qt.UserRole + 1) or "")
+                if path:
+                    self._enqueue_clip_thumb_probe([path])
             return existing
+
+        progressive = bool(getattr(self, "_clips_progressive_active", False))
 
         try:
             row = int(item.data(Qt.UserRole))
@@ -3703,14 +4063,22 @@ class LibraryMixin:
             if not icon_path and len(parts) >= 2 and parts[1].isdigit():
                 icon_path = os.path.join(self.cache_dir, f"{parts[1]}.jpg")
 
-            # Progressive / Skip: disk thumbs only — never ffmpeg-generate here.
-            progressive = bool(getattr(self, "_clips_progressive_active", False))
-            if progressive or getattr(self, "_scan_snapshot_restore", False):
-                if progressive and os.path.exists(str(clip_path)):
-                    thumb_path = resolve_clip_thumbnail(
-                        str(clip_path), self.cache_dir, allow_generate=False
-                    )
-                else:
+            # Progressive: local poster cache ONLY on the UI thread.
+            # Steam thumbnail.jpg + QPixmap decode from the library drive freezes
+            # marquees for seconds (titles stuck mid-scroll as "e Miku…").
+            if progressive:
+                thumb_path = (
+                    probe_clip_poster_cache(self.cache_dir, str(clip_path))
+                    if getattr(self, "cache_dir", None)
+                    else ""
+                )
+            elif getattr(self, "_scan_snapshot_restore", False):
+                thumb_path = (
+                    probe_clip_poster_cache(self.cache_dir, str(clip_path))
+                    if getattr(self, "cache_dir", None)
+                    else ""
+                )
+                if not thumb_path:
                     thumb_path = self._snapshot_local_poster_only(str(clip_path))
             elif os.path.exists(str(clip_path)):
                 thumb_path = resolve_clip_thumbnail(
@@ -3754,7 +4122,8 @@ class LibraryMixin:
         if title_item is not None and not title_item.data(_CLIP_CURED_ROLE):
             level = title_item.data(_CLIP_HEALTH_ROLE)
             is_dead = level == health.ClipHealth.DEAD.value
-        has_thumb = bool(thumb_path and os.path.exists(thumb_path))
+        # thumb_path already verified by poster helpers — no extra exists().
+        has_thumb = bool(thumb_path)
         if getattr(self, "_scan_snapshot_restore", False) and not getattr(
             self, "_clips_progressive_active", False
         ):
@@ -3785,6 +4154,14 @@ class LibraryMixin:
             self._clip_live_paths = live
         if clip_path:
             live.add(os.path.normcase(os.path.normpath(str(clip_path))))
+            # Progressive: resolve Steam thumbnail.jpg off-thread — never QPixmap
+            # from the library drive inside ClipCard.__init__.
+            if progressive and not thumb_path:
+                self._enqueue_clip_thumb_probe([str(clip_path)])
+            # Duration often arrives as ``--:--`` from shallow discover — fill MPD
+            # for this live card in the background.
+            if progressive and (not dur_str or dur_str in ("--:--", "—", "--")):
+                QTimer.singleShot(80, self._schedule_clip_duration_backfill)
         return card
 
     def refresh_library_datetime_displays(self) -> None:
@@ -4019,13 +4396,25 @@ class LibraryMixin:
             if grid is None:
                 continue
             if shelf:
-                # Startup / Progressive: items often still have 0×0 visualRect until
-                # layout — without this, only the first painted row is "on-screen"
-                # and its bottom gets square flush that sticks after more cards load.
-                try:
-                    grid.doItemsLayout()
-                except Exception:
-                    pass
+                # Only force layout when visualRects are still empty — calling
+                # doItemsLayout on every edge sync (startup ×3) stuttered marquees.
+                need_layout = False
+                for i in range(min(grid.count(), 8)):
+                    item = grid.item(i)
+                    if item is None or item.isHidden():
+                        continue
+                    idx = grid.indexFromItem(item)
+                    if not idx.isValid():
+                        continue
+                    vr = grid.visualRect(idx)
+                    if vr.width() <= 0 or vr.height() <= 0:
+                        need_layout = True
+                        break
+                if need_layout:
+                    try:
+                        grid.doItemsLayout()
+                    except Exception:
+                        pass
             vp = grid.viewport()
             vp_rect = vp.rect() if vp is not None else QRect()
             spacing = max(0, int(grid.spacing()))
@@ -4381,7 +4770,8 @@ class LibraryMixin:
                 self.save_json_cache()
         self._library_scan_worker = None
 
-        self.ui.table_clips.setSortingEnabled(True)
+        # Custom apply_sorting owns order — Qt auto-sort must stay off (see apply_sorting).
+        self.ui.table_clips.setSortingEnabled(False)
         self.ui.table_clips.horizontalHeader().setSectionsClickable(False)
         # Snapshot order is already the last-session order — never re-apply
         # Default sort on Skip restore (that alone made Skip feel like a rescan).
@@ -4551,140 +4941,11 @@ class LibraryMixin:
         self._clips_viewport_timer = idle
         self._clips_scroll_active = False
         self._clip_live_paths = set()
-        warm = QTimer(grid)
-        warm.setInterval(_CLIP_WARM_INTERVAL_MS)
-        try:
-            from PySide6.QtCore import Qt as _Qt
-
-            warm.setTimerType(_Qt.TimerType.CoarseTimer)
-        except Exception:
-            pass
-        warm.timeout.connect(self._clips_background_warm_tick)
-        self._clips_warm_timer = warm
         bar = grid.verticalScrollBar()
         if bar is not None:
             bar.valueChanged.connect(self._on_clips_scroll)
             bar.rangeChanged.connect(self._on_clips_scroll_range)
         self._clips_viewport_hooks_installed = True
-
-    def _pause_clips_background_warm(self) -> None:
-        timer = getattr(self, "_clips_warm_timer", None)
-        if timer is not None and timer.isActive():
-            timer.stop()
-        pending = getattr(self, "_clips_warm_start_timer", None)
-        if pending is not None and pending.isActive():
-            pending.stop()
-
-    def _start_clips_background_warm(self, *, delay_ms: int | None = None) -> None:
-        """Slow idle materialize of placeholders — yields to the wheel while scrolling.
-
-        ClipCards can only be built on the UI thread; we never spawn a second
-        process for widgets. Instead: defer until settle is done, then drip
-        one card every ``_CLIP_WARM_INTERVAL_MS``.
-        """
-        if not getattr(self, "_clips_progressive_active", False):
-            return
-        if getattr(self, "_clips_scroll_active", False):
-            return
-        if getattr(self, "_library_panel_mode", "clips") not in ("clips", ""):
-            grid = getattr(self, "grid_clips", None)
-            if grid is None or not grid.isVisible():
-                return
-        timer = getattr(self, "_clips_warm_timer", None)
-        if timer is None:
-            return
-
-        wait = _CLIP_WARM_START_DELAY_MS if delay_ms is None else max(0, int(delay_ms))
-        if getattr(self, "_startup_settle_active", False):
-            # Settle veil / Preparing — don't build cards under it; retry later.
-            wait = max(wait, _CLIP_WARM_START_DELAY_MS)
-
-        if wait > 0:
-            pending = getattr(self, "_clips_warm_start_timer", None)
-            if pending is None:
-                from PySide6.QtCore import QTimer
-
-                host = getattr(self, "grid_clips", None) or getattr(self, "ui", None)
-                pending = QTimer(host)
-                pending.setSingleShot(True)
-                pending.timeout.connect(
-                    lambda: self._start_clips_background_warm(delay_ms=0)
-                )
-                self._clips_warm_start_timer = pending
-            pending.start(wait)
-            return
-        if not timer.isActive():
-            timer.start()
-
-    def _clips_background_warm_candidates(self, limit: int) -> list:
-        grid = getattr(self, "grid_clips", None)
-        if grid is None or limit <= 0:
-            return []
-        n = grid.count()
-        if n <= 0:
-            return []
-        # Cheap start index — avoid full `_clips_visible_items` (layout thrash).
-        start = 0
-        try:
-            vp = grid.viewport()
-            if vp is not None:
-                hit = grid.itemAt(8, 8)
-                if hit is not None:
-                    start = max(0, int(grid.row(hit)) + 1)
-        except Exception:
-            start = 0
-        order = list(range(start, n)) + list(range(0, start))
-        out: list = []
-        for i in order:
-            item = grid.item(i)
-            if item is None or item.isHidden():
-                continue
-            if isinstance(grid.itemWidget(item), ClipCard):
-                continue
-            out.append(item)
-            if len(out) >= limit:
-                break
-        return out
-
-    def _clips_background_warm_tick(self) -> None:
-        if not getattr(self, "_clips_progressive_active", False):
-            self._pause_clips_background_warm()
-            return
-        if getattr(self, "_clips_scroll_active", False):
-            return
-        if getattr(self, "_startup_settle_active", False):
-            self._pause_clips_background_warm()
-            return
-        grid = getattr(self, "grid_clips", None)
-        if grid is None:
-            self._pause_clips_background_warm()
-            return
-        if getattr(self, "_library_panel_mode", "clips") != "clips":
-            if not grid.isVisible():
-                return
-
-        live = getattr(self, "_clip_live_paths", None)
-        if isinstance(live, set) and len(live) >= _CLIP_MAX_LIVE_WIDGETS:
-            # Cap full — pause until scroll idle demats far cards, then resume.
-            self._pause_clips_background_warm()
-            return
-
-        batch = self._clips_background_warm_candidates(_CLIP_WARM_BATCH)
-        if not batch:
-            self._pause_clips_background_warm()
-            return
-        for item in batch:
-            if getattr(self, "_clips_scroll_active", False):
-                break
-            live = getattr(self, "_clip_live_paths", None)
-            if isinstance(live, set) and len(live) >= _CLIP_MAX_LIVE_WIDGETS:
-                break
-            self._materialize_clip_grid_item(item)
-        # Edge flush is expensive — only after a handful of warms.
-        n = int(getattr(self, "_clips_warm_edge_counter", 0)) + 1
-        self._clips_warm_edge_counter = n
-        if n % 8 == 0:
-            self._schedule_clip_card_edge_sync()
 
     def _on_clips_scroll_range(self, *_args) -> None:
         """Sheet open / layout grow — scrollbar appears without a wheel tick."""
@@ -4723,7 +4984,16 @@ class LibraryMixin:
         self._stop_library_scan()
         self._stop_progressive_clips_discover()
         self._stop_clip_poster_backfill()
+        self._stop_clip_thumb_probe()
         self._stop_clip_duration_backfill()
+        self._clip_poster_pending = []
+        self._clip_thumb_probe_pending = []
+        self._clip_thumb_apply_pending = []
+        self._clip_thumb_apply_scheduled = False
+        self._clip_duration_did_full_pass = False
+        # Progressive: no ffmpeg poster storm — thumbs/durations fill off-thread.
+        self._clips_progressive_no_backfill = True
+        self._progressive_side_libs_pending = True
         self._scan_pending_rows = []
         self._scan_flush_scheduled = False
         self._scan_total = 0
@@ -4737,7 +5007,6 @@ class LibraryMixin:
         self._preview_clip_path = None
         self._clips_visual_selected_rows = set()
         self._clip_live_paths = set()
-        self._pause_clips_background_warm()
         if hasattr(self, "_clear_clips_selection_visual"):
             self._clear_clips_selection_visual()
 
@@ -4798,7 +5067,11 @@ class LibraryMixin:
         table.setUpdatesEnabled(False)
         if grid is not None:
             grid.setUpdatesEnabled(False)
+        table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
         try:
+            start_row = table.rowCount()
             for row in rows:
                 if not isinstance(row, ScannedClip):
                     continue
@@ -4808,21 +5081,77 @@ class LibraryMixin:
                     for root in (getattr(self, "clips_folders", None) or [])
                 ):
                     continue
+                # Always insert placeholders — filtering only hides rows.
+                # Insert-time trim broke Clear/Apply (missing clips never existed).
                 self._insert_scanned_clip_row(row)
+            # Hide new non-matches (placeholders only — no ClipCards yet).
+            saved = getattr(self, "saved_filter_state", None)
+            if isinstance(saved, dict) and saved.get("active"):
+                for r in range(start_row, table.rowCount()):
+                    if self._library_filter_row_matches(r, saved):
+                        continue
+                    table.setRowHidden(r, True)
+                    g = getattr(self, "grid_clips", None)
+                    if g is not None and r < g.count():
+                        gitem = g.item(r)
+                        if gitem is not None:
+                            gitem.setHidden(True)
         finally:
             table.setUpdatesEnabled(True)
             if grid is not None:
                 grid.setUpdatesEnabled(True)
-        # Append-only while discovering — `_append_grid_card_for_row` keeps
-        # table/grid order. Per-batch fast_sync_grid was an O(n) main-thread
-        # sort on every 64 rows and made Progressive feel like UI lock-up.
+        # No per-batch viewport rematerialize / edge sync — that fought ClipCard
+        # marquees while batches of 64 still landed. Count label only.
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
-        self._schedule_clips_viewport_refresh(50)
-        # Progressive appends grow the shelf — recompute on-screen top/bottom
-        # flush or the last batch row keeps square bottoms after more cards land.
-        self._schedule_clip_card_edge_sync()
-        # Do not warm mid-discover — that stole Preparing/settle UI time.
+
+    def _hydrate_progressive_side_libraries(self) -> None:
+        """Deferred Rendered + Screenshots after Progressive Clips settle.
+
+        Restoring every Rendered ClipCard + Steam screenshot chunks on the same
+        UI ticks as Progressive placeholders was the main cold-start hitch.
+        """
+        if not getattr(self, "_progressive_side_libs_pending", False):
+            return
+        self._progressive_side_libs_pending = False
+        self._progressive_quiet_hydrate = True
+        self._progressive_shots_after_rendered = False
+        try:
+            restored = False
+            if hasattr(self, "restore_rendered_from_session_cache"):
+                try:
+                    restored = bool(self.restore_rendered_from_session_cache())
+                except Exception:
+                    logging.debug(
+                        "Progressive: rendered session restore failed",
+                        exc_info=True,
+                    )
+            # Chunked rendered still running — screenshots wait for finish hook.
+            if restored and getattr(self, "_rendered_restore_chunk_scheduled", False):
+                self._progressive_shots_after_rendered = True
+                return
+            if hasattr(self, "restore_screenshots_from_session_cache"):
+                QTimer.singleShot(400, self._hydrate_progressive_screenshots)
+            else:
+                self._progressive_quiet_hydrate = False
+        except Exception:
+            self._progressive_quiet_hydrate = False
+            logging.debug(
+                "Progressive: side library hydrate failed",
+                exc_info=True,
+            )
+
+    def _hydrate_progressive_screenshots(self) -> None:
+        try:
+            if hasattr(self, "restore_screenshots_from_session_cache"):
+                self.restore_screenshots_from_session_cache()
+        except Exception:
+            logging.debug(
+                "Progressive: screenshots session restore failed",
+                exc_info=True,
+            )
+        finally:
+            self._progressive_quiet_hydrate = False
 
     def _on_progressive_clips_finished(self, total: int) -> None:
         self._progressive_clips_worker = None
@@ -4836,39 +5165,46 @@ class LibraryMixin:
             return
         table = getattr(getattr(self, "ui", None), "table_clips", None)
         if table is not None:
-            table.setSortingEnabled(True)
+            # Leave Qt auto-sort off — Progressive post_settle runs apply_sorting.
+            table.setSortingEnabled(False)
             table.horizontalHeader().setSectionsClickable(False)
         if hasattr(self, "fast_sync_grid"):
             self.fast_sync_grid()
-        self._purge_inferior_session_siblings()
-        if hasattr(self, "sync_library_filter_view"):
-            self.sync_library_filter_view()
-        if hasattr(self, "_update_library_count_label"):
-            self._update_library_count_label()
-        QTimer.singleShot(0, self._sync_library_scrollbars)
-        QTimer.singleShot(1500, self._persist_clips_library_snapshot)
-        self._schedule_clips_viewport_refresh(0)
-        # Layout settles after placeholders + fast_sync — catch leftover bottom flush.
-        self._schedule_clip_card_edge_sync()
-        QTimer.singleShot(50, self.sync_clip_card_edge_roles)
-        QTimer.singleShot(200, self.sync_clip_card_edge_roles)
-        # Lightweight rows always start as ``--:--`` — fill from MPD off-thread.
-        QTimer.singleShot(600, self._schedule_clip_duration_backfill)
-        QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
-        # Deferred idle warm — never race Preparing workspace / settle veil.
-        self._start_clips_background_warm()
+        # Defer purge / filter / edge / history — same tick as last batch froze UI.
+        QTimer.singleShot(200, self._purge_inferior_session_siblings)
+        QTimer.singleShot(280, self._progressive_clips_post_settle)
+        # Side libraries only after Clips placeholders are in — never during discover.
+        if getattr(self, "_progressive_side_libs_pending", False):
+            QTimer.singleShot(2200, self._hydrate_progressive_side_libraries)
         if getattr(self, "_startup_library_scan_active", False) and hasattr(
             self, "preload_render_history"
         ):
             self._startup_library_scan_active = False
-            self.preload_render_history(announce=False)
+            # Far after side libs — history preload must not compete with hydrate.
+            QTimer.singleShot(3500, lambda: self.preload_render_history(announce=False))
         elif hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
         logging.info("Progressive Clips: %d placeholders ready", int(total or 0))
 
+    def _progressive_clips_post_settle(self) -> None:
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        # One path: apply saved filter hide flags, then Default/current sort.
+        # (Do not sort then reapply — that double-sorted and could desync.)
+        if hasattr(self, "sync_library_filter_view"):
+            self.sync_library_filter_view()
+        elif hasattr(self, "_restore_library_after_filter_change"):
+            self._restore_library_after_filter_change(scroll_top=True)
+        if hasattr(self, "_update_library_count_label"):
+            self._update_library_count_label()
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+        QTimer.singleShot(2000, self._persist_clips_library_snapshot)
+        QTimer.singleShot(80, self._schedule_clip_card_edge_sync)
+        # Fill ``--:--`` footers from MPD for live cards (was blocked entirely).
+        QTimer.singleShot(500, self._schedule_clip_duration_backfill)
+
     def _on_progressive_clips_failed(self, message: str) -> None:
         self._progressive_clips_worker = None
-        self._pause_clips_background_warm()
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "set_busy"):
             try:
@@ -4878,6 +5214,8 @@ class LibraryMixin:
         logging.warning("Progressive Clips discover failed: %s", message)
         if getattr(self, "_startup_library_scan_active", False):
             self._startup_library_scan_active = False
+        if getattr(self, "_progressive_side_libs_pending", False):
+            QTimer.singleShot(400, self._hydrate_progressive_side_libraries)
         if hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
 
@@ -4886,7 +5224,6 @@ class LibraryMixin:
         if not getattr(self, "_clips_progressive_active", False):
             return
         self._clips_scroll_active = True
-        self._pause_clips_background_warm()
         timer = getattr(self, "_clips_viewport_timer", None)
         if timer is not None:
             timer.start()
@@ -4894,7 +5231,6 @@ class LibraryMixin:
     def _clips_on_scroll_idle(self) -> None:
         self._clips_scroll_active = False
         self._clips_refresh_viewport()
-        self._start_clips_background_warm(delay_ms=0)
 
     def _schedule_clips_viewport_refresh(self, delay_ms: int = 0) -> None:
         if not getattr(self, "_clips_progressive_active", False):
@@ -4941,20 +5277,33 @@ class LibraryMixin:
         expect = min(grid.count(), cols * rows)
         if len(out) >= expect:
             return out
-        # Portable Choose a Clip: first row had visualRects, the rest still
-        # (0,0,0,0) until layout — fill the first screen by index.
+        # Seed by filtered (non-hidden) order — never pull hidden placeholders
+        # just because they sit early in the raw grid index list.
         seen = {id(item) for item in out}
-        for i in range(expect):
+        for i in range(grid.count()):
+            if len(out) >= expect:
+                break
             item = grid.item(i)
             if item is not None and not item.isHidden() and id(item) not in seen:
                 out.append(item)
+                seen.add(id(item))
         return out
 
     def _materialize_clip_grid_item(self, item) -> ClipCard | None:
         if not getattr(self, "_clips_progressive_active", False):
             # Still allow one-shot materialize if a placeholder somehow remains.
             pass
-        return self._attach_clip_card_to_grid_item(item)
+        card = self._attach_clip_card_to_grid_item(item)
+        # Session-kept gray cards: re-probe Steam thumbnail.jpg if still empty.
+        if (
+            card is not None
+            and getattr(self, "_clips_progressive_active", False)
+            and bool(getattr(card, "_dim_no_preview", False))
+        ):
+            path = str(item.data(Qt.UserRole + 1) or "") if item is not None else ""
+            if path:
+                self._enqueue_clip_thumb_probe([path])
+        return card
 
     def _dematerialize_clip_grid_item(self, item) -> None:
         grid = getattr(self, "grid_clips", None)
@@ -4973,6 +5322,14 @@ class LibraryMixin:
         if isinstance(live, set) and path:
             live.discard(os.path.normcase(os.path.normpath(path)))
 
+    def _dematerialize_filtered_out_clip_cards(self) -> None:
+        """No-op: Progressive keeps ClipCards for the session even when filtered out.
+
+        Destroying widgets on hide forced a full rematerialize (thumbs/text) whenever
+        the user cleared or changed filters — felt like Progressive «forgot» cards.
+        """
+        return
+
     def _clip_item_distance_from_viewport(self, grid, item, vp_rect) -> int:
         idx = grid.indexFromItem(item)
         if not idx.isValid():
@@ -4985,7 +5342,7 @@ class LibraryMixin:
         return 0
 
     def _clips_refresh_viewport(self) -> None:
-        """Materialize visible (+overscan) ClipCards; keep already-seen ones."""
+        """Materialize visible (+overscan) filtered ClipCards; never drop already-built ones."""
         if getattr(self, "_clips_scroll_active", False):
             return
         if not getattr(self, "_clips_progressive_active", False):
@@ -4997,56 +5354,52 @@ class LibraryMixin:
             if not grid.isVisible():
                 return
         try:
-            grid.doItemsLayout()
+            need_layout = False
+            for i in range(min(grid.count(), 6)):
+                item = grid.item(i)
+                if item is None or item.isHidden():
+                    continue
+                idx = grid.indexFromItem(item)
+                if idx.isValid():
+                    vr = grid.visualRect(idx)
+                    if vr.width() <= 0 or vr.height() <= 0:
+                        need_layout = True
+                        break
+            if need_layout:
+                grid.doItemsLayout()
         except Exception:
             pass
 
         visible = self._clips_visible_items()
-        keep_keys: set[str] = set()
-        for item in visible:
-            path = str(item.data(Qt.UserRole + 1) or "")
-            if path:
-                keep_keys.add(os.path.normcase(os.path.normpath(path)))
+        pending = [
+            item
+            for item in visible
+            if item is not None and grid.itemWidget(item) is None
+        ]
+        chunk = pending[:_CLIP_MATERIALIZE_CHUNK]
+        for item in chunk:
             self._materialize_clip_grid_item(item)
+        # Also rescue already-live gray cards in view (probe missed / skipped hide).
+        if not pending:
+            rescue: list[str] = []
+            for item in visible:
+                if item is None:
+                    continue
+                card = grid.itemWidget(item)
+                if card is None or not bool(getattr(card, "_dim_no_preview", False)):
+                    continue
+                path = str(item.data(Qt.UserRole + 1) or "")
+                if path:
+                    rescue.append(path)
+            if rescue:
+                self._enqueue_clip_thumb_probe(rescue)
+        if len(pending) > _CLIP_MATERIALIZE_CHUNK:
+            QTimer.singleShot(_CLIP_MATERIALIZE_GAP_MS, self._clips_refresh_viewport)
+            return
 
         # visualRect was often 0×0 until this layout pass — shelf flush needs a redo.
         self._schedule_clip_card_edge_sync()
-
-        live = getattr(self, "_clip_live_paths", None)
-        if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
-            return
-
-        # Already-seen cards stay. Only drop farthest extras if RAM cap is hit.
-        vp = grid.viewport()
-        vp_rect = vp.rect() if vp is not None else None
-        index: dict[str, object] = {}
-        for i in range(grid.count()):
-            it = grid.item(i)
-            if it is None:
-                continue
-            p = str(it.data(Qt.UserRole + 1) or "")
-            if p:
-                index[os.path.normcase(os.path.normpath(p))] = it
-
-        candidates: list[tuple[int, object]] = []
-        for key in list(live):
-            if key in keep_keys:
-                continue
-            item = index.get(key)
-            if item is None or item.isSelected():
-                continue
-            dist = (
-                self._clip_item_distance_from_viewport(grid, item, vp_rect)
-                if vp_rect is not None
-                else 10**9
-            )
-            candidates.append((dist, item))
-        candidates.sort(key=lambda pair: pair[0], reverse=True)
-        for _dist, item in candidates:
-            live = getattr(self, "_clip_live_paths", None)
-            if not isinstance(live, set) or len(live) <= _CLIP_MAX_LIVE_WIDGETS:
-                break
-            self._dematerialize_clip_grid_item(item)
+        # Do not dematerialize off-screen / filtered cards — session keeps them.
 
     def restore_clips_from_session_cache(
         self,
@@ -5102,7 +5455,6 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = True
         self._clips_progressive_active = False
-        self._pause_clips_background_warm()
         self._clip_live_paths = set()
         self._snapshot_append_new_after = bool(append_new)
         self._library_clip_rows = []
@@ -5136,7 +5488,7 @@ class LibraryMixin:
             if grid is not None:
                 grid.setUpdatesEnabled(True)
 
-        table.setSortingEnabled(True)
+        table.setSortingEnabled(False)
         table.horizontalHeader().setSectionsClickable(False)
         if hasattr(self, "fast_sync_grid"):
             self.fast_sync_grid()
@@ -5175,13 +5527,7 @@ class LibraryMixin:
         # critical path (same for duration / poster top-ups below).
         QTimer.singleShot(1500, self._persist_clips_library_snapshot)
 
-        # Background only — UI already Ready.
-        QTimer.singleShot(400, self._schedule_clip_duration_backfill)
-        # Thumbs were skipped on paint (no W: I/O); resolve/generate off-thread.
-        QTimer.singleShot(
-            700,
-            lambda: self._schedule_clip_poster_backfill(skip_ui_probe=True),
-        )
+        # Background only — no poster/duration storm (stuttered ClipCard marquees).
         if want_append:
             QTimer.singleShot(2500, self._append_new_clips_only)
         return True
@@ -5195,14 +5541,24 @@ class LibraryMixin:
             worker.wait(3000)
         self._clip_duration_worker = None
 
-    def _schedule_clip_duration_backfill(self) -> None:
-        """Fill missing clip durations from MPD (Skip seed / sparse Refresh leftovers)."""
+    def _schedule_clip_duration_backfill(self, *, live_only: bool | None = None) -> None:
+        """Fill missing durations from MPD (Progressive: live cards first)."""
         if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
             return
+        worker = getattr(self, "_clip_duration_worker", None)
+        if worker is not None and worker.isRunning():
+            return
         self._stop_clip_duration_backfill()
-        paths: list[str] = []
+        if live_only is None:
+            live_only = bool(getattr(self, "_clips_progressive_active", False))
         table = self.ui.table_clips
+        paths: list[str] = []
+        seen: set[str] = set()
+        live = getattr(self, "_clip_live_paths", None)
+        live_keys = live if isinstance(live, set) else set()
         for row in range(table.rowCount()):
+            if table.isRowHidden(row):
+                continue
             name_item = table.item(row, 0)
             dur_item = table.item(row, 3)
             if name_item is None:
@@ -5213,7 +5569,15 @@ class LibraryMixin:
                 continue
             if dur and dur not in ("--:--", "—", "--"):
                 continue
+            key = os.path.normcase(os.path.normpath(str(path)))
+            if key in seen:
+                continue
+            if live_only and live_keys and key not in live_keys:
+                continue
+            seen.add(key)
             paths.append(str(path))
+        if not live_only:
+            paths = self._prioritize_live_clip_paths(paths)
         if not paths:
             return
 
@@ -5272,6 +5636,16 @@ class LibraryMixin:
         if updated:
             self._persist_clips_library_snapshot()
             logging.info("Filled %d clip duration(s) from MPD", updated)
+        # One Progressive follow-up over the rest of the filtered shelf.
+        if (
+            getattr(self, "_clips_progressive_active", False)
+            and not getattr(self, "_clip_duration_did_full_pass", False)
+        ):
+            self._clip_duration_did_full_pass = True
+            QTimer.singleShot(
+                900,
+                lambda: self._schedule_clip_duration_backfill(live_only=False),
+            )
 
     def _append_new_clips_only(self) -> None:
         """Quiet Skip follow-up: discover folders and parse only paths not already listed."""
@@ -5362,7 +5736,6 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
         self._clips_progressive_active = False
-        self._pause_clips_background_warm()
         self._clip_live_paths = set()
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
@@ -5543,10 +5916,8 @@ class LibraryMixin:
                 self.grid_clips.doItemsLayout()
             except Exception:
                 pass
-            self._clips_refresh_viewport()
+            # One rematerialize after layout — not a 0/50ms/warm triple.
             QTimer.singleShot(0, self._clips_refresh_viewport)
-            QTimer.singleShot(50, self._clips_refresh_viewport)
-            self._start_clips_background_warm(delay_ms=400)
 
     def _filter_popup_floor_y(self, menu_y: int) -> int:
         """Bottom Y the filter popup may grow down to (global coords).
@@ -5730,6 +6101,11 @@ class LibraryMixin:
         # Freezing graphics and signals for instant speed
         table.setUpdatesEnabled(False)
         table.blockSignals(True)
+        # Qt's built-in table sort MUST stay off. With setSortingEnabled(True),
+        # every setItem re-sorts by the header (game name) and setRowHidden
+        # sticks to row indexes — Clear then looks like «old filter block,
+        # then everyone else» because Default order never actually lands.
+        table.setSortingEnabled(False)
         
         all_data = []
         for row in range(table.rowCount()):
@@ -5830,10 +6206,14 @@ class LibraryMixin:
             
         table.blockSignals(False)
         table.setUpdatesEnabled(True)
+        # Keep auto-sort off after reorder (re-enable would wipe Default immediately).
+        table.setSortingEnabled(False)
         
         
         if hasattr(self, 'fast_sync_grid'):
             self.fast_sync_grid()
+        if hasattr(self, "_sync_progressive_grid_filter_visibility"):
+            self._sync_progressive_grid_filter_visibility()
 
     
 
