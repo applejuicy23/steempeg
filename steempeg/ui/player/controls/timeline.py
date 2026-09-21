@@ -1150,6 +1150,9 @@ class TimelineCanvas(QWidget):
     def trigger_sniper(self):
         sniper_path = self._sniper_media_path()
         if hasattr(self, 'sniper') and sniper_path and self.pending_sec >= 0:
+            cache_dir = getattr(self, "_markers_cache_dir", None)
+            if cache_dir:
+                self.sniper.cache_dir = cache_dir
             # Don't waste PyAV on buckets already covered by batch disk thumbs.
             if self._thumb_dir_is_valid():
                 self.sniper.disk_cover_until_sec = int(MAX_BATCH_SEC)
@@ -1161,6 +1164,9 @@ class TimelineCanvas(QWidget):
         if getattr(self, "is_hovering", False):
             return
         if hasattr(self, "sniper") and self.sniper:
+            cache_dir = getattr(self, "_markers_cache_dir", None)
+            if cache_dir:
+                self.sniper.cache_dir = cache_dir
             if self._thumb_dir_is_valid():
                 self.sniper.disk_cover_until_sec = int(MAX_BATCH_SEC)
             self.sniper.pause_hover()
@@ -2958,7 +2964,8 @@ class SniperSensorBadge(QWidget):
             self.hide()
             return
         if key == "disk":
-            self._text = "DISK"
+            ms = int(round(float(elapsed_ms or 0.0)))
+            self._text = f"DISK {ms}ms" if ms > 0 else "DISK"
             self._bg = QColor(40, 44, 52, 210)
             self._fg = QColor("#c8cdd6")
         elif key == "gen":
