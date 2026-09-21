@@ -4473,14 +4473,30 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     splitter.setStyleSheet(splitter_qss)
 
     def _sync_startup_layout(self):
-        """Re-apply splitter sizes once the maximized window has real geometry."""
+        """Density / library restore / startup scans — call while shell is still hidden.
+
+        Must run before the first ShowWindow. Doing this after showMaximized paints
+        a black HWND and Windows stamps «Not Responding» while the UI thread works.
+        """
         def _spin():
             fn = getattr(self, "_launch_splash_keepalive", None)
             if callable(fn):
                 try:
                     fn()
+                    return
                 except Exception:
                     pass
+            # Splash already gone — still pump so Progressive batch signals / timers
+            # cannot starve the event loop into a fake freeze.
+            try:
+                from PySide6.QtCore import QEventLoop
+                from PySide6.QtWidgets import QApplication
+
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 16
+                )
+            except Exception:
+                pass
 
         self._ui_density = None  # force chrome density for the real window size
         self._apply_startup_splitter_sizes()
@@ -4676,7 +4692,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         restored_clips = bool(self.start_progressive_clips_library())
                     if not restored_clips:
                         self._startup_library_scan_active = False
-                _restore_session_side_libraries(restored_clips=restored_clips)
+                # Never hydrate Rendered/Screenshots on the same ticks as Progressive
+                # Clips placeholders — full ClipCards + Steam chunks froze launch.
+                # Controller kicks side libs after discover finishes (failsafe below).
+                if restored_clips:
+                    self._progressive_side_libs_pending = True
+                    # Failsafe if discover never finishes (interrupted / hung).
+                    QTimer.singleShot(6000, self._hydrate_progressive_side_libraries)
+                else:
+                    # No clips Progressive — still paint side shelves quietly.
+                    self._progressive_side_libs_pending = True
+                    QTimer.singleShot(800, self._hydrate_progressive_side_libraries)
+                    if hasattr(self, "update_status_indicator"):
+                        self.update_status_indicator("Ready", "ready")
                 return
 
             if mode == SCAN_CACHE:
@@ -6710,28 +6738,26 @@ def main():
             _force_native_window_icon(window.ui, icon_path)
         _splash_keepalive()
 
-        # Strict handoff: splash alone → 100% + Preparing → close splash →
-        # then map the shell (settle veil). Never show the main window under
-        # a still-open splash (gray Preparing bleeding through the card).
+        # Handoff order (do not reshuffle — black HWND / Not Responding):
+        # 1) settle veil on the still-HIDDEN shell
+        # 2) density + library restore + Progressive kick WHILE HIDDEN, splash up
+        # 3) splash 100% Preparing spin, then close splash
+        # 4) showMaximized under the veil (never map during sync — that was the
+        #    multi-second black "Steempeg не отвечает" window)
+        # Never show the main window under a still-open splash (gray Preparing
+        # bleeding through the translucent card).
         from steempeg.ui.startup_settle import (
             begin_startup_settle,
             kick_startup_settle_after_show,
         )
-        from steempeg.ui.settings_prefs import (
-            SCAN_CACHE,
-            SCAN_PROGRESSIVE,
-            SCAN_SMART,
-            load_startup_library_scan,
-        )
 
-        _settle_settings = {}
-        if hasattr(window, "load_user_settings"):
-            try:
-                _settle_settings = window.load_user_settings() or {}
-            except Exception:
-                _settle_settings = {}
-        _settle_mode = load_startup_library_scan(_settle_settings)
-        _use_settle_veil = _settle_mode in (SCAN_CACHE, SCAN_SMART, SCAN_PROGRESSIVE)
+        # Never show the opaque «Preparing workspace…» veil — it stuck for
+        # seconds whenever Progressive / Rendered / Screenshots kept the UI
+        # busy, and covered tab switches. Settle pass still runs without a
+        # cover (density / splitters only).
+        begin_startup_settle(window, use_veil=False)
+        # Heavy restore stays off-screen; splash keepalive still pumps the bar.
+        window._sync_startup_layout()
 
         try:
             from steempeg.ui.launch_splash import (
@@ -6739,15 +6765,12 @@ def main():
                 update_launch_splash,
             )
 
-            # Ensure bar is at 100% before Preparing spin (mid-init may have
-            # snapped already; re-assert so the user never sees Preparing early).
-            update_launch_splash(100, "Preparing workspace…")
-            hold_launch_splash_opening(status="Preparing workspace…", hold_s=0.65)
+            update_launch_splash(100, "Opening…")
+            hold_launch_splash_opening(status="Opening…", hold_s=0.35)
         except Exception:
             logging.debug("Launch splash hold failed", exc_info=True)
 
-        # Splash is closed. Now mount settle veil + show the shell.
-        begin_startup_settle(window, use_veil=_use_settle_veil)
+        # Splash closed — map the shell under the already-installed settle veil.
         try:
             from PySide6.QtCore import QEventLoop
 
@@ -6818,10 +6841,8 @@ def main():
             except Exception:
                 logging.exception("Linux disk-space warning failed to schedule")
 
-        # Geometry-dependent restore + library kickoff — AFTER show (v40.1 order).
-        window._sync_startup_layout()
-
-        # Settle veil covers chrome thrash; reveal closes any leftover splash.
+        # One coherent post-maximize settle under the veil; reveal on timer
+        # (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
         kick_startup_settle_after_show(window)
         try:
             from PySide6.QtCore import QEventLoop
@@ -6831,6 +6852,14 @@ def main():
             )
         except Exception:
             QApplication.processEvents()
+        # Long constructor / sync can leave Windows AppStarting cursor stuck.
+        try:
+            from steempeg.ui.window_chrome import force_app_cursor_resync
+
+            force_app_cursor_resync()
+            QTimer.singleShot(0, force_app_cursor_resync)
+        except Exception:
+            pass
         # Geometry after maximize can still settle one tick later — re-claim
         # foreground after first paint (launcher / terminal may still hold focus).
         _bring_main_to_front()
