@@ -231,6 +231,12 @@ def title_bar_dev_icons(size: int = 16) -> tuple[QIcon, QIcon]:
     return idle, hot
 
 
+def title_bar_kofi_icons(size: int = 16) -> tuple[QIcon, QIcon]:
+    """Ko-fi cup mark for the title-bar tip button (brand colours, not tinted)."""
+    icon = _icon_from_pixmap(load_pixmap("kofi.png", size))
+    return icon, icon
+
+
 def footer_dev_icon(size: int = 16) -> QIcon:
     """White </> for the desktop library-footer Dev button."""
     return _icon_from_pixmap(title_bar_dev_pixmap("#ffffff", size))
