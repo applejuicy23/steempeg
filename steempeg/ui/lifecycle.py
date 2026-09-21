@@ -402,7 +402,7 @@ class LifecycleMixin:
     def _escape_targets_library(self, source) -> bool:
         """True when Esc should clear Clips Manager / Rendered selection."""
         libs = []
-        for name in ("grid_clips", "grid_rendered", "table_rendered", "grid_screenshots"):
+        for name in ("grid_clips", "grid_rendered", "table_rendered", "grid_screenshots", "table_screenshots"):
             w = getattr(self, name, None)
             if w is not None:
                 libs.append(w)
@@ -519,6 +519,14 @@ class LifecycleMixin:
             overlay.hide_loading()
             overlay.deleteLater()
             self._buffering_overlay = None
+        pulse = getattr(self, "_play_pause_pulse", None)
+        if pulse is not None:
+            try:
+                pulse.cancel()
+            except Exception:
+                pass
+            pulse.deleteLater()
+            self._play_pause_pulse = None
 
         # 1. Kill the player if it is active.
         if hasattr(self, 'player') and self.player:
