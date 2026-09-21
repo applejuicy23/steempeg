@@ -191,7 +191,10 @@ def sync_screenshots_vertical_scrollbar(
     try:
         n = int(view.count())  # type: ignore[attr-defined]
     except Exception:
-        n = 0
+        try:
+            n = int(view.rowCount())  # type: ignore[attr-defined]
+        except Exception:
+            n = 0
     # ~3 cols × ~4 visible rows; more than that usually needs a bar with 8k shelves.
     if n > 12 or library_view_needs_vertical_scroll(view):
         view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
@@ -210,6 +213,9 @@ def sync_library_scrollbars(host, *, force_hide: bool = False) -> None:
         sync_library_vertical_scrollbar(view, force_hide=hide)
     sync_screenshots_vertical_scrollbar(
         getattr(host, "grid_screenshots", None), force_hide=hide
+    )
+    sync_screenshots_vertical_scrollbar(
+        getattr(host, "table_screenshots", None), force_hide=hide
     )
     if hasattr(host, "sync_clip_card_edge_roles"):
         try:
