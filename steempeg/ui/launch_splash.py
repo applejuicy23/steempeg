@@ -1,7 +1,8 @@
 """Cold-start launch splash — logo · name · version · status + % bar.
 
 Vegas / Adobe–style card. Top-left: avatar + @handle → profile.
-Top-right: GitHub mark → repo. Progress strip eases like the render bar.
+Top-right: GitHub mark + Ko-fi → repo / tip. Progress strip eases like the
+render bar.
 
 Drive via ``show_launch_splash`` / ``update_launch_splash`` /
 ``hold_launch_splash_opening`` / ``finish_launch_splash``.
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 import webbrowser
 
@@ -19,6 +21,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
+    QFontMetrics,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -65,9 +68,15 @@ _CREDIT_GH = 40
 
 _REPO_URL = "https://github.com/applejuicy23/steempeg"
 _PROFILE_URL = "https://github.com/applejuicy23"
+# Same tip URL as title-bar Donate Me (keep in sync with kofi_dialog.KOFI_URL).
+_KOFI_URL = "https://ko-fi.com/milloriin"
 _HANDLE = "@applejuicy23"
 _GH_MARK = "github.jpg"
+_KOFI_MARK = "kofi.png"
 _AVATAR = "applejuicy23.png"
+_HANDLE_PRO = "#e85a5a"
+# Windows Segoe paints the status midline a hair below a geometric 12px ring.
+_SPINNER_WIN_NUDGE_Y = 1.5 if sys.platform == "win32" else 0.0
 
 _splash: LaunchSplash | None = None
 _sim_timer: QTimer | None = None
@@ -254,9 +263,12 @@ class _SplashProgressBar(QWidget):
 
 
 class _SplashBusySpinner(QWidget):
-    def __init__(self, parent=None, *, pro: bool = False):
+    def __init__(self, parent=None, *, pro: bool = False, box_h: int | None = None):
         super().__init__(parent)
-        self.setFixedSize(_SPINNER_SIZE, _SPINNER_SIZE)
+        # Match status-line font height so AlignVCenter shares the text midline;
+        # paint the ring centered (with a tiny Windows optical nudge).
+        h = max(_SPINNER_SIZE, int(box_h or _SPINNER_SIZE))
+        self.setFixedSize(_SPINNER_SIZE, h)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._pro = bool(pro)
         self._angle = 0
@@ -294,7 +306,10 @@ class _SplashBusySpinner(QWidget):
         del event
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        side = float(_SPINNER_SIZE)
+        x = (float(self.width()) - side) / 2.0
+        y = (float(self.height()) - side) / 2.0 + _SPINNER_WIN_NUDGE_Y
+        r = QRectF(x, y, side, side).adjusted(1.5, 1.5, -1.5, -1.5)
         pen = QPen(_FILL_B_PRO if self._pro else _FILL_B)
         pen.setWidthF(1.75)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -343,9 +358,9 @@ def _round_avatar(size: int) -> QPixmap:
 
 
 class _SplashAuthor(QWidget):
-    """Top-left: avatar + @handle."""
+    """Top-left: avatar + @handle (purple stock · red when PRO)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, pro: bool = False):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
         lay = QHBoxLayout(self)
@@ -368,20 +383,22 @@ class _SplashAuthor(QWidget):
         f.setPointSize(10)
         f.setWeight(QFont.Weight.Bold)
         self._handle.setFont(f)
+        ink = _HANDLE_PRO if pro else tok.ACCENT_PRIMARY
         self._handle.setStyleSheet(
-            f"color: {tok.ACCENT_PRIMARY}; background: transparent; border: none;"
+            f"color: {ink}; background: transparent; border: none;"
         )
         lay.addWidget(self._handle)
 
 
 class _SplashRepoMark(QWidget):
-    """Top-right: GitHub mark (larger than avatar)."""
+    """Top-right: GitHub mark + Ko-fi tip (same size, stacked)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background: transparent; border: none;")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
 
         self._gh = _LinkLabel(_REPO_URL)
         self._gh.setFixedSize(_CREDIT_GH, _CREDIT_GH)
@@ -395,6 +412,19 @@ class _SplashRepoMark(QWidget):
         except Exception:
             logging.debug("Splash GitHub mark failed", exc_info=True)
         lay.addWidget(self._gh, 0, Qt.AlignmentFlag.AlignRight)
+
+        self._kofi = _LinkLabel(_KOFI_URL)
+        self._kofi.setFixedSize(_CREDIT_GH, _CREDIT_GH)
+        self._kofi.setToolTip("Support on Ko-fi")
+        try:
+            from steempeg.ui.icon_assets import load_pixmap
+
+            kofi = load_pixmap(_KOFI_MARK, _CREDIT_GH)
+            if not kofi.isNull():
+                self._kofi.setPixmap(kofi)
+        except Exception:
+            logging.debug("Splash Ko-fi mark failed", exc_info=True)
+        lay.addWidget(self._kofi, 0, Qt.AlignmentFlag.AlignRight)
 
 
 class LaunchSplash(QWidget):
@@ -474,12 +504,13 @@ class LaunchSplash(QWidget):
         meta = QHBoxLayout()
         meta.setContentsMargins(0, 0, 0, 6)
         meta.setSpacing(8)
-        self._spinner = _SplashBusySpinner(pro=self._pro)
-        self._status = QLabel("Starting…")
-        self._status.setObjectName("LaunchSplashStatus")
         status_font = QFont()
         status_font.setFamilies([tok.FONT_APP, "Segoe UI"])
         status_font.setPointSize(10)
+        spin_box_h = max(_SPINNER_SIZE, int(QFontMetrics(status_font).height()))
+        self._spinner = _SplashBusySpinner(pro=self._pro, box_h=spin_box_h)
+        self._status = QLabel("Starting…")
+        self._status.setObjectName("LaunchSplashStatus")
         self._status.setFont(status_font)
         self._status.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -529,7 +560,7 @@ class LaunchSplash(QWidget):
             """
         )
 
-        self._author = _SplashAuthor(self)
+        self._author = _SplashAuthor(self, pro=self._pro)
         self._repo = _SplashRepoMark(self)
         self._place_credits()
 
@@ -693,12 +724,10 @@ def launch_splash_is_holding() -> bool:
 def hold_launch_splash_opening(
     *, status: str = "Preparing workspace…", force: bool = False, hold_s: float = 1.0
 ) -> None:
-    """100% + fast spin for ``hold_s``, then close — spinner never waits on QTimer.
+    """100% + Preparing spin for ``hold_s``, then close the splash card.
 
-    Must close here (before the main shell maps). Leaving the translucent card
-    up over ``showMaximized`` paints a black void behind it and breaks the
-    loading → Preparing workspace handoff. Sunken dash after reveal is fixed
-    by sync glue in ``startup_settle``, not by holding this window open.
+    Caller must not map the main shell until this returns — otherwise the settle
+    veil shows under the translucent splash (gray Preparing before 100%).
     """
     global _splash
     if (_splash_disabled() and not force) or _splash is None:
@@ -707,6 +736,10 @@ def hold_launch_splash_opening(
         _splash.mark_opening(status, hold_alive=True)
         _splash._spinner.set_fast(True)
         _splash.raise_()
+        # Hard-land 100% so the bar is never still crawling when Preparing starts.
+        _splash._bar.snap_to(100.0, busy=True)
+        _splash._sync_percent_label()
+        _pump()
         deadline = time.monotonic() + max(0.35, float(hold_s))
         frame_s = max(0.016, _SPINNER_INTERVAL_FAST_MS / 1000.0)
         while time.monotonic() < deadline:
