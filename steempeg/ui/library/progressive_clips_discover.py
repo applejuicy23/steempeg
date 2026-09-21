@@ -14,7 +14,8 @@ from steempeg.library.clips_library_cache import (
 )
 from steempeg.library.scan import ScannedClip, discover_clip_paths
 
-_BATCH = 64
+_BATCH = 32
+_BATCH_YIELD_MS = 40
 
 
 class ProgressiveClipsDiscoverWorker(QThread):
@@ -54,6 +55,8 @@ class ProgressiveClipsDiscoverWorker(QThread):
                     self.batch_ready.emit(list(batch))
                     total += len(batch)
                     batch.clear()
+                    # Let the UI thread drain placeholder inserts between bursts.
+                    self.msleep(_BATCH_YIELD_MS)
             if batch and not self.isInterruptionRequested():
                 self.batch_ready.emit(list(batch))
                 total += len(batch)
@@ -108,4 +111,14 @@ class ProgressiveClipsDiscoverWorker(QThread):
             )
             if row is not None:
                 out.append(row)
+        # Session cache order + late discovers can leave «old block then new».
+        # Same Default key as the Sorting combo / apply_sorting.
+        from steempeg.library.scan import clip_folder_default_sort_key
+
+        out.sort(
+            key=lambda r: (
+                -float(clip_folder_default_sort_key(r.full_path)),
+                os.path.normcase(os.path.normpath(str(r.full_path or ""))),
+            )
+        )
         return out
