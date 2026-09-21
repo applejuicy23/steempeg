@@ -22,6 +22,7 @@ from steempeg.ui.hide_watcher import HideWatcher
 from steempeg.ui.widgets.combo_chrome import (
     apply_dark_combo_popup,
     compact_combo_stylesheet,
+    install_wide_contents_combo_popup,
     settings_panel_stylesheet,
 )
 
@@ -1039,14 +1040,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         )
         self.combo_sort.setFont(_sort_font)
 
-        # The compact field stays narrow, but the popup must be wide enough for the
-        # longest entry (+ icon) so rows never elide to "Game Na...(A - Z)".
-        _fm = self.combo_sort.fontMetrics()
-        _longest = max(
-            (_fm.horizontalAdvance(self.combo_sort.itemText(i)) for i in range(self.combo_sort.count())),
-            default=0,
-        )
-        self.combo_sort.view().setMinimumWidth(_longest + 78)
+        # Field may shrink on Deck panes; popup still sizes to the longest label.
+        install_wide_contents_combo_popup(self.combo_sort)
 
         self.combo_sort.currentIndexChanged.connect(self.apply_sorting)
 
@@ -2975,6 +2970,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # 2. Install the Global Radar to catch mouse moves and ESC
         self.fs_filter = FullscreenEventFilter(self)
         QApplication.instance().installEventFilter(self.fs_filter)
+        self.install_video_surface_click_handler()
         
         # 3. Connect the Fullscreen button (make sure this name matches your Qt Designer button!)
         if hasattr(self.ui, 'btn_fullscreen'):
@@ -4232,12 +4228,17 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 except Exception:
                     pass
 
-        from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup, compact_combo_stylesheet
+        from steempeg.ui.widgets.combo_chrome import (
+            apply_dark_combo_popup,
+            compact_combo_stylesheet,
+            fit_combo_popup_to_contents,
+        )
 
         combo = getattr(self, "combo_sort", None)
         if combo is not None:
             combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
             apply_dark_combo_popup(combo, dense=dense)
+            fit_combo_popup_to_contents(combo)
 
         self._refresh_dash_secondary_button_styles(dense)
 
@@ -5876,6 +5877,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         combo = getattr(self, "combo_sort", None)
         if combo is not None:
+            from steempeg.ui.widgets.combo_chrome import fit_combo_popup_to_contents
+
             combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
             apply_dark_combo_popup(combo, dense=dense)
             fnt = combo.font()
@@ -5888,6 +5891,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             combo.setFont(fnt)
             if hasattr(self, "_sync_sort_combo_for_panel"):
                 self._sync_sort_combo_for_panel()
+            fit_combo_popup_to_contents(combo)
 
         # List view fixed columns: Deck can't fit Type+Date+Duration at comfort widths.
         table = getattr(self.ui, "table_clips", None)
