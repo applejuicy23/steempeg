@@ -4117,7 +4117,8 @@ class RenderedLibraryMixin:
             self._screenshots_viewport_primed = True
             self._schedule_screenshots_viewport_refresh(0)
         if pending:
-            QTimer.singleShot(16, self._flush_steam_screenshot_chunk)
+            gap = 48 if getattr(self, "_progressive_quiet_hydrate", False) else 16
+            QTimer.singleShot(gap, self._flush_steam_screenshot_chunk)
         else:
             self._steam_screenshot_chunk_scheduled = False
             if getattr(self, "_steam_screenshots_worker", None) is None:
@@ -4410,13 +4411,16 @@ class RenderedLibraryMixin:
         if steam_rows:
             self._pending_steam_screenshot_rows = list(steam_rows)
             self._steam_screenshot_chunk_scheduled = True
-            # After show settles — chunked placeholder append, viewport fills tiles.
-            QTimer.singleShot(100, self._flush_steam_screenshot_chunk)
+            # Progressive quiet hydrate: wait longer so Clips stay responsive.
+            delay = 1200 if getattr(self, "_progressive_quiet_hydrate", False) else 100
+            QTimer.singleShot(delay, self._flush_steam_screenshot_chunk)
         elif not steempeg_rows:
             return False
         else:
             # Steempeg-only snapshot: still try to resolve any Steam leftovers later.
-            QTimer.singleShot(200, self._schedule_screenshot_game_name_backfill)
+            # Skip during Progressive quiet hydrate — API work fights Clips.
+            if not getattr(self, "_progressive_quiet_hydrate", False):
+                QTimer.singleShot(200, self._schedule_screenshot_game_name_backfill)
         return True
 
     def _collect_unresolved_screenshot_app_ids(self) -> list[str]:
@@ -4996,6 +5000,17 @@ class RenderedLibraryMixin:
         self._rendered_scan_generation = getattr(self, "_rendered_scan_generation", 0) + 1
         self._rendered_scan_active = False
 
+        # Progressive quiet hydrate: drip ClipCards so Clips stay responsive.
+        if getattr(self, "_progressive_quiet_hydrate", False):
+            self._pending_rendered_restore_files = list(files)
+            self._rendered_restore_chunk_scheduled = True
+            QTimer.singleShot(0, self._flush_rendered_restore_chunk)
+            logging.info(
+                "Progressive: chunked restore of %d rendered files",
+                len(files),
+            )
+            return True
+
         table = self.table_rendered
         grid = getattr(self, "grid_rendered", None)
         table.setUpdatesEnabled(False)
@@ -5027,9 +5042,76 @@ class RenderedLibraryMixin:
         if hasattr(self, "combo_sort"):
             self._sort_applied_by_panel["rendered"] = int(self.combo_sort.currentIndex())
         # Quiet poster top-up later (may touch export paths).
-        QTimer.singleShot(900, self._schedule_rendered_poster_backfill)
+        # Progressive quiet hydrate: no ffmpeg poster storm during launch.
+        if not getattr(self, "_progressive_quiet_hydrate", False):
+            QTimer.singleShot(900, self._schedule_rendered_poster_backfill)
         QTimer.singleShot(0, self._sync_library_scrollbars)
         return True
+
+    def _flush_rendered_restore_chunk(self) -> None:
+        """Insert a small batch of session-cache Rendered rows (Progressive hydrate)."""
+        pending = getattr(self, "_pending_rendered_restore_files", None)
+        if not isinstance(pending, list) or not pending:
+            self._rendered_restore_chunk_scheduled = False
+            self._finish_chunked_rendered_restore()
+            return
+        if not hasattr(self, "table_rendered"):
+            self._pending_rendered_restore_files = []
+            self._rendered_restore_chunk_scheduled = False
+            return
+
+        chunk = pending[:8]
+        del pending[:8]
+        table = self.table_rendered
+        grid = getattr(self, "grid_rendered", None)
+        table.setUpdatesEnabled(False)
+        if grid is not None:
+            grid.setUpdatesEnabled(False)
+        try:
+            for row in chunk:
+                table_row = self._insert_rendered_file_row(row)
+                if table_row >= 0:
+                    self._append_rendered_grid_card_for_row(table_row)
+                if hasattr(self, "_seed_rendered_health_cache_row"):
+                    self._seed_rendered_health_cache_row(row)
+        finally:
+            table.setUpdatesEnabled(True)
+            if grid is not None:
+                grid.setUpdatesEnabled(True)
+
+        if pending:
+            QTimer.singleShot(24, self._flush_rendered_restore_chunk)
+            return
+        self._pending_rendered_restore_files = []
+        self._rendered_restore_chunk_scheduled = False
+        self._finish_chunked_rendered_restore()
+
+    def _finish_chunked_rendered_restore(self) -> None:
+        if not hasattr(self, "table_rendered"):
+            return
+        table = self.table_rendered
+        table.setSortingEnabled(True)
+        table.horizontalHeader().setSectionsClickable(False)
+        if hasattr(self, "apply_rendered_sorting"):
+            self.apply_rendered_sorting()
+        else:
+            self._sync_rendered_grid_from_table()
+        self._update_library_count_label()
+        if not hasattr(self, "_sort_applied_by_panel"):
+            self._sort_applied_by_panel = {}
+        if hasattr(self, "combo_sort"):
+            self._sort_applied_by_panel["rendered"] = int(self.combo_sort.currentIndex())
+        QTimer.singleShot(0, self._sync_library_scrollbars)
+        if getattr(self, "_progressive_shots_after_rendered", False):
+            self._progressive_shots_after_rendered = False
+            if hasattr(self, "_hydrate_progressive_screenshots"):
+                QTimer.singleShot(350, self._hydrate_progressive_screenshots)
+            else:
+                self._progressive_quiet_hydrate = False
+        logging.info(
+            "Progressive: finished chunked rendered restore (%d rows)",
+            int(table.rowCount()),
+        )
 
     def _on_rendered_scan_error(self, message: str, generation: int) -> None:
         if generation != getattr(self, "_rendered_scan_generation", 0):
@@ -5106,6 +5188,8 @@ class RenderedLibraryMixin:
         return row
 
     def _schedule_rendered_poster_backfill(self) -> None:
+        if getattr(self, "_progressive_quiet_hydrate", False):
+            return
         if not hasattr(self, "table_rendered") or not hasattr(self, "cache_dir"):
             return
 
