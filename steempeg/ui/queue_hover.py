@@ -19,7 +19,15 @@ from PySide6.QtCore import (
     QTimer,
     Property,
 )
-from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QRegion,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -41,7 +49,7 @@ def _hotspot_width(app=None) -> int:
 
 
 _PAD = 14
-_BULGE_OUT = 22
+_BULGE_OUT = 28
 _BULGE_H = 128
 _RADIUS = 16
 _SHEET_INSET_Y = 18
@@ -52,6 +60,7 @@ _WATCH_MS = 50
 _DWMWA_TRANSITIONS_FORCEDISABLED = 3
 _DWMWA_SYSTEMBACKDROP_TYPE = 38
 _DWMSBT_NONE = 1
+_BRACE_GRIP_W = 5.0
 
 
 def _contains_global(widget: QWidget | None, pos) -> bool:
@@ -94,6 +103,99 @@ def _round_region(rect: QRect, radius: float) -> QRegion:
     path.addRoundedRect(QRectF(rect), float(radius), float(radius))
     poly = path.toFillPolygon().toPolygon()
     return QRegion(poly) if not poly.isEmpty() else QRegion()
+
+
+def _path_region(path: QPainterPath) -> QRegion:
+    poly = path.toFillPolygon().toPolygon()
+    return QRegion(poly) if not poly.isEmpty() else QRegion()
+
+
+def _map_brace_local(local: QPainterPath, rect: QRectF, *, open_left: bool) -> QPainterPath:
+    """Place a local tab path (seam on right) into ``rect``, mirrored when needed."""
+    if open_left:
+        return local.translated(rect.left(), rect.top())
+    mirror = QTransform()
+    mirror.translate(rect.left() + float(rect.width()), rect.top())
+    mirror.scale(-1.0, 1.0)
+    return mirror.map(local)
+
+
+def _brace_body_path(rect: QRectF, *, open_left: bool) -> QPainterPath:
+    """Filled edge tab: hill up → flat middle → hill down (not a ``{``, not an oval).
+
+    Flush against the panel seam on one side; free edge is a soft rounded plateau
+    with the grip stripe on the flat span.
+    """
+    if rect.width() < 6.0 or rect.height() < 16.0:
+        return QPainterPath()
+    w = float(rect.width())
+    h = float(rect.height())
+    pad_y = max(2.0, min(8.0, h * 0.03))
+    seam_x = w - 0.5
+    # Outer vertical face of the flat middle.
+    outer_x = 2.0
+    # How tall each end "hill" is before the straight run.
+    hill = max(18.0, min(32.0, h * 0.22))
+    y0 = pad_y
+    y1 = h - pad_y
+    flat_top = y0 + hill
+    flat_bot = y1 - hill
+    if flat_bot <= flat_top + 16.0:
+        # Short grip — keep a usable flat, shrink hills.
+        hill = max(10.0, (y1 - y0 - 16.0) * 0.5)
+        flat_top = y0 + hill
+        flat_bot = y1 - hill
+
+    local = QPainterPath()
+    # Seam top → curve out (hill up) → flat outer edge → curve in (hill down) → seam.
+    local.moveTo(seam_x, y0)
+    # Hill up: leave the seam and land on the outer face.
+    local.cubicTo(
+        seam_x - 1.0,
+        y0,
+        outer_x,
+        y0 + hill * 0.15,
+        outer_x,
+        flat_top,
+    )
+    local.lineTo(outer_x, flat_bot)
+    # Hill down: leave the outer face and meet the seam again.
+    local.cubicTo(
+        outer_x,
+        y1 - hill * 0.15,
+        seam_x - 1.0,
+        y1,
+        seam_x,
+        y1,
+    )
+    local.lineTo(seam_x, y0)
+    local.closeSubpath()
+    return _map_brace_local(local, rect, open_left=open_left)
+
+
+def _brace_grip_rect(rect: QRectF, *, open_left: bool) -> QRectF:
+    """Vertical grip stripe on the flat middle of the tab."""
+    w = float(rect.width())
+    h = float(rect.height())
+    line_w = _BRACE_GRIP_W
+    hill = max(18.0, min(32.0, h * 0.22))
+    pad_y = max(2.0, min(8.0, h * 0.03))
+    flat_top = pad_y + hill
+    flat_bot = h - pad_y - hill
+    if flat_bot <= flat_top + 16.0:
+        hill = max(10.0, (h - 2.0 * pad_y - 16.0) * 0.5)
+        flat_top = pad_y + hill
+        flat_bot = h - pad_y - hill
+    # Inset the stripe a little inside the flat span.
+    inset = 6.0
+    top = rect.top() + flat_top + inset
+    bot = rect.top() + flat_bot - inset
+    # Center in the filled body (between outer face and seam).
+    if open_left:
+        cx = rect.left() + (2.0 + (w - 0.5)) * 0.5
+    else:
+        cx = rect.left() + (0.5 + (w - 2.0)) * 0.5
+    return QRectF(cx - line_w * 0.5, top, line_w, max(20.0, bot - top))
 
 
 def _strip_overlay_dwm(widget: QWidget) -> None:
@@ -179,6 +281,8 @@ class _Grip(QWidget):
 
     Keeping the grip as a child of the translucent overlay left a full-height
     ghost column the width of ``_BULGE_OUT`` (Win ignores mask on that strip).
+    Painted as a filled edge tab (hill → flat → hill) against the panel seam,
+    with the same inner grip stripe as the old handle — not a capsule, not a ``{``.
     """
 
     def __init__(self, overlay: "QueueHoverOverlay"):
@@ -205,14 +309,15 @@ class _Grip(QWidget):
         self.hide()
 
     def place(self, global_rect: QRect) -> None:
-        """Move/show this capsule in global screen coords."""
+        """Move/show this brace grip in global screen coords."""
         if global_rect.width() < 2 or global_rect.height() < 2:
             self.hide()
             return
         self.setGeometry(global_rect)
-        tab_r = min(global_rect.width(), global_rect.height()) * 0.5
+        open_left = not bool(getattr(self._overlay, "_from_left", False))
+        body = _brace_body_path(QRectF(self.rect()), open_left=open_left)
         try:
-            region = _round_region(self.rect(), tab_r)
+            region = _path_region(body) if not body.isEmpty() else QRegion()
             if region.isEmpty():
                 self.clearMask()
             else:
@@ -249,29 +354,25 @@ class _Grip(QWidget):
         if r.width() < 2 or r.height() < 2:
             painter.end()
             return
-        tab_r = min(r.width(), r.height()) * 0.5
-        path = QPainterPath()
-        path.addRoundedRect(r, tab_r, tab_r)
+        open_left = not bool(getattr(self._overlay, "_from_left", False))
+        body = _brace_body_path(r, open_left=open_left)
+        if body.isEmpty():
+            painter.end()
+            return
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bg)
-        painter.fillPath(path, bg)
+        painter.fillPath(body, bg)
         rim = QPen(border)
         rim.setWidthF(1.0)
         rim.setCosmetic(True)
         painter.setPen(rim)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(path)
-        line_w = 5.0
-        pad = 26.0
-        line = QRectF(
-            r.center().x() - line_w * 0.5,
-            r.top() + pad,
-            line_w,
-            max(24.0, r.height() - pad * 2.0),
-        )
+        painter.drawPath(body)
+        stripe = _brace_grip_rect(r, open_left=open_left)
+        painter.setClipPath(body)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(grip_hot if self._hovered else grip_idle)
-        painter.drawRoundedRect(line, 2.5, 2.5)
+        painter.drawRoundedRect(stripe, 2.5, 2.5)
         painter.end()
 
     def enterEvent(self, event):  # noqa: N802
