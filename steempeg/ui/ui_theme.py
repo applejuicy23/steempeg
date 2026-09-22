@@ -2448,11 +2448,26 @@ def about_accent_button_stylesheet() -> str:
 """
 
 
-def about_dialog_stylesheet() -> str:
-    """About frameless card — Default legacy plate; TrueDark elevated tokens."""
+def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
+    """About frameless card — Default legacy plate; TrueDark elevated tokens.
+
+    ``pro`` — Steempeg PRO brand chrome (red title / heart accents).
+    """
     import sys
 
+    if pro is None:
+        try:
+            from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+            pro = resolve_steempeg_pro()
+        except Exception:
+            pro = False
+    pro = bool(pro)
+
     c = _frameless_card_dialog_colors()
+    # Warm red sibling to free violet — same tokens as ProBadge / splash wash.
+    title = "#e85a5a" if pro else c["title"]
+    heart_hover = "#f08080" if pro else "#d4c4f5"
     # Linux (and non-Windows): QSS font-size often under-sizes QLabel geometry,
     # so AboutTitle / Powered captions paint over the logo / circular badges.
     linux_label_room = ""
@@ -2476,7 +2491,7 @@ def about_dialog_stylesheet() -> str:
     }}
     QLabel {{ background: transparent; }}
     QLabel#AboutTitle {{
-        color: {c["title"]};
+        color: {title};
         font-size: 26px;
         font-weight: bold;
     }}
@@ -2489,13 +2504,13 @@ def about_dialog_stylesheet() -> str:
         letter-spacing: 0.4px;
     }}
     QLabel#AboutThanksHeart {{
-        color: {c["title"]};
+        color: {title};
         font-size: 13px;
         font-weight: bold;
         padding-bottom: 1px;
     }}
     QLabel#AboutThanksHeart:hover {{
-        color: #d4c4f5;
+        color: {heart_hover};
     }}
     QLabel#AboutPoweredName {{
         color: {c["text"]};
@@ -2536,6 +2551,26 @@ def about_dialog_stylesheet() -> str:
     }}
     QPushButton#AboutReportBtn:pressed {{
         background-color: {c["danger_pressed_bg"]};
+    }}
+    /* Ko-fi cream CTA — same footprint as Report/Close; Fredoka + brand colours. */
+    QPushButton#AboutKofiBtn {{
+        background-color: #FFF9F3;
+        color: #3A342E;
+        border: 1px solid #E0D5C8;
+        border-radius: 16px;
+        padding: 6px 16px 6px 12px;
+        font-family: "Fredoka", "Candara", "Calibri", "Segoe UI Variable", "Segoe UI", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        min-height: 32px;
+        outline: none;
+    }}
+    QPushButton#AboutKofiBtn:hover {{
+        background-color: #F3EBE2;
+        border: 1px solid #D4C8B8;
+    }}
+    QPushButton#AboutKofiBtn:pressed {{
+        background-color: #EDE4D8;
     }}
     QPushButton#AboutUpdateBtn {{
         background-color: {c["accent_bg"]};
@@ -3002,8 +3037,17 @@ def render_history_close_button_stylesheet() -> str:
     return about_secondary_button_stylesheet()
 
 
-def about_dialog_link_style() -> str:
-    """Inline HTML link color for About (accent stays brand purple)."""
+def about_dialog_link_style(*, pro: bool | None = None) -> str:
+    """Inline HTML link color for About (violet free / red PRO)."""
+    if pro is None:
+        try:
+            from steempeg.ui.settings_prefs import resolve_steempeg_pro
+
+            pro = resolve_steempeg_pro()
+        except Exception:
+            pro = False
+    if pro:
+        return "color:#e85a5a; text-decoration:none;"
     return "color:#b29ae7; text-decoration:none;"
 
 
