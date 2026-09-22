@@ -233,6 +233,41 @@ def clips_from_library_cache(
     return out
 
 
+def _health_from_cache_or_fs(
+    full_path: str,
+    health_cache: dict[str, dict],
+) -> tuple[str, list[str]]:
+    """Prefer mtime-matched cache; else filesystem assess (no ffprobe).
+
+    Progressive used to default missing cache → healthy, so Dead filter showed
+    Apply Filters (0) while empty/corrupt Steam folders still sat on disk.
+    """
+    norm = os.path.normpath(full_path)
+    try:
+        mtime = os.path.getmtime(norm)
+    except OSError:
+        mtime = 0.0
+    entry = health_cache.get(norm) or health_cache.get(full_path)
+    if isinstance(entry, dict) and entry.get("mtime") == mtime and entry.get("level"):
+        return (
+            str(entry.get("level")),
+            [str(x) for x in (entry.get("issues") or [])],
+        )
+    try:
+        report = dash_health.assess_clip_health(norm, probe=False)
+    except Exception:
+        report = dash_health.ClipHealthReport(
+            dash_health.ClipHealth.DEAD,
+            ["Empty or unreadable folder"],
+        )
+    health_cache[norm] = {
+        "mtime": mtime,
+        "level": report.level.value,
+        "issues": list(report.issues),
+    }
+    return report.level.value, list(report.issues)
+
+
 def _lightweight_row_from_path(
     full_path: str,
     *,
@@ -246,9 +281,7 @@ def _lightweight_row_from_path(
     folder_name = os.path.basename(full_path)
     parts = folder_name.split("_")
     norm = os.path.normpath(full_path)
-    entry = health_cache.get(norm) or health_cache.get(full_path) or {}
-    level = str(entry.get("level") or dash_health.ClipHealth.HEALTHY.value)
-    issues = [str(x) for x in (entry.get("issues") or [])]
+    level, issues = _health_from_cache_or_fs(norm, health_cache)
 
     if len(parts) >= 4 and parts[1].isdigit():
         prefix = parts[0].lower()
