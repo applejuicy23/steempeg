@@ -2899,9 +2899,9 @@ class LibraryMixin:
         from steempeg.ui.ui_density import COMFORT, folder_button_label
 
         folders = getattr(self, "clips_folders", [])
-        # The + only exists once at least one folder is set; with no folders the user
-        # must pick a main folder first via Choose Folder.
-        picker.set_add_visible(bool(folders))
+        # Keep the + panel even with an empty library so Discover Steam folders
+        # / Add folder stay reachable after Clear list.
+        picker.set_add_visible(True)
         dense = getattr(self, "_ui_density", None) or COMFORT
         tip = ("Library folders:\n" + "\n".join(folders)) if len(folders) > 1 else ""
         picker.set_folder_label(folder_button_label(len(folders), dense), tip)
@@ -2955,11 +2955,14 @@ class LibraryMixin:
         from steempeg.core.steam_paths import get_steam_path
 
         before = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
+        was_empty = not before
         added = self.auto_discover_steam_folders(save=True)
         after = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
 
         if added:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
+            if was_empty:
+                self._reset_clips_filter_memory()
             # New Steam folders: Full scan (same as Choose/Add folder).
             self.scan_clips(announce_duplicates=True, fast=False)
             steempeg_information(
@@ -2995,6 +2998,7 @@ class LibraryMixin:
         if not folder:
             return
         folder = os.path.normpath(folder)
+        was_empty = not bool(getattr(self, "clips_folders", None))
         if not self.clips_folders:
             self.clips_folders = [folder]
         else:
@@ -3005,6 +3009,10 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
+        # First folder after an empty library: Drop stale filters (old Folders
+        # chips would hide every clip until Refresh).
+        if was_empty:
+            self._reset_clips_filter_memory()
         # First / primary folder: Full scan (ffprobe + Steam meta).
         self.scan_clips(announce_duplicates=True, fast=False)
 
@@ -3019,6 +3027,7 @@ class LibraryMixin:
         if folder in self.clips_folders:
             steempeg_information(self.ui, "Library folders", "That folder is already in the list.")
             return
+        was_empty = not bool(getattr(self, "clips_folders", None))
         if not self.clips_folders:
             self.clips_folders = [folder]
             self.clips_folder = folder
@@ -3027,6 +3036,8 @@ class LibraryMixin:
         self.save_user_settings("user_cleared_library", False)
         self._save_clips_folders()
         self._update_folder_picker_label()
+        if was_empty:
+            self._reset_clips_filter_memory()
         # New folder: Full scan so health + icons land once.
         self.scan_clips(announce_duplicates=True, fast=False)
 
@@ -3037,6 +3048,8 @@ class LibraryMixin:
         self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
         self._save_clips_folders()
         self._update_folder_picker_label()
+        if not self.clips_folders:
+            self._reset_clips_filter_memory()
         self.scan_clips()
 
     def clear_clips_folders(self):
@@ -3047,7 +3060,7 @@ class LibraryMixin:
             self.ui,
             "Clear library folders",
             "Remove all clips folders from the library?",
-            detail="You can add them again with Choose Folder.",
+            detail="Use + → Discover Steam folders… or Choose Folder to add them again.",
         ):
             return
         self.clips_folders = []
@@ -3056,6 +3069,7 @@ class LibraryMixin:
         self._save_clips_folders()
         self._library_clip_rows = []
         clear_clips_library_cache(getattr(self, "cache_dir", None))
+        self._reset_clips_filter_memory()
         self._update_folder_picker_label()
         self.scan_clips()
 
@@ -3457,6 +3471,7 @@ class LibraryMixin:
         if not hasattr(self.ui, "table_clips"):
             return
         table = self.ui.table_clips
+        self._heal_stale_saved_library_filters()
         saved = getattr(self, "saved_filter_state", None)
         active = bool(saved and saved.get("active"))
 
@@ -3723,22 +3738,81 @@ class LibraryMixin:
         """Align grid visibility with remembered filters before showing the library."""
         self.reapply_saved_library_filters()
 
-    # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
-    def refresh_library(self):
-        """ Refresh button: wipe the active filter, deselect the current clip/queue job,
-        reset the player + settings panel, then rescan the folder from scratch. """
-        # 1. Drop the remembered filter so the menu reopens at defaults and nothing stays hidden
+    def _reset_clips_filter_memory(self) -> None:
+        """Drop remembered Clips filters (same wipe Refresh uses)."""
         self.saved_filter_state = None
         if hasattr(self, "_persist_library_filter_memory"):
             self._persist_library_filter_memory()
         if hasattr(self, "sync_filter_pill_badge"):
             self.sync_filter_pill_badge()
-        if getattr(self, 'filter_menu', None) is not None:
+        menu = getattr(self, "filter_menu", None)
+        if menu is not None:
             try:
-                self.filter_menu.deleteLater()
+                menu.deleteLater()
             except Exception:
                 pass
             self.filter_menu = None
+
+    def _heal_stale_saved_library_filters(self) -> bool:
+        """Rewrite saved filters that cannot match the current library.
+
+        After Clear list → add first folder, remembered Folders still point at the
+        old roots — ``sync_library_filter_view`` then hides every new clip until
+        the user hits Refresh (which wipes filters). Same when roots move.
+        """
+        saved = getattr(self, "saved_filter_state", None)
+        if not isinstance(saved, dict) or not saved.get("active"):
+            return False
+        if saved.get("match_none"):
+            return False
+
+        changed = False
+        saved = dict(saved)
+        roots = [
+            os.path.normpath(p)
+            for p in (getattr(self, "clips_folders", None) or [])
+            if p
+        ]
+        root_keys = {os.path.normcase(r) for r in roots}
+
+        if "folders" in saved and roots:
+            folders = [p for p in (saved.get("folders") or []) if p]
+            folder_keys = {
+                os.path.normcase(os.path.normpath(p)) for p in folders
+            }
+            # Non-empty stale list with zero overlap → accept all current roots.
+            if folders and not (folder_keys & root_keys):
+                saved["folders"] = list(roots)
+                changed = True
+
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if table is not None and "games" in saved:
+            selected = {str(g).strip() for g in (saved.get("games") or []) if g}
+            if selected and table.rowCount() > 0:
+                present: set[str] = set()
+                for row in range(table.rowCount()):
+                    item = table.item(row, 0)
+                    if item is not None:
+                        name = item.text().strip()
+                        if name:
+                            present.add(name)
+                if present and not (selected & present):
+                    saved["games"] = sorted(present)
+                    changed = True
+
+        if not changed:
+            return False
+        self.saved_filter_state = saved
+        if hasattr(self, "_persist_library_filter_memory"):
+            self._persist_library_filter_memory()
+        return True
+
+    # --- TRUE HIGH-END FULLSCREEN SYSTEM ---
+    def refresh_library(self):
+        """ Refresh button: wipe the active filter, deselect the current clip/queue job,
+        reset the player + settings panel, then rescan the folder from scratch. """
+        # 1. Drop the remembered filter so the menu reopens at defaults and nothing stays hidden
+        self._reset_clips_filter_memory()
 
         # 2. Reset the selected clip, the player surface and every settings tab
         if hasattr(self, 'close_current_clip'):
@@ -5027,6 +5101,12 @@ class LibraryMixin:
         self._progressive_shots_pending = False
 
     def _on_progressive_clips_finished(self, total: int) -> None:
+        worker = getattr(self, "_progressive_clips_worker", None)
+        # Discover may have filled missing health via filesystem assess — persist.
+        if worker is not None and isinstance(getattr(worker, "_health_cache", None), dict):
+            self._ensure_clip_health_cache()
+            self._clip_health_cache.update(worker._health_cache)
+            self._save_clip_health_cache()
         self._progressive_clips_worker = None
         if not getattr(self, "_clips_progressive_active", False):
             return
