@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-KOFI_URL = "https://ko-fi.com/milloriin"
+KOFI_URL = "https://ko-fi.com/milloriin"  # fallback; prefer resolve_kofi_url()
 KOFI_MARK = "kofi.png"
 
 # Ko-fi dashboard vibe — warm cream plate, soft charcoal type.
@@ -167,9 +167,14 @@ def _cozy_stylesheet(*, support_font: str) -> str:
 
 def show_kofi_dialog(parent=None) -> None:
     """Frameless cozy Donate Me card — cream plate, cup mark, soft Support CTA."""
+    from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
     from steempeg.ui.icon_assets import load_pixmap
     from steempeg.ui.icon_utils import apply_square_icon
     from steempeg.ui.ui_density import scaled_dialog_size
+
+    # Prefer live Pages meta so a renamed Ko-fi slug updates without a release.
+    kofi_url = resolve_kofi_url(refresh=True, timeout=2.5)
+    kofi_host = display_kofi_host(kofi_url)
 
     fredoka = register_bundled_fredoka()
 
@@ -252,7 +257,7 @@ def show_kofi_dialog(parent=None) -> None:
     pitch.setFont(pitch_font)
     content.addWidget(pitch)
 
-    dim = QLabel("ko-fi.com/milloriin")
+    dim = QLabel(kofi_host)
     dim.setObjectName("KofiDim")
     dim.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     content.addWidget(dim)
@@ -277,7 +282,7 @@ def show_kofi_dialog(parent=None) -> None:
     if not cup.isNull():
         btn_open.setIcon(QIcon(cup))
         btn_open.setIconSize(cup.size())
-    btn_open.clicked.connect(lambda: webbrowser.open(KOFI_URL))
+    btn_open.clicked.connect(lambda: webbrowser.open(kofi_url))
     support_row = QHBoxLayout()
     support_row.addStretch(1)
     support_row.addWidget(btn_open)
