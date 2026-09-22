@@ -75,6 +75,10 @@ class ProgressiveClipsDiscoverWorker(QThread):
             return os.path.normcase(os.path.normpath(path)) in root_keys
 
         if self._prefer_session:
+            from dataclasses import replace
+
+            from steempeg.library.clips_library_cache import _health_from_cache_or_fs
+
             for row in clips_from_library_cache(
                 self._cache_dir,
                 library_roots=roots,
@@ -86,6 +90,15 @@ class ProgressiveClipsDiscoverWorker(QThread):
                 if key in seen:
                     continue
                 seen.add(key)
+                # Session JSON may still say "healthy" from an older Progressive
+                # default — refresh so Dead filter matches on-disk truth.
+                level, issues = _health_from_cache_or_fs(
+                    row.full_path, self._health_cache
+                )
+                if level != row.health_level or list(issues) != list(
+                    row.health_issues or []
+                ):
+                    row = replace(row, health_level=level, health_issues=issues)
                 out.append(row)
 
         # Same path filter as Refresh / Full — collect_clip_roots alone would
