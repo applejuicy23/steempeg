@@ -387,7 +387,7 @@ def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
 
 
 class SettingsDialog(SteempegDialog):
-    """App Settings — tabbed: General · Visual · Notifications · Performance · Support · Advanced."""
+    """App Settings — tabbed: General · Visual · Notifications · Performance · Support · PRO · Advanced."""
 
     def __init__(self, app, parent=None, **theme_kwargs):
         parent_w = parent or getattr(app, "ui", None)
@@ -1283,6 +1283,21 @@ class SettingsDialog(SteempegDialog):
         s.addStretch(1)
         tabs.addTab(_scroll_settings_tab(support), "Support")
 
+        # ----- PRO -----
+        pro_page, pro_lay = _tab_page()
+        self._steempeg_pro = bool(load_steempeg_pro(settings))
+        pro_lay.addWidget(self._section("Steempeg PRO"))
+        self._pro_banner = self._build_pro_promo_banner()
+        pro_lay.addWidget(self._pro_banner)
+        pro_lay.addWidget(
+            self._hint(
+                "PRO is free brand chrome for now (title-bar badge, red splash, "
+                "About accents). Converter extras will land here later."
+            )
+        )
+        pro_lay.addStretch(1)
+        tabs.addTab(_scroll_settings_tab(pro_page), "PRO")
+
         # ----- Advanced -----
         advanced, a = _tab_page()
         a.addWidget(self._section("Fullscreen"))
@@ -1396,18 +1411,11 @@ class SettingsDialog(SteempegDialog):
             "Also enables Console gamepad actions for QA."
         )
         a.addWidget(self._chk_dev_mode)
-        self._chk_steempeg_pro = SteempegCheckBox("Steempeg PRO (preview)")
-        self._chk_steempeg_pro.setChecked(load_steempeg_pro(settings))
-        self._chk_steempeg_pro.setToolTip(
-            "v50 seed: show the PRO badge in the title bar and a red splash wash. "
-            "Does not unlock converter knobs yet. Env STEEMPEG_PRO=1 also works."
-        )
-        a.addWidget(self._chk_steempeg_pro)
         a.addWidget(
             self._hint(
                 "Console mode lives under General → Shell. "
                 "Dev Mode → Deck pad emulates the controller. "
-                "PRO preview is brand chrome only for now."
+                "Steempeg PRO lives under the PRO tab."
             )
         )
 
@@ -1563,6 +1571,204 @@ class SettingsDialog(SteempegDialog):
             lbl.setText(text)
         elif isinstance(hint_widget, QLabel):
             hint_widget.setText(text)
+
+    def _build_pro_promo_banner(self) -> QFrame:
+        """Red promo card — Get free / already unlocked."""
+        from steempeg.infra.paths import get_resource_path
+        from steempeg.ui.icon_utils import apply_square_icon, app_logo_pixmap
+        from steempeg.ui.widgets.pro_badge import ProBadge
+
+        frame = QFrame()
+        frame.setObjectName("ProPromoBanner")
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        frame.setStyleSheet(
+            f"""
+            QFrame#ProPromoBanner {{
+                background-color: #2a1818;
+                border: 1px solid #8b3a3a;
+                border-radius: 12px;
+            }}
+            QLabel#ProPromoTitle {{
+                color: #ffb3b3;
+                font-size: 18px;
+                font-weight: bold;
+                background: transparent;
+                font-family: {tok.FONT_APP};
+            }}
+            QLabel#ProPromoPitch {{
+                color: #e0c0c0;
+                font-size: 12px;
+                background: transparent;
+                font-family: {tok.FONT_APP};
+            }}
+            QPushButton#ProPromoGetBtn {{
+                background-color: #6a2e2e;
+                color: #ffffff;
+                border: 2px solid #c44;
+                border-radius: 10px;
+                padding: 10px 18px;
+                font-size: 13px;
+                font-weight: bold;
+                font-family: {tok.FONT_APP};
+            }}
+            QPushButton#ProPromoGetBtn:hover {{
+                background-color: #823838;
+                border-color: #e85a5a;
+            }}
+            QPushButton#ProPromoGetBtn:pressed {{
+                background-color: #4a2020;
+            }}
+            QPushButton#ProPromoOffBtn {{
+                background-color: #383838;
+                color: #e0e0e0;
+                border: 2px solid #555555;
+                border-radius: 10px;
+                padding: 8px 14px;
+                font-size: 12px;
+                font-weight: bold;
+                font-family: {tok.FONT_APP};
+            }}
+            QPushButton#ProPromoOffBtn:hover {{
+                background-color: #404040;
+                border-color: #8b3a3a;
+                color: #ffb3b3;
+            }}
+            """
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(18, 18, 18, 16)
+        lay.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        logo = QLabel()
+        logo.setFixedSize(48, 48)
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setStyleSheet("background: transparent; border: none;")
+        from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
+
+        pix = app_logo_pixmap(48, dpr=1.0)
+        if pix is None or pix.isNull():
+            from PySide6.QtGui import QPixmap
+
+            pix = QPixmap(get_resource_path("logo.png"))
+        # logo.png is a disc on an opaque square — mask corners for the red banner.
+        if pix is not None and not pix.isNull():
+            pix = shaped_game_icon_pixmap(pix, 48, ICON_SHAPE_CIRCLE)
+        apply_square_icon(logo, pix, 48)
+        head.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        title = QLabel("Steempeg")
+        title.setObjectName("ProPromoTitle")
+        name_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
+        name_row.addWidget(ProBadge(size="splash", parent=frame), 0, Qt.AlignmentFlag.AlignVCenter)
+        name_row.addStretch(1)
+        title_col.addLayout(name_row)
+        pitch = QLabel()
+        pitch.setObjectName("ProPromoPitch")
+        pitch.setWordWrap(True)
+        title_col.addWidget(pitch)
+        head.addLayout(title_col, 1)
+        lay.addLayout(head)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_get = QPushButton("Get it now for free")
+        btn_get.setObjectName("ProPromoGetBtn")
+        btn_get.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_get.clicked.connect(self._on_get_steempeg_pro)
+        btn_off = QPushButton("Turn off PRO")
+        btn_off.setObjectName("ProPromoOffBtn")
+        btn_off.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_off.setToolTip("Hide PRO badge / red splash chrome (settings only).")
+        btn_off.clicked.connect(lambda: self._apply_steempeg_pro(False))
+        btn_support = QPushButton("Support on Ko-fi")
+        btn_support.setObjectName("ProPromoOffBtn")
+        btn_support.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_support.setToolTip("Opens the tip URL from steempeg-meta.json on the website.")
+        btn_support.clicked.connect(self._on_pro_support_kofi)
+        btn_row.addWidget(btn_get)
+        btn_row.addWidget(btn_off)
+        btn_row.addWidget(btn_support)
+        btn_row.addStretch(1)
+        lay.addLayout(btn_row)
+
+        host = QLabel("")
+        host.setObjectName("ProPromoPitch")
+        host.setWordWrap(True)
+        lay.addWidget(host)
+
+        frame._pro_pitch = pitch  # type: ignore[attr-defined]
+        frame._pro_btn_get = btn_get  # type: ignore[attr-defined]
+        frame._pro_btn_off = btn_off  # type: ignore[attr-defined]
+        frame._pro_btn_support = btn_support  # type: ignore[attr-defined]
+        frame._pro_host = host  # type: ignore[attr-defined]
+        self._sync_pro_promo_banner(frame)
+        return frame
+
+    def _sync_pro_promo_banner(self, frame: QFrame | None = None) -> None:
+        banner = frame if frame is not None else getattr(self, "_pro_banner", None)
+        if banner is None:
+            return
+        pitch = getattr(banner, "_pro_pitch", None)
+        btn_get = getattr(banner, "_pro_btn_get", None)
+        btn_off = getattr(banner, "_pro_btn_off", None)
+        btn_support = getattr(banner, "_pro_btn_support", None)
+        host = getattr(banner, "_pro_host", None)
+        enabled = bool(getattr(self, "_steempeg_pro", False))
+        if isinstance(pitch, QLabel):
+            if enabled:
+                pitch.setText(
+                    "You're on Steempeg PRO — title-bar badge and red splash are live."
+                )
+            else:
+                pitch.setText("Get it now for free.")
+        if isinstance(btn_get, QPushButton):
+            btn_get.setVisible(not enabled)
+        if isinstance(btn_off, QPushButton):
+            btn_off.setVisible(enabled)
+        if isinstance(btn_support, QPushButton):
+            btn_support.setVisible(True)
+        if isinstance(host, QLabel):
+            try:
+                from steempeg.services.kofi_remote import display_kofi_host, resolve_kofi_url
+
+                host.setText(display_kofi_host(resolve_kofi_url(refresh=False)))
+            except Exception:
+                host.setText("ko-fi.com/milloriin")
+
+    def _on_pro_support_kofi(self) -> None:
+        import webbrowser
+
+        from steempeg.services.kofi_remote import resolve_kofi_url
+
+        webbrowser.open(resolve_kofi_url(refresh=True, timeout=2.5))
+        self._sync_pro_promo_banner()
+
+    def _on_get_steempeg_pro(self) -> None:
+        from steempeg.ui.pro_unlock_dialog import ask_steempeg_pro_unlock
+
+        choice = ask_steempeg_pro_unlock(self)
+        if choice == "dismiss":
+            return
+        # Free unlock — Donate opens Ko-fi first; Cancel skips the tip.
+        self._apply_steempeg_pro(True)
+
+    def _apply_steempeg_pro(self, enabled: bool) -> None:
+        self._steempeg_pro = bool(enabled)
+        value = normalize_steempeg_pro(enabled)
+        if hasattr(self._app, "save_user_settings"):
+            self._app.save_user_settings(KEY_STEEMPEG_PRO, value)
+        if hasattr(self._app, "_refresh_steempeg_pro_chrome"):
+            try:
+                self._app._refresh_steempeg_pro_chrome()
+            except Exception:
+                pass
+        self._sync_pro_promo_banner()
 
     def _save_setting(self, key: str, value) -> None:
         if hasattr(self._app, "save_user_settings"):
@@ -2812,7 +3018,7 @@ class SettingsDialog(SteempegDialog):
         pending[KEY_HWDEC_PREVIEW] = normalize_hwdec_preview(self._combo_hwdec.currentData())
 
         dev_mode = normalize_dev_mode(self._chk_dev_mode.isChecked())
-        steempeg_pro = normalize_steempeg_pro(self._chk_steempeg_pro.isChecked())
+        steempeg_pro = normalize_steempeg_pro(getattr(self, "_steempeg_pro", False))
         deck_controls = normalize_deck_controls(self._chk_deck_controls.isChecked())
         pending[KEY_DEV_MODE] = dev_mode
         pending[KEY_STEEMPEG_PRO] = steempeg_pro
