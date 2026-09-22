@@ -69,8 +69,9 @@ _CREDIT_GH = 40
 
 _REPO_URL = "https://github.com/applejuicy23/steempeg"
 _PROFILE_URL = "https://github.com/applejuicy23"
-# Same tip URL as title-bar Donate Me (keep in sync with kofi_dialog.KOFI_URL).
-_KOFI_URL = "https://ko-fi.com/milloriin"
+# Tip URL: prefer Pages meta / cache (see steempeg.services.kofi_remote).
+from steempeg.services.kofi_remote import DEFAULT_KOFI_URL as _KOFI_URL
+
 _HANDLE = "@applejuicy23"
 _GH_MARK = "github.jpg"
 _KOFI_MARK = "kofi.png"
@@ -326,6 +327,9 @@ class _LinkLabel(QLabel):
         self._url = url
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def set_url(self, url: str) -> None:
+        self._url = str(url or "").strip() or self._url
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             _open_url(self._url)
@@ -415,6 +419,13 @@ class _SplashRepoMark(QWidget):
         lay.addWidget(self._gh, 0, Qt.AlignmentFlag.AlignRight)
 
         self._kofi = _LinkLabel(_KOFI_URL)
+        try:
+            from steempeg.services.kofi_remote import resolve_kofi_url
+
+            # Cache / default only — splash must not wait on the network.
+            self._kofi.set_url(resolve_kofi_url(refresh=False))
+        except Exception:
+            pass
         self._kofi.setFixedSize(_CREDIT_GH, _CREDIT_GH)
         self._kofi.setToolTip("Support on Ko-fi")
         try:
