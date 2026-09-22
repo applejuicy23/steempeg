@@ -13,7 +13,7 @@ import sys
 import psutil
 
 from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -794,8 +794,17 @@ class LifecycleMixin:
         self._about_is_open = True
 
         from steempeg.ui import ui_theme as ut
+        from steempeg.ui.settings_prefs import resolve_steempeg_pro
 
-        link = ut.about_dialog_link_style()
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        about_pro = bool(resolve_steempeg_pro(settings))
+
+        link = ut.about_dialog_link_style(pro=about_pro)
         muted = ut.about_dialog_muted_span_color()
 
         dialog = QDialog(self.ui)
@@ -820,7 +829,7 @@ class LifecycleMixin:
                 dialog.setFixedSize(*scaled_dialog_size(540, 620, parent=self.ui))
         else:
             dialog.setFixedSize(*scaled_dialog_size(520, 600, parent=self.ui))
-        dialog.setStyleSheet(ut.about_dialog_stylesheet())
+        dialog.setStyleSheet(ut.about_dialog_stylesheet(pro=about_pro))
 
         shell_layout = QVBoxLayout(dialog)
         shell_layout.setContentsMargins(0, 0, 0, 0)
@@ -851,12 +860,23 @@ class LifecycleMixin:
         if sys.platform != "win32":
             content.addSpacing(8)
 
+        # Title + optional PRO chip (same placement as the window title bar).
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        title_row.addStretch(1)
         title = QLabel("Steempeg")
         title.setObjectName("AboutTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         if sys.platform != "win32":
             title.setMinimumHeight(36)
-        content.addWidget(title)
+        title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
+        if about_pro:
+            from steempeg.ui.widgets.pro_badge import ProBadge
+
+            about_pro_badge = ProBadge(size="splash", parent=card)
+            title_row.addWidget(about_pro_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addStretch(1)
+        content.addLayout(title_row)
 
         build = QLabel(f"Build: v{APP_VERSION_STR}")
         build.setObjectName("AboutDim")
@@ -1002,15 +1022,39 @@ class LifecycleMixin:
 
         # Buttons above the Valve disclaimer (cleaner hierarchy).
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
         btn_row.addStretch(1)
         btn_report = QPushButton("🐛  Report a bug")
         btn_report.setObjectName("AboutReportBtn")
         btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_report.clicked.connect(self.show_report_dialog)
+
+        from steempeg.ui.icon_assets import load_pixmap
+        from steempeg.ui.kofi_dialog import KOFI_MARK, register_bundled_fredoka
+
+        btn_kofi = QPushButton("  Support")
+        btn_kofi.setObjectName("AboutKofiBtn")
+        btn_kofi.setCursor(Qt.CursorShape.PointingHandCursor)
+        fredoka = register_bundled_fredoka()
+        kofi_font = QFont()
+        if fredoka:
+            kofi_font.setFamily(fredoka)
+        else:
+            kofi_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
+        kofi_font.setPointSize(12)
+        kofi_font.setWeight(QFont.Weight.Bold)
+        btn_kofi.setFont(kofi_font)
+        cup = load_pixmap(KOFI_MARK, 18)
+        if not cup.isNull():
+            btn_kofi.setIcon(QIcon(cup))
+            btn_kofi.setIconSize(cup.size())
+        btn_kofi.clicked.connect(self.show_kofi_dialog)
+
         btn_close = QPushButton("Close")
         btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_close.clicked.connect(dialog.accept)
         btn_row.addWidget(btn_report)
+        btn_row.addWidget(btn_kofi)
         btn_row.addWidget(btn_close)
         btn_row.addStretch(1)
         content.addLayout(btn_row)
@@ -1029,9 +1073,19 @@ class LifecycleMixin:
 
         def apply_ui_theme_chrome() -> None:
             """Live-retint if Settings switches theme while About is open."""
-            dialog.setStyleSheet(ut.about_dialog_stylesheet())
+            try:
+                live_pro = bool(
+                    resolve_steempeg_pro(
+                        self.load_user_settings()
+                        if hasattr(self, "load_user_settings")
+                        else None
+                    )
+                )
+            except Exception:
+                live_pro = about_pro
+            dialog.setStyleSheet(ut.about_dialog_stylesheet(pro=live_pro))
             new_muted = ut.about_dialog_muted_span_color()
-            new_link = ut.about_dialog_link_style()
+            new_link = ut.about_dialog_link_style(pro=live_pro)
             dev.setText(
                 f'<b>Emily</b> 🎀<br>'
                 f'<span style="color:{new_muted};">@applejuicy23</span>'
