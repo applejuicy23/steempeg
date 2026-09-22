@@ -59,10 +59,11 @@ _MAX_STEP_PER_TICK = 1.35
 _CREEP_PER_TICK = 0.12
 _SPINNER_SIZE = 12
 _SPINNER_STEP = 12
-# Preparing: a touch quicker than the bar phase — not a blur.
-_SPINNER_STEP_FAST = 16
+# Opening stage: bigger step + tighter cadence so the ring reads as a fast spin
+# even when cold-start work only yields occasionally.
+_SPINNER_STEP_FAST = 22
 _SPINNER_INTERVAL_MS = 33
-_SPINNER_INTERVAL_FAST_MS = 28
+_SPINNER_INTERVAL_FAST_MS = 16
 _CREDIT_AVATAR = 28
 _CREDIT_GH = 40
 
@@ -673,6 +674,11 @@ def update_launch_splash(
     if (_splash_disabled() and not force) or _splash is None:
         return
     try:
+        # Never walk the bar backwards (99 → 98 looks broken).
+        try:
+            percent = max(float(percent), float(_splash._bar.display_value()))
+        except Exception:
+            percent = float(percent)
         _splash.set_progress(percent, status)
     except RuntimeError:
         _splash = None
@@ -705,7 +711,34 @@ def launch_splash_keepalive(*, force: bool = False) -> None:
     if (_splash_disabled() and not force) or _splash is None:
         return
     try:
+        _splash._spinner.set_fast(True)
         _pace_spinner_frames(2)
+    except RuntimeError:
+        _splash = None
+
+
+def launch_splash_pump(*, force: bool = False) -> None:
+    """Yield to the splash during blocking work.
+
+    During the Opening stage (100% + busy) this paces a real fast frame so the
+    circle keeps spinning smoothly — a naked advance() every N rows looks stuck.
+    """
+    global _splash
+    if (_splash_disabled() and not force) or _splash is None:
+        return
+    try:
+        opening = bool(_splash._bar._busy) and float(_splash._bar.display_value()) >= 99.0
+        if opening:
+            _splash._spinner.set_fast(True)
+            _pace_spinner_frames(1)
+            return
+        _splash._spinner.advance()
+        before = float(_splash._bar.display_value())
+        _splash._bar.tick_once(allow_creep=False)
+        if float(_splash._bar.display_value()) < before:
+            _splash._bar.set_display(before)
+        _splash._sync_percent_label()
+        _pump()
     except RuntimeError:
         _splash = None
 

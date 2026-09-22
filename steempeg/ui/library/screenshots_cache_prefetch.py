@@ -51,6 +51,8 @@ class ScreenshotsCachePrefetchWorker(QThread):
                 "folder": self._folder,
                 "steempeg_rows": steempeg_rows,
                 "steam_rows": steam_rows,
+                "games_catalog": self._build_games_catalog(steempeg_rows, steam_rows),
+                "known_count": len(steempeg_rows) + len(steam_rows),
             }
             logging.info(
                 "Screenshots cache prefetched off-UI: steempeg=%d steam=%d",
@@ -61,3 +63,28 @@ class ScreenshotsCachePrefetchWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             logging.debug("Screenshots cache prefetch failed", exc_info=True)
             self.failed.emit(str(exc))
+
+    @staticmethod
+    def _build_games_catalog(
+        steempeg_rows: list[dict[str, Any]],
+        steam_rows: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Filter-menu catalog without creating Qt widgets."""
+        catalog: dict[str, dict[str, Any]] = {}
+        for row in steempeg_rows + steam_rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("game_name") or "").strip() or "Unknown"
+            app_id = str(row.get("app_id") or "").strip()
+            try:
+                mtime = float(row.get("mtime") or 0.0)
+            except (TypeError, ValueError):
+                mtime = 0.0
+            rec = catalog.setdefault(
+                name, {"app_id": app_id, "count": 0, "max_mtime": 0.0}
+            )
+            rec["count"] = int(rec.get("count") or 0) + 1
+            rec["max_mtime"] = max(float(rec.get("max_mtime") or 0.0), mtime)
+            if app_id and not rec.get("app_id"):
+                rec["app_id"] = app_id
+        return catalog

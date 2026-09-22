@@ -4479,6 +4479,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         a black HWND and Windows stamps «Not Responding» while the UI thread works.
         """
         def _spin():
+            # Prefer no-sleep pump during sync so spinner keeps moving without
+            # stretching the blocking restore with artificial frame delays.
+            try:
+                from steempeg.ui.launch_splash import launch_splash_pump
+
+                launch_splash_pump()
+                return
+            except Exception:
+                pass
             fn = getattr(self, "_launch_splash_keepalive", None)
             if callable(fn):
                 try:
@@ -4626,29 +4635,32 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         def _restore_session_side_libraries(*, restored_clips: bool) -> None:
             """Paint Rendered + Screenshots from session JSON (Skip / Smart)."""
+            def _spin_lib():
+                try:
+                    from steempeg.ui.launch_splash import launch_splash_pump
+
+                    launch_splash_pump()
+                    return
+                except Exception:
+                    pass
+                fn = getattr(self, "_launch_splash_keepalive", None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+
+            _spin_lib()
             restored_rendered = False
             if hasattr(self, "restore_rendered_from_session_cache"):
                 restored_rendered = bool(self.restore_rendered_from_session_cache())
+            _spin_lib()
             restored_shots = False
-            if hasattr(self, "restore_screenshots_from_session_cache"):
-                # Defer past showMaximized — sync paint of a unified Steam
-                # shelf (thousands of cards) blocked the window for minutes.
-                # Startup settle veil stays up past this tick so chrome does
-                # not flash while placeholders land.
-                def _restore_shots():
-                    nonlocal restored_shots
-                    restored_shots = bool(
-                        self.restore_screenshots_from_session_cache()
-                    )
-                    if (
-                        not restored_clips
-                        and restored_shots
-                        and hasattr(self, "update_status_indicator")
-                        and not getattr(self, "_startup_library_scan_active", False)
-                    ):
-                        self.update_status_indicator("Ready", "ready")
-
-                QTimer.singleShot(300, _restore_shots)
+            # Screenshots: JSON off-UI. Scroll mode waits for the tab; full mode
+            # quietly drips placeholders after show (v50). Thumbs stay viewport-lazy.
+            if hasattr(self, "_begin_screenshots_session_restore_async"):
+                self._begin_screenshots_session_restore_async()
+                restored_shots = True
             # Clips restore clears startup + Ready itself when it succeeds.
             if not restored_clips:
                 self._startup_library_scan_active = False
@@ -4692,17 +4704,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         restored_clips = bool(self.start_progressive_clips_library())
                     if not restored_clips:
                         self._startup_library_scan_active = False
-                # Never hydrate Rendered/Screenshots on a timer while Clips is open.
-                # The old singleShot(6000) from Progressive *start* was the delayed
-                # bomb: window shows, ~2–4s later 88 Rendered ClipCards + ffmpeg
-                # posters starve marquees (see session logs: show → +4s chunked restore).
-                # Side shelves stay pending until the user opens that tab.
-                if restored_clips:
-                    self._progressive_side_libs_pending = True
-                else:
-                    self._progressive_side_libs_pending = True
-                    if hasattr(self, "update_status_indicator"):
-                        self.update_status_indicator("Ready", "ready")
+                # v50: eager Rendered (+ screenshots catalog) while shell still hidden.
+                _restore_session_side_libraries(restored_clips=restored_clips)
                 return
 
             if mode == SCAN_CACHE:
@@ -4762,8 +4765,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     self.scan_clips(fast=True)
                 elif hasattr(self, "scan_rendered_outputs"):
                     self.scan_rendered_outputs()
-                if hasattr(self, "restore_screenshots_from_session_cache"):
-                    QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
+                if hasattr(self, "_begin_screenshots_session_restore_async"):
+                    self._begin_screenshots_session_restore_async()
                 return
 
             # Full: after folders + ffprobe, also refresh Steam icons/names
@@ -4785,9 +4788,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             elif hasattr(self, "scan_rendered_outputs"):
                 self._startup_refresh_steam_meta = False
                 self.scan_rendered_outputs()
-            # Screenshots: after show + processEvents settle (not singleShot(0)).
-            if hasattr(self, "restore_screenshots_from_session_cache"):
-                QTimer.singleShot(300, self.restore_screenshots_from_session_cache)
+            # Screenshots: catalog warm only — shelf paints on tab open / scroll.
+            if hasattr(self, "_begin_screenshots_session_restore_async"):
+                self._begin_screenshots_session_restore_async()
 
         # Skip / Smart / Progressive: paint synchronously while still hidden.
         # Quick/Full: defer one tick so maximize geometry can settle first.
@@ -6756,19 +6759,22 @@ def main():
         # cover (density / splitters only).
         startup_trace_reset()
         begin_startup_settle(window, use_veil=False)
-        # Heavy restore stays off-screen; splash keepalive still pumps the bar.
+        # Final splash stage BEFORE heavy restore so the spinner stays on
+        # «Opening Steempeg…» at 100% (not stuck on Loading library / reverse %).
+        try:
+            from steempeg.ui.launch_splash import launch_splash_begin_preparing
+
+            launch_splash_begin_preparing(status="Opening Steempeg…")
+        except Exception:
+            pass
         startup_trace("sync_startup_layout:begin")
         window._sync_startup_layout()
         startup_trace("sync_startup_layout:end")
 
         try:
-            from steempeg.ui.launch_splash import (
-                hold_launch_splash_opening,
-                update_launch_splash,
-            )
+            from steempeg.ui.launch_splash import hold_launch_splash_opening
 
-            update_launch_splash(100, "Opening…")
-            hold_launch_splash_opening(status="Opening…", hold_s=0.35)
+            hold_launch_splash_opening(status="Opening Steempeg…", hold_s=0.85)
         except Exception:
             logging.debug("Launch splash hold failed", exc_info=True)
 

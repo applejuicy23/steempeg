@@ -162,6 +162,7 @@ from steempeg.ui.settings_prefs import (
     KEY_REMEMBER_LIBRARY_TAB,
     KEY_LIBRARY_ALLOW_LIST_VIEW,
     KEY_SCREENSHOTS_FOLDER,
+    KEY_SCREENSHOTS_SHELF_LOAD,
     KEY_QUEUE_HOVER,
     KEY_DESKTOP_SHELL_TOOLS_IN_TITLE_BAR,
     KEY_SHELL_SIDE_LAYOUT,
@@ -175,6 +176,7 @@ from steempeg.ui.settings_prefs import (
     DESKTOP_RENDER_LAYOUT_LABELS,
     RENDER_TAB_LABELS,
     SHELL_SIDE_LAYOUT_LABELS,
+    SCREENSHOTS_SHELF_LOAD_LABELS,
     STARTUP_SCAN_LABELS,
     TZ_SYSTEM,
     UPDATE_INTERVAL_LABELS,
@@ -204,6 +206,7 @@ from steempeg.ui.settings_prefs import (
     load_mpv_log_level,
     load_remember_library_tab,
     load_library_allow_list_view,
+    load_screenshots_shelf_load,
     load_queue_hover,
     load_desktop_shell_tools_in_title_bar,
     load_shell_side_layout,
@@ -226,6 +229,7 @@ from steempeg.ui.settings_prefs import (
     normalize_media_cache_limit_gb,
     normalize_render_tab,
     normalize_screenshots_folder,
+    normalize_screenshots_shelf_load,
     normalize_queue_hover,
     normalize_shell_side_layout,
     normalize_startup_library_scan,
@@ -1339,6 +1343,29 @@ class SettingsDialog(SteempegDialog):
         shot_row.addWidget(btn_reset_shots, 0)
         a.addLayout(shot_row)
         a.addWidget(self._hint("Player screenshots save here (PNG)."))
+
+        shelf_row = QHBoxLayout()
+        shelf_row.setSpacing(8)
+        shelf_lbl = QLabel("Library shelf")
+        shelf_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_shots_shelf = QComboBox()
+        for value, label in SCREENSHOTS_SHELF_LOAD_LABELS:
+            self._combo_shots_shelf.addItem(label, value)
+        cur_shelf = load_screenshots_shelf_load(settings)
+        shelf_idx = self._combo_shots_shelf.findData(cur_shelf)
+        self._combo_shots_shelf.setCurrentIndex(max(0, shelf_idx))
+        self._committed_shots_shelf = cur_shelf
+        shelf_row.addWidget(shelf_lbl)
+        shelf_row.addWidget(self._combo_shots_shelf, 1)
+        a.addLayout(shelf_row)
+        a.addWidget(
+            self._hint(
+                "As you scroll (default): open Screenshots instantly — plant cards "
+                "near the bottom as you scroll; thumbs stay viewport-lazy. "
+                "Full shelf: quietly plant all placeholders after launch (v50) — "
+                "scrollbar is complete sooner, but the UI may hitch while they land."
+            )
+        )
 
         a.addWidget(self._section("Preview decode"))
         hw_row = QHBoxLayout()
@@ -2772,6 +2799,15 @@ class SettingsDialog(SteempegDialog):
         self._edit_screenshots.setText(shots)
         if hasattr(self._app, "screenshots_dir"):
             self._app.screenshots_dir = shots
+
+        pending[KEY_SCREENSHOTS_SHELF_LOAD] = normalize_screenshots_shelf_load(
+            self._combo_shots_shelf.currentData()
+        )
+        new_shelf = pending[KEY_SCREENSHOTS_SHELF_LOAD]
+        if new_shelf != getattr(self, "_committed_shots_shelf", None):
+            self._committed_shots_shelf = new_shelf
+            if hasattr(self._app, "reset_screenshots_shelf_for_load_mode"):
+                deferred.append(self._app.reset_screenshots_shelf_for_load_mode)
 
         pending[KEY_HWDEC_PREVIEW] = normalize_hwdec_preview(self._combo_hwdec.currentData())
 

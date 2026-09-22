@@ -1049,6 +1049,42 @@ DEFAULT_LIBRARY_ALLOW_LIST_VIEW = False
 
 KEY_SCREENSHOTS_FOLDER = "screenshots_folder"
 
+# Screenshots shelf: plant placeholders fully after launch (v50) vs as you scroll.
+KEY_SCREENSHOTS_SHELF_LOAD = "screenshots_shelf_load"
+SHOTS_SHELF_SCROLL = "scroll"
+SHOTS_SHELF_FULL = "full"
+DEFAULT_SCREENSHOTS_SHELF_LOAD = SHOTS_SHELF_SCROLL
+
+SCREENSHOTS_SHELF_LOAD_LABELS: tuple[tuple[str, str], ...] = (
+    (SHOTS_SHELF_SCROLL, "As you scroll (no lag on open)"),
+    (SHOTS_SHELF_FULL, "Full shelf after launch (like v50)"),
+)
+
+
+def normalize_screenshots_shelf_load(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "lazy": SHOTS_SHELF_SCROLL,
+        "viewport": SHOTS_SHELF_SCROLL,
+        "progressive": SHOTS_SHELF_SCROLL,
+        "on_scroll": SHOTS_SHELF_SCROLL,
+        "as_you_scroll": SHOTS_SHELF_SCROLL,
+        "v50": SHOTS_SHELF_FULL,
+        "preload": SHOTS_SHELF_FULL,
+        "background": SHOTS_SHELF_FULL,
+        "complete": SHOTS_SHELF_FULL,
+        "all": SHOTS_SHELF_FULL,
+    }
+    if text in (SHOTS_SHELF_SCROLL, SHOTS_SHELF_FULL):
+        return text
+    return aliases.get(text, DEFAULT_SCREENSHOTS_SHELF_LOAD)
+
+
+def load_screenshots_shelf_load(settings: dict | None) -> str:
+    return normalize_screenshots_shelf_load(
+        (settings or {}).get(KEY_SCREENSHOTS_SHELF_LOAD, DEFAULT_SCREENSHOTS_SHELF_LOAD)
+    )
+
 KEY_HWDEC_PREVIEW = "hwdec_preview"
 HWDEC_OFF = "no"
 HWDEC_AUTO = "auto"
