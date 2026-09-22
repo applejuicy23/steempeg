@@ -3,6 +3,8 @@
 | Path | Role | Public URL |
 |------|------|------------|
 | `landing/` | Product HTML site | `https://applejuicy23.github.io/steempeg/` |
+| `landing/donate.html` | Donate Me (Ko-fi) | `…/steempeg/donate.html` |
+| `landing/steempeg-meta.json` | App-readable tip URL | `…/steempeg/steempeg-meta.json` |
 | `docs/` + `mkdocs.yml` | MkDocs Material | `https://applejuicy23.github.io/steempeg/docs/` |
 
 Repo-root `docs/` (release notes, ROADMAP, readme screenshots) is **unchanged** — different folder.
