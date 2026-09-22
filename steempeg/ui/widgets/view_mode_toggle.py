@@ -1,7 +1,7 @@
-"""Shared View + Grid/List chrome (Render Queue).
+"""Shared View chrome (Render Queue).
 
-Minimal transparent icon chips — same language as Clips Size:
-Grid → ``grid_high.png``, List → ``defaultsort.png``, plaque-purple when active.
+Toolbar: one ghost icon chip showing the active mode. Popup: Grid / List tiles —
+same interaction as Clips Manager Size (one button; selection updates the chip).
 
 Count *text* stays per-surface: library ``• 253 Clips`` / Files / Shots;
 Render Queue ``(N)`` only.
@@ -12,14 +12,25 @@ between track and count.
 """
 from __future__ import annotations
 
-from steempeg.ui import design_tokens as tok
-from PySide6.QtCore import QObject, QSize, Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtCore import QObject, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
+from steempeg.ui import design_tokens as tok
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.icon_assets import (
     CARD_SIZE_GRID_TINT,
     card_size_grid_icon,
+    card_size_grid_pixmap,
     view_mode_list_icon,
+    view_mode_list_pixmap,
 )
 from steempeg.ui.ui_density import (
     COMFORT,
@@ -29,9 +40,11 @@ from steempeg.ui.ui_density import (
     view_toggle_button_styles,
 )
 
-_IDLE_GLYPH = "#9a9a9a"
-_ACTIVE_GLYPH = CARD_SIZE_GRID_TINT
+_TOOLBAR_GLYPH = CARD_SIZE_GRID_TINT
+_POPUP_GLYPH_PX = 40
 _GHOST_BTN_NAME = "ViewModeGhostBtn"
+_GRID_KEY = "grid"
+_LIST_KEY = "list"
 
 
 def _font_css() -> str:
@@ -90,8 +103,97 @@ def format_library_count(value, noun: str) -> str:
     return f"• {n} {noun}"
 
 
+class _ViewModeTile(QPushButton):
+    """Popup tile — Grid or List glyph + label."""
+
+    def __init__(self, mode_key: str, parent=None):
+        super().__init__(parent)
+        self._mode_key = mode_key
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(True)
+        self.setFlat(True)
+        self.setFixedSize(92, 88)
+        self.setToolTip("List" if mode_key == _LIST_KEY else "Grid")
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        chrome = ut.card_size_popup_chrome()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        selected = self.isChecked()
+        hovered = self.underMouse()
+        if selected:
+            bg = QColor(chrome.tile_selected_bg)
+            border = QColor(chrome.tile_selected_border)
+        elif hovered:
+            bg = QColor(chrome.tile_hover_bg)
+            border = QColor(chrome.tile_hover_border)
+        else:
+            bg = QColor(chrome.tile_bg)
+            border = QColor(chrome.tile_border)
+        p.setPen(border)
+        p.setBrush(bg)
+        p.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, 8, 8)
+
+        tint = chrome.glyph_selected if selected else chrome.glyph
+        if self._mode_key == _LIST_KEY:
+            glyph = view_mode_list_pixmap(_POPUP_GLYPH_PX, color=tint)
+            label = "List"
+        else:
+            glyph = card_size_grid_pixmap("big", _POPUP_GLYPH_PX, color=tint)
+            label = "Grid"
+        if not glyph.isNull():
+            gx = (self.width() - glyph.width()) // 2
+            gy = 10
+            p.drawPixmap(gx, gy, glyph)
+
+        p.setPen(QColor(chrome.label_selected if selected else chrome.label))
+        font = QFont(tok.FONT_APP)
+        font.setBold(True)
+        font.setPixelSize(11)
+        p.setFont(font)
+        p.drawText(
+            QRectF(0, self.height() - 22, self.width(), 18),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            label,
+        )
+        p.end()
+
+
+class _ViewModePopup(QFrame):
+    """Emits ``grid`` / ``list`` when a tile is picked."""
+
+    choice_picked = Signal(str)
+
+    def __init__(self, current: str, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("ViewModePopup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        chrome = ut.card_size_popup_chrome()
+        self.setStyleSheet(
+            f"""
+            QFrame#ViewModePopup {{
+                background-color: {chrome.panel_bg};
+                border: 1px solid {chrome.panel_border};
+                border-radius: 10px;
+            }}
+            """
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        for key in (_GRID_KEY, _LIST_KEY):
+            tile = _ViewModeTile(key, self)
+            tile.setChecked(key == current)
+            tile.clicked.connect(lambda _=False, k=key: self._pick(k))
+            lay.addWidget(tile)
+
+    def _pick(self, key: str) -> None:
+        self.choice_picked.emit(key)
+        self.hide()
+
+
 class ViewModeChrome(QObject):
-    """Owns View label + Grid/List icon chips + count."""
+    """Owns View label + one mode chip + count. Grid/List live in a popup."""
 
     mode_changed = Signal(str)
 
@@ -111,6 +213,7 @@ class ViewModeChrome(QObject):
         if self._grid_only:
             mode = "grid"
         self._mode = mode
+        self._popup: _ViewModePopup | None = None
 
         self.lbl_view = QLabel("View", parent)
         self._apply_label_style(self.lbl_view)
@@ -126,36 +229,29 @@ class ViewModeChrome(QObject):
         )
         toggle_layout = QHBoxLayout(self.toggle_pill)
         toggle_layout.setContentsMargins(0, 0, 0, 0)
-        toggle_layout.setSpacing(2)
+        toggle_layout.setSpacing(0)
 
         self.btn_view_grid = QPushButton(self.toggle_pill)
-        self.btn_view_list = QPushButton(self.toggle_pill)
-        for btn, tip in (
-            (self.btn_view_grid, "Grid"),
-            (self.btn_view_list, "List"),
-        ):
-            btn.setObjectName(_GHOST_BTN_NAME)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFlat(True)
-            btn.setAutoDefault(False)
-            btn.setDefault(False)
-            btn.setText("")
-            btn.setToolTip(tip)
-            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.btn_view_grid.setObjectName(_GHOST_BTN_NAME)
+        self.btn_view_grid.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_view_grid.setFlat(True)
+        self.btn_view_grid.setAutoDefault(False)
+        self.btn_view_grid.setDefault(False)
+        self.btn_view_grid.setText("")
+        self.btn_view_grid.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.btn_view_grid.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
+        self.btn_view_grid.clicked.connect(self._open_mode_popup)
 
-        # Compat: some callers still read these (List restore / density).
+        # Compat alias — List lives in the popup, not the toolbar.
+        self.btn_view_list = QPushButton(self.toggle_pill)
+        self.btn_view_list.setObjectName(VIEW_TOGGLE_SEG_NAME)
+        self.btn_view_list.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
+        self.btn_view_list.hide()
+
         self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(
             self._density
         )
-        # Keep legacy object-name alias for sheets that looked up ViewToggleSeg.
-        self.btn_view_grid.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
-        self.btn_view_list.setProperty("legacySeg", VIEW_TOGGLE_SEG_NAME)
-
-        self.btn_view_grid.clicked.connect(lambda: self.set_mode("grid"))
-        self.btn_view_list.clicked.connect(lambda: self.set_mode("list"))
-
         toggle_layout.addWidget(self.btn_view_grid)
-        toggle_layout.addWidget(self.btn_view_list)
 
         self.lbl_count = QLabel(
             initial_count if initial_count is not None else "(0)", parent
@@ -167,7 +263,7 @@ class ViewModeChrome(QObject):
         self.set_grid_only(self._grid_only)
 
     def add_to_layout(self, layout, *, include_count: bool = True) -> None:
-        """Append View · track · count in Render Queue order."""
+        """Append View · chip · count in Render Queue order."""
         layout.addWidget(self.lbl_view)
         layout.addWidget(self.toggle_pill)
         if include_count:
@@ -189,17 +285,11 @@ class ViewModeChrome(QObject):
             self.mode_changed.emit(mode)
 
     def set_grid_only(self, grid_only: bool) -> None:
-        """Screenshots: same shell with a single Grid chip (no List)."""
+        """Screenshots: same shell with a single Grid chip (no List popup)."""
         self._grid_only = bool(grid_only)
-        if self._grid_only:
-            self.btn_view_list.hide()
-            self.btn_view_grid.show()
-            if self._mode != "grid":
-                self._mode = "grid"
-            self._sync_buttons()
-            return
-        self.btn_view_list.show()
-        self.btn_view_grid.show()
+        self.btn_view_list.hide()
+        if self._grid_only and self._mode != "grid":
+            self._mode = "grid"
         self._sync_buttons()
 
     def set_count(self, value) -> None:
@@ -214,7 +304,9 @@ class ViewModeChrome(QObject):
         self.lbl_view.setVisible(not dense.compact)
         self._apply_label_style(self.lbl_view)
         self._apply_count_style(self.lbl_count)
-        self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(dense)
+        self.toggle_style_active, self.toggle_style_inactive = view_toggle_button_styles(
+            dense
+        )
         self.toggle_pill.setStyleSheet(
             "QFrame#ViewModeChromeHost { background: transparent; border: none; }"
         )
@@ -233,30 +325,49 @@ class ViewModeChrome(QObject):
         h = toggle_segment_min_height(dense)
         glyph = self._glyph_px()
         side = max(h, glyph + 6)
-        style = _ghost_button_style(radius=max(4, side // 4))
-        for btn in (self.btn_view_grid, self.btn_view_list):
-            btn.setFixedSize(side, side)
-            btn.setIconSize(QSize(glyph, glyph))
-            btn.setStyleSheet(style)
+        self.btn_view_grid.setFixedSize(side, side)
+        self.btn_view_grid.setIconSize(QSize(glyph, glyph))
+        self.btn_view_grid.setStyleSheet(_ghost_button_style(radius=max(4, side // 4)))
+
+    def _open_mode_popup(self) -> None:
+        if self._grid_only:
+            return
+        if self._popup is not None:
+            try:
+                self._popup.hide()
+                self._popup.deleteLater()
+            except RuntimeError:
+                pass
+        popup = _ViewModePopup(self._mode)
+        popup.choice_picked.connect(self.set_mode)
+        self._popup = popup
+        popup.adjustSize()
+        origin = self.btn_view_grid.mapToGlobal(
+            QPoint(0, self.btn_view_grid.height() + 4)
+        )
+        popup.move(origin)
+        popup.show()
 
     def _sync_buttons(self) -> None:
         glyph_px = self._glyph_px()
         side = max(toggle_segment_min_height(self._density), glyph_px + 6)
         style = _ghost_button_style(radius=max(4, side // 4))
         list_on = self._mode == "list" and not self._grid_only
-        grid_color = _IDLE_GLYPH if list_on else _ACTIVE_GLYPH
-        list_color = _ACTIVE_GLYPH if list_on else _IDLE_GLYPH
-        for btn, icon in (
-            (self.btn_view_grid, card_size_grid_icon("big", glyph_px, color=grid_color)),
-            (self.btn_view_list, view_mode_list_icon(glyph_px, color=list_color)),
-        ):
-            btn.setFixedSize(side, side)
-            btn.setStyleSheet(style)
-            btn.setText("")
-            btn.setIcon(icon)
-            btn.setIconSize(QSize(glyph_px, glyph_px))
-        self.btn_view_grid.setToolTip("Grid")
-        self.btn_view_list.setToolTip("List")
+        self.btn_view_grid.setFixedSize(side, side)
+        self.btn_view_grid.setStyleSheet(style)
+        self.btn_view_grid.setText("")
+        if list_on:
+            self.btn_view_grid.setIcon(
+                view_mode_list_icon(glyph_px, color=_TOOLBAR_GLYPH)
+            )
+            self.btn_view_grid.setToolTip("View — List")
+        else:
+            self.btn_view_grid.setIcon(
+                card_size_grid_icon("big", glyph_px, color=_TOOLBAR_GLYPH)
+            )
+            self.btn_view_grid.setToolTip("View — Grid")
+        self.btn_view_grid.setIconSize(QSize(glyph_px, glyph_px))
+        self.btn_view_list.hide()
 
     def _apply_label_style(self, lbl: QLabel) -> None:
         d = self._density

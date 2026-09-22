@@ -862,7 +862,7 @@ class RenderQueuePanel(QWidget):
         actions_layout.addWidget(self._btn_history, 0, Qt.AlignmentFlag.AlignVCenter)
         actions_layout.addWidget(self._btn_clear, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # View · Grid/List · (N) — same pill language as Clips Manager
+        # View · one mode chip · (N) — Size-popup language like Clips Manager
         self._view_chrome = ViewModeChrome(
             toolbar,
             initial_mode=self._view_mode,
