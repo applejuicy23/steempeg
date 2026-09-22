@@ -441,9 +441,13 @@ def scan_single_clip(
         if allow_network and repair.recover_orphaned_clip(full_path):
             has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
 
-    if not has_mpd and not has_chunks:
-        return None
-    if not folder_has_video_chunks(full_path):
+    folder_name = os.path.basename(full_path)
+    is_steam_name = folder_name.lower().startswith(("clip_", "bg_", "fg_"))
+    has_video = folder_has_video_chunks(full_path)
+
+    # Empty non-Steam folders stay out. Steam clip_/bg_/fg_ trees with no
+    # playable media still enter as Dead (Dead filter used to show 0).
+    if not has_mpd and not has_chunks and not has_video and not is_steam_name:
         return None
 
     health_report = _resolve_clip_health(full_path, health_cache, fast=fast)
@@ -451,7 +455,6 @@ def scan_single_clip(
         mpd_path, dead=health_report.level == health.ClipHealth.DEAD
     )
 
-    folder_name = os.path.basename(full_path)
     parts = folder_name.split("_")
 
     if len(parts) >= 4 and parts[1].isdigit():
