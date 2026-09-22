@@ -1190,7 +1190,8 @@ class RenderedLibraryMixin:
                 folders = getattr(self, "clips_folders", []) or []
                 tip = ("Library folders:\n" + "\n".join(folders)) if len(folders) > 1 else ""
                 picker.set_folder_label(folder_button_label(len(folders), dense), tip)
-                picker.set_add_visible(bool(folders))
+                # Always show + — empty library still needs Discover / Add panel.
+                picker.set_add_visible(True)
                 picker.main_btn.clicked.connect(self.choose_folder)
                 picker.add_btn.clicked.connect(self.show_folders_panel)
 
