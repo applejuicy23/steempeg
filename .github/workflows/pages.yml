@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           rm -rf public
           mkdir -p public/assets public/media
-          cp website/landing/index.html website/landing/styles.css public/
+          cp website/landing/index.html website/landing/styles.css website/landing/donate.html website/landing/steempeg-meta.json public/
           cp assets/logo.png public/assets/logo.png
           # Product screenshots (README gallery)
           cp docs/readme/steempeg50_1.png public/media/
