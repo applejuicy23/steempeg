@@ -6854,6 +6854,13 @@ def main():
         kick_startup_settle_after_show(window)
         startup_trace("main_window_shown")
         try:
+            from steempeg.services.kofi_remote import refresh_kofi_url_async
+
+            # Quiet Pages pull so Donate Me / PRO use the latest tip slug.
+            QTimer.singleShot(2500, refresh_kofi_url_async)
+        except Exception:
+            logging.debug("Ko-fi meta refresh schedule failed", exc_info=True)
+        try:
             from PySide6.QtCore import QEventLoop
 
             QApplication.processEvents(
