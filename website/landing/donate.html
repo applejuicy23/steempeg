@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Donate Me — Steempeg</title>
+  <meta name="description" content="Support Steempeg on Ko-fi. Tips keep the lights on — and the developer in caffeine.">
+  <link rel="icon" href="assets/logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .donate-card {
+      max-width: 420px;
+      margin: 2.5rem auto 0;
+      padding: 2rem 1.75rem 1.5rem;
+      background: var(--bg-elev);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      text-align: center;
+    }
+    .donate-card h1 {
+      font-family: var(--font-display);
+      font-size: 1.75rem;
+      margin: 0.75rem 0 0.5rem;
+    }
+    .donate-card .pitch {
+      color: var(--muted);
+      font-size: 0.98rem;
+      margin: 0 0 1rem;
+    }
+    .donate-card .kofi-host {
+      display: inline-block;
+      color: var(--accent);
+      font-weight: 600;
+      text-decoration: none;
+      margin-bottom: 1.25rem;
+      word-break: break-all;
+    }
+    .donate-card .kofi-host:hover {
+      text-decoration: underline;
+    }
+    .donate-cup {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto;
+      border-radius: 50%;
+      background: #2a2420;
+      display: grid;
+      place-items: center;
+      font-size: 2rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="top">
+    <a class="brand" href="./">
+      <img src="assets/logo.png" alt="" width="36" height="36">
+      <span>Steempeg</span>
+    </a>
+    <nav class="nav">
+      <a href="docs/getting-started/">Getting Started</a>
+      <a href="docs/">Docs</a>
+      <a href="donate.html" aria-current="page">Donate Me</a>
+      <a class="nav-download" href="https://github.com/applejuicy23/steempeg/releases/latest">Download</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" style="padding-bottom: 1rem;">
+      <p class="fine" style="margin-bottom: 0;">Support the project</p>
+    </section>
+
+    <div class="donate-card">
+      <div class="donate-cup" aria-hidden="true">☕</div>
+      <h1>Donate Me!</h1>
+      <p class="pitch">
+        If Steempeg saves you time, a small tip keeps the lights on —
+        and the developer in caffeine. No pressure, just coffee.
+      </p>
+      <a id="kofi-host" class="kofi-host" href="https://ko-fi.com/milloriin" rel="noopener noreferrer">ko-fi.com/milloriin</a>
+      <div class="cta" style="justify-content: center;">
+        <a id="kofi-btn" class="btn btn-primary" href="https://ko-fi.com/milloriin" rel="noopener noreferrer">Support on Ko-fi</a>
+      </div>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <span>© Steempeg · GPL-3.0</span>
+    <a href="./">Home</a>
+    <a href="https://github.com/applejuicy23/steempeg">Source</a>
+  </footer>
+
+  <script>
+    (function () {
+      var FALLBACK = "https://ko-fi.com/milloriin";
+
+      function stripScheme(url) {
+        return String(url || "").replace(/^https?:\/\//i, "").replace(/\/$/, "");
+      }
+
+      function apply(url) {
+        var full = String(url || FALLBACK).trim() || FALLBACK;
+        if (!/^https?:\/\//i.test(full)) {
+          full = "https://" + full.replace(/^\/+/, "");
+        }
+        var host = document.getElementById("kofi-host");
+        var btn = document.getElementById("kofi-btn");
+        if (host) {
+          host.href = full;
+          host.textContent = stripScheme(full);
+        }
+        if (btn) {
+          btn.href = full;
+        }
+      }
+
+      apply(FALLBACK);
+      fetch("steempeg-meta.json", { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+        .then(function (j) {
+          if (j && j.kofi_url) apply(j.kofi_url);
+        })
+        .catch(function () { /* keep fallback */ });
+    })();
+  </script>
+</body>
+</html>
