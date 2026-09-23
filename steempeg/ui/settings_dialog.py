@@ -1739,7 +1739,7 @@ class SettingsDialog(SteempegDialog):
 
                 host.setText(display_kofi_host(resolve_kofi_url(refresh=False)))
             except Exception:
-                host.setText("ko-fi.com/milloriin")
+                host.setText("ko-fi.com/applejuicy23")
 
     def _on_pro_support_kofi(self) -> None:
         import webbrowser

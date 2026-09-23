@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-KOFI_URL = "https://ko-fi.com/milloriin"  # fallback; prefer resolve_kofi_url()
+KOFI_URL = "https://ko-fi.com/applejuicy23"  # fallback; prefer resolve_kofi_url()
 KOFI_MARK = "kofi.png"
 
 # Ko-fi dashboard vibe — warm cream plate, soft charcoal type.

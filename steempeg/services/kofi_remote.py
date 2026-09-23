@@ -4,7 +4,7 @@ Single source of truth on the website:
 
   https://applejuicy23.github.io/steempeg/steempeg-meta.json
 
-  { "kofi_url": "https://ko-fi.com/milloriin" }
+  { "kofi_url": "https://ko-fi.com/applejuicy23" }
 
 The app caches the last good URL so Donate Me / PRO still work offline.
 Display strips ``https://``; buttons always open the full URL.
@@ -17,7 +17,7 @@ import re
 import threading
 from typing import Any
 
-DEFAULT_KOFI_URL = "https://ko-fi.com/milloriin"
+DEFAULT_KOFI_URL = "https://ko-fi.com/applejuicy23"
 META_URL = "https://applejuicy23.github.io/steempeg/steempeg-meta.json"
 _CACHE_NAME = "kofi_remote.json"
 
