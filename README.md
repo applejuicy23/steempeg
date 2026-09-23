@@ -16,6 +16,9 @@
   <img src="https://img.shields.io/badge/Windows-2d2d2d?style=flat-square&logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/Linux-2d2d2d?style=flat-square&logo=linux&logoColor=white" alt="Linux">
   <img src="https://img.shields.io/badge/Steam%20Deck-1b2838?style=flat-square&logo=steam&logoColor=white" alt="Steam Deck">
+  <a href="https://ko-fi.com/milloriin">
+    <img src="https://img.shields.io/badge/Ko--fi-Donate-ff5e5b?style=flat-square&logo=ko-fi&logoColor=white" alt="Donate on Ko-fi">
+  </a>
   <img src="https://img.shields.io/github/license/applejuicy23/steempeg?style=flat-square&color=3d8b40" alt="GPL-3.0">
   <a href="https://github.com/applejuicy23/steempeg/stargazers">
     <img src="https://img.shields.io/github/stars/applejuicy23/steempeg?style=social" alt="GitHub stars">
@@ -31,6 +34,7 @@
   <a href="#-getting-started">Getting Started</a> ·
   <a href="https://applejuicy23.github.io/steempeg/">Website</a> ·
   <a href="https://applejuicy23.github.io/steempeg/docs/">Docs</a> ·
+  <a href="#-support--donate">Donate</a> ·
   <a href="#-changelog">Changelog</a> ·
   <a href="#-credits">Credits</a>
 </p>
@@ -208,6 +212,25 @@ Then extract and run the launcher for your platform.
 ## 📋 Changelog
 
 Release notes for every version live on **[GitHub Releases](https://github.com/applejuicy23/steempeg/releases)** — that's the canonical place for what's new, fixed, and changed.
+
+---
+
+
+
+## ☕ Support / Donate
+
+If Steempeg saves you time, a small tip keeps the lights on — and the developer in caffeine. No pressure, just coffee.
+
+<p align="center">
+  <a href="https://ko-fi.com/milloriin">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi">
+  </a>
+</p>
+
+- **Ko-fi:** [ko-fi.com/milloriin](https://ko-fi.com/milloriin)
+- **Donate Me page:** [applejuicy23.github.io/steempeg/donate.html](https://applejuicy23.github.io/steempeg/donate.html)
+
+In the app: title-bar cup / **Support** → opens the same tip flow.
 
 ---
 
