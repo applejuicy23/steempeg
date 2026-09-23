@@ -1277,10 +1277,6 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self._refresh_cascade_after_types()
         self.update_live_count()
 
-    def _on_folders_paint_changed(self):
-        self._sync_folder_memory()
-        self.update_live_count()
-
     @staticmethod
     def _sec_to_qtime(seconds):
         h = min(23, seconds // 3600)
@@ -1681,7 +1677,56 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         if getattr(self, '_is_gathering', False):
             return
         self._sync_folder_memory()
+        # Same as game pick: don't leave Games/Type/Health all-off (Apply (0))
+        # after the user only flipped a Folders chip.
+        if self._get_checked_names(self.folders_layout):
+            self._revive_filters_after_folder_pick()
         self.update_live_count()
+
+    def _on_folders_paint_changed(self):
+        self._sync_folder_memory()
+        if self._get_checked_names(self.folders_layout):
+            self._revive_filters_after_folder_pick()
+        self.update_live_count()
+
+    def _revive_filters_after_folder_pick(self) -> None:
+        """Folders-only click must not leave Games/Health empty → Apply (0)."""
+        if getattr(self, "_is_gathering", False):
+            return
+        if not self._get_checked_names(self.folders_layout):
+            return
+
+        saved = getattr(getattr(self, "app", None), "saved_filter_state", None)
+        if isinstance(saved, dict) and saved.get("match_none"):
+            saved = dict(saved)
+            saved["match_none"] = False
+            self.app.saved_filter_state = saved
+
+        if self._type_checked_memory and not any(self._type_checked_memory.values()):
+            self._type_checked_memory = {k: True for k in self._type_checked_memory}
+
+        if self.games_layout.count() > 0 and not self._get_checked_names(self.games_layout):
+            for i in range(self.games_layout.count()):
+                w = self.games_layout.itemAt(i).widget()
+                if w is not None:
+                    w.setChecked(True)
+
+        if self.types_layout.count() > 0 and not self._get_checked_names(self.types_layout):
+            self._ensure_types_checked_if_none()
+            if not self._get_checked_names(self.types_layout):
+                for i in range(self.types_layout.count()):
+                    w = self.types_layout.itemAt(i).widget()
+                    if w is not None:
+                        w.setChecked(True)
+                        name = w.property("raw_name")
+                        if name:
+                            self._type_checked_memory[name] = True
+
+        if self.health_layout.count() > 0 and not self._get_checked_health_levels():
+            for i in range(self.health_layout.count()):
+                w = self.health_layout.itemAt(i).widget()
+                if w is not None and not w.isHidden():
+                    w.setChecked(True)
 
     def _refresh_cascade_after_games(self):
         if getattr(self, '_is_gathering', False):

@@ -540,7 +540,7 @@ class SplitterRulesMixin:
         if int(sizes[0]) <= PANE_FREED:
             return FROM_KISS
         # Below layout floor = shut: free-drag scrap (2px..floor-1) used to latch
-        # mode "" and unroll, then snap to floor on release («свиток»).
+        # mode "" and unroll, then snap to floor on release (scroll-up feel).
         return REOPEN_QUEUE if int(sizes[1]) < self._inner_pane_floor() else ""
 
     def _drag_right_from_kiss(self, global_x: int, grab_offset: int) -> bool:

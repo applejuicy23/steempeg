@@ -2264,6 +2264,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.ui.btn_skip_forward.setIconSize(QSize(32, 32))
 
         _launch_splash_progress(70, "Wiring player controls…")
+        logging.info("Startup: wiring player controls…")
         # --- NEXT-GEN TIMELINE & CONTROLS UI REBUILD ---
         from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QWidget, QFrame
         
@@ -2289,6 +2290,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     break
                     
             if controls_index != -1:
+                logging.info("Startup: rebuilding player footer controls")
                 old_controls_layout = right_layout.itemAt(controls_index).layout()
                 
                 # Extract our widgets from the old layout
@@ -2304,7 +2306,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 
                 # Hard height limit (so the panel doesn't bulge like in the photo)
                 from PySide6.QtWidgets import QSizePolicy
-                self.player_footer_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+                self.player_footer_frame.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+                )
                 
                 from steempeg.ui.design_tokens import with_tooltip_style
                 self.player_footer_frame.setStyleSheet(with_tooltip_style(
@@ -2317,6 +2321,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 
                 # ROW 1: The Custom Timeline
                 if not hasattr(self, 'custom_timeline'):
+                    logging.info("Startup: creating CustomTimelineWidget")
                     self.custom_timeline = CustomTimelineWidget()
                     self.custom_timeline.canvas.marker_store.set_cache_dir(self.cache_dir)
                 self.custom_timeline.canvas.marker_chrome_changed.connect(
@@ -2326,6 +2331,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 v_layout.addWidget(self.custom_timeline)
                 v_layout.addSpacing(6)
                 # ROW 2: Volume/Speed | pinned timer | tools — timer never leaves center
+                logging.info("Startup: volume/speed controls")
                 from steempeg.ui.player.controls.center_pinned_row import CenterPinnedRow
 
                 # 1. LEFT BLOCK (Volume & Speed)
@@ -2340,8 +2346,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.speed_control = SpeedControlWidget(self.player_footer_frame)
                 self.speed_control.slider.valueChanged.connect(self.set_vlc_speed)
 
-                lw.addWidget(self.volume_control, alignment=Qt.AlignLeft | Qt.AlignVCenter)
-                lw.addWidget(self.speed_control, alignment=Qt.AlignLeft | Qt.AlignVCenter)
+                lw.addWidget(
+                    self.volume_control,
+                    alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                )
+                lw.addWidget(
+                    self.speed_control,
+                    alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                )
                 lw.addStretch() # Pushes both buttons nicely to the left!
 
                 # 2. CENTER (Timer) — overlaid on geometric midpoint by CenterPinnedRow
@@ -2881,6 +2893,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.custom_timeline.duplicate_marker_requested.connect(
                     self.duplicate_user_marker
                 )
+                logging.info("Startup: player controls wired")
         
         _launch_splash_progress(74, "Starting video engine…")
         # --- INITIALIZING THE MPV VIDEO PLAYER ---
@@ -5016,7 +5029,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         Never arm the timer while a handle drag is live — mid-hold free→close→reopen
         used to get ``sync_queue_minimum`` floor slapped on after 100ms pauses
-        («свиток» then sudden min-open). Snap is scheduled from drag-end instead.
+        (scroll-up feel then sudden min-open). Snap is scheduled from drag-end instead.
         """
         if getattr(self, "_splitter_dragging", False):
             return
@@ -6744,7 +6757,7 @@ def main():
         # 2) density + library restore + Progressive kick WHILE HIDDEN, splash up
         # 3) splash 100% Preparing spin, then close splash
         # 4) showMaximized under the veil (never map during sync — that was the
-        #    multi-second black "Steempeg не отвечает" window)
+        #    multi-second black "Steempeg is not responding" window)
         # Never show the main window under a still-open splash (gray Preparing
         # bleeding through the translucent card).
         from steempeg.ui.startup_settle import (

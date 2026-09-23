@@ -165,10 +165,15 @@ def _merge_session_groups_via_clip_packages(
 
 
 def dedupe_steam_session_folders(folder_paths: List[str]) -> Tuple[List[str], int]:
-    """Collapse clip_/bg_/fg_ siblings to a single best folder.
+    """Collapse healthy clip_/bg_/fg_ siblings; keep no-video (often dead) packages.
 
     Groups by app+timestamp, then merges groups when a Steam package folder
     nests another session (CLIP saved from an FG often uses a newer stamp).
+
+    Within a group we still pick one best playable folder, but any sibling
+    without video chunks stays in the library — those are usually dead saved
+    packages the user still wants to see (health filter / cleanup), even when
+    SteamLibrary has a healthier FG/BG for the same session.
 
     Returns (deduped_paths, ignored_duplicate_count). Non-Steam folders pass through.
     """
@@ -191,9 +196,22 @@ def dedupe_steam_session_folders(folder_paths: List[str]) -> Tuple[List[str], in
             deduped.append(group[0])
             continue
         chosen = pick_best_session_folder(group)
-        if chosen:
-            deduped.append(chosen)
-            ignored += len(group) - 1
+        if not chosen:
+            continue
+        chosen_norm = os.path.normpath(chosen)
+        kept_norms = {chosen_norm}
+        deduped.append(chosen)
+        for path in group:
+            norm = os.path.normpath(path)
+            if norm in kept_norms:
+                continue
+            # No video chunks → keep (dead / broken package), even if a healthier
+            # sibling under another library root won the session.
+            if not folder_has_video_chunks(path):
+                deduped.append(path)
+                kept_norms.add(norm)
+            else:
+                ignored += 1
 
     # Preserve newest-first ordering from the caller (mtime sort).
     order = {os.path.normpath(p): i for i, p in enumerate(folder_paths)}

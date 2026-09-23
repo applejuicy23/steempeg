@@ -1465,7 +1465,7 @@ class TimelineCanvas(QWidget):
                 # but BEFORE the white playhead bar is drawn at the end of the function!
                 painter.fillRect(QRectF(m_x - 1.0, track_y, 2.0, track_height), QColor(255, 255, 255, 140))
 
-        pixels_per_sec = usable_w / (self.duration_ms / 1000.0) # Заменили width на usable_w
+        pixels_per_sec = usable_w / (self.duration_ms / 1000.0)  # usable_w, not full width
         
         # SMART SCALING — ruler ticks stay visible during trim drag.
         if pixels_per_sec < 0.1: step = 900       # 15-minute step (for very long durations)

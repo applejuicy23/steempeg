@@ -2963,6 +2963,9 @@ class LibraryMixin:
             logging.info("Steam auto-discovery added %s folder(s): %s", len(added), added)
             if was_empty:
                 self._reset_clips_filter_memory()
+            else:
+                for path in added:
+                    self._include_library_root_in_saved_folders(path)
             # New Steam folders: Full scan (same as Choose/Add folder).
             self.scan_clips(announce_duplicates=True, fast=False)
             steempeg_information(
@@ -3038,19 +3041,52 @@ class LibraryMixin:
         self._update_folder_picker_label()
         if was_empty:
             self._reset_clips_filter_memory()
+        else:
+            # New root must not stay invisible under a Folders filter that only
+            # listed the older roots (looked like "only the last folder counts").
+            self._include_library_root_in_saved_folders(folder)
         # New folder: Full scan so health + icons land once.
         self.scan_clips(announce_duplicates=True, fast=False)
 
+    def _include_library_root_in_saved_folders(self, path: str) -> None:
+        """Append a newly added library root to an active Folders filter list."""
+        saved = getattr(self, "saved_filter_state", None)
+        if not isinstance(saved, dict) or not saved.get("active"):
+            return
+        if "folders" not in saved:
+            return
+        folders = [p for p in (saved.get("folders") or []) if p]
+        if not folders:
+            return
+        key = os.path.normcase(os.path.normpath(path))
+        existing = {os.path.normcase(os.path.normpath(p)) for p in folders}
+        if key in existing:
+            return
+        saved = dict(saved)
+        saved["folders"] = folders + [os.path.normpath(path)]
+        self.saved_filter_state = saved
+        if hasattr(self, "_persist_library_filter_memory"):
+            self._persist_library_filter_memory()
+        menu = getattr(self, "filter_menu", None)
+        if menu is not None:
+            try:
+                menu.deleteLater()
+            except Exception:
+                pass
+            self.filter_menu = None
+
     def remove_clips_folder(self, path):
-        """Remove one library root and rescan."""
+        """Remove one library root and rescan like Refresh (filters wiped)."""
         if path in self.clips_folders:
             self.clips_folders.remove(path)
         self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
         self._save_clips_folders()
         self._update_folder_picker_label()
-        if not self.clips_folders:
-            self._reset_clips_filter_memory()
-        self.scan_clips()
+        # Folder list changed — drop remembered filters. Leaving Folders/Games
+        # chips pointed at the removed root left a blank library (badge still
+        # active) until the user hit Refresh by hand.
+        self._reset_clips_filter_memory()
+        self.scan_clips(announce_duplicates=True, fast=False)
 
     def clear_clips_folders(self):
         """Drop every saved library root."""
@@ -3777,11 +3813,23 @@ class LibraryMixin:
 
         if "folders" in saved and roots:
             folders = [p for p in (saved.get("folders") or []) if p]
-            folder_keys = {
-                os.path.normcase(os.path.normpath(p)) for p in folders
-            }
-            # Non-empty stale list with zero overlap → accept all current roots.
-            if folders and not (folder_keys & root_keys):
+            # Drop roots that are no longer in the library list (remove folder).
+            pruned = [
+                p
+                for p in folders
+                if os.path.normcase(os.path.normpath(p)) in root_keys
+            ]
+            if pruned != folders:
+                changed = True
+                if pruned:
+                    saved["folders"] = pruned
+                else:
+                    # Only pointed at removed roots — drop the Folders constraint.
+                    del saved["folders"]
+            elif folders and not (
+                {os.path.normcase(os.path.normpath(p)) for p in folders} & root_keys
+            ):
+                # Non-empty stale list with zero overlap → accept all current roots.
                 saved["folders"] = list(roots)
                 changed = True
 
@@ -4857,13 +4905,9 @@ class LibraryMixin:
             QTimer.singleShot(0, self._schedule_clip_duration_backfill)
 
         if announce_duplicates and stats.duplicate_count:
-            noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
-            steempeg_information(
-                self.ui,
-                "Duplicate clips ignored",
-                f"Ignored {stats.duplicate_count} {noun} across folders.\n\n"
-                "The same clip was found in more than one library folder; only the "
-                "most recent copy is shown.",
+            logging.info(
+                "Library scan ignored %d session duplicate(s) across folders",
+                stats.duplicate_count,
             )
 
         if hasattr(self, "sync_library_filter_view"):

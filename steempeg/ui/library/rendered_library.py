@@ -4169,7 +4169,12 @@ class RenderedLibraryMixin:
         QTimer.singleShot(0, self._flush_steam_screenshot_chunk)
 
     def _maybe_extend_steam_screenshot_placeholders(self) -> None:
-        """Scroll mode: append one chunk when near the end of the planted shelf."""
+        """Scroll mode: append one chunk when near the end of the planted shelf.
+
+        When everything still fits in the viewport (no scrollbar yet), keep
+        planting — otherwise a first open with nowhere to scroll stays stuck
+        after the seed chunk until the user hits Refresh.
+        """
         if not self._screenshots_shelf_is_scroll_mode():
             return
         pending = getattr(self, "_pending_steam_screenshot_rows", None) or []
@@ -4181,13 +4186,12 @@ class RenderedLibraryMixin:
         if grid is None:
             return
         bar = grid.verticalScrollBar()
-        near_end = True
         if bar is not None and int(bar.maximum()) > 0:
             near_end = int(bar.value()) >= max(
                 0, int(bar.maximum()) - _SHOT_STEAM_NEAR_END_PX
             )
-        elif self._steam_screenshot_grid_count() >= _SHOT_STEAM_SEED:
-            near_end = False
+        else:
+            near_end = True
         if not near_end:
             return
         self._steam_screenshot_chunk_scheduled = True
@@ -4237,7 +4241,6 @@ class RenderedLibraryMixin:
             self._schedule_screenshots_viewport_refresh(0)
 
         if scroll_mode:
-            # Never auto-chain in scroll mode — wait for near-end scroll.
             self._steam_screenshot_chunk_scheduled = False
             if not pending:
                 self._apply_screenshots_filters(refresh_viewport=False)
@@ -4251,6 +4254,9 @@ class RenderedLibraryMixin:
                     )
                 elif getattr(self, "_steam_screenshots_worker", None) is None:
                     QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
+                return
+            # Seed filled the viewport with no scrollbar — keep planting.
+            QTimer.singleShot(0, self._maybe_extend_steam_screenshot_placeholders)
             return
 
         # Full (v50) mode: keep dripping quietly until done.
@@ -4545,13 +4551,13 @@ class RenderedLibraryMixin:
         if hasattr(self, "_update_library_count_label"):
             self._update_library_count_label()
         logging.info(
-            "Screenshots shelf reset for load mode=%s",
+            "Screenshots shelf reset for load mode=%s — rescanning folders",
             "scroll" if self._screenshots_shelf_is_scroll_mode() else "full",
         )
-        self._begin_screenshots_session_restore_async()
-        if str(getattr(self, "_library_panel_mode", "") or "") == "screenshots":
-            # Scroll mode paints on tab; full mode also apply once payload is ready.
-            QTimer.singleShot(80, self._ensure_screenshots_shelf_for_tab)
+        # Mode change must walk Steempeg + Steam folders. Session JSON alone
+        # leaves an empty shelf when the cache is missing/stale (looks like
+        # "not searching at all" after switching to Full / like v50).
+        self.refresh_screenshots_library(force=True)
 
     def _begin_screenshots_session_restore_async(self) -> bool:
         """Parse screenshots JSON off-UI; shelf paint depends on shelf-load setting."""
@@ -4590,7 +4596,10 @@ class RenderedLibraryMixin:
     def _on_screenshots_cache_prefetch_ok(self, payload) -> None:
         self._screenshots_prefetch_worker = None
         if not isinstance(payload, dict):
+            self.refresh_screenshots_library(force=True)
             return
+        steempeg_n = len(payload.get("steempeg_rows") or [])
+        steam_n = len(payload.get("steam_rows") or [])
         self._screenshots_prefetch_payload = payload
         catalog = payload.get("games_catalog")
         if isinstance(catalog, dict) and catalog:
@@ -4598,14 +4607,16 @@ class RenderedLibraryMixin:
         try:
             self._screenshots_known_count = int(payload.get("known_count") or 0)
         except (TypeError, ValueError):
-            self._screenshots_known_count = len(payload.get("steempeg_rows") or []) + len(
-                payload.get("steam_rows") or []
-            )
+            self._screenshots_known_count = steempeg_n + steam_n
         if hasattr(self, "_update_library_count_label"):
             try:
                 self._update_library_count_label()
             except Exception:
                 pass
+        if steempeg_n <= 0 and steam_n <= 0:
+            logging.info("Screenshots: empty session cache — scanning folders")
+            self.refresh_screenshots_library(force=True)
+            return
         # Scroll mode: wait for Screenshots tab. Full mode: quiet drip after settle (v50).
         if self._screenshots_shelf_is_scroll_mode():
             if str(getattr(self, "_library_panel_mode", "") or "") == "screenshots":
@@ -4628,7 +4639,10 @@ class RenderedLibraryMixin:
 
     def _on_screenshots_cache_prefetch_failed(self, message: str) -> None:
         self._screenshots_prefetch_worker = None
-        logging.warning("Screenshots session prefetch failed: %s", message)
+        logging.warning(
+            "Screenshots session prefetch failed: %s — scanning folders", message
+        )
+        self.refresh_screenshots_library(force=True)
 
     def _apply_screenshots_session_payload(self) -> bool:
         """UI-thread paint from off-UI prefetch payload (placeholders only)."""
@@ -4641,7 +4655,9 @@ class RenderedLibraryMixin:
         steam_rows = list(payload.get("steam_rows") or [])
         self._screenshots_prefetch_payload = None
         if not steempeg_rows and not steam_rows:
-            return False
+            logging.info("Screenshots: empty payload — scanning folders")
+            self.refresh_screenshots_library(force=True)
+            return True
 
         folder = self._screenshots_folder_path()
         self._ensure_screenshots_widgets()
@@ -4710,6 +4726,8 @@ class RenderedLibraryMixin:
                 if not self._pending_steam_screenshot_rows:
                     QTimer.singleShot(0, lambda: self._finish_steam_screenshots_merge(0))
                     QTimer.singleShot(200, self._schedule_screenshot_game_name_backfill)
+                else:
+                    QTimer.singleShot(0, self._maybe_extend_steam_screenshot_placeholders)
             else:
                 # Full (v50): queue all Steam rows; chunked placeholder append.
                 self._pending_steam_screenshot_rows = list(steam_rows)
