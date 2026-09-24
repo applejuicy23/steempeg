@@ -2479,8 +2479,8 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
         margin-top: 4px;
     }
     QLabel#AboutPoweredName {
-        min-height: 18px;
-        padding-top: 4px;
+        min-height: 22px;
+        padding-top: 2px;
     }
 """
     return f"""
