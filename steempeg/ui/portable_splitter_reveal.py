@@ -275,7 +275,11 @@ def _clear_handle_widget_styles(app) -> None:
 def _restore_handle_cursors(
     app, names: tuple[str, ...] = _SIDE_SPLITTER_NAMES
 ) -> None:
-    """Ensure Qt resize arrows after any prior handle QSS / filter mess."""
+    """Ensure Qt splitter drag cursors after any prior handle QSS / filter mess.
+
+    ``SplitHCursor`` / ``SplitVCursor`` — left/right (or up/down) arrows with
+    the double bar in the middle, not plain SizeHor ↔.
+    """
     for _name, splitter in _iter_shell_splitters(app, names):
         try:
             if splitter.count() < 2:
@@ -293,3 +297,21 @@ def _restore_handle_cursors(
                 handle.setCursor(Qt.CursorShape.SplitVCursor)
         except RuntimeError:
             continue
+
+
+def restore_shell_splitter_cursors(app=None) -> None:
+    """Public: re-apply drag cursors on shell splitter handles (desktop + Portable)."""
+    if app is None:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Prefer the Steempeg main window if present.
+        for w in app.topLevelWidgets():
+            if hasattr(w, "main_splitter") or hasattr(
+                getattr(w, "ui", None), "main_splitter"
+            ):
+                app = w
+                break
+    _restore_handle_cursors(app, names=_SHELL_SPLITTER_NAMES)
