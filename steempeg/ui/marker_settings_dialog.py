@@ -1029,8 +1029,8 @@ class MarkerSettingsDialog(SteempegDialog):
     def _add_dup_del_action(menu: QMenu, label: str, *, kind: str):
         """Emoji-in-text like ClipCard — QIcon on one row alone makes a huge left gutter."""
         if kind == "duplicate":
-            return menu.addAction(f"📋  {label}")
-        return menu.addAction(f"🗑️  {label}")
+            return menu.addAction(f"📋 {label}")
+        return menu.addAction(f"🗑️ {label}")
 
     def _delete_on_clip_marker(self, row_info: dict) -> None:
         canvas = self._canvas()
