@@ -133,6 +133,48 @@ class SplitterRulesMixin:
         self._watch_splitter_handle(getattr(ui, "main_splitter", None), LEFT)
         self._watch_splitter_handle(getattr(self, "right_h_splitter", None), RIGHT)
 
+    def rebind_splitter_handle_watchers(self) -> None:
+        """Re-attach Stage B drag filters after side swap / handle width restore.
+
+        ``setHandleWidth`` / Hover rebind can replace the ``QSplitterHandle``
+        widgets. New handles have no event filter → native Qt bounce (the old
+        player-column bug). Default Queue-right often keeps the original
+        handles; Queue-left after swap commonly does not.
+        """
+        alive = []
+        for watcher in getattr(self, "_splitter_handle_watchers", None) or []:
+            try:
+                parent = watcher.parent()
+            except RuntimeError:
+                continue
+            if parent is not None:
+                alive.append(watcher)
+        self._splitter_handle_watchers = alive
+
+        ui = getattr(self, "ui", None)
+        pairs = (
+            (getattr(ui, "main_splitter", None), LEFT),
+            (getattr(self, "right_h_splitter", None), RIGHT),
+        )
+        for splitter, side in pairs:
+            if splitter is None or splitter.count() < 2:
+                continue
+            try:
+                handle = splitter.handle(1)
+            except RuntimeError:
+                continue
+            if handle is None:
+                continue
+            already = any(
+                getattr(w, "_side", None) == side and w.parent() is handle
+                for w in self._splitter_handle_watchers
+            )
+            if already:
+                continue
+            # Allow _watch_splitter_handle to bind this live handle widget.
+            handle.setProperty("steempeg_drag_side", False)
+            self._watch_splitter_handle(splitter, side)
+
     def _watch_splitter_handle(self, splitter, side: str) -> None:
         if splitter is None or splitter.count() < 2:
             return
