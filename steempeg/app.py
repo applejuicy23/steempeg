@@ -4845,6 +4845,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         from steempeg.ui.layout_defaults import left_panel_min_width
         from steempeg.ui.ui_density import chrome_equal, density_for_width
 
+        # Mid-drag Stage B owns mins/sizes — clamp here fights kiss (esp. Queue-left).
+        if getattr(self, "_splitter_dragging", False):
+            return
+
         w = int(self.ui.width() or 0)
         if w <= 0:
             if apply_density:
@@ -5318,6 +5322,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         self._shell_queue_on_left = queue_left
         self.sync_shell_side_gutters()
+        if hasattr(self, "rebind_splitter_handle_watchers"):
+            try:
+                self.rebind_splitter_handle_watchers()
+            except Exception:
+                logging.debug("splitter watcher rebind after side layout skipped", exc_info=True)
         if not restore_widths:
             if hasattr(self, "sync_queue_minimum"):
                 self.sync_queue_minimum()
@@ -5503,6 +5512,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             ctrl._set_queue_handle_visible(False)
         except Exception:
             logging.debug("queue hover handle rebind skipped", exc_info=True)
+        try:
+            from steempeg.ui.portable_splitter_reveal import restore_shell_splitter_cursors
+
+            restore_shell_splitter_cursors(self)
+        except Exception:
+            logging.debug("splitter cursor restore after side sync skipped", exc_info=True)
+        # Handle width restore can replace QSplitterHandle widgets — Stage B
+        # filters must follow or Queue-left falls back to native bounce.
+        if hasattr(self, "rebind_splitter_handle_watchers"):
+            try:
+                self.rebind_splitter_handle_watchers()
+            except Exception:
+                logging.debug("splitter watcher rebind after side sync skipped", exc_info=True)
 
     def apply_queue_hover(self, enabled: bool | None = None) -> None:
         """Float Render Queue as an edge slide-out, or dock it back in the splitter."""
