@@ -447,6 +447,12 @@ class ScreenshotsFilterMenu(PillPaintDragMixin, QWidget):
             return 0
         games = self._selected_games()
         folders = self._selected_folders()
+        counter = getattr(self.app, "_count_screenshots_matching_filters", None)
+        if callable(counter):
+            try:
+                return int(counter(games, folders))
+            except Exception:
+                pass
         grid = getattr(self.app, "grid_screenshots", None)
         if grid is None:
             return 0
