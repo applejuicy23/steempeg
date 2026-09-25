@@ -1831,7 +1831,7 @@ class TimelineCanvas(QWidget):
         
         if is_user_marker:
             action_edit = menu.addAction("✏️ Edit Marker")
-            action_duplicate = self._menu_action_duplicate(menu, "Duplicate")
+            action_duplicate = menu.addAction("📋 Duplicate")
             action_delete = menu.addAction("🗑️ Delete Marker")
             menu.addSeparator() 
 
@@ -1879,11 +1879,6 @@ class TimelineCanvas(QWidget):
         elif action == action_screenshot: # Sending the order to take a screenshot
             self.screenshot_requested.emit(float(marker.get('time_ms', 0)))
 
-    @staticmethod
-    def _menu_action_duplicate(menu: QMenu, label: str):
-        """Duplicate row — emoji in text (same as ClipCard; QIcon blows out the gutter)."""
-        return menu.addAction(f"📋  {label}")
-    
     def show_track_context_menu(self, pos, time_ms):
         from steempeg.ui import ui_theme as ut
 
