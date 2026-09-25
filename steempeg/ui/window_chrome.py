@@ -551,6 +551,13 @@ def force_app_cursor_resync() -> None:
                 app.restoreOverrideCursor()
         # Geometry hover may still need the hand override (sticky tab UnderMouse).
         refresh_traffic_lights_under_cursor_all()
+        # unsetCursor() above strips SizeHor/Ver from splitter handles — put them back.
+        try:
+            from steempeg.ui.portable_splitter_reveal import restore_shell_splitter_cursors
+
+            restore_shell_splitter_cursors()
+        except Exception:
+            pass
     except RuntimeError:
         _traffic_hand_override = False
 
