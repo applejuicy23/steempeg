@@ -711,12 +711,18 @@ class LifecycleMixin:
         content_scale: float = 1.0,
     ) -> QWidget:
         """Circular project logo + caption under it (clickable)."""
+        from PySide6.QtGui import QFont, QFontMetrics
+        from PySide6.QtWidgets import QSizePolicy
+
         cell = QWidget()
+        cell.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         lay = QVBoxLayout(cell)
+        # Top-align icon+caption so Linux HBox VCenter cannot squash them together.
         lay.setContentsMargins(4, 0, 4, 0)
-        # Linux QSS captions under-size and paint into the disc; give more air.
-        lay.setSpacing(12 if sys.platform != "win32" else 8)
-        lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        lay.setSpacing(0)
+        lay.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
 
         icon = _AboutLinkLabel(url)
         pix = _round_pixmap(
@@ -734,17 +740,46 @@ class LifecycleMixin:
         icon.setFixedSize(int(size), int(size))
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setToolTip(url)
+        icon.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         caption = _AboutLinkLabel(url)
         caption.setObjectName("AboutPoweredName")
         caption.setText(name)
-        caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        if sys.platform != "win32":
-            caption.setMinimumHeight(18)
+        caption.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        # Pin metrics in code — Linux QSS font-size alone under-sizes the widget
+        # and paints the name into the disc (Windows is fine without this).
+        cap_font = QFont(caption.font())
+        cap_font.setPixelSize(11)
+        cap_font.setBold(True)
+        caption.setFont(cap_font)
+        fm = QFontMetrics(cap_font)
+        gap = 14 if sys.platform != "win32" else 8
+        cap_h = max(fm.height() + (8 if sys.platform != "win32" else 4), 18)
+        caption.setFixedHeight(cap_h)
+        caption.setMinimumWidth(max(int(size), fm.horizontalAdvance(name) + 12))
 
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addSpacing(gap)
         lay.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        cell.setFixedHeight(int(size) + gap + cap_h + 2)
+        cell.setMinimumWidth(max(int(size) + 8, caption.minimumWidth()))
         return cell
+
+    @staticmethod
+    def _about_powered_amp(*, icon_size: int = 68) -> QWidget:
+        """``&`` centered on the disc row only (not the caption band)."""
+        wrap = QWidget()
+        wrap.setFixedHeight(int(icon_size))
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addStretch(1)
+        amp = QLabel("&")
+        amp.setObjectName("AboutAmp")
+        amp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(amp, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(1)
+        return wrap
 
     @staticmethod
     def _about_hairline() -> QFrame:
@@ -965,6 +1000,7 @@ class LifecycleMixin:
 
         powered_row = QHBoxLayout()
         powered_row.setSpacing(6)
+        powered_row.setAlignment(Qt.AlignmentFlag.AlignTop)
         powered_row.addStretch(1)
         powered_row.addWidget(self._about_powered_badge(
             "ffmpeg.png",
@@ -977,10 +1013,7 @@ class LifecycleMixin:
             ring_width=1.25,
             content_scale=0.72,
         ))
-        amp1 = QLabel("&")
-        amp1.setObjectName("AboutAmp")
-        amp1.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        powered_row.addWidget(amp1)
+        powered_row.addWidget(self._about_powered_amp(icon_size=68))
         powered_row.addWidget(self._about_powered_badge(
             "pyav.png",
             "PyAV",
@@ -993,10 +1026,7 @@ class LifecycleMixin:
             ring_width=1.25,
             content_scale=0.72,
         ))
-        amp2 = QLabel("&")
-        amp2.setObjectName("AboutAmp")
-        amp2.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        powered_row.addWidget(amp2)
+        powered_row.addWidget(self._about_powered_amp(icon_size=68))
         powered_row.addWidget(self._about_powered_badge(
             "mpv.png",
             "MPV",
