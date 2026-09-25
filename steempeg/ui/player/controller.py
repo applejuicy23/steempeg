@@ -1750,6 +1750,17 @@ class PlayerMixin:
         handle = self._splitter_handle(splitter, index)
         if handle is not None:
             handle.setVisible(bool(visible))
+            if visible:
+                try:
+                    from PySide6.QtCore import Qt
+
+                    handle.unsetCursor()
+                    if splitter.orientation() == Qt.Orientation.Horizontal:
+                        handle.setCursor(Qt.CursorShape.SplitHCursor)
+                    else:
+                        handle.setCursor(Qt.CursorShape.SplitVCursor)
+                except RuntimeError:
+                    pass
 
     def _save_right_h_splitter_handle(self, width_attr: str, visible_attr: str) -> None:
         splitter = getattr(self, "right_h_splitter", None)
