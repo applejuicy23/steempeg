@@ -72,6 +72,7 @@ class VolumeControlWidget(QWidget):
         self.btn_icon.move(0, 0)
         self.btn_icon.setCursor(Qt.PointingHandCursor)
         self.btn_icon.setToolTip("Mute / Unmute Volume")
+        self.btn_icon.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.btn_icon.setStyleSheet(_round_btn_style(40))
         
         # Set maximum volume (3) by default
