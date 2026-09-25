@@ -4008,7 +4008,9 @@ class LibraryMixin:
             path = item.data(Qt.UserRole)
             if path:
                 paths.append(str(path))
-        dropped = session_duplicate_paths_to_drop(paths)
+        dropped = session_duplicate_paths_to_drop(
+            paths, preferred_roots=list(getattr(self, "clips_folders", None) or [])
+        )
         if not dropped:
             return 0
         removed = self._remove_library_clip_paths_from_ui(dropped)
@@ -4714,7 +4716,10 @@ class LibraryMixin:
                     existing_rows = getattr(self, "_library_clip_rows", None) or []
                     existing_paths = [str(r.full_path) for r in existing_rows]
                     dropped = session_duplicate_paths_to_drop(
-                        existing_paths + [row.full_path]
+                        existing_paths + [row.full_path],
+                        preferred_roots=list(
+                            getattr(self, "clips_folders", None) or []
+                        ),
                     )
                     losers = [
                         p
@@ -4905,6 +4910,14 @@ class LibraryMixin:
             QTimer.singleShot(0, self._schedule_clip_duration_backfill)
 
         if announce_duplicates and stats.duplicate_count:
+            noun = "duplicate" if stats.duplicate_count == 1 else "duplicates"
+            steempeg_information(
+                self.ui,
+                "Duplicate clips ignored",
+                f"Ignored {stats.duplicate_count} {noun} across folders.\n\n"
+                "The same clip was found in more than one library folder; only one "
+                "copy is shown (the primary library folder wins).",
+            )
             logging.info(
                 "Library scan ignored %d session duplicate(s) across folders",
                 stats.duplicate_count,
