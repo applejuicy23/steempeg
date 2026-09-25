@@ -23,6 +23,17 @@ from steempeg.ui.window_chrome import (
     soft_full_redraw,
 )
 
+
+def _restore_shell_splitter_cursors() -> None:
+    """Re-apply ←‖→ on splitter handles after minimize/restore / DWM redraw."""
+    try:
+        from steempeg.ui.portable_splitter_reveal import restore_shell_splitter_cursors
+
+        restore_shell_splitter_cursors()
+    except Exception:
+        pass
+
+
 _WindowBase = QDialog if sys.platform == "win32" else QWidget
 
 
@@ -74,10 +85,16 @@ class MainWindow(_WindowBase):
                 host, "hide_floating_overlays"
             ):
                 host.hide_floating_overlays()
+            elif not self.isMinimized():
+                # Minimize/restore often strips SplitHCursor from handles.
+                QTimer.singleShot(0, _restore_shell_splitter_cursors)
+                QTimer.singleShot(50, _restore_shell_splitter_cursors)
         elif event.type() == QEvent.Type.ActivationChange:
             # Inactive shell often skips enter/leave on the dots until click —
             # re-evaluate under the cursor when focus returns (or is lost).
             QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
+            if self.isActiveWindow() and not self.isMinimized():
+                QTimer.singleShot(0, _restore_shell_splitter_cursors)
         super().changeEvent(event)
 
     def hideEvent(self, event):
@@ -92,6 +109,7 @@ class MainWindow(_WindowBase):
         if host is not None and hasattr(host, "on_main_window_resized"):
             host.on_main_window_resized()
         QTimer.singleShot(0, lambda: refresh_traffic_lights_under_cursor(self))
+        QTimer.singleShot(0, _restore_shell_splitter_cursors)
         super().showEvent(event)
 
     def resizeEvent(self, event):
@@ -119,6 +137,7 @@ class MainWindow(_WindowBase):
             if tb is not None and hasattr(tb, "reset_traffic_lights"):
                 tb.reset_traffic_lights()
             refresh_traffic_lights_under_cursor(self)
+            _restore_shell_splitter_cursors()
         finally:
             # Clear on next tick so any late resize from RedrawWindow is ignored.
             QTimer.singleShot(0, self._end_dwm_redraw)
