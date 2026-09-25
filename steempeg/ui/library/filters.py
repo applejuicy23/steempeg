@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.locale_time import parse_clip_datetime_text, qt_time_display_format
+from steempeg.core.clip_identity import expand_library_root_aliases
 from steempeg.core.dash.health import ClipHealth
 from steempeg.core.steam_paths import steam_id_from_clips_folder
 from steempeg.ui.icon_assets import health_icon
@@ -43,7 +44,13 @@ def _row_display_health_level(item) -> str:
 
 
 def _library_root_for_clip(clip_path: str, roots) -> str | None:
-    """Longest matching library root for a clip folder path, or None."""
+    """Configured library root for a clip folder path, or None.
+
+    Steam stores FG/BG under sibling ``…/gamerecordings/video`` while the
+    configured root is often ``…/gamerecordings/clips``. Treat those as one
+    seat so Folders filter does not hide primary orphans when a second root
+    is active.
+    """
     if not clip_path or not roots:
         return None
     norm = os.path.normpath(clip_path)
@@ -53,9 +60,11 @@ def _library_root_for_clip(clip_path: str, roots) -> str | None:
         if not root:
             continue
         rn = os.path.normpath(root)
-        rn_key = os.path.normcase(rn)
-        if norm_key == rn_key or norm_key.startswith(rn_key + os.sep):
-            matches.append(rn)
+        for alias in expand_library_root_aliases(rn):
+            alias_key = os.path.normcase(os.path.normpath(alias))
+            if norm_key == alias_key or norm_key.startswith(alias_key + os.sep):
+                matches.append(rn)
+                break
     return max(matches, key=len) if matches else None
 
 
