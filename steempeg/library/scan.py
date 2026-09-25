@@ -205,25 +205,40 @@ def collect_clip_roots(base_folder: str) -> Set[str]:
 
 
 def _path_under_any_root(path: str, roots: List[str]) -> bool:
-    """True when ``path`` is equal to or nested under any library root."""
+    """True when ``path`` is equal to or nested under any library root.
+
+    Expands Steam ``clips``/``video``/``gamerecordings`` aliases so FG/BG under
+    sibling ``video`` still count as belonging to a ``…/clips`` library root.
+    """
     if not roots:
         return True
+    from steempeg.core.clip_identity import expand_library_root_aliases
+
     norm = os.path.normcase(os.path.normpath(path))
     for root in roots:
         if not root:
             continue
-        r = os.path.normcase(os.path.normpath(root))
-        if norm == r or norm.startswith(r + os.sep):
-            return True
+        for alias in expand_library_root_aliases(root):
+            r = os.path.normcase(os.path.normpath(alias))
+            if norm == r or norm.startswith(r + os.sep):
+                return True
     return False
 
 
 def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
     """Return sorted clip folder paths and duplicate count from session dedupe."""
+    from steempeg.library.clip_discover_trace import ClipDiscoverTrace, tracing_enabled
+
+    trace = ClipDiscoverTrace(list(library_roots)) if tracing_enabled() else None
+
     library_root_norms = {os.path.normpath(r) for r in library_roots}
     folders_to_check: Set[str] = set()
     for root in library_roots:
-        folders_to_check.update(collect_clip_roots(root))
+        found = collect_clip_roots(root)
+        folders_to_check.update(found)
+        if trace is not None:
+            for path in found:
+                trace.note_collected(path)
 
     sorted_folders = sorted(
         list(folders_to_check),
@@ -232,7 +247,11 @@ def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
             os.path.normcase(os.path.normpath(x)),
         ),
     )
-    sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
+    sorted_folders, session_dupes = dedupe_steam_session_folders(
+        sorted_folders, preferred_roots=list(library_roots), trace=trace
+    )
+    if trace is not None:
+        trace.note_after_session_dedupe(sorted_folders, session_dupes)
 
     candidates: List[str] = []
     seen_clip_ids: Set[str] = set()
@@ -240,30 +259,66 @@ def discover_clip_paths(library_roots: List[str]) -> Tuple[List[str], int]:
 
     for full_path in sorted_folders:
         if not os.path.exists(full_path):
+            if trace is not None:
+                trace.note_filter_skip(full_path, "path_missing")
             continue
         if os.path.normpath(full_path) in library_root_norms:
+            if trace is not None:
+                trace.note_filter_skip(full_path, "is_library_root_path")
             continue
 
         folder_name = os.path.basename(full_path).lower()
         if folder_name in ("gamerecordings", "clips", "video"):
+            if trace is not None:
+                trace.note_filter_skip(full_path, "steam_container_name")
             continue
         if is_steam_clip_container_folder(full_path):
+            if trace is not None:
+                trace.note_filter_skip(full_path, "steam_clip_container_folder")
             continue
         if is_clip_library_root(full_path):
+            if trace is not None:
+                trace.note_filter_skip(full_path, "looks_like_library_root")
             continue
         is_steam_name = folder_name.startswith(("clip_", "bg_", "fg_"))
         if not is_steam_name and not folder_has_dash_recording(full_path):
+            if trace is not None:
+                trace.note_filter_skip(full_path, "no_steam_name_and_no_dash")
             continue
-        if "steempeg" in folder_name or folder_name in ["logs", "cache", "_update_extracted"]:
+        if "steempeg" in folder_name or folder_name in [
+            "logs",
+            "cache",
+            "_update_extracted",
+        ]:
+            if trace is not None:
+                trace.note_filter_skip(full_path, "steempeg_noise_folder")
             continue
 
-        session_key = steam_session_key(folder_name)
-        dedupe_key = session_key or folder_name
-        if dedupe_key in seen_clip_ids:
-            duplicate_count += 1
+        # Steam session siblings are already collapsed above (playable→one;
+        # no-video dead packages may remain). Do not drop them again by key.
+        if steam_session_key(folder_name):
+            candidates.append(full_path)
+            if trace is not None:
+                trace.note_filter_keep(full_path, via="steam_session_key")
             continue
-        seen_clip_ids.add(dedupe_key)
+        if folder_name in seen_clip_ids:
+            duplicate_count += 1
+            if trace is not None:
+                trace.note_basename_dupe(full_path, folder_name)
+            continue
+        seen_clip_ids.add(folder_name)
         candidates.append(full_path)
+        if trace is not None:
+            trace.note_filter_keep(full_path, via="unique_basename")
+
+    if trace is not None:
+        trace.note_final(candidates, duplicate_count)
+        try:
+            paths = trace.flush()
+            if paths:
+                logging.info("Compare traces in logs/: %s", paths[1])
+        except Exception:
+            logging.exception("Clip discover trace flush failed")
 
     return candidates, duplicate_count
 
@@ -293,19 +348,22 @@ def discover_clip_paths_from_health_cache(
             os.path.normcase(os.path.normpath(x)),
         ),
     )
-    sorted_folders, session_dupes = dedupe_steam_session_folders(sorted_folders)
+    sorted_folders, session_dupes = dedupe_steam_session_folders(
+        sorted_folders, preferred_roots=list(library_roots)
+    )
 
     candidates: List[str] = []
     seen_clip_ids: Set[str] = set()
     duplicate_count = session_dupes
     for full_path in sorted_folders:
         folder_name = os.path.basename(full_path).lower()
-        session_key = steam_session_key(folder_name)
-        dedupe_key = session_key or folder_name
-        if dedupe_key in seen_clip_ids:
+        if steam_session_key(folder_name):
+            candidates.append(full_path)
+            continue
+        if folder_name in seen_clip_ids:
             duplicate_count += 1
             continue
-        seen_clip_ids.add(dedupe_key)
+        seen_clip_ids.add(folder_name)
         candidates.append(full_path)
     return candidates, duplicate_count
 
