@@ -90,6 +90,7 @@ class SpeedControlWidget(QWidget):
         self.btn_icon.move(0, 0)
         self.btn_icon.setCursor(Qt.PointingHandCursor)
         self.btn_icon.setToolTip("Playback Speed")
+        self.btn_icon.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.btn_icon.setStyleSheet(_round_btn_style(40))
         self.btn_icon.setIconSize(QSize(36, 16))
         self.btn_icon.clicked.connect(self.toggle_speed)
