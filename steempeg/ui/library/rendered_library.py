@@ -3059,22 +3059,169 @@ class RenderedLibraryMixin:
     def _invalidate_screenshot_norm_app_id_map(self) -> None:
         self._screenshot_norm_to_app_id = {}
 
+    def _iter_screenshots_filter_rows(self):
+        """Planted grid + still-pending Steam rows (scroll shelf may not plant all)."""
+        seen: set[str] = set()
+        grid = getattr(self, "grid_screenshots", None)
+        if grid is not None:
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                path = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                norm = os.path.normcase(os.path.normpath(path)) if path else ""
+                if norm:
+                    if norm in seen:
+                        continue
+                    seen.add(norm)
+                raw_name = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
+                source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+                app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+                try:
+                    mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+                except (TypeError, ValueError):
+                    mtime = 0.0
+                yield {
+                    "game_name": raw_name,
+                    "source": source,
+                    "app_id": app_id,
+                    "mtime": mtime,
+                }
+        pending = getattr(self, "_pending_steam_screenshot_rows", None) or []
+        for row in pending:
+            if not isinstance(row, dict):
+                continue
+            path = str(row.get("full_path") or row.get("path") or "").strip()
+            norm = os.path.normcase(os.path.normpath(path)) if path else ""
+            if norm:
+                if norm in seen:
+                    continue
+                seen.add(norm)
+            yield {
+                "game_name": str(row.get("game_name") or "").strip() or "Unknown",
+                "source": str(row.get("source") or "steam").strip() or "steam",
+                "app_id": str(row.get("app_id") or "").strip(),
+                "mtime": float(row.get("mtime") or 0.0) if row.get("mtime") else 0.0,
+            }
+
+    def _count_screenshots_matching_filters(
+        self,
+        games: set[str] | None = None,
+        folders: set[str] | None = None,
+    ) -> int:
+        """Match count for Apply label — planted + pending, not viewport alone."""
+        if games is None:
+            games = getattr(self, "_screenshots_filter_games", None)
+        if folders is None:
+            folders = getattr(self, "_screenshots_filter_folders", None)
+        count = 0
+        for row in self._iter_screenshots_filter_rows():
+            raw = str(row.get("game_name") or "").strip() or "Unknown"
+            source = str(row.get("source") or "steempeg")
+            app_id = str(row.get("app_id") or "").strip()
+            game, _aid = self._resolve_screenshot_row_identity(
+                raw, app_id, source=source
+            )
+            label = (game or raw).strip() or "Unknown"
+            if games is not None and label not in games and raw not in games:
+                continue
+            if folders is not None:
+                src = (source or "steempeg").strip().lower() or "steempeg"
+                if src not in folders:
+                    continue
+            count += 1
+        return count
+
+    def _plant_filtered_pending_screenshots(self) -> int:
+        """Scroll mode: pull matching pending Steam rows into the grid on Apply.
+
+        Without this, Cyberpunk → Apply hides every planted non-match and leaves
+        an empty shelf while matching shots sit in ``_pending_steam_screenshot_rows``.
+        """
+        if not self._screenshots_shelf_is_scroll_mode():
+            return 0
+        games = getattr(self, "_screenshots_filter_games", None)
+        folders = getattr(self, "_screenshots_filter_folders", None)
+        if games is None and folders is None:
+            return 0
+        pending = getattr(self, "_pending_steam_screenshot_rows", None)
+        if not isinstance(pending, list) or not pending:
+            return 0
+
+        match: list[dict] = []
+        rest: list[dict] = []
+        for row in pending:
+            if not isinstance(row, dict):
+                continue
+            raw = str(row.get("game_name") or "").strip() or "Unknown"
+            source = str(row.get("source") or "steam")
+            app_id = str(row.get("app_id") or "").strip()
+            game, _aid = self._resolve_screenshot_row_identity(
+                raw, app_id, source=source
+            )
+            label = (game or raw).strip() or "Unknown"
+            hidden = False
+            if games is not None and label not in games and raw not in games:
+                hidden = True
+            if not hidden and folders is not None:
+                src = (source or "steam").strip().lower() or "steam"
+                if src not in folders:
+                    hidden = True
+            (rest if hidden else match).append(row)
+
+        if not match:
+            return 0
+
+        grid = getattr(self, "grid_screenshots", None)
+        visible_match = 0
+        if grid is not None:
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None:
+                    continue
+                raw = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
+                source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
+                app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+                game, _aid = self._resolve_screenshot_row_identity(
+                    raw, app_id, source=source
+                )
+                label = (game or raw).strip() or "Unknown"
+                if games is not None and label not in games and raw not in games:
+                    continue
+                if folders is not None:
+                    src = (source or "steempeg").strip().lower() or "steempeg"
+                    if src not in folders:
+                        continue
+                visible_match += 1
+
+        need = max(0, _SHOT_STEAM_SEED - visible_match)
+        if need <= 0:
+            # Still prioritize matches for later scroll extends.
+            self._pending_steam_screenshot_rows = match + rest
+            return 0
+
+        chunk = match[:need]
+        self._pending_steam_screenshot_rows = match[need:] + rest
+        self._paint_screenshot_rows(chunk, rebuild_index=False)
+        return len(chunk)
+
     def _collect_screenshot_games_catalog(self) -> dict[str, dict]:
-        """Canonical game → {app_id, count, max_mtime} — prefer session meta, else grid."""
+        """Canonical game → {app_id, count, max_mtime}.
+
+        Prefer full session catalog when present. Otherwise build from the
+        planted grid **plus** pending Steam rows so scroll-shelf filters do
+        not report Cyberpunk → Apply (0) before those cards are planted.
+        """
         cached = getattr(self, "_screenshots_games_catalog", None)
+        # Session catalog is complete; pending is only a plant queue from it.
         if isinstance(cached, dict) and cached:
             return dict(cached)
-        grid = getattr(self, "grid_screenshots", None)
+
         catalog: dict[str, dict] = {}
-        if grid is None:
-            return catalog
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is None:
-                continue
-            raw_name = str(item.data(_SHOT_GAME_ROLE) or "").strip() or "Unknown"
-            source = str(item.data(_SHOT_SOURCE_ROLE) or "steempeg")
-            app_id = str(item.data(_SHOT_APP_ID_ROLE) or "").strip()
+        for row in self._iter_screenshots_filter_rows():
+            raw_name = str(row.get("game_name") or "").strip() or "Unknown"
+            source = str(row.get("source") or "steempeg")
+            app_id = str(row.get("app_id") or "").strip()
             game, app_id = self._resolve_screenshot_row_identity(
                 raw_name, app_id, source=source
             )
@@ -3084,7 +3231,7 @@ class RenderedLibraryMixin:
                 )
             canon = (game or raw_name).strip() or "Unknown"
             try:
-                mtime = float(item.data(_SHOT_MTIME_ROLE) or 0.0)
+                mtime = float(row.get("mtime") or 0.0)
             except (TypeError, ValueError):
                 mtime = 0.0
             norm = _normalize_screenshot_game_key(canon)
@@ -5009,8 +5156,14 @@ class RenderedLibraryMixin:
     ) -> bool:
         games = getattr(self, "_screenshots_filter_games", None)
         folders = getattr(self, "_screenshots_filter_folders", None)
-        if games is not None and (game_name or "Unknown") not in games:
-            return True
+        if games is not None:
+            raw = (game_name or "Unknown").strip() or "Unknown"
+            game, _aid = self._resolve_screenshot_row_identity(
+                raw, "", source=source
+            )
+            label = (game or raw).strip() or "Unknown"
+            if label not in games and raw not in games:
+                return True
         if folders is not None:
             src = (source or "steempeg").strip().lower() or "steempeg"
             if src not in folders:
@@ -5040,6 +5193,12 @@ class RenderedLibraryMixin:
         if grid is None:
             return
         self._remap_screenshots_filter_game_names()
+        # Scroll shelf: plant matching pending rows before hide-pass so Apply
+        # for a late game (e.g. Cyberpunk) is not an empty grid.
+        try:
+            self._plant_filtered_pending_screenshots()
+        except Exception:
+            logging.debug("filtered pending screenshot plant skipped", exc_info=True)
         for i in range(grid.count()):
             item = grid.item(i)
             if item is None:
