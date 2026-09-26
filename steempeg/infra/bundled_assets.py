@@ -114,6 +114,7 @@ _BASE_ASSETS = (
     # About / easter-egg logo variant.
     "phibechipeegg.png",
     "play2.png",
+    "loupe.png",
     "pause_player.png",
     "windows.png",
     "linux.png",
