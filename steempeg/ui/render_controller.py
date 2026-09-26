@@ -2185,6 +2185,12 @@ class RenderMixin:
             sync_portable_render_button(self)
         else:
             self._sync_dash_render_settings_button()
+        try:
+            filt = getattr(btn, "_press_feedback_filter", None)
+            if filt is not None:
+                filt.sync_rest()
+        except Exception:
+            pass
 
     def _ensure_dash_render_settings_button(self) -> None:
         """Purple «Render Settings» next to Start — Like a Portable mode only."""
@@ -2234,6 +2240,12 @@ class RenderMixin:
         btn.clicked.connect(self.toggle_desktop_render_settings)
         self.btn_render_settings = btn
         self._sync_dash_render_settings_button()
+        try:
+            from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
+
+            install_press_feedback_chip(btn)
+        except Exception:
+            pass
 
     def _sync_dash_render_settings_button(self) -> None:
         btn = getattr(self, "btn_render_settings", None)
@@ -2250,6 +2262,12 @@ class RenderMixin:
             btn.setText(" Close Settings")
         else:
             btn.setText(" Render Settings")
+        try:
+            filt = getattr(btn, "_press_feedback_filter", None)
+            if filt is not None:
+                filt.sync_rest()
+        except Exception:
+            pass
 
     def _desktop_render_layout_is_portable_like(self) -> bool:
         if getattr(self, "_portable_shell", False):
@@ -6600,6 +6618,12 @@ class RenderMixin:
                     " background-color: #262626; color: #5a5a5a; border: 2px solid #333333;"
                     "}"
                 )
+        try:
+            filt = getattr(btn, "_press_feedback_filter", None)
+            if filt is not None:
+                filt.sync_rest()
+        except Exception:
+            pass
 
     def _ensure_desktop_queue_leave_resume_button(self) -> None:
         """Leave/Resume CTA on the desktop render dash beside Render Queue (N)."""
@@ -6655,6 +6679,12 @@ class RenderMixin:
                     break
         row.insertWidget(insert_at, btn)
         self._btn_queue_leave_resume = btn
+        try:
+            from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
+
+            install_press_feedback_chip(btn)
+        except Exception:
+            pass
 
     def _sync_host_queue_resume_buttons(self, *, deferred: bool, busy: bool) -> None:
         """Compat shim for older call sites."""
