@@ -440,14 +440,22 @@ def title_cluster_max_width(app, header: QWidget) -> int:
     dock = measure_right_dock_span(app, spacing)
     gap = _TITLE_DOCK_GAP_PX
 
+    zoom = 0
+    try:
+        from steempeg.ui.player_zoom_chrome import measure_left_zoom_span
+
+        zoom = measure_left_zoom_span(app, spacing)
+    except Exception:
+        zoom = 0
+
     if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
-        # mirror | title band | dock  → middle ≈ content - 2*dock - gaps
-        middle = content - 2 * dock - gap - 2 * max(0, spacing)
+        # zoom | mirror | title band | dock  → middle ≈ content - zoom - 2*dock
+        middle = content - zoom - 2 * dock - gap - 2 * max(0, spacing)
         half_cap = content // 2 - 40
         return max(80, min(middle, half_cap))
 
-    # Left-aligned: title grows from the left until the dock.
-    return max(80, content - dock - gap - max(0, spacing))
+    # Left-aligned: title grows from the left until the dock (after zoom chips).
+    return max(80, content - zoom - dock - gap - max(0, spacing))
 
 
 def _title_text_budget(app, title: QWidget, cluster_max: int) -> int:
@@ -956,6 +964,12 @@ def apply_player_header_layout(app, layout: object | None = None) -> str:
         label.setAlignment(align)
 
     # Never use Ignored: Expanding spacers would collapse icon+name to width 0.
+    try:
+        from steempeg.ui.player_zoom_chrome import pin_player_zoom_dock
+
+        pin_player_zoom_dock(app)
+    except Exception:
+        pass
     sync_centered_title_width(app)
     return mode
 
@@ -1266,4 +1280,12 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
             app.update_playback_badge()
         except Exception:
             pass
+    try:
+        from steempeg.ui.player_zoom_chrome import sync_preview_zoom_chrome
+
+        sync_preview_zoom_chrome(
+            app, font_px=font_px, chip=chip, chip_icon=chip_icon
+        )
+    except Exception:
+        pass
     sync_centered_title_width(app)
