@@ -812,6 +812,12 @@ def _ensure_render_button(app) -> None:
         host_layout.addWidget(btn_render)
     else:
         host_layout.insertWidget(idx, btn_render)
+    try:
+        from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
+
+        install_press_feedback_chip(btn_render)
+    except Exception:
+        pass
 
 
 def _ensure_sheet_garage(app) -> QWidget:
