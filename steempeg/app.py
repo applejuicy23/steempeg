@@ -1870,6 +1870,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 self.update_status_indicator("Ready", "ready")
             if hasattr(self, "apply_desktop_render_layout"):
                 self.apply_desktop_render_layout()
+            try:
+                from steempeg.ui.widgets.press_feedback import (
+                    install_render_chrome_press_feedback,
+                )
+
+                install_render_chrome_press_feedback(self)
+            except Exception:
+                pass
 
         except Exception as e:
             print(f"Error building ultimate monolithic dashboard: {e}")
@@ -2138,6 +2146,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             placeholder=True,
         )
         apply_player_header_layout(self)
+
+        # Left dock: loupe + zoom-% (Vegas-style preview zoom — before status chips).
+        try:
+            from steempeg.ui.player_zoom_chrome import install_player_zoom_chrome
+
+            install_player_zoom_chrome(self)
+        except Exception:
+            pass
 
         # Status chips (health + preview badge) | action chips (close, later: preview settings).
         self.player_header_status = QWidget()
@@ -2432,7 +2448,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 # Connect button signals
                 self.btn_theater.clicked.connect(self.toggle_theater_mode)
                 self.btn_trim.clicked.connect(self.toggle_trim_state)
-                self.btn_fullscreen.clicked.connect(self.toggle_fullscreen) 
+                self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
+                try:
+                    from steempeg.ui.widgets.press_feedback import (
+                        install_press_feedback_chip,
+                    )
+
+                    install_press_feedback_chip(self.btn_trim)
+                except Exception:
+                    pass
                 
                 pill_layout.addWidget(self.btn_theater)
                 pill_layout.addWidget(self.btn_fullscreen)
@@ -6131,12 +6155,19 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 frame.setStyleSheet(ut.player_chrome_pill_stylesheet(radius=chip_r))
 
         # Sync press-feedback rest sizes after transport icon/min changes.
-        from steempeg.ui.widgets.press_feedback import install_press_feedback
+        from steempeg.ui.widgets.press_feedback import (
+            install_press_feedback,
+            install_render_chrome_press_feedback,
+        )
 
         for attr in ("btn_play", "btn_skip_back", "btn_skip_forward"):
             b = getattr(self.ui, attr, None)
             if b is not None:
                 install_press_feedback(b).sync_rest_icon_size()
+        try:
+            install_render_chrome_press_feedback(self)
+        except Exception:
+            pass
 
         # --- Render settings (Source / Video / Audio / Export) ---
         from steempeg.ui.render_panel import apply_settings_panel_density
