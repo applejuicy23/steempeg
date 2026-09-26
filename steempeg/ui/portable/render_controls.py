@@ -251,6 +251,14 @@ class PortableRenderControlStrip(QFrame):
 
         root.addLayout(btn_row)
         self._apply_button_chrome()
+        try:
+            from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
+
+            for attr in ("btn_start", "btn_leave", "btn_pause", "btn_cancel"):
+                install_press_feedback_chip(getattr(self, attr, None))
+            # Logs — no press anim (Emily 26 Sep)
+        except Exception:
+            pass
         self.sync_game_header()
         self.sync_from_app()
 
@@ -582,6 +590,12 @@ class PortableRenderControlStrip(QFrame):
             leave_icon = get_resource_path("exit.png")
             if leave_icon and os.path.isfile(leave_icon):
                 btn.setIcon(QIcon(leave_icon))
+        try:
+            filt = getattr(btn, "_press_feedback_filter", None)
+            if filt is not None:
+                filt.sync_rest()
+        except Exception:
+            pass
 
     def _on_leave_resume(self) -> None:
         if hasattr(self._app, "toggle_render_queue_scheme"):
