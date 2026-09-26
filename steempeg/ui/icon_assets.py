@@ -696,6 +696,15 @@ def preview_badge_icon(size: int = 16, *, color: str = "#ffffff") -> QIcon:
     return _icon_from_pixmap(_glyph_pixmap_from_bw("play2.png", size, color=color))
 
 
+def loupe_icon(size: int = 16, *, color: str = "#c4b0f0") -> QIcon:
+    """Magnifier for the player-header preview-zoom loupe chip."""
+    pix = _glyph_pixmap_from_bw("loupe.png", size, color=color)
+    if pix.isNull():
+        # Fallback if the asset is missing from a sparse pack.
+        return load_icon("loupe.png", size)
+    return _icon_from_pixmap(pix)
+
+
 def preview_settings_icon(size: int = 16) -> QIcon:
     """settings.png for the player header preview-quality chip."""
     return load_icon("settings.png", size)
