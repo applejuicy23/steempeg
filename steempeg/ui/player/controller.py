@@ -620,6 +620,12 @@ class PlayerMixin:
                 self._awaiting_first_frame = False
 
         self._clear_player_surface()
+        try:
+            from steempeg.ui.player_zoom_chrome import reset_preview_zoom
+
+            reset_preview_zoom(self)
+        except Exception:
+            pass
         # NOTE: clearSelection() leaves the *current* index intact, so the badge's
         # fallback (_current_preview_clip_path -> table.currentRow()) still resolved the
         # old clip and the badge never hid. Reset the current index too.
@@ -1226,8 +1232,12 @@ class PlayerMixin:
         Rapid clicks are allowed: each one toggles playback and **interrupts** the
         pulse so the new play/pause glyph restarts immediately. A tiny debounce
         only collapses Win32 duplicate MSG deliveries for the *same* physical click.
+        Skip when a zoom-pan drag just finished (drag ≠ click).
         """
         if getattr(self, "_is_closing", False):
+            return
+        if getattr(self, "_preview_zoom_suppress_click", False):
+            self._preview_zoom_suppress_click = False
             return
         now = time.monotonic()
         ignore_until = float(getattr(self, "_video_surface_ignore_until", 0.0) or 0.0)
@@ -1252,11 +1262,82 @@ class PlayerMixin:
             self.wake_up_fullscreen_controls()
         self.toggle_play(pulse=True)
 
-    def install_video_surface_click_handler(self) -> None:
-        """Catch LMB on the video surface → play/pause pulse.
+    def _preview_zoom_surface_size(self) -> tuple[int, int]:
+        screen = getattr(self, "mpv_screen", None)
+        if screen is None:
+            return (1, 1)
+        try:
+            return (max(1, int(screen.width())), max(1, int(screen.height())))
+        except RuntimeError:
+            return (1, 1)
 
-        Windows: embedded mpv ``wid=`` HWND — ``WM_LBUTTONUP`` via native filter only
-        (a translucent Qt sibling painted black; Qt mouse on the embed is unreliable).
+    def _preview_zoom_pan_begin(self, x: float, y: float) -> bool:
+        """Start a potential pan when zoomed. Returns True if pan mode is active."""
+        try:
+            from steempeg.ui.player_zoom_chrome import is_preview_zoomed
+
+            if not is_preview_zoomed(self):
+                self._preview_zoom_drag = None
+                return False
+        except Exception:
+            self._preview_zoom_drag = None
+            return False
+        self._preview_zoom_drag = {
+            "x": float(x),
+            "y": float(y),
+            "moved": False,
+        }
+        self._preview_zoom_suppress_click = False
+        return True
+
+    def _preview_zoom_pan_move(self, x: float, y: float) -> bool:
+        """Update pan from drag. Returns True if this event was consumed as a pan."""
+        drag = getattr(self, "_preview_zoom_drag", None)
+        if not drag:
+            return False
+        dx = float(x) - float(drag["x"])
+        dy = float(y) - float(drag["y"])
+        if not drag["moved"]:
+            if (dx * dx + dy * dy) < 9.0:  # ~3px threshold
+                return False
+            drag["moved"] = True
+            screen = getattr(self, "mpv_screen", None)
+            if screen is not None:
+                try:
+                    screen.setCursor(Qt.CursorShape.ClosedHandCursor)
+                except RuntimeError:
+                    pass
+        drag["x"] = float(x)
+        drag["y"] = float(y)
+        try:
+            from steempeg.ui.player_zoom_chrome import nudge_preview_pan
+
+            w, h = self._preview_zoom_surface_size()
+            nudge_preview_pan(self, dx, dy, surface_w=w, surface_h=h)
+        except Exception:
+            pass
+        return True
+
+    def _preview_zoom_pan_end(self) -> bool:
+        """Finish pan. Returns True if a real drag happened (suppress play/pause)."""
+        drag = getattr(self, "_preview_zoom_drag", None)
+        self._preview_zoom_drag = None
+        moved = bool(drag and drag.get("moved"))
+        if moved:
+            self._preview_zoom_suppress_click = True
+        try:
+            from steempeg.ui.player_zoom_chrome import sync_preview_zoom_cursor
+
+            sync_preview_zoom_cursor(self)
+        except Exception:
+            pass
+        return moved
+
+    def install_video_surface_click_handler(self) -> None:
+        """Catch LMB on the video surface → play/pause pulse (or pan when zoomed).
+
+        Windows: embedded mpv ``wid=`` HWND — ``WM_LBUTTON*`` / ``WM_MOUSEMOVE`` via
+        native filter (Qt mouse on the embed is unreliable).
         Linux: Qt event filter on ``mpv_screen``.
         """
         if getattr(self, "_video_surface_click_handler_installed", False):
@@ -1265,9 +1346,14 @@ class PlayerMixin:
 
         if sys.platform == "win32":
             self._install_video_surface_native_click_filter()
-            screen = getattr(self, "mpv_screen", None)
-            if screen is not None:
-                screen.setCursor(Qt.CursorShape.ArrowCursor)
+            try:
+                from steempeg.ui.player_zoom_chrome import sync_preview_zoom_cursor
+
+                sync_preview_zoom_cursor(self)
+            except Exception:
+                screen = getattr(self, "mpv_screen", None)
+                if screen is not None:
+                    screen.setCursor(Qt.CursorShape.ArrowCursor)
             return
 
         class _VideoSurfaceClickFilter(QObject):
@@ -1276,24 +1362,47 @@ class PlayerMixin:
                 self._app = app
 
             def eventFilter(self, obj, event):  # noqa: N802
-                if event.type() != QEvent.Type.MouseButtonRelease:
-                    return False
-                if event.button() != Qt.MouseButton.LeftButton:
-                    return False
                 if obj is not getattr(self._app, "mpv_screen", None):
                     return False
-                self._app._on_video_surface_click()
-                return True
+                et = event.type()
+                if et == QEvent.Type.MouseButtonPress:
+                    if event.button() != Qt.MouseButton.LeftButton:
+                        return False
+                    pos = event.position() if hasattr(event, "position") else event.pos()
+                    self._app._preview_zoom_pan_begin(float(pos.x()), float(pos.y()))
+                    return False
+                if et == QEvent.Type.MouseMove:
+                    if not (event.buttons() & Qt.MouseButton.LeftButton):
+                        return False
+                    pos = event.position() if hasattr(event, "position") else event.pos()
+                    if self._app._preview_zoom_pan_move(float(pos.x()), float(pos.y())):
+                        return True
+                    return False
+                if et == QEvent.Type.MouseButtonRelease:
+                    if event.button() != Qt.MouseButton.LeftButton:
+                        return False
+                    moved = self._app._preview_zoom_pan_end()
+                    if moved:
+                        return True
+                    self._app._on_video_surface_click()
+                    return True
+                return False
 
         filt = _VideoSurfaceClickFilter(self)
         self._video_surface_click_filter = filt
         screen = getattr(self, "mpv_screen", None)
         if screen is not None:
             screen.installEventFilter(filt)
-            screen.setCursor(Qt.CursorShape.ArrowCursor)
+            screen.setMouseTracking(True)
+            try:
+                from steempeg.ui.player_zoom_chrome import sync_preview_zoom_cursor
+
+                sync_preview_zoom_cursor(self)
+            except Exception:
+                screen.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _install_video_surface_native_click_filter(self) -> None:
-        """Win32: LMB up on the embed (or pulse tool) HWND → play/pause."""
+        """Win32: LMB / move on the embed (or pulse tool) HWND → pan or play/pause."""
         if getattr(self, "_video_surface_native_click_filter", None) is not None:
             return
         try:
@@ -1305,6 +1414,8 @@ class PlayerMixin:
 
         _WM_LBUTTONDOWN = 0x0201
         _WM_LBUTTONUP = 0x0202
+        _WM_MOUSEMOVE = 0x0200
+        _MK_LBUTTON = 0x0001
 
         class _MpvSurfaceClickNativeFilter(QAbstractNativeEventFilter):
             def __init__(self, app):
@@ -1343,6 +1454,16 @@ class PlayerMixin:
                     return True
                 return False
 
+            @staticmethod
+            def _client_xy(lparam: int) -> tuple[float, float]:
+                x = int(lparam & 0xFFFF)
+                if x >= 0x8000:
+                    x -= 0x10000
+                y = int((lparam >> 16) & 0xFFFF)
+                if y >= 0x8000:
+                    y -= 0x10000
+                return (float(x), float(y))
+
             def nativeEventFilter(self, eventType, message):  # noqa: N802
                 # One channel only — handling both generic + dispatcher double-fires
                 # toggle (play then immediate pause).
@@ -1359,23 +1480,43 @@ class PlayerMixin:
                     return False
 
                 hwnd = int(msg.hwnd) if msg.hwnd else 0
+                app = self._app
 
                 if msg.message == _WM_LBUTTONDOWN:
                     # Must be the video HWND itself. Point-in-video was wrong: in
                     # fullscreen the HUD sits over the picture, so every button
                     # click (and fullscreen enter/exit) also toggled play/pause.
                     self._armed = self._is_surface_click_hwnd(hwnd)
+                    if self._armed:
+                        x, y = self._client_xy(int(msg.lParam))
+                        app._preview_zoom_pan_begin(x, y)
                     return False
+
+                if msg.message == _WM_MOUSEMOVE:
+                    if not self._armed:
+                        return False
+                    if not (int(msg.wParam) & _MK_LBUTTON):
+                        return False
+                    if not self._is_surface_click_hwnd(hwnd):
+                        return False
+                    x, y = self._client_xy(int(msg.lParam))
+                    app._preview_zoom_pan_move(x, y)
+                    return False
+
                 if msg.message != _WM_LBUTTONUP:
                     return False
                 if not self._armed:
                     return False
                 self._armed = False
                 if not self._is_surface_click_hwnd(hwnd):
+                    app._preview_zoom_pan_end()
                     return False
 
-                app = self._app
                 if getattr(app, "_is_closing", False):
+                    app._preview_zoom_pan_end()
+                    return False
+                moved = app._preview_zoom_pan_end()
+                if moved:
                     return False
                 # Defer so we don't re-enter Win32 dispatch from inside the filter.
                 QTimer.singleShot(0, app._on_video_surface_click)
@@ -2933,6 +3074,12 @@ class PlayerMixin:
                 self.btn_trim.setText("✂️ Trim")
             self.btn_trim.setStyleSheet(STYLE_TRIM_BUTTON)
             self._apply_video_border(False)
+        try:
+            filt = getattr(self.btn_trim, "_press_feedback_filter", None)
+            if filt is not None:
+                filt.sync_rest()
+        except Exception:
+            pass
         from steempeg.ui.player.controls.adaptive_trim_tools import (
             sync_trim_tools_placement,
         )
@@ -3418,6 +3565,13 @@ class PlayerMixin:
             QTimer.singleShot(
                 150 if has_trim else 50, self._deferred_apply_open_seek
             )
+        # Re-push preview zoom — mpv may have reset pan/zoom on the new file.
+        try:
+            from steempeg.ui.player_zoom_chrome import apply_preview_zoom
+
+            apply_preview_zoom(self)
+        except Exception:
+            pass
         # Health badge / quality populate after first paint — markers load in parallel.
         self._flush_deferred_clip_open_work(switch_gen)
 
@@ -3790,6 +3944,12 @@ class PlayerMixin:
         self._active_play_media_path = file_path
         self._preview_clip_path = file_path
         self._rendered_media_path = file_path
+        try:
+            from steempeg.ui.player_zoom_chrome import reset_preview_zoom
+
+            reset_preview_zoom(self)
+        except Exception:
+            pass
         self._rendered_duration_cache = None
         self._pending_trim_restore = None
         if hasattr(self, "_sync_library_mode_chrome"):
@@ -4339,6 +4499,12 @@ class PlayerMixin:
 
         self._opening_clip_path = clip_path
         self._preview_clip_path = clip_path
+        try:
+            from steempeg.ui.player_zoom_chrome import reset_preview_zoom
+
+            reset_preview_zoom(self)
+        except Exception:
+            pass
         # Raw clip is active now — re-show dash/settings only when dock was hidden
         # (Screenshots / rendered-only). Skip geometry churn while already open.
         if hasattr(self, "_sync_library_mode_chrome"):
