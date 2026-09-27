@@ -1,6 +1,7 @@
 """Player-header loupe + Vegas-style preview zoom (mpv video-zoom / pan).
 
 Preview only — never touches export / FFmpeg / queue math.
+Zoom/pan reset on clip change; nothing is persisted across sessions.
 """
 from __future__ import annotations
 
