@@ -63,12 +63,14 @@ def _chip_qss(
     font_px: int,
     active: bool = False,
 ) -> str:
+    # Glyphs/label stay white; purple is border/fill only (Emily 28 Sep).
+    fg = "#ffffff"
     # Active loupe = filled chip so the arm/disarm state reads at a glance.
     if active:
         return (
             "QPushButton {"
             f"background-color: rgba({accent_rgb}, 0.55);"
-            f"color: {accent};"
+            f"color: {fg};"
             f"border: 2px solid {accent};"
             "border-radius: 8px;"
             f"font-family: {tok.FONT_APP};"
@@ -82,7 +84,7 @@ def _chip_qss(
     return (
         "QPushButton {"
         f"background-color: rgba({accent_rgb}, 0.18);"
-        f"color: {accent};"
+        f"color: {fg};"
         f"border: 2px solid {accent};"
         "border-radius: 8px;"
         f"font-family: {tok.FONT_APP};"
@@ -123,7 +125,7 @@ def install_player_zoom_chrome(app) -> QWidget | None:
     btn_loupe.setCheckable(True)
     btn_loupe.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_loupe.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    btn_loupe.setToolTip("Loupe: click to arm, then scroll-wheel over video to zoom")
+    btn_loupe.setToolTip("Loupe: click to arm — wheel zooms toward cursor; drag pans")
     btn_loupe.setAccessibleName("Preview loupe")
 
     btn_pct = QPushButton()
@@ -152,8 +154,9 @@ def install_player_zoom_chrome(app) -> QWidget | None:
     try:
         from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
 
-        install_press_feedback_chip(btn_loupe)
-        install_press_feedback_chip(btn_pct)
+        # Match QSS border-radius: 8 — half-height pill mask looked square on these chips.
+        install_press_feedback_chip(btn_loupe, chip_radius=8.0)
+        install_press_feedback_chip(btn_pct, chip_radius=8.0)
     except Exception:
         pass
 
@@ -260,14 +263,14 @@ def sync_preview_zoom_chrome(
     btn_loupe.setFixedSize(int(chip), int(chip))
     btn_loupe.setStyleSheet(loupe_qss)
     btn_loupe.setToolTip(
-        "Loupe on — scroll-wheel over video to zoom (click to disarm)"
+        "Loupe on — wheel zooms toward cursor; LMB/RMB drag pans (click to disarm)"
         if armed
-        else "Loupe off — click to arm, then scroll-wheel over video to zoom"
+        else "Loupe off — click to arm: wheel zooms toward cursor, drag pans when zoomed"
     )
     try:
         from steempeg.ui.icon_assets import loupe_icon
 
-        btn_loupe.setIcon(loupe_icon(int(chip_icon)))
+        btn_loupe.setIcon(loupe_icon(int(chip_icon), color="#ffffff"))
         btn_loupe.setIconSize(QSize(int(chip_icon), int(chip_icon)))
         btn_loupe.setText("")
     except Exception:
@@ -285,6 +288,15 @@ def sync_preview_zoom_chrome(
     btn_pct.setMaximumWidth(16777215)
     btn_pct.setStyleSheet(pct_qss)
     btn_pct.setText(f" {pct}% ▾ ")
+
+    # Keep ClipCard press radius matched to QSS (8px) after density/restyle.
+    try:
+        from steempeg.ui.widgets.press_feedback import install_press_feedback_chip
+
+        install_press_feedback_chip(btn_loupe, chip_radius=8.0)
+        install_press_feedback_chip(btn_pct, chip_radius=8.0)
+    except Exception:
+        pass
 
 
 def apply_preview_zoom(
@@ -324,10 +336,27 @@ def set_preview_zoom_pct(app, pct: int) -> None:
         apply_preview_zoom(app, target)
 
 
-def nudge_preview_zoom_wheel(app, delta_y: float) -> bool:
+def _clamp_pan(pan_x: float, pan_y: float, scale: float) -> tuple[float, float]:
+    limit = max(0.0, 1.0 - (1.0 / max(scale, 0.01))) + 0.15
+    return (
+        max(-limit, min(limit, float(pan_x))),
+        max(-limit, min(limit, float(pan_y))),
+    )
+
+
+def nudge_preview_zoom_wheel(
+    app,
+    delta_y: float,
+    *,
+    cursor_x: float | None = None,
+    cursor_y: float | None = None,
+    surface_w: int | None = None,
+    surface_h: int | None = None,
+) -> bool:
     """Scroll-wheel zoom while loupe is armed. ``delta_y`` > 0 = zoom in.
 
-    Returns True if the event was consumed.
+    When cursor + surface size are given, zoom toward the cursor (pan adjusts so
+    the point under the pointer stays put). Returns True if consumed.
     """
     if not is_preview_loupe_armed(app):
         return False
@@ -341,10 +370,34 @@ def nudge_preview_zoom_wheel(app, delta_y: float) -> bool:
     nxt = clamp_zoom_pct(cur + int(round(steps * ZOOM_WHEEL_STEP_PCT)))
     if nxt == cur:
         return True
+
     if nxt <= DEFAULT_ZOOM_PCT:
         apply_preview_zoom(app, nxt, pan=(0.0, 0.0))
-    else:
-        apply_preview_zoom(app, nxt)
+        return True
+
+    old_s = max(0.01, float(cur) / 100.0)
+    new_s = max(0.01, float(nxt) / 100.0)
+    pan = getattr(app, "_preview_zoom_pan", (0.0, 0.0)) or (0.0, 0.0)
+    px, py = float(pan[0]), float(pan[1])
+
+    w = int(surface_w or 0)
+    h = int(surface_h or 0)
+    if (
+        cursor_x is not None
+        and cursor_y is not None
+        and w > 0
+        and h > 0
+        and abs(new_s - old_s) > 1e-6
+    ):
+        # Screen offset from center as a fraction of the surface.
+        ox = (float(cursor_x) / float(w)) - 0.5
+        oy = (float(cursor_y) / float(h)) - 0.5
+        # Keep the content point under the cursor stable across the scale change.
+        px = px + ox * (1.0 / old_s - 1.0 / new_s)
+        py = py + oy * (1.0 / old_s - 1.0 / new_s)
+        px, py = _clamp_pan(px, py, new_s)
+
+    apply_preview_zoom(app, nxt, pan=(px, py))
     return True
 
 
@@ -490,10 +543,7 @@ def nudge_preview_pan(
     d_x = float(dx_px) / float(w) / scale
     d_y = float(dy_px) / float(h) / scale
     cur = getattr(app, "_preview_zoom_pan", (0.0, 0.0)) or (0.0, 0.0)
-    # Soft clamp so you can't lose the frame entirely.
-    limit = max(0.0, 1.0 - (1.0 / scale)) + 0.15
-    nx = max(-limit, min(limit, float(cur[0]) + d_x))
-    ny = max(-limit, min(limit, float(cur[1]) + d_y))
+    nx, ny = _clamp_pan(float(cur[0]) + d_x, float(cur[1]) + d_y, scale)
     app._preview_zoom_pan = (nx, ny)
     player = getattr(app, "player", None)
     if player is None:
