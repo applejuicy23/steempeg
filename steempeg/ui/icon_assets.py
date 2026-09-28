@@ -696,7 +696,7 @@ def preview_badge_icon(size: int = 16, *, color: str = "#ffffff") -> QIcon:
     return _icon_from_pixmap(_glyph_pixmap_from_bw("play2.png", size, color=color))
 
 
-def loupe_icon(size: int = 16, *, color: str = "#c4b0f0") -> QIcon:
+def loupe_icon(size: int = 16, *, color: str = "#ffffff") -> QIcon:
     """Magnifier for the player-header preview-zoom loupe chip."""
     pix = _glyph_pixmap_from_bw("loupe.png", size, color=color)
     if pix.isNull():
