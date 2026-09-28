@@ -1365,6 +1365,16 @@ class PlayerMixin:
                 if obj is not getattr(self._app, "mpv_screen", None):
                     return False
                 et = event.type()
+                if et == QEvent.Type.Wheel:
+                    try:
+                        from steempeg.ui.player_zoom_chrome import nudge_preview_zoom_wheel
+
+                        delta = event.angleDelta().y()
+                        if nudge_preview_zoom_wheel(self._app, float(delta)):
+                            return True
+                    except Exception:
+                        pass
+                    return False
                 if et == QEvent.Type.MouseButtonPress:
                     if event.button() != Qt.MouseButton.LeftButton:
                         return False
@@ -1415,6 +1425,7 @@ class PlayerMixin:
         _WM_LBUTTONDOWN = 0x0201
         _WM_LBUTTONUP = 0x0202
         _WM_MOUSEMOVE = 0x0200
+        _WM_MOUSEWHEEL = 0x020A
         _MK_LBUTTON = 0x0001
 
         class _MpvSurfaceClickNativeFilter(QAbstractNativeEventFilter):
@@ -1454,6 +1465,22 @@ class PlayerMixin:
                     return True
                 return False
 
+            def _cursor_over_mpv(self) -> bool:
+                """True when the cursor sits over the embed (wheel often hits Qt parent)."""
+                screen = getattr(self._app, "mpv_screen", None)
+                if screen is None:
+                    return False
+                try:
+                    if not screen.isVisible():
+                        return False
+                    from PySide6.QtGui import QCursor
+
+                    gp = QCursor.pos()
+                    local = screen.mapFromGlobal(gp)
+                    return screen.rect().contains(local)
+                except Exception:
+                    return False
+
             @staticmethod
             def _client_xy(lparam: int) -> tuple[float, float]:
                 x = int(lparam & 0xFFFF)
@@ -1463,6 +1490,13 @@ class PlayerMixin:
                 if y >= 0x8000:
                     y -= 0x10000
                 return (float(x), float(y))
+
+            @staticmethod
+            def _wheel_delta(wparam: int) -> float:
+                delta = (int(wparam) >> 16) & 0xFFFF
+                if delta >= 0x8000:
+                    delta -= 0x10000
+                return float(delta)
 
             def nativeEventFilter(self, eventType, message):  # noqa: N802
                 # One channel only — handling both generic + dispatcher double-fires
@@ -1481,6 +1515,25 @@ class PlayerMixin:
 
                 hwnd = int(msg.hwnd) if msg.hwnd else 0
                 app = self._app
+
+                if msg.message == _WM_MOUSEWHEEL:
+                    # Embed wid= often does not own focus — wheel may target a Qt parent.
+                    if not (
+                        self._is_surface_click_hwnd(hwnd) or self._cursor_over_mpv()
+                    ):
+                        return False
+                    try:
+                        from steempeg.ui.player_zoom_chrome import (
+                            nudge_preview_zoom_wheel,
+                        )
+
+                        if nudge_preview_zoom_wheel(
+                            app, self._wheel_delta(int(msg.wParam))
+                        ):
+                            return True
+                    except Exception:
+                        pass
+                    return False
 
                 if msg.message == _WM_LBUTTONDOWN:
                     # Must be the video HWND itself. Point-in-video was wrong: in
