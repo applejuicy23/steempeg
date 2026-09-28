@@ -27,12 +27,16 @@ def install_press_feedback(
     pressed_scale: float | None = None,
     duration_ms: int | None = None,
     mode: str = "icon",
+    chip_radius: float | None = None,
 ) -> PressFeedbackFilter:
     """Attach press feedback; safe to call once per button.
 
     ``mode``:
       * ``icon`` — shrink ``iconSize`` (player transport).
       * ``chip`` — ClipCard-style whole-control snapshot scale.
+
+    ``chip_radius`` — optional paint/mask radius for ``mode="chip"`` (header chips
+    use 8 to match QSS; dash pills omit and keep half-height).
     """
     if mode == "chip":
         if pressed_scale is None:
@@ -51,6 +55,8 @@ def install_press_feedback(
             existing.mode = mode
         existing._pressed_scale = float(pressed_scale)
         existing._duration = max(40, int(duration_ms))
+        if chip_radius is not None:
+            existing._chip_radius_override = float(chip_radius)
         existing.sync_rest()
         return existing
     filt = PressFeedbackFilter(
@@ -58,6 +64,7 @@ def install_press_feedback(
         pressed_scale=float(pressed_scale),
         duration_ms=int(duration_ms),
         mode=mode,
+        chip_radius=chip_radius,
     )
     button._press_feedback_filter = filt  # type: ignore[attr-defined]
     return filt
@@ -68,6 +75,7 @@ def install_press_feedback_chip(
     *,
     pressed_scale: float | None = None,
     duration_ms: int | None = None,
+    chip_radius: float | None = None,
 ) -> PressFeedbackFilter | None:
     """ClipCard-style whole-chip press. No-op on ``None``."""
     if button is None:
@@ -81,6 +89,7 @@ def install_press_feedback_chip(
         pressed_scale=pressed_scale,
         duration_ms=duration_ms,
         mode="chip",
+        chip_radius=chip_radius,
     )
 
 
@@ -120,12 +129,16 @@ class PressFeedbackFilter(QObject):
         pressed_scale: float = 0.88,
         duration_ms: int = 80,
         mode: str = "icon",
+        chip_radius: float | None = None,
     ):
         super().__init__(button)
         self._btn = button
         self._pressed_scale = float(pressed_scale)
         self._duration = max(40, int(duration_ms))
         self.mode = "chip" if mode == "chip" else "icon"
+        self._chip_radius_override = (
+            float(chip_radius) if chip_radius is not None else None
+        )
         self._rest_icon: QSize | None = None
         self._scale = 1.0
         self._anim: QVariantAnimation | None = None
@@ -177,6 +190,8 @@ class PressFeedbackFilter(QObject):
             pass
 
     def _chip_radius(self, w: int, h: int) -> float:
+        if self._chip_radius_override is not None:
+            return max(2.0, float(self._chip_radius_override))
         # Dash / Trim chips are pills: radius ≈ half height (same as _fmt_dash_btn).
         return float(max(8, h // 2))
 
@@ -312,13 +327,17 @@ class PressFeedbackFilter(QObject):
             and self._snapshot is not None
             and not self._snapshot.isNull()
         ):
-            # ClipCard language: backdrop + rounded clip + grab scaled about center.
+            # ClipCard language: rounded clip + backdrop + grab scaled about center.
+            # Clip first so a scaled-down snap never leaves square widget corners.
             p = QPainter(self._btn)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             w = max(1, int(self._btn.width()))
             h = max(1, int(self._btn.height()))
-            # Clear the rectangular widget slot with the dash/footer fill.
+            radius = self._chip_radius(w, h)
+            path = QPainterPath()
+            path.addRoundedRect(0.5, 0.5, w - 1.0, h - 1.0, radius, radius)
+            p.setClipPath(path)
             p.fillRect(0, 0, w, h, self._backdrop)
             scale = float(self._scale)
             if abs(scale - 1.0) > 0.001:
