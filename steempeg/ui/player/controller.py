@@ -1271,8 +1271,12 @@ class PlayerMixin:
         except RuntimeError:
             return (1, 1)
 
-    def _preview_zoom_pan_begin(self, x: float, y: float) -> bool:
-        """Start a potential pan when zoomed. Returns True if pan mode is active."""
+    def _preview_zoom_pan_begin(self, x: float, y: float, *, button: str = "left") -> bool:
+        """Start a potential pan when zoomed. Returns True if pan mode is active.
+
+        Loupe mode: LMB or RMB drag pans. Outside loupe: LMB pan still works when
+        zoomed (e.g. scale set from the % menu).
+        """
         try:
             from steempeg.ui.player_zoom_chrome import is_preview_zoomed
 
@@ -1286,8 +1290,13 @@ class PlayerMixin:
             "x": float(x),
             "y": float(y),
             "moved": False,
+            "button": button,
         }
-        self._preview_zoom_suppress_click = False
+        # RMB never toggles play/pause; LMB suppresses only after a real drag.
+        if button == "right":
+            self._preview_zoom_suppress_click = True
+        else:
+            self._preview_zoom_suppress_click = False
         return True
 
     def _preview_zoom_pan_move(self, x: float, y: float) -> bool:
@@ -1370,28 +1379,60 @@ class PlayerMixin:
                         from steempeg.ui.player_zoom_chrome import nudge_preview_zoom_wheel
 
                         delta = event.angleDelta().y()
-                        if nudge_preview_zoom_wheel(self._app, float(delta)):
+                        try:
+                            pos = event.position()
+                            cx, cy = float(pos.x()), float(pos.y())
+                        except Exception:
+                            p = event.pos()
+                            cx, cy = float(p.x()), float(p.y())
+                        w, h = self._app._preview_zoom_surface_size()
+                        if nudge_preview_zoom_wheel(
+                            self._app,
+                            float(delta),
+                            cursor_x=cx,
+                            cursor_y=cy,
+                            surface_w=w,
+                            surface_h=h,
+                        ):
                             return True
                     except Exception:
                         pass
                     return False
                 if et == QEvent.Type.MouseButtonPress:
-                    if event.button() != Qt.MouseButton.LeftButton:
+                    btn = event.button()
+                    if btn not in (
+                        Qt.MouseButton.LeftButton,
+                        Qt.MouseButton.RightButton,
+                    ):
                         return False
                     pos = event.position() if hasattr(event, "position") else event.pos()
-                    self._app._preview_zoom_pan_begin(float(pos.x()), float(pos.y()))
-                    return False
+                    which = "right" if btn == Qt.MouseButton.RightButton else "left"
+                    self._app._preview_zoom_pan_begin(
+                        float(pos.x()), float(pos.y()), button=which
+                    )
+                    # Eat RMB so a context menu does not steal the pan gesture.
+                    return which == "right"
                 if et == QEvent.Type.MouseMove:
-                    if not (event.buttons() & Qt.MouseButton.LeftButton):
+                    buttons = event.buttons()
+                    if not (
+                        buttons & Qt.MouseButton.LeftButton
+                        or buttons & Qt.MouseButton.RightButton
+                    ):
                         return False
                     pos = event.position() if hasattr(event, "position") else event.pos()
                     if self._app._preview_zoom_pan_move(float(pos.x()), float(pos.y())):
                         return True
                     return False
                 if et == QEvent.Type.MouseButtonRelease:
-                    if event.button() != Qt.MouseButton.LeftButton:
+                    btn = event.button()
+                    if btn not in (
+                        Qt.MouseButton.LeftButton,
+                        Qt.MouseButton.RightButton,
+                    ):
                         return False
                     moved = self._app._preview_zoom_pan_end()
+                    if btn == Qt.MouseButton.RightButton:
+                        return True
                     if moved:
                         return True
                     self._app._on_video_surface_click()
@@ -1424,15 +1465,19 @@ class PlayerMixin:
 
         _WM_LBUTTONDOWN = 0x0201
         _WM_LBUTTONUP = 0x0202
+        _WM_RBUTTONDOWN = 0x0204
+        _WM_RBUTTONUP = 0x0205
         _WM_MOUSEMOVE = 0x0200
         _WM_MOUSEWHEEL = 0x020A
         _MK_LBUTTON = 0x0001
+        _MK_RBUTTON = 0x0002
 
         class _MpvSurfaceClickNativeFilter(QAbstractNativeEventFilter):
             def __init__(self, app):
                 super().__init__()
                 self._app = app
                 self._armed = False
+                self._armed_button = "left"
 
             def _mpv_hwnd(self) -> int:
                 screen = getattr(self._app, "mpv_screen", None)
@@ -1481,6 +1526,18 @@ class PlayerMixin:
                 except Exception:
                     return False
 
+            def _cursor_local_xy(self) -> tuple[float, float]:
+                screen = getattr(self._app, "mpv_screen", None)
+                if screen is None:
+                    return (0.0, 0.0)
+                try:
+                    from PySide6.QtGui import QCursor
+
+                    local = screen.mapFromGlobal(QCursor.pos())
+                    return (float(local.x()), float(local.y()))
+                except Exception:
+                    return (0.0, 0.0)
+
             @staticmethod
             def _client_xy(lparam: int) -> tuple[float, float]:
                 x = int(lparam & 0xFFFF)
@@ -1527,8 +1584,15 @@ class PlayerMixin:
                             nudge_preview_zoom_wheel,
                         )
 
+                        cx, cy = self._cursor_local_xy()
+                        w, h = app._preview_zoom_surface_size()
                         if nudge_preview_zoom_wheel(
-                            app, self._wheel_delta(int(msg.wParam))
+                            app,
+                            self._wheel_delta(int(msg.wParam)),
+                            cursor_x=cx,
+                            cursor_y=cy,
+                            surface_w=w,
+                            surface_h=h,
                         ):
                             return True
                     except Exception:
@@ -1536,29 +1600,50 @@ class PlayerMixin:
                     return False
 
                 if msg.message == _WM_LBUTTONDOWN:
-                    # Must be the video HWND itself. Point-in-video was wrong: in
-                    # fullscreen the HUD sits over the picture, so every button
-                    # click (and fullscreen enter/exit) also toggled play/pause.
                     self._armed = self._is_surface_click_hwnd(hwnd)
+                    self._armed_button = "left"
                     if self._armed:
                         x, y = self._client_xy(int(msg.lParam))
-                        app._preview_zoom_pan_begin(x, y)
+                        app._preview_zoom_pan_begin(x, y, button="left")
                     return False
+
+                if msg.message == _WM_RBUTTONDOWN:
+                    if not self._is_surface_click_hwnd(hwnd):
+                        return False
+                    self._armed = True
+                    self._armed_button = "right"
+                    x, y = self._client_xy(int(msg.lParam))
+                    app._preview_zoom_pan_begin(x, y, button="right")
+                    # Consume so Windows does not raise a context menu mid-pan.
+                    return True
 
                 if msg.message == _WM_MOUSEMOVE:
                     if not self._armed:
                         return False
-                    if not (int(msg.wParam) & _MK_LBUTTON):
+                    buttons = int(msg.wParam)
+                    want = (
+                        _MK_RBUTTON
+                        if self._armed_button == "right"
+                        else _MK_LBUTTON
+                    )
+                    if not (buttons & want):
                         return False
                     if not self._is_surface_click_hwnd(hwnd):
                         return False
                     x, y = self._client_xy(int(msg.lParam))
                     app._preview_zoom_pan_move(x, y)
-                    return False
+                    return self._armed_button == "right"
+
+                if msg.message == _WM_RBUTTONUP:
+                    if not self._armed or self._armed_button != "right":
+                        return False
+                    self._armed = False
+                    app._preview_zoom_pan_end()
+                    return True
 
                 if msg.message != _WM_LBUTTONUP:
                     return False
-                if not self._armed:
+                if not self._armed or self._armed_button != "left":
                     return False
                 self._armed = False
                 if not self._is_surface_click_hwnd(hwnd):
