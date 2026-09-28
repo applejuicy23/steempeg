@@ -1,7 +1,10 @@
-"""Player-header loupe + Vegas-style preview zoom (mpv video-zoom / pan).
+"""Player-header loupe + Vegas-style preview zoom (mpv scale / pan).
 
 Preview only — never touches export / FFmpeg / queue math.
 Zoom/pan reset on clip change; nothing is persisted across sessions.
+
+Loupe chip = arm/disarm scroll-wheel zoom on the video surface.
+% chip = discrete ladder (or shows the live wheel level).
 """
 from __future__ import annotations
 
@@ -17,41 +20,65 @@ from steempeg.ui import ui_theme as ut
 
 ZOOM_LADDER: tuple[int, ...] = (100, 125, 150, 200, 300)
 DEFAULT_ZOOM_PCT = 100
+ZOOM_MIN_PCT = 100
+ZOOM_MAX_PCT = 400
+# One notch of the mouse wheel ≈ this many percent.
+ZOOM_WHEEL_STEP_PCT = 10
 
 _LOG = logging.getLogger(__name__)
 
 
-def normalize_zoom_pct(value: object | None) -> int:
+def clamp_zoom_pct(value: object | None) -> int:
+    """Continuous zoom percent (wheel / live level), clamped to the allowed range."""
     try:
         pct = int(round(float(value)))
     except (TypeError, ValueError):
         return DEFAULT_ZOOM_PCT
+    return max(ZOOM_MIN_PCT, min(ZOOM_MAX_PCT, pct))
+
+
+def snap_zoom_pct(value: object | None) -> int:
+    """Snap to the nearest ladder step (menu picks)."""
+    pct = clamp_zoom_pct(value)
     if pct in ZOOM_LADDER:
         return pct
-    # Snap to nearest ladder step.
     return min(ZOOM_LADDER, key=lambda s: abs(s - pct))
+
+
+def normalize_zoom_pct(value: object | None) -> int:
+    """Back-compat alias — continuous clamp (label / mpv use live %)."""
+    return clamp_zoom_pct(value)
 
 
 def pct_to_video_zoom(pct: int) -> float:
     """UI percent → mpv ``video-zoom`` (log2 scale factor)."""
-    scale = max(0.01, float(normalize_zoom_pct(pct)) / 100.0)
+    scale = max(0.01, float(clamp_zoom_pct(pct)) / 100.0)
     return math.log2(scale)
 
 
-def next_zoom_pct(current: int) -> int:
-    """Loupe click: advance one step; wrap from top back to 100%."""
-    cur = normalize_zoom_pct(current)
-    try:
-        idx = ZOOM_LADDER.index(cur)
-    except ValueError:
-        return DEFAULT_ZOOM_PCT
-    nxt = idx + 1
-    if nxt >= len(ZOOM_LADDER):
-        return DEFAULT_ZOOM_PCT
-    return ZOOM_LADDER[nxt]
-
-
-def _chip_qss(*, accent: str, accent_rgb: str, font_px: int) -> str:
+def _chip_qss(
+    *,
+    accent: str,
+    accent_rgb: str,
+    font_px: int,
+    active: bool = False,
+) -> str:
+    # Active loupe = filled chip so the arm/disarm state reads at a glance.
+    if active:
+        return (
+            "QPushButton {"
+            f"background-color: rgba({accent_rgb}, 0.55);"
+            f"color: {accent};"
+            f"border: 2px solid {accent};"
+            "border-radius: 8px;"
+            f"font-family: {tok.FONT_APP};"
+            "font-weight: bold;"
+            f"font-size: {font_px}px;"
+            "padding: 0px 8px;"
+            "}"
+            f"QPushButton:hover {{ background-color: rgba({accent_rgb}, 0.68); }}"
+            f"QPushButton:pressed {{ background-color: rgba({accent_rgb}, 0.80); }}"
+        )
     return (
         "QPushButton {"
         f"background-color: rgba({accent_rgb}, 0.18);"
@@ -93,16 +120,17 @@ def install_player_zoom_chrome(app) -> QWidget | None:
 
     btn_loupe = QPushButton()
     btn_loupe.setObjectName("playerHeaderZoomLoupe")
+    btn_loupe.setCheckable(True)
     btn_loupe.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_loupe.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    btn_loupe.setToolTip("Zoom preview (click to step)")
-    btn_loupe.setAccessibleName("Preview zoom")
+    btn_loupe.setToolTip("Loupe: click to arm, then scroll-wheel over video to zoom")
+    btn_loupe.setAccessibleName("Preview loupe")
 
     btn_pct = QPushButton()
     btn_pct.setObjectName("playerHeaderZoomPct")
     btn_pct.setCursor(Qt.CursorShape.PointingHandCursor)
     btn_pct.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    btn_pct.setToolTip("Preview zoom level")
+    btn_pct.setToolTip("Preview zoom level (does not affect export)")
     btn_pct.setAccessibleName("Preview zoom percent")
 
     row.addWidget(btn_loupe, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -115,8 +143,10 @@ def install_player_zoom_chrome(app) -> QWidget | None:
         app._preview_zoom_pct = DEFAULT_ZOOM_PCT
     if not hasattr(app, "_preview_zoom_pan"):
         app._preview_zoom_pan = (0.0, 0.0)
+    if not hasattr(app, "_preview_loupe_armed"):
+        app._preview_loupe_armed = False
 
-    btn_loupe.clicked.connect(lambda: step_preview_zoom(app))
+    btn_loupe.clicked.connect(lambda _checked=False: toggle_preview_loupe(app))
     btn_pct.clicked.connect(lambda: show_preview_zoom_menu(app))
 
     try:
@@ -165,6 +195,23 @@ def measure_left_zoom_span(app, spacing: int = 10) -> int:
         return 0
 
 
+def is_preview_loupe_armed(app) -> bool:
+    return bool(getattr(app, "_preview_loupe_armed", False))
+
+
+def toggle_preview_loupe(app) -> None:
+    """Arm / disarm scroll-wheel zoom on the video surface."""
+    app._preview_loupe_armed = not is_preview_loupe_armed(app)
+    sync_preview_zoom_chrome(app)
+    sync_preview_zoom_cursor(app)
+
+
+def set_preview_loupe_armed(app, armed: bool) -> None:
+    app._preview_loupe_armed = bool(armed)
+    sync_preview_zoom_chrome(app)
+    sync_preview_zoom_cursor(app)
+
+
 def sync_preview_zoom_chrome(
     app,
     *,
@@ -196,12 +243,27 @@ def sync_preview_zoom_chrome(
             chip = chip or 30
             chip_icon = chip_icon or 16
 
-    pct = normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    pct = clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
     app._preview_zoom_pct = pct
+    armed = is_preview_loupe_armed(app)
 
-    qss = _chip_qss(accent=accent, accent_rgb=accent_rgb, font_px=int(font_px))
+    loupe_qss = _chip_qss(
+        accent=accent, accent_rgb=accent_rgb, font_px=int(font_px), active=armed
+    )
+    pct_qss = _chip_qss(
+        accent=accent, accent_rgb=accent_rgb, font_px=int(font_px), active=False
+    )
+
+    btn_loupe.blockSignals(True)
+    btn_loupe.setChecked(armed)
+    btn_loupe.blockSignals(False)
     btn_loupe.setFixedSize(int(chip), int(chip))
-    btn_loupe.setStyleSheet(qss)
+    btn_loupe.setStyleSheet(loupe_qss)
+    btn_loupe.setToolTip(
+        "Loupe on — scroll-wheel over video to zoom (click to disarm)"
+        if armed
+        else "Loupe off — click to arm, then scroll-wheel over video to zoom"
+    )
     try:
         from steempeg.ui.icon_assets import loupe_icon
 
@@ -221,13 +283,15 @@ def sync_preview_zoom_chrome(
     btn_pct.setMaximumHeight(int(chip))
     btn_pct.setMinimumWidth(0)
     btn_pct.setMaximumWidth(16777215)
-    btn_pct.setStyleSheet(qss)
+    btn_pct.setStyleSheet(pct_qss)
     btn_pct.setText(f" {pct}% ▾ ")
 
 
-def apply_preview_zoom(app, pct: int | None = None, *, pan: tuple[float, float] | None = None) -> None:
+def apply_preview_zoom(
+    app, pct: int | None = None, *, pan: tuple[float, float] | None = None
+) -> None:
     """Push zoom (+ optional pan) to mpv and refresh the % chip label."""
-    target = normalize_zoom_pct(
+    target = clamp_zoom_pct(
         pct if pct is not None else getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT)
     )
     app._preview_zoom_pct = target
@@ -242,31 +306,46 @@ def apply_preview_zoom(app, pct: int | None = None, *, pan: tuple[float, float] 
 
 
 def reset_preview_zoom(app) -> None:
-    """100% + centered pan — call on clip change / close / idle."""
+    """100% + centered pan + loupe disarmed — call on clip change / close / idle."""
     app._preview_zoom_pct = DEFAULT_ZOOM_PCT
     app._preview_zoom_pan = (0.0, 0.0)
+    app._preview_loupe_armed = False
     sync_preview_zoom_chrome(app)
     sync_preview_zoom_cursor(app)
     _push_zoom_to_mpv(app)
 
 
-def step_preview_zoom(app) -> None:
-    """Loupe: one ladder step; wraps to 100% from the top."""
-    cur = normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
-    nxt = next_zoom_pct(cur)
-    # Stepping to 100% recenters; other steps keep pan (Vegas-ish).
-    if nxt <= DEFAULT_ZOOM_PCT:
-        apply_preview_zoom(app, nxt, pan=(0.0, 0.0))
-    else:
-        apply_preview_zoom(app, nxt)
-
-
 def set_preview_zoom_pct(app, pct: int) -> None:
-    target = normalize_zoom_pct(pct)
+    """Menu / ladder: snap to a discrete step."""
+    target = snap_zoom_pct(pct)
     if target <= DEFAULT_ZOOM_PCT:
         apply_preview_zoom(app, target, pan=(0.0, 0.0))
     else:
         apply_preview_zoom(app, target)
+
+
+def nudge_preview_zoom_wheel(app, delta_y: float) -> bool:
+    """Scroll-wheel zoom while loupe is armed. ``delta_y`` > 0 = zoom in.
+
+    Returns True if the event was consumed.
+    """
+    if not is_preview_loupe_armed(app):
+        return False
+    steps = float(delta_y) / 120.0
+    if abs(steps) < 0.01:
+        # Trackpads sometimes send tiny deltas — treat any non-zero as one notch.
+        if delta_y == 0:
+            return False
+        steps = 1.0 if delta_y > 0 else -1.0
+    cur = clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    nxt = clamp_zoom_pct(cur + int(round(steps * ZOOM_WHEEL_STEP_PCT)))
+    if nxt == cur:
+        return True
+    if nxt <= DEFAULT_ZOOM_PCT:
+        apply_preview_zoom(app, nxt, pan=(0.0, 0.0))
+    else:
+        apply_preview_zoom(app, nxt)
+    return True
 
 
 def show_preview_zoom_menu(app) -> None:
@@ -284,12 +363,14 @@ def show_preview_zoom_menu(app) -> None:
 
     group = QActionGroup(menu)
     group.setExclusive(True)
-    current = normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    current = clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    # Check the nearest ladder step so a wheel level still highlights something.
+    nearest = snap_zoom_pct(current)
 
     for step in ZOOM_LADDER:
         action = menu.addAction(f"{step}%")
         action.setCheckable(True)
-        action.setChecked(step == current)
+        action.setChecked(step == nearest)
         action.setData(step)
         group.addAction(action)
 
@@ -313,44 +394,92 @@ def show_preview_zoom_menu(app) -> None:
         menu.exec()
 
 
+def _set_mpv_prop(player, name: str, value) -> bool:
+    """Set an mpv property via bracket, attribute, or command — soft-fail."""
+    try:
+        player[name] = value
+        return True
+    except Exception:
+        pass
+    attr = name.replace("-", "_")
+    try:
+        setattr(player, attr, value)
+        return True
+    except Exception:
+        pass
+    try:
+        player.command("set", name, str(value))
+        return True
+    except Exception:
+        return False
+
+
 def _push_zoom_to_mpv(app) -> None:
+    """Apply live zoom/pan to mpv.
+
+    Embed uses ``panscan=1`` + ``keepaspect=no`` to fill the 16:9 hole.
+    ``video-zoom`` alone often looks like a no-op under that fill path, so we
+    drive linear ``video-scale-x/y`` (applied *after* panscan) and keep
+    ``video-zoom`` cleared. When zoomed we also drop panscan so pan doesn't
+    fight the crop.
+    """
     player = getattr(app, "player", None)
     if player is None:
         return
-    pct = normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    pct = clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
     pan = getattr(app, "_preview_zoom_pan", (0.0, 0.0)) or (0.0, 0.0)
+    scale = float(pct) / 100.0
     try:
-        player["video-zoom"] = pct_to_video_zoom(pct)
-        player["video-pan-x"] = float(pan[0])
-        player["video-pan-y"] = float(pan[1])
+        if pct > DEFAULT_ZOOM_PCT:
+            _set_mpv_prop(player, "panscan", 0.0)
+            _set_mpv_prop(player, "keepaspect", "yes")
+        else:
+            _set_mpv_prop(player, "panscan", 1.0)
+            _set_mpv_prop(player, "keepaspect", "no")
+
+        # Clear log2 zoom so it cannot stack with linear scale.
+        _set_mpv_prop(player, "video-zoom", 0.0)
+        ok_sx = _set_mpv_prop(player, "video-scale-x", scale)
+        ok_sy = _set_mpv_prop(player, "video-scale-y", scale)
+        # Fallback if this mpv build lacks video-scale-*: log2 zoom alone.
+        if not (ok_sx and ok_sy):
+            _set_mpv_prop(player, "video-zoom", pct_to_video_zoom(pct))
+        _set_mpv_prop(player, "video-pan-x", float(pan[0]))
+        _set_mpv_prop(player, "video-pan-y", float(pan[1]))
+        if not (ok_sx or ok_sy):
+            _LOG.warning("preview zoom: mpv rejected scale/zoom (pct=%s)", pct)
     except Exception:
-        _LOG.debug("preview zoom apply failed", exc_info=True)
+        _LOG.warning("preview zoom apply failed", exc_info=True)
 
 
 def preview_zoom_scale(app) -> float:
-    pct = normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
+    pct = clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT))
     return max(1.0, float(pct) / 100.0)
 
 
 def is_preview_zoomed(app) -> bool:
-    return normalize_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT)) > DEFAULT_ZOOM_PCT
+    return clamp_zoom_pct(getattr(app, "_preview_zoom_pct", DEFAULT_ZOOM_PCT)) > DEFAULT_ZOOM_PCT
 
 
 def sync_preview_zoom_cursor(app) -> None:
-    """Open-hand when zoomed; arrow when at 100%."""
+    """Open-hand when zoomed; cross when loupe armed at 100%; arrow otherwise."""
     screen = getattr(app, "mpv_screen", None)
     if screen is None:
         return
     try:
         if is_preview_zoomed(app):
             screen.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        elif is_preview_loupe_armed(app):
+            screen.setCursor(QCursor(Qt.CursorShape.CrossCursor))
         else:
             screen.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
     except RuntimeError:
         pass
 
 
-def nudge_preview_pan(app, dx_px: float, dy_px: float, *, surface_w: int, surface_h: int) -> None:
+def nudge_preview_pan(
+    app, dx_px: float, dy_px: float, *, surface_w: int, surface_h: int
+) -> None:
     """Convert screen-pixel drag into mpv video-pan-x/y (scaled by zoom)."""
     if not is_preview_zoomed(app):
         return
@@ -369,8 +498,5 @@ def nudge_preview_pan(app, dx_px: float, dy_px: float, *, surface_w: int, surfac
     player = getattr(app, "player", None)
     if player is None:
         return
-    try:
-        player["video-pan-x"] = nx
-        player["video-pan-y"] = ny
-    except Exception:
-        _LOG.debug("preview pan apply failed", exc_info=True)
+    _set_mpv_prop(player, "video-pan-x", nx)
+    _set_mpv_prop(player, "video-pan-y", ny)
