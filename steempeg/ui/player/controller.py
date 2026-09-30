@@ -1277,6 +1277,9 @@ class PlayerMixin:
         Loupe mode: LMB or RMB drag pans. Outside loupe: LMB pan still works when
         zoomed (e.g. scale set from the % menu).
         """
+        # Release handlers skip play/pause after a drag / RMB themselves, so a
+        # suppress flag left from the previous gesture would eat this click.
+        self._preview_zoom_suppress_click = False
         try:
             from steempeg.ui.player_zoom_chrome import is_preview_zoomed
 
@@ -1292,11 +1295,6 @@ class PlayerMixin:
             "moved": False,
             "button": button,
         }
-        # RMB never toggles play/pause; LMB suppresses only after a real drag.
-        if button == "right":
-            self._preview_zoom_suppress_click = True
-        else:
-            self._preview_zoom_suppress_click = False
         return True
 
     def _preview_zoom_pan_move(self, x: float, y: float) -> bool:
