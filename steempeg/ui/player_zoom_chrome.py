@@ -467,6 +467,27 @@ def _set_mpv_prop(player, name: str, value) -> bool:
         return False
 
 
+def _player_fit_baseline(app, player) -> tuple[object, object]:
+    """``(panscan, keepaspect)`` the player was created with, read once per player.
+
+    Embed creates with ``panscan=1`` / ``keepaspect=no``, but the Linux external
+    window fallback uses ``keepaspect=yes`` — 100% must restore whichever it was.
+    """
+    cached = getattr(app, "_preview_zoom_fit_baseline", None)
+    if cached is not None and cached[0] is player:
+        return cached[1], cached[2]
+    try:
+        panscan = player["panscan"]
+    except Exception:
+        panscan = 1.0
+    try:
+        keepaspect = player["keepaspect"]
+    except Exception:
+        keepaspect = "no"
+    app._preview_zoom_fit_baseline = (player, panscan, keepaspect)
+    return panscan, keepaspect
+
+
 def _push_zoom_to_mpv(app) -> None:
     """Apply live zoom/pan to mpv.
 
@@ -483,12 +504,13 @@ def _push_zoom_to_mpv(app) -> None:
     pan = getattr(app, "_preview_zoom_pan", (0.0, 0.0)) or (0.0, 0.0)
     scale = float(pct) / 100.0
     try:
+        base_panscan, base_keepaspect = _player_fit_baseline(app, player)
         if pct > DEFAULT_ZOOM_PCT:
             _set_mpv_prop(player, "panscan", 0.0)
             _set_mpv_prop(player, "keepaspect", "yes")
         else:
-            _set_mpv_prop(player, "panscan", 1.0)
-            _set_mpv_prop(player, "keepaspect", "no")
+            _set_mpv_prop(player, "panscan", base_panscan)
+            _set_mpv_prop(player, "keepaspect", base_keepaspect)
 
         # Clear log2 zoom so it cannot stack with linear scale.
         _set_mpv_prop(player, "video-zoom", 0.0)
