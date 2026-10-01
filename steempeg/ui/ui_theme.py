@@ -2660,6 +2660,11 @@ def render_error_dialog_stylesheet() -> str:
         font-size: 18px;
         font-weight: bold;
     }}
+    QLabel#AccentTitle {{
+        color: {c["title"]};
+        font-size: 18px;
+        font-weight: bold;
+    }}
     QLabel#ErrorDesc {{
         color: {c["error_desc"]};
         font-size: 13px;
