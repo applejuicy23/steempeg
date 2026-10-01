@@ -427,6 +427,53 @@ def show_clip_cured_dialog(parent) -> None:
     dlg.exec()
 
 
+def run_salvage_demo(
+    parent, host=None, *, salvage_fails: bool = False, verify_fails: bool = False
+) -> str:
+    """Walk the real Dead Clip → salvage → verify → Cured dialogs with no clip I/O.
+
+    Returns a short outcome tag for the caller's log.
+    """
+    from steempeg.ui.message_dialog import steempeg_warning
+
+    theme = dialog_theme(host) if host is not None else {}
+    offer = DeadClipOfferDialog(
+        [
+            "Missing or corrupt video init segment (init-stream0.m4s)",
+            "Demo issue — no real clip is touched",
+        ],
+        parent=parent,
+        **theme,
+    )
+    if not (offer.exec() and offer.accepted_yes):
+        return "offer declined"
+
+    confirm = DeadClipSalvageDialog(parent=parent, **theme)
+    if not (confirm.exec() and confirm.accepted_yes):
+        return "salvage cancelled"
+
+    if salvage_fails:
+        DeadClipSalvageFailedDialog(parent=parent, **theme).exec()
+        return "salvage failed"
+
+    verify = DeadClipSalvageVerifyDialog(parent=parent, **theme)
+    if not (verify.exec() and verify.accepted_yes):
+        return "verify skipped"
+
+    if verify_fails:
+        steempeg_warning(
+            parent,
+            "Could not verify playback",
+            "Playback was not confirmed by the internal check, so this clip "
+            "was not marked Cured.\n\n"
+            "No decoded playback was detected.",
+        )
+        return "verify failed"
+
+    show_clip_cured_dialog(parent)
+    return "cured"
+
+
 def dialog_theme(parent) -> dict:
     from steempeg.ui import design_tokens as tok
 
