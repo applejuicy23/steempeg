@@ -137,7 +137,7 @@ class _MascotConfirmDialog(SteempegDialog):
         return self._choice == _YesNoChoice.YES
 
 
-_OFFER_MASCOT_W = 210
+_OFFER_MASCOT_W = 180
 
 
 class DeadClipOfferDialog(QDialog):
@@ -157,7 +157,8 @@ class DeadClipOfferDialog(QDialog):
         self.setWindowTitle("Dead Clip")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedWidth(700)
+        # Same card footprint as Render Failed (render_controller).
+        self.setFixedSize(780, 460)
 
         shell = QWidget(self)
         shell.setObjectName("RenderErrorShell")
@@ -172,7 +173,6 @@ class DeadClipOfferDialog(QDialog):
         main_layout = QHBoxLayout(shell)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
-        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         pic = QLabel()
         pic.setStyleSheet("background: transparent; border: none;")
@@ -190,7 +190,6 @@ class DeadClipOfferDialog(QDialog):
 
         col = QVBoxLayout()
         col.setSpacing(12)
-        col.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title = QLabel("This clip is marked Dead and won't play normally")
         title.setObjectName("ErrorTitle")
@@ -230,12 +229,6 @@ class DeadClipOfferDialog(QDialog):
 
         col.addLayout(actions)
         main_layout.addLayout(col, 1)
-
-        # Same height floor as the mascot so short issue lists don't crop her.
-        pm = pic.pixmap()
-        mascot_h = pm.height() if pm is not None and not pm.isNull() else _OFFER_MASCOT_W
-        self.setMinimumHeight(mascot_h + 40)
-        self.adjustSize()
 
     def apply_ui_theme_chrome(self) -> None:
         """Live-retint if Settings switches theme while this dialog is open."""
