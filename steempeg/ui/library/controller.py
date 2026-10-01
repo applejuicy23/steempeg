@@ -1986,20 +1986,19 @@ class LibraryMixin:
             self._salvage_verify_pending = None
             return
 
-        from steempeg.ui.dead_clip_dialogs import DeadClipSalvageVerifyDialog, dialog_theme
-        from steempeg.ui.message_dialog import steempeg_information, steempeg_warning
+        from steempeg.ui.dead_clip_dialogs import (
+            DeadClipSalvageVerifyDialog,
+            dialog_theme,
+            show_clip_cured_dialog,
+        )
+        from steempeg.ui.message_dialog import steempeg_warning
 
         dlg = DeadClipSalvageVerifyDialog(parent=self.ui, **dialog_theme(self))
         if dlg.exec() and dlg.accepted_yes:
             ok, reason = self._validate_salvage_playback(clip_path)
             if ok:
                 self._mark_clip_cured(clip_path, auto_play=dlg.always_play_salvage())
-                steempeg_information(
-                    self.ui,
-                    "Clip Cured",
-                    "Salvage playback was verified.\n"
-                    "This clip is now marked Cured and can be added to the render queue.",
-                )
+                show_clip_cured_dialog(self.ui)
             else:
                 steempeg_warning(
                     self.ui,
