@@ -217,12 +217,10 @@ class RenderMixin:
         ):
             return list(cached[1])
 
-        paths = discovery.find_mpd_paths(clip_path)
-        if not paths:
-            # Force-play salvage: a clip with no scanner-visible manifest but a built
-            # session_salvage.mpd is playable/renderable through that salvage manifest.
-            salvaged = getattr(self, "_salvaged_clips", {}).get(norm)
-            paths = list(salvaged) if salvaged else []
+        # Salvaged clips must resolve to session_salvage.mpd even when a stale
+        # session_recovered.mpd (pointing at the corrupt init) is still on disk.
+        salvaged = getattr(self, "_salvaged_clips", {}).get(norm)
+        paths = list(salvaged) if salvaged else discovery.find_mpd_paths(clip_path)
         self._mpd_paths_memo = (norm, list(paths))
         return list(paths)
 
