@@ -19,7 +19,7 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
 )
-from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPixmap
+from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -1782,7 +1782,11 @@ class LibraryMixin:
             if "session_salvage.mpd" in files:
                 mpds.append(os.path.join(root, "session_salvage.mpd"))
         if mpds:
-            self._salvaged_clips[os.path.normpath(clip_path)] = sorted(mpds)
+            norm = os.path.normpath(clip_path)
+            self._salvaged_clips[norm] = sorted(mpds)
+            memo = getattr(self, "_mpd_paths_memo", None)
+            if isinstance(memo, tuple) and memo and memo[0] == norm:
+                self._mpd_paths_memo = None
 
     def _is_salvaged_clip(self, clip_path: str) -> bool:
         return os.path.normpath(clip_path) in getattr(self, "_salvaged_clips", {})
