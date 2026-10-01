@@ -5,7 +5,14 @@ from enum import Enum
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
@@ -130,28 +137,122 @@ class _MascotConfirmDialog(SteempegDialog):
         return self._choice == _YesNoChoice.YES
 
 
-class DeadClipOfferDialog(_MascotConfirmDialog):
-    """First time a dead clip is opened — offer salvage."""
+_OFFER_MASCOT_W = 210
 
-    def __init__(self, issues: list[str], parent=None, **theme):
-        issues_text = "\n".join(f"• {issue}" for issue in issues[:6])
-        body = (
-            f"{issues_text}\n\n"
+
+class DeadClipOfferDialog(QDialog):
+    """First time a dead clip is opened — offer salvage.
+
+    Frameless card in the Render Failed dialog language (shared
+    ``render_error_dialog_stylesheet``): big mascot left, red title, bold issues,
+    pill buttons. Esc / Not now → no.
+    """
+
+    def __init__(self, issues: list[str], parent=None, **_theme):
+        super().__init__(parent)
+        from steempeg.ui import ui_theme as ut
+
+        self._choice = _YesNoChoice.NO
+        self.setObjectName("SteempegDeadClipOfferDialog")
+        self.setWindowTitle("Dead Clip")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedWidth(700)
+
+        shell = QWidget(self)
+        shell.setObjectName("RenderErrorShell")
+        shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        shell.setStyleSheet(ut.render_error_dialog_stylesheet())
+        self._shell = shell
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(shell)
+
+        main_layout = QHBoxLayout(shell)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        pic = QLabel()
+        pic.setStyleSheet("background: transparent; border: none;")
+        pix = QPixmap(get_resource_path("chupiwarn.png"))
+        if not pix.isNull():
+            pic.setPixmap(
+                pix.scaledToWidth(
+                    _OFFER_MASCOT_W, Qt.TransformationMode.SmoothTransformation
+                )
+            )
+        else:
+            pic.setFixedWidth(_OFFER_MASCOT_W)
+        pic.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        main_layout.addWidget(pic, 0, Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(12)
+        col.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        title = QLabel("This clip is marked Dead and won't play normally")
+        title.setObjectName("ErrorTitle")
+        title.setWordWrap(True)
+        col.addWidget(title)
+
+        issues_lbl = QLabel("\n".join(f"• {issue}" for issue in issues[:6]))
+        issues_lbl.setObjectName("ErrorHint")
+        issues_lbl.setWordWrap(True)
+        col.addWidget(issues_lbl)
+
+        desc = QLabel(
             "Steempeg can try to salvage it from surviving chunks. "
             "If the decoder header is missing, recovery uses a healthy same-game "
             "clip from your library, or a bundled donor for that game when available. "
             "No donor at all = usually unrecoverable."
         )
-        super().__init__(
-            "Dead Clip",
-            "chupiwarn.png",
-            "This clip is marked Dead and won't play normally",
-            body,
-            primary_label="Try to recover",
-            secondary_label="Not now",
-            parent=parent,
-            **theme,
-        )
+        desc.setObjectName("ErrorDesc")
+        desc.setWordWrap(True)
+        col.addWidget(desc)
+        col.addStretch(1)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch(1)
+
+        btn_not_now = QPushButton("Not now")
+        btn_not_now.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_not_now.clicked.connect(lambda: self._finish(_YesNoChoice.NO))
+        actions.addWidget(btn_not_now)
+
+        btn_recover = QPushButton("Try to recover")
+        btn_recover.setObjectName("AccentBtn")
+        btn_recover.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_recover.clicked.connect(lambda: self._finish(_YesNoChoice.YES))
+        actions.addWidget(btn_recover)
+
+        col.addLayout(actions)
+        main_layout.addLayout(col, 1)
+
+        # Same height floor as the mascot so short issue lists don't crop her.
+        pm = pic.pixmap()
+        mascot_h = pm.height() if pm is not None and not pm.isNull() else _OFFER_MASCOT_W
+        self.setMinimumHeight(mascot_h + 40)
+        self.adjustSize()
+
+    def apply_ui_theme_chrome(self) -> None:
+        """Live-retint if Settings switches theme while this dialog is open."""
+        from steempeg.ui import ui_theme as ut
+
+        self._shell.setStyleSheet(ut.render_error_dialog_stylesheet())
+
+    def _finish(self, choice: _YesNoChoice) -> None:
+        self._choice = choice
+        if choice == _YesNoChoice.YES:
+            self.accept()
+        else:
+            self.reject()
+
+    @property
+    def accepted_yes(self) -> bool:
+        return self._choice == _YesNoChoice.YES
 
 
 class DeadClipSalvageDialog(_MascotConfirmDialog):
@@ -294,6 +395,36 @@ class DeadClipSalvageVerifyDialog(SteempegDialog):
 
     def always_play_salvage(self) -> bool:
         return self._chk_auto_play.isChecked()
+
+
+def show_clip_cured_dialog(parent) -> None:
+    """«Clip Cured» ack — bold Cured-icon lead line, then the plain explanation."""
+    from steempeg.core.dash.health import HEALTH_COLORS, ClipHealth
+    from steempeg.ui.icon_assets import health_icon
+    from steempeg.ui.message_dialog import SteempegMessageDialog
+
+    dlg = SteempegMessageDialog(
+        "Clip Cured",
+        "This clip is now marked Cured and can be added to the render queue.",
+        parent,
+    )
+
+    lead = QHBoxLayout()
+    lead.setSpacing(6)
+    icon_lbl = QLabel()
+    icon_lbl.setStyleSheet("background: transparent; border: none;")
+    icon_lbl.setPixmap(health_icon(ClipHealth.CURED, 16).pixmap(16, 16))
+    icon_lbl.setFixedSize(16, 16)
+    lead.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+    lead_text = QLabel("Salvage playback was verified.")
+    lead_text.setStyleSheet(
+        f"color: {HEALTH_COLORS[ClipHealth.CURED]}; font-size: 13px; font-weight: bold; "
+        f"background: transparent; font-family: {tok.FONT_APP};"
+    )
+    lead.addWidget(lead_text, 0, Qt.AlignmentFlag.AlignVCenter)
+    lead.addStretch(1)
+    dlg.content_layout.insertLayout(0, lead)
+    dlg.exec()
 
 
 def dialog_theme(parent) -> dict:
