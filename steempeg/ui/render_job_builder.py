@@ -286,12 +286,12 @@ def _mpd_paths_for_clip(app: SteempegApp, clip_path: str) -> list[str]:
                 app._register_salvaged_clip(clip_path)
         except Exception:
             pass
-    mpds = discovery.find_mpd_paths(clip_path)
-    if mpds:
-        return mpds
     salvage = list(getattr(app, "_salvaged_clips", {}).get(clip_path, []))
     if salvage:
         return salvage
+    mpds = discovery.find_mpd_paths(clip_path)
+    if mpds:
+        return mpds
     return _salvage_mpd_paths(clip_path)
 
 
