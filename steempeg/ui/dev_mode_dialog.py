@@ -1067,6 +1067,28 @@ class DevModeDialog(SteempegDialog):
         btn_ffmpeg_err.clicked.connect(self._simulate_ffmpeg_error_dialog)
         lay.addWidget(btn_ffmpeg_err)
 
+        # -- Dead Clip salvage flow (dialog walkthrough, no clip I/O) --
+        g_salvage = QGroupBox("Dead Clip salvage flow (demo)")
+        g_salvage_lay = QVBoxLayout(g_salvage)
+        tip_salvage = QLabel(
+            "Walk the real dialogs: Dead Clip offer → Force play (salvage) → "
+            "Did it play? → Clip Cured. Nothing is rebuilt, played or marked Cured."
+        )
+        tip_salvage.setWordWrap(True)
+        tip_salvage.setStyleSheet("color: #b0b0b0; font-weight: normal;")
+        g_salvage_lay.addWidget(tip_salvage)
+        self._chk_salvage_fails = QCheckBox("Salvage fails (Nothing to salvage)")
+        self._chk_verify_fails = QCheckBox("Playback check fails (Could not verify)")
+        g_salvage_lay.addWidget(self._chk_salvage_fails)
+        g_salvage_lay.addWidget(self._chk_verify_fails)
+        salvage_row = QHBoxLayout()
+        btn_salvage = QPushButton("Simulate salvage flow")
+        btn_salvage.clicked.connect(self._simulate_salvage_flow)
+        salvage_row.addWidget(btn_salvage)
+        salvage_row.addStretch()
+        g_salvage_lay.addLayout(salvage_row)
+        lay.addWidget(g_salvage)
+
         # -- Launch splash (v50 startup loader) --
         g_splash = QGroupBox("Launch splash (startup loader)")
         g_splash_lay = QVBoxLayout(g_splash)
@@ -1539,6 +1561,23 @@ class DevModeDialog(SteempegDialog):
             host._show_steempeg_render_error_dialog(sample)
         except Exception as exc:
             self._tools_log.appendPlainText(f"ERROR: simulate failed: {exc}")
+
+    def _simulate_salvage_flow(self) -> None:
+        from steempeg.ui.dead_clip_dialogs import run_salvage_demo
+
+        host = self._resolve_app_host()
+        parent = getattr(host, "ui", None) or self
+        self._tools_log.appendPlainText("Salvage flow demo…")
+        try:
+            outcome = run_salvage_demo(
+                parent,
+                host,
+                salvage_fails=self._chk_salvage_fails.isChecked(),
+                verify_fails=self._chk_verify_fails.isChecked(),
+            )
+            self._tools_log.appendPlainText(f"Salvage flow demo ended: {outcome}.")
+        except Exception as exc:
+            self._tools_log.appendPlainText(f"ERROR: salvage demo failed: {exc}")
 
     def _simulate_launch_splash(self) -> None:
         """Replay the v50 cold-start splash card for visual design review."""
