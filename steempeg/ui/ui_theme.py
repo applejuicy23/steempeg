@@ -2736,6 +2736,18 @@ def render_error_dialog_stylesheet() -> str:
         background-color: {c["danger_hover_bg"]};
         border: 1px solid {c["danger_hover_border"]};
     }}
+    QPushButton#AccentBtn {{
+        background-color: {c["accent_bg"]};
+        color: {c["accent_fg"]};
+        border: 1px solid {c["accent_border"]};
+    }}
+    QPushButton#AccentBtn:hover {{
+        background-color: {c["accent_hover_bg"]};
+        border: 1px solid {c["title"]};
+    }}
+    QPushButton#AccentBtn:pressed {{
+        background-color: {c["accent_pressed_bg"]};
+    }}
 """
 
 
