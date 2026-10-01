@@ -336,11 +336,50 @@ def set_preview_zoom_pct(app, pct: int) -> None:
         apply_preview_zoom(app, target)
 
 
-def _clamp_pan(pan_x: float, pan_y: float, scale: float) -> tuple[float, float]:
-    limit = max(0.0, 1.0 - (1.0 / max(scale, 0.01))) + 0.15
+def _video_fit_size(app, surface_w: int, surface_h: int) -> tuple[float, float]:
+    """Size of the video rect at 100% (aspect-fit into the surface), in surface px.
+
+    mpv ``video-pan-*`` is a fraction of the *scaled video*, not the window, so
+    letterboxed clips need the fitted rect rather than the surface size.
+    """
+    w = float(max(1, int(surface_w)))
+    h = float(max(1, int(surface_h)))
+    player = getattr(app, "player", None)
+    try:
+        params = player["video-params"] if player is not None else None
+        dw = float((params or {}).get("dw") or 0)
+        dh = float((params or {}).get("dh") or 0)
+    except Exception:
+        dw = dh = 0.0
+    if dw <= 0 or dh <= 0:
+        return w, h
+    fit = min(w / dw, h / dh)
+    return dw * fit, dh * fit
+
+
+def _clamp_pan(
+    pan_x: float,
+    pan_y: float,
+    scale: float,
+    *,
+    fit_w: float | None = None,
+    fit_h: float | None = None,
+    surface_w: int | None = None,
+    surface_h: int | None = None,
+) -> tuple[float, float]:
+    """Keep the scaled video covering the surface (no panning past its edges)."""
+    s = max(scale, 0.01)
+
+    def _limit(fit: float | None, surface: int | None) -> float:
+        if fit and surface:
+            return max(0.0, (1.0 - float(surface) / (float(fit) * s)) / 2.0)
+        return max(0.0, (1.0 - 1.0 / s) / 2.0)
+
+    lx = _limit(fit_w, surface_w)
+    ly = _limit(fit_h, surface_h)
     return (
-        max(-limit, min(limit, float(pan_x))),
-        max(-limit, min(limit, float(pan_y))),
+        max(-lx, min(lx, float(pan_x))),
+        max(-ly, min(ly, float(pan_y))),
     )
 
 
@@ -382,19 +421,23 @@ def nudge_preview_zoom_wheel(
 
     w = int(surface_w or 0)
     h = int(surface_h or 0)
-    if (
-        cursor_x is not None
-        and cursor_y is not None
-        and w > 0
-        and h > 0
-        and abs(new_s - old_s) > 1e-6
-    ):
-        # Screen offset from center as a fraction of the surface.
-        ox = (float(cursor_x) / float(w)) - 0.5
-        oy = (float(cursor_y) / float(h)) - 0.5
-        # Keep the content point under the cursor stable across the scale change.
-        px = px + ox * (1.0 / old_s - 1.0 / new_s)
-        py = py + oy * (1.0 / old_s - 1.0 / new_s)
+    if w > 0 and h > 0:
+        fit_w, fit_h = _video_fit_size(app, w, h)
+        if (
+            cursor_x is not None
+            and cursor_y is not None
+            and abs(new_s - old_s) > 1e-6
+        ):
+            # Cursor offset from center in units of the 100% video rect. The
+            # content point under it is ``o/s - pan``; hold that fixed across s.
+            ox = (float(cursor_x) - w / 2.0) / fit_w
+            oy = (float(cursor_y) - h / 2.0) / fit_h
+            px = px + ox * (1.0 / new_s - 1.0 / old_s)
+            py = py + oy * (1.0 / new_s - 1.0 / old_s)
+        px, py = _clamp_pan(
+            px, py, new_s, fit_w=fit_w, fit_h=fit_h, surface_w=w, surface_h=h
+        )
+    else:
         px, py = _clamp_pan(px, py, new_s)
 
     apply_preview_zoom(app, nxt, pan=(px, py))
@@ -561,11 +604,20 @@ def nudge_preview_pan(
     w = max(1, int(surface_w))
     h = max(1, int(surface_h))
     scale = preview_zoom_scale(app)
+    fit_w, fit_h = _video_fit_size(app, w, h)
     # Positive drag (right/down) moves the picture with the cursor.
-    d_x = float(dx_px) / float(w) / scale
-    d_y = float(dy_px) / float(h) / scale
+    d_x = float(dx_px) / fit_w / scale
+    d_y = float(dy_px) / fit_h / scale
     cur = getattr(app, "_preview_zoom_pan", (0.0, 0.0)) or (0.0, 0.0)
-    nx, ny = _clamp_pan(float(cur[0]) + d_x, float(cur[1]) + d_y, scale)
+    nx, ny = _clamp_pan(
+        float(cur[0]) + d_x,
+        float(cur[1]) + d_y,
+        scale,
+        fit_w=fit_w,
+        fit_h=fit_h,
+        surface_w=w,
+        surface_h=h,
+    )
     app._preview_zoom_pan = (nx, ny)
     player = getattr(app, "player", None)
     if player is None:
