@@ -4781,7 +4781,9 @@ class LibraryMixin:
             self._update_library_count_label()
 
         self._schedule_clip_card_edge_sync()
-        if getattr(self, "_clips_progressive_active", False):
+        # Lazy Refresh: fill the first screen, then leave the grid alone until the
+        # scan finalizes — a relayout per arriving clip strobed the visible cards.
+        if getattr(self, "_clips_progressive_active", False) and not self._clips_first_screen_filled():
             self._schedule_clips_viewport_refresh(50)
 
         if pending:
@@ -5024,6 +5026,9 @@ class LibraryMixin:
     def _on_clips_scroll_range(self, *_args) -> None:
         """Sheet open / layout grow — scrollbar appears without a wheel tick."""
         if not getattr(self, "_clips_progressive_active", False):
+            return
+        if getattr(self, "_clips_scan_active", False) and self._clips_first_screen_filled():
+            # Range grows on every inserted row during Refresh — not a real resize.
             return
         self._schedule_clips_viewport_refresh(50)
 
@@ -5342,6 +5347,9 @@ class LibraryMixin:
             return
         if getattr(self, "_clips_scroll_active", False):
             return
+        if getattr(self, "_clips_scan_active", False):
+            # Lazy Refresh still inserting — finalize's viewport pass re-arms this.
+            return
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return
@@ -5372,6 +5380,31 @@ class LibraryMixin:
             timer.start(1)
         else:
             timer.start(int(delay_ms))
+
+    def _clips_first_screen_filled(self) -> bool:
+        """True once the top screen of visible grid items all have ClipCards."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return True
+        vp = grid.viewport()
+        if vp is None:
+            return True
+        cols_fn = getattr(self, "_clip_grid_column_count_for", None)
+        cols = max(1, int(cols_fn(grid)) if callable(cols_fn) else 6)
+        cell_h = max(1, _clips_card_cell_size(self).height() + max(0, int(grid.spacing())))
+        rows = max(1, int(vp.height()) // cell_h + 1)
+        need = cols * rows
+        seen = 0
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            if grid.itemWidget(item) is None:
+                return False
+            seen += 1
+            if seen >= need:
+                return True
+        return False
 
     def _clips_visible_items(self) -> list:
         grid = getattr(self, "grid_clips", None)
