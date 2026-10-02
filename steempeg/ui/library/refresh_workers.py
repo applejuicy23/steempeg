@@ -138,7 +138,7 @@ class SteamIconsRefreshWorker(QThread):
                         os.remove(icon_path)
                 except OSError:
                     pass
-                if games.download_icon(app_id, icon_path):
+                if games.download_icon(app_id, icon_path, prefer_network=True):
                     updated += 1
                 self.progress.emit(i + 1, total)
             self.finished_icons.emit(
