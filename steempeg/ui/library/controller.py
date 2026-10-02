@@ -3887,12 +3887,14 @@ class LibraryMixin:
                 settings = self.load_user_settings() or {}
             except Exception:
                 settings = {}
+        # lazy_cards: ClipCards only for the viewport (Progressive-style) — a full
+        # Refresh with Clips visible used to relayout/paint every card per batch.
         if load_startup_library_scan(settings) == SCAN_PROGRESSIVE:
             # Same companion as On launch → Full: Steam icons/names after paint.
             self._startup_refresh_steam_meta = True
-            self.scan_clips(fast=False)
+            self.scan_clips(fast=False, lazy_cards=True)
         else:
-            self.scan_clips(fast=True)
+            self.scan_clips(fast=True, lazy_cards=True)
 
     def _insert_scanned_clip_row(self, row: ScannedClip) -> int:
         """Append one scanned clip to the hidden table (+ grid card). Returns row index."""
@@ -4699,7 +4701,13 @@ class LibraryMixin:
                     self._finalize_scan_finished(stats, gen, announce)
             return
 
-        batch = 12 if getattr(self, "_scan_snapshot_restore", False) else 4
+        if getattr(self, "_scan_snapshot_restore", False):
+            batch = 12
+        elif getattr(self, "_clips_progressive_active", False):
+            # Placeholders only — cheap enough for bigger batches.
+            batch = 24
+        else:
+            batch = 4
         inserted_before = int(getattr(self, "_scan_inserted", 0))
         n = min(batch, len(pending))
         last_row = None
@@ -4773,6 +4781,8 @@ class LibraryMixin:
             self._update_library_count_label()
 
         self._schedule_clip_card_edge_sync()
+        if getattr(self, "_clips_progressive_active", False):
+            self._schedule_clips_viewport_refresh(50)
 
         if pending:
             self._scan_flush_scheduled = True
@@ -4838,13 +4848,20 @@ class LibraryMixin:
 
         quiet_append = bool(getattr(self, "_scan_append_new_only", False))
         do_steam_meta = bool(getattr(self, "_startup_refresh_steam_meta", False))
+        # Lazy Refresh borrows Progressive's viewport cards but is still a full scan
+        # (real durations, poster/icon backfill) — only launch Progressive skips those.
+        lazy_refresh = bool(getattr(self, "_clips_refresh_lazy", False))
+        self._clips_refresh_lazy = False
+        progressive_launch = (
+            bool(getattr(self, "_clips_progressive_active", False)) and not lazy_refresh
+        )
         if quiet_append:
             # CLIP often appears after FG for the same Steam session — drop the loser.
             self._purge_inferior_session_siblings()
         if (
             not quiet_append
             and not snapshot_restore
-            and not getattr(self, "_clips_progressive_active", False)
+            and not progressive_launch
         ):
             # Full startup will re-download all icons shortly — skip the
             # missing-only backfill (would race / duplicate CDN work).
@@ -4903,7 +4920,7 @@ class LibraryMixin:
             # after a short settle, then once more for still-recording clips.
             QTimer.singleShot(800, self._schedule_clip_duration_backfill)
             QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
-        elif getattr(self, "_clips_progressive_active", False):
+        elif progressive_launch:
             # Progressive discover paints ``--:--`` placeholders; durations are
             # filled from MPD after discover finishes (see progressive finished).
             pass
@@ -5791,6 +5808,7 @@ class LibraryMixin:
         *,
         fast: bool = True,
         from_cache: bool = False,
+        lazy_cards: bool = False,
     ):
         """Scan library roots on a background thread with live progress in the status bar.
 
@@ -5801,12 +5819,16 @@ class LibraryMixin:
         from_cache=True rebuilds rows from clip_health_cache paths (seed when no
         session snapshot exists yet). Prefer ``restore_clips_from_session_cache``
         for Settings → Skip.
+
+        lazy_cards=True plants grid placeholders and materializes ClipCards only
+        for the viewport (same session state as a Progressive launch).
         """
         if not hasattr(self.ui, "table_clips"):
             return
 
         self._stop_library_scan()
         self._stop_progressive_clips_discover()
+        self._stop_clips_idle_fill()
         self._stop_clip_poster_backfill()
         self._stop_clip_duration_backfill()
         self._scan_pending_rows = []
@@ -5816,7 +5838,12 @@ class LibraryMixin:
         self._scan_finalize_pending = None
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
-        self._clips_progressive_active = False
+        self._clips_progressive_active = bool(lazy_cards)
+        self._clips_refresh_lazy = bool(lazy_cards)
+        if lazy_cards:
+            self._ensure_clips_viewport_lazy_hooks()
+            self._clips_scroll_active = False
+            self._clip_duration_did_full_pass = False
         self._clip_live_paths = set()
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
