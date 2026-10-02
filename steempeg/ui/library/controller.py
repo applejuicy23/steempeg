@@ -4745,7 +4745,11 @@ class LibraryMixin:
             if table is not None:
                 table.setUpdatesEnabled(True)
             if grid is not None:
-                grid.setUpdatesEnabled(True)
+                if self._should_freeze_clips_grid_for_scan():
+                    self._freeze_clips_grid()
+                else:
+                    self._unfreeze_clips_grid()
+                    grid.setUpdatesEnabled(True)
 
         if (
             last_row is not None
@@ -4803,6 +4807,55 @@ class LibraryMixin:
                 QTimer.singleShot(0, self.sync_clip_card_edge_roles)
                 QTimer.singleShot(50, self.sync_clip_card_edge_roles)
 
+    def _should_freeze_clips_grid_for_scan(self) -> bool:
+        """Lazy Refresh with the first screen printed — later rows land off-screen."""
+        if not getattr(self, "_clips_refresh_lazy", False):
+            return False
+        if not getattr(self, "_clips_scan_active", False):
+            return False
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or not grid.isVisible():
+            return False
+        return self._clips_first_screen_filled()
+
+    def _freeze_clips_grid(self) -> None:
+        """Hold the Clips grid's last frame while a lazy Refresh streams rows in.
+
+        Each inserted row relayouts the QListView and re-places the item widgets;
+        painting that per clip strobed the cards until the scan finished.
+        """
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        if not getattr(self, "_clips_grid_freeze_filter", None):
+            from PySide6.QtCore import QEvent, QObject
+
+            app = self
+
+            class _ThawOnShow(QObject):
+                def eventFilter(self, obj, event):  # noqa: N802
+                    if event.type() == QEvent.Type.Show:
+                        app._unfreeze_clips_grid()
+                    return False
+
+            self._clips_grid_freeze_filter = _ThawOnShow(grid)
+            grid.installEventFilter(self._clips_grid_freeze_filter)
+        self._clips_grid_frozen = True
+        grid.setUpdatesEnabled(False)
+
+    def _unfreeze_clips_grid(self) -> None:
+        if not getattr(self, "_clips_grid_frozen", False):
+            return
+        self._clips_grid_frozen = False
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return
+        try:
+            grid.setUpdatesEnabled(True)
+            grid.viewport().update()
+        except RuntimeError:
+            pass
+
     def _on_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
@@ -4822,6 +4875,7 @@ class LibraryMixin:
 
     def _finalize_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         """Run the original scan-finished logic once both worker + UI insert are done."""
+        self._unfreeze_clips_grid()
 
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
@@ -4968,6 +5022,8 @@ class LibraryMixin:
         self._library_scan_worker = None
         self._startup_refresh_steam_meta = False
         logging.error("Library scan failed: %s", message)
+        self._clips_refresh_lazy = False
+        self._unfreeze_clips_grid()
         self._clips_scan_active = False
         self._sync_library_scan_interaction_lock(busy=False)
         if hasattr(self, "update_status_indicator"):
@@ -5871,6 +5927,7 @@ class LibraryMixin:
         self._scan_finalize_pending = None
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
+        self._unfreeze_clips_grid()
         self._clips_progressive_active = bool(lazy_cards)
         self._clips_refresh_lazy = bool(lazy_cards)
         if lazy_cards:
