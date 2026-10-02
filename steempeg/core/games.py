@@ -184,27 +184,36 @@ def find_icon_url(app_id, timeout=7):
     return urls[0] if urls else None
 
 
-def download_icon(app_id, dest_path, timeout=5):
+def download_icon(app_id, dest_path, timeout=5, *, prefer_network=False):
     """Find and download the game icon for `app_id` to `dest_path`.
 
-    Prefers the local Steam client cache, then tries CDN URLs until one returns
-    a real image (community HTML can point at stale 404 hashes).
+    Default: local Steam client cache first, then CDN URLs until one returns a
+    real image (community HTML can point at stale 404 hashes).
+    ``prefer_network`` (explicit Refresh) tries the CDN first and retries ids
+    that failed earlier — otherwise a stale local Steam icon is recopied forever.
     Returns True on success. Pure - no Qt.
 
     After a hard failure for an app_id, later calls in this process skip the
     network (so one dead Kuro/Wuthering Waves fetch doesn't hammer every clip).
     """
     app_id = str(app_id)
-    if app_id in _FAILED_ICON_DOWNLOADS:
+    if prefer_network:
+        _FAILED_ICON_DOWNLOADS.discard(app_id)
+    elif app_id in _FAILED_ICON_DOWNLOADS:
         return False
 
-    local = find_local_steam_icon(app_id)
-    if local:
+    def _copy_local() -> bool:
+        local = find_local_steam_icon(app_id)
+        if not local:
+            return False
         try:
             shutil.copy2(local, dest_path)
             return True
         except OSError:
-            pass
+            return False
+
+    if not prefer_network and _copy_local():
+        return True
 
     for url in find_icon_urls(app_id, timeout=timeout):
         try:
@@ -216,5 +225,7 @@ def download_icon(app_id, dest_path, timeout=5):
             return True
         except (requests.RequestException, OSError):
             continue
+    if prefer_network and _copy_local():
+        return True
     _FAILED_ICON_DOWNLOADS.add(app_id)
     return False
