@@ -26,14 +26,17 @@ class _YesNoChoice(Enum):
 
 
 _CARD_MASCOT_W = 180
+_CARD_W = 780
+# Breathing room between the text block and the button row.
+_CARD_BUTTON_GAP = 28
 
 
 class _CardDialog(QDialog):
     """Frameless card in the Render Failed dialog language.
 
-    Shares ``render_error_dialog_stylesheet`` and the 780×460 footprint: mascot
-    left, title + bold hints + description right, pill buttons pinned bottom-right.
-    Esc / secondary → no.
+    Shares ``render_error_dialog_stylesheet`` and the 780px width: mascot left,
+    title + bold hints + description right, pill buttons bottom-right. Height hugs
+    the content (no FFmpeg log to fill). Esc / secondary → no.
     """
 
     def __init__(
@@ -60,7 +63,7 @@ class _CardDialog(QDialog):
             self.setWindowTitle(window_title)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(780, 460)
+        self.setFixedWidth(_CARD_W)
 
         shell = QWidget(self)
         shell.setObjectName("RenderErrorShell")
@@ -110,6 +113,7 @@ class _CardDialog(QDialog):
         if rich_body:
             desc.setTextFormat(Qt.TextFormat.RichText)
         col.addWidget(desc)
+        col.addSpacing(_CARD_BUTTON_GAP)
         col.addStretch(1)
 
         # Optional row above the buttons (e.g. a checkbox) — subclasses fill it.
@@ -135,6 +139,17 @@ class _CardDialog(QDialog):
 
         col.addLayout(actions)
         main_layout.addLayout(col, 1)
+        self._main_layout = main_layout
+        self._fit_height()
+
+    def _fit_height(self) -> None:
+        """Lock height to the wrapped content (call again after adding extras)."""
+        lay = self._main_layout
+        lay.activate()
+        h = lay.totalHeightForWidth(_CARD_W) if lay.hasHeightForWidth() else -1
+        if h <= 0:
+            h = lay.totalSizeHint().height()
+        self.setFixedHeight(max(h, lay.totalMinimumSize().height()))
 
     def apply_ui_theme_chrome(self) -> None:
         """Live-retint if Settings switches theme while this dialog is open."""
@@ -238,6 +253,7 @@ class DeadClipSalvageVerifyDialog(_CardDialog):
             "Always play this clip via salvage without asking",
         )
         self.extra_layout.addWidget(self._chk_auto_play)
+        self._fit_height()
 
     def always_play_salvage(self) -> bool:
         return self._chk_auto_play.isChecked()
