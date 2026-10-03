@@ -286,18 +286,6 @@ class ReleaseEntry:
             return "older · stable floor"
         return "older"
 
-    def milestone_labels(self) -> str:
-        if not self.milestones:
-            return ""
-        parts = [f"{m.icon} {m.short_label}" for m in self.milestones]
-        return " · ".join(parts)
-
-    def row_highlight(self) -> str | None:
-        if self.milestones:
-            return self.milestone_labels()
-        return extract_release_highlight(self.body)
-
-
 @dataclass(frozen=True)
 class LocalBackup:
     folder_name: str
@@ -339,38 +327,6 @@ def classify_era(version_float: float) -> VersionEra:
     return VersionEra.RELIABLE
 
 
-def is_early_development(version_float: float) -> bool:
-    return version_float <= 8.0
-
-
-def extract_release_highlight(body: str) -> str | None:
-    """First bullet under NEW FEATURES or PLAYER & UI in GitHub release notes."""
-    if not body:
-        return None
-    lines = body.splitlines()
-    in_section = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if _SECTION_HEADER_RE.search(stripped):
-            in_section = True
-            continue
-        if in_section:
-            if stripped.startswith("#") or stripped.startswith("---"):
-                break
-            if len(stripped) < 80 and _SECTION_HEADER_RE.search(stripped):
-                break
-            match = _BULLET_LINE_RE.match(stripped)
-            if match:
-                text = _MARKDOWN_BOLD_RE.sub(r"\1", match.group(1)).strip()
-                if text:
-                    return text[:72] + ("…" if len(text) > 72 else "")
-            if stripped[0].isdigit() and "." in stripped[:4]:
-                break
-    return None
-
-
 def group_releases_by_major(releases: list[ReleaseEntry]) -> list[list[ReleaseEntry]]:
     """Group v36 / v36.1 / v36.2 together; preserve newest-major-first order."""
     groups: dict[int, list[ReleaseEntry]] = {}
@@ -385,15 +341,6 @@ def group_releases_by_major(releases: list[ReleaseEntry]) -> list[list[ReleaseEn
         sorted(groups[major], key=lambda item: item.version_float, reverse=True)
         for major in major_order
     ]
-
-
-def patch_warning(entry: ReleaseEntry, group: list[ReleaseEntry]) -> str | None:
-    if len(group) <= 1:
-        return None
-    newest = group[0]
-    if entry.version_float < newest.version_float - 0.001:
-        return f"Newer patch v{newest.version_str} exists. This build may have unfixed bugs."
-    return None
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -538,10 +485,6 @@ def _missing_channel_block_reason(
     return f"No {pretty} build for this version (available: {others})."
 
 
-def old_version_warning(entry: ReleaseEntry, current_version: float) -> str | None:
-    return selection_notice(entry, current_version)
-
-
 def milestones_for_version(version_float: float) -> tuple[VersionMilestone, ...]:
     return tuple(m for m in VERSION_MILESTONES if versions_equal(m.version, version_float))
 
@@ -567,38 +510,6 @@ def is_installable(version_float: float, zip_url: str | None, *, available_platf
         if channel not in available_platforms:
             return False
     return True
-
-
-def install_policy_message(entry: ReleaseEntry) -> str | None:
-    if entry.block_reason:
-        return entry.block_reason.replace("—", ",")
-    if versions_equal(entry.version_float, RECOMMENDED_INSTALL_VERSION):
-        return "Last safe version for in-app install."
-    if versions_equal(entry.version_float, 12.1):
-        return "Last early zip build. No longer supported. Not recommended."
-    if MIN_INSTALL_VERSION < entry.version_float < RECOMMENDED_INSTALL_VERSION:
-        return "Early zip updater. Settings and formats may break."
-    if is_early_development(entry.version_float) and versions_equal(entry.version_float, 8.0):
-        return "Last Early Development build. Select Clip + Render only."
-    if is_early_development(entry.version_float):
-        return "Early Development. Bare .exe only."
-    return None
-
-
-def jump_warnings(from_version: float, to_version: float) -> list[str]:
-    if versions_equal(from_version, to_version):
-        return []
-    low = min(from_version, to_version)
-    high = max(from_version, to_version)
-    warnings: list[str] = []
-    for threshold, message in REFACTOR_THRESHOLDS:
-        if low < threshold <= high:
-            warnings.append(message)
-    if high < RECOMMENDED_INSTALL_VERSION and low >= MIN_INSTALL_VERSION:
-        warnings.append("Target is before v16: early updater era; higher crash/incompatibility risk.")
-    if low < MIN_INSTALL_VERSION:
-        warnings.append("Crossing into pre-v12.1 territory: manual .exe era, not in-app install.")
-    return warnings
 
 
 def release_platform_tag() -> str:
