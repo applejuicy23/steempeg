@@ -56,15 +56,6 @@ def _ease_in_out_cubic(t: float) -> float:
     return 1.0 - (u * u * u) / 2.0
 
 
-def _smoothstep(t: float) -> float:
-    """Hermite smoothstep — no visible 'start of fade' kink."""
-    if t <= 0.0:
-        return 0.0
-    if t >= 1.0:
-        return 1.0
-    return t * t * (3.0 - 2.0 * t)
-
-
 def _scroll_factor(elapsed_ms: int) -> float:
     """Map global elapsed time → offset factor in [0, 1] for the current cycle."""
     t = int(elapsed_ms) % _CYCLE_MS
@@ -80,93 +71,6 @@ def _scroll_factor(elapsed_ms: int) -> float:
     return 1.0 - _ease_in_out_cubic(float(t) / float(_TRAVEL_MS))
 
 
-def _edge_fade_width(rect_w: float) -> float:
-    if rect_w < _EDGE_FADE_MIN_W:
-        return 0.0
-    return min(_EDGE_FADE_PX, max(6.0, rect_w * 0.10))
-
-
-def _edge_fade_strengths(
-    offset: float, max_offset: float, fade_px: float
-) -> tuple[float, float]:
-    """Left [A] / right [B] from how many px are still clipped past each edge.
-
-    Rest @ start: offset=0 → only [B]. Rest @ end: offset=max → only [A].
-    Mid-travel: both full. Near a rest the fade *width* shrinks with the
-    remaining overhang — driven by scroll geometry, not a timed strength ramp
-    (that looked like the blur peeling off after the title stopped).
-    """
-    if max_offset <= 0.0 or fade_px <= 0.0:
-        return 0.0, 0.0
-    left_overhang = max(0.0, float(offset))
-    right_overhang = max(0.0, float(max_offset) - float(offset))
-    left = min(1.0, left_overhang / fade_px)
-    right = min(1.0, right_overhang / fade_px)
-    return left, right
-
-
-def _dissolve_layer_edges(
-    img: QImage,
-    *,
-    left_strength: float,
-    right_strength: float,
-    fade_px: float,
-) -> None:
-    """Smoothstep-dissolve glyph alpha on the text layer (not a widget fog)."""
-    left_strength = max(0.0, min(1.0, float(left_strength)))
-    right_strength = max(0.0, min(1.0, float(right_strength)))
-    fade_left = left_strength > 0.02
-    fade_right = right_strength > 0.02
-    if fade_px <= 0.0 or (not fade_left and not fade_right):
-        return
-    # Paint in logical coords — QImage DPR maps them to physical pixels.
-    dpr = max(float(img.devicePixelRatio()), 1.0)
-    lw = float(img.width()) / dpr
-    lh = float(img.height()) / dpr
-    if lw <= 1.0:
-        return
-    fade_l = min(fade_px * left_strength, lw * 0.4)
-    fade_r = min(fade_px * right_strength, lw * 0.4)
-    fl = fade_l / lw if fade_left else 0.0
-    fr = fade_r / lw if fade_right else 0.0
-
-    # Build stops in order. Alpha 0 = drop glyph, 255 = keep.
-    stops: list[tuple[float, int]] = []
-    steps = 8
-    if fade_left and fl > 0.0:
-        for i in range(steps + 1):
-            t = float(i) / float(steps)
-            stops.append((fl * t, int(255 * _smoothstep(t))))
-    else:
-        stops.append((0.0, 255))
-
-    mid_lo = fl if fade_left else 0.0
-    mid_hi = (1.0 - fr) if fade_right else 1.0
-    if mid_lo < mid_hi:
-        stops.append((mid_lo + 1e-4, 255))
-        stops.append((mid_hi - 1e-4, 255))
-
-    if fade_right and fr > 0.0:
-        for i in range(steps + 1):
-            t = float(i) / float(steps)
-            stops.append((1.0 - fr * t, int(255 * _smoothstep(t))))
-    else:
-        stops.append((1.0, 255))
-
-    stops.sort(key=lambda s: s[0])
-    grad = QLinearGradient(0.0, 0.0, lw, 0.0)
-    last_p = -1.0
-    for pos, alpha in stops:
-        pos = max(0.0, min(1.0, pos))
-        if pos - last_p < 1e-5:
-            pos = min(1.0, last_p + 1e-5)
-        grad.setColorAt(pos, QColor(0, 0, 0, alpha))
-        last_p = pos
-
-    p = QPainter(img)
-    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-    p.fillRect(0, 0, int(round(lw + 0.5)), int(round(lh + 0.5)), grad)
-    p.end()
 class _MarqueeTicker:
     """One shared timer + wall clock for all active OverflowMarqueeLabel instances."""
 
@@ -268,20 +172,6 @@ class _MarqueeTicker:
 _TICKER = _MarqueeTicker()
 
 
-def suspend_clip_marquees() -> None:
-    """Stop title marquees while Clips Manager is doing heavy UI work."""
-    _TICKER.suspend()
-
-
-def resume_clip_marquees() -> None:
-    _TICKER.resume()
-
-
-def set_clip_marquees_busy(busy: bool) -> None:
-    """Ensure marquees stay at full tick rate (busy flag no longer throttles)."""
-    _TICKER.set_busy(bool(busy))
-
-
 class OverflowMarqueeLabel(QLabel):
     """Label that marquees when text is wider than the widget.
 
@@ -306,11 +196,6 @@ class OverflowMarqueeLabel(QLabel):
         self.setMinimumWidth(0)
         if text:
             self.setText(text)
-
-    def set_marquee_align(self, align: Qt.AlignmentFlag) -> None:
-        """Align short (non-overflow) text; overflow still marquees."""
-        self._h_align = align
-        self.update()
 
     def setText(self, text: str) -> None:  # noqa: N802 — Qt API
         self._full_text = text or ""
