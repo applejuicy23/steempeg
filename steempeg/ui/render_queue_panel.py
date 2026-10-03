@@ -1050,11 +1050,6 @@ class RenderQueuePanel(QWidget):
             self._btn_view_list.setStyleSheet(inactive)
             self._btn_view_grid.setStyleSheet(active)
 
-    def _active_host_layout(self):
-        if self._view_mode == "grid":
-            return self._grid_layout
-        return self._list_layout
-
     def _show_active_host(self) -> None:
         is_grid = self._view_mode == "grid"
         self._list_host.setVisible(not is_grid)
