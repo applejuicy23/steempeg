@@ -24,44 +24,8 @@ _CAPTION_ONLY_MASK = WS_CAPTION | WS_SYSMENU
 _BORDERLESS_MASK = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
 
 
-def win32_hide_native_caption(widget):
-    """Remove native title-bar chrome but keep WS_THICKFRAME for edge resize."""
-    hwnd = _hwnd(widget)
-    style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~_CAPTION_ONLY_MASK)
-    _frame_changed(hwnd)
-    return style
-
-
-def win32_restore_native_caption(widget, saved_style):
-    hwnd = _hwnd(widget)
-    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, saved_style)
-    _frame_changed(hwnd)
-
-
 def _hwnd(widget):
     return int(widget.winId())
-
-
-def _frame_changed(hwnd):
-    ctypes.windll.user32.SetWindowPos(
-        hwnd, 0, 0, 0, 0, 0,
-        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-    )
-
-
-def win32_hide_title_bar(widget):
-    hwnd = _hwnd(widget)
-    style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~_BORDERLESS_MASK)
-    _frame_changed(hwnd)
-    return style
-
-
-def win32_restore_title_bar(widget, saved_style):
-    hwnd = _hwnd(widget)
-    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, saved_style)
-    _frame_changed(hwnd)
 
 
 _SW_SHOWNORMAL = 1
