@@ -178,12 +178,6 @@ def find_icon_urls(app_id, timeout=7) -> list[str]:
     return urls
 
 
-def find_icon_url(app_id, timeout=7):
-    """Find a square game-icon URL for `app_id`, or None."""
-    urls = find_icon_urls(app_id, timeout=timeout)
-    return urls[0] if urls else None
-
-
 def download_icon(app_id, dest_path, timeout=5, *, prefer_network=False):
     """Find and download the game icon for `app_id` to `dest_path`.
 
