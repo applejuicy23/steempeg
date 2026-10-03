@@ -3265,9 +3265,6 @@ class RenderedLibraryMixin:
         def name_key(row: tuple[str, dict]) -> str:
             return row[0].lower()
 
-        def count_key(row: tuple[str, dict]) -> int:
-            return int(row[1].get("count") or 0)
-
         def recent_key(row: tuple[str, dict]) -> float:
             return float(row[1].get("max_mtime") or 0.0)
 
@@ -3552,19 +3549,6 @@ class RenderedLibraryMixin:
                 }
             )
         return rows
-
-    def _collect_steam_screenshot_rows(self) -> list[dict]:
-        """Deprecated sync helper — prefer ``_start_steam_screenshots_scan``."""
-        # Kept for rare debug call sites; do not use on the UI startup path.
-        rows: list[dict] = []
-        try:
-            from steempeg.core.steam_screenshots import iter_steam_library_screenshots
-
-            entries = iter_steam_library_screenshots()
-        except Exception as exc:
-            logging.warning("Steam screenshots scan failed: %s", exc)
-            return rows
-        return self._steam_entries_to_rows(entries)
 
     def _sync_screenshot_photo_visuals(self) -> None:
         grid = getattr(self, "grid_screenshots", None)
@@ -4885,19 +4869,6 @@ class RenderedLibraryMixin:
             QTimer.singleShot(200, self._schedule_screenshot_game_name_backfill)
         return True
 
-    def restore_screenshots_from_session_cache(self) -> bool:
-        """Session Screenshots — JSON off-UI; shelf per Screenshots shelf-load setting."""
-        if getattr(self, "_screenshots_session_painted", False):
-            return True
-        if self._screenshots_shelf_is_scroll_mode():
-            # Catalog warm only until Screenshots tab opens.
-            if str(getattr(self, "_library_panel_mode", "") or "") != "screenshots":
-                return bool(self._begin_screenshots_session_restore_async())
-        if getattr(self, "_screenshots_prefetch_payload", None) is not None:
-            QTimer.singleShot(0, self._apply_screenshots_session_payload)
-            return True
-        return bool(self._begin_screenshots_session_restore_async())
-
     def _collect_unresolved_screenshot_app_ids(self) -> list[str]:
         grid = getattr(self, "grid_screenshots", None)
         if grid is None:
@@ -5243,11 +5214,6 @@ class RenderedLibraryMixin:
 
         floor_y = self._filter_popup_floor_y(menu_y) if hasattr(self, "_filter_popup_floor_y") else menu_y + 400
         menu.set_content_max_height(max(160, floor_y - menu_y - 8))
-
-    def _on_screenshot_item_activated(self, item: QListWidgetItem) -> None:
-        path = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if path:
-            self._on_screenshot_open(str(path))
 
     def _seed_rendered_icons_cache(self) -> dict[str, str]:
         """Reuse game icons already fetched during the Clips Manager scan."""
@@ -6154,9 +6120,6 @@ class RenderedLibraryMixin:
 
         QTimer.singleShot(0, self._sync_library_scrollbars)
 
-    def _sync_rendered_view_mode(self):
-        self._apply_rendered_view_mode()
-
     def apply_rendered_sorting(self):
         if not hasattr(self, "table_rendered") or not hasattr(self, "combo_sort"):
             return
@@ -6796,9 +6759,6 @@ class RenderedLibraryMixin:
             f"Permanently delete {len(paths)} rendered files?",
             detail,
         )
-
-    def delete_rendered_file(self, file_path: str) -> None:
-        self.delete_rendered_files([file_path])
 
     def delete_rendered_files(self, file_paths: list[str]) -> None:
         paths = [p for p in file_paths if p and os.path.isfile(p)]
