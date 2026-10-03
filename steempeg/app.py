@@ -3873,47 +3873,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             {tok.STYLE_TOOLTIP}
         """
 
-    def apply_chrome_theme(self, name: str, persist: bool = True) -> None:
-        """Switch the title bar / background color theme live."""
-        from PySide6.QtGui import QColor, QPalette
-        from steempeg.ui import design_tokens as tok
-
-        if name not in tok.CHROME_THEMES:
-            name = tok.DEFAULT_CHROME_THEME
-        self._chrome_theme = name
-        colors = tok.chrome_theme_colors(name)
-        app_bg = colors["app_bg"]
-        bar_bg = colors["title_bar"]
-
-        palette = self.ui.palette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
-        self.ui.setPalette(palette)
-        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
-        try:
-            from steempeg.ui.design_tokens import apply_app_tooltip_style
-
-            apply_app_tooltip_style()
-        except Exception:
-            pass
-
-        # Shell wrappers created by install_title_bar (appShell + appContent).
-        for attr, obj_name in (
-            ("_custom_chrome_shell", "appShell"),
-            ("_custom_content_wrap", "appContent"),
-        ):
-            widget = getattr(self.ui, attr, None)
-            if widget is not None:
-                widget.setStyleSheet(f"QWidget#{obj_name} {{ background-color: {app_bg}; }}")
-
-        title_bar = getattr(self.ui, "title_bar", None)
-        if title_bar is not None and hasattr(title_bar, "set_bar_color"):
-            title_bar.set_bar_color(bar_bg)
-
-        self._apply_dark_shell()
-
-        if persist:
-            self.save_user_settings("chrome_theme", name)
-
     def apply_ui_theme(self, name: str, persist: bool = True, *, preview: bool = False) -> None:
         """Switch Default / TrueDark / TrueDark OLED — tokens + shell surfaces."""
         from PySide6.QtGui import QColor, QPalette
@@ -3982,32 +3941,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         if persist:
             self.save_user_settings(ut.KEY_UI_THEME, name)
-
-    def finalize_ui_theme_shell(self) -> None:
-        """Root shell QSS after live preview — skips surface re-tint."""
-        from PySide6.QtGui import QColor, QPalette
-
-        from steempeg.ui import ui_theme as ut
-        from steempeg.ui.design_tokens import apply_app_tooltip_style
-
-        name = ut.get_ui_theme()
-        colors = ut.chrome_colors_for_active()
-        app_bg = colors["app_bg"]
-
-        if name == ut.UI_THEME_DEFAULT:
-            dense = getattr(self, "_ui_density", None)
-            if dense is not None:
-                self._apply_ui_density(dense)
-                return
-
-        palette = self.ui.palette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
-        self.ui.setPalette(palette)
-        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
-        try:
-            apply_app_tooltip_style()
-        except Exception:
-            pass
 
     @staticmethod
     def _fmt_dash_btn(
