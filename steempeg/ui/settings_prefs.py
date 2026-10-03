@@ -103,14 +103,6 @@ def load_shell_side_layout(settings: dict | None = None) -> str:
     return set_shell_side_layout(raw)
 
 
-def shell_queue_on_left(settings: dict | None = None) -> bool:
-    if settings is None:
-        return get_shell_side_layout() == SHELL_SIDE_QUEUE_LEFT
-    return normalize_shell_side_layout(
-        (settings or {}).get(KEY_SHELL_SIDE_LAYOUT, DEFAULT_SHELL_SIDE_LAYOUT)
-    ) == SHELL_SIDE_QUEUE_LEFT
-
-
 # ----- Desktop shell: hover slide-out for Render Queue -----
 
 KEY_QUEUE_HOVER = "queue_hover"
@@ -281,19 +273,6 @@ def load_desktop_render_layout(settings: dict | None = None) -> str:
     return normalize_desktop_render_layout(
         (settings or {}).get(KEY_DESKTOP_RENDER_LAYOUT, DEFAULT_DESKTOP_RENDER_LAYOUT)
     )
-
-
-def normalize_portable_like_middle_splitter(value: object | None) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value or "").strip().lower()
-    if text in ("1", "true", "yes", "on"):
-        return True
-    if text in ("0", "false", "no", "off", ""):
-        return False
-    return DEFAULT_PORTABLE_LIKE_MIDDLE_SPLITTER
 
 
 def load_portable_like_middle_splitter(settings: dict | None) -> bool:
@@ -1380,10 +1359,6 @@ def immersive_transition_cover_enabled() -> bool:
     if raw in ("1", "true", "yes", "on"):
         return True
     return not bool(_runtime_test_new_fullscreen)
-
-
-def current_ffmpeg_loglevel() -> str:
-    return _runtime_ffmpeg_loglevel or "error"
 
 
 def current_mpv_loglevel() -> str:
