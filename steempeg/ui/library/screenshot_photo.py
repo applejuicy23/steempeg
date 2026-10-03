@@ -245,29 +245,10 @@ class ScreenshotPhoto(QWidget):
                 self._info_btn.setToolTip(tip)
         self.update()
 
-    def set_subtitle(self, subtitle: str) -> None:
-        text = (subtitle or "").strip()
-        if text == self._subtitle:
-            return
-        self._subtitle = text
-        if self._spec.footer_mode == "info":
-            tip = self._info_tip or f"{self._title}\n{self._subtitle}".strip()
-            self.setToolTip(tip)
-            if self._info_btn is not None:
-                self._info_btn.setToolTip(tip)
-        self.update()
-
     @staticmethod
     def _normalize_source(source: str) -> str:
         key = (source or "steempeg").strip().lower()
         return "steam" if key == "steam" else "steempeg"
-
-    def set_source(self, source: str) -> None:
-        key = self._normalize_source(source)
-        if key == self._source:
-            return
-        self._source = key
-        self.update()
 
     def source_key(self) -> str:
         return self._source
