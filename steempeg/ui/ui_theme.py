@@ -459,38 +459,6 @@ def footer_pill_stylesheet() -> str:
     """
 
 
-def unified_button_stylesheet() -> str:
-    p = _active
-    return f"""
-        QPushButton {{
-            background-color: {p.button_secondary_bg};
-            color: #ffffff;
-            border: 2px solid {p.button_secondary_border};
-            border-radius: 14px;
-            font-family: {tok.FONT_APP};
-            font-weight: bold;
-            font-size: 13px;
-            padding: 4px 12px;
-            min-height: 24px;
-            outline: none;
-        }}
-        QPushButton:hover {{ background-color: {p.button_secondary_hover_bg}; border: 2px solid #6b5a8e; }}
-        QPushButton:pressed {{ background-color: {p.button_secondary_pressed_bg}; border: 2px solid #b29ae7; }}
-        QPushButton:disabled {{
-            background-color: {p.button_disabled_bg};
-            color: #555555;
-            border: 2px solid {p.button_disabled_border};
-        }}
-        QPushButton:focus, QPushButton:default {{
-            background-color: {p.button_secondary_bg};
-            color: #ffffff;
-            border: 2px solid {p.button_secondary_border};
-            outline: none;
-        }}
-        QPushButton::menu-indicator {{ image: none; }}
-    """
-
-
 def footer_button_stylesheet(dense) -> str:
     """Library footer row — density-aware secondary buttons."""
     p = _active
@@ -1092,31 +1060,6 @@ def marker_settings_field_stylesheet() -> str:
 """ + combo_popup_item_rules()
 
 
-def marker_settings_list_stylesheet(*, item_padding: str = "6px 8px") -> str:
-    """Marker Settings QListWidget plates."""
-    p = _active
-    if p.name == UI_THEME_DEFAULT:
-        bg, border, hover, sel = "#242424", "#444444", "#333", "#3a3a3a"
-    else:
-        bg = p.bg_elevated
-        border = p.border_card
-        hover = p.neo_nav_hover_bg
-        sel = "#3a3a3a"
-    return f"""
-    QListWidget {{
-        background-color: {bg}; border: 1px solid {border}; border-radius: 8px;
-        color: #eee; font-size: 13px; outline: none;
-        font-family: {tok.FONT_APP};
-    }}
-    QListWidget::item {{
-        padding: {item_padding}; margin: 2px 4px; border-radius: 6px;
-        min-height: 22px;
-    }}
-    QListWidget::item:selected {{ background-color: {sel}; color: #ffffff; }}
-    QListWidget::item:hover:!selected {{ background-color: {hover}; }}
-"""
-
-
 def marker_settings_list_host_stylesheet() -> str:
     """On-clip marker table — Clips Manager List energy + dialog plate."""
     from steempeg.ui.library.library_styles import LIBRARY_SCROLLBAR_VERTICAL
@@ -1218,40 +1161,6 @@ def marker_settings_class_list_stylesheet() -> str:
     }}
     QListWidget#markerClassList::item:hover:!selected {{
         background-color: {hover};
-    }}
-"""
-
-
-def marker_settings_pick_row_stylesheet(*, selected: bool = False) -> str:
-    """Selectable marker row in the On clip list."""
-    p = _active
-    if selected:
-        bg = "#3a3a3a" if p.name == UI_THEME_DEFAULT else p.neo_nav_checked_bg
-        fg = "#ffffff"
-    else:
-        bg = "transparent"
-        fg = "#e8e8e8"
-    hover = p.neo_nav_hover_bg if p.name != UI_THEME_DEFAULT else "#333333"
-    if selected:
-        return f"""
-    QFrame#mkPick {{
-        background-color: {bg}; border-radius: 6px;
-    }}
-    QFrame#mkPick QLabel {{
-        color: {fg}; font-size: 13px; background: transparent;
-        font-family: {tok.FONT_APP};
-    }}
-"""
-    return f"""
-    QFrame#mkPick {{
-        background: transparent; border-radius: 6px;
-    }}
-    QFrame#mkPick:hover {{
-        background-color: {hover};
-    }}
-    QFrame#mkPick QLabel {{
-        color: {fg}; font-size: 13px; background: transparent;
-        font-family: {tok.FONT_APP};
     }}
 """
 
@@ -2879,91 +2788,6 @@ def update_center_btn_primary_stylesheet() -> str:
     QPushButton:hover {{ background-color: #5a4d76; border-color: #b29ae7; }}
     QPushButton:pressed {{ background-color: #3a324a; }}
     QPushButton:disabled {{ background-color: {dis_bg}; color: #666; border-color: {dis_border}; }}
-"""
-
-
-def update_center_btn_secondary_stylesheet() -> str:
-    """Update Center secondary actions — TrueDark secondary button family."""
-    p = _active
-    if p.name == UI_THEME_DEFAULT:
-        bg, border, hover = "#333333", "#555555", "#444444"
-        dis_bg, dis_border = "#2a2a2a", "#444444"
-        return f"""
-    QPushButton {{
-        background-color: {bg}; color: #ccc; border: 1px solid {border};
-        border-radius: 8px; padding: 6px 14px; font-size: 12px;
-    }}
-    QPushButton:hover {{ background-color: {hover}; color: #fff; border-color: #6b5a8e; }}
-    QPushButton:disabled {{ background-color: {dis_bg}; color: #666; border-color: {dis_border}; }}
-"""
-    # Card-plate fill reads darker on the dialog shell than button_secondary_bg alone.
-    bg = p.bg_card
-    border = p.button_secondary_border
-    hover = p.button_secondary_hover_bg
-    pressed = p.button_secondary_pressed_bg
-    dis_bg = p.button_disabled_bg
-    dis_border = p.button_disabled_border
-    return f"""
-    QPushButton {{
-        font-family: {tok.FONT_APP};
-        font-size: 12px;
-        font-weight: bold;
-        background-color: {bg};
-        color: #ffffff;
-        border: 2px solid {border};
-        border-radius: 8px;
-        padding: 6px 14px;
-        outline: none;
-    }}
-    QPushButton:hover {{
-        background-color: {hover};
-        border: 2px solid #6b5a8e;
-    }}
-    QPushButton:pressed {{
-        background-color: {pressed};
-        border: 2px solid #b29ae7;
-    }}
-    QPushButton:disabled {{
-        background-color: {dis_bg};
-        color: #555555;
-        border: 2px solid {dis_border};
-    }}
-    QPushButton::menu-indicator {{ image: none; }}
-"""
-
-
-def update_center_btn_current_stylesheet() -> str:
-    """Update Center — installed version indicator (secondary plate, non-actionable)."""
-    p = _active
-    if p.name == UI_THEME_DEFAULT:
-        bg, border = "#333333", "#555555"
-        return f"""
-    QPushButton {{
-        background-color: {bg}; color: #ccc; border: 1px solid {border};
-        border-radius: 8px; padding: 6px 14px; font-size: 12px;
-    }}
-    QPushButton:disabled {{ background-color: {bg}; color: #888; border-color: {border}; }}
-"""
-    bg = p.bg_card
-    border = p.button_secondary_border
-    return f"""
-    QPushButton {{
-        font-family: {tok.FONT_APP};
-        font-size: 12px;
-        font-weight: bold;
-        background-color: {bg};
-        color: #888888;
-        border: 2px solid {border};
-        border-radius: 8px;
-        padding: 6px 14px;
-        outline: none;
-    }}
-    QPushButton:disabled {{
-        background-color: {bg};
-        color: #888888;
-        border: 2px solid {border};
-    }}
-    QPushButton::menu-indicator {{ image: none; }}
 """
 
 
