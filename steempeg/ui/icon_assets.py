@@ -256,13 +256,6 @@ def title_bar_update_pixmap(color: str | QColor, size: int = 16) -> QPixmap:
     return _tinted_cropped_asset("update.png", color, size)
 
 
-def title_bar_update_icons(size: int = 16) -> tuple[QIcon, QIcon]:
-    """Idle + hot icons for the title-bar Updates spinner button."""
-    idle = _icon_from_pixmap(title_bar_update_pixmap("#b8b8b8", size))
-    hot = _icon_from_pixmap(title_bar_update_pixmap("#e8e8e8", size))
-    return idle, hot
-
-
 def update_arrows_spin_frame(
     color: str | QColor,
     size: int,
@@ -477,11 +470,6 @@ def add_clip_icon(size: int = 18) -> QIcon:
     return tinted_icon("addclip.png", "#d4c8f5", size)
 
 
-def add_to_queue_icon(size: int = 14) -> QIcon:
-    """Painted bold plus — weight matched to 13px bold chip text (not plus.png)."""
-    return bold_plus_icon(size, "#ffcc00")
-
-
 def bold_plus_icon(size: int = 12, color: str | QColor = "#ffcc00") -> QIcon:
     """Plus for chip labels — tight box, glyph ≈ cap-height of bold 13px Q."""
     from PySide6.QtCore import QPointF
@@ -591,10 +579,6 @@ def _glyph_pixmap_from_bw(name: str, size: int = 16, *, color: str = "#ffffff") 
     from steempeg.ui.icon_utils import square_fit_pixmap
 
     return square_fit_pixmap(pix, size, dpr=1.0)
-
-
-def _white_glyph_pixmap(name: str, size: int = 16) -> QPixmap:
-    return _glyph_pixmap_from_bw(name, size, color="#ffffff")
 
 
 def _dash_button_glyph_icon(name: str, size: int = 16) -> QIcon:
