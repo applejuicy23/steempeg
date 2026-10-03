@@ -130,11 +130,6 @@ class DateGroup(QWidget):
         self.d.validate_text(self.d.currentText())
         self.d.blockSignals(False)
         
-    def set_dt(self, qd):
-        self.y.setCurrentText(str(qd.year()))
-        self.m.setCurrentText(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][qd.month()-1])
-        self.d.setCurrentText(f"{qd.day():02d}")
-
 class TimeGroup(QWidget):
     def __init__(self, mode="time"): 
         super().__init__()
@@ -165,13 +160,6 @@ class TimeGroup(QWidget):
         h = h % 12
         self.h.setCurrentText(f"{12 if h==0 else h:02d}")
         self.m.setCurrentText(f"{qt.minute():02d}")
-
-    def set_sec(self, sec):
-        self.h.setCurrentText(f"{sec//3600:02d}")
-        self.m.setCurrentText(f"{(sec%3600)//60:02d}")
-        self.s.setCurrentText(f"{sec%60:02d}")
-
-
 
 class FilterMenu(PillPaintDragMixin, QWidget):
     def __init__(self, parent=None):

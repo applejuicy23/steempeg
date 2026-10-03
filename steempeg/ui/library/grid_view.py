@@ -54,13 +54,6 @@ _THUMB_PEEK_DELAY_MS = 2000
 _THUMB_PEEK_FADE_MS = 220
 
 
-def _circular_icon_pixmap(source: qtg.QPixmap, size: int) -> qtg.QPixmap:
-    """Backward-compatible alias — prefer shaped_game_icon_pixmap. """
-    from steempeg.ui.icon_shape import ICON_SHAPE_CIRCLE, shaped_game_icon_pixmap
-
-    return shaped_game_icon_pixmap(source, size, ICON_SHAPE_CIRCLE)
-
-
 def _asymmetric_round_rect(
     w: float, h: float, tl: float, tr: float, br: float, bl: float
 ) -> qtg.QPainterPath:
