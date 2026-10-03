@@ -30,17 +30,6 @@ def _iter_files(root: str) -> Iterable[tuple[str, int, float]]:
             yield path, int(st.st_size), float(st.st_mtime)
 
 
-def media_cache_bytes(cache_dir: str | None) -> int:
-    if not cache_dir:
-        return 0
-    total = 0
-    for sub in _MEDIA_CACHE_SUBDIRS:
-        folder = os.path.join(cache_dir, sub)
-        for _path, size, _mtime in _iter_files(folder) or ():
-            total += size
-    return total
-
-
 def prune_media_cache(cache_dir: str | None, limit_gb: int) -> tuple[int, int]:
     """Delete oldest media-cache files until under *limit_gb*.
 
