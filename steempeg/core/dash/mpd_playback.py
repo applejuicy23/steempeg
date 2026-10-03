@@ -699,21 +699,3 @@ def existing_playback_cache_for_play(
     if not os.path.isfile(sibling):
         return None
     return existing_playback_cache(sibling, quality_id=quality_id)
-
-
-def resolve_playback_media_path(
-    media_path: str, *, quality_id: str | None = None
-) -> str:
-    """Path that libmpv can open. Remuxes ``.mpd`` on Linux when needed."""
-    if not media_path:
-        return media_path
-    if not should_remux_mpd_for_playback(quality_id):
-        return media_path
-    if not media_path.lower().endswith(".mpd"):
-        return media_path
-    if not os.path.isfile(media_path):
-        return media_path
-    warm = existing_playback_cache_for_play(media_path, quality_id=quality_id)
-    if warm:
-        return warm
-    return remux_mpd_for_playback(media_path, quality_id=quality_id)

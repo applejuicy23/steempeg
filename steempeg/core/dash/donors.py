@@ -47,24 +47,3 @@ def find_bundled_donor_init(
     except OSError:
         return None
     return None
-
-
-def list_bundled_donor_app_ids() -> list[str]:
-    """Steam app_ids that have a bundled video init under ``assets/donors/``."""
-    root = get_resource_path("donors")
-    if not os.path.isdir(root):
-        return []
-    found: list[str] = []
-    try:
-        for name in sorted(os.listdir(root)):
-            if not name.isdigit():
-                continue
-            init = os.path.join(root, name, _VIDEO_INIT)
-            try:
-                if os.path.isfile(init) and os.path.getsize(init) >= _MIN_INIT_BYTES:
-                    found.append(name)
-            except OSError:
-                continue
-    except OSError:
-        return []
-    return found
