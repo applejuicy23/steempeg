@@ -502,12 +502,6 @@ class LifecycleMixin:
                 state = "busy"
             self.update_status_indicator(text, state)
 
-    def elide_path(self, path, max_len=75):
-        """ Smart truncation of long paths (keeps start and end) """
-        if len(path) <= max_len: return path
-        half = (max_len - 7) // 2
-        return path[:half] + " [...] " + path[-half:]
-    
     def closeEvent(self, event):
         """ Triggered automatically when the window's red 'X' button is clicked """
         self._force_pause = True
@@ -553,12 +547,8 @@ class LifecycleMixin:
             self._stop_rendered_scan()
         if hasattr(self, '_stop_clip_poster_backfill'):
             self._stop_clip_poster_backfill()
-        if hasattr(self, '_stop_clip_thumb_probe'):
-            self._stop_clip_thumb_probe()
         if hasattr(self, '_stop_screenshots_cache_prefetch'):
             self._stop_screenshots_cache_prefetch()
-        if hasattr(self, '_stop_rendered_cache_prefetch'):
-            self._stop_rendered_cache_prefetch()
         if hasattr(self, '_stop_rendered_poster_backfill'):
             self._stop_rendered_poster_backfill()
         if hasattr(self, 'custom_timeline') and hasattr(self.custom_timeline, 'canvas'):
@@ -1302,88 +1292,3 @@ class LifecycleMixin:
             "Clear cache",
             f"Removed {removed} item(s) ({log_util.format_bytes(freed)} freed).",
         )
-
-
-    def clear_clip_state(self):
-        """ Clears the interface when the clip is closed by clicking the X """
-        
-        self.ui.lbl_top_info.setText("Clip not chosen") 
-        
-        self.ui.lbl_source_resolution.setText("-")
-        self.ui.lbl_source_fps.setText("-")
-        self.ui.lbl_source_duration.setText("-")
-
-      
-        if hasattr(self, 'player'):
-            self.player.command("stop")
-        if hasattr(self, 'video_wrapper'):
-            self.video_wrapper.layout().setCurrentIndex(1)
-        if hasattr(self, "_sync_start_render_enabled"):
-            self._sync_start_render_enabled()
-        else:
-            self.ui.btn_start.setEnabled(False)
-            self.ui.btn_start.setText(" Choose clip for render")
-            if hasattr(self, "_apply_desktop_dash_render_icons"):
-                self._apply_desktop_dash_render_icons()
-
-        if hasattr(self.ui, 'label_time'):
-            self.ui.label_time.setText("00:00 / 00:00")
-            
-        if hasattr(self.ui, 'btn_play'):
-            self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
-            
-        # 1. Clear the Source Info tab to dashes.
-        if hasattr(self.ui, 'source_label'): self.ui.source_label.setText("Source: -")
-        if hasattr(self.ui, 'orig_res_label'): self.ui.orig_res_label.setText("Original resolution: -")
-        if hasattr(self.ui, 'label_vbitrate'): self.ui.label_vbitrate.setText("Video Bitrate: -")
-        if hasattr(self.ui, 'label_abitrate'): self.ui.label_abitrate.setText("Audio Bitrate: -")
-        if hasattr(self.ui, 'label_size'): self.ui.label_size.setText("Size: -")
-        if hasattr(self.ui, 'label_duration'): self.ui.label_duration.setText("Time: -")
-        if hasattr(self.ui, 'label_fps'): self.ui.label_fps.setText("FPS: -")
-
-       # 2. Hiding the small path-copying icons
-        if hasattr(self, 'btn_copy_src'): self.btn_copy_src.hide()
-        if hasattr(self, 'btn_copy_loc'): self.btn_copy_loc.hide()
-
-        # 3. Safely clearing dropdown lists (blocking signals to avoid crashing Python)
-        def clear_combo(combo_name):
-            if hasattr(self.ui, combo_name):
-                widget = getattr(self.ui, combo_name)
-                widget.blockSignals(True)
-                widget.clear()
-                widget.blockSignals(False)
-
-        clear_combo('combo_quality')
-        clear_combo('combo_fps')
-        clear_combo('combo_bitrate')
-        clear_combo('combo_audio_bitrate')
-
-        # Hide the custom size slider (if it was open)
-        if hasattr(self.ui, 'size_slider'): self.ui.size_slider.hide()
-        if hasattr(self, 'size_container'): self.size_container.hide()
-
-        #4. Clear the Export Settings and delete the filename.
-        if hasattr(self.ui, 'input_filename'):
-            self.ui.input_filename.blockSignals(True)
-            self.ui.input_filename.clear()
-            self.ui.input_filename.blockSignals(False)
-            
-        if hasattr(self.ui, 'label_short_summary'):
-            if hasattr(self, "_sync_queue_player_and_dash_chrome"):
-                self._sync_queue_player_and_dash_chrome()
-            elif hasattr(self, 'reset_bottom_summary'):
-                self.reset_bottom_summary()
-        if hasattr(self.ui, 'label_detailed_summary'):
-            self.ui.label_detailed_summary.setText("Waiting for clip selection...")
-        if hasattr(self.ui, 'label_location'):
-            self.ui.label_location.setText("")
-        path_row = getattr(self.ui, "output_path_row", None)
-        if path_row is not None:
-            path_row.hide()
-            
-        # 5. Hard-Block the Render Button — unless the queue still has pending work.
-        if hasattr(self.ui, 'btn_start'):
-            if hasattr(self, "_sync_start_render_enabled"):
-                self._sync_start_render_enabled()
-            else:
-                self.ui.btn_start.setEnabled(False)
