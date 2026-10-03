@@ -128,11 +128,6 @@ FONT_TITLE_SIZE = 10
 FONT_SUBTITLE_SIZE = 10
 
 
-def font_family_css() -> str:
-    """Live ``font-family: …`` stack (read ``tok.FONT_APP`` / this helper at use time)."""
-    return FONT_FAMILY_CSS
-
-
 def normalize_ui_font(value: object | None) -> str:
     raw = str(value or "").strip().lower()
     aliases = {
