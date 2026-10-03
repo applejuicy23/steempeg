@@ -553,44 +553,6 @@ def _output_basename_for_clip(app: SteempegApp, clip_path: str, settings: Render
     return default_name
 
 
-def apply_per_clip_export_to_settings(
-    app: SteempegApp, clip_path: str, settings: RenderJobSettings
-) -> None:
-    """When queueing a clip that is not being previewed, use its own export memory."""
-    clip_norm = os.path.normpath(clip_path)
-    preview = getattr(app, "_preview_clip_path", None)
-    if preview and os.path.normpath(preview) == clip_norm:
-        return
-
-    memory = getattr(app, "_clip_session_memory", {}).get(clip_norm, {})
-    if memory:
-        settings.container_format = memory.get("container", "MP4")
-        settings.codec_text = memory.get("codec_text", "H.265 (HEVC)")
-        settings.audio_format = memory.get("audio_format", "AAC")
-        settings.output_preset = memory.get("output_preset", "Custom")
-        settings.audio_only = bool(memory.get("audio_only", False))
-        settings.mute_audio = bool(memory.get("mute_audio", False))
-        return
-
-    job = app.render_queue.find_by_clip_path(clip_path) if hasattr(app, "render_queue") else None
-    if job:
-        s = job.settings
-        settings.container_format = s.container_format or "MP4"
-        settings.codec_text = s.codec_text
-        settings.audio_format = s.audio_format
-        settings.output_preset = s.output_preset or "Custom"
-        settings.audio_only = bool(s.audio_only)
-        settings.mute_audio = bool(s.mute_audio)
-        return
-
-    settings.container_format = "MP4"
-    settings.codec_text = "H.265 (HEVC)"
-    settings.audio_format = "AAC"
-    settings.output_preset = "Custom"
-    settings.audio_only = False
-    settings.mute_audio = False
-
-
 @dataclass
 class QueueAddPayload:
     """UI-thread snapshot so MPD walk / probe can run off the GUI thread."""
