@@ -59,11 +59,6 @@ class TimelineStripMetrics:
     ruler_gap: int
     bottom_pad: int
 
-    @property
-    def chrome_below(self) -> int:
-        """Dark ruler band under the scrubber (gap + major ticks + pad)."""
-        return int(self.ruler_gap + self.major_tick_h + self.bottom_pad)
-
 
 # Large = pre-pref / previous Large (track 13 + 11/5 ticks + 9pt). Track is
 # constant. Medium ≈ v36.1 compact digits/ticks under that same bar. Small

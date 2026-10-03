@@ -341,7 +341,3 @@ class ShellChooserDialog(SteempegDialog):
     @property
     def chosen_shell(self) -> str | None:
         return self._chosen
-
-    @property
-    def remember_choice(self) -> bool:
-        return bool(self._chk_remember.isChecked())
