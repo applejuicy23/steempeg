@@ -67,15 +67,6 @@ def save_screenshots_library_cache(
     json_cache.write_json(screenshots_library_cache_path(cache_dir), payload)
 
 
-def clear_screenshots_library_cache(cache_dir: str | None) -> None:
-    path = screenshots_library_cache_path(cache_dir)
-    try:
-        if path and os.path.isfile(path):
-            os.remove(path)
-    except OSError:
-        pass
-
-
 def files_from_screenshots_library_cache(
     cache_dir: str | None,
     *,
