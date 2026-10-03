@@ -555,13 +555,6 @@ def _nav_open_combo(app: Any, button: DeckButton) -> bool:
     return True
 
 
-def _nav_combo_popup(app: Any, button: DeckButton) -> bool:
-    """Legacy name — D-pad only path used by older call sites."""
-    if button not in _DPAD:
-        return False
-    return _nav_open_combo(app, button)
-
-
 def _focus_settings_horizontal(app: Any, direction: int) -> None:
     """◀▶ among controls on roughly the same row — never jumps to Queue."""
     page = _render_tab_page(app)
