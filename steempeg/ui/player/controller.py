@@ -3547,13 +3547,6 @@ class PlayerMixin:
         new_time = self.custom_timeline.visual_ms + 15000
         self.custom_timeline.force_jump(new_time)
 
-    def skip_back(self):
-        """ Skips 15 seconds backward using the Independent Timeline Engine """
-        if not hasattr(self, 'custom_timeline') or not self.custom_timeline.isEnabled(): return
-        new_time = self.custom_timeline.visual_ms - 15000
-        self.custom_timeline.force_jump(new_time)
-        
-
     def get_effective_duration(self):
         """ Calculates the real duration of the video. If Trim is active, returns only the trimmed part! """
         if hasattr(self, 'custom_timeline') and self.custom_timeline.is_trim_mode:
@@ -4992,12 +4985,6 @@ class PlayerMixin:
                         src, dur
                     ),
                 )
-
-    def _schedule_preview_post_open_work(
-        self, switch_gen: int, clip_path: str, mpd_path: str
-    ) -> None:
-        """Compat: queue post-open work (same as defer)."""
-        self._defer_preview_post_open_work(switch_gen, clip_path, mpd_path)
 
     def _run_preview_post_open_work(
         self, post_gen: int, switch_gen: int, clip_path: str, mpd_path: str
