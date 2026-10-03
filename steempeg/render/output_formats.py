@@ -184,22 +184,3 @@ def build_audio_args(audio_format: str, audio_bitrate_kbps: str, mute_audio: boo
         return "-c:a pcm_s16le"
     # AAC default — ffmpeg built-in encoder (not libfdk_aac)
     return f"-c:a aac -b:a {audio_bitrate_kbps}"
-
-
-def format_output_summary(
-    container: str,
-    codec_text: str,
-    audio_format: str,
-    *,
-    audio_only: bool = False,
-    mute_audio: bool = False,
-) -> str:
-    """Short line for queue cards / summaries."""
-    c = normalize_container(container)
-    codec = (codec_text or "").split()[0]
-    if audio_only:
-        return f"{c} • {audio_format} extract"
-    if mute_audio:
-        return f"{c} • {codec} • no audio"
-    audio = (audio_format or "AAC").strip()
-    return f"{c} • {codec} • {audio}"

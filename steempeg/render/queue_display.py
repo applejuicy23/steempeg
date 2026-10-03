@@ -202,11 +202,6 @@ def format_job_datetime_line(job: RenderJob) -> str:
     return " • ".join(parts) if parts else "—"
 
 
-def format_job_meta_line(job: RenderJob) -> str:
-    """Alias kept for list cards — same as datetime line."""
-    return format_job_datetime_line(job)
-
-
 def format_job_output(job: RenderJob) -> str:
     path = (job.output_file or "").strip()
     if not path and job.settings.save_dir:
