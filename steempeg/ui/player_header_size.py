@@ -130,10 +130,6 @@ def scale_for(size: object | None = None) -> PlayerHeaderSizeScale:
     return _SCALES[key]
 
 
-def scale_for_current() -> PlayerHeaderSizeScale:
-    return scale_for(_current_size)
-
-
 def _scale_pad_str(pad: str, factor: float) -> str:
     """Scale ``Npx`` tokens in a CSS-like pad string."""
     import re

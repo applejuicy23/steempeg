@@ -45,11 +45,6 @@ def snap_zoom_pct(value: object | None) -> int:
     return min(ZOOM_LADDER, key=lambda s: abs(s - pct))
 
 
-def normalize_zoom_pct(value: object | None) -> int:
-    """Back-compat alias — continuous clamp (label / mpv use live %)."""
-    return clamp_zoom_pct(value)
-
-
 def pct_to_video_zoom(pct: int) -> float:
     """UI percent → mpv ``video-zoom`` (log2 scale factor)."""
     scale = max(0.01, float(clamp_zoom_pct(pct)) / 100.0)
@@ -205,12 +200,6 @@ def is_preview_loupe_armed(app) -> bool:
 def toggle_preview_loupe(app) -> None:
     """Arm / disarm scroll-wheel zoom on the video surface."""
     app._preview_loupe_armed = not is_preview_loupe_armed(app)
-    sync_preview_zoom_chrome(app)
-    sync_preview_zoom_cursor(app)
-
-
-def set_preview_loupe_armed(app, armed: bool) -> None:
-    app._preview_loupe_armed = bool(armed)
     sync_preview_zoom_chrome(app)
     sync_preview_zoom_cursor(app)
 
