@@ -5513,42 +5513,6 @@ class LibraryMixin:
             pass
         return self._attach_clip_card_to_grid_item(item)
 
-    def _dematerialize_clip_grid_item(self, item) -> None:
-        grid = getattr(self, "grid_clips", None)
-        if grid is None or item is None:
-            return
-        card = grid.itemWidget(item)
-        if card is None:
-            return
-        path = str(item.data(Qt.UserRole + 1) or "")
-        grid.removeItemWidget(item)
-        try:
-            card.deleteLater()
-        except RuntimeError:
-            pass
-        live = getattr(self, "_clip_live_paths", None)
-        if isinstance(live, set) and path:
-            live.discard(os.path.normcase(os.path.normpath(path)))
-
-    def _dematerialize_filtered_out_clip_cards(self) -> None:
-        """No-op: Progressive keeps ClipCards for the session even when filtered out.
-
-        Destroying widgets on hide forced a full rematerialize (thumbs/text) whenever
-        the user cleared or changed filters — felt like Progressive «forgot» cards.
-        """
-        return
-
-    def _clip_item_distance_from_viewport(self, grid, item, vp_rect) -> int:
-        idx = grid.indexFromItem(item)
-        if not idx.isValid():
-            return 10**9
-        vr = grid.visualRect(idx)
-        if vr.bottom() < vp_rect.top():
-            return vp_rect.top() - vr.bottom()
-        if vr.top() > vp_rect.bottom():
-            return vr.top() - vp_rect.bottom()
-        return 0
-
     def _clips_refresh_viewport(self) -> None:
         """Materialize visible (+overscan) ClipCards — never drop already-built ones.
 
