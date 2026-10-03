@@ -602,9 +602,6 @@ class PortableRenderControlStrip(QFrame):
             self._app.toggle_render_queue_scheme()
         self.sync_from_app()
 
-    def _on_resume(self) -> None:
-        self._on_leave_resume()
-
     def _on_start(self) -> None:
         from steempeg.ui.portable.sheets import persist_render_settings
 

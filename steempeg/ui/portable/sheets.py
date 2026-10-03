@@ -195,12 +195,6 @@ def portable_render_sheet_geometry(*, compact: bool, shell) -> tuple[int, int, i
     return max(640, w), max(560, h), _QUEUE_RAIL_SPACIOUS
 
 
-def portable_render_sheet_size(*, compact: bool, shell) -> tuple[int, int]:
-    """Fixed dialog size for the current shell footprint."""
-    w, h, _queue = portable_render_sheet_geometry(compact=compact, shell=shell)
-    return w, h
-
-
 def portable_settings_density(app):
     """Settings column for the portable Render sheet.
 
