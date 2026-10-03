@@ -187,10 +187,6 @@ class _SplashProgressBar(QWidget):
             self._tick.stop()
         self.update()
 
-    def set_finished(self, *, hold_alive: bool = False) -> None:
-        # Always land on a true 100% for the final stage.
-        self.snap_to(100.0, busy=bool(hold_alive))
-
     def set_display(self, value: float) -> None:
         self._display = max(0.0, min(100.0, float(value)))
         self.update()
@@ -754,17 +750,6 @@ def launch_splash_pump(*, force: bool = False) -> None:
         _splash = None
 
 
-def launch_splash_is_holding() -> bool:
-    global _splash
-    if _splash is None:
-        return False
-    try:
-        return bool(_splash.isVisible())
-    except RuntimeError:
-        _splash = None
-        return False
-
-
 def hold_launch_splash_opening(
     *, status: str = "Preparing workspace…", force: bool = False, hold_s: float = 1.0
 ) -> None:
@@ -812,17 +797,6 @@ def finish_launch_splash(*, status: str = "Opening…", force: bool = False) -> 
     except RuntimeError:
         pass
     _splash = None
-
-
-def raise_launch_splash() -> None:
-    """Keep Preparing splash above the main shell until settle reveals."""
-    global _splash
-    if _splash is None:
-        return
-    try:
-        _splash.raise_()
-    except RuntimeError:
-        _splash = None
 
 
 def cancel_launch_splash_simulation() -> None:
