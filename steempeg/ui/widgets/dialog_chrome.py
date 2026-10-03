@@ -408,14 +408,6 @@ class SteempegDialog(QDialog):
             if btn is not None and hasattr(btn, "_set_hovered"):
                 btn._set_hovered(False)
 
-    # Back-compat name used by portable sheets / chrome.
-    def _park_offscreen(self) -> None:
-        flags = self.windowFlags()
-        if flags & Qt.WindowType.Dialog:
-            self._park_hidden_dialog()
-        else:
-            self._park_as_embedded_widget(self.parentWidget())
-
     def release_map_suppression(self, host: QWidget | None = None) -> None:
         """Promote / unsuspend immediately before exec()/show()."""
         if host is not None:

@@ -180,9 +180,6 @@ class LevelGradientSlider(GradientSlider):
                 self._unity_value = None
         self.update()
 
-    def unity_value(self) -> int | None:
-        return self._unity_value
-
     def _unity_frac(self) -> float | None:
         if self._unity_value is None:
             return None
