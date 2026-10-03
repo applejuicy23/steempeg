@@ -1155,13 +1155,6 @@ class LibraryMixin:
         if isinstance(pending, list) and pending:
             QTimer.singleShot(200, self._pump_clip_poster_queue)
 
-    def _stop_clip_thumb_probe(self) -> None:
-        """No-op — v50.1 resolves thumbs synchronously at ClipCard materialize."""
-        self._clip_thumb_probe_worker = None
-        self._clip_thumb_probe_pending = []
-        self._clip_thumb_apply_pending = []
-        self._clip_thumb_apply_scheduled = False
-
     @staticmethod
     def _folder_has_dash_recording(folder_path: str, max_depth: int = 4) -> bool:
         """True when a folder itself (within a few levels) contains DASH manifests/chunks."""
@@ -1842,9 +1835,6 @@ class LibraryMixin:
         entry = self._salvage_verified_entry(clip_path)
         return bool(entry and entry.get("cured"))
 
-    def _is_salvage_verified(self, clip_path: str) -> bool:
-        return self._is_clip_cured(clip_path)
-
     def _is_salvage_auto_play(self, clip_path: str) -> bool:
         entry = self._salvage_verified_entry(clip_path)
         return bool(entry and entry.get("auto_play"))
@@ -1946,9 +1936,6 @@ class LibraryMixin:
 
     def _sync_cured_role_on_item(self, item, clip_path: str) -> None:
         item.setData(_CLIP_CURED_ROLE, bool(self._is_clip_cured(clip_path)))
-
-    def _mark_salvage_verified(self, clip_path: str, *, auto_play: bool) -> None:
-        self._mark_clip_cured(clip_path, auto_play=auto_play)
 
     def _clear_salvage_verified(self, clip_path: str) -> None:
         norm = os.path.normpath(clip_path)
@@ -3226,52 +3213,6 @@ class LibraryMixin:
         pos = QPoint(top_right.x() - size.width(), top_right.y() - size.height())
         menu.exec(pos)
 
-    def _collect_clip_roots(self, base_folder):
-        """Return clip folder paths discovered under one library root."""
-        if not base_folder or not os.path.exists(base_folder):
-            return set()
-
-        base_folder = os.path.normpath(base_folder)
-        if os.path.basename(base_folder).lower() == "clips":
-            parent = os.path.dirname(base_folder)
-            if os.path.basename(parent).lower() == "gamerecordings":
-                base_folder = parent
-
-        base_name = os.path.basename(base_folder).lower()
-        base_is_steam_package = base_name.startswith(("clip_", "bg_", "fg_"))
-
-        roots = set()
-        for sub in ("clips", "video"):
-            sub_path = os.path.join(base_folder, sub)
-            if os.path.exists(sub_path):
-                for item in os.listdir(sub_path):
-                    full = os.path.join(sub_path, item)
-                    if not os.path.isdir(full):
-                        continue
-                    if base_is_steam_package and is_steam_package_internal_child(
-                        base_name, item.lower()
-                    ):
-                        continue
-                    roots.add(full)
-
-        if self._looks_like_single_clip_folder(base_folder):
-            if base_name not in ("gamerecordings", "clips", "video"):
-                if not self._is_steam_clip_container_folder(base_folder):
-                    roots.add(base_folder)
-        try:
-            for item in os.listdir(base_folder):
-                full = os.path.join(base_folder, item)
-                if not os.path.isdir(full) or not item.lower().startswith(("clip_", "bg_", "fg_")):
-                    continue
-                if base_is_steam_package and is_steam_package_internal_child(
-                    base_name, item.lower()
-                ):
-                    continue
-                roots.add(full)
-        except Exception:
-            pass
-        return roots
-
     def fast_sync_grid(self):
         """ INSTANT GRID SYNCHRONIZATION """
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'): return
@@ -3414,83 +3355,6 @@ class LibraryMixin:
             # treat unknown duration as 0s (that hid whole games and made Apply
             # look broken when unchecking pills).
             dur_text = (item_dur.text() or "").strip()
-            if dur_text and dur_text not in ("--:--", "—", "--"):
-                r_dur = FilterMenu._parse_row_duration(dur_text)
-                if r_dur < min_dur or r_dur > max_dur:
-                    return False
-        return True
-
-    def _scanned_clip_matches_saved_filter(self, clip: ScannedClip, saved: dict) -> bool:
-        """Same rules as ``_library_filter_row_matches``, for Progressive insert."""
-        from steempeg.ui.library.filters import (
-            FilterMenu,
-            _library_root_for_clip,
-        )
-
-        if not saved or not saved.get("active"):
-            return True
-        if saved.get("match_none"):
-            return False
-
-        selected_games = set(saved.get("games") or [])
-        selected_types = set(saved.get("types") or [])
-        selected_health = set(saved.get("health") or [])
-        selected_folders = list(saved.get("folders") or [])
-        roots = list(getattr(self, "clips_folders", None) or [])
-
-        if "games" in saved and not selected_games:
-            return False
-
-        game = (clip.game_name or "").strip()
-        if selected_games and game not in selected_games:
-            return False
-        rec = (clip.rec_type or "").strip()
-        if selected_types and rec not in selected_types:
-            return False
-        level = str(clip.health_level or "healthy")
-        if selected_health and level not in selected_health:
-            return False
-        if selected_folders:
-            root = _library_root_for_clip(clip.full_path, roots)
-            folder_keys = {
-                os.path.normcase(os.path.normpath(p)) for p in selected_folders if p
-            }
-            if root is None or os.path.normcase(os.path.normpath(root)) not in folder_keys:
-                return False
-
-        min_date = saved.get("min_date")
-        max_date = saved.get("max_date")
-        min_time = saved.get("min_time")
-        max_time = saved.get("max_time")
-        min_dur_t = saved.get("min_dur")
-        max_dur_t = saved.get("max_dur")
-        min_time_sec = FilterMenu._qtime_to_sec(min_time) if min_time is not None else 0
-        max_time_sec = (
-            FilterMenu._qtime_to_sec(max_time) if max_time is not None else 24 * 3600 - 1
-        )
-        min_dur = FilterMenu._qtime_to_sec(min_dur_t) if min_dur_t is not None else 0
-        max_dur = FilterMenu._qtime_to_sec(max_dur_t) if max_dur_t is not None else 0
-        skip_duration = max_dur <= 0 and min_dur <= 0
-
-        q_dt = FilterMenu._parse_row_datetime(clip.date_display or "")
-        if q_dt is not None:
-            r_date = q_dt.date()
-            if min_date is not None and hasattr(min_date, "isValid") and min_date.isValid():
-                if r_date < min_date:
-                    return False
-            if max_date is not None and hasattr(max_date, "isValid") and max_date.isValid():
-                if r_date > max_date:
-                    return False
-            r_time = (
-                q_dt.time().hour() * 3600
-                + q_dt.time().minute() * 60
-                + q_dt.time().second()
-            )
-            if r_time < min_time_sec or r_time > max_time_sec:
-                return False
-
-        if not skip_duration:
-            dur_text = (clip.duration_str or "").strip()
             if dur_text and dur_text not in ("--:--", "—", "--"):
                 r_dur = FilterMenu._parse_row_duration(dur_text)
                 if r_dur < min_dur or r_dur > max_dur:
@@ -4387,9 +4251,6 @@ class LibraryMixin:
                     ]
                 )
 
-    def _clip_grid_column_count(self) -> int:
-        return self._clip_grid_column_count_for(getattr(self, "grid_clips", None))
-
     def _clip_grid_column_count_for(self, grid) -> int:
         if grid is None:
             return 1
@@ -5120,7 +4981,6 @@ class LibraryMixin:
         self._stop_progressive_clips_discover()
         self._stop_clips_idle_fill()
         self._stop_clip_poster_backfill()
-        self._stop_clip_thumb_probe()
         self._stop_clip_duration_backfill()
         self._scan_pending_rows = []
         self._scan_flush_scheduled = False
@@ -5224,20 +5084,6 @@ class LibraryMixin:
         self._schedule_clips_viewport_refresh(50)
         self._schedule_clip_card_edge_sync()
 
-    def _hydrate_progressive_side_libraries(self) -> None:
-        """Legacy no-op — side libs restore eagerly from app.py (v50.1)."""
-        self._progressive_side_libs_pending = False
-        self._progressive_quiet_hydrate = False
-
-    def _hydrate_progressive_screenshots(self) -> None:
-        """Legacy no-op — screenshots restore from app.py @300ms (v50.1)."""
-        self._progressive_shots_pending = False
-        self._progressive_quiet_hydrate = False
-
-    def _kick_pending_progressive_shots_if_needed(self) -> None:
-        """Legacy no-op — screenshots already session-painted at startup."""
-        self._progressive_shots_pending = False
-
     def _on_progressive_clips_finished(self, total: int) -> None:
         worker = getattr(self, "_progressive_clips_worker", None)
         # Discover may have filled missing health via filesystem assess — persist.
@@ -5269,40 +5115,6 @@ class LibraryMixin:
         elif hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Ready", "ready")
         logging.info("Progressive Clips: %d placeholders ready", int(total or 0))
-
-    def _stop_screenshots_cache_prefetch(self) -> None:
-        worker = getattr(self, "_screenshots_prefetch_worker", None)
-        if worker is None:
-            return
-        if worker.isRunning():
-            worker.requestInterruption()
-            worker.wait(1500)
-        self._screenshots_prefetch_worker = None
-
-    def _stop_rendered_cache_prefetch(self) -> None:
-        worker = getattr(self, "_rendered_prefetch_worker", None)
-        if worker is None:
-            return
-        if worker.isRunning():
-            worker.requestInterruption()
-            worker.wait(1500)
-        self._rendered_prefetch_worker = None
-
-    def _start_side_library_prefetch(self) -> None:
-        """Legacy no-op — side libs restore eagerly from app.py (v50.1)."""
-        return
-
-    def _start_rendered_cache_prefetch(self) -> None:
-        """Legacy no-op — Rendered paints from session JSON at startup (v50.1)."""
-        return
-
-    def _start_screenshots_cache_prefetch(self) -> None:
-        """Legacy no-op — Screenshots paint from session JSON @300ms (v50.1)."""
-        return
-
-    def _paint_screenshots_from_prefetch(self) -> None:
-        """Legacy no-op — use restore_screenshots_from_session_cache."""
-        return
 
     def _progressive_clips_post_settle(self) -> None:
         if not getattr(self, "_clips_progressive_active", False):
