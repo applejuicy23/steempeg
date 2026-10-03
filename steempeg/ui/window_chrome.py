@@ -1564,44 +1564,6 @@ def _edge_resize_blocked(window: QWidget) -> bool:
     return False
 
 
-def _edges_at(window: QWidget, global_pos: QPoint, *, border: int, corner: int):
-    """Map a global mouse position to Qt resize edges, or None if not on a grip."""
-    if _edge_resize_blocked(window):
-        return None
-
-    geo = window.frameGeometry()
-    x, y = global_pos.x(), global_pos.y()
-    left, top = geo.x(), geo.y()
-    right, bottom = left + geo.width(), top + geo.height()
-
-    on_left = left <= x < left + border
-    on_right = right - border <= x < right
-    on_top = top <= y < top + border
-    on_bottom = bottom - border <= y < bottom
-    in_left_c = left <= x < left + corner
-    in_right_c = right - corner <= x < right
-    in_top_c = top <= y < top + corner
-    in_bottom_c = bottom - corner <= y < bottom
-
-    if in_top_c and in_left_c:
-        return Qt.Edge.TopEdge | Qt.Edge.LeftEdge
-    if in_top_c and in_right_c:
-        return Qt.Edge.TopEdge | Qt.Edge.RightEdge
-    if in_bottom_c and in_left_c:
-        return Qt.Edge.BottomEdge | Qt.Edge.LeftEdge
-    if in_bottom_c and in_right_c:
-        return Qt.Edge.BottomEdge | Qt.Edge.RightEdge
-    if on_left:
-        return Qt.Edge.LeftEdge
-    if on_right:
-        return Qt.Edge.RightEdge
-    if on_top:
-        return Qt.Edge.TopEdge
-    if on_bottom:
-        return Qt.Edge.BottomEdge
-    return None
-
-
 def _cursor_for_edges(edges) -> Qt.CursorShape:
     left = bool(edges & Qt.Edge.LeftEdge)
     right = bool(edges & Qt.Edge.RightEdge)
@@ -1833,23 +1795,6 @@ def refresh_windows_edge_resize(window: QWidget) -> None:
 # --- Linux edge resize (unchanged behaviour) --------------------------------
 
 
-def _linux_nearly_maximized(window: QWidget) -> bool:
-    return _nearly_maximized(window)
-
-
-def _linux_edges_at(window: QWidget, global_pos: QPoint):
-    return _edges_at(
-        window,
-        global_pos,
-        border=_LINUX_RESIZE_BORDER,
-        corner=_LINUX_RESIZE_CORNER,
-    )
-
-
-def _linux_cursor_for_edges(edges) -> Qt.CursorShape:
-    return _cursor_for_edges(edges)
-
-
 def _linux_prefer_manual_resize() -> bool:
     """XWayland/xcb often mishandles startSystemResize for frameless windows."""
     app = QApplication.instance()
@@ -1857,16 +1802,6 @@ def _linux_prefer_manual_resize() -> bool:
         return True
     name = (app.platformName() or "").lower()
     return name in ("xcb", "offscreen", "minimal")
-
-
-def _linux_apply_manual_resize(
-    window: QWidget,
-    edges,
-    origin: QPoint,
-    start_geo,
-    global_pos: QPoint,
-) -> None:
-    _apply_manual_resize(window, edges, origin, start_geo, global_pos)
 
 
 class _LinuxEdgeResizeFilter(QObject):
@@ -2003,14 +1938,6 @@ def enable_linux_edge_resize(window: QWidget) -> None:
         window._linux_edge_resize_filter = _LinuxEdgeResizeFilter(window)
     if getattr(window, "_linux_edge_resize_grips", None) is None:
         window._linux_edge_resize_grips = _LinuxEdgeResizeGrips(window)
-
-
-def _hex_to_colorref(hex_color: str) -> int:
-    hex_color = hex_color.lstrip("#")
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    return (b << 16) | (g << 8) | r
 
 
 def _resize_border_thickness(window: QWidget) -> int:
@@ -2343,30 +2270,6 @@ def force_full_redraw(window) -> None:
 
 _SW_HIDE = 0
 _SW_SHOWNA = 8  # show in current state, do not activate / change z-order
-
-
-def rebuild_window_surface(window) -> None:
-    """Force DWM to allocate a fresh redirection surface for the window.
-
-    Growing a frameless window from the maximized work-area size to the full
-    monitor leaves a stale composited strip (the old taskbar-height bottom) that
-    a plain RedrawWindow can't erase — only a minimize/restore fixes it. This
-    does the equivalent surface teardown/recreate (hide + show-no-activate)
-    without the visible animation; call it while a solid cover masks the window."""
-    if os.name != "nt":
-        return
-    try:
-        hwnd = int(window.winId())
-        user32 = ctypes.windll.user32
-        user32.ShowWindow(hwnd, _SW_HIDE)
-        user32.ShowWindow(hwnd, _SW_SHOWNA)
-        redraw = (
-            _RDW_INVALIDATE | _RDW_ERASE | _RDW_ERASENOW
-            | _RDW_UPDATENOW | _RDW_ALLCHILDREN | _RDW_FRAME
-        )
-        user32.RedrawWindow(hwnd, None, None, redraw)
-    except Exception:
-        pass
 
 
 _DWMWA_TRANSITIONS_FORCEDISABLED = 3
