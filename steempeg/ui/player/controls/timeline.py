@@ -36,7 +36,6 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
-    QPolygonF,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -3226,9 +3225,3 @@ class ThumbnailPreviewWidget(QWidget):
         if (state or "").strip().lower() in ("ok", "miss", "err", "error", "disk"):
             self._loading_overlay.stop()
         self._sniper_sensor.raise_()
-
-    def update_info(self, time_str, is_in_trim, hover_ms, thumb_dir):
-        """Legacy entry point — updates time and loads a disk thumb when available."""
-        self.update_time_display(time_str, is_in_trim)
-        if thumb_dir:
-            self.load_disk_thumbnail(hover_ms, thumb_dir)

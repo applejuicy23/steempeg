@@ -300,9 +300,6 @@ class PreviewSniperWorker(QThread):
             return 1, 1
         return min(nums), max(nums)
 
-    def _infer_chunk_start_number(self, stream_idx: int = 0) -> int:
-        return self._infer_chunk_number_bounds(stream_idx)[0]
-
     def _apply_steam_dash_defaults(self) -> bool:
         """Fallback when MPD XML parsing misses SegmentTemplate (common on session_fixed.mpd)."""
         if not self.base_dir or not os.path.isdir(self.base_dir):
