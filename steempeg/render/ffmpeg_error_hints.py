@@ -178,11 +178,6 @@ _SIMULATE_SAMPLES: tuple[tuple[str, str], ...] = (
 )
 
 
-def simulate_ffmpeg_error_samples() -> list[tuple[str, str]]:
-    """``(kind, stderr_sample)`` pairs for Dev Mode dialog cycling."""
-    return list(_SIMULATE_SAMPLES)
-
-
 def next_simulate_sample(index: int) -> tuple[int, str, str]:
     """Return ``(next_index, kind, sample_text)`` cycling through samples."""
     samples = _SIMULATE_SAMPLES
