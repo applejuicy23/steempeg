@@ -126,18 +126,6 @@ def fetch_markers_cdn_info(app_id, timeout=5):
     return None
 
 
-def _read_markers_meta(cache_dir, app_id):
-    path = _markers_meta_path(cache_dir, app_id)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
 def _write_markers_meta(cache_dir, app_id, info):
     folder = _markers_cache_dir(cache_dir, app_id)
     os.makedirs(folder, exist_ok=True)
@@ -184,21 +172,6 @@ def download_markers_svg(app_id, dest_path, info=None, cache_dir=None, timeout=8
             logging.warning("Markers CDN download failed for app %s: %s", app_id, exc)
     logging.warning("All markers CDN mirrors failed for app %s (%s)", app_id, last_err)
     return False
-
-
-def _steempeg_cache_is_fresh(cache_dir, app_id, info):
-    path = steempeg_markers_path(cache_dir, app_id)
-    if not os.path.isfile(path):
-        return False
-    if not info:
-        return True
-    meta = _read_markers_meta(cache_dir, app_id)
-    if not meta:
-        return True
-    remote_ver = info.get("timeline_marker_updated")
-    if remote_ver is None:
-        return True
-    return str(meta.get("timeline_marker_updated")) == str(remote_ver)
 
 
 def resolve_markers_svg_path_local(app_id, cache_dir=None, steam_path=None):
@@ -325,10 +298,6 @@ class MarkerIconStore:
 
         self._renderers[app_id] = renderer
         return renderer
-
-    def has_icon(self, app_id, icon_id):
-        renderer = self._renderer_for(app_id)
-        return renderer is not None and renderer.elementExists(icon_id)
 
     def get_icon(self, app_id, icon_id, size=36, *, dpr=1.0):
         """QPixmap for icon_id from app_id's sprite, or None if unavailable.
