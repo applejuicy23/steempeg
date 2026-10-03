@@ -141,18 +141,6 @@ def resolve_steam_id_for_clip(clip_path: str, library_roots: list[str] | None = 
     return None
 
 
-def clip_folder_start_local(clip_path: str) -> datetime | None:
-    """UTC timestamp from the folder name → local timezone.
-
-    Note: Steam ``clip_*`` folder names are often near the *end* of the saved
-    segment. Prefer :func:`clip_media_start_local` for playhead / overlap math.
-    """
-    utc = clip_folder_start_utc(clip_path)
-    if utc is None:
-        return None
-    return utc.astimezone()
-
-
 def clip_folder_start_utc(clip_path: str) -> datetime | None:
     """Timestamp encoded in ``clip|fg|bg_<app>_<date>_<time>`` (UTC)."""
     if not clip_path:
@@ -387,18 +375,6 @@ def clip_timeline_offset_ms(clip_path: str, timeline_id: str = "") -> int | None
     except ValueError:
         return None
     return int((video_dt - json_dt).total_seconds() * 1000)
-
-
-def timeline_id_start_utc(timeline_id: str) -> datetime | None:
-    """UTC start encoded in ``timeline_<app><YYYYMMDD>_<HHMMSS>``."""
-    match = _JSON_DT_RE.search(timeline_id or "")
-    if not match:
-        return None
-    try:
-        dt = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
-        return dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
 
 
 def timeline_json_start_utc(json_path: str) -> datetime | None:
