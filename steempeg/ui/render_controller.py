@@ -230,9 +230,6 @@ class RenderMixin:
     def recover_orphaned_clip(self, folder_path):
         return repair.recover_orphaned_clip(folder_path)
 
-    def get_fps_from_mpd(self, mpd_path):
-        return mpd.get_fps(mpd_path)
-
     def get_audio_bitrate_from_mpd(self, mpd_path):
         return mpd.get_audio_bitrate_kbps(mpd_path)
 
@@ -1329,15 +1326,6 @@ class RenderMixin:
             return False
         return not bool(getattr(self, "_queue_scheme_deferred", False))
 
-    def _queue_owns_identity_chrome(self) -> bool:
-        """True when queue mode is active (jobs kept, scheme not Left).
-
-        Footer / Ready cluster always follow ``_status_strip_context_job``.
-        Player header always follows the open clip — never queue head.
-        False while Left (deferred).
-        """
-        return self._queue_is_active()
-
     def _player_has_open_clip(self) -> bool:
         """True when the player is showing real media (not the idle poster).
 
@@ -1465,42 +1453,6 @@ class RenderMixin:
         """True when Start should batch-render pending queue jobs."""
         return self._queue_is_active() and self._queue_pending_count() > 0
 
-    def _queue_context_job(self):
-        """Job that owns player-header identity while a clip is on screen.
-
-        Follow the clip actually playing — never queue head when idle.
-        Clicking a queue card plays it, so selection matches preview.
-        Active render still wins during a batch.
-        """
-        if not self._queue_owns_identity_chrome():
-            return None
-        preview = getattr(self, "_preview_clip_path", None)
-        preview_norm = os.path.normpath(preview) if preview else ""
-        if not preview_norm:
-            return None
-
-        def _clip_matches(job) -> bool:
-            if job is None:
-                return False
-            path = getattr(job, "clip_path", None) or ""
-            return os.path.normpath(path) == preview_norm
-
-        active = getattr(self, "_active_render_job", None)
-        if active is not None:
-            live = self.render_queue.get(getattr(active, "id", ""))
-            if live is not None:
-                return live
-        selected_id = getattr(self, "_selected_queue_job_id", None)
-        if selected_id:
-            job = self.render_queue.get(selected_id)
-            if job is not None and _clip_matches(job):
-                return job
-        job = self._queue_job_for_clip(preview_norm)
-        if job is not None:
-            return job
-        # Playing a clip that is not queued — don't advertise Ready #1.
-        return None
-
     def _dash_ready_queue_job(self):
         """Job for the Ready cluster digit + left summary — next to render only.
 
@@ -1564,21 +1516,6 @@ class RenderMixin:
         )
         apply_square_icon(self.bottom_icon_label, shaped, 24)
 
-    def _sync_player_header_to_queue_context(self) -> bool:
-        """Drive header from the queue context job. False = no queue context."""
-        job = self._queue_context_job()
-        if job is None:
-            # Queue is active but the playing clip is not the Ready/#1 job —
-            # keep (or restore) identity from the clip on screen.
-            if self._queue_owns_identity_chrome() and getattr(
-                self, "_preview_clip_path", None
-            ):
-                self._restore_header_from_library_selection()
-            return False
-        self._apply_header_from_job(job)
-        self._sync_dash_queue_status_chrome()
-        return True
-
     def _restore_header_from_library_selection(self) -> None:
         """After the queue clears or Leave — fall back to Clips / Rendered selection.
 
@@ -1617,10 +1554,6 @@ class RenderMixin:
             if row >= 0:
                 self._apply_header_from_table_row(row)
                 return
-
-    def _queue_controls_preview(self) -> bool:
-        """Alias kept for library/grid hooks."""
-        return self._queue_is_active()
 
     def _current_preview_clip_path(self):
         """Path of the clip currently shown in the player."""
@@ -3122,30 +3055,6 @@ class RenderMixin:
 
         toggle_desktop_render_settings(self)
 
-    def focus_export_settings_panel(self) -> None:
-        """Open Export Settings — Portable sheet, floating window, or neo Export tab."""
-        if getattr(self, "_portable_shell", False):
-            try:
-                from steempeg.ui.portable.chrome import open_portable_render_settings
-
-                open_portable_render_settings(self)
-            except Exception:
-                logging.exception("Open portable render settings failed")
-            return
-        if self._desktop_render_layout_is_portable_like():
-            self.toggle_desktop_render_settings()
-            return
-        from steempeg.ui.settings_prefs import RENDER_TAB_EXPORT, apply_default_render_tab
-
-        apply_default_render_tab(self, RENDER_TAB_EXPORT)
-        neo = getattr(self, "neo_wrapper", None)
-        if neo is not None:
-            neo.show()
-            neo.raise_()
-        scroll = getattr(self, "right_scroll", None)
-        if scroll is not None:
-            scroll.ensureVisible(0, 0)
-
     def _apply_desktop_dash_render_icons(self) -> None:
         """White glyphs on desktop Start / Pause / Cancel (portable keeps emoji labels)."""
         if getattr(self, "_portable_shell", False):
@@ -3415,23 +3324,6 @@ class RenderMixin:
     def _flush_current_trim_state(self) -> None:
         self._flush_clip_session_state()
 
-    def _sync_queue_trim_from_timeline(self) -> bool:
-        """Update only trim fields on the queued job for the clip being previewed."""
-        if getattr(self, "_loading_queue_job", False):
-            return False
-        if not hasattr(self, "custom_timeline"):
-            return False
-        preview = self._current_preview_clip_path()
-        if not preview:
-            return False
-        job = self._queue_job_for_preview_sync(preview)
-        if not job or job.status not in (JobStatus.QUEUED, JobStatus.ERROR):
-            return False
-        job.settings.is_trim_mode = bool(self.custom_timeline.is_trim_mode)
-        job.settings.trim_start_ms = int(self.custom_timeline.trim_start_ms)
-        job.settings.trim_end_ms = int(self.custom_timeline.trim_end_ms)
-        return True
-
     def _trim_state_for_clip(self, clip_path: str) -> dict:
         state = self._session_state_for_clip(clip_path)
         return {
@@ -3462,14 +3354,6 @@ class RenderMixin:
         if not hasattr(self, "_clip_session_memory"):
             self._clip_session_memory = {}
         self._clip_session_memory[norm] = state
-
-    def _apply_trim_from_job_settings(self, settings) -> None:
-        if hasattr(self, "apply_trim_state"):
-            self.apply_trim_state(
-                settings.is_trim_mode,
-                settings.trim_start_ms,
-                settings.trim_end_ms,
-            )
 
     def _sync_active_queue_job_from_ui(self) -> bool:
         """Push live export/trim UI into the queued job for the clip being previewed."""
@@ -6684,19 +6568,6 @@ class RenderMixin:
         except Exception:
             pass
 
-    def _sync_host_queue_resume_buttons(self, *, deferred: bool, busy: bool) -> None:
-        """Compat shim for older call sites."""
-        has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
-        self._sync_host_queue_leave_resume(
-            deferred=bool(deferred) and has_jobs,
-            has_jobs=has_jobs,
-            busy=busy,
-        )
-
-    def _ensure_desktop_queue_resume_button(self) -> None:
-        """Compat shim — creates the Leave/Resume dash control."""
-        self._ensure_desktop_queue_leave_resume_button()
-
     def clear_render_queue(self) -> None:
         if getattr(self, "_queue_batch_active", False):
             steempeg_warning(self.ui, "Render Queue", "Stop the batch render before clearing the queue.")
@@ -8331,42 +8202,4 @@ class RenderMixin:
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
 
-    def inject_custom_input(self, combo_widget, placeholder):
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)  # Small gap between input and icon
-
-        combo_widget.parentWidget().layout().replaceWidget(combo_widget, container)
-
-        # Tell the ComboBox to aggressively expand and fill all available horizontal space!
-        combo_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        line_edit = QLineEdit()
-        line_edit.setPlaceholderText(placeholder)
-        # Make the input box exactly 70px wide (no more, no less) so it doesn't stretch
-        line_edit.setFixedWidth(70)
-        line_edit.hide()  # Hidden by default
-
-        warn_icon = QLabel()
-        warn_icon.setFixedSize(16, 16)
-        _warn_pix = warning_pixmap(16)
-        if not _warn_pix.isNull():
-            warn_icon.setPixmap(_warn_pix)
-        warn_icon.hide()  # Hidden by default
-
-        # ---> APPLY THE INSTANT TOOLTIP MAGIC HERE <---
-        if hasattr(self, 'instant_tooltip'):
-            warn_icon.installEventFilter(self.instant_tooltip)
-
-        # Add widgets to layout.
-        layout.addWidget(combo_widget)
-        layout.addWidget(line_edit)
-        layout.addWidget(warn_icon)
-
-        # Show/hide logic
-        combo_widget.currentTextChanged.connect(lambda t: (
-            line_edit.setVisible("Custom" in t),
-            warn_icon.setVisible(False) if "Custom" not in t else None
-        ))
         return line_edit, warn_icon
