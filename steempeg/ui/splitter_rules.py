@@ -555,9 +555,6 @@ class SplitterRulesMixin:
         sizes = self.ui.main_splitter.sizes()
         return int(sizes[0]) if sizes else 0
 
-    def _clips_width(self) -> int:
-        return self._outer_pane_width()
-
     def _apply_left_drag_geometry(
         self, main_total: int, left: int, player_w: int, inner_w: int
     ) -> None:
@@ -685,9 +682,6 @@ class SplitterRulesMixin:
         self.right_h_splitter.setSizes([0, room])
         return True
 
-    def _shut_clips_and_travel(self) -> bool:
-        return self._shut_outer_and_travel()
-
     def _queue_pane_floor(self) -> int:
         """Narrowest the queue renders at — its own content minimum."""
         return max(int(self.render_queue_panel.minimumSizeHint().width()), 1)
@@ -704,13 +698,6 @@ class SplitterRulesMixin:
     def _snap_inner_width(self, wanted: int, room: int) -> int:
         """Shut, or at least the inner layout min — never creep via content hint."""
         floor = min(self._inner_pane_floor(), room)
-        if wanted < floor * CLIPS_SNAP_SHUT:
-            return 0
-        return min(max(int(wanted), floor), room)
-
-    def _snap_queue_width(self, wanted: int, room: int) -> int:
-        """Shut, or at least the queue layout min — never creep via content hint."""
-        floor = min(self._queue_layout_floor(), room)
         if wanted < floor * CLIPS_SNAP_SHUT:
             return 0
         return min(max(int(wanted), floor), room)
