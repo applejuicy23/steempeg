@@ -310,12 +310,6 @@ def get_class(class_id: str | None, prefs: dict | None = None) -> dict | None:
     return None
 
 
-def class_has_color(cls: dict | None) -> bool:
-    if not cls:
-        return False
-    return bool(str(cls.get("color") or "").strip())
-
-
 def marker_override(marker_key: str, prefs: dict | None = None) -> dict:
     data = prefs if prefs is not None else load_marker_prefs()
     raw = (data.get("markers") or {}).get(str(marker_key)) or {}
@@ -437,21 +431,6 @@ def remember_marker_ids(
     return prefs["known_marker_ids"]
 
 
-def list_svg_element_ids(svg_path: str) -> list[str]:
-    """Parse ``id="..."`` attributes from a markers.svg (best-effort)."""
-    if not svg_path or not os.path.isfile(svg_path):
-        return []
-    try:
-        with open(svg_path, "r", encoding="utf-8", errors="ignore") as f:
-            raw = f.read()
-    except OSError:
-        return []
-    ids = re.findall(r'\bid="([^"]+)"', raw)
-    # Skip structural junk.
-    skip = {"svg", "defs", "g", "path", "clipPath", "mask", "linearGradient"}
-    return sorted({i for i in ids if i and i not in skip and not i.startswith("SVGID")})
-
-
 FRIENDLY_LABEL_EN: dict[str, str] = {
     "kill": "Kill",
     "death": "Death",
@@ -511,61 +490,6 @@ def friendly_marker_label(key: str, *, title: str = "") -> str:
     if k.startswith("cs2_"):
         return k.replace("cs2_", "").replace("_", " ").title()
     return k
-
-
-def catalog_marker_keys(
-    *,
-    app_id: str | None = None,
-    clip_marker_icons: list[str] | None = None,
-    clip_icon_keys: list[str] | None = None,
-    prefs: dict | None = None,
-) -> list[dict]:
-    """Unified list for the settings UI: key, kind, label hint."""
-    data = prefs if prefs is not None else load_marker_prefs()
-    rows: dict[str, dict] = {}
-
-    def _add(key: str, kind: str, hint: str = "") -> None:
-        key = str(key)
-        if not key or key in rows:
-            return
-        if is_round_number_key(key):
-            return
-        rows[key] = {"key": key, "kind": kind, "hint": hint}
-
-    for k in LEGACY_ICON_KEYS:
-        _add(k, "legacy", LEGACY_KEY_TO_ASSET.get(k, ""))
-
-    for k in data.get("known_marker_ids") or []:
-        kind = "steam" if ("_" in k or k.startswith("cs")) else "legacy"
-        if k in LEGACY_ICON_KEYS:
-            kind = "legacy"
-        if k == "usermarker":
-            kind = "user"
-        _add(k, kind)
-
-    for k in clip_marker_icons or ():
-        _add(str(k), "steam")
-    for k in clip_icon_keys or ():
-        _add(str(k), "legacy" if str(k) in LEGACY_ICON_KEYS else "steam")
-
-    if app_id:
-        try:
-            from steempeg.services.steam_markers import resolve_markers_svg_path_local
-
-            svg = resolve_markers_svg_path_local(app_id)
-            for eid in list_svg_element_ids(svg or ""):
-                _add(eid, "steam")
-        except Exception:
-            pass
-
-    # Prefer stable order: user, legacy, then steam alpha.
-    def _sort_key(row: dict):
-        k = row["key"]
-        kind = row["kind"]
-        pri = {"user": 0, "legacy": 1, "steam": 2}.get(kind, 3)
-        return (pri, k.lower())
-
-    return sorted(rows.values(), key=_sort_key)
 
 
 def is_user_marker(marker: dict | None) -> bool:
