@@ -33,13 +33,6 @@ def steam_prefix_rank(folder_name: str) -> int:
     return _PREFIX_RANK.get(parsed[0], 99)
 
 
-def is_nested_same_session(parent_name: str, child_name: str) -> bool:
-    """True when ``child`` is a clip/bg/fg folder for the same session inside ``parent``."""
-    parent_key = steam_session_key(parent_name)
-    child_key = steam_session_key(child_name)
-    return bool(parent_key and child_key and parent_key == child_key)
-
-
 def is_steam_package_internal_child(parent_name: str, child_name: str) -> bool:
     """True when ``child`` is a Steam session folder nested inside another.
 
