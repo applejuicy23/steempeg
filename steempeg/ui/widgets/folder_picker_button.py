@@ -104,9 +104,6 @@ class _FolderPickerAddButton(QPushButton):
             self.setToolTip("Manage clips folders")
         self.update()
 
-    def is_busy(self) -> bool:
-        return bool(self._busy)
-
     def _on_tick(self) -> None:
         if not self._busy:
             self._spin.stop()

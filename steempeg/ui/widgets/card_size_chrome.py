@@ -289,11 +289,6 @@ class CardSizeChrome(QObject):
             self.set_allow_list(False)
             self.set_mode("grid", emit=False)
 
-    def set_size_only(self, size_only: bool) -> None:
-        self._size_only = bool(size_only)
-        if size_only:
-            self.set_allow_list(False)
-
     def set_count(self, value) -> None:
         from steempeg.ui.widgets.view_mode_toggle import format_view_count
 
