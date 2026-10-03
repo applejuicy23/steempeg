@@ -536,10 +536,6 @@ def settings_button_label(dense: UiDensity) -> str:
     return "⚙️ Settings"
 
 
-def refresh_button_label(dense: UiDensity) -> str:
-    return "🔄 Refresh"  # already short; keep emoji
-
-
 def scaled_dialog_size(
     width: int,
     height: int,
