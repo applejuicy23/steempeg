@@ -6289,7 +6289,11 @@ class RenderedLibraryMixin:
             table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
             current_row = table.currentRow()
             if not keep_current_cell or current_row not in rows:
-                table.setCurrentCell(rows[0], 0)
+                # NoUpdate: setCurrentCell reads live modifiers — held Ctrl toggled a row.
+                table.selectionModel().setCurrentIndex(
+                    table.model().index(rows[0], 0),
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
         table.blockSignals(False)
 
     def _cancel_pending_rendered_preview(self) -> None:
