@@ -28,3 +28,27 @@ class QueueAddWorker(QThread):
         except Exception as exc:  # noqa: BLE001 — surface to UI log
             logging.exception("Queue add worker failed")
             self.failed.emit(str(exc))
+
+
+class QueuePeekWorker(QThread):
+    """Build Add-to-queue hover preview jobs off the UI thread, one at a time."""
+
+    job_ready = Signal(str, object)  # clip_path, RenderJob
+
+    def __init__(self, payloads, parent=None):
+        super().__init__(parent)
+        self._payloads = list(payloads)
+
+    def run(self) -> None:
+        from steempeg.ui.render_job_builder import build_render_job_from_payload
+
+        for payload in self._payloads:
+            if self.isInterruptionRequested():
+                return
+            try:
+                job = build_render_job_from_payload(payload)
+            except Exception:  # noqa: BLE001 — preview only; keep the placeholder
+                logging.debug("Queue peek: build failed for %s", payload.clip_path, exc_info=True)
+                continue
+            if job is not None and not self.isInterruptionRequested():
+                self.job_ready.emit(payload.clip_path, job)
