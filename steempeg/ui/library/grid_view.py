@@ -778,6 +778,26 @@ class ClipCard(qtw.QWidget):
             return
         self._selected = selected
         self._apply_selection_style()
+        self._refresh_press_snapshot()
+
+    def _refresh_press_snapshot(self) -> None:
+        """Re-grab the press snapshot so a mid-press selection change shows at once."""
+        if self._press_snapshot is None:
+            return
+        hidden = list(self._press_hidden_children)
+        for child in hidden:
+            try:
+                child.setVisible(True)
+            except RuntimeError:
+                pass
+        self._press_snapshot = None
+        self._press_snapshot = self.grab()
+        for child in hidden:
+            try:
+                child.setVisible(False)
+            except RuntimeError:
+                pass
+        self.update()
 
     def clear_chrome_hover(self) -> None:
         """Drop hover / thumb-peek chrome (tab switch, selection clear)."""
