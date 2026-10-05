@@ -4,6 +4,7 @@ from __future__ import annotations
 from steempeg.ui import design_tokens as tok
 import logging
 import os
+import time
 
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize, QTimer
 from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
@@ -103,6 +104,8 @@ _SPLITTER_GUTTER = 10
 
 # Full preview cards per Add-to-queue hover; the rest collapse into one "+N more".
 _PEEK_FULL_MAX = 12
+# Re-hovering Add to queue within this window reuses the built preview jobs.
+_PEEK_JOB_CACHE_S = 20.0
 
 _PEEK_BADGE_STYLE = (
     "QLabel#queueAddPeekBadge {"
@@ -888,6 +891,11 @@ class RenderQueuePanel(QWidget):
         self._hover_hosted = False
         self._add_peek_key: tuple[str, ...] | None = None
         self._peek_ghosts: list[QWidget] = []
+        self._peek_ghost_by_norm: dict[str, QWidget] = {}
+        self._peek_index_by_norm: dict[str, int] = {}
+        self._peek_job_cache: dict[str, tuple[float, RenderJob]] = {}
+        self._peek_worker = None
+        self._peek_stale_workers: list = []
         self._peek_showed_host = False
         self._rest_vscroll = 0
         self._peek_saved_v: int | None = None
@@ -1174,21 +1182,102 @@ class RenderQueuePanel(QWidget):
     def _norm_clip(self, path: str) -> str:
         return os.path.normcase(os.path.normpath(path or ""))
 
-    def _peek_preview_job(self, clip_path: str, queue_index: int) -> RenderJob | None:
-        """Job Add to queue would create right now (same builder, never enqueued)."""
+    def _peek_payload(self, clip_path: str):
+        """UI-thread snapshot for the job Add to queue would create (built off-thread)."""
         app = getattr(self, "_app", None)
         if app is None:
             return None
         try:
-            from steempeg.ui.render_job_builder import build_render_job_from_ui
+            from steempeg.ui.render_job_builder import collect_queue_add_payload
 
-            job = build_render_job_from_ui(app, clip_path)
+            return collect_queue_add_payload(app, clip_path)
         except Exception:
-            logging.debug("Add-to-queue peek: preview job failed for %s", clip_path, exc_info=True)
+            logging.debug("Add-to-queue peek: payload failed for %s", clip_path, exc_info=True)
             return None
-        if job is not None:
-            job.queue_index = int(queue_index)
+
+    def _cached_peek_job(self, norm: str) -> RenderJob | None:
+        hit = self._peek_job_cache.get(norm)
+        if hit is None:
+            return None
+        stamp, job = hit
+        if time.monotonic() - stamp > _PEEK_JOB_CACHE_S:
+            self._peek_job_cache.pop(norm, None)
+            return None
         return job
+
+    def _make_peek_ghost(self, clip_path: str, job: RenderJob | None) -> QWidget:
+        grid = self._view_mode == "grid"
+        d = self._density
+        if job is not None:
+            job.queue_index = int(self._peek_index_by_norm.get(self._norm_clip(clip_path), 0))
+        return _QueueAddPeekGhost(
+            clip_path,
+            grid=grid,
+            cache_dir=self._queue_cache_dir(),
+            title=self._peek_title_for_clip(clip_path),
+            thumb_w=d.queue_thumb_w,
+            thumb_h=d.queue_thumb_h,
+            job=job,
+            jobs=self._jobs,
+            dense=d,
+            parent=self._grid_inner if grid else self._list_host,
+        )
+
+    def _start_peek_worker(self, payloads) -> None:
+        from steempeg.ui.queue_add_worker import QueuePeekWorker
+
+        self._stop_peek_worker()
+        worker = QueuePeekWorker(payloads, parent=self)
+        worker.job_ready.connect(self._on_peek_job_ready)
+        self._peek_worker = worker
+        worker.start()
+
+    def _stop_peek_worker(self) -> None:
+        worker = self._peek_worker
+        self._peek_worker = None
+        if worker is None:
+            return
+        worker.requestInterruption()
+        if worker.isRunning():
+            # Never drop a running QThread — park it until it exits.
+            self._peek_stale_workers.append(worker)
+            worker.finished.connect(lambda w=worker: self._forget_peek_worker(w))
+        else:
+            worker.deleteLater()
+
+    def _forget_peek_worker(self, worker) -> None:
+        try:
+            self._peek_stale_workers.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def _on_peek_job_ready(self, clip_path: str, job) -> None:
+        norm = self._norm_clip(clip_path)
+        self._peek_job_cache[norm] = (time.monotonic(), job)
+        if self.sender() is not self._peek_worker:
+            return
+        old = self._peek_ghost_by_norm.get(norm)
+        if old is None or old not in self._peek_ghosts:
+            return
+        new = self._make_peek_ghost(clip_path, job)
+        self._peek_ghosts[self._peek_ghosts.index(old)] = new
+        self._peek_ghost_by_norm[norm] = new
+        if self._view_mode == "grid":
+            stop_card_peek_pulse(old)
+            _dispose_queue_card(old)
+            self._relayout_grid_cards()
+        else:
+            layout = self._list_layout
+            at = layout.indexOf(old)
+            stop_card_peek_pulse(old)
+            _dispose_queue_card(old)
+            if at >= 0:
+                layout.insertWidget(at, new)
+            else:
+                layout.addWidget(new)
+            QTimer.singleShot(0, self._refresh_list_card_widths)
+        new.show()
 
     def _peek_title_for_clip(self, clip_path: str) -> str:
         folder = os.path.basename(str(clip_path).rstrip("\\/")) or "Clip"
@@ -1398,22 +1487,21 @@ class RenderQueuePanel(QWidget):
             d = self._density
             host = self._grid_inner if grid else self._list_host
             shown = new_paths[:_PEEK_FULL_MAX]
+            payloads = []
             for offset, path in enumerate(shown, start=1):
-                job = self._peek_preview_job(path, len(self._jobs) + offset)
-                ghost = _QueueAddPeekGhost(
-                    path,
-                    grid=grid,
-                    cache_dir=cache_dir,
-                    title=self._peek_title_for_clip(path),
-                    thumb_w=d.queue_thumb_w,
-                    thumb_h=d.queue_thumb_h,
-                    job=job,
-                    jobs=self._jobs,
-                    dense=d,
-                    parent=host,
-                )
+                norm = self._norm_clip(path)
+                self._peek_index_by_norm[norm] = len(self._jobs) + offset
+                job = self._cached_peek_job(norm)
+                if job is None:
+                    payload = self._peek_payload(path)
+                    if payload is not None:
+                        payloads.append(payload)
+                ghost = self._make_peek_ghost(path, job)
                 ghost.show()
                 self._peek_ghosts.append(ghost)
+                self._peek_ghost_by_norm[norm] = ghost
+            if payloads:
+                self._start_peek_worker(payloads)
             rest = len(new_paths) - len(shown)
             if rest > 0:
                 more = _QueueAddPeekGhost(
@@ -1463,12 +1551,15 @@ class RenderQueuePanel(QWidget):
                 self._restore_peek_scroll()
             return
         self._add_peek_key = None
+        self._stop_peek_worker()
         for card in self._card_widgets:
             stop_card_peek_pulse(card)
         for ghost in self._peek_ghosts:
             stop_card_peek_pulse(ghost)
             _dispose_queue_card(ghost)
         self._peek_ghosts = []
+        self._peek_ghost_by_norm = {}
+        self._peek_index_by_norm = {}
         if self._peek_showed_host and not self._jobs:
             self._peek_showed_host = False
             self._list_host.hide()
