@@ -3,6 +3,7 @@
 Pure logic - no Qt. Runs tiny throwaway ffmpeg encodes to see which encoders
 work here, and relies on ffmpeg being on PATH (the app prepends ./bin at startup).
 """
+import functools
 import os
 import subprocess
 import sys
@@ -26,8 +27,13 @@ _OPTIONAL_VIDEO_CODECS = [
 _SOFTWARE_CODECS = frozenset({"libx264", "libx265", "libsvtav1", "libvpx-vp9"})
 
 
+@functools.lru_cache(maxsize=None)
 def _encoder_works(test_code):
-    """Try encoding a single black frame with test_code. True if ffmpeg accepts it."""
+    """Try encoding a single black frame with test_code. True if ffmpeg accepts it.
+
+    Cached per session: callers sit on UI paths (queue add, settings snapshot)
+    and each uncached probe is a full ffmpeg spawn.
+    """
     cmd = [
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=black:s=640x480:r=1",
         "-frames:v", "1", "-pix_fmt", "yuv420p", "-c:v", test_code,
