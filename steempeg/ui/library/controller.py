@@ -8,11 +8,14 @@ the application instance and reach its widgets and state through self.
 import logging
 import os
 import re
+import time
 import shutil
 
 from PySide6.QtCore import (
     Qt,
+    QEasingCurve,
     QPoint,
+    QPropertyAnimation,
     QRect,
     QSize,
     QTimer,
@@ -23,6 +26,7 @@ from PySide6.QtGui import QBrush, QColor, QCursor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
@@ -85,6 +89,7 @@ from steempeg.ui import ui_theme as ut
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
+_CLIP_CARD_FADE_OUT_MS = 200
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
 # Viewport fill after scroll stops — small bursts so the shelf never hitch-prints.
@@ -2159,8 +2164,9 @@ class LibraryMixin:
             action_open.triggered.connect(lambda: self.open_clip_folder(clip_path))
             action_delete.triggered.connect(lambda: self.delete_clip(clip_path))
         else:
-            action_open.setEnabled(False)
-            action_delete.setEnabled(False)
+            paths = list(clip_paths)
+            action_open.triggered.connect(lambda: self.open_clip_folders(paths))
+            action_delete.triggered.connect(lambda: self.delete_clips(paths))
 
     def _on_library_context_shown(self) -> None:
         QTimer.singleShot(0, self._peek_queue_if_cursor_on_add_action)
@@ -2230,13 +2236,13 @@ class LibraryMixin:
         if not hasattr(self, 'grid_clips') or not hasattr(self.ui, 'table_clips'):
             return
 
-        selected_rows = {idx.row() for idx in self.ui.table_clips.selectionModel().selectedRows()}
+        selected_keys = self._table_selected_clip_keys()
 
         self.grid_clips.blockSignals(True)
         self.grid_clips.clearSelection()
         for i in range(self.grid_clips.count()):
             item = self.grid_clips.item(i)
-            if item.data(Qt.UserRole) in selected_rows:
+            if self._grid_item_clip_key(item) in selected_keys:
                 item.setSelected(True)
         self.grid_clips.blockSignals(False)
         self._sync_grid_card_visuals()
@@ -2250,32 +2256,26 @@ class LibraryMixin:
         """Paint selection on ClipCard widgets for every selected table row."""
         if not hasattr(self, 'grid_clips'):
             return
-        selected_rows: set[int] = set()
+        selected_keys: set[str] = set()
         if (
             getattr(self, "_library_panel_mode", "clips") == "clips"
             and hasattr(self.ui, "table_clips")
         ):
-            sm = self.ui.table_clips.selectionModel()
-            if sm is not None:
-                selected_rows = {int(idx.row()) for idx in sm.selectedRows()}
+            selected_keys = self._table_selected_clip_keys()
         prev = getattr(self, "_clips_visual_selected_rows", None)
         # Fast path: bookkeeping matches. Still scan for ghost rings — tab
-        # restore / sort / viewport rematerialize can leave `_selected` on a
-        # card whose row id moved, so `prev|selected` misses it.
-        if prev == selected_rows:
+        # restore / viewport rematerialize can leave `_selected` on a card
+        # that bookkeeping no longer tracks.
+        if prev == selected_keys:
             ghost = False
             for i in range(self.grid_clips.count()):
                 item = self.grid_clips.item(i)
                 if item is None:
                     continue
-                try:
-                    row = int(item.data(Qt.UserRole))
-                except (TypeError, ValueError):
-                    continue
                 card = self.grid_clips.itemWidget(item)
                 if isinstance(card, ClipCard) and bool(
                     getattr(card, "_selected", False)
-                ) != (row in selected_rows):
+                ) != (self._grid_item_clip_key(item) in selected_keys):
                     ghost = True
                     break
             if not ghost:
@@ -2284,17 +2284,34 @@ class LibraryMixin:
             item = self.grid_clips.item(i)
             if item is None:
                 continue
-            try:
-                row = int(item.data(Qt.UserRole))
-            except (TypeError, ValueError):
-                continue
             card = self.grid_clips.itemWidget(item)
             if not isinstance(card, ClipCard):
                 continue
-            want = row in selected_rows
+            want = self._grid_item_clip_key(item) in selected_keys
             if bool(getattr(card, "_selected", False)) != want:
                 card.set_selected(want)
-        self._clips_visual_selected_rows = set(selected_rows)
+        self._clips_visual_selected_rows = set(selected_keys)
+
+    @staticmethod
+    def _clip_key(path) -> str:
+        return os.path.normcase(os.path.normpath(str(path))) if path else ""
+
+    def _grid_item_clip_key(self, item) -> str:
+        return self._clip_key(item.data(Qt.UserRole + 1)) if item is not None else ""
+
+    def _table_selected_clip_keys(self) -> set[str]:
+        """Selected clips by path — row ids drift whenever the table re-orders."""
+        table = getattr(self.ui, "table_clips", None)
+        sm = table.selectionModel() if table is not None else None
+        if sm is None:
+            return set()
+        keys: set[str] = set()
+        for idx in sm.selectedRows():
+            cell = table.item(idx.row(), 0)
+            key = self._clip_key(cell.data(Qt.UserRole)) if cell is not None else ""
+            if key:
+                keys.add(key)
+        return keys
 
     def sync_table_from_grid_selection(self, *, keep_current_cell: bool = False) -> None:
         """Mirror multi-selection from the grid into the list."""
@@ -2309,11 +2326,13 @@ class LibraryMixin:
             table.blockSignals(False)
             return
 
-        rows = sorted({
-            item.data(Qt.UserRole)
-            for item in selected_items
-            if item.data(Qt.UserRole) is not None
-        })
+        wanted = {self._grid_item_clip_key(item) for item in selected_items}
+        wanted.discard("")
+        rows = []
+        for row in range(table.rowCount()):
+            cell = table.item(row, 0)
+            if cell is not None and self._clip_key(cell.data(Qt.UserRole)) in wanted:
+                rows.append(row)
 
         selection = QItemSelection()
         for row in rows:
@@ -2330,7 +2349,11 @@ class LibraryMixin:
             table.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.Select)
             current_row = table.currentRow()
             if not keep_current_cell or current_row not in rows:
-                table.setCurrentCell(rows[0], 0)
+                # NoUpdate: setCurrentCell reads live modifiers — held Ctrl toggled a row.
+                table.selectionModel().setCurrentIndex(
+                    table.model().index(rows[0], 0),
+                    QItemSelectionModel.SelectionFlag.NoUpdate,
+                )
         table.blockSignals(False)
 
     def _schedule_clips_selection_preview(self) -> None:
@@ -2525,7 +2548,7 @@ class LibraryMixin:
                 QItemSelectionModel.SelectionFlag.Toggle
                 | QItemSelectionModel.SelectionFlag.Rows,
             )
-            table.setCurrentIndex(index)
+            sm.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
             return
         if mods & Qt.ShiftModifier:
             from PySide6.QtCore import QItemSelection
@@ -2545,7 +2568,7 @@ class LibraryMixin:
                 QItemSelectionModel.SelectionFlag.ClearAndSelect
                 | QItemSelectionModel.SelectionFlag.Rows,
             )
-            table.setCurrentIndex(index)
+            sm.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def _grid_select_item(
         self, item, event=None, *, force_single: bool = False, mods=None
@@ -2746,6 +2769,15 @@ class LibraryMixin:
         except Exception as e:
             logging.error(f"Failed to open folder: {e}")
 
+    def open_clip_folders(self, clip_paths) -> None:
+        """Reveal several clips at once — one Explorer window per parent, all selected."""
+        from steempeg.infra.paths import reveal_many_in_file_manager
+
+        try:
+            reveal_many_in_file_manager(list(clip_paths))
+        except Exception as e:
+            logging.error(f"Failed to open folders: {e}")
+
     def _rmtree_clip_folder(self, clip_path: str, *, attempts: int = 6) -> None:
         """``shutil.rmtree`` with release + short retries for WinError 32 locks."""
         import time
@@ -2778,6 +2810,14 @@ class LibraryMixin:
 
     def delete_clip(self, clip_path):
         """ Prompts for confirmation and deletes the clip folder permanently. """
+        self.delete_clips([clip_path])
+
+    def delete_clips(self, clip_paths) -> None:
+        """One confirmation, then delete every clip folder and fade their cards together."""
+        clip_paths = [p for p in clip_paths if p]
+        if not clip_paths:
+            return
+        count = len(clip_paths)
         confirm = True
         try:
             from steempeg.ui.settings_prefs import load_confirm_before_delete
@@ -2788,57 +2828,47 @@ class LibraryMixin:
             confirm = load_confirm_before_delete(settings)
         except Exception:
             confirm = True
-        if confirm and not steempeg_confirm_delete(
-            self.ui,
-            "Delete Clip",
-            "Are you sure you want to delete this clip?",
-            detail="This will permanently delete the folder and all its contents.\nThis cannot be undone!",
-        ):
+        if count == 1:
+            title, question = "Delete Clip", "Are you sure you want to delete this clip?"
+            detail = "This will permanently delete the folder and all its contents.\nThis cannot be undone!"
+        else:
+            title, question = "Delete Clips", f"Are you sure you want to delete {count} clips?"
+            detail = "This will permanently delete their folders and all contents.\nThis cannot be undone!"
+        if confirm and not steempeg_confirm_delete(self.ui, title, question, detail=detail):
             return
 
-        try:
-            # Unload + kill sniper/thumbs first — Windows won't delete held .m4s.
-            if hasattr(self, "release_media_before_delete"):
-                self.release_media_before_delete(clip_path)
-
+        deleted: list[str] = []
+        failures: list[tuple[str, Exception]] = []
+        for clip_path in clip_paths:
             try:
-                from steempeg.infra.media_cache import purge_clip_media_cache
+                self._delete_clip_folder_now(clip_path)
+                deleted.append(clip_path)
+            except Exception as e:
+                logging.error(f"Failed to delete clip {clip_path}: {e}")
+                failures.append((clip_path, e))
 
-                purge_clip_media_cache(getattr(self, "cache_dir", None), clip_path)
-            except Exception:
-                logging.exception("Clip media-cache purge failed")
-
-            self._rmtree_clip_folder(clip_path)
-            logging.info(f"Deleted clip folder: {clip_path}")
-            if hasattr(self, "_on_queue_source_removed"):
-                self._on_queue_source_removed(clip_path)
-            norm = os.path.normpath(clip_path)
-            if hasattr(self, "_clear_salvage_verified"):
-                self._clear_salvage_verified(clip_path)
-            if hasattr(self.ui, "table_clips"):
-                for row in range(self.ui.table_clips.rowCount()):
-                    item = self.ui.table_clips.item(row, 0)
-                    if item and item.data(Qt.UserRole) and os.path.normpath(item.data(Qt.UserRole)) == norm:
-                        item.setData(_CLIP_CURED_ROLE, False)
-                        break
-            salvaged = getattr(self, "_salvaged_clips", {})
-            if norm in salvaged:
-                del salvaged[norm]
-
+        if deleted:
             # Surgical UI drop — full scan_clips() re-applied filters mid-rebuild and
             # looked like “only ~20 clips” until Refresh wiped the filter.
             if hasattr(self, "_remove_library_clip_paths_from_ui"):
-                self._remove_library_clip_paths_from_ui([clip_path])
-                live = getattr(self, "_clip_live_paths", None)
-                if isinstance(live, set):
-                    live.discard(os.path.normcase(norm))
-                if hasattr(self, "reapply_saved_library_filters"):
-                    self.reapply_saved_library_filters()
-                if hasattr(self, "_persist_clips_library_snapshot"):
+                def _drop_from_ui() -> None:
                     try:
-                        self._persist_clips_library_snapshot()
+                        self._remove_library_clip_paths_from_ui(deleted)
+                        live = getattr(self, "_clip_live_paths", None)
+                        if isinstance(live, set):
+                            for path in deleted:
+                                live.discard(os.path.normcase(os.path.normpath(path)))
+                        if hasattr(self, "reapply_saved_library_filters"):
+                            self.reapply_saved_library_filters()
+                        if hasattr(self, "_persist_clips_library_snapshot"):
+                            try:
+                                self._persist_clips_library_snapshot()
+                            except Exception:
+                                logging.debug("Clip snapshot persist after delete failed", exc_info=True)
                     except Exception:
-                        logging.debug("Clip snapshot persist after delete failed", exc_info=True)
+                        logging.exception("Library UI drop after delete failed")
+
+                self._fade_out_clip_cards(deleted, _drop_from_ui)
             else:
                 self.scan_clips()
 
@@ -2850,13 +2880,92 @@ class LibraryMixin:
             if hasattr(self.ui, 'label_detailed_summary'):
                 self.ui.label_detailed_summary.setText("Waiting for clip selection...")
 
-        except Exception as e:
-            logging.error(f"Failed to delete clip: {e}")
-            steempeg_critical(
-                self.ui,
-                "Error",
-                f"Failed to delete the clip.\nIt might be in use by another program.\n\n{e}",
-            )
+        if failures:
+            if len(failures) == 1:
+                message = (
+                    "Failed to delete the clip.\nIt might be in use by another program.\n\n"
+                    f"{failures[0][1]}"
+                )
+            else:
+                names = "\n".join(os.path.basename(os.path.normpath(p)) for p, _ in failures[:8])
+                more = f"\n…and {len(failures) - 8} more" if len(failures) > 8 else ""
+                message = (
+                    f"Failed to delete {len(failures)} of {count} clips.\n"
+                    f"They might be in use by another program.\n\n{names}{more}"
+                )
+            steempeg_critical(self.ui, "Error", message)
+
+    def _delete_clip_folder_now(self, clip_path: str) -> None:
+        """Release media, purge cache, remove the folder and forget per-clip state."""
+        # Unload + kill sniper/thumbs first — Windows won't delete held .m4s.
+        if hasattr(self, "release_media_before_delete"):
+            self.release_media_before_delete(clip_path)
+
+        try:
+            from steempeg.infra.media_cache import purge_clip_media_cache
+
+            purge_clip_media_cache(getattr(self, "cache_dir", None), clip_path)
+        except Exception:
+            logging.exception("Clip media-cache purge failed")
+
+        self._rmtree_clip_folder(clip_path)
+        logging.info(f"Deleted clip folder: {clip_path}")
+        if hasattr(self, "_on_queue_source_removed"):
+            self._on_queue_source_removed(clip_path)
+        norm = os.path.normpath(clip_path)
+        if hasattr(self, "_clear_salvage_verified"):
+            self._clear_salvage_verified(clip_path)
+        if hasattr(self.ui, "table_clips"):
+            for row in range(self.ui.table_clips.rowCount()):
+                item = self.ui.table_clips.item(row, 0)
+                if item and item.data(Qt.UserRole) and os.path.normpath(item.data(Qt.UserRole)) == norm:
+                    item.setData(_CLIP_CURED_ROLE, False)
+                    break
+        salvaged = getattr(self, "_salvaged_clips", {})
+        if norm in salvaged:
+            del salvaged[norm]
+
+    def _fade_out_clip_cards(self, clip_paths, on_done) -> None:
+        """Fade the on-screen grid ClipCards for *clip_paths*, then run *on_done* once.
+
+        Cards that aren't visible (List view, filtered, not materialized yet) are
+        skipped; with none visible *on_done* runs right away.
+        """
+        grid = getattr(self, "grid_clips", None)
+        cards = []
+        if grid is not None and grid.isVisible():
+            wanted = {os.path.normcase(os.path.normpath(p)) for p in clip_paths}
+            for i in range(grid.count()):
+                item = grid.item(i)
+                if item is None or item.isHidden():
+                    continue
+                path = str(item.data(Qt.UserRole + 1) or "")
+                if path and os.path.normcase(os.path.normpath(path)) in wanted:
+                    card = grid.itemWidget(item)
+                    if card is not None and card.isVisible():
+                        cards.append(card)
+        if not cards:
+            on_done()
+            return
+        pending = [len(cards)]
+
+        def _one_done() -> None:
+            pending[0] -= 1
+            if pending[0] == 0:
+                on_done()
+
+        for card in cards:
+            card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            effect = QGraphicsOpacityEffect(card)
+            card.setGraphicsEffect(effect)
+            anim = QPropertyAnimation(effect, b"opacity", card)
+            anim.setDuration(_CLIP_CARD_FADE_OUT_MS)
+            anim.setStartValue(1.0)
+            anim.setEndValue(0.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(_one_done)
+            card._fade_out_anim = anim
+            anim.start()
 
     def _load_clips_folders_from_settings(self):
         settings = self.load_user_settings()
@@ -3932,6 +4041,27 @@ class LibraryMixin:
             return
         self._attach_clip_card_to_grid_item(item)
 
+    def _table_row_for_grid_item(self, item) -> int:
+        """Table row of the grid item's clip, matched by path (row ids go stale)."""
+        table = self.ui.table_clips
+        try:
+            row = int(item.data(Qt.UserRole))
+        except (TypeError, ValueError):
+            row = -1
+        key = self._grid_item_clip_key(item)
+        if not key:
+            return row if 0 <= row < table.rowCount() else -1
+        if 0 <= row < table.rowCount():
+            cell = table.item(row, 0)
+            if cell is not None and self._clip_key(cell.data(Qt.UserRole)) == key:
+                return row
+        for r in range(table.rowCount()):
+            cell = table.item(r, 0)
+            if cell is not None and self._clip_key(cell.data(Qt.UserRole)) == key:
+                item.setData(Qt.UserRole, r)
+                return r
+        return -1
+
     def _attach_clip_card_to_grid_item(self, item: QListWidgetItem) -> ClipCard | None:
         """Build / attach a ClipCard for an existing grid item (materialize path)."""
         if not hasattr(self, "grid_clips") or not hasattr(self.ui, "table_clips"):
@@ -3942,12 +4072,9 @@ class LibraryMixin:
         if isinstance(existing, ClipCard):
             return existing
 
-        try:
-            row = int(item.data(Qt.UserRole))
-        except (TypeError, ValueError):
-            return None
         table = self.ui.table_clips
-        if row < 0 or row >= table.rowCount():
+        row = self._table_row_for_grid_item(item)
+        if row < 0:
             return None
         title_item = table.item(row, 0)
         date_item = table.item(row, 2)
@@ -4054,6 +4181,9 @@ class LibraryMixin:
             card.set_unavailable(dead=is_dead, no_preview=False)
         else:
             card.set_unavailable(dead=is_dead, no_preview=not has_thumb)
+        # setItemWidget shows the card at its current pos — place it first, or every
+        # idle-fill card flashes at (0, 0) over the first card and steals its hover.
+        card.setGeometry(self.grid_clips.visualItemRect(item))
         self.grid_clips.setItemWidget(item, card)
 
         # Progressive rematerialize / Size rebuild must re-apply the purple ring —
@@ -4065,9 +4195,7 @@ class LibraryMixin:
                 getattr(self, "_library_panel_mode", "clips") == "clips"
                 and hasattr(self.ui, "table_clips")
             ):
-                sm = self.ui.table_clips.selectionModel()
-                if sm is not None:
-                    want = any(int(idx.row()) == int(row) for idx in sm.selectedRows())
+                want = self._clip_key(clip_path) in self._table_selected_clip_keys()
             card.set_selected(want)
         except Exception:
             pass
@@ -5096,7 +5224,6 @@ class LibraryMixin:
             return
         table = getattr(getattr(self, "ui", None), "table_clips", None)
         if table is not None:
-            table.setSortingEnabled(True)
             table.horizontalHeader().setSectionsClickable(False)
         if hasattr(self, "fast_sync_grid"):
             self.fast_sync_grid()
