@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from steempeg.ui import design_tokens as tok
+import logging
 import os
 
 from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize, QTimer
@@ -100,8 +101,24 @@ _DRAG_PIXMAP_MAX_H = 88
 _SPLITTER_GUTTER = 10
 
 
+# Full preview cards per Add-to-queue hover; the rest collapse into one "+N more".
+_PEEK_FULL_MAX = 12
+
+_PEEK_BADGE_STYLE = (
+    "QLabel#queueAddPeekBadge {"
+    " background-color: rgba(81, 56, 230, 0.92); color: #ffffff;"
+    " border: 1px solid #b29ae7; border-radius: 11px;"
+    f" font-size: 11px; font-weight: bold; padding: 0 9px; {_FONT} }}"
+)
+
+
 class _QueueAddPeekGhost(QFrame):
-    """Dashed placeholder: where a clip would land if you choose Add to queue."""
+    """Dashed placeholder: where a clip would land if you choose Add to queue.
+
+    With a preview *job* it wraps the real queue card (thumb, icon, title, date,
+    preset, output) under a dashed ring; without one it falls back to a plain
+    title-only placeholder.
+    """
 
     def __init__(
         self,
@@ -114,13 +131,31 @@ class _QueueAddPeekGhost(QFrame):
         thumb_h: int = _LIST_THUMB_H,
         card_w: int | None = None,
         card_h: int | None = None,
+        job: RenderJob | None = None,
+        jobs: list[RenderJob] | None = None,
+        dense: UiDensity | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.setObjectName("queueAddPeekGhost")
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._ring: QFrame | None = None
+        self._badge: QLabel | None = None
+        self._grid = bool(grid)
         hint = "Would be added"
+        if job is not None:
+            self._build_from_job(
+                job,
+                grid=grid,
+                cache_dir=cache_dir,
+                jobs=jobs,
+                thumb_w=thumb_w,
+                thumb_h=thumb_h,
+                dense=dense,
+            )
+            start_card_peek_pulse(self)
+            return
         self.setStyleSheet(
             f"""
             QFrame#queueAddPeekGhost {{
@@ -202,6 +237,87 @@ class _QueueAddPeekGhost(QFrame):
             lay.addWidget(thumb, 0, Qt.AlignmentFlag.AlignVCenter)
             lay.addLayout(col, 1)
         start_card_peek_pulse(self)
+
+    def _build_from_job(
+        self,
+        job: RenderJob,
+        *,
+        grid: bool,
+        cache_dir: str | None,
+        jobs: list[RenderJob] | None,
+        thumb_w: int,
+        thumb_h: int,
+        dense: UiDensity | None,
+    ) -> None:
+        self.setStyleSheet("QFrame#queueAddPeekGhost { background: transparent; border: none; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        if grid:
+            card = QueueGridJobCard(job, cache_dir=cache_dir, dense=dense, parent=self)
+            self.setFixedSize(card.size())
+            radii = "border-radius: 0px; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;"
+        else:
+            card = QueueJobCard(
+                job,
+                cache_dir=cache_dir,
+                jobs=list(jobs or []) + [job],
+                thumb_w=thumb_w,
+                thumb_h=thumb_h,
+                dense=dense,
+                parent=self,
+            )
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setFixedHeight(card.sizeHint().height())
+            radii = "border-radius: 12px;"
+            # Neutral face: the ghost is not "Ready" yet, and the dashed ring is the outline.
+            card._apply_card_style = lambda: None
+            card.setStyleSheet(
+                f"QueueJobCard {{ background-color: {ut.queue_job_card_face(selected=False, ready_tint=False)};"
+                f" border: {QUEUE_CARD_BORDER_PX}px solid transparent; border-radius: 12px; }}"
+                f" QLabel {{ background: transparent; border: none; {_FONT} }}"
+            )
+        remove_btn = getattr(card, "_btn_remove", None)
+        if remove_btn is not None:
+            # Compact relayout re-shows it, so drop it instead of hiding.
+            card._btn_remove = None
+            remove_btn.hide()
+            remove_btn.deleteLater()
+        card.setAcceptDrops(False)
+        card.setToolTip("")
+        for w in [card, *card.findChildren(QWidget)]:
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay.addWidget(card)
+
+        self._ring = QFrame(self)
+        self._ring.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._ring.setStyleSheet(
+            f"QFrame {{ background-color: rgba(178, 154, 231, 0.10);"
+            f" border: {QUEUE_CARD_BORDER_PX}px dashed #b29ae7; {radii} }}"
+        )
+        self._badge = QLabel("+ Would be added", self)
+        self._badge.setObjectName("queueAddPeekBadge")
+        self._badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._badge.setStyleSheet(_PEEK_BADGE_STYLE)
+        self._badge.setFixedHeight(22)
+        self._badge.adjustSize()
+        self._place_overlays()
+
+    def _place_overlays(self) -> None:
+        if self._ring is not None:
+            self._ring.setGeometry(0, 0, self.width(), self.height())
+            self._ring.raise_()
+        if self._badge is not None:
+            if self._grid:
+                self._badge.move(max(4, self.width() - self._badge.width() - 8), 8)
+            else:
+                # List: sit on the thumb so the title / preset rows stay readable.
+                self._badge.move(12, max(4, self.height() - self._badge.height() - 12))
+            self._badge.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_overlays()
 _GRID_GAP = 10
 _QUEUE_TOGGLE_ACTIVE = (
     "background-color: #5138e6; color: #ffffff; border-radius: 12px;"
@@ -1058,6 +1174,22 @@ class RenderQueuePanel(QWidget):
     def _norm_clip(self, path: str) -> str:
         return os.path.normcase(os.path.normpath(path or ""))
 
+    def _peek_preview_job(self, clip_path: str, queue_index: int) -> RenderJob | None:
+        """Job Add to queue would create right now (same builder, never enqueued)."""
+        app = getattr(self, "_app", None)
+        if app is None:
+            return None
+        try:
+            from steempeg.ui.render_job_builder import build_render_job_from_ui
+
+            job = build_render_job_from_ui(app, clip_path)
+        except Exception:
+            logging.debug("Add-to-queue peek: preview job failed for %s", clip_path, exc_info=True)
+            return None
+        if job is not None:
+            job.queue_index = int(queue_index)
+        return job
+
     def _peek_title_for_clip(self, clip_path: str) -> str:
         folder = os.path.basename(str(clip_path).rstrip("\\/")) or "Clip"
         try:
@@ -1265,7 +1397,9 @@ class RenderQueuePanel(QWidget):
             grid = self._view_mode == "grid"
             d = self._density
             host = self._grid_inner if grid else self._list_host
-            for path in new_paths[:4]:
+            shown = new_paths[:_PEEK_FULL_MAX]
+            for offset, path in enumerate(shown, start=1):
+                job = self._peek_preview_job(path, len(self._jobs) + offset)
                 ghost = _QueueAddPeekGhost(
                     path,
                     grid=grid,
@@ -1273,10 +1407,26 @@ class RenderQueuePanel(QWidget):
                     title=self._peek_title_for_clip(path),
                     thumb_w=d.queue_thumb_w,
                     thumb_h=d.queue_thumb_h,
+                    job=job,
+                    jobs=self._jobs,
+                    dense=d,
                     parent=host,
                 )
                 ghost.show()
                 self._peek_ghosts.append(ghost)
+            rest = len(new_paths) - len(shown)
+            if rest > 0:
+                more = _QueueAddPeekGhost(
+                    "",
+                    grid=grid,
+                    cache_dir=cache_dir,
+                    title=f"+{rest} more clip{'s' if rest != 1 else ''}",
+                    thumb_w=d.queue_thumb_w,
+                    thumb_h=d.queue_thumb_h,
+                    parent=host,
+                )
+                more.show()
+                self._peek_ghosts.append(more)
             if grid:
                 self._relayout_grid_cards()
             else:
@@ -1317,12 +1467,7 @@ class RenderQueuePanel(QWidget):
             stop_card_peek_pulse(card)
         for ghost in self._peek_ghosts:
             stop_card_peek_pulse(ghost)
-            try:
-                ghost.hide()
-                ghost.setParent(None)
-                ghost.deleteLater()
-            except RuntimeError:
-                pass
+            _dispose_queue_card(ghost)
         self._peek_ghosts = []
         if self._peek_showed_host and not self._jobs:
             self._peek_showed_host = False
