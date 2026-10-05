@@ -267,6 +267,62 @@ def _reveal_windows(path: str) -> bool:
         return False
 
 
+def _reveal_windows_many(parent: str, items: list[str]) -> bool:
+    """One Explorer window on ``parent`` with every path in ``items`` selected."""
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        ole32 = ctypes.windll.ole32
+        shell32 = ctypes.windll.shell32
+        # PIDLs are pointers — default c_int restype truncates them on 64-bit.
+        shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+        shell32.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+        shell32.ILFindLastID.restype = ctypes.c_void_p
+        shell32.ILFindLastID.argtypes = [ctypes.c_void_p]
+        shell32.ILFree.argtypes = [ctypes.c_void_p]
+        shell32.SHOpenFolderAndSelectItems.argtypes = [
+            ctypes.c_void_p,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.DWORD,
+        ]
+        ole32.CoInitialize(None)
+        folder = shell32.ILCreateFromPathW(parent)
+        if not folder:
+            return False
+        children = [shell32.ILCreateFromPathW(p) for p in items]
+        try:
+            relative = [shell32.ILFindLastID(c) for c in children if c]
+            if not relative:
+                return False
+            array = (ctypes.c_void_p * len(relative))(*relative)
+            hr = shell32.SHOpenFolderAndSelectItems(folder, len(relative), array, 0)
+            return int(hr) >= 0
+        finally:
+            for child in children:
+                if child:
+                    shell32.ILFree(child)
+            shell32.ILFree(folder)
+    except Exception:
+        return False
+
+
+def reveal_many_in_file_manager(paths) -> None:
+    """Open the file manager once per parent folder with all ``paths`` selected."""
+    groups: dict[str, list[str]] = {}
+    for path in paths or []:
+        if not path:
+            continue
+        norm = os.path.abspath(os.path.normpath(path))
+        if os.path.exists(norm):
+            groups.setdefault(os.path.dirname(norm), []).append(norm)
+    for parent, items in groups.items():
+        if len(items) > 1 and sys.platform == "win32" and _reveal_windows_many(parent, items):
+            continue
+        reveal_in_file_manager(items[0])
+
+
 def reveal_in_file_manager(path: str) -> None:
     """Open the file manager with ``path`` selected/highlighted.
 
