@@ -1,7 +1,7 @@
 """Shared constants and helpers for render-queue list/grid cards."""
 import os
 
-from PySide6.QtCore import Qt, QPropertyAnimation
+from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
 
@@ -202,15 +202,16 @@ def job_can_remove(job: RenderJob) -> bool:
 
 
 def start_card_peek_pulse(widget: QWidget) -> None:
-    """Looping opacity blink for Add-to-queue hover preview."""
+    """Looping soft opacity breathe for Add-to-queue hover preview."""
     stop_card_peek_pulse(widget)
     effect = QGraphicsOpacityEffect(widget)
     widget.setGraphicsEffect(effect)
     anim = QPropertyAnimation(effect, b"opacity", widget)
-    anim.setDuration(900)
+    anim.setDuration(1400)
     anim.setStartValue(1.0)
-    anim.setKeyValueAt(0.5, 0.34)
+    anim.setKeyValueAt(0.5, 0.6)
     anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.InOutSine)
     anim.setLoopCount(-1)
     anim.start()
     widget._peek_pulse_anim = anim
