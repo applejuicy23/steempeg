@@ -687,6 +687,31 @@ def add_library_panel_button_stylesheet(dense) -> str:
     """
 
 
+def queue_pin_button_stylesheet(dense) -> str:
+    p = _active
+    sz = dense.add_tab_size
+    return f"""
+        QPushButton {{
+            background-color: {p.bg_library_tab};
+            color: #ffffff;
+            border: 1px solid {p.border_library_tab_idle};
+            border-radius: {dense.tab_radius}px;
+            font-size: {14 if not dense.compact else 11}px;
+            padding: 0px;
+            min-width: {sz}px; max-width: {sz}px;
+            min-height: {sz}px; max-height: {sz}px;
+        }}
+        QPushButton:hover {{
+            background-color: {p.neo_nav_hover_bg};
+            border-color: #6b5a8e;
+        }}
+        QPushButton:checked {{
+            background-color: #3a324a;
+            border: 1px solid #b29ae7;
+        }}
+    """
+
+
 def timeline_strip_stylesheet() -> str:
     """Custom timeline scroll area — groove zone lighter than #HudFrame footer."""
     p = _active
