@@ -175,7 +175,7 @@ def pin_player_zoom_dock(app) -> None:
     elif idx != 0:
         lay.removeWidget(host)
         lay.insertWidget(0, host, 0)
-    host.show()
+    host.setVisible(bool(getattr(app, "_player_header_zoom_visible", False)))
 
 
 def measure_left_zoom_span(app, spacing: int = 10) -> int:
