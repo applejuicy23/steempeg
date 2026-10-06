@@ -638,6 +638,7 @@ class QueueHoverController(QObject):
         self._revealed = False
         self._resizing = False
         self._add_peek = False
+        self._pinned = False
         self._host = _resolve_host(app)
         self._overlay = QueueHoverOverlay(self, self._host)
         self._hotspot = _Hotspot(self, self._host)
@@ -664,6 +665,57 @@ class QueueHoverController(QObject):
 
     def is_revealed(self) -> bool:
         return bool(self._revealed)
+
+    def is_pinned(self) -> bool:
+        return bool(self._pinned)
+
+    def set_pinned(self, pinned: bool) -> None:
+        self._pinned = bool(pinned)
+        if self._pinned:
+            if self.is_enabled() and not self._revealed:
+                self.reveal()
+        elif self._revealed:
+            self._on_hot_leave()
+
+    def _app_is_foreground(self) -> bool:
+        ui = getattr(self._app, "ui", None)
+        if ui is None:
+            return False
+        try:
+            if ui.isMinimized():
+                return False
+        except RuntimeError:
+            return False
+        return QApplication.applicationState() == Qt.ApplicationState.ApplicationActive
+
+    def _sync_pinned_visibility(self) -> None:
+        if not self._pinned or not self.is_enabled():
+            return
+        if self._app_is_foreground():
+            if not self._revealed:
+                self.reveal(animated=False)
+            else:
+                self._raise_overlay()
+        elif self._revealed and not self._add_peek:
+            self.conceal(animated=False)
+
+    def _raise_overlay(self) -> None:
+        """Clicking the shell can stack it over the unowned Tool — lift it back (no activate)."""
+        if sys.platform != "win32" or not self._app_is_foreground():
+            return
+        try:
+            import ctypes
+
+            flags = 0x0001 | 0x0002 | 0x0010 | 0x0200  # NOSIZE|NOMOVE|NOACTIVATE|NOOWNERZORDER
+            user32 = ctypes.windll.user32
+            for widget in (self._overlay, getattr(self._overlay, "_grip", None)):
+                if widget is None or not widget.isVisible():
+                    continue
+                hwnd = int(widget.winId())
+                if hwnd:
+                    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)  # HWND_TOP
+        except Exception:
+            logging.debug("queue hover raise skipped", exc_info=True)
 
     def peek_add_to_queue(self, clip_paths: list[str]) -> None:
         """Open the hover drawer and preview where Add to queue would land."""
@@ -795,6 +847,7 @@ class QueueHoverController(QObject):
                 pass
         else:
             self.sync_geometry()
+            self._sync_pinned_visibility()
 
     def reveal(self, *, animated: bool = True) -> None:
         if not self.is_enabled():
@@ -856,6 +909,18 @@ class QueueHoverController(QObject):
     def eventFilter(self, obj, event):  # noqa: N802
         et = event.type()
         ui = getattr(self._app, "ui", None)
+        if self._pinned:
+            if et == QEvent.Type.ApplicationStateChange or (
+                obj is ui and et == QEvent.Type.WindowStateChange
+            ):
+                QTimer.singleShot(0, self._sync_pinned_visibility)
+            elif (
+                et == QEvent.Type.MouseButtonRelease
+                and self._revealed
+                and isinstance(obj, QWidget)
+                and obj.window() is ui
+            ):
+                QTimer.singleShot(0, self._raise_overlay)
         if obj in (self._host, ui) and et in (
             QEvent.Type.Resize,
             QEvent.Type.Move,
@@ -991,6 +1056,8 @@ class QueueHoverController(QObject):
         if self._resizing:
             return True
         if self._add_peek:
+            return True
+        if self._pinned and self._app_is_foreground():
             return True
         if self._pointer_over_chrome() or self._edge_contains_cursor():
             return True
