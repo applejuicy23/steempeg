@@ -151,10 +151,12 @@ def find_icon_urls(app_id, timeout=7) -> list[str]:
         )
         if resp.ok:
             common = resp.json().get("data", {}).get(app_id, {}).get("common", {})
-            icon_hash = common.get("clienticon") or common.get("icon")
-            if icon_hash:
-                for url in _cdn_icon_urls(app_id, icon_hash):
-                    add(url)
+            # ``clienticon`` is sometimes only published as .ico (404 as .jpg).
+            for key in ("clienticon", "icon"):
+                icon_hash = common.get(key)
+                if icon_hash:
+                    for url in _cdn_icon_urls(app_id, icon_hash):
+                        add(url)
     except (requests.RequestException, ValueError, TypeError):
         pass
 
