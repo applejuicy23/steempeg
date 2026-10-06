@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -69,6 +70,7 @@ from steempeg.ui.widgets.thumb_loading_overlay import ThumbLoadingOverlay
 from steempeg.ui.widgets.view_mode_toggle import ViewModeChrome
 
 _LIST_TITLE_ICON = 28
+_DELETOR_TAB_LABEL = "🧹 Smart Deletor"
 
 _DISPOSE_SINK: QWidget | None = None
 
@@ -876,6 +878,10 @@ class RenderQueuePanel(QWidget):
     history_requested = Signal()
     view_mode_changed = Signal(str)
     empty_hint_dismissed_changed = Signal(bool)
+    smart_deletor_open_changed = Signal(bool)
+    smart_deletor_created = Signal(object)  # SmartDeletorPanel
+    page_changed = Signal(str)
+    pin_toggled = Signal(bool)
 
     def __init__(self, initial_view_mode: str = "grid", parent=None):
         super().__init__(parent)
@@ -914,11 +920,45 @@ class RenderQueuePanel(QWidget):
 
         self._tab = LibraryTabWidget("🎬 Render Queue", "queue", closable=False)
         self._tab.set_active(True)
+        self._tab.activated.connect(lambda _m: self.show_page("queue"))
+        self._deletor_tab = LibraryTabWidget(_DELETOR_TAB_LABEL, "smart_deletor", closable=True)
+        self._deletor_tab.activated.connect(lambda _m: self.show_page("smart_deletor"))
+        self._deletor_tab.close_requested.connect(lambda _m: self.set_smart_deletor_open(False))
+        self._deletor_tab.hide()
+        self._btn_add_tab = QPushButton("+")
+        self._btn_add_tab.setFixedSize(COMFORT.add_tab_size, COMFORT.add_tab_size)
+        self._btn_add_tab.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_add_tab.setToolTip("Add or remove panels")
+        self._btn_add_tab.setStyleSheet(ut.add_library_panel_button_stylesheet(COMFORT))
+        self._btn_add_tab.clicked.connect(self._show_add_tab_menu)
+        self._btn_pin = QPushButton("📌")
+        self._btn_pin.setCheckable(True)
+        self._btn_pin.setFixedSize(COMFORT.add_tab_size, COMFORT.add_tab_size)
+        self._btn_pin.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_pin.setToolTip("Pin panel open")
+        self._btn_pin.setStyleSheet(ut.queue_pin_button_stylesheet(COMFORT))
+        self._btn_pin.toggled.connect(self._on_pin_toggled)
+        self._btn_pin.hide()
+        self._smart_deletor: QWidget | None = None
+        self._page = "queue"
+        self._peek_prev_page: str | None = None
         self._lbl_view = None  # set below
         tab_row.addStretch()
         tab_row.addWidget(self._tab)
+        tab_row.addWidget(self._deletor_tab)
+        tab_row.addWidget(self._btn_add_tab)
+        tab_row.addWidget(self._btn_pin)
         tab_row.addStretch()
         outer.addLayout(tab_row)
+
+        self._pages = QStackedWidget()
+        self._pages.setStyleSheet("background: transparent;")
+        self._queue_page = QWidget()
+        self._queue_page.setStyleSheet("background: transparent;")
+        queue_page_layout = QVBoxLayout(self._queue_page)
+        queue_page_layout.setContentsMargins(0, 0, 0, 0)
+        queue_page_layout.setSpacing(LIBRARY_TAB_TO_TOOLBAR_SPACING)
+        self._pages.addWidget(self._queue_page)
 
         toolbar_row = QHBoxLayout()
         toolbar_row.setContentsMargins(_QUEUE_CHROME_INSET, 0, _QUEUE_CHROME_INSET, 0)
@@ -1005,7 +1045,7 @@ class RenderQueuePanel(QWidget):
         tool_layout.addStretch()
         tool_layout.addWidget(actions_group, 0, Qt.AlignmentFlag.AlignVCenter)
         toolbar_row.addWidget(toolbar)
-        outer.addLayout(toolbar_row)
+        queue_page_layout.addLayout(toolbar_row)
 
         self._list_container = QFrame()
         self._list_container.setObjectName("queueListContainer")
@@ -1116,7 +1156,8 @@ class RenderQueuePanel(QWidget):
         self._scroll.setWidget(self._content_stack)
         list_outer.addWidget(self._scroll, 1)
 
-        outer.addWidget(self._list_container, 1)
+        queue_page_layout.addWidget(self._list_container, 1)
+        outer.addWidget(self._pages, 1)
 
         self._scroll.viewport().installEventFilter(self)
 
@@ -1459,9 +1500,12 @@ class RenderQueuePanel(QWidget):
         key = tuple(self._norm_clip(p) for p in paths)
         if key == self._add_peek_key:
             return
-        self.clear_add_peek(restore_scroll=False)
+        self.clear_add_peek(restore_scroll=False, restore_page=not key)
         if not key:
             return
+        if self._page != "queue":
+            self._peek_prev_page = self._page
+            self.show_page("queue", remember=False)
         self._capture_rest_for_peek()
         self._add_peek_key = key
         queued_norms = {
@@ -1543,7 +1587,10 @@ class RenderQueuePanel(QWidget):
         elif existing_focus is not None:
             self._scroll_to_peek_target(existing_focus, to_end=False)
 
-    def clear_add_peek(self, *, restore_scroll: bool = True) -> None:
+    def clear_add_peek(self, *, restore_scroll: bool = True, restore_page: bool = True) -> None:
+        if restore_page and self._peek_prev_page:
+            prev, self._peek_prev_page = self._peek_prev_page, None
+            self.show_page(prev, remember=False)
         if self._add_peek_key is None and not self._peek_ghosts:
             for card in self._card_widgets:
                 stop_card_peek_pulse(card)
@@ -1622,6 +1669,67 @@ class RenderQueuePanel(QWidget):
         """Hover overlay has no in-panel splitter gutter — the handle sits outside."""
         self._hover_hosted = bool(hosted)
         self._apply_splitter_gutter()
+        self._btn_pin.setVisible(self._hover_hosted)
+        if not self._hover_hosted and self._btn_pin.isChecked():
+            self._btn_pin.setChecked(False)
+
+    def _on_pin_toggled(self, pinned: bool) -> None:
+        self._btn_pin.setToolTip("Unpin panel" if pinned else "Pin panel open")
+        self.pin_toggled.emit(bool(pinned))
+
+    def is_pinned(self) -> bool:
+        return self._btn_pin.isChecked()
+
+    def _show_add_tab_menu(self) -> None:
+        menu = QMenu(self._btn_add_tab)
+        menu.setStyleSheet(ut.logs_menu_stylesheet())
+        is_open = not self._deletor_tab.isHidden()
+        act = menu.addAction(f"{'−' if is_open else '+'}  {_DELETOR_TAB_LABEL}")
+        pos = self._btn_add_tab.mapToGlobal(QPoint(0, self._btn_add_tab.height()))
+        if menu.exec(pos) is act:
+            self.set_smart_deletor_open(not is_open)
+
+    def smart_deletor_panel(self):
+        return self._smart_deletor
+
+    def is_smart_deletor_open(self) -> bool:
+        return not self._deletor_tab.isHidden()
+
+    def set_smart_deletor_open(self, open_: bool, *, activate: bool = True) -> None:
+        was_open = not self._deletor_tab.isHidden()
+        if open_:
+            if self._smart_deletor is None:
+                from steempeg.ui.smart_deletor_panel import SmartDeletorPanel
+
+                self._smart_deletor = SmartDeletorPanel()
+                self._pages.addWidget(self._smart_deletor)
+                self.smart_deletor_created.emit(self._smart_deletor)
+            self._deletor_tab.show()
+            if activate:
+                self.show_page("smart_deletor")
+        else:
+            self._deletor_tab.hide()
+            self.show_page("queue")
+        if was_open != open_:
+            self.smart_deletor_open_changed.emit(open_)
+
+    def show_page(self, page: str, *, remember: bool = True) -> None:
+        if page == "smart_deletor" and self._smart_deletor is not None and not self._deletor_tab.isHidden():
+            self._pages.setCurrentWidget(self._smart_deletor)
+        else:
+            page = "queue"
+            self._pages.setCurrentWidget(self._queue_page)
+        changed = page != self._page
+        self._page = page
+        self._tab.set_active(page == "queue")
+        self._deletor_tab.set_active(page == "smart_deletor")
+        if remember:
+            self._peek_prev_page = None
+            if changed:
+                self.page_changed.emit(page)
+
+    def current_page(self) -> str:
+        return self._page
 
     def set_splitter_gutter_side(self, side: str) -> None:
         """Put the handle gutter on the player-facing edge (``left`` or ``right``)."""
@@ -1647,6 +1755,11 @@ class RenderQueuePanel(QWidget):
         self._density = dense
         self._tab.set_label(tab_label("queue", dense))
         self._tab.apply_density(dense)
+        self._deletor_tab.apply_density(dense)
+        self._btn_add_tab.setFixedSize(dense.add_tab_size, dense.add_tab_size)
+        self._btn_add_tab.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+        self._btn_pin.setFixedSize(dense.add_tab_size, dense.add_tab_size)
+        self._btn_pin.setStyleSheet(ut.queue_pin_button_stylesheet(dense))
         self._tool_layout.setContentsMargins(dense.queue_tool_pad_h, 4, dense.queue_tool_pad_h, 4)
         self._tool_layout.setSpacing(6 if dense.compact else 8)
         chrome = getattr(self, "_view_chrome", None)
@@ -1944,9 +2057,18 @@ class RenderQueuePanel(QWidget):
                 scroll, chrome=queue_scrollbar_chrome()
             )
 
-        tab = getattr(self, "_tab", None)
-        if tab is not None and hasattr(tab, "_apply_style"):
-            tab._apply_style()
+        for tab in (getattr(self, "_tab", None), getattr(self, "_deletor_tab", None)):
+            if tab is not None and hasattr(tab, "_apply_style"):
+                tab._apply_style()
+        deletor = getattr(self, "_smart_deletor", None)
+        if deletor is not None:
+            deletor.apply_ui_theme_chrome()
+        add_btn = getattr(self, "_btn_add_tab", None)
+        if add_btn is not None:
+            add_btn.setStyleSheet(ut.add_library_panel_button_stylesheet(dense))
+        pin_btn = getattr(self, "_btn_pin", None)
+        if pin_btn is not None:
+            pin_btn.setStyleSheet(ut.queue_pin_button_stylesheet(dense))
 
         toolbar = getattr(self, "_toolbar", None)
         if toolbar is not None:
