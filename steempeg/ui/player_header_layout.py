@@ -648,11 +648,83 @@ def sync_header_center_mirror(app) -> None:
         sync_centered_title_width(app)
         return
 
-    target = measure_right_dock_span(app, spacing)
+    right_pad = ensure_header_right_pad(app)
+    if lay.indexOf(right_pad) != lay.count() - 1:
+        if lay.indexOf(right_pad) >= 0:
+            lay.removeWidget(right_pad)
+        lay.addWidget(right_pad, 0)
+    right_pad.show()
     mirror.show()
-    if mirror.width() != target:
-        mirror.setFixedWidth(target)
+
+    left_w, right_w = _center_group_bounds(app, lay)
+    if left_w is None or right_w is None:
+        sync_centered_title_width(app)
+        return
+    base_left = _side_span(lay, 0, lay.indexOf(left_w), spacing, skip=(mirror,))
+    base_right = _side_span(
+        lay, lay.indexOf(right_w) + 1, lay.count(), spacing, skip=(right_pad,)
+    )
+    diff = base_right - base_left
+    left_target, right_target = max(0, diff), max(0, -diff)
+    if mirror.width() != left_target or mirror.minimumWidth() != left_target:
+        mirror.setFixedWidth(left_target)
+    if right_pad.width() != right_target or right_pad.minimumWidth() != right_target:
+        right_pad.setFixedWidth(right_target)
     sync_centered_title_width(app)
+
+
+def ensure_header_right_pad(app) -> QWidget:
+    """Trailing pad that balances left-only chrome (zoom) when the dock is narrow."""
+    pad = getattr(app, "player_header_right_pad", None)
+    if _widget_alive(pad):
+        return pad
+    pad = QWidget()
+    pad.setObjectName("playerHeaderRightPad")
+    pad.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+    pad.setFixedWidth(0)
+    app.player_header_right_pad = pad
+    return pad
+
+
+def _center_group_bounds(app, lay) -> tuple[QWidget | None, QWidget | None]:
+    """First / last header items of the centered group (wings or spacers)."""
+    for left_name, right_name in (
+        ("player_header_left_wing", "player_header_right_wing"),
+        ("player_header_left_spacer", "player_header_right_spacer"),
+    ):
+        lw = getattr(app, left_name, None)
+        rw = getattr(app, right_name, None)
+        if (
+            _widget_alive(lw)
+            and _widget_alive(rw)
+            and lay.indexOf(lw) >= 0
+            and lay.indexOf(rw) >= 0
+            and not lw.isHidden()
+            and not rw.isHidden()
+        ):
+            return lw, rw
+    return None, None
+
+
+def _side_span(lay, start: int, stop: int, spacing: int, *, skip=()) -> int:
+    """Fixed width of items in ``[start, stop)`` plus one gap each toward the center."""
+    total = 0
+    for i in range(max(0, start), max(0, stop)):
+        item = lay.itemAt(i)
+        if item is None:
+            continue
+        w = item.widget()
+        if w is not None:
+            if w in skip:
+                total += spacing  # pad itself is sized separately; its gap counts
+                continue
+            if w.isHidden():
+                continue
+            total += max(int(w.width()) if w.width() > 0 else 0, int(w.sizeHint().width()))
+            total += spacing
+        elif not item.isEmpty():
+            total += int(item.sizeHint().width()) + spacing
+    return total
 
 
 class _HeaderCenterSyncFilter(QObject):
@@ -698,6 +770,7 @@ def ensure_header_center_sync(app) -> None:
         "btn_portable_add_to_queue",
         "btn_portable_in_queue",
         "btn_portable_queue_gear",
+        "player_header_zoom",
         "player_header_frame",
     ):
         child = getattr(app, name, None)
