@@ -2828,6 +2828,21 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         "render_queue_empty_hint_dismissed", bool(checked)
                     )
                 )
+                from steempeg.ui.smart_deletor_controller import SmartDeletorController
+
+                self._smart_deletor_ctl = SmartDeletorController(self, parent=self.render_queue_panel)
+                self.render_queue_panel.smart_deletor_created.connect(self._smart_deletor_ctl.attach)
+                self.render_queue_panel.smart_deletor_open_changed.connect(
+                    lambda is_open: self.save_layout_setting("smart_deletor_open", bool(is_open))
+                )
+                self.render_queue_panel.page_changed.connect(
+                    lambda page: self.save_layout_setting("queue_panel_page", page)
+                )
+                if self.get_layout_setting("smart_deletor_open", False):
+                    self.render_queue_panel.set_smart_deletor_open(
+                        True,
+                        activate=self.get_layout_setting("queue_panel_page", "queue") == "smart_deletor",
+                    )
 
                 self.right_h_splitter = QSplitter(Qt.Horizontal)
                 self.right_h_splitter.setObjectName("right_h_splitter")
@@ -3242,6 +3257,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ):
             if widget is not None:
                 widget.setVisible(bool(visible))
+        self._player_header_zoom_visible = bool(visible)
+        zoom_host = getattr(self, "player_header_zoom", None)
+        if zoom_host is not None:
+            zoom_host.setVisible(bool(visible))
         # Preview quality is for Steam/DASH clips only — finished exports have no
         # adaptive streams to pick, so hide the gear on Rendered videos playback.
         btn_q = getattr(self, "btn_preview_settings", None)
@@ -5496,6 +5515,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             ctrl = QueueHoverController(self)
             self._queue_hover = ctrl
+            panel = getattr(self, "render_queue_panel", None)
+            if panel is not None and hasattr(panel, "pin_toggled"):
+                panel.pin_toggled.connect(ctrl.set_pinned)
         immersive = bool(getattr(self, "is_theater", False)) or bool(
             getattr(self, "is_fullscreen", False)
         )
@@ -6558,6 +6580,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Steempeg")
     app.setApplicationDisplayName("Steempeg")
+    from steempeg.ui.popup_dismiss import install_popup_opener_dismiss
+
+    install_popup_opener_dismiss(app)
     if sys.platform != "win32":
         from steempeg.infra.linux_desktop import apply_linux_qt_app, install_linux_desktop_entry
 
