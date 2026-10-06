@@ -122,6 +122,9 @@ class SettingsMixin:
             "queue_panel_width",
             "queue_panel_open",
             "main_v_splitter_sizes",
+            "smart_deletor_open",
+            "queue_panel_page",
+            "smart_deletor_view_mode",
         }
     )
 
