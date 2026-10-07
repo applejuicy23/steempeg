@@ -30,6 +30,12 @@ from PySide6.QtWidgets import (
 
 from steempeg.core import capabilities
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
+from steempeg.ui.render_pro_controls import (
+    pro_summary_tags,
+    refresh_pro_controls,
+    remember_quality_choice,
+    sync_bitrate_lock as sync_pro_bitrate_lock,
+)
 
 _TRANSIENT_STATUS_MS = 3500
 
@@ -4154,6 +4160,7 @@ class RenderMixin:
             return
 
         self.ui.combo_bitrate.setEnabled(True) 
+        sync_pro_bitrate_lock(self)
         if hasattr(self.ui, 'combo_fps'): self.ui.combo_fps.setEnabled(True)
         if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.setEnabled(True)
         if hasattr(self.ui, 'combo_encoder'):
@@ -4574,6 +4581,12 @@ class RenderMixin:
             if match:
                 video_bitrate_display = f"{_fmt_mbps(float(match.group(1)))} Mbps"
 
+        pro_tags = [] if audio_only else pro_summary_tags(self)
+        if pro_tags and pro_tags[0].startswith(("CRF", "CQ")):
+            video_bitrate_display = f"Variable ({pro_tags[0]})"
+            size_str = "Varies (constant quality)"
+        pro_suffix = f" · PRO: {', '.join(pro_tags)}" if pro_tags else ""
+
         # Parse Audio Bitrate for UI
         if audio_format in ("FLAC", "WAV", "Copy"):
             audio_bitrate_clean = "lossless / copy" if audio_format != "Copy" else "copy"
@@ -4619,7 +4632,7 @@ class RenderMixin:
                 f"Codec: {codec}\n"
                 f"Encoder: {enc_clean}\n"
                 f"Encode speed: {encode_speed or 'Balanced'}\n"
-                f"Other settings: >> NO SOUND (MUTED)\n"
+                f"Other settings: >> NO SOUND (MUTED){pro_suffix}\n"
                 f"Est. File Size: {size_str}"
             )
         elif "Original" in quality and "Target File Size" not in quality:
@@ -4646,7 +4659,7 @@ class RenderMixin:
                 f"Encoder: {enc_clean}\n"
                 f"Encode speed: {encode_speed or 'Balanced'}\n"
                 f"Sound: {audio_format}, {audio_bitrate_clean}\n"
-                f"Other settings: Normal Render\n"
+                f"Other settings: Normal Render{pro_suffix}\n"
                 f"Est. File Size: {size_str}"
             )
             
@@ -7681,6 +7694,17 @@ class RenderMixin:
                 params.trim_start_sec,
                 params.trim_duration_sec,
                 params.encode_speed,
+                rate_control=params.rate_control,
+                quality_value=params.quality_value,
+                two_pass=params.two_pass,
+                ten_bit=params.ten_bit,
+            )
+            logging.info(
+                "PRO encode: rate=%s quality=%s two_pass=%s ten_bit=%s",
+                params.rate_control,
+                params.quality_value,
+                params.two_pass,
+                params.ten_bit,
             )
             self.render_thread.progress_signal.connect(self._on_render_progress)
             self.render_thread.finished_signal.connect(self.on_render_finished)
