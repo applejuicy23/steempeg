@@ -377,7 +377,6 @@ def _right_dock_widgets(app) -> list[QWidget]:
     out: list[QWidget] = []
     for name in (
         "player_header_status",
-        "player_header_divider",
         "player_header_actions",
     ):
         w = getattr(app, name, None)
@@ -641,20 +640,19 @@ def sync_header_center_mirror(app) -> None:
     lay = header.layout()
     spacing = int(lay.spacing()) if lay is not None else 10
 
+    right_pad = ensure_header_right_pad(app)
     if get_header_layout() != HEADER_LAYOUT_STEAM_LIKE:
         if mirror.width() != 0:
             mirror.setFixedWidth(0)
         mirror.hide()
+        right_pad.hide()
         sync_centered_title_width(app)
         return
 
-    right_pad = ensure_header_right_pad(app)
     if lay.indexOf(right_pad) != lay.count() - 1:
         if lay.indexOf(right_pad) >= 0:
             lay.removeWidget(right_pad)
         lay.addWidget(right_pad, 0)
-    right_pad.show()
-    mirror.show()
 
     left_w, right_w = _center_group_bounds(app, lay)
     if left_w is None or right_w is None:
@@ -664,13 +662,22 @@ def sync_header_center_mirror(app) -> None:
     base_right = _side_span(
         lay, lay.indexOf(right_w) + 1, lay.count(), spacing, skip=(right_pad,)
     )
+    # A visible pad costs its width plus one layout gap; a zero-width visible
+    # pad would still add that gap (extra margin at the bar edge).
     diff = base_right - base_left
-    left_target, right_target = max(0, diff), max(0, -diff)
-    if mirror.width() != left_target or mirror.minimumWidth() != left_target:
-        mirror.setFixedWidth(left_target)
-    if right_pad.width() != right_target or right_pad.minimumWidth() != right_target:
-        right_pad.setFixedWidth(right_target)
+    _set_balance_pad(mirror, diff, spacing)
+    _set_balance_pad(right_pad, -diff, spacing)
     sync_centered_title_width(app)
+
+
+def _set_balance_pad(pad: QWidget, need: int, spacing: int) -> None:
+    if need <= 0:
+        pad.hide()
+        return
+    width = max(0, need - spacing)
+    if pad.width() != width or pad.minimumWidth() != width:
+        pad.setFixedWidth(width)
+    pad.show()
 
 
 def ensure_header_right_pad(app) -> QWidget:
@@ -716,7 +723,6 @@ def _side_span(lay, start: int, stop: int, spacing: int, *, skip=()) -> int:
         w = item.widget()
         if w is not None:
             if w in skip:
-                total += spacing  # pad itself is sized separately; its gap counts
                 continue
             if w.isHidden():
                 continue
@@ -1310,6 +1316,14 @@ def apply_player_header_density(app, dense: UiDensity | None = None) -> None:
     divider = getattr(app, "player_header_divider", None)
     if _widget_alive(divider):
         divider.setFixedHeight(max(18, chip - 8))
+    # Divider sits in the actions row (spacing 6); pad its right side so both
+    # gaps match the header spacing that separates it from the status chips.
+    gap_item = getattr(app, "_player_header_divider_gap", None)
+    actions = getattr(app, "player_header_actions", None)
+    if gap_item is not None and _widget_alive(actions) and lay is not None:
+        inner = actions.layout().spacing() if actions.layout() is not None else 6
+        gap_item.changeSize(max(0, lay.spacing() - inner), 0)
+        actions.layout().invalidate()
 
     # Portable "| Choose a Clip" cluster — keep chip height with the header.
     choose = getattr(app, "btn_portable_add_clip", None)
