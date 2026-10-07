@@ -4751,7 +4751,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if roots:
                     self._startup_library_scan_active = True
                     self._defer_rendered_scan_until_clips_done = True
-                    self.scan_clips(fast=True)
+                    self.scan_clips(fast=True, lazy_cards=True)
                 elif hasattr(self, "scan_rendered_outputs"):
                     self.scan_rendered_outputs()
                 if hasattr(self, "_begin_screenshots_session_restore_async"):
@@ -4773,7 +4773,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     logging.info(
                         "Startup library scan: Quick (folders + cached health)"
                     )
-                self.scan_clips(fast=(mode != SCAN_FULL))
+                # Viewport-lazy ClipCards — building every card up front stalls
+                # launch for the whole library (Refresh uses the same path).
+                self.scan_clips(fast=(mode != SCAN_FULL), lazy_cards=True)
             elif hasattr(self, "scan_rendered_outputs"):
                 self._startup_refresh_steam_meta = False
                 self.scan_rendered_outputs()
