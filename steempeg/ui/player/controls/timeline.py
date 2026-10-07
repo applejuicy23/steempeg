@@ -18,6 +18,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPoint,
     QPointF,
+    QPropertyAnimation,
     QRect,
     QRectF,
     Qt,
@@ -36,8 +37,10 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QRegion,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -53,6 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.infra.paths import get_resource_path
+from steempeg.ui import design_tokens as tok
 from steempeg.ui.edit_marker_dialog import EditSteamMarkerDialog
 from steempeg.ui.marker_icons import TIMELINE_MARKER_LOGICAL
 from steempeg.ui.player.thumbnails import PreviewSniperWorker, preview_bucket_sec, MAX_BATCH_SEC
@@ -173,9 +177,20 @@ def _paint_timeline_marker_pixmap(
 
 
 class _TimelineMarkerTip(QFrame):
-    """Marker hover chip. QSS radius on a Tool HWND leaves square corner fill."""
+    """Marker hover card under the strip: caret toward the pin, icon disc, title + note.
 
-    _RADIUS = 8.0
+    Painted chrome + window mask — QSS radius on a Tool HWND leaves square corner
+    fill, and Win11 would otherwise round / border the HWND itself.
+    """
+
+    _RADIUS = 10.0
+    _CARET_W = 14.0
+    _CARET_H = 7.0
+    _ICON_DISC = 28
+    _ICON_PX = 18
+    _DESC_MAX_W = 280
+    _APPEAR_MS = 150
+    _SLIDE_PX = 5
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,18 +198,146 @@ class _TimelineMarkerTip(QFrame):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._caret_x = 0.0
+        self._target_pos = QPoint()
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, int(self._CARET_H) + 8, 14, 8)
+        row.setSpacing(10)
+        self._icon = QLabel(self)
+        self._icon.setFixedSize(self._ICON_DISC, self._ICON_DISC)
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(1)
+        self._title = QLabel(self)
+        self._title.setTextFormat(Qt.TextFormat.PlainText)
+        self._desc = QLabel(self)
+        self._desc.setTextFormat(Qt.TextFormat.PlainText)
+        self._desc.setWordWrap(True)
+        text_col.addWidget(self._title)
+        text_col.addWidget(self._desc)
+        row.addWidget(self._icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addLayout(text_col)
+
+        self._anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._anim.setDuration(self._APPEAR_MS)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._slide = QPropertyAnimation(self, b"pos", self)
+        self._slide.setDuration(self._APPEAR_MS)
+        self._slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        from steempeg.ui import ui_theme as ut
+
+        _, _, _, fg = ut.timeline_hover_preview_colors()
+        self._icon.setStyleSheet(
+            "background-color: rgba(255, 255, 255, 22);"
+            f" border-radius: {self._ICON_DISC // 2}px;"
+        )
+        self._title.setStyleSheet(
+            f"background: transparent; color: {fg}; font-family: {tok.FONT_APP};"
+            " font-size: 13px; font-weight: bold;"
+        )
+        self._desc.setStyleSheet(
+            f"background: transparent; color: #a8a8a8; font-family: {tok.FONT_APP};"
+            " font-size: 11px;"
+        )
+
+    def show_marker(self, title: str, desc: str, pix, anchor_x: int, top_y: int) -> None:
+        """Pop under ``top_y`` with the caret on global ``anchor_x``."""
+        was_visible = self.isVisible()
+        self._title.setText(title)
+        self._desc.setText(desc)
+        self._desc.setVisible(bool(desc))
+        if desc:
+            natural = self._desc.fontMetrics().horizontalAdvance(desc) + 2
+            title_w = self._title.fontMetrics().horizontalAdvance(title) + 2
+            self._desc.setFixedWidth(max(title_w, min(natural, self._DESC_MAX_W)))
+        if pix is not None and not pix.isNull():
+            from steempeg.ui.icon_utils import square_fit_pixmap
+
+            self._icon.setPixmap(square_fit_pixmap(pix, self._ICON_PX))
+            self._icon.show()
+        else:
+            self._icon.clear()
+            self._icon.hide()
+        self.adjustSize()
+
+        w = self.width()
+        x = int(anchor_x - w / 2)
+        screen = QApplication.screenAt(QPoint(int(anchor_x), int(top_y)))
+        if screen is not None:
+            geo = screen.availableGeometry()
+            x = max(geo.left() + 4, min(x, geo.right() - w - 4))
+        edge = self._RADIUS + self._CARET_W / 2 + 2
+        self._caret_x = max(edge, min(float(anchor_x - x), w - edge))
+        self._apply_mask()
+        self.update()
+
+        self._target_pos = QPoint(x, int(top_y))
+        self._anim.stop()
+        self._slide.stop()
+        if was_visible:
+            self.move(self._target_pos)
+            self.setWindowOpacity(1.0)
+            return
+        start = QPoint(x, int(top_y) - self._SLIDE_PX)
+        self.move(start)
+        self.setWindowOpacity(0.0)
+        _show_timeline_tool(self)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._slide.setStartValue(start)
+        self._slide.setEndValue(self._target_pos)
+        self._anim.start()
+        self._slide.start()
+
+    def hideEvent(self, event):
+        self._anim.stop()
+        self._slide.stop()
+        super().hideEvent(event)
+
+    def _shape(self) -> QPainterPath:
+        r = QRectF(self.rect()).adjusted(0.5, self._CARET_H + 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(r, self._RADIUS, self._RADIUS)
+        caret = QPainterPath()
+        cx = self._caret_x
+        caret.moveTo(cx - self._CARET_W / 2, r.top() + 1.0)
+        caret.lineTo(cx, 0.5)
+        caret.lineTo(cx + self._CARET_W / 2, r.top() + 1.0)
+        caret.closeSubpath()
+        return path.united(caret)
+
+    def _apply_mask(self) -> None:
+        poly = self._shape().toFillPolygon().toPolygon()
+        if poly.isEmpty():
+            self.clearMask()
+        else:
+            self.setMask(QRegion(poly))
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                hwnd = int(self.winId())
+                pref = ctypes.c_int(1)  # DWMWCP_DONOTROUND
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
+                )
+            except Exception:
+                pass
 
     def paintEvent(self, event):
         from steempeg.ui import ui_theme as ut
 
-        pal = ut.active_palette()
+        bg, border, _, _ = ut.timeline_hover_preview_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        path = QPainterPath()
-        path.addRoundedRect(rect, self._RADIUS, self._RADIUS)
-        painter.fillPath(path, QColor(pal.tooltip_bg))
-        painter.setPen(QPen(QColor(pal.tooltip_border), 1.0))
+        path = self._shape()
+        painter.fillPath(path, QColor(bg))
+        painter.setPen(QPen(QColor(border), 1.0))
         painter.drawPath(path)
 
 
@@ -349,16 +492,6 @@ class TimelineCanvas(QWidget):
         self.text_tooltip.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.text_tooltip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
         _detach_timeline_tool(self.text_tooltip)
-        tip_row = QHBoxLayout(self.text_tooltip)
-        tip_row.setContentsMargins(7, 4, 9, 4)
-        tip_row.setSpacing(6)
-        self._tooltip_icon = QLabel(self.text_tooltip)
-        self._tooltip_icon.setFixedSize(16, 16)
-        self._tooltip_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._tooltip_text = QLabel(self.text_tooltip)
-        self._tooltip_text.setTextFormat(Qt.TextFormat.RichText)
-        tip_row.addWidget(self._tooltip_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        tip_row.addWidget(self._tooltip_text, 0, Qt.AlignmentFlag.AlignVCenter)
         self.text_tooltip.hide()
 
         # Strip + ruler from Settings S/M/L (Large = class defaults above; track stays).
@@ -447,6 +580,7 @@ class TimelineCanvas(QWidget):
             tip = getattr(self, "text_tooltip", None)
             if tip is not None:
                 tip.setStyleSheet(ut.floating_tooltip_chip_stylesheet())
+                tip.apply_theme()
                 tip.update()
             pw = getattr(self, "preview_widget", None)
             if pw is not None and hasattr(pw, "apply_theme"):
@@ -2137,35 +2271,14 @@ class TimelineCanvas(QWidget):
                         ):
                             title = "User Marker"
                         
-                    html_text = f"<b>{title}</b>"
-                    if desc:
-                        html_text += f"<br>{desc}"
-
                     pix = self.get_icon_pixmap(found_marker)
-                    icon = getattr(self, "_tooltip_icon", None)
-                    body = getattr(self, "_tooltip_text", None)
-                    if icon is not None:
-                        if pix is not None and not pix.isNull():
-                            from steempeg.ui.icon_utils import apply_square_icon
-
-                            apply_square_icon(icon, pix, 16)
-                            icon.show()
-                        else:
-                            icon.clear()
-                            icon.hide()
-                    if body is not None:
-                        body.setText(html_text)
-                    else:
-                        self.text_tooltip.setText(html_text)
-                    self.text_tooltip.adjustSize()
-                    
                     tip_x = self.ms_to_x(found_marker["time_ms"])
                     scroll_area = self.parentWidget().parentWidget() if self.parentWidget() else self
-                    global_y = scroll_area.mapToGlobal(QPoint(0, scroll_area.height() + 4)).y()
-                    global_x = self.mapToGlobal(QPoint(int(tip_x), 0)).x() - (self.text_tooltip.width() // 2)
-                    
-                    self.text_tooltip.move(global_x, global_y)
-                    _show_timeline_tool(self.text_tooltip)
+                    global_y = scroll_area.mapToGlobal(QPoint(0, scroll_area.height() + 2)).y()
+                    global_x = self.mapToGlobal(QPoint(int(tip_x), 0)).x()
+                    self.text_tooltip.show_marker(
+                        str(title or ""), str(desc or "").strip(), pix, global_x, global_y
+                    )
                 else:
                     self.text_tooltip.hide()
         
