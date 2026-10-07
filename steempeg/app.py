@@ -263,11 +263,44 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             enabled = resolve_steempeg_pro(self.load_user_settings() or {})
         except Exception:
             enabled = False
+        self._steempeg_pro_enabled = enabled
         tb = getattr(getattr(self, "ui", None), "title_bar", None)
         if tb is None:
             tb = getattr(self, "title_bar", None)
         if tb is not None and hasattr(tb, "set_pro_enabled"):
             tb.set_pro_enabled(enabled)
+        if hasattr(getattr(self, "ui", None), "pro_encoding_box"):
+            self._refresh_pro_encoding_controls()
+            if hasattr(self, "fit_settings_tab_to_page"):
+                self.fit_settings_tab_to_page()
+            if hasattr(self, "update_final_setup"):
+                self.update_final_setup()
+
+    def _refresh_pro_encoding_controls(self, *_args) -> None:
+        from steempeg.ui.render_pro_controls import refresh_pro_controls
+
+        refresh_pro_controls(self)
+
+    def _wire_pro_encoding_controls(self) -> None:
+        from steempeg.ui.render_pro_controls import remember_quality_choice
+
+        ui = self.ui
+        if not hasattr(ui, "pro_encoding_box"):
+            return
+
+        def _rate_changed(*_):
+            self._refresh_pro_encoding_controls()
+            self.update_final_setup()
+
+        def _quality_changed(*_):
+            remember_quality_choice(self)
+            self.update_final_setup()
+
+        ui.combo_rate_control.currentIndexChanged.connect(_rate_changed)
+        ui.combo_pro_quality.currentIndexChanged.connect(_quality_changed)
+        ui.check_pro_two_pass.toggled.connect(lambda *_: self.update_final_setup())
+        ui.check_pro_ten_bit.toggled.connect(lambda *_: self.update_final_setup())
+        self._refresh_pro_encoding_controls()
 
     def _apply_playback_button_styles(self):
         """Playback buttons live under HudFrame; style them directly (not via right_panel)."""
@@ -1382,7 +1415,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.populate_output_format_combos()
         # Update the bitrate list when changing resolution
         if hasattr(self.ui, 'combo_quality'):
+            self.ui.combo_quality.currentTextChanged.connect(self._refresh_pro_encoding_controls)
             self.ui.combo_quality.currentTextChanged.connect(self.on_quality_preset_combo_changed) 
+        self._wire_pro_encoding_controls()
         
         # 4. BINDING BUTTONS TO FUNCTIONS
         _launch_splash_progress(50, "Building chrome…")
@@ -2177,18 +2212,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.label_playback_badge.hide()
         status_row.addWidget(self.label_playback_badge)
 
-        self.player_header_divider = QFrame()
-        self.player_header_divider.setFrameShape(QFrame.Shape.VLine)
-        self.player_header_divider.setFixedWidth(1)
-        self.player_header_divider.setStyleSheet(
-            "color: #555555; background-color: #555555; margin: 4px 2px;"
-        )
-        self.player_header_divider.hide()
-
         self.player_header_actions = QWidget()
         actions_row = QHBoxLayout(self.player_header_actions)
         actions_row.setContentsMargins(0, 0, 0, 0)
         actions_row.setSpacing(6)
+
+        # Lives inside the actions row: as a header-layout item it picked up the
+        # wide header spacing on both sides and read as a gap, not a separator.
+        self.player_header_divider = QFrame()
+        self.player_header_divider.setFrameShape(QFrame.Shape.NoFrame)
+        self.player_header_divider.setFixedWidth(1)
+        self.player_header_divider.setStyleSheet("background-color: #4a4a4a; border: none;")
+        self.player_header_divider.hide()
+        actions_row.addWidget(self.player_header_divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        from PySide6.QtWidgets import QSpacerItem
+
+        self._player_header_divider_gap = QSpacerItem(4, 0)
+        actions_row.addItem(self._player_header_divider_gap)
 
         from steempeg.ui.icon_assets import close_clip_icon, preview_settings_icon
 
@@ -2240,7 +2280,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self.player_header_actions.hide()
 
         header_layout.addWidget(self.player_header_status)
-        header_layout.addWidget(self.player_header_divider)
         header_layout.addWidget(self.player_header_actions)
         # Status/actions exist now — re-apply so Steam-like dock mirror + sync
         # filters attach to the right dock (first apply ran before these).
@@ -3071,6 +3110,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.init_original_help_state()
         if hasattr(self.ui, 'combo_bitrate'): self.ui.combo_bitrate.currentTextChanged.connect(self.update_final_setup)
         if hasattr(self.ui, 'combo_codec'):
+            self.ui.combo_codec.currentTextChanged.connect(self._refresh_pro_encoding_controls)
             self.ui.combo_codec.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_codec.currentTextChanged.connect(self._mark_output_preset_custom)
             self.ui.combo_codec.currentTextChanged.connect(self.refresh_output_format_availability)
@@ -3082,6 +3122,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'input_filename'): self.ui.input_filename.textChanged.connect(self._on_output_filename_changed)
 
         if hasattr(self.ui, 'combo_encoder'):
+            self.ui.combo_encoder.currentTextChanged.connect(self._refresh_pro_encoding_controls)
             self.ui.combo_encoder.currentTextChanged.connect(self.update_final_setup)
             self.ui.combo_encoder.currentTextChanged.connect(self.refresh_encode_speed_options)
             self.ui.combo_encoder.currentTextChanged.connect(self._mark_output_preset_custom)
@@ -3107,6 +3148,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         self._setup_custom_target_size()
         
         if hasattr(self.ui, 'check_audio_only'):
+            self.ui.check_audio_only.toggled.connect(self._refresh_pro_encoding_controls)
             self.ui.check_audio_only.toggled.connect(self.on_audio_only_toggled)
         if hasattr(self.ui, 'check_mute_audio'):
             self.ui.check_mute_audio.toggled.connect(self.on_mute_audio_toggled)
