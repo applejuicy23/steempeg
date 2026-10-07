@@ -74,6 +74,11 @@ class RenderJobSettings:
     encode_speed: str = "balanced"
     # If quality cannot apply (taller than source): try this label, else Original.
     quality_fallback: str = "Original"
+    # Steempeg PRO knobs (only captured while PRO is on).
+    pro_rate_control: str = "bitrate"
+    pro_quality: int = -1
+    pro_two_pass: bool = False
+    pro_ten_bit: bool = False
 
 
 @dataclass
@@ -122,6 +127,10 @@ class ResolvedRenderParams:
     trim_duration_sec: float
     container_format: str = "MP4"
     encode_speed: str = "balanced"
+    rate_control: str = "bitrate"
+    quality_value: int = -1
+    two_pass: bool = False
+    ten_bit: bool = False
 
 
 def compute_unique_output_path(save_dir: str, base_filename: str, ext: str) -> str:
