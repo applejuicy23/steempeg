@@ -1957,7 +1957,11 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         # a "cleared" popup. Apply immediately so memory + view match.
         # Wipe session + disk filter memory (do not re-save an "all on" active filter).
         self.app.saved_filter_state = None
-        if hasattr(self.app, "reapply_saved_library_filters"):
+        if hasattr(self.app, "run_filter_with_card_fade"):
+            self.app.run_filter_with_card_fade(
+                lambda: self.app.reapply_saved_library_filters(scroll_top=True)
+            )
+        elif hasattr(self.app, "reapply_saved_library_filters"):
             self.app.reapply_saved_library_filters(scroll_top=True)
         else:
             table = self.app.ui.table_clips
@@ -2393,7 +2397,11 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         self.hide()
         
         # Re-sort full table (Default / current combo), then sync grid hide flags.
-        if hasattr(self.app, "_restore_library_after_filter_change"):
+        if hasattr(self.app, "run_filter_with_card_fade"):
+            self.app.run_filter_with_card_fade(
+                lambda: self.app._restore_library_after_filter_change(scroll_top=False)
+            )
+        elif hasattr(self.app, "_restore_library_after_filter_change"):
             self.app._restore_library_after_filter_change(scroll_top=False)
         elif hasattr(self.app, "apply_sorting"):
             self.app.apply_sorting()
