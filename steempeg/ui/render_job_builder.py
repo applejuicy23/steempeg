@@ -13,7 +13,13 @@ from steempeg.core.dash import discovery, mpd
 from steempeg.core import capabilities
 from steempeg.render.bitrate import format_video_mbps
 from steempeg.render.encode_speed import normalize_encode_speed
+from steempeg.render.pro_encoding import normalize_rate_control
 from steempeg.ui.settings_prefs import resolve_app_export_folder
+from steempeg.ui.render_pro_controls import (
+    apply_pro_fields_to_ui,
+    refresh_pro_controls,
+    snapshot_pro_fields,
+)
 from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import (
     RenderJob,
@@ -126,6 +132,7 @@ def apply_job_settings_to_ui(
             )
             if idx >= 0:
                 ui.combo_encode_speed.setCurrentIndex(idx)
+        apply_pro_fields_to_ui(app, settings)
 
         if hasattr(ui, "check_audio_only"):
             ui.check_audio_only.setChecked(settings.audio_only)
@@ -181,6 +188,7 @@ def apply_job_settings_to_ui(
             w.blockSignals(False)
         app._bulk_settings_apply = prev_bulk
 
+    refresh_pro_controls(app)
     if refresh_summary and hasattr(app, "update_final_setup"):
         app.update_final_setup()
 
@@ -536,6 +544,7 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         container_format=container_format or "MP4",
         output_preset=output_preset or "Custom",
         encode_speed=encode_speed,
+        **snapshot_pro_fields(app),
     )
 
 
@@ -896,4 +905,8 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
         trim_duration_sec=trim_duration_sec,
         container_format=s.container_format or "MP4",
         encode_speed=normalize_encode_speed(s.encode_speed),
+        rate_control=normalize_rate_control(s.pro_rate_control),
+        quality_value=int(s.pro_quality if s.pro_quality is not None else -1),
+        two_pass=bool(s.pro_two_pass),
+        ten_bit=bool(s.pro_ten_bit),
     )
