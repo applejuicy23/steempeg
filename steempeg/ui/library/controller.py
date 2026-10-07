@@ -90,6 +90,10 @@ _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_HEALTH_ISSUES_ROLE = Qt.UserRole + 3
 _CLIP_CURED_ROLE = Qt.UserRole + 4
 _CLIP_CARD_FADE_OUT_MS = 200
+_CLIP_CARD_FADE_IN_MS = 220
+_CLIP_CARD_CASCADE_STEP_MS = 18
+_CLIP_CARD_CASCADE_MAX_MS = 220
+_CLIP_CARD_CASCADE_WINDOW_S = 0.25
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
 # Viewport fill after scroll stops — small bursts so the shelf never hitch-prints.
@@ -2925,11 +2929,117 @@ class LibraryMixin:
         if norm in salvaged:
             del salvaged[norm]
 
-    def _fade_out_clip_cards(self, clip_paths, on_done) -> None:
+    def _visible_grid_card(self, grid, item):
+        if item is None or item.isHidden():
+            return None
+        card = grid.itemWidget(item)
+        if card is None or not card.isVisible() or card.visibleRegion().isEmpty():
+            return None
+        return card
+
+    def run_filter_with_card_fade(self, apply_grid) -> None:
+        """Fade out grid cards the table just hid, run *apply_grid*, then fade in newcomers."""
+        grid = getattr(self, "grid_clips", None)
+        table = getattr(getattr(self, "ui", None), "table_clips", None)
+        if grid is None or table is None or not grid.isVisible():
+            apply_grid()
+            return
+        hidden_now = set()
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            path = item.data(Qt.UserRole) if item is not None else None
+            if path and table.isRowHidden(row):
+                hidden_now.add(os.path.normcase(os.path.normpath(str(path))))
+        before_visible = set()
+        leaving = []
+        for i in range(grid.count()):
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            path = str(item.data(Qt.UserRole + 1) or "")
+            if not path:
+                continue
+            key = os.path.normcase(os.path.normpath(path))
+            before_visible.add(key)
+            if key in hidden_now:
+                leaving.append(path)
+
+        def _then() -> None:
+            apply_grid()
+            QTimer.singleShot(0, lambda: self._fade_in_clip_cards(before_visible))
+
+        if leaving:
+            self._fade_out_clip_cards(leaving, _then, restore=True)
+        else:
+            _then()
+
+    def _fade_in_clip_cards(self, skip_keys) -> None:
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or not grid.isVisible():
+            return
+        for i in range(grid.count()):
+            item = grid.item(i)
+            card = self._visible_grid_card(grid, item)
+            if card is None or card.graphicsEffect() is not None:
+                continue
+            path = str(item.data(Qt.UserRole + 1) or "")
+            if not path or os.path.normcase(os.path.normpath(path)) in skip_keys:
+                continue
+            effect = QGraphicsOpacityEffect(card)
+            effect.setOpacity(0.0)
+            card.setGraphicsEffect(effect)
+            anim = QPropertyAnimation(effect, b"opacity", card)
+            anim.setDuration(_CLIP_CARD_FADE_IN_MS)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda c=card: self._clear_card_fade(c))
+            card._fade_in_anim = anim
+            anim.start()
+
+    def _fade_in_new_card(self, card, item) -> None:
+        """Freshly printed on-screen cards appear in a short cascade instead of popping."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or not grid.isVisible():
+            return
+        try:
+            if not grid.viewport().rect().intersects(grid.visualItemRect(item)):
+                return
+        except RuntimeError:
+            return
+        now = time.monotonic()
+        last, count = getattr(self, "_card_fade_burst", (0.0, 0))
+        count = count + 1 if now - last < _CLIP_CARD_CASCADE_WINDOW_S else 0
+        self._card_fade_burst = (now, count)
+        delay = min(count * _CLIP_CARD_CASCADE_STEP_MS, _CLIP_CARD_CASCADE_MAX_MS)
+
+        effect = QGraphicsOpacityEffect(card)
+        effect.setOpacity(0.0)
+        card.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", card)
+        anim.setDuration(_CLIP_CARD_FADE_IN_MS)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(lambda c=card: self._clear_card_fade(c))
+        card._fade_in_anim = anim
+        QTimer.singleShot(delay, anim, anim.start)
+
+    @staticmethod
+    def _clear_card_fade(card) -> None:
+        try:
+            card.setGraphicsEffect(None)
+            card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        except RuntimeError:
+            pass
+
+    def _fade_out_clip_cards(self, clip_paths, on_done, *, restore: bool = False) -> None:
         """Fade the on-screen grid ClipCards for *clip_paths*, then run *on_done* once.
 
-        Cards that aren't visible (List view, filtered, not materialized yet) are
-        skipped; with none visible *on_done* runs right away.
+        Cards that aren't visible (List view, filtered, scrolled away, not
+        materialized yet) are skipped; with none visible *on_done* runs right away.
+        ``restore`` clears the fade after *on_done* — for cards that are only
+        hidden (filter) and may come back.
         """
         grid = getattr(self, "grid_clips", None)
         cards = []
@@ -2941,8 +3051,8 @@ class LibraryMixin:
                     continue
                 path = str(item.data(Qt.UserRole + 1) or "")
                 if path and os.path.normcase(os.path.normpath(path)) in wanted:
-                    card = grid.itemWidget(item)
-                    if card is not None and card.isVisible():
+                    card = self._visible_grid_card(grid, item)
+                    if card is not None:
                         cards.append(card)
         if not cards:
             on_done()
@@ -2953,6 +3063,9 @@ class LibraryMixin:
             pending[0] -= 1
             if pending[0] == 0:
                 on_done()
+                if restore:
+                    for card in cards:
+                        self._clear_card_fade(card)
 
         for card in cards:
             card.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -4185,6 +4298,7 @@ class LibraryMixin:
         # idle-fill card flashes at (0, 0) over the first card and steals its hover.
         card.setGeometry(self.grid_clips.visualItemRect(item))
         self.grid_clips.setItemWidget(item, card)
+        self._fade_in_new_card(card, item)
 
         # Progressive rematerialize / Size rebuild must re-apply the purple ring —
         # new ClipCards start unselected while `_clips_visual_selected_rows` can
