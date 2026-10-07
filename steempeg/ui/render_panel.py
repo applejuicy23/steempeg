@@ -749,7 +749,91 @@ def restyle_video_page(ui):
     ui.check_mute_audio = toggle
     root.addLayout(_toggle_row(toggle, "Disable Audio (Video Only)"))
 
+    root.addWidget(_build_pro_encoding_section(ui))
+
     root.addStretch()
+
+
+_PRO_CAPTION_QSS = (
+    "QLabel { color: #cccccc; font-size: 12px; font-weight: bold; background: transparent; "
+    + _font_css() + " } QLabel:disabled { color: #5c5c5c; }"
+)
+_PRO_FIELD_LABEL_QSS = (
+    "QLabel { color: #8a8a8a; font-size: 13px; font-weight: bold; background: transparent; "
+    + _font_css() + " } QLabel:disabled { color: #555555; }"
+)
+
+
+def _pro_toggle_row(toggle: ToggleSwitch, text: str) -> tuple[QHBoxLayout, QLabel]:
+    row = QHBoxLayout()
+    row.setSpacing(10)
+    row.addWidget(toggle)
+    caption = QLabel(text)
+    caption.setStyleSheet(_PRO_CAPTION_QSS)
+    row.addWidget(caption)
+    row.addStretch()
+    return row, caption
+
+
+def _build_pro_encoding_section(ui) -> QWidget:
+    """Steempeg PRO encoder knobs: rate control, CRF/CQ, two-pass, 10-bit."""
+    from steempeg.ui.widgets.pro_badge import ProBadge
+
+    box = QWidget()
+    box.setObjectName("proEncodingBox")
+    box.setAttribute(Qt.WA_StyledBackground, False)
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 8, 0, 0)
+    lay.setSpacing(12)
+
+    head = QHBoxLayout()
+    head.setSpacing(8)
+    title = QLabel("Advanced Encoding")
+    title.setStyleSheet(_TITLE_QSS)
+    head.addWidget(title)
+    head.addWidget(ProBadge(), alignment=Qt.AlignVCenter)
+    head.addStretch()
+    lay.addLayout(head)
+
+    ui.label_rate_control = QLabel("Rate Control")
+    ui.label_rate_control.setStyleSheet(_PRO_FIELD_LABEL_QSS)
+    ui.combo_rate_control = QComboBox()
+    ui.combo_rate_control.setObjectName("combo_rate_control")
+    ui.label_pro_quality = QLabel("Constant Quality")
+    ui.label_pro_quality.setStyleSheet(_PRO_FIELD_LABEL_QSS)
+    ui.combo_pro_quality = QComboBox()
+    ui.combo_pro_quality.setObjectName("combo_pro_quality")
+
+    grid = QGridLayout()
+    grid.setHorizontalSpacing(16)
+    grid.setVerticalSpacing(12)
+    for col, (label, combo) in enumerate(
+        ((ui.label_rate_control, ui.combo_rate_control), (ui.label_pro_quality, ui.combo_pro_quality))
+    ):
+        cell = QVBoxLayout()
+        cell.setSpacing(4)
+        cell.setContentsMargins(0, 0, 0, 0)
+        cell.addWidget(label, alignment=Qt.AlignLeft)
+        cell.addLayout(_combo_row_with_slot(combo))
+        grid.addLayout(cell, 0, col)
+    grid.setColumnStretch(2, 1)
+    lay.addLayout(grid)
+
+    ui.check_pro_two_pass = ToggleSwitch()
+    ui.check_pro_two_pass.setObjectName("check_pro_two_pass")
+    row, ui.label_pro_two_pass = _pro_toggle_row(
+        ui.check_pro_two_pass, "Two-pass encode (Target File Size)"
+    )
+    lay.addLayout(row)
+
+    ui.check_pro_ten_bit = ToggleSwitch()
+    ui.check_pro_ten_bit.setObjectName("check_pro_ten_bit")
+    row, ui.label_pro_ten_bit = _pro_toggle_row(ui.check_pro_ten_bit, "10-bit color")
+    lay.addLayout(row)
+
+    ui.pro_encoding_box = box
+    box.hide()
+    return box
 
 
 def restyle_audio_page(ui):
