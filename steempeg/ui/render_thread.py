@@ -17,6 +17,7 @@ import psutil
 from PySide6.QtCore import QThread, Signal
 
 from steempeg.render.output_formats import build_audio_args, video_encoder_extra_args
+from steempeg.render import pro_encoding as pro
 from steempeg.core.dash.mpd import estimate_render_duration_sec
 
 
@@ -37,8 +38,12 @@ class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
 
-    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced"):
+    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False):
         super().__init__()
+        self.rate_control = pro.normalize_rate_control(rate_control)
+        self.quality_value = quality_value
+        self.two_pass = bool(two_pass)
+        self.ten_bit = bool(ten_bit)
         self.target_scale_h = target_scale_h 
         self.trim_start_sec = trim_start_sec
         self.trim_duration_sec = trim_duration_sec
@@ -87,10 +92,13 @@ class RenderThread(QThread):
         current_sec: float,
         duration_sec: float,
         last_pct: list,
+        step: int = 0,
+        steps: int = 1,
     ) -> None:
         if duration_sec <= 0:
             return
-        part_frac = min(1.0, max(0.0, current_sec / duration_sec))
+        run_frac = min(1.0, max(0.0, current_sec / duration_sec))
+        part_frac = (step + run_frac) / max(1, steps)
         overall = ((part_index + part_frac) / part_count) * 100.0
         overall = min(99.9, overall)
         if last_pct and abs(overall - last_pct[0]) < 0.4:
@@ -99,6 +107,77 @@ class RenderThread(QThread):
         self.progress_signal.emit(
             f"Part {part_index + 1}/{part_count}.. ({overall:.1f}%)"
         )
+
+    def _run_part_command(
+        self,
+        cmd: str,
+        *,
+        cwd: str,
+        creation_flags: int,
+        part_index: int,
+        expected_duration: float,
+        step: int,
+        steps: int,
+    ) -> None:
+        """Run one ffmpeg invocation for a part; raise on cancel / failure."""
+        logging.debug(f"FFmpeg cmd for part {part_index} ({step + 1}/{steps}): {cmd}")
+        self.current_process = _popen_cmdline(
+            cmd,
+            cwd=cwd,
+            creation_flags=creation_flags,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            encoding="utf-8",
+            errors="ignore",
+        )
+
+        progress_duration = expected_duration
+        last_ffmpeg_output = []
+        last_emitted_pct: list[float] = []
+
+        for line in self.current_process.stdout:
+            if self.is_cancelled:
+                break
+
+            clean_line = line.strip()
+            if clean_line:
+                logging.debug(f"[FFmpeg] {clean_line}")
+                last_ffmpeg_output.append(clean_line)
+                if len(last_ffmpeg_output) > 5:
+                    last_ffmpeg_output.pop(0)
+
+            parsed_dur = self._parse_ffmpeg_duration_hms(line)
+            if parsed_dur and parsed_dur > 0:
+                if progress_duration <= 0:
+                    progress_duration = parsed_dur
+                elif parsed_dur <= progress_duration * 2:
+                    # Larger = manifest/ffmpeg duration inflated — keep chunk-based estimate.
+                    progress_duration = min(progress_duration, parsed_dur)
+
+            current_time = self._parse_ffmpeg_time_hms(line)
+            if current_time is not None and progress_duration > 0:
+                self._emit_part_progress(
+                    part_index,
+                    len(self.mpd_paths),
+                    current_time,
+                    progress_duration,
+                    last_emitted_pct,
+                    step,
+                    steps,
+                )
+
+        self.current_process.wait()
+
+        if self.is_cancelled:
+            raise Exception("Render cancelled by user.")
+
+        if self.current_process.returncode != 0:
+            error_details = "\n".join(last_ffmpeg_output)
+            logging.error(f"FFmpeg ERROR in part {part_index}:\n{error_details}")
+            raise Exception(
+                f"Failed to render part {part_index + 1}.\nFFmpeg error:\n{error_details}"
+            )
 
     def cancel(self):
         """ Force kills the FFmpeg process. """
@@ -139,6 +218,7 @@ class RenderThread(QThread):
             return
 
         temp_files = []
+        two_pass_logs: list[str] = []
         concat_file = None
         # Tracks whether any part was produced via raw stream copy. Copied parts can
         # inherit a corrupt Steam decode timeline, so single-file output needs a final
@@ -220,6 +300,10 @@ class RenderThread(QThread):
                     self.audio_format, self.audio_bitrate_kbps, self.mute_audio
                 )
                 v_extra = video_encoder_extra_args(self.selected_encoder, self.encode_speed)
+                enc = self.selected_encoder
+                pix_args = pro.ten_bit_args(enc) if self.ten_bit else ""
+                # Pass-1 analysis runs (two-pass) go before ``cmd`` in this list.
+                pre_cmds: list[str] = []
 
                 # 2. Construct the final command based on video settings
                 if self.audio_only:
@@ -241,91 +325,60 @@ class RenderThread(QThread):
                     else:
                         scale_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
                     
-                    cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf "{scale_filter}" {fps_arg}{v_extra}-c:v {self.selected_encoder} -b:v {self.video_bitrate} -maxrate {self.video_bitrate} -bufsize {bufsize} {base_audio} -y "{temp_mp4}"'
+                    video = (
+                        f'{trim_args}-i "{safe_mpd}" -vf "{scale_filter}" {fps_arg}{v_extra}'
+                        f"-c:v {enc} -b:v {self.video_bitrate} -maxrate {self.video_bitrate} "
+                        f"-bufsize {bufsize} {pix_args}"
+                    )
+                    if self.two_pass and pro.supports_two_pass(enc):
+                        if pro.two_pass_runs_twice(enc):
+                            log_prefix = pro.two_pass_log_prefix(self.save_dir, idx)
+                            two_pass_logs.append(log_prefix)
+                            pre_cmds.append(
+                                f'"{self.ffmpeg_exe}" {video}'
+                                f"{pro.two_pass_args(enc, 1, log_prefix)}-an -f null -"
+                            )
+                            video += pro.two_pass_args(enc, 2, log_prefix)
+                        else:
+                            video += pro.single_run_two_pass_args(enc)
+                    cmd = f'"{self.ffmpeg_exe}" {video}{base_audio} -y "{temp_mp4}"'
                     
                 else:
                     match = re.search(r'^(\d+)p', self.quality_text)
                     if match:
                         target_height = match.group(1)
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}{v_extra}-c:v {self.selected_encoder} -b:v {self.video_bitrate} {base_audio} -y "{temp_mp4}"'
+                        if (
+                            self.rate_control == pro.RATE_QUALITY
+                            and pro.supports_constant_quality(enc)
+                        ):
+                            rate_args = pro.constant_quality_args(enc, self.quality_value)
+                        else:
+                            rate_args = f"-b:v {self.video_bitrate} "
+                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vf scale=-2:{target_height} {fps_arg}{v_extra}-c:v {enc} {rate_args}{pix_args}{base_audio} -y "{temp_mp4}"'
                     else:
                         self._stream_copy_used = True
                         cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
-
-                logging.debug(f"FFmpeg cmd for part {idx}: {cmd}")
 
                 expected_duration = estimate_render_duration_sec(
                     mpd,
                     trim_duration_sec=self.trim_duration_sec if is_trim else -1.0,
                 )
 
-                # Launch FFmpeg
-                self.current_process = _popen_cmdline(
-                    cmd,
-                    cwd=os.path.dirname(mpd),
-                    creation_flags=creation_flags,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    universal_newlines=True,
-                    encoding="utf-8",
-                    errors="ignore",
-                )
+                runs = pre_cmds + [cmd]
+                for step, run_cmd in enumerate(runs):
+                    self._run_part_command(
+                        run_cmd,
+                        cwd=os.path.dirname(mpd),
+                        creation_flags=creation_flags,
+                        part_index=idx,
+                        expected_duration=expected_duration,
+                        step=step,
+                        steps=len(runs),
+                    )
 
-                ffmpeg_duration = 0.0
-                progress_duration = expected_duration
-                last_ffmpeg_output = []
-                last_emitted_pct: list[float] = []
-
-                # Read FFmpeg logs in real time
-                for line in self.current_process.stdout:
-                    if self.is_cancelled:
-                        break
-                        
-                    clean_line = line.strip()
-                    if clean_line:
-                        logging.debug(f"[FFmpeg] {clean_line}")
-                        last_ffmpeg_output.append(clean_line)
-                        if len(last_ffmpeg_output) > 5:
-                            last_ffmpeg_output.pop(0)
-
-                    parsed_dur = self._parse_ffmpeg_duration_hms(line)
-                    if parsed_dur and parsed_dur > 0:
-                        ffmpeg_duration = parsed_dur
-                        if progress_duration <= 0:
-                            progress_duration = ffmpeg_duration
-                        elif ffmpeg_duration > progress_duration * 2:
-                            # Manifest/ffmpeg duration inflated — keep chunk-based estimate.
-                            pass
-                        else:
-                            progress_duration = min(progress_duration, ffmpeg_duration)
-
-                    current_time = self._parse_ffmpeg_time_hms(line)
-                    if current_time is not None and progress_duration > 0:
-                        self._emit_part_progress(
-                            idx,
-                            len(self.mpd_paths),
-                            current_time,
-                            progress_duration,
-                            last_emitted_pct,
-                        )
-
-                self.current_process.wait()
-                
                 self.progress_signal.emit(
                     f"Part {idx + 1}/{len(self.mpd_paths)}.. (100%)"
                 )
-                
-                # Post-process checks
-                if self.is_cancelled:
-                    raise Exception("Render cancelled by user.")
-                    
-                if self.current_process.returncode != 0:
-                    error_details = "\n".join(last_ffmpeg_output)
-
-                    logging.error(f"FFmpeg ERROR in part {idx}:\n{error_details}")
-
-
-                    raise Exception(f"Failed to render part {idx+1}.\nFFmpeg error:\n{error_details}")
 
             # Final check before gluing
             if self.is_cancelled:
@@ -429,5 +482,7 @@ class RenderThread(QThread):
                 if os.path.exists(tmp):
                     try: os.remove(tmp)
                     except: pass
+            for log_prefix in two_pass_logs:
+                pro.remove_two_pass_logs(log_prefix)
 
 # BACKGROUND DOWNLOAD THREAD FOR UPDATER
