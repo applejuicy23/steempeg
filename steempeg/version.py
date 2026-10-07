@@ -13,6 +13,6 @@ Update channels (from **40T** onward) live in ``APP_UPDATE_CHANNEL``, baked by
 Legacy builds that still encode the channel in the version string
 (``40T-linux``) keep working via suffix parsing in the Update Center.
 """
-APP_VERSION_STR = "52"
-APP_VERSION_FLOAT = 52.0
+APP_VERSION_STR = "53"
+APP_VERSION_FLOAT = 53.0
 APP_UPDATE_CHANNEL = ""
