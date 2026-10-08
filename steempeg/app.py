@@ -6594,13 +6594,10 @@ def main():
             os.environ["QT_QPA_PLATFORM"] = forced
         else:
             os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-        nvidia = (
-            os.path.exists("/proc/driver/nvidia/version")
-            or os.path.exists("/dev/nvidia0")
-            or os.path.isdir("/sys/module/nvidia")
-        )
+        from steempeg.infra.linux_gpu import linux_has_nvidia_proprietary
+
         if (
-            nvidia
+            linux_has_nvidia_proprietary()
             and os.environ.get("QT_QPA_PLATFORM", "").startswith("xcb")
             and "QT_XCB_GL_INTEGRATION" not in os.environ
         ):
