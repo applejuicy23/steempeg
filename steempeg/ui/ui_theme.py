@@ -2408,13 +2408,26 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
     if sys.platform != "win32":
         linux_label_room = """
     QLabel#AboutTitle {
-        min-height: 36px;
-        padding-top: 8px;
-        margin-top: 4px;
+        min-height: 40px;
+        padding-top: 6px;
+        margin-top: 2px;
     }
     QLabel#AboutPoweredName {
-        min-height: 22px;
+        min-height: 24px;
+        padding-top: 4px;
+        padding-bottom: 2px;
+    }
+    QLabel#AboutDim {
+        min-height: 16px;
         padding-top: 2px;
+    }
+    QLabel#AboutSectionLabel {
+        min-height: 16px;
+        padding-bottom: 2px;
+    }
+    QLabel#AboutDisclaimer {
+        min-height: 32px;
+        padding-top: 4px;
     }
 """
     return f"""
