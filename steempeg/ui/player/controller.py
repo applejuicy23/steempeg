@@ -240,9 +240,15 @@ class PlayerMixin:
             for mode in modes:
                 for vo in vo_attempts:
                     # Legacy VOs + hwdec often paint garbage on XWayland; keep sw decode.
-                    hwdec = current_hwdec_preview()
+                    requested_hwdec = current_hwdec_preview()
+                    hwdec = requested_hwdec
+                    hwdec_reason = "settings"
                     if vo in ("xv", "x11") and hwdec != "no":
                         hwdec = "no"
+                        hwdec_reason = "legacy_vo_no_hwdec"
+                    elif mode == "embed" and vo == "gpu":
+                        # Capability matrix: NVIDIA prop → software; Mesa/Deck → auto.
+                        hwdec, hwdec_reason = self._linux_embed_gpu_hwdec(requested_hwdec)
                     opts = {
                         "panscan": 1.0,
                         "keepaspect": "no" if mode == "embed" else "yes",
@@ -258,6 +264,7 @@ class PlayerMixin:
                     }
                     # wid= embed under XWayland: force x11egl so gpu does not pick
                     # a Wayland context that paints beside the Qt window.
+                    # Deck pack also defaults QT_QPA_PLATFORM=xcb today.
                     if vo == "gpu":
                         opts["gpu_context"] = (
                             os.environ.get("STEEMPEG_GPU_CONTEXT") or "x11egl"
@@ -272,11 +279,21 @@ class PlayerMixin:
                     try:
                         self.player = _mpv.MPV(**opts)
                         logging.info(
-                            "Linux mpv created: vo=%s mode=%s hwdec=%s brew_mesa=%s",
+                            "Linux mpv created: vo=%s mode=%s hwdec=%s "
+                            "(requested=%s reason=%s) brew_mesa=%s",
                             vo,
                             mode,
                             hwdec,
+                            requested_hwdec,
+                            hwdec_reason,
                             brew_mesa,
+                        )
+                        logging.info(
+                            "Linux preview hwdec policy: requested=%s resolved=%s "
+                            "reason=%s",
+                            requested_hwdec,
+                            hwdec,
+                            hwdec_reason,
                         )
                         last_exc = None
                         break
@@ -305,6 +322,17 @@ class PlayerMixin:
             return True
         self._linux_mpv_vo_attached = True
         return True
+
+    @staticmethod
+    def _linux_embed_gpu_hwdec(requested: str) -> tuple[str, str]:
+        """Map Settings hwdec for ``vo=gpu`` + ``wid=`` embeds on Linux.
+
+        See ``steempeg.infra.linux_gpu.resolve_linux_embed_gpu_hwdec``.
+        Returns ``(hwdec, reason)``.
+        """
+        from steempeg.infra.linux_gpu import resolve_linux_embed_gpu_hwdec
+
+        return resolve_linux_embed_gpu_hwdec(requested)
 
     def _prepare_linux_embed_for_wid(self) -> None:
         """Map ``video_container`` and give the native child a real size before winId.
@@ -1106,6 +1134,18 @@ class PlayerMixin:
                 mark_embed_noactivate(getattr(self, "mpv_screen", None))
             except Exception:
                 pass
+        else:
+            # Pay CUDA lavfi graph init once while the open overlay still covers
+            # the player — later quality-gear switches stay live without a stall.
+            try:
+                from steempeg.ui.player import preview_quality as pq
+
+                warmed = pq.warm_linux_preview_scale(getattr(self, "player", None))
+                # Warm strips vf — put the user's gear preset back.
+                if warmed and hasattr(self, "_apply_saved_preview_quality_to_player"):
+                    self._apply_saved_preview_quality_to_player()
+            except Exception:
+                logging.debug("Linux preview vf warm failed", exc_info=True)
         if hasattr(self, 'video_stack') and hasattr(self.ui, 'video_container'):
             self.video_stack.setCurrentWidget(self.ui.video_container)
         self._kick_linux_embed_surface()
