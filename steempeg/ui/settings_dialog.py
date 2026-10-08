@@ -1398,7 +1398,8 @@ class SettingsDialog(SteempegDialog):
         a.addWidget(
             self._hint(
                 "MPV hwdec for preview. Applies on next player create / restart. "
-                "Off if hardware decode glitches."
+                "On Linux embed, Auto is GPU-aware: NVIDIA → software; "
+                "Deck/AMD/Intel → auto (VAAPI). Force on → auto-copy. Off = software."
             )
         )
 
