@@ -183,11 +183,14 @@ def _hw_pixfmt(player) -> str:
 
 
 def _vf_candidates(src_h: int, max_height: int, *, player=None) -> tuple[str, ...]:
-    """Build filter bodies. Windows prefers d3d11vpp; Linux prefers scale_cuda / hwdownload.
+    """Build filter bodies. Windows prefers d3d11vpp; Linux follows live pixfmt.
 
     Plain ``scale`` on CUDA frames is accepted then disabled by lavfi
     (``Impossible to convert … cuda``) — the picture never changes. Prefer
-    ``scale_cuda`` (NVIDIA) or ``hwdownload,format=nv12,scale=…`` first.
+    ``scale_cuda`` / ``hwdownload`` only when frames are still on the GPU
+    (``cuda`` pixfmt). Software decode, VAAPI-copy, and ``auto-copy`` land in
+    system memory — use software ``scale`` first (Deck / AMD / Intel / NVIDIA
+    software preview).
     """
     out: list[str] = []
     h = int(max_height)
@@ -200,34 +203,40 @@ def _vf_candidates(src_h: int, max_height: int, *, player=None) -> tuple[str, ..
             out.append(f"d3d11vpp=scale={factor:.6f}")
 
     if os.name != "nt":
-        # Keep AR + even dims (libx264-style) for CUDA rescale.
-        out.append(
-            f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease:"
-            f"force_divisible_by=2:interp_algo=lanczos"
-        )
-        out.append(
-            f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease"
-        )
-        # Download to system memory, then software scale (works when scale_cuda
-        # is missing from a thinner lavf build).
-        out.append(
-            f"hwdownload,format=nv12,scale=-2:{h}:flags=lanczos:"
-            f"force_original_aspect_ratio=decrease"
-        )
-        out.append(
-            f"hwdownload,scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
-        )
-        if not cuda:
-            out.append(
-                f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
-            )
-        # Last: plain scale even on cuda (usually fails — kept for sw-decode hosts).
-        out.append(
+        sw_scale = (
             f"scale=-2:{h}:flags=lanczos:force_original_aspect_ratio=decrease"
         )
-        out.append(
-            f"lavfi=[hwdownload,format=nv12,scale=-2:{h}:force_original_aspect_ratio=decrease]"
-        )
+        if cuda:
+            # Keep AR + even dims (libx264-style) for CUDA rescale.
+            out.append(
+                f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease:"
+                f"force_divisible_by=2:interp_algo=lanczos"
+            )
+            out.append(
+                f"scale_cuda=w=-2:h={h}:force_original_aspect_ratio=decrease"
+            )
+            # Download to system memory, then software scale (works when
+            # scale_cuda is missing from a thinner lavf build).
+            out.append(
+                f"hwdownload,format=nv12,scale=-2:{h}:flags=lanczos:"
+                f"force_original_aspect_ratio=decrease"
+            )
+            out.append(
+                f"hwdownload,scale=-2:{h}:flags=lanczos:"
+                f"force_original_aspect_ratio=decrease"
+            )
+            # Last: plain scale on cuda (usually fails — sw-decode hosts).
+            out.append(sw_scale)
+            out.append(
+                f"lavfi=[hwdownload,format=nv12,scale=-2:{h}:"
+                f"force_original_aspect_ratio=decrease]"
+            )
+        else:
+            # VAAPI-copy / auto-copy / software / Mesa — already CPU-side.
+            out.append(sw_scale)
+            out.append(
+                f"lavfi=[scale=-2:{h}:force_original_aspect_ratio=decrease]"
+            )
     else:
         # Windows software fallbacks after d3d11vpp.
         out.extend(
@@ -245,6 +254,50 @@ def _vf_candidates(src_h: int, max_height: int, *, player=None) -> tuple[str, ..
             seen.add(body)
             unique.append(body)
     return tuple(unique)
+
+
+_linux_preview_vf_warmed = False
+
+
+def warm_linux_preview_scale(player) -> bool:
+    """Pay CUDA ``scale_cuda`` lavfi graph init once (call behind open overlay).
+
+    Only when live pixfmt is CUDA (rare with the Linux embed policy — NVIDIA
+    Auto uses software decode). Deck / AMD / VAAPI hosts no-op immediately.
+    Zero-copy CUDA stalls ~4–5 s on first ``scale_cuda``; warming once keeps
+    later quality-gear switches live.
+    """
+    global _linux_preview_vf_warmed
+    if _linux_preview_vf_warmed or not player or os.name == "nt":
+        return False
+    pix = _hw_pixfmt(player)
+    if "cuda" not in (pix or ""):
+        # Mesa / software / copy-back — nothing to warm.
+        _linux_preview_vf_warmed = True
+        return False
+
+    body = (
+        "scale_cuda=w=-2:h=720:force_original_aspect_ratio=decrease:"
+        "force_divisible_by=2:interp_algo=lanczos"
+    )
+    tagged = _labeled(body)
+    remove_preview_vf(player)
+    t0 = time.time()
+    if not _try_add_vf(player, tagged):
+        _linux_preview_vf_warmed = True
+        return False
+    deadline = t0 + 6.0
+    while time.time() < deadline:
+        if _preview_vf_alive(player):
+            out_h = _output_height(player)
+            if out_h > 0 and out_h <= 800:
+                break
+        time.sleep(0.05)
+    elapsed = time.time() - t0
+    remove_preview_vf(player)
+    _linux_preview_vf_warmed = True
+    logging.info("Linux preview vf warm (scale_cuda) done in %.2fs", elapsed)
+    return True
 
 
 def _labeled(body: str) -> str:
