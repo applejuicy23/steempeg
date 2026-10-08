@@ -14,7 +14,7 @@ import re
 import weakref
 from typing import Optional
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPoint, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QFontMetrics,
@@ -54,6 +54,21 @@ def _ease_in_out_cubic(t: float) -> float:
         return 4.0 * t * t * t
     u = -2.0 * t + 2.0
     return 1.0 - (u * u * u) / 2.0
+
+
+def _edge_fade_width(rect_w: float) -> float:
+    if rect_w < _EDGE_FADE_MIN_W:
+        return 0.0
+    return min(_EDGE_FADE_PX, max(6.0, rect_w * 0.10))
+
+
+def _edge_gradient(x_clear: float, x_solid: float) -> QLinearGradient:
+    """Smoothstep alpha ramp: transparent at ``x_clear`` → opaque at ``x_solid``."""
+    grad = QLinearGradient(x_clear, 0.0, x_solid, 0.0)
+    for i in range(7):
+        t = i / 6.0
+        grad.setColorAt(t, QColor(0, 0, 0, int(255 * t * t * (3.0 - 2.0 * t))))
+    return grad
 
 
 def _scroll_factor(elapsed_ms: int) -> float:
@@ -268,7 +283,66 @@ class OverflowMarqueeLabel(QLabel):
         self._offset = _scroll_factor(elapsed) * self._max_offset
         painter.setClipRect(rect)
         y = (rect.height() + metrics.ascent() - metrics.descent()) // 2
-        painter.drawText(int(round(-self._offset)), y, text)
+        fade_px = _edge_fade_width(float(rect.width()))
+        if fade_px <= 0.0:
+            painter.drawText(int(round(-self._offset)), y, text)
+            return
+        painter.drawImage(rect.topLeft(), self._faded_layer(rect, y - rect.top(), fade_px))
+
+    def _text_strip(self, height: int, baseline: int) -> QImage:
+        """Full title rasterized once; per-frame paint only blits a window of it."""
+        dpr = max(1.0, float(self.devicePixelRatioF()))
+        color = self._text_color()
+        key = (self._full_text, self.font().key(), color.rgba(), dpr, height, baseline)
+        cached = getattr(self, "_strip_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        text_w = QFontMetrics(self.font()).horizontalAdvance(self._full_text) + 2
+        img = QImage(
+            max(1, int(round(text_w * dpr))),
+            max(1, int(round(height * dpr))),
+            QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        img.setDevicePixelRatio(dpr)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        p.setFont(self.font())
+        p.setPen(color)
+        p.drawText(0, baseline, self._full_text)
+        p.end()
+        self._strip_cache = (key, img)
+        return img
+
+    def _faded_layer(self, rect: QRect, baseline: int, fade_px: float) -> QImage:
+        """Visible window of the title with glyph alpha dissolved at clipped edges."""
+        strip = self._text_strip(rect.height(), baseline)
+        dpr = strip.devicePixelRatio()
+        phys_w = max(1, int(round(rect.width() * dpr)))
+        phys_h = max(1, int(round(rect.height() * dpr)))
+        layer = getattr(self, "_fade_layer", None)
+        if layer is None or layer.width() != phys_w or layer.height() != phys_h:
+            layer = QImage(phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied)
+            layer.setDevicePixelRatio(dpr)
+            self._fade_layer = layer
+        layer.fill(Qt.GlobalColor.transparent)
+
+        # Overhang-driven: a side fades only while text is still clipped past it.
+        left_w = fade_px * min(1.0, max(0.0, self._offset) / fade_px)
+        right_w = fade_px * min(1.0, max(0.0, self._max_offset - self._offset) / fade_px)
+        lw = float(rect.width())
+        p = QPainter(layer)
+        p.drawImage(QPoint(int(round(-self._offset)), 0), strip)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        if left_w >= 1.0:
+            p.fillRect(QRectF(0.0, 0.0, left_w, rect.height()), _edge_gradient(0.0, left_w))
+        if right_w >= 1.0:
+            p.fillRect(
+                QRectF(lw - right_w, 0.0, right_w, rect.height()),
+                _edge_gradient(lw, lw - right_w),
+            )
+        p.end()
+        return layer
 
     def _text_color(self) -> QColor:
         match = _COLOR_RE.search(self.styleSheet() or "")
