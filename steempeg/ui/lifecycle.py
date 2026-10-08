@@ -706,6 +706,8 @@ class LifecycleMixin:
 
         cell = QWidget()
         cell.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # Clip so a QSS-undersized caption cannot paint into the disc / hairline.
+        cell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         lay = QVBoxLayout(cell)
         # Top-align icon+caption so Linux HBox VCenter cannot squash them together.
         lay.setContentsMargins(4, 0, 4, 0)
@@ -743,15 +745,20 @@ class LifecycleMixin:
         cap_font.setBold(True)
         caption.setFont(cap_font)
         fm = QFontMetrics(cap_font)
-        gap = 14 if sys.platform != "win32" else 8
-        cap_h = max(fm.height() + (8 if sys.platform != "win32" else 4), 18)
+        # Linux needs a real gap under the disc; Windows stays tighter.
+        gap = 12 if sys.platform != "win32" else 8
+        cap_h = max(fm.height() + (10 if sys.platform != "win32" else 4), 20)
         caption.setFixedHeight(cap_h)
         caption.setMinimumWidth(max(int(size), fm.horizontalAdvance(name) + 12))
 
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
         lay.addSpacing(gap)
         lay.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
-        cell.setFixedHeight(int(size) + gap + cap_h + 2)
+        # Prefer minimum over fixed: FixedHeight + QSS min-height fights on Linux
+        # and was letting captions render past the cell into the hairline.
+        cell_h = int(size) + gap + cap_h + 4
+        cell.setMinimumHeight(cell_h)
+        cell.setMaximumHeight(cell_h)
         cell.setMinimumWidth(max(int(size) + 8, caption.minimumWidth()))
         return cell
 
@@ -842,16 +849,21 @@ class LifecycleMixin:
 
         # Portable + Deck-class shells: scaled_dialog_size shrinks too hard for the
         # Report / Close row. Keep About wide enough for labels.
+        # Linux: never shrink height — QSS + density scale was packing sections
+        # on top of each other (title into logo, captions into hairline).
+        linux = sys.platform != "win32"
         if getattr(self, "_portable_shell", False):
             shell_w = 0
             try:
                 shell_w = int(self.ui.width() or 0)
             except Exception:
                 shell_w = 0
-            if shell_w <= 1600:
-                dialog.setFixedSize(560, 640)
+            if linux or shell_w <= 1600:
+                dialog.setFixedSize(560, 680 if linux else 640)
             else:
                 dialog.setFixedSize(*scaled_dialog_size(540, 620, parent=self.ui))
+        elif linux:
+            dialog.setFixedSize(540, 680)
         else:
             dialog.setFixedSize(*scaled_dialog_size(520, 600, parent=self.ui))
         dialog.setStyleSheet(ut.about_dialog_stylesheet(pro=about_pro))
@@ -870,7 +882,7 @@ class LifecycleMixin:
 
         content = QVBoxLayout(card)
         content.setContentsMargins(28, 28, 28, 22)
-        content.setSpacing(10)
+        content.setSpacing(12 if linux else 10)
 
         # --- Centered brand ---
         logo_row = QHBoxLayout()
@@ -882,8 +894,8 @@ class LifecycleMixin:
         logo_row.addStretch(1)
         content.addLayout(logo_row)
         # Linux: stylesheet title paints into the logo without reserved height.
-        if sys.platform != "win32":
-            content.addSpacing(8)
+        if linux:
+            content.addSpacing(12)
 
         # Title + optional PRO chip (same placement as the window title bar).
         title_row = QHBoxLayout()
@@ -892,8 +904,8 @@ class LifecycleMixin:
         title = QLabel("Steempeg")
         title.setObjectName("AboutTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        if sys.platform != "win32":
-            title.setMinimumHeight(36)
+        if linux:
+            title.setMinimumHeight(40)
         title_row.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         if about_pro:
             from steempeg.ui.widgets.pro_badge import ProBadge
@@ -906,6 +918,8 @@ class LifecycleMixin:
         build = QLabel(f"Build: v{APP_VERSION_STR}")
         build.setObjectName("AboutDim")
         build.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        if linux:
+            build.setMinimumHeight(18)
         content.addWidget(build)
 
         desc = QLabel(
@@ -917,7 +931,7 @@ class LifecycleMixin:
         desc.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         content.addWidget(desc)
 
-        content.addSpacing(10)
+        content.addSpacing(14 if linux else 10)
 
         # --- Developer + links: match description column width ---
         mid_wrap = QWidget()
@@ -974,7 +988,7 @@ class LifecycleMixin:
         mid_wrap_lay.addLayout(mid)
         content.addWidget(mid_wrap)
 
-        content.addSpacing(8)
+        content.addSpacing(16 if linux else 8)
 
         # --- Powered by ♥ (thanks lives on the heart tooltip/click) ---
         powered_head_row = QHBoxLayout()
@@ -982,14 +996,18 @@ class LifecycleMixin:
         powered_head_row.addStretch(1)
         powered_head = QLabel("Powered by")
         powered_head.setObjectName("AboutSectionLabel")
+        if linux:
+            powered_head.setMinimumHeight(18)
         powered_head_row.addWidget(powered_head)
         powered_heart = _AboutThanksHeart()
         powered_head_row.addWidget(powered_heart)
         powered_head_row.addStretch(1)
         content.addLayout(powered_head_row)
+        if linux:
+            content.addSpacing(6)
 
         powered_row = QHBoxLayout()
-        powered_row.setSpacing(6)
+        powered_row.setSpacing(10 if linux else 6)
         powered_row.setAlignment(Qt.AlignmentFlag.AlignTop)
         powered_row.addStretch(1)
         powered_row.addWidget(self._about_powered_badge(
@@ -1030,14 +1048,14 @@ class LifecycleMixin:
         powered_row.addStretch(1)
         content.addLayout(powered_row)
 
-        # Hairline under the three logos only.
+        # Hairline under the three logos + captions (not through the names).
         hair_wrap = QHBoxLayout()
-        hair_wrap.setContentsMargins(36, 8, 36, 2)
+        hair_wrap.setContentsMargins(36, 14 if linux else 8, 36, 4 if linux else 2)
         hair_wrap.addWidget(self._about_hairline())
         content.addLayout(hair_wrap)
 
         # Keep the old "Special thanks…" band as empty air (text lives on ♥).
-        content.addSpacing(36)
+        content.addSpacing(28 if linux else 36)
         content.addStretch(1)
 
         # Buttons above the Valve disclaimer (cleaner hierarchy).
@@ -1079,7 +1097,7 @@ class LifecycleMixin:
         btn_row.addStretch(1)
         content.addLayout(btn_row)
 
-        content.addSpacing(8)
+        content.addSpacing(12 if linux else 8)
 
         disclaimer = QLabel(
             "Steempeg is an unofficial, community-created tool.\n"
@@ -1089,6 +1107,8 @@ class LifecycleMixin:
         disclaimer.setObjectName("AboutDisclaimer")
         disclaimer.setWordWrap(True)
         disclaimer.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        if linux:
+            disclaimer.setMinimumHeight(36)
         content.addWidget(disclaimer)
 
         def apply_ui_theme_chrome() -> None:
