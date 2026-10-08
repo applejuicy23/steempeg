@@ -160,8 +160,24 @@ def install_player_zoom_chrome(app) -> QWidget | None:
     return host
 
 
+def _zoom_docks_with_actions() -> bool:
+    """SteempegUI keeps the title flush left, so the zoom chips join the gear / close pair."""
+    try:
+        from steempeg.ui.player_header_layout import (
+            HEADER_LAYOUT_STEAM_LIKE,
+            get_header_layout,
+        )
+
+        return get_header_layout() != HEADER_LAYOUT_STEAM_LIKE
+    except Exception:
+        return False
+
+
 def pin_player_zoom_dock(app) -> None:
-    """Keep zoom chips at the far left of the header (before Steam-like mirror)."""
+    """Steam-like: zoom chips at the far left of the header (before the mirror).
+
+    SteempegUI: zoom chips sit in the actions row, right before the gear.
+    """
     host = getattr(app, "player_header_zoom", None)
     header = getattr(app, "player_header_frame", None)
     if host is None or header is None:
@@ -169,12 +185,29 @@ def pin_player_zoom_dock(app) -> None:
     lay = header.layout()
     if lay is None:
         return
-    idx = lay.indexOf(host)
-    if idx < 0:
-        lay.insertWidget(0, host, 0)
-    elif idx != 0:
-        lay.removeWidget(host)
-        lay.insertWidget(0, host, 0)
+    actions = getattr(app, "player_header_actions", None)
+    actions_lay = actions.layout() if actions is not None else None
+    gear = getattr(app, "btn_preview_settings", None)
+
+    if _zoom_docks_with_actions() and actions_lay is not None and gear is not None:
+        if lay.indexOf(host) >= 0:
+            lay.removeWidget(host)
+        if actions_lay.indexOf(host) < 0:
+            actions_lay.insertWidget(actions_lay.indexOf(gear), host, 0)
+        else:
+            want = actions_lay.indexOf(gear) - 1
+            if actions_lay.indexOf(host) != want:
+                actions_lay.removeWidget(host)
+                actions_lay.insertWidget(actions_lay.indexOf(gear), host, 0)
+    else:
+        if actions_lay is not None and actions_lay.indexOf(host) >= 0:
+            actions_lay.removeWidget(host)
+        idx = lay.indexOf(host)
+        if idx < 0:
+            lay.insertWidget(0, host, 0)
+        elif idx != 0:
+            lay.removeWidget(host)
+            lay.insertWidget(0, host, 0)
     host.setVisible(bool(getattr(app, "_player_header_zoom_visible", False)))
 
 
@@ -186,6 +219,8 @@ def measure_left_zoom_span(app, spacing: int = 10) -> int:
     try:
         if not host.isVisible():
             return 0
+        if host.parentWidget() is getattr(app, "player_header_actions", None):
+            return 0  # counted with the right dock
         laid = int(host.width()) if host.width() > 0 else 0
         hint = max(0, int(host.sizeHint().width()))
         return max(laid, hint)
