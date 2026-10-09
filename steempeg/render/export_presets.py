@@ -20,6 +20,9 @@ import re
 from dataclasses import asdict, replace
 from typing import Any, Callable
 
+from steempeg.core import capabilities
+from steempeg.render import pro_encoding as pro
+from steempeg.render.output_formats import resolve_video_encoder
 from steempeg.render.queue import RenderJob, RenderJobSettings, settings_from_dict
 
 SETTINGS_KEY = "export_presets"
@@ -258,6 +261,30 @@ def _short_audio(settings: RenderJobSettings) -> str:
     return fmt
 
 
+def _short_pro(settings: RenderJobSettings) -> list[str]:
+    """PRO knobs that will actually apply to this recipe's encoder."""
+    encoder = resolve_video_encoder(
+        settings.codec_text, settings.encoder_codec, capabilities.av1_encoder_available()
+    )
+    out: list[str] = []
+    if (
+        pro.normalize_rate_control(settings.pro_rate_control) == pro.RATE_QUALITY
+        and "Target File Size" not in (settings.quality_text or "")
+    ):
+        scale = pro.quality_scale(encoder)
+        if scale is not None:
+            out.append(f"{scale.flag} {pro.clamp_quality(encoder, settings.pro_quality)}")
+    if settings.pro_ten_bit and pro.supports_ten_bit(encoder):
+        out.append("10-bit")
+    if pro.preset_args(encoder, settings.pro_preset):
+        out.append(settings.pro_preset)
+    if pro.tune_args(encoder, settings.pro_tune):
+        out.append(settings.pro_tune)
+    if settings.pro_keyint_sec and settings.pro_keyint_sec > 0:
+        out.append(f"GOP {settings.pro_keyint_sec:g}s")
+    return out
+
+
 def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -> str:
     """Readable recipe line: container · codec · res · bitrate · audio."""
     if isinstance(settings, dict):
@@ -283,8 +310,12 @@ def format_preset_summary(settings: RenderJobSettings | dict[str, Any] | None) -
         parts.append(res)
 
     br = _short_video_bitrate(settings)
+    pro_parts = _short_pro(settings) if br != "source" else []
+    if pro_parts and pro_parts[0].startswith(("CRF", "CQ")):
+        br = pro_parts.pop(0)
     if br:
         parts.append(br)
+    parts.extend(pro_parts)
 
     audio = _short_audio(settings)
     if audio:
