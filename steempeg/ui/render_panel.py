@@ -776,7 +776,7 @@ def _pro_toggle_row(toggle: ToggleSwitch, text: str) -> tuple[QHBoxLayout, QLabe
 
 
 def _build_pro_encoding_section(ui) -> QWidget:
-    """Steempeg PRO encoder knobs: rate control, CRF/CQ, two-pass, 10-bit."""
+    """Steempeg PRO encoder knobs: rate control, CRF/CQ, preset, tune, keyframes, two-pass, 10-bit."""
     from steempeg.ui.widgets.pro_badge import ProBadge
 
     box = QWidget()
@@ -803,19 +803,36 @@ def _build_pro_encoding_section(ui) -> QWidget:
     ui.label_pro_quality.setStyleSheet(_PRO_FIELD_LABEL_QSS)
     ui.combo_pro_quality = QComboBox()
     ui.combo_pro_quality.setObjectName("combo_pro_quality")
+    ui.label_pro_preset = QLabel("Encoder Preset")
+    ui.label_pro_preset.setStyleSheet(_PRO_FIELD_LABEL_QSS)
+    ui.combo_pro_preset = QComboBox()
+    ui.combo_pro_preset.setObjectName("combo_pro_preset")
+    ui.label_pro_tune = QLabel("Tune")
+    ui.label_pro_tune.setStyleSheet(_PRO_FIELD_LABEL_QSS)
+    ui.combo_pro_tune = QComboBox()
+    ui.combo_pro_tune.setObjectName("combo_pro_tune")
+    ui.label_pro_keyint = QLabel("Keyframe Interval")
+    ui.label_pro_keyint.setStyleSheet(_PRO_FIELD_LABEL_QSS)
+    ui.combo_pro_keyint = QComboBox()
+    ui.combo_pro_keyint.setObjectName("combo_pro_keyint")
 
     grid = QGridLayout()
     grid.setHorizontalSpacing(16)
     grid.setVerticalSpacing(12)
-    for col, (label, combo) in enumerate(
-        ((ui.label_rate_control, ui.combo_rate_control), (ui.label_pro_quality, ui.combo_pro_quality))
-    ):
+    cells = (
+        (ui.label_rate_control, ui.combo_rate_control),
+        (ui.label_pro_quality, ui.combo_pro_quality),
+        (ui.label_pro_preset, ui.combo_pro_preset),
+        (ui.label_pro_tune, ui.combo_pro_tune),
+        (ui.label_pro_keyint, ui.combo_pro_keyint),
+    )
+    for i, (label, combo) in enumerate(cells):
         cell = QVBoxLayout()
         cell.setSpacing(4)
         cell.setContentsMargins(0, 0, 0, 0)
         cell.addWidget(label, alignment=Qt.AlignLeft)
         cell.addLayout(_combo_row_with_slot(combo))
-        grid.addLayout(cell, 0, col)
+        grid.addLayout(cell, i // 2, i % 2)
     grid.setColumnStretch(2, 1)
     lay.addLayout(grid)
 
