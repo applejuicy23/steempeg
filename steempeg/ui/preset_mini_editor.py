@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import capabilities
+from steempeg.render import pro_encoding as pro
 from steempeg.render.encode_speed import ENCODE_SPEED_OPTIONS, normalize_encode_speed
 from steempeg.render.export_presets import (
     get_preset_settings,
@@ -32,6 +33,7 @@ from steempeg.render.output_formats import (
     AUDIO_FORMATS,
     CONTAINERS,
     VIDEO_CODEC_ITEMS,
+    resolve_video_encoder,
 )
 from steempeg.render.quality_presets import (
     build_quality_presets,
@@ -48,6 +50,7 @@ from steempeg.ui.message_dialog import (
     steempeg_question,
     steempeg_warning,
 )
+from steempeg.ui.render_pro_controls import preset_rows, pro_enabled, tune_rows
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
@@ -331,6 +334,43 @@ class PresetMiniEditor(SteempegDialog):
         export.setColumnStretch(1, 1)
         root.addLayout(export)
 
+        self._pro_on = pro_enabled(app)
+        self._pro_carry: dict = {}
+        self._pro_rate = QComboBox()
+        for key, label in pro.RATE_CONTROL_OPTIONS:
+            self._pro_rate.addItem(label, key)
+        self._pro_quality = QComboBox()
+        self._pro_preset = QComboBox()
+        self._pro_tune = QComboBox()
+        self._pro_keyint = QComboBox()
+        for sec, label in pro.KEYINT_CHOICES:
+            self._pro_keyint.addItem(label, sec)
+        self._pro_ten_bit = SteempegCheckBox("10-bit color")
+        self._pro_family = ""
+        if self._pro_on:
+            from steempeg.ui.widgets.pro_badge import ProBadge
+
+            head = QHBoxLayout()
+            head.setSpacing(8)
+            head.addWidget(_section_title("Advanced Encoding"))
+            head.addWidget(ProBadge(), alignment=Qt.AlignmentFlag.AlignVCenter)
+            head.addStretch(1)
+            root.addLayout(head)
+            adv = QGridLayout()
+            adv.setContentsMargins(0, 0, 0, 0)
+            adv.setHorizontalSpacing(16)
+            adv.setVerticalSpacing(10)
+            adv.addLayout(_field_cell("Rate control", self._pro_rate), 0, 0)
+            adv.addLayout(_field_cell("Constant quality", self._pro_quality), 0, 1)
+            adv.addLayout(_field_cell("Encoder preset", self._pro_preset), 1, 0)
+            adv.addLayout(_field_cell("Tune", self._pro_tune), 1, 1)
+            adv.addLayout(_field_cell("Keyframe interval", self._pro_keyint), 2, 0)
+            adv.setColumnStretch(0, 1)
+            adv.setColumnStretch(1, 1)
+            root.addLayout(adv)
+            root.addWidget(self._pro_ten_bit)
+            self.resize(self.width(), 940)
+
         _apply_settings_combo_chrome(
             self._quality,
             self._fallback,
@@ -342,6 +382,11 @@ class PresetMiniEditor(SteempegDialog):
             self._audio_fmt,
             self._audio_br,
             self._container,
+            self._pro_rate,
+            self._pro_quality,
+            self._pro_preset,
+            self._pro_tune,
+            self._pro_keyint,
         )
 
         hint = QLabel(
@@ -368,6 +413,10 @@ class PresetMiniEditor(SteempegDialog):
         root.addLayout(actions)
 
         self._quality.currentIndexChanged.connect(self._sync_original_locks)
+        self._codec.currentIndexChanged.connect(self._sync_pro)
+        self._encoder.currentIndexChanged.connect(self._sync_pro)
+        self._pro_rate.currentIndexChanged.connect(self._sync_pro)
+        self._pro_preset.currentIndexChanged.connect(self._sync_pro)
         self._mute.toggled.connect(self._sync_audio_enabled)
         self._audio_fmt.currentIndexChanged.connect(self._sync_audio_enabled)
 
@@ -405,6 +454,96 @@ class PresetMiniEditor(SteempegDialog):
         self._encoder.setEnabled(not is_orig)
         self._speed.setEnabled(not is_orig)
         self._fallback.setEnabled(not is_orig)
+        self._sync_pro()
+
+    def _current_encoder(self) -> str:
+        return str(
+            resolve_video_encoder(
+                self._codec.currentText(),
+                str(self._encoder.currentData() or "libx264"),
+                capabilities.av1_encoder_available(),
+            )
+        )
+
+    def _refill(self, combo: QComboBox, rows, wanted) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        for label, data in rows:
+            combo.addItem(label, data)
+        idx = combo.findData(wanted)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _sync_pro(self, *_args) -> None:
+        """Per-encoder choices and enable state of the PRO fields."""
+        if not self._pro_on:
+            return
+        encoder = self._current_encoder()
+        family = pro.pro_family(encoder)
+        if family != self._pro_family:
+            self._pro_family = family
+            q = self._pro_quality.currentData()
+            self._refill(
+                self._pro_quality,
+                [(label, value) for value, label in pro.quality_choices(encoder)],
+                pro.clamp_quality(encoder, int(q) if q is not None else -1),
+            )
+            self._refill(
+                self._pro_preset, preset_rows(encoder), self._pro_preset.currentData() or ""
+            )
+            self._refill(self._pro_tune, tune_rows(encoder), self._pro_tune.currentData() or "")
+        video = self._quality.currentData() != "original"
+        cq_ok = video and pro.supports_constant_quality(encoder)
+        self._pro_rate.setEnabled(cq_ok)
+        quality_on = cq_ok and self._pro_rate.currentData() == pro.RATE_QUALITY
+        self._pro_quality.setEnabled(quality_on)
+        self._bitrate.setEnabled(video and not quality_on)
+        preset_on = video and pro.supports_preset(encoder)
+        self._pro_preset.setEnabled(preset_on)
+        self._speed.setEnabled(video and not (preset_on and self._pro_preset.currentData()))
+        self._pro_tune.setEnabled(video and pro.supports_tune(encoder))
+        self._pro_keyint.setEnabled(video)
+        self._pro_ten_bit.setEnabled(video and pro.supports_ten_bit(encoder))
+
+    def _load_pro(self, settings: RenderJobSettings) -> None:
+        self._pro_carry = {
+            "pro_rate_control": settings.pro_rate_control,
+            "pro_quality": settings.pro_quality,
+            "pro_two_pass": settings.pro_two_pass,
+            "pro_ten_bit": settings.pro_ten_bit,
+            "pro_preset": settings.pro_preset,
+            "pro_tune": settings.pro_tune,
+            "pro_keyint_sec": settings.pro_keyint_sec,
+        }
+        if not self._pro_on:
+            return
+        encoder = self._current_encoder()
+        self._pro_family = pro.pro_family(encoder)
+        _set_combo_data(self._pro_rate, pro.normalize_rate_control(settings.pro_rate_control))
+        self._refill(
+            self._pro_quality,
+            [(label, value) for value, label in pro.quality_choices(encoder)],
+            pro.clamp_quality(encoder, settings.pro_quality),
+        )
+        self._refill(self._pro_preset, preset_rows(encoder), settings.pro_preset or "")
+        self._refill(self._pro_tune, tune_rows(encoder), settings.pro_tune or "")
+        _set_combo_data(self._pro_keyint, float(settings.pro_keyint_sec or 0.0))
+        self._pro_ten_bit.setChecked(bool(settings.pro_ten_bit))
+
+    def _pro_fields(self) -> dict:
+        """PRO fields to save; untouched carry-over when PRO is off."""
+        if not self._pro_on:
+            return dict(self._pro_carry)
+        q = self._pro_quality.currentData()
+        return {
+            "pro_rate_control": pro.normalize_rate_control(self._pro_rate.currentData()),
+            "pro_quality": int(q) if q is not None else -1,
+            "pro_two_pass": bool(self._pro_carry.get("pro_two_pass", False)),
+            "pro_ten_bit": self._pro_ten_bit.isChecked(),
+            "pro_preset": str(self._pro_preset.currentData() or ""),
+            "pro_tune": str(self._pro_tune.currentData() or ""),
+            "pro_keyint_sec": float(self._pro_keyint.currentData() or 0.0),
+        }
 
     def _sync_audio_enabled(self) -> None:
         on = not self._mute.isChecked()
@@ -469,6 +608,8 @@ class PresetMiniEditor(SteempegDialog):
             _set_combo_data(self._audio_br, int(m.group(1)))
         if settings.container_format:
             _set_combo_text(self._container, settings.container_format)
+        self._load_pro(settings)
+        self._sync_pro()
 
     def _build_settings(self) -> RenderJobSettings | None:
         qdata = self._quality.currentData()
@@ -531,6 +672,7 @@ class PresetMiniEditor(SteempegDialog):
             output_preset="Custom",
             encode_speed=encode_speed,
             quality_fallback=fallback,
+            **self._pro_fields(),
         )
 
     def _maybe_warn_monitor(self, settings: RenderJobSettings) -> bool:
