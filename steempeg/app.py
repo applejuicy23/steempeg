@@ -300,6 +300,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ui.combo_pro_quality.currentIndexChanged.connect(_quality_changed)
         ui.check_pro_two_pass.toggled.connect(lambda *_: self.update_final_setup())
         ui.check_pro_ten_bit.toggled.connect(lambda *_: self.update_final_setup())
+        ui.combo_pro_preset.currentIndexChanged.connect(_rate_changed)
+        ui.combo_pro_tune.currentIndexChanged.connect(lambda *_: self.update_final_setup())
+        ui.combo_pro_keyint.currentIndexChanged.connect(lambda *_: self.update_final_setup())
         self._refresh_pro_encoding_controls()
 
     def _apply_playback_button_styles(self):
