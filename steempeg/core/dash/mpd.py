@@ -32,20 +32,49 @@ def get_fps(mpd_path, default=60):
     return default
 
 
-def get_audio_bitrate_kbps(mpd_path, default=192):
-    """Return the audio bitrate in kbps from an .mpd manifest, or `default` on failure."""
+def measure_audio_kbps(mpd_path, seconds: float = 20.0) -> int | None:
+    """Real audio kbps from the first ``seconds`` of AAC packets.
+
+    Steam writes ``bandwidth="128000"`` in every manifest, but the recorder's
+    AAC actually runs ~160–175 kbps; ffprobe's ``stream=bit_rate`` for DASH is
+    garbage too. Summing packet sizes over their durations is the real rate.
+    """
     try:
         out = subprocess.check_output(
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
-             "-show_entries", "stream=bit_rate",
-             "-of", "default=noprint_wrappers=1:nokey=1", mpd_path],
-            creationflags=_NO_WINDOW, stderr=subprocess.DEVNULL, text=True,
-        ).strip()
-        if out.isdigit():
-            return int(out) // 1000      # bps -> kbps
+             "-read_intervals", f"%+{seconds:g}",
+             "-show_entries", "packet=size,duration_time",
+             "-of", "csv=p=0", mpd_path],
+            creationflags=_NO_WINDOW, stderr=subprocess.DEVNULL, text=True, timeout=15,
+        )
     except Exception:
-        pass
-    return default
+        return None
+    total_bytes = 0
+    total_sec = 0.0
+    for line in out.splitlines():
+        parts = line.strip().split(",")
+        if len(parts) < 2:
+            continue
+        try:
+            total_sec += float(parts[0])
+            total_bytes += int(parts[1])
+        except ValueError:
+            continue
+    if total_sec < 1.0 or total_bytes <= 0:
+        return None
+    return max(1, int(round(total_bytes * 8 / total_sec / 1000)))
+
+
+def get_audio_bitrate_kbps(mpd_path, default=192):
+    """Real audio kbps (packet-measured), else the manifest value, else ``default``."""
+    measured = measure_audio_kbps(mpd_path)
+    if measured:
+        return measured
+    try:
+        with open(mpd_path, encoding="utf-8") as handle:
+            return audio_bitrate_kbps_from_content(handle.read(), default)
+    except OSError:
+        return default
 
 _VIDEO_REP_BW = re.compile(
     r'<Representation\b[^>]*\bbandwidth="(\d+)"[^>]*\bmimeType="video/',
