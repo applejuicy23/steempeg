@@ -12,8 +12,9 @@ from steempeg.core import games
 from steempeg.core.clip_identity import (
     dedupe_steam_session_folders,
     folder_has_video_chunks,
+    is_same_steam_recording,
     is_steam_package_internal_child,
-    nested_steam_session_keys,
+    nested_steam_session_folders,
     pick_best_session_folder,
     steam_session_key,
 )
@@ -624,14 +625,16 @@ def run_library_scan(
             if best:
                 known_by_session[key] = os.path.normpath(best)
 
+        nested_copies: Dict[str, str] = {}
         for path in known:
             key = steam_session_key(os.path.basename(path))
             if not key:
                 continue
             _remember_session(key, path)
-            # CLIP packages claim nested FG/BG stamps so Skip won't re-add them.
-            for nested_key in nested_steam_session_keys(path):
-                _remember_session(nested_key, path)
+            # CLIP packages claim nested FG/BG stamps so Skip won't re-add an
+            # identical top-level copy (scraps still get their own card).
+            for nested_key, nested_path in nested_steam_session_folders(path):
+                nested_copies.setdefault(nested_key, nested_path)
 
         filtered: List[str] = []
         for path in candidates:
@@ -639,6 +642,9 @@ def run_library_scan(
             if norm in known:
                 continue
             key = steam_session_key(os.path.basename(path))
+            nested_path = nested_copies.get(key) if key else None
+            if nested_path and is_same_steam_recording(path, nested_path):
+                continue
             if key and key in known_by_session:
                 best = pick_best_session_folder([known_by_session[key], path])
                 if not best or os.path.normpath(best) != norm:
