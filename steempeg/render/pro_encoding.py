@@ -1,4 +1,5 @@
-"""Steempeg PRO encode knobs — constant quality, two-pass, 10-bit — as ffmpeg flags.
+"""Steempeg PRO encode knobs — constant quality, two-pass, 10-bit, preset, tune,
+keyframe interval — as ffmpeg flags.
 
 Pure logic — no Qt. Every helper takes the resolved ``-c:v`` encoder name and
 answers per encoder family. AMF / QSV are left out: their CQP / 10-bit flags
@@ -162,6 +163,93 @@ def supports_ten_bit(encoder: str) -> bool:
 
 def ten_bit_args(encoder: str) -> str:
     return _TEN_BIT_ARGS.get((encoder or "").lower(), "")
+
+
+_X26X_PRESETS = (
+    "ultrafast", "superfast", "veryfast", "faster", "fast",
+    "medium", "slow", "slower", "veryslow", "placebo",
+)
+_PRESETS: dict[str, tuple[str, ...]] = {
+    "x264": _X26X_PRESETS,
+    "x265": _X26X_PRESETS,
+    "nvenc": ("p1", "p2", "p3", "p4", "p5", "p6", "p7"),
+    "svtav1": tuple(str(n) for n in range(12, -1, -1)),
+}
+
+
+def preset_choices(encoder: str) -> tuple[str, ...]:
+    """Native ``-preset`` values, fastest first."""
+    return _PRESETS.get(pro_family(encoder), ())
+
+
+def supports_preset(encoder: str) -> bool:
+    return bool(preset_choices(encoder))
+
+
+def preset_args(encoder: str, preset: str | None) -> str:
+    """Exact preset replacing the Encode speed mapping; empty when not valid here."""
+    value = (preset or "").strip()
+    if value and value in preset_choices(encoder):
+        return f"-preset {value} "
+    return ""
+
+
+_TUNES: dict[str, tuple[tuple[str, str], ...]] = {
+    "x264": (
+        ("film", "Film"),
+        ("animation", "Animation"),
+        ("grain", "Grain"),
+        ("stillimage", "Still image"),
+        ("fastdecode", "Fast decode"),
+        ("zerolatency", "Zero latency"),
+    ),
+    "x265": (
+        ("animation", "Animation"),
+        ("grain", "Grain"),
+        ("fastdecode", "Fast decode"),
+        ("zerolatency", "Zero latency"),
+    ),
+}
+
+
+def tune_choices(encoder: str) -> tuple[tuple[str, str], ...]:
+    return _TUNES.get(pro_family(encoder), ())
+
+
+def supports_tune(encoder: str) -> bool:
+    return bool(tune_choices(encoder))
+
+
+def tune_args(encoder: str, tune: str | None) -> str:
+    value = (tune or "").strip()
+    if value and any(key == value for key, _ in tune_choices(encoder)):
+        return f"-tune {value} "
+    return ""
+
+
+KEYINT_CHOICES: tuple[tuple[float, str], ...] = (
+    (0.0, "Auto"),
+    (0.5, "Every 0.5 s"),
+    (1.0, "Every 1 s"),
+    (2.0, "Every 2 s"),
+    (5.0, "Every 5 s"),
+    (10.0, "Every 10 s"),
+)
+
+
+def keyint_frames(seconds: float | None, fps: float) -> int:
+    """GOP length in frames for ``-g``; 0 = encoder default."""
+    try:
+        sec = float(seconds or 0)
+    except (TypeError, ValueError):
+        return 0
+    if sec <= 0 or fps <= 0:
+        return 0
+    return max(1, int(round(sec * fps)))
+
+
+def keyint_args(frames: int) -> str:
+    return f"-g {int(frames)} " if frames and frames > 0 else ""
 
 
 def ten_bit_note(encoder: str) -> str:
