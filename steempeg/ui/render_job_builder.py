@@ -13,7 +13,7 @@ from steempeg.core.dash import discovery, mpd
 from steempeg.core import capabilities
 from steempeg.render.bitrate import format_video_mbps
 from steempeg.render.encode_speed import normalize_encode_speed
-from steempeg.render.pro_encoding import normalize_rate_control
+from steempeg.render.pro_encoding import keyint_frames, normalize_rate_control
 from steempeg.ui.settings_prefs import resolve_app_export_folder
 from steempeg.ui.render_pro_controls import (
     apply_pro_fields_to_ui,
@@ -836,6 +836,7 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
     orig_fps = s.orig_fps or 60
     max_allowed_fps = min(60, orig_fps)
     fps_multiplier = 1.0
+    out_fps = float(orig_fps)
 
     if "Custom" in fps_text:
         try:
@@ -843,12 +844,16 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
             val = max(1, min(val, max_allowed_fps))
             fps_text = f"{val} FPS"
             fps_multiplier = val / orig_fps if orig_fps > 0 else 1.0
+            out_fps = float(val)
         except (TypeError, ValueError):
             fps_text = f"{max_allowed_fps} FPS"
+            out_fps = float(max_allowed_fps)
     else:
         try:
             selected_fps = int(re.search(r"(\d+)", fps_text).group(1))
             fps_multiplier = selected_fps / orig_fps if orig_fps > 0 else 1.0
+            if "Original" not in fps_text:
+                out_fps = float(selected_fps)
         except (AttributeError, ValueError):
             pass
 
@@ -909,4 +914,7 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
         quality_value=int(s.pro_quality if s.pro_quality is not None else -1),
         two_pass=bool(s.pro_two_pass),
         ten_bit=bool(s.pro_ten_bit),
+        preset=str(s.pro_preset or ""),
+        tune=str(s.pro_tune or ""),
+        keyint_frames=keyint_frames(s.pro_keyint_sec, out_fps),
     )
