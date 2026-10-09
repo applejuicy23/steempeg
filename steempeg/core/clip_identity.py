@@ -45,14 +45,14 @@ def is_steam_package_internal_child(parent_name: str, child_name: str) -> bool:
     return parse_steam_folder_name(child_name) is not None
 
 
-def nested_steam_session_keys(folder_path: str) -> List[str]:
-    """Session keys of clip_/bg_/fg_ folders under ``video/`` or ``clips/``.
+def nested_steam_session_folders(folder_path: str) -> List[tuple[str, str]]:
+    """``(session key, path)`` of clip_/bg_/fg_ folders under ``video/`` or ``clips/``.
 
     Used to link a saved CLIP package to its source FG/BG (and any top-level copy).
     """
     if not folder_path or not os.path.isdir(folder_path):
         return []
-    keys: List[str] = []
+    found: List[tuple[str, str]] = []
     seen: set[str] = set()
     for sub in ("video", "clips"):
         sub_path = os.path.join(folder_path, sub)
@@ -70,8 +70,36 @@ def nested_steam_session_keys(folder_path: str) -> List[str]:
             if not os.path.isdir(full):
                 continue
             seen.add(key)
-            keys.append(key)
-    return keys
+            found.append((key, full))
+    return found
+
+
+def steam_media_signature(folder_path: str) -> dict[str, int]:
+    """Steam's own DASH media files in a folder tree, as ``{name: size}``.
+
+    Files Steempeg writes itself (salvage init copies, manifests) are left out
+    so a salvaged folder still compares equal to an untouched copy.
+    """
+    signature: dict[str, int] = {}
+    if not folder_path or not os.path.isdir(folder_path):
+        return signature
+    for root, _dirs, files in os.walk(folder_path):
+        for name in files:
+            if not name.endswith(".m4s") or "salvage" in name:
+                continue
+            if not name.startswith(("chunk-stream", "init-stream")):
+                continue
+            try:
+                signature[name] = os.path.getsize(os.path.join(root, name))
+            except OSError:
+                continue
+    return signature
+
+
+def is_same_steam_recording(folder_a: str, folder_b: str) -> bool:
+    """True when two folders hold exactly the same Steam media files."""
+    first = steam_media_signature(folder_a)
+    return bool(first) and first == steam_media_signature(folder_b)
 
 
 def folder_has_video_chunks(folder_path: str) -> bool:
@@ -193,10 +221,12 @@ def _merge_session_groups_via_clip_packages(
     steam_groups: Dict[str, List[str]],
     folder_paths: List[str],
 ) -> Dict[str, List[str]]:
-    """Union session keys when a CLIP/BG/FG package nests another session folder.
+    """Union session keys when a CLIP/BG/FG package nests an identical copy.
 
     Example: ``clip_…_224607`` contains ``video/fg_…_224328`` while Steam also
-    keeps ``video/fg_…_224328`` at the library root — same recording, two stamps.
+    keeps ``video/fg_…_224328`` at the library root. They merge only when every
+    top-level copy holds the same media as the nested one — Steam usually
+    leaves just a one-chunk scrap behind, and that scrap gets its own card.
     """
     parent: Dict[str, str] = {key: key for key in steam_groups}
 
@@ -215,10 +245,12 @@ def _merge_session_groups_via_clip_packages(
         own = steam_session_key(os.path.basename(path))
         if not own or own not in steam_groups:
             continue
-        for nested_key in nested_steam_session_keys(path):
+        for nested_key, nested_path in nested_steam_session_folders(path):
             if nested_key not in steam_groups:
                 continue
-            union(own, nested_key)
+            copies = steam_groups[nested_key]
+            if all(is_same_steam_recording(copy, nested_path) for copy in copies):
+                union(own, nested_key)
 
     merged: Dict[str, List[str]] = {}
     for key, group in steam_groups.items():
