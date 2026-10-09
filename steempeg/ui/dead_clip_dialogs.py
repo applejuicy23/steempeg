@@ -26,15 +26,15 @@ class _YesNoChoice(Enum):
 
 
 _CARD_MASCOT_W = 180
-_CARD_W = 780
+_CARD_W = 620
 # Breathing room between the text block and the button row.
-_CARD_BUTTON_GAP = 28
+_CARD_BUTTON_GAP = 40
 
 
 class _CardDialog(QDialog):
     """Frameless card in the Render Failed dialog language.
 
-    Shares ``render_error_dialog_stylesheet`` and the 780px width: mascot left,
+    Shares ``render_error_dialog_stylesheet``; narrower than Render Failed: mascot left,
     title + bold hints + description right, pill buttons bottom-right. Height hugs
     the content (no FFmpeg log to fill). Esc / secondary → no.
     """
