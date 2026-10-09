@@ -383,6 +383,17 @@ class SplitterRulesMixin:
                     continue
         return panel
 
+    def _queue_hover_slot_docked(self) -> bool:
+        """True when the hidden hover placeholder holds the inner pane slot."""
+        slot = getattr(self, "_queue_hover_slot", None)
+        rhs = getattr(self, "right_h_splitter", None)
+        if slot is None or rhs is None:
+            return False
+        try:
+            return rhs.indexOf(slot) >= 0
+        except RuntimeError:
+            return False
+
     def _queue_on_left(self) -> bool:
         """True when Render Queue is the outer (left) pane."""
         dock = self._queue_dock_widget()
@@ -475,6 +486,9 @@ class SplitterRulesMixin:
         """
         rhs = self.right_h_splitter
         handle = rhs.handle(1)
+        if handle is not None and handle.isHidden():
+            # Hover queue: the handle is gone, so it takes no room at all.
+            return 0
         widget_w = 0
         if handle is not None:
             widget_w = max(int(handle.width()), int(handle.sizeHint().width()))
@@ -562,6 +576,11 @@ class SplitterRulesMixin:
         self._free_collapsed_minimums(
             player_w <= 0, inner_w <= 0, outer_shut=int(left) <= 0
         )
+        if player_w <= 0 and inner_w <= 0 and self._queue_hover_slot_docked():
+            # Qt never collapses the only visible child of right_h_splitter, so
+            # with the hover slot hidden the whole right block shuts instead.
+            self.ui.main_splitter.setSizes([max(int(main_total), 0), 0])
+            return
         block = player_w + inner_w + handle
         self.ui.main_splitter.setSizes([max(int(left), 0), max(block, handle)])
         self.right_h_splitter.setSizes([max(int(player_w), 0), max(int(inner_w), 0)])
