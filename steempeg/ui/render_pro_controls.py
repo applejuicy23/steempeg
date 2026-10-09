@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 
 from steempeg.core import capabilities
 from steempeg.render import pro_encoding as pro
+from steempeg.render.encode_speed import encode_speed_hint, encoder_family
 from steempeg.render.output_formats import resolve_video_encoder
 
 if TYPE_CHECKING:
@@ -36,6 +37,25 @@ class ProUiState:
     quality: int
     two_pass: bool
     ten_bit: bool
+    preset: str = ""
+    tune: str = ""
+    keyint_sec: float = 0.0
+
+    @property
+    def video_encode(self) -> bool:
+        return self.enabled and self.mode in (MODE_TARGET, MODE_HEIGHT)
+
+    @property
+    def preset_active(self) -> bool:
+        return self.video_encode and bool(pro.preset_args(self.encoder, self.preset))
+
+    @property
+    def tune_active(self) -> bool:
+        return self.video_encode and bool(pro.tune_args(self.encoder, self.tune))
+
+    @property
+    def keyint_active(self) -> bool:
+        return self.video_encode and self.keyint_sec > 0
 
     @property
     def constant_quality_active(self) -> bool:
@@ -105,12 +125,17 @@ def read_pro_state(app) -> ProUiState:
     rate = pro.RATE_BITRATE
     quality = -1
     two_pass = ten_bit = False
+    preset = tune = ""
+    keyint_sec = 0.0
     if hasattr(ui, "combo_rate_control"):
         rate = pro.normalize_rate_control(ui.combo_rate_control.currentData(Qt.UserRole))
         data = ui.combo_pro_quality.currentData(Qt.UserRole)
         quality = int(data) if data is not None else -1
         two_pass = ui.check_pro_two_pass.isChecked()
         ten_bit = ui.check_pro_ten_bit.isChecked()
+        preset = str(ui.combo_pro_preset.currentData(Qt.UserRole) or "")
+        tune = str(ui.combo_pro_tune.currentData(Qt.UserRole) or "")
+        keyint_sec = float(ui.combo_pro_keyint.currentData(Qt.UserRole) or 0.0)
     return ProUiState(
         enabled=pro_enabled(app) and hasattr(ui, "pro_encoding_box"),
         encoder=encoder,
@@ -119,6 +144,9 @@ def read_pro_state(app) -> ProUiState:
         quality=quality,
         two_pass=two_pass,
         ten_bit=ten_bit,
+        preset=preset,
+        tune=tune,
+        keyint_sec=keyint_sec,
     )
 
 
@@ -139,6 +167,42 @@ def _fill_quality_combo(ui, encoder: str, wanted: int) -> None:
             idx = combo.count() - 1
         combo.setCurrentIndex(idx)
     combo.blockSignals(False)
+
+
+def preset_rows(encoder: str) -> list[tuple[str, str]]:
+    values = pro.preset_choices(encoder)
+    rows = [("Auto (Encode Speed)", "")]
+    for i, value in enumerate(values):
+        label = value
+        if i == 0:
+            label += " · fastest"
+        elif i == len(values) - 1:
+            label += " · slowest"
+        rows.append((label, value))
+    return rows
+
+
+def tune_rows(encoder: str) -> list[tuple[str, str]]:
+    return [("None", "")] + [(label, key) for key, label in pro.tune_choices(encoder)]
+
+
+def _fill_choice_combo(combo, rows, wanted) -> None:
+    """Refill ``combo``; keep ``wanted`` if it is still offered, else the first row."""
+    combo.blockSignals(True)
+    combo.clear()
+    for label, data in rows:
+        combo.addItem(label, data)
+    idx = combo.findData(wanted, Qt.UserRole)
+    combo.setCurrentIndex(idx if idx >= 0 else 0)
+    combo.blockSignals(False)
+
+
+def _fill_family_combos(ui, encoder: str, preset: str, tune: str) -> None:
+    _fill_choice_combo(ui.combo_pro_preset, preset_rows(encoder), preset)
+    _fill_choice_combo(ui.combo_pro_tune, tune_rows(encoder), tune)
+    if ui.combo_pro_keyint.count() == 0:
+        rows = [(label, sec) for sec, label in pro.KEYINT_CHOICES]
+        _fill_choice_combo(ui.combo_pro_keyint, rows, 0.0)
 
 
 def _set_enabled_with_tip(widgets, enabled: bool, tip: str) -> None:
@@ -173,6 +237,10 @@ def refresh_pro_controls(app) -> None:
     if ui.combo_pro_quality.property("pro_family") != family:
         _fill_quality_combo(ui, encoder, remembered)
         ui.combo_pro_quality.setProperty("pro_family", family)
+    if ui.combo_pro_preset.property("pro_family") != family:
+        _fill_family_combos(ui, encoder, state.preset, state.tune)
+        ui.combo_pro_preset.setProperty("pro_family", family)
+        state = read_pro_state(app)
 
     video_encode = state.mode in (MODE_TARGET, MODE_HEIGHT)
     cq_supported = pro.supports_constant_quality(encoder)
@@ -222,6 +290,39 @@ def refresh_pro_controls(app) -> None:
     ten_ok = pro.supports_ten_bit(encoder) and video_encode
     _set_enabled_with_tip((ui.check_pro_ten_bit, ui.label_pro_ten_bit), ten_ok, ten_tip)
 
+    if not pro.supports_preset(encoder):
+        preset_tip = _UNSUPPORTED_TIP if family in ("amf", "qsv") else "Encode Speed already covers this encoder."
+    elif not video_encode:
+        preset_tip = "Only for re-encoding presets."
+    else:
+        preset_tip = (
+            "Exact encoder preset instead of the Encode Speed ladder.\n"
+            "Slower = smaller file at the same quality, but longer render."
+        )
+    preset_ok = pro.supports_preset(encoder) and video_encode
+    _set_enabled_with_tip((ui.combo_pro_preset, ui.label_pro_preset), preset_ok, preset_tip)
+
+    if not pro.supports_tune(encoder):
+        tune_tip = "Tune is for CPU H.264 / H.265 only."
+    elif not video_encode:
+        tune_tip = "Only for re-encoding presets."
+    else:
+        tune_tip = (
+            "Film: live action · Animation: flat colours, cel shading · "
+            "Grain: keep film grain / noise.\n"
+            "Fast decode: lighter for weak devices · Zero latency: streaming."
+        )
+    tune_ok = pro.supports_tune(encoder) and video_encode
+    _set_enabled_with_tip((ui.combo_pro_tune, ui.label_pro_tune), tune_ok, tune_tip)
+
+    keyint_tip = (
+        "How often a full keyframe is written. Shorter = snappier seeking in editors "
+        "and players, slightly bigger file. Auto = encoder default."
+        if video_encode
+        else "Only for re-encoding presets."
+    )
+    _set_enabled_with_tip((ui.combo_pro_keyint, ui.label_pro_keyint), video_encode, keyint_tip)
+
     sync_bitrate_lock(app, state)
 
 
@@ -239,6 +340,19 @@ def sync_bitrate_lock(app, state: ProUiState | None = None) -> None:
     label = getattr(ui, "label_4", None)
     if label is not None:
         label.setEnabled(not locked)
+
+    speed = getattr(ui, "combo_encode_speed", None)
+    if speed is not None and state.mode in (MODE_TARGET, MODE_HEIGHT):
+        overridden = state.preset_active
+        speed.setEnabled(not overridden)
+        speed.setToolTip(
+            f"Overridden by Encoder Preset ({state.preset})."
+            if overridden
+            else encode_speed_hint(encoder_family(state.encoder))
+        )
+        speed_label = getattr(ui, "label_encode_speed", None)
+        if speed_label is not None:
+            speed_label.setEnabled(not overridden)
 
 
 def remember_quality_choice(app) -> None:
@@ -263,6 +377,9 @@ def snapshot_pro_fields(app) -> dict:
         "pro_quality": state.quality,
         "pro_two_pass": state.two_pass,
         "pro_ten_bit": state.ten_bit,
+        "pro_preset": state.preset,
+        "pro_tune": state.tune,
+        "pro_keyint_sec": state.keyint_sec,
     }
 
 
@@ -270,7 +387,15 @@ def apply_pro_fields_to_ui(app, settings: RenderJobSettings) -> None:
     ui = app.ui
     if not hasattr(ui, "combo_rate_control"):
         return
-    widgets = (ui.combo_rate_control, ui.combo_pro_quality, ui.check_pro_two_pass, ui.check_pro_ten_bit)
+    widgets = (
+        ui.combo_rate_control,
+        ui.combo_pro_quality,
+        ui.check_pro_two_pass,
+        ui.check_pro_ten_bit,
+        ui.combo_pro_preset,
+        ui.combo_pro_tune,
+        ui.combo_pro_keyint,
+    )
     for w in widgets:
         w.blockSignals(True)
     try:
@@ -287,6 +412,10 @@ def apply_pro_fields_to_ui(app, settings: RenderJobSettings) -> None:
         ui.combo_pro_quality.setProperty("pro_family", pro.pro_family(encoder))
         ui.check_pro_two_pass.setChecked(bool(settings.pro_two_pass))
         ui.check_pro_ten_bit.setChecked(bool(settings.pro_ten_bit))
+        _fill_family_combos(ui, encoder, settings.pro_preset or "", settings.pro_tune or "")
+        ui.combo_pro_preset.setProperty("pro_family", pro.pro_family(encoder))
+        idx = ui.combo_pro_keyint.findData(float(settings.pro_keyint_sec or 0.0), Qt.UserRole)
+        ui.combo_pro_keyint.setCurrentIndex(max(idx, 0))
     finally:
         for w in widgets:
             w.blockSignals(False)
@@ -305,4 +434,10 @@ def pro_summary_tags(app) -> list[str]:
         tags.append("2-pass" if pro.two_pass_runs_twice(state.encoder) else "multipass")
     if state.ten_bit_active:
         tags.append("10-bit")
+    if state.preset_active:
+        tags.append(f"preset {state.preset}")
+    if state.tune_active:
+        tags.append(f"tune {state.tune}")
+    if state.keyint_active:
+        tags.append(f"GOP {state.keyint_sec:g}s")
     return tags
