@@ -45,6 +45,8 @@ markdown_extensions:
   - md_in_html
   - pymdownx.details
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.highlight:
       anchor_linenums: true
   - tables
@@ -54,5 +56,9 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Library:
+      - Clips Manager: library/clips-manager.md
+      - Clip health: library/clip-health.md
+      - Repair & salvage: library/repair-salvage.md
   - More docs:
       - Coming soon: more/index.md
