@@ -1227,6 +1227,9 @@ class QueueHoverController(QObject):
         slot.setMaximumWidth(0)
         slot.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         slot.setStyleSheet("background: transparent; border: none;")
+        # QSplitter re-shows the handle before every visible child on each
+        # relayout — a hidden slot keeps the queue-side handle gone for good.
+        slot.hide()
         self._app._queue_hover_slot = slot
         return slot
 
