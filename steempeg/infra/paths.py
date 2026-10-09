@@ -240,6 +240,30 @@ def open_in_file_manager(path, *, reveal: bool = False):
     open_path_with_default_app(norm)
 
 
+def _shell32_with_pidl_prototypes():
+    """Shell32 with PIDL functions typed as pointers.
+
+    Without explicit prototypes ctypes returns ``c_int`` and cuts 64-bit PIDLs in
+    half — Explorer then gets garbage and opens Documents instead of the clip.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.windll.shell32
+    shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+    shell32.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+    shell32.ILFindLastID.restype = ctypes.c_void_p
+    shell32.ILFindLastID.argtypes = [ctypes.c_void_p]
+    shell32.ILFree.argtypes = [ctypes.c_void_p]
+    shell32.SHOpenFolderAndSelectItems.argtypes = [
+        ctypes.c_void_p,
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p),
+        wintypes.DWORD,
+    ]
+    return shell32
+
+
 def _reveal_windows(path: str) -> bool:
     """Select ``path`` in Explorer, even when that folder is already open.
 
@@ -252,7 +276,7 @@ def _reveal_windows(path: str) -> bool:
     abs_path = os.path.abspath(path)
     try:
         ole32 = ctypes.windll.ole32
-        shell32 = ctypes.windll.shell32
+        shell32 = _shell32_with_pidl_prototypes()
         ole32.CoInitialize(None)
         pidl = shell32.ILCreateFromPathW(abs_path)
         if not pidl:
@@ -270,23 +294,10 @@ def _reveal_windows(path: str) -> bool:
 def _reveal_windows_many(parent: str, items: list[str]) -> bool:
     """One Explorer window on ``parent`` with every path in ``items`` selected."""
     import ctypes
-    from ctypes import wintypes
 
     try:
         ole32 = ctypes.windll.ole32
-        shell32 = ctypes.windll.shell32
-        # PIDLs are pointers — default c_int restype truncates them on 64-bit.
-        shell32.ILCreateFromPathW.restype = ctypes.c_void_p
-        shell32.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
-        shell32.ILFindLastID.restype = ctypes.c_void_p
-        shell32.ILFindLastID.argtypes = [ctypes.c_void_p]
-        shell32.ILFree.argtypes = [ctypes.c_void_p]
-        shell32.SHOpenFolderAndSelectItems.argtypes = [
-            ctypes.c_void_p,
-            wintypes.UINT,
-            ctypes.POINTER(ctypes.c_void_p),
-            wintypes.DWORD,
-        ]
+        shell32 = _shell32_with_pidl_prototypes()
         ole32.CoInitialize(None)
         folder = shell32.ILCreateFromPathW(parent)
         if not folder:
