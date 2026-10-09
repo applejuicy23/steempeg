@@ -38,12 +38,15 @@ class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
 
-    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False):
+    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False, preset="", tune="", keyint_frames=0):
         super().__init__()
         self.rate_control = pro.normalize_rate_control(rate_control)
         self.quality_value = quality_value
         self.two_pass = bool(two_pass)
         self.ten_bit = bool(ten_bit)
+        self.preset = str(preset or "")
+        self.tune = str(tune or "")
+        self.keyint_frames = int(keyint_frames or 0)
         self.target_scale_h = target_scale_h 
         self.trim_start_sec = trim_start_sec
         self.trim_duration_sec = trim_duration_sec
@@ -299,8 +302,12 @@ class RenderThread(QThread):
                 base_audio = build_audio_args(
                     self.audio_format, self.audio_bitrate_kbps, self.mute_audio
                 )
-                v_extra = video_encoder_extra_args(self.selected_encoder, self.encode_speed)
                 enc = self.selected_encoder
+                v_extra = (
+                    pro.preset_args(enc, self.preset)
+                    or video_encoder_extra_args(enc, self.encode_speed)
+                )
+                v_extra += pro.tune_args(enc, self.tune) + pro.keyint_args(self.keyint_frames)
                 pix_args = pro.ten_bit_args(enc) if self.ten_bit else ""
                 # Pass-1 analysis runs (two-pass) go before ``cmd`` in this list.
                 pre_cmds: list[str] = []
