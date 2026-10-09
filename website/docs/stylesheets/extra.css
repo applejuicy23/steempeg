@@ -25,6 +25,24 @@
   background-color: #000000;
 }
 
+/* Placeholder for a screenshot that has not been taken yet. */
+.md-typeset .admonition.screenshot,
+.md-typeset details.screenshot {
+  border-color: #b29ae7;
+  border-style: dashed;
+}
+
+.md-typeset .screenshot > .admonition-title,
+.md-typeset .screenshot > summary {
+  background-color: rgba(178, 154, 231, 0.12);
+  padding-left: 0.8rem;
+}
+
+.md-typeset .screenshot > .admonition-title::before,
+.md-typeset .screenshot > summary::before {
+  display: none;
+}
+
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
   height: 1.6rem;
