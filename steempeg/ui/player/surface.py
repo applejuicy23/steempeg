@@ -9,11 +9,10 @@ move / show and on splitterMoved, with an early-out when the video rect is
 unchanged.
 
 Trim border:
-  * Windows — four native child widgets + QSS ``#ffcc00`` (same HWND stack as
-    the embed; compositor handles it).
-  * Linux — paint the ring in ``paintEvent`` on this (non-native) wrapper.
-    Sibling QWidgets next to a wid= X11 surface force recompositing and bring
-    back the splitter tear; QSS on native X11 children also does not fill.
+  * Windows — drawn by mpv itself (``ui/player/mpv_osd.py``); anything Qt
+    puts next to the embed HWND lags behind it while a splitter is dragged.
+  * Linux — painted in ``paintEvent`` on this (non-native) wrapper. Sibling
+    QWidgets next to a wid= X11 surface bring back the splitter tear.
 
 On Linux, native embed is opt-in via ``prepare_native_embed()`` (called right
 before ``winId()``) so startup does not create X11 children under NVIDIA.
@@ -50,18 +49,6 @@ class MPVWrapper(QWidget):
             # Placeholder until prepare_native_embed() / external mpv window.
             self.mpv_screen.setStyleSheet("background-color: #0a0a0a;")
 
-        self.lines = []
-        if sys.platform == "win32":
-            for _ in range(4):
-                line = QWidget(self)
-                self._apply_native_attrs(line, for_video=False)
-                line.setStyleSheet("background-color: #ffcc00;")
-                line.hide()
-                self.lines.append(line)
-            self.top_line, self.bottom_line, self.left_line, self.right_line = self.lines
-        else:
-            self.top_line = self.bottom_line = self.left_line = self.right_line = None
-
         self.setStyleSheet("background-color: transparent;")
 
     @staticmethod
@@ -83,6 +70,9 @@ class MPVWrapper(QWidget):
         self._apply_native_attrs(self.mpv_screen, for_video=True)
 
     def setStyleSheet(self, style):
+        if sys.platform == "win32":
+            super().setStyleSheet("background-color: transparent;")
+            return
         if "#ffcc00" in style:
             self.set_border_active(True)
         elif "transparent" in style or "none" in style:
@@ -91,10 +81,9 @@ class MPVWrapper(QWidget):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        # Linux-only: yellow trim without sibling widgets (see module docstring).
         if sys.platform == "win32":
             return
-        if not getattr(self, "_is_border_active", False):
+        if not self._is_border_active or self._transition_frozen:
             return
         ring = getattr(self, "_border_ring", None)
         if not ring:
@@ -117,37 +106,12 @@ class MPVWrapper(QWidget):
         """
         self.mpv_screen.setGeometry(0, 0, 0, 0)
         self.mpv_screen.hide()
-        self._park_border_lines()
         self._border_ring = None
         if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
             self.hud_reference.hide()
         self._last_video_rect = (0, 0, 0, 0)
         self._last_screen_origin = None
-        if sys.platform != "win32":
-            self.update()
-
-    def _park_border_lines(self) -> None:
-        """Hide + zero the yellow trim ring so DWM cannot keep a ghost frame."""
-        for line in self.lines:
-            line.hide()
-            line.setGeometry(0, 0, 0, 0)
-
-    def _apply_border_line_geometry(self, x: int, y: int, total_w: int, total_h: int, b: int, video_h: int) -> None:
-        """Move the four native edge widgets without leaving a second on-screen ring."""
-        if not self.lines or b <= 0:
-            self._park_border_lines()
-            return
-        # Hide before ConfigureWindow — otherwise Windows keeps the old frame
-        # composited next to the new one (FS exit duplicate yellow boxes).
-        for line in self.lines:
-            line.hide()
-        self.top_line.setGeometry(x, y, total_w, b)
-        self.bottom_line.setGeometry(x, y + total_h - b, total_w, b)
-        self.left_line.setGeometry(x, y + b, b, video_h)
-        self.right_line.setGeometry(x + total_w - b, y + b, b, video_h)
-        for line in self.lines:
-            line.show()
-            line.raise_()
+        self.update()
 
     def begin_transition(self):
         """Stop tracking geometry until :meth:`end_transition`.
@@ -156,10 +120,10 @@ class MPVWrapper(QWidget):
         moved the embedded HWND — visible as the video jumping between sizes.
         The surface is left where it is (clipped by its parent at worst) so the
         last decoded frame stays on screen instead of blanking. The trim ring is
-        parked: leaving it visible paints a second yellow frame after re-pin.
+        not painted meanwhile: it would sit around a rect the video has left.
         """
         self._transition_frozen = True
-        self._park_border_lines()
+        self.update()
 
     def end_transition(self):
         """Apply the settled geometry once."""
@@ -174,7 +138,7 @@ class MPVWrapper(QWidget):
 
         After fullscreen / splitter moves the wrapper's screen origin changes while
         the centered 16:9 rect inside it can stay identical — the early-out would
-        skip ``setGeometry`` and leave the yellow native border HWNDs stranded.
+        skip ``setGeometry`` and leave the native mpv HWND stranded.
         """
         self._last_video_rect = None
         self._last_screen_origin = None
@@ -228,7 +192,7 @@ class MPVWrapper(QWidget):
             screen_origin = None
         # Skip redundant ConfigureWindow when nothing changed (multi-caller paths).
         # Must include screen origin: parent can move with an identical relative rect
-        # (FS exit, splitter kiss) and native border children would otherwise drift.
+        # (FS exit, splitter kiss) and the native embed would otherwise drift.
         if (
             getattr(self, "_last_video_rect", None) == video_rect
             and getattr(self, "_border_ring", None) == border_ring
@@ -243,14 +207,7 @@ class MPVWrapper(QWidget):
             logging.info("[fstrace] %.3f mpv geom -> %s", time.perf_counter(), video_rect)
 
         self.mpv_screen.setGeometry(*video_rect)
-
-        if self.lines and border_ring is not None:
-            self._apply_border_line_geometry(x, y, total_w, total_h, b, video_h)
-        elif self.lines:
-            self._park_border_lines()
-
-        if sys.platform != "win32":
-            self.update()
+        self.update()
 
         if getattr(self, "hud_reference", None) and self.hud_reference.parent() == self:
             hud = self.hud_reference
@@ -284,11 +241,8 @@ class MPVWrapper(QWidget):
         self._is_border_active = active
         self._last_video_rect = None
         self._last_screen_origin = None
-        if not active:
-            self._park_border_lines()
         self.update_geometry()
-        if sys.platform != "win32":
-            self.update()
+        self.update()
 
 
 class VideoAspectKeeper(QObject):
