@@ -1249,9 +1249,14 @@ class PlayerMixin:
         """Brief YouTube-style circle with play/pause glyph over the video."""
         overlay = getattr(self, "_play_pause_pulse", None)
         if overlay is None:
-            from steempeg.ui.player.play_pause_pulse import PlayPausePulseOverlay
+            if sys.platform == "win32":
+                from steempeg.ui.player.mpv_osd import MpvPlayPausePulse
 
-            overlay = PlayPausePulseOverlay(parent=None)
+                overlay = MpvPlayPausePulse(lambda: getattr(self, "player", None), self.mpv_screen)
+            else:
+                from steempeg.ui.player.play_pause_pulse import PlayPausePulseOverlay
+
+                overlay = PlayPausePulseOverlay(parent=None)
             self._play_pause_pulse = overlay
         anchor = getattr(self, "mpv_wrapper", None) or getattr(
             getattr(self, "ui", None), "video_container", None
@@ -1528,7 +1533,7 @@ class PlayerMixin:
 
             def _pulse_hwnd(self) -> int:
                 pulse = getattr(self._app, "_play_pause_pulse", None)
-                if pulse is None:
+                if pulse is None or not hasattr(pulse, "winId"):
                     return 0
                 try:
                     if not pulse.isVisible():
@@ -5513,6 +5518,16 @@ class PlayerMixin:
             self.ui.btn_play.setIcon(QIcon(icon_path))
         
 
+    def _mpv_trim_ring(self):
+        """Lazily create the mpv-drawn yellow trim ring (Windows)."""
+        ring = getattr(self, "_mpv_trim_ring_obj", None)
+        if ring is None:
+            from steempeg.ui.player.mpv_osd import MpvTrimRing
+
+            ring = MpvTrimRing(lambda: getattr(self, "player", None), self.mpv_screen)
+            self._mpv_trim_ring_obj = ring
+        return ring
+
     def _apply_video_border(self, active):
         """Toggle the yellow trim border only when it actually changes.
 
@@ -5523,6 +5538,9 @@ class PlayerMixin:
         if getattr(self, '_video_border_active', None) == active:
             return
         self._video_border_active = active
+        if sys.platform == "win32":
+            self._mpv_trim_ring().set_active(bool(active))
+            return
         if not hasattr(self, 'aspect_frame'):
             return
         color = "#ffcc00" if active else "transparent"
