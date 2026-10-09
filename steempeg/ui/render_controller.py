@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from steempeg.core import capabilities
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
+from steempeg.ui.cq_size_estimator import cq_size_text
 from steempeg.ui.render_pro_controls import (
     pro_summary_tags,
     refresh_pro_controls,
@@ -314,6 +315,69 @@ class RenderMixin:
         self._mark_output_preset_custom()
         self.refresh_slider_if_needed()
         self._schedule_update_final_setup()
+
+    def _rebuild_audio_bitrate_combo(self, *, keep_choice: bool = False) -> None:
+        """Audio bitrate list around the source kbps; Original selected unless ``keep_choice``."""
+        combo = getattr(self.ui, "combo_audio_bitrate", None)
+        if combo is None:
+            return
+        orig = int(getattr(self, "current_orig_audio_bitrate", 192) or 192)
+        prev = combo.currentText()
+        bitrates = [
+            (320, "320 kbps (Best Quality)"),
+            (256, "256 kbps (High Quality)"),
+            (192, "192 kbps (Good Quality)"),
+            (160, "160 kbps"),
+            (128, "128 kbps (Standard)"),
+            (64, "64 kbps (Bad)"),
+            (32, "32 kbps (Very bad)"),
+        ]
+        # The first tier at or above the source still holds it without loss.
+        ceiling = min((val for val, _ in bitrates if val >= orig), default=320)
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(f"{orig} kbps (Original)")
+        for val, text in bitrates:
+            combo.addItem(text)
+            if val > ceiling:
+                set_combo_item_enabled(
+                    combo,
+                    combo.count() - 1,
+                    False,
+                    tooltip=f"Source audio is {orig} kbps — cannot increase.",
+                )
+        combo.insertSeparator(combo.count())
+        combo.addItem("⚙️ Custom Audio...")
+        if keep_choice and prev and "(Original)" not in prev:
+            idx = combo.findText(prev)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def _schedule_real_audio_bitrate(self, mpd_path: str) -> None:
+        """Replace the manifest's audio kbps (Steam always says 128) with the measured one."""
+        self._audio_probe_gen = getattr(self, "_audio_probe_gen", 0) + 1
+        gen = self._audio_probe_gen
+        import threading
+
+        def _worker():
+            kbps = mpd.measure_audio_kbps(mpd_path)
+            if kbps:
+                QTimer.singleShot(0, self, lambda: self._apply_real_audio_bitrate(gen, kbps))
+
+        threading.Thread(target=_worker, name="steempeg-audio-kbps", daemon=True).start()
+
+    def _apply_real_audio_bitrate(self, gen: int, kbps: int) -> None:
+        if gen != getattr(self, "_audio_probe_gen", 0):
+            return
+        if kbps == int(getattr(self, "current_orig_audio_bitrate", 0) or 0):
+            return
+        self.current_orig_audio_bitrate = kbps
+        self._rebuild_audio_bitrate_combo(keep_choice=True)
+        if hasattr(self.ui, "label_abitrate"):
+            self.ui.label_abitrate.setText(f"Audio Bitrate: {kbps} kbps")
+        self._sync_original_audio_controls()
+        self.update_final_setup()
 
     def _sync_original_audio_controls(self):
         """Freeze audio encode controls when Original is doing stream copy."""
@@ -3499,33 +3563,9 @@ class RenderMixin:
         if clip_path and hasattr(self, "_schedule_clip_folder_size_label"):
             self._schedule_clip_folder_size_label(clip_path)
 
-        # Rebuild audio combo once we know Original kbps from XML.
-        orig_audio_bitrate = int(getattr(self, "current_orig_audio_bitrate", 192) or 192)
-        if hasattr(self.ui, "combo_audio_bitrate"):
-            self.ui.combo_audio_bitrate.blockSignals(True)
-            self.ui.combo_audio_bitrate.clear()
-            bitrates = [
-                (320, "320 kbps (Best Quality)"),
-                (256, "256 kbps (High Quality)"),
-                (192, "192 kbps (Good Quality)"),
-                (128, "128 kbps (Standard)"),
-                (64, "64 kbps (Bad)"),
-                (32, "32 kbps (Very bad)"),
-            ]
-            self.ui.combo_audio_bitrate.addItem(f"{orig_audio_bitrate} kbps (Original)")
-            for val, text in bitrates:
-                self.ui.combo_audio_bitrate.addItem(text)
-                idx = self.ui.combo_audio_bitrate.count() - 1
-                if val > orig_audio_bitrate + 15:
-                    set_combo_item_enabled(
-                        self.ui.combo_audio_bitrate,
-                        idx,
-                        False,
-                        tooltip=f"Source audio is {orig_audio_bitrate} kbps — cannot increase.",
-                    )
-            self.ui.combo_audio_bitrate.insertSeparator(self.ui.combo_audio_bitrate.count())
-            self.ui.combo_audio_bitrate.addItem("⚙️ Custom Audio...")
-            self.ui.combo_audio_bitrate.blockSignals(False)
+        self._rebuild_audio_bitrate_combo()
+        if all_mpds:
+            self._schedule_real_audio_bitrate(all_mpds[0])
 
         if hasattr(self, "update_clip_open_loading_progress"):
             self.update_clip_open_loading_progress(40)
@@ -4155,12 +4195,12 @@ class RenderMixin:
                 self.ui.combo_encoder.setToolTip("")
             if hasattr(self.ui, 'combo_encode_speed'):
                 self.ui.combo_encode_speed.setEnabled(True)
+            sync_pro_bitrate_lock(self)
             self.ui.combo_bitrate.blockSignals(False)
             self.update_final_setup()
             return
 
         self.ui.combo_bitrate.setEnabled(True) 
-        sync_pro_bitrate_lock(self)
         if hasattr(self.ui, 'combo_fps'): self.ui.combo_fps.setEnabled(True)
         if hasattr(self.ui, 'combo_codec'): self.ui.combo_codec.setEnabled(True)
         if hasattr(self.ui, 'combo_encoder'):
@@ -4168,6 +4208,7 @@ class RenderMixin:
             self.ui.combo_encoder.setToolTip("")
         if hasattr(self.ui, 'combo_encode_speed'):
             self.ui.combo_encode_speed.setEnabled(True)
+        sync_pro_bitrate_lock(self)
         
         match = re.search(r'^(\d+)p', quality_text)
         if not match: 
@@ -4584,7 +4625,8 @@ class RenderMixin:
         pro_tags = [] if audio_only else pro_summary_tags(self)
         if pro_tags and pro_tags[0].startswith(("CRF", "CQ")):
             video_bitrate_display = f"Variable ({pro_tags[0]})"
-            size_str = "Varies (constant quality)"
+            audio_mbps = 0.0 if mute_audio else self._audio_kbps_from_ui() / 1000.0
+            size_str = cq_size_text(self, duration, audio_mbps)
         pro_suffix = f" · PRO: {', '.join(pro_tags)}" if pro_tags else ""
 
         # Parse Audio Bitrate for UI
@@ -7698,13 +7740,19 @@ class RenderMixin:
                 quality_value=params.quality_value,
                 two_pass=params.two_pass,
                 ten_bit=params.ten_bit,
+                preset=params.preset,
+                tune=params.tune,
+                keyint_frames=params.keyint_frames,
             )
             logging.info(
-                "PRO encode: rate=%s quality=%s two_pass=%s ten_bit=%s",
+                "PRO encode: rate=%s quality=%s two_pass=%s ten_bit=%s preset=%s tune=%s keyint=%s",
                 params.rate_control,
                 params.quality_value,
                 params.two_pass,
                 params.ten_bit,
+                params.preset or "-",
+                params.tune or "-",
+                params.keyint_frames,
             )
             self.render_thread.progress_signal.connect(self._on_render_progress)
             self.render_thread.finished_signal.connect(self.on_render_finished)
