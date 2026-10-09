@@ -79,6 +79,10 @@ class RenderJobSettings:
     pro_quality: int = -1
     pro_two_pass: bool = False
     pro_ten_bit: bool = False
+    # Native -preset / -tune values ("" = from Encode speed / none); keyframe gap in seconds.
+    pro_preset: str = ""
+    pro_tune: str = ""
+    pro_keyint_sec: float = 0.0
 
 
 @dataclass
@@ -131,6 +135,9 @@ class ResolvedRenderParams:
     quality_value: int = -1
     two_pass: bool = False
     ten_bit: bool = False
+    preset: str = ""
+    tune: str = ""
+    keyint_frames: int = 0
 
 
 def compute_unique_output_path(save_dir: str, base_filename: str, ext: str) -> str:
