@@ -244,6 +244,23 @@ class SourcePathsBox(QWidget):
         return row
 
 
+class OutputPathField(QLineEdit):
+    """Read-only export path field styled like the Source Info path rows."""
+
+    def __init__(self, text: str = ""):
+        """Builds a frameless read-only line edit that can be selected with the mouse."""
+        super().__init__(text)
+        self.setReadOnly(True)
+        self.setFrame(False)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def setText(self, text):  # noqa: N802 — Qt override
+        """Shows the path and scrolls back to its start so the drive is visible."""
+        super().setText(text or "")
+        self.setCursorPosition(0)
+
+
 class StatValueLabel(QLabel):
     """Shows only the value of a 'Caption: value' string (first line, caption dropped)."""
 
@@ -1071,20 +1088,17 @@ def restyle_export_page(ui):
         path_row = QFrame()
         path_row.setObjectName("outputPathRow")
         path_row.setStyleSheet(ut.render_settings_output_path_row_stylesheet())
-        path_row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        path_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         path_row.setMaximumWidth(SETTINGS_CONTENT_WIDTH)
         path_layout = QHBoxLayout(path_row)
         path_layout.setContentsMargins(12, 8, 8, 8)
         path_layout.setSpacing(6)
-        if not isinstance(loc_label, ElidedLabel):
-            smart_label = ElidedLabel()
-            smart_label.setStyleSheet(loc_label.styleSheet())
-            smart_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        if not isinstance(loc_label, OutputPathField):
+            path_field = OutputPathField()
             loc_label.deleteLater()
-            loc_label = smart_label
-            ui.label_location = smart_label
-        loc_label.setStyleSheet(ut.render_settings_output_path_label_stylesheet())
-        loc_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            loc_label = path_field
+            ui.label_location = path_field
+        loc_label.setStyleSheet(ut.render_settings_source_path_field_stylesheet())
         path_layout.addWidget(loc_label, 1)
         ui.output_path_row = path_row
         path_row.hide()  # only with a real clip / output path
@@ -1193,12 +1207,11 @@ def apply_render_panel_theme_chrome(ui) -> None:
         row.setStyleSheet(row_qss)
 
     path_row_qss = ut.render_settings_output_path_row_stylesheet()
-    path_label_qss = ut.render_settings_output_path_label_stylesheet()
     for path_row in root.findChildren(QFrame, "outputPathRow"):
         path_row.setStyleSheet(path_row_qss)
     loc = getattr(ui, "label_location", None)
     if loc is not None:
-        loc.setStyleSheet(path_label_qss)
+        loc.setStyleSheet(ut.render_settings_source_path_field_stylesheet())
 
     # Source path read-only fields inside srcRow widgets.
     path_field_qss = ut.render_settings_source_path_field_stylesheet()
