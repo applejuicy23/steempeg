@@ -6,8 +6,8 @@ import logging
 import os
 import time
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF, QEvent, QSize, QTimer
-from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QEvent, QSize, QTimer
+from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -99,8 +99,14 @@ from steempeg.ui.render_queue_grid import (
     _CARD_W as _GRID_CARD_W,
     _REMOVE_BTN_STYLE,
 )
-_DRAG_PIXMAP_MAX_W = 300
-_DRAG_PIXMAP_MAX_H = 88
+from steempeg.ui.render_queue_drag import (
+    QueueDragAnimator,
+    build_reorder_request,
+    press_card_visual,
+    release_card_visual,
+    render_lifted_card_pixmap,
+    settle_card_visual,
+)
 _SPLITTER_GUTTER = 10
 
 
@@ -348,6 +354,8 @@ class QueueJobCard(QFrame):
     clicked = Signal(str)
     remove_requested = Signal(str)
     dropped_on = Signal(str, str)
+    drag_started = Signal(str)
+    drag_finished = Signal(str)
 
     def __init__(
         self,
@@ -611,41 +619,6 @@ class QueueJobCard(QFrame):
     def is_loading(self) -> bool:
         return bool(getattr(self, "_loading", False))
 
-    def _drag_preview_pixmap(self) -> QPixmap:
-        """A clean, opaque rounded snapshot of the card for the drag cursor.
-
-        A plain self.grab() captured the card's translucent background with hard
-        square corners, so the floating preview looked muddy and broken. Here we
-        paint a solid rounded panel, clip the live card contents to it, and add the
-        purple accent border — giving a crisp "lifted card" while dragging.
-        """
-        w = max(1, min(self.width(), _DRAG_PIXMAP_MAX_W))
-        h = max(1, min(self.height(), _DRAG_PIXMAP_MAX_H))
-        dpr = self.devicePixelRatioF()
-
-        pix = QPixmap(int(w * dpr), int(h * dpr))
-        pix.setDevicePixelRatio(dpr)
-        pix.fill(Qt.transparent)
-
-        painter = QPainter(pix)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
-        painter.fillPath(path, QColor("#262229"))
-
-        painter.save()
-        painter.setClipPath(path)
-        painter.setOpacity(0.97)
-        self.render(painter, QPoint(0, 0))
-        painter.restore()
-
-        painter.setPen(QPen(QColor("#b29ae7"), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 11, 11)
-        painter.end()
-        return pix
-
     def _refresh_num_style(self) -> None:
         color = STATUS_COLORS.get(self._job.status, "#ffcc00")
         self._num_label.setStyleSheet(
@@ -722,6 +695,7 @@ class QueueJobCard(QFrame):
         self._press_on_remove = False
         if event.button() == Qt.LeftButton:
             self._drag_start = event.position().toPoint()
+            press_card_visual(self)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -731,6 +705,7 @@ class QueueJobCard(QFrame):
                 self.remove_requested.emit(self._job_id)
             return
         if event.button() == Qt.LeftButton:
+            release_card_visual(self)
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
                 self.clicked.emit(self._job_id)
         super().mouseReleaseEvent(event)
@@ -749,11 +724,21 @@ class QueueJobCard(QFrame):
         mime = QMimeData()
         mime.setData(_MIME_JOB_ID, self._job_id.encode("utf-8"))
         drag.setMimeData(mime)
-        drag.setPixmap(self._drag_preview_pixmap())
-        drag.setHotSpot(QPoint(min(event.position().toPoint().x(), _DRAG_PIXMAP_MAX_W // 2), 16))
+        settle_card_visual(self)
+        pixmap, scale = render_lifted_card_pixmap(self)
+        drag.setPixmap(pixmap)
+        grab = event.position().toPoint()
+        drag.setHotSpot(QPoint(int(grab.x() * scale), int(grab.y() * scale)))
 
-        drag.exec(Qt.DropAction.MoveAction)
-        self.update()
+        self.drag_started.emit(self._job_id)
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self.drag_finished.emit(self._job_id)
+        try:
+            self.update()
+        except RuntimeError:
+            pass
 
     def dragEnterEvent(self, event):
         if not _job_accepts_drop(self._job):
@@ -1093,6 +1078,15 @@ class RenderQueuePanel(QWidget):
 
         self._content_stack = _QueueScrollContent()
         self._content_stack.setObjectName("queueScrollContent")
+        self._content_stack.setAcceptDrops(True)
+        self._drag_animator = QueueDragAnimator(
+            lambda: list(self._card_widgets),
+            lambda: self._view_mode,
+            self._list_layout.spacing(),
+            _MIME_JOB_ID,
+            self._commit_drag_order,
+            self,
+        )
         self._content_stack_layout = QVBoxLayout(self._content_stack)
         self._content_stack_layout.setContentsMargins(0, 0, 0, 0)
         self._content_stack_layout.addWidget(self._list_host)
@@ -1841,6 +1835,38 @@ class RenderQueuePanel(QWidget):
         card.clicked.connect(self._on_card_clicked)
         card.remove_requested.connect(self.job_remove_requested.emit)
         card.dropped_on.connect(self._on_card_drop)
+        card.drag_started.connect(self._drag_animator.begin)
+        card.drag_finished.connect(lambda _job_id: self._drag_animator.end())
+
+    def _commit_drag_order(self, source_id: str, order: list) -> None:
+        """Turns the order shown at drop time into a queue reorder, then snaps cards to the real order."""
+        request = build_reorder_request(source_id, order, self._jobs)
+        if request is not None:
+            kind, anchor = request
+            if kind == "before":
+                self.job_reorder_requested.emit(source_id, anchor)
+            else:
+                self.job_reorder_after_requested.emit(source_id, anchor)
+        self._reorder_cards_in_place(self._jobs)
+
+    def _reorder_cards_in_place(self, jobs: list) -> bool:
+        """Moves existing cards into ``jobs`` order without rebuilding them; False when the card set differs."""
+        by_id = {c._job_id: c for c in self._card_widgets}
+        ids = [j.id for j in jobs]
+        if len(ids) != len(by_id) or set(ids) != set(by_id):
+            return False
+        cards = [by_id[job_id] for job_id in ids]
+        self._card_widgets = cards
+        if self._view_mode == "grid":
+            self._relayout_grid_cards()
+        else:
+            for card in cards:
+                self._list_layout.removeWidget(card)
+            for index, card in enumerate(cards):
+                self._list_layout.insertWidget(index, card)
+            self._list_layout.invalidate()
+            self._list_layout.activate()
+        return True
 
     def set_empty_hint_dismissed(self, dismissed: bool) -> None:
         self._empty_hint_dismissed = bool(dismissed)
@@ -1947,6 +1973,12 @@ class RenderQueuePanel(QWidget):
                 or (self._view_mode == "list" and isinstance(self._card_widgets[0], QueueJobCard))
             )
         )
+        same_kind = bool(self._card_widgets) and (
+            (self._view_mode == "grid" and isinstance(self._card_widgets[0], QueueGridJobCard))
+            or (self._view_mode == "list" and isinstance(self._card_widgets[0], QueueJobCard))
+        )
+        if not same_cards and same_kind and not self._peek_ghosts:
+            same_cards = self._reorder_cards_in_place(jobs)
         if same_cards:
             for card, job in zip(self._card_widgets, jobs):
                 if isinstance(card, QueueJobCard):
