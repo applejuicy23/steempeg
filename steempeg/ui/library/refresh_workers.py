@@ -187,3 +187,20 @@ class SteamNamesRefreshWorker(QThread):
         except Exception as exc:
             logging.exception("Steam names refresh worker failed")
             self.failed.emit(str(exc))
+
+
+class SteamRecordingRootsWorker(QThread):
+    """Looks for Steam Game Recording folders on local drives without blocking launch."""
+
+    found_roots = Signal(object)  # list[str]
+
+    def run(self) -> None:
+        """Runs the drive scan and emits every recording folder it finds."""
+        from steempeg.core.steam_paths import discover_steam_recording_roots
+
+        try:
+            roots = discover_steam_recording_roots()
+        except Exception:
+            logging.exception("Steam recording roots scan failed")
+            roots = []
+        self.found_roots.emit(list(roots))
