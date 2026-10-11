@@ -15,8 +15,19 @@ _ARROW_ROTATIONS = {
 }
 
 
+_LOADED_PIXMAP_CACHE: dict[tuple[str, int], QPixmap] = {}
+
+
 def load_pixmap(name: str, size: int = 16) -> QPixmap:
-    """Load a bundled asset into a transparent ``size×size`` pixmap (never stretched)."""
+    """Load a bundled asset into a transparent ``size×size`` pixmap (never stretched).
+
+    Results are cached per name and size: some masters are ~800px PNGs and
+    decoding them per row made Update Center take seconds to open.
+    """
+    cache_key = (name, int(size))
+    hit = _LOADED_PIXMAP_CACHE.get(cache_key)
+    if hit is not None:
+        return QPixmap(hit)
     pix = QPixmap(get_resource_path(name))
     if pix.isNull():
         return QPixmap()
@@ -24,7 +35,9 @@ def load_pixmap(name: str, size: int = 16) -> QPixmap:
 
     # dpr=1.0: callers pass these to QLabel/QIcon at logical px; HiDPI chrome
     # logos go through app_logo_pixmap instead.
-    return square_fit_pixmap(pix, size, dpr=1.0)
+    fitted = square_fit_pixmap(pix, size, dpr=1.0)
+    _LOADED_PIXMAP_CACHE[cache_key] = fitted
+    return QPixmap(fitted)
 
 
 def _icon_from_pixmap(pix: QPixmap) -> QIcon:
