@@ -3276,7 +3276,7 @@ class LibraryMixin:
         )
         if getattr(self, "_new_clip_popups", None) is None:
             self._new_clip_popups = NewClipPopupStack(
-                self.open_new_clip_from_popup, self.express_new_clip_from_popup
+                self.open_express_player, self.express_new_clip_from_popup
             )
         self._new_clip_popups.show_clip(info)
 
@@ -3309,8 +3309,8 @@ class LibraryMixin:
                 return True
         return False
 
-    def open_new_clip_from_popup(self, clip_path: str) -> None:
-        """Brings the main window forward and opens the new clip once the library lists it."""
+    def open_new_clip_from_popup(self, clip_path: str, *, open_render_settings: bool = False) -> None:
+        """Brings the main window forward and opens the clip once the library lists it."""
         from steempeg.infra.window_focus import force_widget_foreground
 
         window = self.ui
@@ -3321,25 +3321,149 @@ class LibraryMixin:
         window.show()
         window.raise_()
         force_widget_foreground(window)
-        self._open_new_clip_when_listed(clip_path, attempts_left=40)
+        self._open_new_clip_when_listed(
+            clip_path, attempts_left=40, open_render_settings=open_render_settings
+        )
 
-    def _open_new_clip_when_listed(self, clip_path: str, *, attempts_left: int) -> None:
+    def _open_new_clip_when_listed(
+        self, clip_path: str, *, attempts_left: int, open_render_settings: bool = False
+    ) -> None:
         """Opens the clip in Clips Manager, retrying while the quiet scan is still adding it."""
         if self._library_has_clip_row(clip_path):
             self.open_source_clip(clip_path, play=True)
+            if open_render_settings:
+                QTimer.singleShot(400, self._show_render_settings_window)
             return
         if attempts_left <= 0:
             logging.warning("New clip never showed up in the library: %s", clip_path)
             return
         QTimer.singleShot(
             500,
-            lambda: self._open_new_clip_when_listed(clip_path, attempts_left=attempts_left - 1),
+            lambda: self._open_new_clip_when_listed(
+                clip_path,
+                attempts_left=attempts_left - 1,
+                open_render_settings=open_render_settings,
+            ),
         )
 
-    def express_new_clip_from_popup(self, clip_path: str) -> None:
-        """Express render entry point; opens the clip normally until the mini player lands."""
-        logging.info("Express requested for new clip: %s", clip_path)
-        self.open_new_clip_from_popup(clip_path)
+    def _show_render_settings_window(self) -> None:
+        """Opens the Render Settings window, or raises it when it is already open."""
+        dlg = getattr(self, "_desktop_render_settings_dlg", None)
+        try:
+            if dlg is not None and dlg.isVisible():
+                dlg.raise_()
+                dlg.activateWindow()
+                return
+        except RuntimeError:
+            pass
+        self.toggle_desktop_render_settings()
+
+    def open_express_player(self, clip_path: str) -> None:
+        """Opens the Steam-like Express mini player for a clip (one window per clip)."""
+        from steempeg.services.new_clip_watcher import describe_new_clip
+        from steempeg.ui.express_player import ExpressPlayerWindow
+        from steempeg.infra.window_focus import force_widget_foreground
+
+        players = getattr(self, "_express_players", None)
+        if players is None:
+            players = self._express_players = {}
+        key = os.path.normcase(os.path.normpath(clip_path))
+        existing = players.get(key)
+        if existing is not None:
+            try:
+                existing.showNormal()
+                existing.raise_()
+                force_widget_foreground(existing)
+                return
+            except RuntimeError:
+                players.pop(key, None)
+        info = describe_new_clip(
+            clip_path,
+            getattr(self, "game_names_cache", None),
+            getattr(self, "cache_dir", ""),
+        )
+        player = ExpressPlayerWindow(self, info)
+        player.destroyed.connect(lambda _=None, k=key: players.pop(k, None))
+        players[key] = player
+        player.show()
+        force_widget_foreground(player)
+        QTimer.singleShot(0, player.open_clip)
+
+    def start_express_render(
+        self,
+        clip_path: str,
+        *,
+        preset_name: str | None = None,
+        trim_ms: tuple[int, int] | None = None,
+    ):
+        """Builds and starts a background Express render; returns the runner or None."""
+        from steempeg.ui.express_render import ExpressRender, build_express_job
+
+        express_job = build_express_job(self, clip_path, preset_name=preset_name, trim_ms=trim_ms)
+        if express_job is None:
+            logging.warning("Express: could not build a job for %s", clip_path)
+            return None
+        render = ExpressRender(self, express_job, parent=self.ui)
+        running = getattr(self, "_express_renders", None)
+        if running is None:
+            running = self._express_renders = []
+        running.append(render)
+        render.finished.connect(lambda *_args, r=render: self._forget_express_render(r))
+        if not render.start():
+            return None
+        return render
+
+    def _forget_express_render(self, render) -> None:
+        """Drops a finished Express render from the keep-alive list."""
+        running = getattr(self, "_express_renders", None) or []
+        if render in running:
+            running.remove(render)
+        render.deleteLater()
+
+    def add_express_clip_to_queue(
+        self, clip_path: str, *, trim_ms: tuple[int, int] | None = None
+    ) -> bool:
+        """Queues a clip in the Render Queue with the Express recipe and the player's trim."""
+        from steempeg.ui.express_render import build_express_job
+
+        express_job = build_express_job(self, clip_path, trim_ms=trim_ms)
+        if express_job is None:
+            return False
+        was_duplicate = bool(self.render_queue.contains_clip(clip_path))
+        self._commit_queue_job(express_job.job, clip_path, was_duplicate, sync_ui=True)
+        return True
+
+    def recycle_clip(self, clip_path: str) -> None:
+        """Moves a clip folder to the Recycle Bin and drops it from the library."""
+        from steempeg.infra.recycle_bin import send_to_recycle_bin
+
+        if hasattr(self, "release_media_before_delete"):
+            self.release_media_before_delete(clip_path)
+        try:
+            from steempeg.infra.media_cache import purge_clip_media_cache
+
+            purge_clip_media_cache(getattr(self, "cache_dir", None), clip_path)
+        except Exception:
+            logging.exception("Clip media-cache purge failed")
+        send_to_recycle_bin(clip_path)
+        logging.info("Moved clip to Recycle Bin: %s", clip_path)
+        if hasattr(self, "_on_queue_source_removed"):
+            self._on_queue_source_removed(clip_path)
+        if hasattr(self, "_remove_library_clip_paths_from_ui"):
+            self._remove_library_clip_paths_from_ui([clip_path])
+            live = getattr(self, "_clip_live_paths", None)
+            if isinstance(live, set):
+                live.discard(os.path.normcase(os.path.normpath(clip_path)))
+            if hasattr(self, "_persist_clips_library_snapshot"):
+                try:
+                    self._persist_clips_library_snapshot()
+                except Exception:
+                    logging.debug("Clip snapshot persist after recycle failed", exc_info=True)
+
+    def express_new_clip_from_popup(self, clip_path: str):
+        """Popup Express: renders right away with the automatic recipe (Original / max for Issues)."""
+        logging.info("Express requested from popup: %s", clip_path)
+        return self.start_express_render(clip_path, preset_name="")
 
     def discover_steam_folders(self):
         """User action: merge any newly found Steam clip folders into the library."""
