@@ -1046,9 +1046,21 @@ class DevModeDialog(SteempegDialog):
     # ── Tools Tab ────────────────────────────────────────────────────────────
 
     def _build_tools_tab(self) -> QWidget:
+        """Builds the Tools tab inside a scroll area so its groups keep their natural height."""
         page = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        from steempeg.ui.library.library_styles import (
+            LIBRARY_SCROLLBAR_VERTICAL,
+            install_library_vertical_scrollbar,
+        )
+
+        scroll.setStyleSheet("QScrollArea { border: none; }" + LIBRARY_SCROLLBAR_VERTICAL)
+        install_library_vertical_scrollbar(scroll)
         lay = QVBoxLayout(page)
         lay.setSpacing(10)
+        lay.setContentsMargins(0, 0, 12, 0)
 
         btn_filters = QPushButton("Run Filters QA")
         btn_filters.clicked.connect(self._run_filters_qa)
@@ -1088,6 +1100,32 @@ class DevModeDialog(SteempegDialog):
         salvage_row.addStretch()
         g_salvage_lay.addLayout(salvage_row)
         lay.addWidget(g_salvage)
+
+        # -- Express render (v55 new-clip popup + mini player) --
+        g_express = QGroupBox("Express render (demo)")
+        g_express_lay = QVBoxLayout(g_express)
+        tip_express = QLabel(
+            "Preview the «New clip» corner card on your newest library clips — "
+            "same card Steam saves trigger. Open / Express work for real."
+        )
+        tip_express.setWordWrap(True)
+        tip_express.setStyleSheet("color: #b0b0b0; font-weight: normal;")
+        g_express_lay.addWidget(tip_express)
+        express_row = QHBoxLayout()
+        btn_popup = QPushButton("Simulate New clip popup")
+        btn_popup.clicked.connect(lambda: self._simulate_new_clip_popups(1))
+        express_row.addWidget(btn_popup)
+        btn_popup_stack = QPushButton("×3 (stack)")
+        btn_popup_stack.setToolTip("Three cards at once to check stacking.")
+        btn_popup_stack.clicked.connect(lambda: self._simulate_new_clip_popups(3))
+        express_row.addWidget(btn_popup_stack)
+        btn_player = QPushButton("Express player")
+        btn_player.setEnabled(False)
+        btn_player.setToolTip("Steam-like mini player — coming next.")
+        express_row.addWidget(btn_player)
+        express_row.addStretch()
+        g_express_lay.addLayout(express_row)
+        lay.addWidget(g_express)
 
         # -- Launch splash (v50 startup loader) --
         g_splash = QGroupBox("Launch splash (startup loader)")
@@ -1184,9 +1222,14 @@ class DevModeDialog(SteempegDialog):
         self._tools_log = QPlainTextEdit()
         self._tools_log.setReadOnly(True)
         self._tools_log.setMaximumBlockCount(5000)
+        self._tools_log.setMinimumHeight(180)
         lay.addWidget(self._tools_log, 1)
 
-        return page
+        # Long hints must wrap to the viewport instead of widening the page.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        for label in page.findChildren(QLabel):
+            label.setWordWrap(True)
+        return scroll
 
     def _build_deck_pad_tab(self) -> QWidget:
         """Virtual Steam Deck face — taps feed ``steempeg.input.gamepad`` bus."""
@@ -1578,6 +1621,20 @@ class DevModeDialog(SteempegDialog):
             self._tools_log.appendPlainText(f"Salvage flow demo ended: {outcome}.")
         except Exception as exc:
             self._tools_log.appendPlainText(f"ERROR: salvage demo failed: {exc}")
+
+    def _simulate_new_clip_popups(self, count: int) -> None:
+        """Shows «New clip» cards for the newest library clips."""
+        host = self._resolve_app_host()
+        if host is None or not hasattr(host, "show_new_clip_popup"):
+            self._tools_log.appendPlainText("ERROR: app host not available.")
+            return
+        clips = host.list_newest_library_clips(count)
+        if not clips:
+            self._tools_log.appendPlainText("No library clips to preview.")
+            return
+        for clip in clips:
+            host.show_new_clip_popup(clip)
+        self._tools_log.appendPlainText(f"New clip popup preview: {len(clips)} card(s).")
 
     def _simulate_launch_splash(self) -> None:
         """Replay the v50 cold-start splash card for visual design review."""
