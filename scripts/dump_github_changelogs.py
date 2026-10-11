@@ -7,7 +7,7 @@ Usage (repo root, needs `gh` auth):
   python scripts/dump_github_changelogs.py
   python scripts/dump_github_changelogs.py --out docs/github_changelogs_dump.txt
 
-Requires: GitHub CLI (`gh`) logged in (`gh auth status`).
+Uses GitHub CLI (`gh`) when installed; otherwise the public GitHub API.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import argparse
 import json
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,8 +26,34 @@ DEFAULT_OUT = REPO_ROOT / "docs" / "github_changelogs_dump.txt"
 DEFAULT_REPO = "applejuicy23/steempeg"
 
 
+def fetch_public_api_pages(path: str) -> list:
+    """Fetches every page of a public GitHub API list endpoint without auth."""
+    items: list = []
+    page = 1
+    while True:
+        url = f"https://api.github.com/{path}?per_page=100&page={page}"
+        request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                batch = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            print(f"error: GET {url}\n{exc}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(batch, list) or not batch:
+            break
+        items.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return items
+
+
 def run_gh_json(args: list[str]) -> object:
-    """Run `gh … --jq`/`gh api` and parse JSON stdout."""
+    """Run `gh … --jq`/`gh api` and parse JSON stdout.
+
+    Falls back to the public GitHub API when `gh` is not installed; the repo is
+    public, so release and tag lists need no auth (only a lower rate limit).
+    """
     cmd = ["gh", *args]
     try:
         proc = subprocess.run(
@@ -37,8 +65,8 @@ def run_gh_json(args: list[str]) -> object:
             errors="replace",
         )
     except FileNotFoundError:
-        print("error: `gh` not found on PATH. Install GitHub CLI and retry.", file=sys.stderr)
-        sys.exit(1)
+        print("  `gh` not found on PATH, using the public GitHub API instead")
+        return fetch_public_api_pages(args[-1])
 
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
