@@ -3183,6 +3183,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         # Recording folders on other drives (old Steam recording locations, newly
         # attached disks) are picked up quietly once the window is up.
         QTimer.singleShot(6000, self.start_steam_recording_roots_watch)
+        # Clips saved while Steempeg runs → «New clip» popup (Express render).
+        QTimer.singleShot(4000, self.start_new_clip_watch)
 
         # Keep the folder-picker (+ button / label) in sync with whatever roots we
         # ended up with. Auto-detected paths never went through choose_folder(), so
