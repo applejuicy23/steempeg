@@ -206,22 +206,27 @@ class NewClipPopup(QWidget):
         saved = QLabel("Saved just now")
         saved.setStyleSheet(_SAVED_QSS)
         text_col.addWidget(saved)
+        self._status_label = saved
         game_row.addLayout(text_col, 1)
         body.addLayout(game_row)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
         actions.addStretch(1)
-        open_btn = QPushButton("Open")
-        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        open_btn.clicked.connect(lambda: self._emit_and_close(self.open_requested))
-        actions.addWidget(open_btn)
-        express_btn = QPushButton("⚡ Express")
-        express_btn.setObjectName("AccentBtn")
-        express_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        express_btn.clicked.connect(lambda: self._emit_and_close(self.express_requested))
-        actions.addWidget(express_btn)
+        self._open_btn = QPushButton("Open")
+        self._open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_btn.clicked.connect(self._on_open_clicked)
+        actions.addWidget(self._open_btn)
+        self._express_btn = QPushButton("⚡ Express")
+        self._express_btn.setObjectName("AccentBtn")
+        self._express_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._express_btn.setToolTip("Render now: Original, or max quality re-encode for clips with Issues")
+        self._express_btn.clicked.connect(self._on_express_clicked)
+        actions.addWidget(self._express_btn)
         body.addLayout(actions)
+
+        self._render = None
+        self._output_file = ""
 
         self._dismiss_timer = QTimer(self)
         self._dismiss_timer.setSingleShot(True)
@@ -269,10 +274,72 @@ class NewClipPopup(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802 — Qt override
-        """Restarts auto-dismiss when the pointer leaves the card."""
-        if not self._closing:
+        """Restarts auto-dismiss when the pointer leaves the card (not while rendering)."""
+        if not self._closing and self._render is None:
             self._dismiss_timer.start()
         super().leaveEvent(event)
+
+    def _on_open_clicked(self) -> None:
+        """Open opens the player; after a render it reveals the file instead."""
+        if self._output_file:
+            from steempeg.infra.paths import reveal_in_file_manager
+
+            reveal_in_file_manager(self._output_file)
+            self.dismiss()
+            return
+        self._emit_and_close(self.open_requested)
+
+    def _on_express_clicked(self) -> None:
+        """Starts Express, cancels a running one, or copies the finished file."""
+        if self._output_file:
+            from steempeg.ui.express_player import copy_file_to_clipboard
+
+            copy_file_to_clipboard(self._output_file)
+            self._status_label.setText("📎 Copied to clipboard")
+            self._dismiss_timer.start()
+            return
+        if self._render is not None:
+            self._render.cancel()
+            return
+        self.express_requested.emit(self._info.path)
+
+    def track_render(self, render) -> None:
+        """Turns the card into a progress card for an Express render of this clip."""
+        if render is None:
+            self._status_label.setText("Could not start the render")
+            return
+        self._render = render
+        self._dismiss_timer.stop()
+        self._express_btn.setToolTip("Click to cancel")
+        render.progress_changed.connect(self._on_render_progress)
+        render.finished.connect(self._on_render_finished)
+        self._status_label.setText(f"Rendering · {render.recipe_label}")
+        self._on_render_progress(0.0)
+
+    def _on_render_progress(self, percent: float) -> None:
+        """Fills the Express button like a progress bar."""
+        from steempeg.ui.express_player import build_express_progress_qss
+
+        self._express_btn.setText(f"{int(percent)}%")
+        qss = build_express_progress_qss(percent).replace("QPushButton#ExpressMain", "QPushButton#AccentBtn")
+        self._express_btn.setStyleSheet(qss)
+
+    def _on_render_finished(self, success: bool, error: str, output_file: str) -> None:
+        """Shows the result: Show in folder + Copy, or the failure."""
+        self._render = None
+        self._express_btn.setStyleSheet("")
+        if success and output_file:
+            self._output_file = output_file
+            self._status_label.setText("✓ Rendered")
+            self._open_btn.setText("📂 Show")
+            self._express_btn.setText("📎 Copy")
+            self._express_btn.setToolTip("Copy the video file (paste into Discord / Telegram)")
+        else:
+            cancelled = "cancel" in (error or "").lower()
+            self._status_label.setText("Render cancelled" if cancelled else "Render failed")
+            self._express_btn.setText("⚡ Express")
+        if not self.underMouse():
+            self._dismiss_timer.start()
 
     def _emit_and_close(self, signal) -> None:
         """Sends the clip path through ``signal`` and dismisses the card."""
@@ -316,7 +383,9 @@ class NewClipPopupStack:
                 return
         popup = NewClipPopup(info)
         popup.open_requested.connect(self._on_open)
-        popup.express_requested.connect(self._on_express)
+        popup.express_requested.connect(
+            lambda path, p=popup: p.track_render(self._on_express(path))
+        )
         popup.dismissed.connect(self._remove_popup)
         self._popups.insert(0, popup)
         targets = self._slot_positions()
