@@ -56,6 +56,7 @@ from steempeg.ui.library.refresh_workers import (
     ClipHealthRecheckWorker,
     SteamIconsRefreshWorker,
     SteamNamesRefreshWorker,
+    SteamRecordingRootsWorker,
 )
 from steempeg.library.scan import ScannedClip, clip_folder_default_sort_key
 from steempeg.library.clips_library_cache import (
@@ -69,6 +70,7 @@ from steempeg.ui.library.filters import clip_folder_sort_key
 from steempeg.core.steam_paths import (
     default_clips_dialog_path,
     discover_steam_clips_folders,
+    discover_steam_recording_roots,
     steam_id_from_clips_folder,
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time, parse_clip_datetime_text
@@ -110,6 +112,32 @@ def _clips_card_cell_size(app) -> QSize:
     from steempeg.ui.library.card_sizes import card_cell_size
 
     return card_cell_size(getattr(app, "_clips_card_size", None))
+
+
+def _library_root_is_covered(path: str, roots) -> bool:
+    """True when ``path`` is already one of ``roots``, sits inside one, or contains one."""
+    key = os.path.normcase(os.path.normpath(path))
+    for root in roots or []:
+        if not root:
+            continue
+        other = os.path.normcase(os.path.normpath(root))
+        if key == other:
+            return True
+        if key.startswith(other.rstrip(os.sep) + os.sep):
+            return True
+        if other.startswith(key.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
+def _merge_discovered_roots(*groups) -> list:
+    """Joins discovered Steam folder lists in order, dropping paths already covered by an earlier one."""
+    merged: list = []
+    for group in groups:
+        for path in group or []:
+            if not _library_root_is_covered(path, merged):
+                merged.append(os.path.normpath(path))
+    return merged
 
 
 class LibraryMixin:
@@ -891,6 +919,7 @@ class LibraryMixin:
             self.set_status(f"Re-checking clip health ({done}/{total})…")
 
     def _on_health_recheck_finished(self, payload: dict) -> None:
+        """Applies re-check results to the rows and reports totals, counting salvage-verified rows as Cured."""
         self._health_recheck_worker = None
         results = payload.get("results") or {}
         counts = payload.get("counts") or {}
@@ -899,6 +928,8 @@ class LibraryMixin:
             self._clip_health_cache = cache
             self._save_clip_health_cache()
 
+        shown_counts = dict(counts)
+        cured_seen = set()
         for row in range(self.ui.table_clips.rowCount()):
             item = self.ui.table_clips.item(row, 0)
             if not item:
@@ -906,12 +937,19 @@ class LibraryMixin:
             clip_path = item.data(Qt.UserRole)
             if not clip_path:
                 continue
-            entry = results.get(os.path.normpath(clip_path))
+            norm = os.path.normpath(clip_path)
+            entry = results.get(norm)
             if not entry:
                 continue
             level, issues = entry
             item.setData(_CLIP_HEALTH_ROLE, level)
             item.setData(_CLIP_HEALTH_ISSUES_ROLE, "\n".join(issues or []))
+            if item.data(_CLIP_CURED_ROLE) and norm not in cured_seen:
+                cured_seen.add(norm)
+                shown_counts[level] = max(0, int(shown_counts.get(level, 0)) - 1)
+                cured_key = health.ClipHealth.CURED.value
+                shown_counts[cured_key] = int(shown_counts.get(cured_key, 0)) + 1
+        counts = shown_counts
 
         if hasattr(self, "build_netflix_grid"):
             self.build_netflix_grid()
@@ -3140,13 +3178,18 @@ class LibraryMixin:
         return self._is_first_library_setup()
 
     def auto_discover_steam_folders(self, save=True):
-        """Scan Steam userdata for gamerecordings/clips paths. Returns newly found paths."""
-        discovered = discover_steam_clips_folders()
+        """Scan Steam userdata and other drives for Game Recording folders. Returns newly found paths."""
+        discovered = _merge_discovered_roots(
+            discover_steam_clips_folders(), discover_steam_recording_roots()
+        )
         if not discovered:
             return []
 
-        existing = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
-        new_paths = [p for p in discovered if p not in existing]
+        existing_roots = list(getattr(self, "clips_folders", []) or [])
+        existing = {os.path.normpath(p) for p in existing_roots}
+        new_paths = [
+            p for p in discovered if not _library_root_is_covered(p, existing_roots)
+        ]
         if not new_paths and existing:
             return []
 
@@ -3161,6 +3204,48 @@ class LibraryMixin:
             self._save_clips_folders()
         self._update_folder_picker_label()
         return new_paths if existing else discovered
+
+    def start_steam_recording_roots_watch(self) -> None:
+        """Launch-time background check for Steam recording folders on newly attached drives."""
+        if getattr(self, "_steam_roots_worker", None) is not None:
+            return
+        worker = SteamRecordingRootsWorker(self.ui)
+        self._steam_roots_worker = worker
+        worker.found_roots.connect(self._on_steam_recording_roots_found)
+        worker.start()
+
+    def _on_steam_recording_roots_found(self, roots) -> None:
+        """Adds recording folders never seen before; ones the user removed earlier stay removed."""
+        self._steam_roots_worker = None
+        settings = self.load_user_settings()
+        seen_list = list(settings.get("steam_recording_roots_seen") or [])
+        seen = {os.path.normcase(os.path.normpath(p)) for p in seen_list}
+        fresh = [p for p in roots or [] if os.path.normcase(os.path.normpath(p)) not in seen]
+        if not fresh:
+            return
+        scan = getattr(self, "_library_scan_worker", None)
+        if scan is not None and scan.isRunning():
+            retry_roots = list(roots)
+            QTimer.singleShot(1500, lambda: self._on_steam_recording_roots_found(retry_roots))
+            return
+        self.save_user_settings("steam_recording_roots_seen", seen_list + fresh)
+
+        current = list(getattr(self, "clips_folders", []) or [])
+        if not current:
+            return
+        added = [p for p in fresh if not _library_root_is_covered(p, current)]
+        if not added:
+            return
+
+        self.clips_folders.extend(added)
+        self._save_clips_folders()
+        for path in added:
+            self._include_library_root_in_saved_folders(path)
+        self._update_folder_picker_label()
+        logging.info("Steam recording folders added on launch: %s", added)
+        self.scan_clips(announce_duplicates=False, fast=True)
+        if hasattr(self, "set_status"):
+            self.set_status("Found Steam recordings: " + ", ".join(added))
 
     def discover_steam_folders(self):
         """User action: merge any newly found Steam clip folders into the library."""
@@ -3187,14 +3272,19 @@ class LibraryMixin:
             )
             return
 
-        discovered = discover_steam_clips_folders()
+        discovered = _merge_discovered_roots(
+            discover_steam_clips_folders(), discover_steam_recording_roots()
+        )
         if not discovered:
             steam = get_steam_path()
             steempeg_information(
                 self.ui,
                 "Steam folders",
                 "No Steam Game Recording folders were found.\n\n"
-                f"Looked under:\n{os.path.join(steam, 'userdata', '<Steam ID>', 'gamerecordings', 'clips')}",
+                "Looked under:\n"
+                f"{os.path.join(steam, 'userdata', '<Steam ID>', 'gamerecordings', 'clips')}\n"
+                "Steam libraries and folders up to two levels deep on every local drive "
+                "(looking for gamerecording.pb)",
             )
             return
 
