@@ -206,3 +206,110 @@ def discover_steam_library_roots(steam_path=None) -> list[str]:
             add(match.group(1))
 
     return roots
+
+
+_RECORDING_MARKER = "gamerecording.pb"
+_SKIPPED_DRIVE_DIRS = {
+    "$recycle.bin",
+    "system volume information",
+    "windows",
+    "recovery",
+    "perflogs",
+    "lost+found",
+}
+
+
+def is_steam_recording_root(path: str) -> bool:
+    """True when Steam keeps Game Recording data here: the marker file plus a clips or video folder."""
+    if not path or not os.path.isfile(os.path.join(path, _RECORDING_MARKER)):
+        return False
+    return os.path.isdir(os.path.join(path, "clips")) or os.path.isdir(
+        os.path.join(path, "video")
+    )
+
+
+def _fixed_drive_roots() -> list[str]:
+    """Local disk roots to look at: fixed drives on Windows, mount points on Linux / Deck."""
+    roots: list[str] = []
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        except Exception:
+            get_drive_type = None
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{letter}:\\"
+            if get_drive_type is not None and get_drive_type(root) != 3:  # DRIVE_FIXED
+                continue
+            if os.path.isdir(root):
+                roots.append(root)
+        return roots
+
+    user = os.environ.get("USER") or os.path.basename(os.path.expanduser("~"))
+    for parent in (f"/run/media/{user}", f"/media/{user}", "/mnt"):
+        try:
+            names = sorted(os.listdir(parent))
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(parent, name)
+            if os.path.isdir(path):
+                roots.append(path)
+    return roots
+
+
+def _list_subdirs(path: str) -> list[str]:
+    """Visible child folders of ``path``; empty when it can't be read."""
+    out: list[str] = []
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                name = entry.name
+                if name.startswith((".", "$")) or name.lower() in _SKIPPED_DRIVE_DIRS:
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        out.append(entry.path)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def discover_steam_recording_roots(steam_path=None) -> list[str]:
+    """Find Steam Game Recording folders outside ``userdata`` (e.g. ``E:\\SteamLibrary``).
+
+    Looks at every Steam library from ``libraryfolders.vdf`` and at folders up to two
+    levels deep on each local drive, keeping the ones that hold ``gamerecording.pb``.
+    The default ``userdata/<id>/gamerecordings`` seats are left to
+    ``discover_steam_clips_folders``.
+    """
+    steam_root = os.path.normpath(steam_path or get_steam_path())
+    userdata_key = os.path.normcase(os.path.join(steam_root, "userdata")) + os.sep
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def consider(path: str) -> None:
+        norm = os.path.normpath(path)
+        key = os.path.normcase(norm)
+        if key in seen:
+            return
+        seen.add(key)
+        if (key + os.sep).startswith(userdata_key):
+            return
+        if is_steam_recording_root(norm):
+            found.append(norm)
+
+    for library in discover_steam_library_roots(steam_root):
+        consider(library)
+
+    for drive in _fixed_drive_roots():
+        consider(drive)
+        for child in _list_subdirs(drive):
+            consider(child)
+            for grandchild in _list_subdirs(child):
+                consider(grandchild)
+
+    return found
