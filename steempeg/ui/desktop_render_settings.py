@@ -13,6 +13,10 @@ from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 _log = logging.getLogger(__name__)
 
+# The first frame after show() paints neo only inside its stale 640×480 rect
+# (black band beside it); the window stays transparent until a full repaint.
+_REVEAL_AFTER_MAP_MS = 60
+
 
 class DesktopRenderSettingsDialog(SteempegDialog):
     """Non-modal window that borrows the docked neo export panel.
@@ -56,6 +60,9 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             self._neo.setMaximumHeight(16777215)
             self._neo.setMinimumHeight(0)
             self._home = _borrow_widget(self._neo)
+            # Parent into the dialog before show(): a parentless show() maps neo
+            # as its own top-level window for a frame (the "ghost window" flash).
+            self.content_layout.addWidget(self._neo, 1)
             self._neo.show()
             self._neo.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -72,7 +79,6 @@ class DesktopRenderSettingsDialog(SteempegDialog):
                     w.show()
             if hasattr(app, "fit_settings_tab_to_page"):
                 QTimer.singleShot(0, app.fit_settings_tab_to_page)
-            self.content_layout.addWidget(self._neo, 1)
 
         try:
             self._title_bar.close_requested.disconnect(self.reject)
@@ -251,6 +257,15 @@ class DesktopRenderSettingsDialog(SteempegDialog):
             apply_render_panel_theme_chrome(ui)
 
 
+def _reveal_render_settings_dialog(dlg: DesktopRenderSettingsDialog) -> None:
+    """Repaints the whole Render Settings window, then makes it visible."""
+    try:
+        dlg.repaint()
+        dlg.setWindowOpacity(1.0)
+    except RuntimeError:
+        pass
+
+
 def toggle_desktop_render_settings(app) -> None:
     """Open / raise / lower the desktop Render Settings window."""
     if getattr(app, "_portable_shell", False):
@@ -280,7 +295,9 @@ def toggle_desktop_render_settings(app) -> None:
 
     dlg = DesktopRenderSettingsDialog(app, parent=getattr(app, "ui", None))
     # __init__ already assigned _desktop_render_settings_dlg and reclaimed neo.
+    dlg.setWindowOpacity(0.0)
     dlg.show()
+    QTimer.singleShot(_REVEAL_AFTER_MAP_MS, lambda: _reveal_render_settings_dialog(dlg))
     dlg.raise_()
     dlg.activateWindow()
     # Glue after first paint — keeps Open snappy; still kills the black void.
