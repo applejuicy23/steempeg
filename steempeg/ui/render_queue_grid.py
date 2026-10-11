@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt, Signal, QMimeData, QPoint, QRectF
-from PySide6.QtGui import QDrag, QPixmap, QPainter, QColor, QPen, QPainterPath
+from PySide6.QtCore import Qt, Signal, QMimeData, QPoint
+from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -39,6 +39,12 @@ from steempeg.ui.queue_card_shared import (
 )
 from steempeg.ui.ui_density import COMFORT, UiDensity
 from steempeg.ui import ui_theme as ut
+from steempeg.ui.render_queue_drag import (
+    press_card_visual,
+    release_card_visual,
+    render_lifted_card_pixmap,
+    settle_card_visual,
+)
 from steempeg.ui.library.card_sizes import (
     CARD_SIZE_BIG,
     queue_card_size_spec,
@@ -50,9 +56,6 @@ _THUMB_H = 148
 _TEXT_H = 96
 _CARD_H = _THUMB_H + _TEXT_H
 _STATUS_DOT = 26
-_DRAG_PIXMAP_MAX_W = 280
-_DRAG_PIXMAP_MAX_H = 140
-
 _REMOVE_BTN_STYLE = """
     QPushButton#queueRemoveBtn {
         background-color: rgba(120, 45, 45, 0.92);
@@ -75,6 +78,8 @@ class QueueGridJobCard(QWidget):
     clicked = Signal(str)
     remove_requested = Signal(str)
     dropped_on = Signal(str, str)
+    drag_started = Signal(str)
+    drag_finished = Signal(str)
 
     def __init__(
         self,
@@ -338,28 +343,6 @@ class QueueGridJobCard(QWidget):
         self._apply_border_style()
         super().leaveEvent(event)
 
-    def _drag_preview_pixmap(self) -> QPixmap:
-        w = max(1, min(self.width(), _DRAG_PIXMAP_MAX_W))
-        h = max(1, min(self.height(), _DRAG_PIXMAP_MAX_H))
-        dpr = self.devicePixelRatioF()
-        pix = QPixmap(int(w * dpr), int(h * dpr))
-        pix.setDevicePixelRatio(dpr)
-        pix.fill(Qt.transparent)
-        painter = QPainter(pix)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
-        painter.fillPath(path, QColor("#262229"))
-        painter.save()
-        painter.setClipPath(path)
-        painter.setOpacity(0.97)
-        self.render(painter, QPoint(0, 0))
-        painter.restore()
-        painter.setPen(QPen(QColor("#b29ae7"), 2))
-        painter.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 11, 11)
-        painter.end()
-        return pix
-
     def _hit_remove_button(self, event) -> bool:
         if self._btn_remove is None or not self._btn_remove.isVisible():
             return False
@@ -373,6 +356,7 @@ class QueueGridJobCard(QWidget):
         self._press_on_remove = False
         if event.button() == Qt.LeftButton:
             self._drag_start = event.position().toPoint()
+            press_card_visual(self)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -382,6 +366,7 @@ class QueueGridJobCard(QWidget):
                 self.remove_requested.emit(self._job_id)
             return
         if event.button() == Qt.LeftButton:
+            release_card_visual(self)
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 8:
                 self.clicked.emit(self._job_id)
         super().mouseReleaseEvent(event)
@@ -399,9 +384,16 @@ class QueueGridJobCard(QWidget):
         mime = QMimeData()
         mime.setData(_MIME_JOB_ID, self._job_id.encode("utf-8"))
         drag.setMimeData(mime)
-        drag.setPixmap(self._drag_preview_pixmap())
-        drag.setHotSpot(QPoint(min(event.position().toPoint().x(), _DRAG_PIXMAP_MAX_W // 2), 24))
-        drag.exec(Qt.DropAction.MoveAction)
+        settle_card_visual(self)
+        pixmap, scale = render_lifted_card_pixmap(self)
+        drag.setPixmap(pixmap)
+        grab = event.position().toPoint()
+        drag.setHotSpot(QPoint(int(grab.x() * scale), int(grab.y() * scale)))
+        self.drag_started.emit(self._job_id)
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self.drag_finished.emit(self._job_id)
 
     def dragEnterEvent(self, event):
         if not _job_accepts_drop(self._job):
