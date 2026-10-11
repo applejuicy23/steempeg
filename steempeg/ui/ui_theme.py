@@ -1006,14 +1006,6 @@ def render_settings_output_path_row_stylesheet() -> str:
     return render_settings_source_row_stylesheet().replace("srcRow", "outputPathRow")
 
 
-def render_settings_output_path_label_stylesheet(*, font_px: int = 11) -> str:
-    """Monospace export destination path ink."""
-    return (
-        f"background: transparent; border: none; color: #b29ae7; font-size: {font_px}px;"
-        f" font-weight: bold; font-family: 'Consolas', monospace;"
-    )
-
-
 def render_settings_source_path_field_stylesheet(*, font_px: int = 11) -> str:
     """Read-only source path field on Source Info rows."""
     return (
