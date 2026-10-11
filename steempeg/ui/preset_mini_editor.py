@@ -12,13 +12,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
+    QWidget,
 )
 
 from steempeg.core import capabilities
@@ -55,6 +58,7 @@ from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.widgets.vertical_scrollbar import ensure_steempg_vertical_scrollbar
 
 _log = logging.getLogger(__name__)
 
@@ -210,12 +214,28 @@ class PresetMiniEditor(SteempegDialog):
         super().__init__(title, parent or getattr(app, "ui", None), **theme)
         self._app = app
         self._edit_name = " ".join((edit_name or "").strip().split()) or None
-        # No set_comfort_size / setFixedSize — that crushed combo bodies to slits.
-        self.setMinimumSize(580, 640)
-        self.resize(640, 760)
+        # Form scrolls inside a fixed-height window; rows keep their natural height.
+        self.setMinimumSize(580, 520)
+        screen_h = _screen_height_px()
+        self.resize(640, min(760, int(screen_h * 0.85)) if screen_h > 0 else 760)
 
-        root = self.content_layout
+        outer = self.content_layout
+        outer.setSpacing(12)
+        body = QWidget()
+        body.setObjectName("presetEditorBody")
+        body.setStyleSheet("QWidget#presetEditorBody { background: transparent; }")
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 12, 0)
         root.setSpacing(14)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.viewport().setStyleSheet("background: transparent;")
+        scroll.setWidget(body)
+        ensure_steempg_vertical_scrollbar(scroll)
+        outer.addWidget(scroll, 1)
 
         name_col = QVBoxLayout()
         name_col.setSpacing(4)
@@ -223,7 +243,7 @@ class PresetMiniEditor(SteempegDialog):
         name_lbl = QLabel("Name")
         name_lbl.setStyleSheet(_NAME_LABEL_QSS)
         self._name = QLineEdit()
-        self._name.setPlaceholderText("e.g. Discord 720p")
+        self._name.setPlaceholderText("Enter preset name…")
         self._name.setFixedHeight(_settings_combo_line_h())
         self._name.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
@@ -330,6 +350,7 @@ class PresetMiniEditor(SteempegDialog):
         export.setContentsMargins(0, 0, 0, 0)
         export.setHorizontalSpacing(16)
         export.addLayout(_field_cell("Container", self._container), 0, 0)
+        export.addWidget(QWidget(), 0, 1)
         export.setColumnStretch(0, 1)
         export.setColumnStretch(1, 1)
         root.addLayout(export)
@@ -369,7 +390,6 @@ class PresetMiniEditor(SteempegDialog):
             adv.setColumnStretch(1, 1)
             root.addLayout(adv)
             root.addWidget(self._pro_ten_bit)
-            self.resize(self.width(), 940)
 
         _apply_settings_combo_chrome(
             self._quality,
@@ -397,6 +417,7 @@ class PresetMiniEditor(SteempegDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet(_HINT)
         root.addWidget(hint)
+        root.addStretch(1)
 
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -410,7 +431,7 @@ class PresetMiniEditor(SteempegDialog):
         btn_save.clicked.connect(self._on_save)
         actions.addWidget(btn_cancel)
         actions.addWidget(btn_save)
-        root.addLayout(actions)
+        outer.addLayout(actions)
 
         self._quality.currentIndexChanged.connect(self._sync_original_locks)
         self._codec.currentIndexChanged.connect(self._sync_pro)
