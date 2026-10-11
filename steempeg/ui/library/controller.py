@@ -3133,9 +3133,12 @@ class LibraryMixin:
         self._update_folder_picker_label()
 
     def _save_clips_folders(self):
+        """Persists library roots and re-points the new-clip watcher at them."""
         self.save_user_settings("clips_folders", self.clips_folders)
         if self.clips_folders:
             self.save_user_settings("last_clips_folder", self.clips_folders[0])
+        if getattr(self, "_new_clip_watcher", None) is not None:
+            self._new_clip_watcher.start(list(self.clips_folders))
 
     def _update_folder_picker_label(self):
         # Tab-aware footer owns the label when Rendered / Screenshots is active.
@@ -3246,6 +3249,97 @@ class LibraryMixin:
         self.scan_clips(announce_duplicates=False, fast=True)
         if hasattr(self, "set_status"):
             self.set_status("Found Steam recordings: " + ", ".join(added))
+
+    def start_new_clip_watch(self) -> None:
+        """Starts watching library roots for clips Steam saves while Steempeg runs."""
+        from steempeg.services.new_clip_watcher import NewClipWatcher
+
+        if getattr(self, "_new_clip_watcher", None) is None:
+            self._new_clip_watcher = NewClipWatcher(self.ui)
+            self._new_clip_watcher.new_clip_ready.connect(self._on_new_clip_ready)
+        self._new_clip_watcher.start(list(getattr(self, "clips_folders", []) or []))
+
+    def _on_new_clip_ready(self, clip_path: str) -> None:
+        """Shows the «New clip» popup and quietly adds the clip to the library."""
+        self.show_new_clip_popup(clip_path)
+        self._append_new_clip_to_library()
+
+    def show_new_clip_popup(self, clip_path: str) -> None:
+        """Shows the «New clip» corner card for a clip folder (also used by Dev Tools)."""
+        from steempeg.services.new_clip_watcher import describe_new_clip
+        from steempeg.ui.new_clip_popup import NewClipPopupStack
+
+        info = describe_new_clip(
+            clip_path,
+            getattr(self, "game_names_cache", None),
+            getattr(self, "cache_dir", ""),
+        )
+        if getattr(self, "_new_clip_popups", None) is None:
+            self._new_clip_popups = NewClipPopupStack(
+                self.open_new_clip_from_popup, self.express_new_clip_from_popup
+            )
+        self._new_clip_popups.show_clip(info)
+
+    def list_newest_library_clips(self, count: int) -> list[str]:
+        """Returns up to ``count`` saved Steam clips (``clip_*``) from the library, newest first."""
+        stamped = []
+        for row in getattr(self, "_library_clip_rows", None) or []:
+            if not os.path.basename(os.path.normpath(row.full_path)).lower().startswith("clip_"):
+                continue
+            try:
+                stamped.append((os.path.getmtime(row.full_path), row.full_path))
+            except OSError:
+                continue
+        stamped.sort(reverse=True)
+        return [path for _mtime, path in stamped[:count]]
+
+    def _append_new_clip_to_library(self) -> None:
+        """Runs the quiet new-clips-only scan, waiting for a running scan to finish first."""
+        scan = getattr(self, "_library_scan_worker", None)
+        if getattr(self, "_clips_scan_active", False) or (scan is not None and scan.isRunning()):
+            QTimer.singleShot(1500, self._append_new_clip_to_library)
+            return
+        self._append_new_clips_only()
+
+    def _library_has_clip_row(self, clip_path: str) -> bool:
+        """Checks whether a clip folder is already listed in the Clips library."""
+        key = os.path.normcase(os.path.normpath(clip_path))
+        for row in getattr(self, "_library_clip_rows", None) or []:
+            if os.path.normcase(os.path.normpath(row.full_path)) == key:
+                return True
+        return False
+
+    def open_new_clip_from_popup(self, clip_path: str) -> None:
+        """Brings the main window forward and opens the new clip once the library lists it."""
+        from steempeg.infra.window_focus import force_widget_foreground
+
+        window = self.ui
+        if window.isMinimized():
+            window.setWindowState(
+                (window.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
+            )
+        window.show()
+        window.raise_()
+        force_widget_foreground(window)
+        self._open_new_clip_when_listed(clip_path, attempts_left=40)
+
+    def _open_new_clip_when_listed(self, clip_path: str, *, attempts_left: int) -> None:
+        """Opens the clip in Clips Manager, retrying while the quiet scan is still adding it."""
+        if self._library_has_clip_row(clip_path):
+            self.open_source_clip(clip_path, play=True)
+            return
+        if attempts_left <= 0:
+            logging.warning("New clip never showed up in the library: %s", clip_path)
+            return
+        QTimer.singleShot(
+            500,
+            lambda: self._open_new_clip_when_listed(clip_path, attempts_left=attempts_left - 1),
+        )
+
+    def express_new_clip_from_popup(self, clip_path: str) -> None:
+        """Express render entry point; opens the clip normally until the mini player lands."""
+        logging.info("Express requested for new clip: %s", clip_path)
+        self.open_new_clip_from_popup(clip_path)
 
     def discover_steam_folders(self):
         """User action: merge any newly found Steam clip folders into the library."""
