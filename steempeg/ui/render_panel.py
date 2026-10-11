@@ -1621,12 +1621,12 @@ class PresetListRow(QWidget):
 
         menu = QMenu(apply_split)
         menu.setStyleSheet(ut.library_menu_stylesheet())
-        act_edit = menu.addAction("Edit in editor…")
-        act_update = menu.addAction("Update from panel")
-        act_rename = menu.addAction("Rename…")
-        act_dup = menu.addAction("Duplicate")
+        act_edit = menu.addAction("✏️  Edit in editor…")
+        act_update = menu.addAction("🔄  Update from panel")
+        act_rename = menu.addAction("🏷️  Rename…")
+        act_dup = menu.addAction("📑  Duplicate")
         menu.addSeparator()
-        act_del = menu.addAction("Delete")
+        act_del = menu.addAction("🗑️  Delete")
         act_edit.triggered.connect(lambda *_: on_edit(name))
         act_update.triggered.connect(lambda *_: on_update(name))
         act_rename.triggered.connect(lambda *_: on_rename(name))
@@ -1706,7 +1706,7 @@ class StandardPresetRow(QWidget):
 
         name_col = QVBoxLayout()
         name_col.setContentsMargins(0, 0, 0, 0)
-        name_col.setSpacing(0)
+        name_col.setSpacing(3)
         name_lbl = QLabel(label)
         name_lbl.setStyleSheet(self._NAME_QSS)
         name_col.addWidget(name_lbl)
@@ -1762,9 +1762,6 @@ class PresetSectionHeader(QWidget):
 
 def restyle_presets_page(ui, app) -> None:
     """Presets tab: create strip + searchable expandable list (row actions)."""
-    from steempeg.ui.design_tokens import with_tooltip_style
-    from steempeg.ui.icon_assets import info_icon
-
     page = ensure_presets_tab(ui)
     _drop_layout(page)
 
@@ -1794,35 +1791,7 @@ def restyle_presets_page(ui, app) -> None:
     title_row.setSpacing(8)
     title_row.addWidget(_page_title_icon_label(4), 0, Qt.AlignmentFlag.AlignVCenter)
     title_row.addWidget(_page_title("Presets"), 0, Qt.AlignmentFlag.AlignVCenter)
-    info_btn = QPushButton()
-    info_btn.setObjectName("preset_help_info")
-    info_btn.setIcon(info_icon(14))
-    info_btn.setIconSize(QSize(14, 14))
-    info_btn.setFixedSize(22, 22)
-    info_btn.setFlat(True)
-    info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    info_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    info_btn.setToolTip(
-        "Standard — built-in quality ladder (immutable).\n"
-        "Custom — your saved Video / Audio / Export recipes.\n"
-        "Create… opens the mini-editor (does not change the live panel).\n"
-        "Save as new snapshots the current panel.\n"
-        "Apply from here or pick either kind in Video Settings → Quality Preset.\n"
-        "Star Custom rows to pin favourites. Expand a Custom row for details.\n"
-        "▾ on Custom: Edit / Update / Rename / Duplicate / Delete."
-    )
-    info_btn.setStyleSheet(
-        with_tooltip_style(
-            "QPushButton {"
-            " background: transparent; border: none; border-radius: 11px;"
-            " padding: 0px; margin: 0px;"
-            "}"
-            " QPushButton:hover { background-color: rgba(255, 255, 255, 0.08); }"
-            " QPushButton:pressed { background-color: rgba(255, 255, 255, 0.12); }"
-        )
-    )
-    ui.btn_preset_help = info_btn
-    title_row.addWidget(info_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+    ui.btn_preset_help = None
     title_row.addStretch(1)
     root.addLayout(title_row)
 
@@ -1830,7 +1799,7 @@ def restyle_presets_page(ui, app) -> None:
     name_cap.setStyleSheet(_FIELD_LABEL_QSS)
     name_edit = QLineEdit()
     name_edit.setObjectName("preset_name_edit")
-    name_edit.setPlaceholderText("e.g. Discord 720p")
+    name_edit.setPlaceholderText("Enter preset name…")
     name_edit.setStyleSheet(ut.presets_line_edit_stylesheet())
     ui.preset_name_edit = name_edit
 
