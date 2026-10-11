@@ -1437,17 +1437,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             path_row = self.ui.output_path_row
             path_layout = path_row.layout()
             if path_layout is not None and not hasattr(self, 'btn_copy_loc'):
-                if hasattr(self.ui, 'label_location') and not isinstance(
-                    self.ui.label_location, ElidedLabel
-                ):
-                    smart_label = ElidedLabel()
-                    smart_label.setStyleSheet(self.ui.label_location.styleSheet())
-                    smart_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-                    old = self.ui.label_location
-                    path_layout.replaceWidget(old, smart_label)
-                    old.deleteLater()
-                    self.ui.label_location = smart_label
-
                 self.btn_copy_loc = QPushButton()
                 self.btn_copy_loc.setFixedSize(22, 22)
                 self.btn_copy_loc.setToolTip("Copy output path")
