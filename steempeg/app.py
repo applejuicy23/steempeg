@@ -3191,6 +3191,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 # (ffprobe + meta). Later launches keep On launch → Progressive.
                 self._force_full_startup_scan = True
 
+        # Recording folders on other drives (old Steam recording locations, newly
+        # attached disks) are picked up quietly once the window is up.
+        QTimer.singleShot(6000, self.start_steam_recording_roots_watch)
+
         # Keep the folder-picker (+ button / label) in sync with whatever roots we
         # ended up with. Auto-detected paths never went through choose_folder(), so
         # _update_folder_picker_label must run here too.
