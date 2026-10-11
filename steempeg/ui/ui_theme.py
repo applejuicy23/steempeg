@@ -2227,8 +2227,9 @@ def presets_apply_split_stylesheet() -> str:
         font-weight: bold;
         min-width: 22px;
         max-width: 26px;
-        padding: 2px 0;
+        padding: 0px;
         min-height: 22px;
+        max-height: 22px;
     }}
     QPushButton#PresetApplyMenu:hover {{
         background-color: {p.button_secondary_hover_bg};
