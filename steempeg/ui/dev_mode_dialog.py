@@ -1120,8 +1120,8 @@ class DevModeDialog(SteempegDialog):
         btn_popup_stack.clicked.connect(lambda: self._simulate_new_clip_popups(3))
         express_row.addWidget(btn_popup_stack)
         btn_player = QPushButton("Express player")
-        btn_player.setEnabled(False)
-        btn_player.setToolTip("Steam-like mini player — coming next.")
+        btn_player.setToolTip("Open the Steam-like mini player on the newest library clip.")
+        btn_player.clicked.connect(self._open_express_player_preview)
         express_row.addWidget(btn_player)
         express_row.addStretch()
         g_express_lay.addLayout(express_row)
@@ -1635,6 +1635,19 @@ class DevModeDialog(SteempegDialog):
         for clip in clips:
             host.show_new_clip_popup(clip)
         self._tools_log.appendPlainText(f"New clip popup preview: {len(clips)} card(s).")
+
+    def _open_express_player_preview(self) -> None:
+        """Opens the Express mini player on the newest library clip."""
+        host = self._resolve_app_host()
+        if host is None or not hasattr(host, "open_express_player"):
+            self._tools_log.appendPlainText("ERROR: app host not available.")
+            return
+        clips = host.list_newest_library_clips(1)
+        if not clips:
+            self._tools_log.appendPlainText("No library clips to preview.")
+            return
+        host.open_express_player(clips[0])
+        self._tools_log.appendPlainText(f"Express player: {os.path.basename(clips[0])}")
 
     def _simulate_launch_splash(self) -> None:
         """Replay the v50 cold-start splash card for visual design review."""
