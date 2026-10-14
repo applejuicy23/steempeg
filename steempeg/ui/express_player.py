@@ -1,7 +1,7 @@
 """Express player — Steam-like mini player for one fresh clip.
 
 The window is the player: a near-invisible top strip (Steempeg logo left,
-traffic lights right) is the only drag area. Below sit Back + game title,
+traffic lights right) is the only drag area. Below sit the game title,
 the video, the regular Steempeg timeline with trim, and the action row:
 Delete (to Recycle Bin), Trim, and the Express split button.
 
@@ -14,7 +14,7 @@ import os
 import sys
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -36,6 +36,8 @@ _SKIP_MS = 15000
 _POLL_MS = 50
 _DEFAULT_SIZE = QSize(1040, 720)
 _MIN_SIZE = QSize(720, 480)
+_SCREEN_WIDTH_SHARE = 0.62
+_SCREEN_HEIGHT_CAP = 0.88
 
 
 def format_player_time(ms: float) -> str:
@@ -50,6 +52,8 @@ def format_player_time(ms: float) -> str:
 
 def build_express_player_qss() -> str:
     """Builds the window stylesheet from the active theme tokens."""
+    from steempeg.ui.ui_density import COMFORT
+
     palette = ut.active_palette()
     c = ut._frameless_card_dialog_colors()
     return f"""
@@ -68,8 +72,8 @@ def build_express_player_qss() -> str:
         border-bottom-right-radius: 10px;
     }}
     QLabel#ExpressTitle {{
-        color: #e0e0e0; font-family: {tok.FONT_APP}; font-size: 14px; font-weight: bold;
-        background: transparent;
+        color: white; font-family: {tok.FONT_APP}; font-size: {COMFORT.header_font}px;
+        font-weight: 700; background: transparent;
     }}
     QLabel#ExpressTime {{
         color: #cccccc; font-family: {tok.FONT_APP}; font-size: 13px; font-weight: bold;
@@ -95,8 +99,7 @@ def build_express_player_qss() -> str:
     QPushButton#ExpressPill:pressed {{ background-color: {c["btn_pressed_bg"]}; }}
     QPushButton#ExpressMain, QPushButton#ExpressArrow {{
         background-color: {c["accent_bg"]}; color: {c["accent_fg"]};
-        border: 1px solid {c["accent_border"]}; min-height: 30px;
-        font-family: {tok.FONT_APP}; font-size: 12px; font-weight: bold;
+        border: 1px solid {c["accent_border"]}; min-height: 30px; font-weight: bold;
     }}
     QPushButton#ExpressMain {{
         border-top-left-radius: 15px; border-bottom-left-radius: 15px;
@@ -226,6 +229,8 @@ class ExpressPlayerWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self._top_strip = _TopStrip(self)
+        # Edge-resize grips only show while the window has a visible ``title_bar``.
+        self.title_bar = self._top_strip
         root.addWidget(self._top_strip)
 
         body = QVBoxLayout()
@@ -255,42 +260,86 @@ class ExpressPlayerWindow(QWidget):
             except Exception:
                 logging.debug("Express player: edge resize unavailable", exc_info=True)
 
+        self.fit_to_screen()
+
+    def fit_to_screen(self) -> None:
+        """Sizes the window to a share of the screen under the cursor so 16:9 video fills it, then centres it."""
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(_DEFAULT_SIZE)
+            return
+        area = screen.availableGeometry()
+        side_margins = 24
+        chrome_h = (
+            self._top_strip.sizeHint().height()
+            + self._header.sizeHint().height()
+            + self._footer.sizeHint().height()
+            + 12
+        )
+        width = int(area.width() * _SCREEN_WIDTH_SHARE)
+        height = int((width - side_margins) * 9 / 16) + chrome_h
+        max_height = int(area.height() * _SCREEN_HEIGHT_CAP)
+        if height > max_height:
+            height = max_height
+            width = int((height - chrome_h) * 16 / 9) + side_margins
+        width = max(_MIN_SIZE.width(), min(width, area.width()))
+        height = max(_MIN_SIZE.height(), min(height, area.height()))
+        self.resize(width, height)
+        self.move(
+            area.x() + (area.width() - width) // 2,
+            area.y() + (area.height() - height) // 2,
+        )
+
     @property
     def clip_path(self) -> str:
         """Returns the clip folder shown in this player."""
         return self._info.path
 
+    def apply_ui_theme_chrome(self) -> None:
+        """Repaints the window when the user switches theme (Default / TrueDark / OLED)."""
+        self.setStyleSheet(build_express_player_qss())
+        if hasattr(self._timeline, "_apply_timeline_chrome_stylesheet"):
+            self._timeline._apply_timeline_chrome_stylesheet()
+        self._timeline.canvas.update()
+
     # -- layout ---------------------------------------------------------------
 
     def _build_header(self) -> QFrame:
-        """Back button left, game icon + name centred."""
+        """Game icon + name centred, at the desktop player header's height and font."""
         from steempeg.ui.icon_utils import apply_square_icon
+        from steempeg.ui.layout_defaults import (
+            PLAYER_HEADER_CANVAS_GAP,
+            PLAYER_HEADER_FRAME_BORDER_V,
+        )
         from steempeg.ui.new_clip_popup import build_game_icon_pixmap
+        from steempeg.ui.player_header_layout import player_header_title_qfont
+        from steempeg.ui.ui_density import COMFORT
 
         header = QFrame()
         header.setObjectName("ExpressHeader")
-        header.setFixedHeight(44)
+        header.setFixedHeight(
+            max(
+                int(COMFORT.header_chip) + 2 * int(COMFORT.header_pad_v),
+                int(COMFORT.header_min_h),
+                int(COMFORT.header_icon) + 2 * int(COMFORT.header_pad_v),
+            )
+            + PLAYER_HEADER_CANVAS_GAP
+            + int(PLAYER_HEADER_FRAME_BORDER_V)
+        )
         lay = QHBoxLayout(header)
-        lay.setContentsMargins(8, 0, 8, 0)
-        back = QPushButton("‹  Back")
-        back.setObjectName("ExpressBack")
-        back.setCursor(Qt.CursorShape.PointingHandCursor)
-        back.setToolTip("Close the player")
-        back.clicked.connect(self.close)
-        lay.addWidget(back, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.setContentsMargins(int(COMFORT.header_pad_h), 0, int(COMFORT.header_pad_h), 0)
         lay.addStretch(1)
+        icon_px = int(COMFORT.header_icon)
         icon = QLabel()
         icon.setStyleSheet("background: transparent;")
-        apply_square_icon(icon, build_game_icon_pixmap(self._info.icon_path, 20), 20)
+        apply_square_icon(icon, build_game_icon_pixmap(self._info.icon_path, icon_px), icon_px)
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addSpacing(8)
         title = QLabel(self._info.game_name)
         title.setObjectName("ExpressTitle")
+        title.setFont(player_header_title_qfont(int(COMFORT.header_font)))
         lay.addWidget(title, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addStretch(1)
-        spacer = QWidget()
-        spacer.setFixedWidth(back.sizeHint().width())
-        lay.addWidget(spacer)
         self._header = header
         return header
 
@@ -358,6 +407,7 @@ class ExpressPlayerWindow(QWidget):
         transport.addWidget(self._btn_forward)
         transport.addStretch(1)
         center_lay.addLayout(transport)
+        center_lay.addSpacing(4)
         self._time_label = QLabel("0:00 / 0:00")
         self._time_label.setObjectName("ExpressTime")
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -462,9 +512,19 @@ class ExpressPlayerWindow(QWidget):
             return
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
         logging.info("Express player: play %s", play_path)
+        self._attach_hover_preview(play_path)
         self._player.play(play_path)
         self._player.pause = False
         self._poll.start()
+
+    def _attach_hover_preview(self, play_path: str) -> None:
+        """Points the timeline's PyAV hover preview at this clip and the app's frame cache."""
+        cache_dir = getattr(self._app, "cache_dir", None)
+        if cache_dir:
+            self._timeline.canvas._markers_cache_dir = cache_dir
+            self._timeline.canvas.sniper.cache_dir = cache_dir
+        self._timeline.sniper_source_path = play_path
+        self._timeline.current_video_path = play_path
 
     def _create_player(self):
         """Builds a libmpv instance embedded in this window's video surface."""
@@ -616,16 +676,23 @@ class ExpressPlayerWindow(QWidget):
         canvas = self._timeline.canvas
         if canvas.is_trim_mode:
             self._timeline.disable_trim_mode()
-            self._btn_trim.setText(" Trim")
-            self._btn_trim.setIcon(QIcon(get_resource_path("trim_icon.png")))
-            self._btn_trim.setStyleSheet(tok.STYLE_TRIM_BUTTON)
+            self._show_trim_button_state(cancel=False)
         else:
             self._timeline.enable_trim_mode()
             if not canvas.is_trim_mode:
                 return
+            self._show_trim_button_state(cancel=True)
+
+    def _show_trim_button_state(self, *, cancel: bool) -> None:
+        """Shows the button as gold "✂ Trim" or red "✕ Cancel", icons like the desktop player."""
+        if cancel:
+            self._btn_trim.setIcon(QIcon(get_resource_path("cancel.png")))
             self._btn_trim.setText(" Cancel")
-            self._btn_trim.setIcon(QIcon())
             self._btn_trim.setStyleSheet(tok.STYLE_TRIM_CANCEL_BUTTON)
+        else:
+            self._btn_trim.setIcon(QIcon(get_resource_path("trim_icon.png")))
+            self._btn_trim.setText(" Trim")
+            self._btn_trim.setStyleSheet(tok.STYLE_TRIM_BUTTON)
 
     def current_trim_ms(self) -> tuple[int, int] | None:
         """Returns the active trim range, or None when the whole clip is used."""
@@ -813,8 +880,15 @@ class ExpressPlayerWindow(QWidget):
         self.close()
 
     def _release_player(self) -> None:
-        """Stops polling and destroys the mpv handle (frees the clip files)."""
+        """Stops polling, the PyAV hover decoder and the mpv handle (frees the clip files)."""
         self._poll.stop()
+        sniper = getattr(self._timeline.canvas, "sniper", None)
+        if sniper is not None:
+            try:
+                sniper.kill_worker()
+            except Exception:
+                logging.debug("Express player: sniper stop failed", exc_info=True)
+        self._timeline.current_video_path = ""
         player = self._player
         self._player = None
         if player is None:
