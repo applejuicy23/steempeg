@@ -4302,6 +4302,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     w.apply_ui_theme_chrome()
                 except Exception:
                     pass
+        for express_player in list((getattr(self, "_express_players", None) or {}).values()):
+            try:
+                express_player.apply_ui_theme_chrome()
+            except Exception:
+                pass
         sheet = getattr(self, "_portable_render_sheet_dlg", None)
         if sheet is not None and hasattr(sheet, "apply_ui_theme_chrome"):
             try:
