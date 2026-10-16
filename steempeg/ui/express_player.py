@@ -79,11 +79,11 @@ def build_express_player_qss() -> str:
         color: #cccccc; font-family: {tok.FONT_APP}; font-size: 13px; font-weight: bold;
         background: transparent;
     }}
-    QPushButton#ExpressBack {{
+    QPushButton#ExpressFlat {{
         color: #cfcfcf; background: transparent; border: none; border-radius: 8px;
         font-family: {tok.FONT_APP}; font-size: 13px; font-weight: bold; padding: 4px 10px;
     }}
-    QPushButton#ExpressBack:hover {{ color: #ffffff; background: rgba(255, 255, 255, 22); }}
+    QPushButton#ExpressFlat:hover {{ color: #ffffff; background: rgba(255, 255, 255, 22); }}
     QPushButton#ExpressIconBtn {{
         background: transparent; border: none; border-radius: 20px; padding: 0;
     }}
@@ -395,16 +395,16 @@ class ExpressPlayerWindow(QWidget):
         center_lay.setSpacing(0)
         transport = QHBoxLayout()
         transport.setSpacing(6)
-        self._btn_back = self._make_icon_button("less15.png", 28, "Back 15 s (←)")
-        self._btn_back.clicked.connect(lambda: self.skip_by(-_SKIP_MS))
+        self._btn_skip_back = self._make_icon_button("less15.png", 28, "Back 15 s (←)")
+        self._btn_skip_back.clicked.connect(lambda: self.skip_by(-_SKIP_MS))
         self._btn_play = self._make_icon_button("icon_play.png", 40, "Play / Pause (Space)", box=48)
         self._btn_play.clicked.connect(self.toggle_play)
-        self._btn_forward = self._make_icon_button("more15.png", 28, "Forward 15 s (→)")
-        self._btn_forward.clicked.connect(lambda: self.skip_by(_SKIP_MS))
+        self._btn_skip_forward = self._make_icon_button("more15.png", 28, "Forward 15 s (→)")
+        self._btn_skip_forward.clicked.connect(lambda: self.skip_by(_SKIP_MS))
         transport.addStretch(1)
-        transport.addWidget(self._btn_back)
+        transport.addWidget(self._btn_skip_back)
         transport.addWidget(self._btn_play)
-        transport.addWidget(self._btn_forward)
+        transport.addWidget(self._btn_skip_forward)
         transport.addStretch(1)
         center_lay.addLayout(transport)
         center_lay.addSpacing(4)
@@ -474,7 +474,7 @@ class ExpressPlayerWindow(QWidget):
         self._btn_show_folder.clicked.connect(self.show_last_output_in_folder)
         self._btn_copy.clicked.connect(self.copy_last_output)
         close = QPushButton("✕")
-        close.setObjectName("ExpressBack")
+        close.setObjectName("ExpressFlat")
         close.setCursor(Qt.CursorShape.PointingHandCursor)
         close.clicked.connect(strip.hide)
         lay.addWidget(close)
