@@ -117,6 +117,11 @@ from steempeg.ui.message_dialog import (
     steempeg_question,
     steempeg_warning,
 )
+from steempeg.infra.autostart import (
+    autostart_is_supported,
+    read_autostart_enabled,
+    set_autostart_enabled,
+)
 from steempeg.ui.tray import tray_is_supported
 from steempeg.ui.shell_chooser import (
     UI_SHELL_ASK_KEY,
@@ -552,6 +557,9 @@ class SettingsDialog(SteempegDialog):
 
         self._chk_keep_running_in_tray = SteempegCheckBox("Keep Steempeg running in the tray")
         self._chk_keep_running_in_tray.setChecked(load_keep_running_in_tray(settings))
+        self._chk_autostart = SteempegCheckBox("Start Steempeg with Windows")
+        self._chk_autostart.setChecked(read_autostart_enabled())
+        self._chk_autostart.toggled.connect(self._on_autostart_toggled)
         if tray_is_supported():
             g.addWidget(self._chk_keep_running_in_tray)
             g.addWidget(
@@ -560,6 +568,14 @@ class SettingsDialog(SteempegDialog):
                     "clips still pop up. Quit from the tray icon menu."
                 )
             )
+            if autostart_is_supported():
+                g.addWidget(self._chk_autostart)
+                g.addWidget(
+                    self._hint(
+                        "Starts hidden in the tray when you sign in to Windows. "
+                        "Same as the installer's «Start Steempeg with Windows» box."
+                    )
+                )
 
         self._chk_deck_controls = SteempegCheckBox("Console mode (gamepad)")
         self._chk_deck_controls.setChecked(load_deck_controls(settings))
@@ -2087,7 +2103,17 @@ class SettingsDialog(SteempegDialog):
             if bool(chk_tray.isChecked()) != load_keep_running_in_tray(prev):
                 return True
 
+        chk_autostart = getattr(self, "_chk_autostart", None)
+        if chk_autostart is not None and autostart_is_supported():
+            if bool(chk_autostart.isChecked()) != read_autostart_enabled():
+                return True
+
         return False
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        """Ticking autostart also ticks the tray box: a Windows-start launch lives in the tray."""
+        if checked:
+            self._chk_keep_running_in_tray.setChecked(True)
 
     def _restart_app(self) -> None:
         from steempeg.ui.message_dialog import (
@@ -2792,6 +2818,10 @@ class SettingsDialog(SteempegDialog):
         pending[KEY_KEEP_RUNNING_IN_TRAY] = keep_in_tray
         if hasattr(self._app, "apply_keep_running_in_tray"):
             deferred.append(lambda k=keep_in_tray: self._app.apply_keep_running_in_tray(k))
+        if autostart_is_supported():
+            want_autostart = bool(self._chk_autostart.isChecked())
+            if want_autostart != read_autostart_enabled():
+                set_autostart_enabled(want_autostart)
 
         requested = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         folder, fell_back = ensure_usable_export_folder(requested)
