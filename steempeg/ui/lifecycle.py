@@ -503,8 +503,16 @@ class LifecycleMixin:
             self.update_status_indicator(text, state)
 
     def install_tray(self, *, background_launch: bool = False) -> None:
-        """Creates the tray icon and applies the «Keep Steempeg running in the tray» setting."""
-        from steempeg.ui.settings_prefs import load_keep_running_in_tray
+        """Creates the tray icon and applies the «Keep Steempeg running in the tray» setting.
+
+        A fresh install with the installer's autostart box ticked has no saved
+        tray setting yet; it is switched on so Settings shows what really happens.
+        """
+        from steempeg.infra.autostart import read_autostart_enabled
+        from steempeg.ui.settings_prefs import (
+            KEY_KEEP_RUNNING_IN_TRAY,
+            load_keep_running_in_tray,
+        )
         from steempeg.ui.tray import SteempegTray
 
         self._tray = SteempegTray(self, background_launch=background_launch)
@@ -512,7 +520,14 @@ class LifecycleMixin:
             settings = self.load_user_settings() or {}
         except Exception:
             settings = {}
-        self._tray.apply_keep_running(load_keep_running_in_tray(settings))
+        keep_running = load_keep_running_in_tray(settings)
+        if KEY_KEEP_RUNNING_IN_TRAY not in settings and read_autostart_enabled():
+            keep_running = True
+            try:
+                self.save_user_settings(KEY_KEEP_RUNNING_IN_TRAY, True)
+            except Exception:
+                logging.debug("Tray: could not save the autostart-implied setting", exc_info=True)
+        self._tray.apply_keep_running(keep_running)
 
     def apply_keep_running_in_tray(self, enabled: bool) -> None:
         """Turns tray mode on / off live after Settings → Save."""
