@@ -6518,13 +6518,19 @@ def main():
     import argparse
     import traceback
 
-    # Toast / protocol click: restore the running window and exit (no Qt).
+    # Toast / protocol click: restore the running window and exit (no widgets).
     if sys.platform == "win32" and any(
         a == "--raise-existing" or str(a).startswith("steempeg:")
         for a in sys.argv[1:]
     ):
+        from PySide6.QtCore import QCoreApplication
+        from steempeg.infra.instance_bridge import ask_running_instance_to_show
         from steempeg.infra.window_focus import raise_steempeg_window
 
+        _bridge_core = QCoreApplication(sys.argv)
+        # The bridge also reaches a window hidden in the tray; Win32 raise only sees visible ones.
+        if ask_running_instance_to_show():
+            raise SystemExit(0)
         raise SystemExit(0 if raise_steempeg_window() else 1)
 
     from PySide6.QtWidgets import QApplication, QMessageBox
@@ -6540,6 +6546,7 @@ def main():
     parser.add_argument('--backup-folder', type=str, default="")
     parser.add_argument('--update-handler', action='store_true')
     parser.add_argument('--job', type=str, default="")
+    parser.add_argument('--background', action='store_true')
     args, unknown = parser.parse_known_args()
 
     if args.update_handler:
@@ -6655,6 +6662,10 @@ def main():
 
     _instance_lock, _got_lock = try_acquire_instance_lock()
     if not _got_lock:
+        from steempeg.infra.instance_bridge import ask_running_instance_to_show
+
+        if args.background or ask_running_instance_to_show():
+            sys.exit(0)
         dlg = AlreadyRunningDialog()
         dlg.exec()
         if not dlg.run_anyway:
@@ -6681,6 +6692,10 @@ def main():
 
     # Steam Deck: Portable by default (no chooser). Else ask unless "Don't ask again".
     ui_shell = resolve_startup_ui_shell()
+    if ui_shell is None and args.background:
+        from steempeg.ui.shell_chooser import UI_SHELL_DESKTOP, load_ui_shell
+
+        ui_shell = load_ui_shell() or UI_SHELL_DESKTOP
     if ui_shell is None:
         chooser = ShellChooserDialog()
         if chooser.exec() != QDialog.DialogCode.Accepted or not chooser.chosen_shell:
@@ -6695,19 +6710,27 @@ def main():
     else:
         save_ui_shell(ui_shell)
 
-    try:
-        from steempeg.ui.launch_splash import finish_launch_splash, show_launch_splash
+    if not args.background:
+        try:
+            from steempeg.ui.launch_splash import finish_launch_splash, show_launch_splash
 
-        show_launch_splash()
-        _launch_splash_progress(4, "Starting Steempeg…")
-    except Exception:
-        logging.debug("Launch splash failed to open", exc_info=True)
+            show_launch_splash()
+            _launch_splash_progress(4, "Starting Steempeg…")
+        except Exception:
+            logging.debug("Launch splash failed to open", exc_info=True)
 
     try:
         window = SteempegApp()
         # Keep the lock alive for the process lifetime (prevent GC unlock).
         window._instance_lock = _instance_lock
         window._ui_shell = ui_shell
+        window.install_tray(background_launch=args.background)
+        if _got_lock:
+            from steempeg.infra.instance_bridge import InstanceBridge
+
+            window._instance_bridge = InstanceBridge(window.ui)
+            window._instance_bridge.show_requested.connect(window.bring_main_window_forward)
+            window._instance_bridge.listen()
         _splash_keepalive()
         
         if getattr(window, 'ui', None) is None:
@@ -6846,203 +6869,211 @@ def main():
         except Exception:
             logging.debug("Launch splash hold failed", exc_info=True)
 
-        # Splash closed — map the shell under the already-installed settle veil.
-        try:
-            from PySide6.QtCore import QEventLoop
-
-            QApplication.processEvents(
-                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
-            )
-        except Exception:
-            QApplication.processEvents()
-
-        if sys.platform == "win32":
-            # Maximize on the *first* show. Showing the inset normal state first
-            # and maximizing right after gives Windows no state change to record,
-            # so the first green-button restore snaps with no DWM transition —
-            # every later toggle animates because that first one seeded it.
-            #
-            # Pre-size above still fills the work area (density / first paint).
-            # That would also become Qt/Windows normalGeometry — Restore would
-            # stay ~fullscreen. Seed rcNormalPosition to the stock restore size
-            # before showMaximized so the green button shrinks to ~1400×900.
-            from steempeg.ui.layout_defaults import stock_restore_geometry
-            from steempeg.ui.window_chrome import seed_windows_restore_geometry
-
-            _screen = app.primaryScreen()
-            if _screen is not None:
-                seed_windows_restore_geometry(
-                    window.ui, stock_restore_geometry(_screen.availableGeometry())
-                )
-            window.ui.showMaximized()
-        else:
-            # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
-            # Seed a restore size so the first fake-unmaximize is not "still full".
-            from steempeg.ui.layout_defaults import stock_restore_geometry
-
-            _screen = app.primaryScreen()
-            if _screen is not None:
-                window.ui._linux_restore_geometry = stock_restore_geometry(
-                    _screen.availableGeometry()
-                )
-            window.ui.show()
-            logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
-
-        def _bring_main_to_front():
-            # Qt alone is often ignored under Windows focus-stealing rules when
-            # launched from another process. Win32 path is a no-op on Linux.
-            window.ui.raise_()
-            window.ui.activateWindow()
+        def _reveal_main_window():
+            """Maps the main window for the first time (startup, or first tray Open after --background)."""
+            # Splash closed — map the shell under the already-installed settle veil.
             try:
-                wh = window.ui.windowHandle()
-                if wh is not None:
-                    wh.requestActivate()
-            except Exception:
-                pass
-            try:
-                from steempeg.infra.window_focus import force_widget_foreground
+                from PySide6.QtCore import QEventLoop
 
-                force_widget_foreground(window.ui)
-            except Exception:
-                logging.debug("startup bring-to-front failed", exc_info=True)
-
-        _bring_main_to_front()
-        if sys.platform != "win32":
-            try:
-                from steempeg.ui.disk_space_warning import (
-                    schedule_linux_low_disk_startup_warning,
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
                 )
-
-                schedule_linux_low_disk_startup_warning(window)
             except Exception:
-                logging.exception("Linux disk-space warning failed to schedule")
+                QApplication.processEvents()
 
-        # One coherent post-maximize settle under the veil; reveal on timer
-        # (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
-        kick_startup_settle_after_show(window)
-        startup_trace("main_window_shown")
-        try:
-            from steempeg.services.kofi_remote import refresh_kofi_url_async
+            if sys.platform == "win32":
+                # Maximize on the *first* show. Showing the inset normal state first
+                # and maximizing right after gives Windows no state change to record,
+                # so the first green-button restore snaps with no DWM transition —
+                # every later toggle animates because that first one seeded it.
+                #
+                # Pre-size above still fills the work area (density / first paint).
+                # That would also become Qt/Windows normalGeometry — Restore would
+                # stay ~fullscreen. Seed rcNormalPosition to the stock restore size
+                # before showMaximized so the green button shrinks to ~1400×900.
+                from steempeg.ui.layout_defaults import stock_restore_geometry
+                from steempeg.ui.window_chrome import seed_windows_restore_geometry
 
-            # Quiet Pages pull so Donate Me / PRO use the latest tip slug.
-            QTimer.singleShot(2500, refresh_kofi_url_async)
-        except Exception:
-            logging.debug("Ko-fi meta refresh schedule failed", exc_info=True)
-        try:
-            from PySide6.QtCore import QEventLoop
+                _screen = app.primaryScreen()
+                if _screen is not None:
+                    seed_windows_restore_geometry(
+                        window.ui, stock_restore_geometry(_screen.availableGeometry())
+                    )
+                window.ui.showMaximized()
+            else:
+                # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
+                # Seed a restore size so the first fake-unmaximize is not "still full".
+                from steempeg.ui.layout_defaults import stock_restore_geometry
 
-            QApplication.processEvents(
-                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
-            )
-        except Exception:
-            QApplication.processEvents()
-        # Long constructor / sync can leave Windows AppStarting cursor stuck.
-        try:
-            from steempeg.ui.window_chrome import force_app_cursor_resync
+                _screen = app.primaryScreen()
+                if _screen is not None:
+                    window.ui._linux_restore_geometry = stock_restore_geometry(
+                        _screen.availableGeometry()
+                    )
+                window.ui.show()
+                logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
 
-            force_app_cursor_resync()
-            QTimer.singleShot(0, force_app_cursor_resync)
-        except Exception:
-            pass
-        # Geometry after maximize can still settle one tick later — re-claim
-        # foreground after first paint (launcher / terminal may still hold focus).
-        _bring_main_to_front()
-        QTimer.singleShot(0, _bring_main_to_front)
-        # Belt-and-suspenders: strip any stuck WS_EX_TOPMOST after the startup
-        # focus flashes settle (otherwise Explorer stays under Steempeg).
-        if sys.platform == "win32":
-            def _clear_startup_topmost():
+            def _bring_main_to_front():
+                # Qt alone is often ignored under Windows focus-stealing rules when
+                # launched from another process. Win32 path is a no-op on Linux.
+                window.ui.raise_()
+                window.ui.activateWindow()
                 try:
-                    from steempeg.infra.window_focus import clear_widget_topmost
-
-                    clear_widget_topmost(window.ui)
+                    wh = window.ui.windowHandle()
+                    if wh is not None:
+                        wh.requestActivate()
                 except Exception:
                     pass
+                try:
+                    from steempeg.infra.window_focus import force_widget_foreground
 
-            QTimer.singleShot(100, _clear_startup_topmost)
-            QTimer.singleShot(500, _clear_startup_topmost)
-        if ui_shell == UI_SHELL_PORTABLE:
-            # Theatre under the veil; one late re-assert after settle reveal.
-            window.apply_portable_theatre_shell()
-            QTimer.singleShot(600, window.apply_portable_theatre_shell)
-            # Prewarm Clips/Render sheets off the critical path (map-suppressed —
-            # no translucent HWND flash). First open stays snappy.
-            from steempeg.ui.portable.chrome import prewarm_portable_sheets
-            from steempeg.ui.window_chrome import force_app_cursor_resync
+                    force_widget_foreground(window.ui)
+                except Exception:
+                    logging.debug("startup bring-to-front failed", exc_info=True)
 
-            QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
-            # Shell chooser (or any startup modal) can leave PointingHand stuck
-            # over the empty theatre — resync after first paint.
-            QTimer.singleShot(0, force_app_cursor_resync)
-            QTimer.singleShot(50, force_app_cursor_resync)
-        if hasattr(window, "schedule_silent_update_check"):
-            # Quiet badge probe — never auto-installs; user still chooses backup/update.
-            # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).
-            from steempeg.ui.settings_prefs import should_run_silent_update_check
+            _bring_main_to_front()
+            if sys.platform != "win32":
+                try:
+                    from steempeg.ui.disk_space_warning import (
+                        schedule_linux_low_disk_startup_warning,
+                    )
 
+                    schedule_linux_low_disk_startup_warning(window)
+                except Exception:
+                    logging.exception("Linux disk-space warning failed to schedule")
+
+            # One coherent post-maximize settle under the veil; reveal on timer
+            # (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
+            kick_startup_settle_after_show(window)
+            startup_trace("main_window_shown")
             try:
-                _upd_settings = window.load_user_settings() or {}
+                from steempeg.services.kofi_remote import refresh_kofi_url_async
+
+                # Quiet Pages pull so Donate Me / PRO use the latest tip slug.
+                QTimer.singleShot(2500, refresh_kofi_url_async)
             except Exception:
-                _upd_settings = {}
-            if should_run_silent_update_check(_upd_settings):
-                window.schedule_silent_update_check(2800)
+                logging.debug("Ko-fi meta refresh schedule failed", exc_info=True)
+            try:
+                from PySide6.QtCore import QEventLoop
 
-        # Small-screen tip after chrome settles — Desktop only (chooser already
-        # warns inline; Portable is built for cramped screens).
-        if ui_shell != UI_SHELL_PORTABLE:
-            from steempeg.ui.settings_dialog import maybe_show_small_screen_warning
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 50
+                )
+            except Exception:
+                QApplication.processEvents()
+            # Long constructor / sync can leave Windows AppStarting cursor stuck.
+            try:
+                from steempeg.ui.window_chrome import force_app_cursor_resync
 
-            QTimer.singleShot(
-                900,
-                lambda: maybe_show_small_screen_warning(window, ui_shell),
+                force_app_cursor_resync()
+                QTimer.singleShot(0, force_app_cursor_resync)
+            except Exception:
+                pass
+            # Geometry after maximize can still settle one tick later — re-claim
+            # foreground after first paint (launcher / terminal may still hold focus).
+            _bring_main_to_front()
+            QTimer.singleShot(0, _bring_main_to_front)
+            # Belt-and-suspenders: strip any stuck WS_EX_TOPMOST after the startup
+            # focus flashes settle (otherwise Explorer stays under Steempeg).
+            if sys.platform == "win32":
+                def _clear_startup_topmost():
+                    try:
+                        from steempeg.infra.window_focus import clear_widget_topmost
+
+                        clear_widget_topmost(window.ui)
+                    except Exception:
+                        pass
+
+                QTimer.singleShot(100, _clear_startup_topmost)
+                QTimer.singleShot(500, _clear_startup_topmost)
+            if ui_shell == UI_SHELL_PORTABLE:
+                # Theatre under the veil; one late re-assert after settle reveal.
+                window.apply_portable_theatre_shell()
+                QTimer.singleShot(600, window.apply_portable_theatre_shell)
+                # Prewarm Clips/Render sheets off the critical path (map-suppressed —
+                # no translucent HWND flash). First open stays snappy.
+                from steempeg.ui.portable.chrome import prewarm_portable_sheets
+                from steempeg.ui.window_chrome import force_app_cursor_resync
+
+                QTimer.singleShot(500, lambda: prewarm_portable_sheets(window))
+                # Shell chooser (or any startup modal) can leave PointingHand stuck
+                # over the empty theatre — resync after first paint.
+                QTimer.singleShot(0, force_app_cursor_resync)
+                QTimer.singleShot(50, force_app_cursor_resync)
+            if hasattr(window, "schedule_silent_update_check"):
+                # Quiet badge probe — never auto-installs; user still chooses backup/update.
+                # Interval: Settings → Check for updates (Off / Every launch / Daily / Weekly).
+                from steempeg.ui.settings_prefs import should_run_silent_update_check
+
+                try:
+                    _upd_settings = window.load_user_settings() or {}
+                except Exception:
+                    _upd_settings = {}
+                if should_run_silent_update_check(_upd_settings):
+                    window.schedule_silent_update_check(2800)
+
+            # Small-screen tip after chrome settles — Desktop only (chooser already
+            # warns inline; Portable is built for cramped screens).
+            if ui_shell != UI_SHELL_PORTABLE:
+                from steempeg.ui.settings_dialog import maybe_show_small_screen_warning
+
+                QTimer.singleShot(
+                    900,
+                    lambda: maybe_show_small_screen_warning(window, ui_shell),
+                )
+
+            geo = window.ui.geometry()
+            logging.info(
+                "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
+                app.platformName(),
+                ui_shell,
+                window.ui.isVisible(),
+                geo.width(),
+                geo.height(),
+                geo.x(),
+                geo.y(),
+                os.environ.get("STEEMPEG_SOFT_GL", "0") == "1",
             )
+            if app.platformName() == "xcb":
+                logging.warning(
+                    "UI is on xcb/XWayland — native maximize/minimize may hard-freeze on NVIDIA"
+                )
 
-        geo = window.ui.geometry()
-        logging.info(
-            "Main window shown (platform=%s shell=%s visible=%s geo=%sx%s+%s+%s soft_gl=%s)",
-            app.platformName(),
-            ui_shell,
-            window.ui.isVisible(),
-            geo.width(),
-            geo.height(),
-            geo.x(),
-            geo.y(),
-            os.environ.get("STEEMPEG_SOFT_GL", "0") == "1",
-        )
-        if app.platformName() == "xcb":
-            logging.warning(
-                "UI is on xcb/XWayland — native maximize/minimize may hard-freeze on NVIDIA"
-            )
+            def _apply_custom_shell_native():
+                from steempeg.ui.window_chrome import ensure_startup_maximized
 
-        def _apply_custom_shell_native():
-            from steempeg.ui.window_chrome import ensure_startup_maximized
+                # Maximize / FRAMECHANGED can wipe WM_SETICON — re-stamp after.
+                ensure_startup_maximized(window.ui)
+                _force_native_window_icon(window.ui, icon_path)
+                tb = getattr(window.ui, "title_bar", None)
+                if tb is not None:
+                    tb.sync_window_state()
 
-            # Maximize / FRAMECHANGED can wipe WM_SETICON — re-stamp after.
-            ensure_startup_maximized(window.ui)
-            _force_native_window_icon(window.ui, icon_path)
-            tb = getattr(window.ui, "title_bar", None)
-            if tb is not None:
-                tb.sync_window_state()
+            # Second pass after maximize settles (icon + NCCALCSIZE); caption already
+            # stripped before the first show above.
+            QTimer.singleShot(0, _apply_custom_shell_native)
+            # Second pass: after the first paint / shell settle (post-update launches
+            # sometimes need another poke before Windows shows the branded icon).
+            QTimer.singleShot(400, lambda: _force_native_window_icon(window.ui, icon_path))
+            from steempeg.ui.window_chrome import ensure_startup_maximized as _ensure_max
 
-        # Second pass after maximize settles (icon + NCCALCSIZE); caption already
-        # stripped before the first show above.
-        QTimer.singleShot(0, _apply_custom_shell_native)
-        # Second pass: after the first paint / shell settle (post-update launches
-        # sometimes need another poke before Windows shows the branded icon).
-        QTimer.singleShot(400, lambda: _force_native_window_icon(window.ui, icon_path))
-        from steempeg.ui.window_chrome import ensure_startup_maximized as _ensure_max
+            QTimer.singleShot(450, lambda: _ensure_max(window.ui))
+            QTimer.singleShot(500, lambda: _force_native_window_icon(window.ui, icon_path))
+            if args.updated_from:
+                QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
 
-        QTimer.singleShot(450, lambda: _ensure_max(window.ui))
-        QTimer.singleShot(500, lambda: _force_native_window_icon(window.ui, icon_path))
-        if args.updated_from:
-            QTimer.singleShot(800, lambda: _force_native_window_icon(window.ui, icon_path))
+                def _post_update_ui():
+                    _ensure_max(window.ui)
+                    window.show_update_success(args.updated_from, args.backup_folder)
+                    _ensure_max(window.ui)
 
-            def _post_update_ui():
-                _ensure_max(window.ui)
-                window.show_update_success(args.updated_from, args.backup_folder)
-                _ensure_max(window.ui)
+                QTimer.singleShot(1000, _post_update_ui)
 
-            QTimer.singleShot(1000, _post_update_ui)
+        if args.background and window._tray.keeps_running_on_close():
+            window._tray.set_first_reveal(_reveal_main_window)
+            logging.info("Background launch: main window stays hidden until opened from the tray")
+        else:
+            _reveal_main_window()
 
         sys.exit(app.exec())
 
