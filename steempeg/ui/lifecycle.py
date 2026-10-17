@@ -502,8 +502,32 @@ class LifecycleMixin:
                 state = "busy"
             self.update_status_indicator(text, state)
 
+    def install_tray(self, *, background_launch: bool = False) -> None:
+        """Creates the tray icon and applies the «Keep Steempeg running in the tray» setting."""
+        from steempeg.ui.settings_prefs import load_keep_running_in_tray
+        from steempeg.ui.tray import SteempegTray
+
+        self._tray = SteempegTray(self, background_launch=background_launch)
+        try:
+            settings = self.load_user_settings() or {}
+        except Exception:
+            settings = {}
+        self._tray.apply_keep_running(load_keep_running_in_tray(settings))
+
+    def apply_keep_running_in_tray(self, enabled: bool) -> None:
+        """Turns tray mode on / off live after Settings → Save."""
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.apply_keep_running(enabled)
+
     def closeEvent(self, event):
         """ Triggered automatically when the window's red 'X' button is clicked """
+        # Must run before the ffmpeg kill below, or hiding to tray would abort renders.
+        tray = getattr(self, "_tray", None)
+        if tray is not None and tray.keeps_running_on_close():
+            event.ignore()
+            tray.hide_main_window()
+            return
         self._force_pause = True
         self._is_closing = True
 
