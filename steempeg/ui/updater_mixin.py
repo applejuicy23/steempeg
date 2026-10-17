@@ -320,8 +320,15 @@ class UpdaterMixin:
             keep_presets=bool(keep.get("presets", True)),
         )
         spawn_update_handler(job)
+        self._allow_quit_past_tray()
         QApplication.quit()
         sys.exit(0)
+
+    def _allow_quit_past_tray(self) -> None:
+        """Tells the tray this is a real quit so closing the main window is not turned into hide."""
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.mark_quitting()
 
     def _clear_update_chrome_hover(self) -> None:
         """Reset stuck hand-cursor / traffic-light hover after Update Center modals."""
@@ -527,5 +534,6 @@ exec ./"{exe_name}"
             os.chmod(sh_path, 0o755)
             subprocess.Popen(["/bin/bash", sh_path], cwd=exe_dir, start_new_session=True, env=env)
 
+        self._allow_quit_past_tray()
         QApplication.quit()
         sys.exit(0)
