@@ -27,7 +27,8 @@ def restart_application(app_obj=None) -> None:
             pass
 
     exe = sys.executable
-    argv = list(sys.argv)
+    # The user restarts from a visible window, so the new process must show it too.
+    argv = [arg for arg in sys.argv if arg != "--background"]
     if getattr(sys, "frozen", False):
         # Frozen: argv[0] is the exe; only pass trailing args.
         ok = QProcess.startDetached(exe, argv[1:])
@@ -37,6 +38,9 @@ def restart_application(app_obj=None) -> None:
         _log.error("QProcess.startDetached failed for restart (%s %s)", exe, argv)
         return
 
+    tray = getattr(app_obj, "_tray", None) if app_obj is not None else None
+    if tray is not None:
+        tray.mark_quitting()
     qapp = QApplication.instance()
     if qapp is not None:
         qapp.quit()
