@@ -595,7 +595,7 @@ class SmartDeletorPanel(QWidget):
         self._view_chrome = ViewModeChrome(toolbar, initial_mode="list", dense=COMFORT, initial_count="")
         self._view_chrome.mode_changed.connect(self._on_view_mode)
         self._view_chrome.add_to_layout(tl)
-        self._summary = ElidedLabel("Pick rules, then Find")
+        self._summary = ElidedLabel("")
         self._view_chrome._apply_count_style(self._summary)
         self._summary.setMinimumWidth(0)
         self._summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -682,8 +682,13 @@ class SmartDeletorPanel(QWidget):
         self._chk_permanent = _check("Delete permanently")
         self._chk_permanent.setToolTip("Skip the Recycle Bin — cannot be undone")
         self._chk_permanent.toggled.connect(self._sync_start_button)
-        bottom = QHBoxLayout()
+        actions = QFrame()
+        actions.setObjectName("deletorActions")
+        self._actions_bar = actions
+        bottom = QHBoxLayout(actions)
+        bottom.setContentsMargins(16, 6, 16, 6)
         bottom.setSpacing(8)
+        bottom.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         bottom.addWidget(self._chk_permanent, 0, Qt.AlignmentFlag.AlignVCenter)
         bottom.addStretch()
         self._btn_cancel = QPushButton("Cancel")
@@ -697,15 +702,19 @@ class SmartDeletorPanel(QWidget):
         self._btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_start.clicked.connect(self._emit_start)
         bottom.addWidget(self._btn_start)
-        cl.addLayout(bottom)
 
         outer.addWidget(container, 1)
+        actions_row = QHBoxLayout()
+        actions_row.setContentsMargins(_QUEUE_CHROME_INSET, 0, _QUEUE_CHROME_INSET, 0)
+        actions_row.addWidget(actions)
+        outer.addLayout(actions_row)
         self.apply_ui_theme_chrome()
         self._sync_start_button()
 
     def apply_ui_theme_chrome(self) -> None:
         """Re-tint every control for the active theme (Default / TrueDark / OLED)."""
         self._toolbar.setStyleSheet(toolbar_mega_pill_style(COMFORT, object_name="deletorToolbar"))
+        self._actions_bar.setStyleSheet(toolbar_mega_pill_style(COMFORT, object_name="deletorActions"))
         self._container.setStyleSheet(ut.queue_list_panel_stylesheet())
         for btn in (self._btn_find, self._btn_cancel):
             btn.setStyleSheet(_btn_style(32))
