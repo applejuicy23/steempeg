@@ -156,6 +156,7 @@ class NewClipWatcher(QObject):
         self._fs.directoryChanged.connect(self._on_container_changed)
         self._known: set[str] = set()
         self._pending: dict[str, dict] = {}
+        self._paused = False
         self._poll = QTimer(self)
         self._poll.setInterval(POLL_MS)
         self._poll.timeout.connect(self._check_pending)
@@ -191,6 +192,18 @@ class NewClipWatcher(QObject):
         """Returns the folders currently being watched."""
         return list(self._fs.directories())
 
+    def is_paused(self) -> bool:
+        """Tells whether new clips are currently being ignored."""
+        return self._paused
+
+    def set_paused(self, paused: bool) -> None:
+        """Pauses or resumes announcements; clips saved while paused stay silent forever."""
+        self._paused = bool(paused)
+        if self._paused:
+            self._pending.clear()
+            self._poll.stop()
+        _log.info("New-clip watcher: %s", "paused" if self._paused else "resumed")
+
     def _on_container_changed(self, container: str) -> None:
         """Queues clip folders that appeared in a container since the last look."""
         now = time.monotonic()
@@ -198,6 +211,8 @@ class NewClipWatcher(QObject):
             if key in self._known:
                 continue
             self._known.add(key)
+            if self._paused:
+                continue
             self._pending[path] = {"since": now, "print": None, "stable_at": now}
             _log.info("New-clip watcher: saw %s, waiting for Steam to finish", path)
         if self._pending and not self._poll.isActive():
