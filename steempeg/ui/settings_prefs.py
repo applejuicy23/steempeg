@@ -624,6 +624,36 @@ def save_hide_update_available_badge(app, hide: bool) -> None:
     )
 
 
+# ----- Tray / background mode -----
+
+# Red close button hides the main window to the tray instead of quitting.
+KEY_KEEP_RUNNING_IN_TRAY = "keep_running_in_tray"
+DEFAULT_KEEP_RUNNING_IN_TRAY = False
+
+
+def normalize_keep_running_in_tray(value: object | None) -> bool:
+    """Turns a stored value (bool / number / text) into the tray on/off flag."""
+    if value is None:
+        return DEFAULT_KEEP_RUNNING_IN_TRAY
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_KEEP_RUNNING_IN_TRAY
+
+
+def load_keep_running_in_tray(settings: dict | None) -> bool:
+    """Reads whether closing the main window should hide Steempeg in the tray."""
+    return normalize_keep_running_in_tray(
+        (settings or {}).get(KEY_KEEP_RUNNING_IN_TRAY, DEFAULT_KEEP_RUNNING_IN_TRAY)
+    )
+
+
 # ----- Update Center: Keep when updating -----
 
 KEY_UPDATE_KEEP_WHEN = "update_keep_when_updating"
