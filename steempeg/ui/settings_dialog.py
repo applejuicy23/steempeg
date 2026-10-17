@@ -117,6 +117,7 @@ from steempeg.ui.message_dialog import (
     steempeg_question,
     steempeg_warning,
 )
+from steempeg.ui.tray import tray_is_supported
 from steempeg.ui.shell_chooser import (
     UI_SHELL_ASK_KEY,
     UI_SHELL_DESKTOP,
@@ -168,6 +169,7 @@ from steempeg.ui.settings_prefs import (
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
     KEY_HIDE_UPDATE_AVAILABLE_BADGE,
+    KEY_KEEP_RUNNING_IN_TRAY,
     KEY_UPDATE_CHECK_INTERVAL,
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
@@ -199,6 +201,7 @@ from steempeg.ui.settings_prefs import (
     load_ffmpeg_log_level,
     load_hwdec_preview,
     load_hide_update_available_badge,
+    load_keep_running_in_tray,
     load_marker_trim_offset_ms,
     load_markers_on_strip,
     load_media_cache_limit_gb,
@@ -546,6 +549,17 @@ class SettingsDialog(SteempegDialog):
         else:
             g.addWidget(self._chk_ask_shell)
             g.addWidget(self._hint("Applies the next time Steempeg starts."))
+
+        self._chk_keep_running_in_tray = SteempegCheckBox("Keep Steempeg running in the tray")
+        self._chk_keep_running_in_tray.setChecked(load_keep_running_in_tray(settings))
+        if tray_is_supported():
+            g.addWidget(self._chk_keep_running_in_tray)
+            g.addWidget(
+                self._hint(
+                    "The red close button hides Steempeg to the tray, so new Steam "
+                    "clips still pop up. Quit from the tray icon menu."
+                )
+            )
 
         self._chk_deck_controls = SteempegCheckBox("Console mode (gamepad)")
         self._chk_deck_controls.setChecked(load_deck_controls(settings))
@@ -2068,6 +2082,11 @@ class SettingsDialog(SteempegDialog):
             ):
                 return True
 
+        chk_tray = getattr(self, "_chk_keep_running_in_tray", None)
+        if chk_tray is not None:
+            if bool(chk_tray.isChecked()) != load_keep_running_in_tray(prev):
+                return True
+
         return False
 
     def _restart_app(self) -> None:
@@ -2768,6 +2787,11 @@ class SettingsDialog(SteempegDialog):
             deferred.append(
                 lambda h=hide_badge: self._app.apply_hide_update_available_badge(h)
             )
+
+        keep_in_tray = bool(self._chk_keep_running_in_tray.isChecked())
+        pending[KEY_KEEP_RUNNING_IN_TRAY] = keep_in_tray
+        if hasattr(self._app, "apply_keep_running_in_tray"):
+            deferred.append(lambda k=keep_in_tray: self._app.apply_keep_running_in_tray(k))
 
         requested = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         folder, fell_back = ensure_usable_export_folder(requested)
