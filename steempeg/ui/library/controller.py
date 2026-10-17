@@ -3260,9 +3260,46 @@ class LibraryMixin:
         self._new_clip_watcher.start(list(getattr(self, "clips_folders", []) or []))
 
     def _on_new_clip_ready(self, clip_path: str) -> None:
-        """Shows the «New clip» popup and quietly adds the clip to the library."""
+        """Remembers the clip, shows the «New clip» popup and quietly adds it to the library."""
+        self._last_new_clip_path = clip_path
         self.show_new_clip_popup(clip_path)
         self._append_new_clip_to_library()
+
+    def is_new_clip_watch_paused(self) -> bool:
+        """Tells whether new Steam clips are currently ignored (tray menu toggle)."""
+        watcher = getattr(self, "_new_clip_watcher", None)
+        return bool(watcher is not None and watcher.is_paused())
+
+    def set_new_clip_watch_paused(self, paused: bool) -> None:
+        """Pauses or resumes new-clip popups; clips saved while paused stay quiet."""
+        watcher = getattr(self, "_new_clip_watcher", None)
+        if watcher is not None:
+            watcher.set_paused(paused)
+
+    def find_last_clip_for_express(self) -> str:
+        """Returns the clip saved most recently this session, else the newest library clip, else ''."""
+        last = getattr(self, "_last_new_clip_path", "") or ""
+        if last and os.path.isdir(last):
+            return last
+        newest = self.list_newest_library_clips(1)
+        return newest[0] if newest else ""
+
+    def bring_main_window_forward(self) -> None:
+        """Shows the main window from the tray / minimized state and focuses it."""
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.show_main_window()
+            return
+        from steempeg.infra.window_focus import force_widget_foreground
+
+        window = self.ui
+        if window.isMinimized():
+            window.setWindowState(
+                (window.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
+            )
+        window.show()
+        window.raise_()
+        force_widget_foreground(window)
 
     def show_new_clip_popup(self, clip_path: str) -> None:
         """Shows the «New clip» corner card for a clip folder (also used by Dev Tools)."""
@@ -3311,16 +3348,7 @@ class LibraryMixin:
 
     def open_new_clip_from_popup(self, clip_path: str, *, open_render_settings: bool = False) -> None:
         """Brings the main window forward and opens the clip once the library lists it."""
-        from steempeg.infra.window_focus import force_widget_foreground
-
-        window = self.ui
-        if window.isMinimized():
-            window.setWindowState(
-                (window.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
-            )
-        window.show()
-        window.raise_()
-        force_widget_foreground(window)
+        self.bring_main_window_forward()
         self._open_new_clip_when_listed(
             clip_path, attempts_left=40, open_render_settings=open_render_settings
         )
