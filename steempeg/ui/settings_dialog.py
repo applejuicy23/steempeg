@@ -259,6 +259,7 @@ from steempeg.ui.settings_prefs import (
     DEFAULT_MPV_LOG_LEVEL,
     DEFAULT_SHELL_SIDE_LAYOUT,
 )
+from steempeg.ui import settings_layouts
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
@@ -304,6 +305,9 @@ _HINT = (
 )
 
 _SETTINGS_DESIGN_W = 540
+# Rail and one-scroll frames carry a section rail beside the cards.
+_SETTINGS_RAIL_DESIGN_W = 780
+_SETTINGS_RAIL_MIN_W = 640
 _SETTINGS_DESIGN_H = 560
 # Keep the shell shorter than the Steempeg window / work area so it can center.
 _SETTINGS_HEIGHT_FRAC = 0.85
@@ -368,16 +372,22 @@ class _SettingsTabScroll(QScrollArea):
         return QSize(200, 120)
 
 
-def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
+def _settings_page_inner_stylesheet(bg: str) -> str:
+    """Shell fill for the scroll body only; children keep their own faces (section cards)."""
+    return f"QWidget#settingsPageInner {{ background-color: {bg}; }}"
+
+
+def _scroll_settings_tab(inner: QWidget, bg: str | None = None) -> QScrollArea:
     """Wrap a settings tab page; lavender pill scrollbar matches the library."""
     from steempeg.ui.library.library_styles import (
         LIBRARY_SCROLLBAR_VERTICAL,
         install_library_vertical_scrollbar,
     )
 
-    bg = tok.BG_SHELL
+    bg = bg or tok.BG_SHELL
+    inner.setObjectName("settingsPageInner")
     inner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    inner.setStyleSheet(f"background-color: {bg};")
+    inner.setStyleSheet(_settings_page_inner_stylesheet(bg))
 
     scroll = _SettingsTabScroll()
     scroll.setWidgetResizable(True)
@@ -394,15 +404,25 @@ def _scroll_settings_tab(inner: QWidget) -> QScrollArea:
 
 
 class SettingsDialog(SteempegDialog):
-    """App Settings — tabbed: General · Visual · Notifications · Performance · Support · PRO · Advanced."""
+    """App Settings — General · Visual · Notifications · Performance · Support · PRO · Advanced.
 
-    def __init__(self, app, parent=None, **theme_kwargs):
+    Stock frame is the section rail with cards; Dev can open the one-scroll or
+    classic-tabs frame (``settings_layout``).
+    """
+
+    def __init__(self, app, parent=None, *, settings_layout: str | None = None, **theme_kwargs):
         parent_w = parent or getattr(app, "ui", None)
         if not theme_kwargs.get("bar_color"):
             theme_kwargs = {**dialog_theme(parent_w), **theme_kwargs}
         super().__init__("Settings", parent_w, **theme_kwargs)
         self._app = app
-        self.setMinimumWidth(480)
+        self._settings_layout = settings_layouts.normalize_settings_layout(settings_layout)
+        if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
+            self._design_w = _SETTINGS_DESIGN_W
+            self.setMinimumWidth(480)
+        else:
+            self._design_w = _SETTINGS_RAIL_DESIGN_W
+            self.setMinimumWidth(_SETTINGS_RAIL_MIN_W)
         self.setMinimumHeight(_SETTINGS_MIN_H)
         self._apply_settings_geometry()
 
@@ -416,13 +436,8 @@ class SettingsDialog(SteempegDialog):
         root = self.content_layout
         root.setSpacing(10)
 
-        tabs = QTabWidget()
-        from steempeg.ui import ui_theme as ut
-
-        tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
-        self._settings_tabs = tabs
-        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        root.addWidget(tabs, 1)
+        self._settings_pages: list[tuple[str, QWidget, QVBoxLayout]] = []
+        self._settings_frame = None
 
         # ----- General (Updates + Export + Render landing + Shell) -----
         general, g = _tab_page()
@@ -616,7 +631,7 @@ class SettingsDialog(SteempegDialog):
         )
         g.addLayout(restart_row)
         g.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(general), "General")
+        self._settings_pages.append(("General", general, g))
 
         # ----- Visual -----
         visual, v = _tab_page()
@@ -1133,7 +1148,7 @@ class SettingsDialog(SteempegDialog):
         )
 
         v.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(visual), "Visual")
+        self._settings_pages.append(("Visual", visual, v))
 
         # ----- Notifications -----
         notify, n = _tab_page()
@@ -1150,7 +1165,7 @@ class SettingsDialog(SteempegDialog):
             )
         )
         n.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(notify), "Notifications")
+        self._settings_pages.append(("Notifications", notify, n))
 
         # ----- Performance -----
         perf, p = _tab_page()
@@ -1227,7 +1242,7 @@ class SettingsDialog(SteempegDialog):
         )
 
         p.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(perf), "Performance")
+        self._settings_pages.append(("Performance", perf, p))
 
         # ----- Support -----
         support, s = _tab_page()
@@ -1310,7 +1325,7 @@ class SettingsDialog(SteempegDialog):
         self._import_status.setStyleSheet(_HINT)
         s.addWidget(self._import_status)
         s.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(support), "Support")
+        self._settings_pages.append(("Support", support, s))
 
         # ----- PRO -----
         pro_page, pro_lay = _tab_page()
@@ -1325,7 +1340,7 @@ class SettingsDialog(SteempegDialog):
             )
         )
         pro_lay.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(pro_page), "PRO")
+        self._settings_pages.append(("PRO", pro_page, pro_lay))
 
         # ----- Advanced -----
         advanced, a = _tab_page()
@@ -1450,7 +1465,8 @@ class SettingsDialog(SteempegDialog):
         )
 
         a.addStretch(1)
-        tabs.addTab(_scroll_settings_tab(advanced), "Advanced")
+        self._settings_pages.append(("Advanced", advanced, a))
+        self._mount_settings_frame(root)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -1478,13 +1494,49 @@ class SettingsDialog(SteempegDialog):
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
 
+    def _mount_settings_frame(self, root: QVBoxLayout) -> None:
+        """Puts the built pages into the picked frame: rail + cards, one scroll, or classic tabs."""
+        from steempeg.ui import ui_theme as ut
+
+        if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
+            tabs = QTabWidget()
+            tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
+            tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            for title, page, _layout in self._settings_pages:
+                tabs.addTab(_scroll_settings_tab(page), title)
+            self._settings_tabs = tabs
+            root.addWidget(tabs, 1)
+            return
+
+        for _title, _page, page_layout in self._settings_pages:
+            settings_layouts.regroup_page_into_cards(page_layout)
+        pages = [(title, page) for title, page, _layout in self._settings_pages]
+
+        def wrap_on_dialog_face(page: QWidget) -> QScrollArea:
+            """Cards sit straight on the dialog face, same as the rail beside them."""
+            return _scroll_settings_tab(page, bg=self._settings_body_bg())
+
+        if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_SCROLL:
+            frame = settings_layouts.SettingsScrollFrame(pages, wrap_on_dialog_face)
+        else:
+            frame = settings_layouts.SettingsRailFrame(pages, wrap_on_dialog_face)
+        self._settings_frame = frame
+        self._settings_tabs = frame.stack
+        root.addWidget(frame, 1)
+
+    def _settings_body_bg(self) -> str:
+        """Fill behind the pages: shell gray for classic tabs, the dialog face for card frames."""
+        if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
+            return tok.BG_SHELL
+        return getattr(self, "_bg_color", None) or tok.BG_SHELL
+
     def _apply_settings_geometry(self) -> None:
         """Comfort design size, capped so the shell stays on-screen and centerable."""
         from steempeg.ui.ui_density import scaled_dialog_size
 
         parent = self.parentWidget()
         w, h = scaled_dialog_size(
-            _SETTINGS_DESIGN_W, _SETTINGS_DESIGN_H, parent=parent
+            getattr(self, "_design_w", _SETTINGS_DESIGN_W), _SETTINGS_DESIGN_H, parent=parent
         )
         max_h = _settings_max_height(parent)
         target_h = min(h, max_h)
@@ -1550,8 +1602,10 @@ class SettingsDialog(SteempegDialog):
 
     @staticmethod
     def _section(text: str) -> QLabel:
+        """Bold section title; in the rail / scroll frames each one opens a new card."""
         lbl = QLabel(text)
         lbl.setStyleSheet(_SECTION)
+        settings_layouts.mark_section_title(lbl)
         return lbl
 
     @staticmethod
@@ -2200,6 +2254,8 @@ class SettingsDialog(SteempegDialog):
             if isinstance(btn, _TrafficLight):
                 btn.update()
                 continue
+            if btn.objectName() == settings_layouts.RAIL_BUTTON_OBJECT_NAME:
+                continue
             if btn.objectName() == "settingsPrimaryBtn" or btn is getattr(
                 self, "_btn_save", None
             ):
@@ -2220,12 +2276,22 @@ class SettingsDialog(SteempegDialog):
 
         super().apply_ui_theme_chrome()
         tabs = getattr(self, "_settings_tabs", None)
-        if tabs is not None:
+        if isinstance(tabs, QTabWidget):
             tabs.setStyleSheet(ut.settings_dialog_tabs_stylesheet())
-        bg = tok.BG_SHELL
+        frame = getattr(self, "_settings_frame", None)
+        if frame is not None:
+            frame.apply_ui_theme_chrome()
+        card_qss = settings_layouts.settings_card_stylesheet()
+        for card in self.findChildren(QFrame, settings_layouts.CARD_OBJECT_NAME):
+            card.setStyleSheet(card_qss)
+        bg = self._settings_body_bg()
         for scroll in self.findChildren(QScrollArea):
             inner = scroll.widget()
-            if inner is not None:
+            if inner is None:
+                continue
+            if inner.objectName() == "settingsPageInner":
+                inner.setStyleSheet(_settings_page_inner_stylesheet(bg))
+            else:
                 inner.setStyleSheet(f"background-color: {bg};")
             tok.apply_dialog_scroll_bg(scroll, bg)
             scroll.setStyleSheet(tok.dialog_scroll_stylesheet(bg) + LIBRARY_SCROLLBAR_VERTICAL)
@@ -3156,12 +3222,15 @@ class SettingsDialog(SteempegDialog):
         QTimer.singleShot(0, _run_deferred)
 
 
-def show_settings_dialog(app) -> None:
+def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
+    """Opens Settings modally; Dev passes ``settings_layout`` to preview the other frames."""
     from PySide6.QtWidgets import QWidget
 
     from steempeg.ui.window_chrome import force_app_cursor_resync
 
-    dlg = SettingsDialog(app, parent=getattr(app, "ui", None))
+    dlg = SettingsDialog(
+        app, parent=getattr(app, "ui", None), settings_layout=settings_layout
+    )
     app._app_settings_dlg = dlg
     app._app_settings_open = True
     app._deck_app_settings_focus_idx = 0
