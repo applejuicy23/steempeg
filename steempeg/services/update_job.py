@@ -61,7 +61,9 @@ def spawn_update_handler(job: UpdateJob) -> None:
     env.pop("_MEIPASS2", None)
     env.pop("_MEIPASS", None)
 
-    if getattr(sys, "frozen", False):
+    from steempeg.infra.paths import is_frozen_build
+
+    if is_frozen_build():
         cmd = [sys.executable, "--update-handler", "--job", job_path]
     else:
         # Portable Linux pack / dev: sys.executable is venv python.
