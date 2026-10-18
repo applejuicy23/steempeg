@@ -60,5 +60,8 @@ nav:
       - Clips Manager: library/clips-manager.md
       - Clip health: library/clip-health.md
       - Repair & salvage: library/repair-salvage.md
-  - More docs:
-      - Coming soon: more/index.md
+      - Launch modes: library/launch-modes.md
+  - Player: player/player.md
+  - Render settings: render/render-settings.md
+  - Updates & backups: app/updates.md
+  - More docs: more/index.md
