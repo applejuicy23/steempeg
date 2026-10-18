@@ -1127,6 +1127,29 @@ class DevModeDialog(SteempegDialog):
         g_express_lay.addLayout(express_row)
         lay.addWidget(g_express)
 
+        # -- Settings window frames (v55 redesign) --
+        from steempeg.ui.settings_layouts import SETTINGS_LAYOUT_LABELS
+
+        g_settings = QGroupBox("Settings layout (demo)")
+        g_settings_lay = QVBoxLayout(g_settings)
+        tip_settings = QLabel(
+            "Open Settings in another frame. Stock is the rail with cards; "
+            "the others are for comparing. Save works for real in all of them."
+        )
+        tip_settings.setWordWrap(True)
+        tip_settings.setStyleSheet("color: #b0b0b0; font-weight: normal;")
+        g_settings_lay.addWidget(tip_settings)
+        settings_row = QHBoxLayout()
+        for layout_name, label in SETTINGS_LAYOUT_LABELS:
+            btn_layout = QPushButton(label)
+            btn_layout.clicked.connect(
+                lambda _checked=False, name=layout_name: self._open_settings_in_layout(name)
+            )
+            settings_row.addWidget(btn_layout)
+        settings_row.addStretch()
+        g_settings_lay.addLayout(settings_row)
+        lay.addWidget(g_settings)
+
         # -- Launch splash (v50 startup loader) --
         g_splash = QGroupBox("Launch splash (startup loader)")
         g_splash_lay = QVBoxLayout(g_splash)
@@ -1648,6 +1671,17 @@ class DevModeDialog(SteempegDialog):
             return
         host.open_express_player(clips[0])
         self._tools_log.appendPlainText(f"Express player: {os.path.basename(clips[0])}")
+
+    def _open_settings_in_layout(self, layout_name: str) -> None:
+        """Opens the Settings window in the picked frame (rail / one scroll / classic tabs)."""
+        from steempeg.ui.settings_dialog import show_settings_dialog
+
+        host = self._resolve_app_host()
+        if host is None:
+            self._tools_log.appendPlainText("ERROR: app host not available.")
+            return
+        self._tools_log.appendPlainText(f"Settings layout: {layout_name}")
+        show_settings_dialog(host, settings_layout=layout_name)
 
     def _simulate_launch_splash(self) -> None:
         """Replay the v50 cold-start splash card for visual design review."""
