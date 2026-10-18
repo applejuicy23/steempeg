@@ -21,7 +21,10 @@ _COMPANION_SUFFIX = ".steempeg.json"
 
 
 def _bundled_bin_dir() -> str:
-    if getattr(sys, "frozen", False):
+    """Folder with the bundled ffmpeg / ffprobe: next to the exe, or repo/bin from source."""
+    from steempeg.infra.paths import is_frozen_build
+
+    if is_frozen_build():
         base = os.path.dirname(sys.executable)
     else:
         # steempeg/core/rendered_media.py -> repo root
