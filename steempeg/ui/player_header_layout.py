@@ -530,11 +530,17 @@ def apply_header_title_elide(app, cluster_max: int) -> None:
     budget = _title_text_budget(app, title, cluster_max)
     label.setMinimumWidth(0)
     label.setMaximumWidth(max(40, budget))
-    label.setWordWrap(False)
+    # QLabel.setWordWrap / setFont relayout even when nothing changes; that posts a
+    # LayoutRequest back into _HeaderCenterSyncFilter and spins the GUI thread forever.
+    if label.wordWrap():
+        label.setWordWrap(False)
 
     font_px = player_header_font_px(app)
     font = player_header_title_qfont(font_px)
-    label.setFont(font)
+    # Compare px, not QFont: the label's QSS font never equals the token QFont.
+    if getattr(app, "_player_header_elide_font_px", None) != font_px:
+        app._player_header_elide_font_px = font_px
+        label.setFont(font)
     fm = QFontMetrics(font)
 
     full_title = str(meta.get("title") or "").strip() or "—"
@@ -594,15 +600,16 @@ def sync_centered_title_width(app) -> None:
     if not _widget_alive(title) or not _widget_alive(header):
         return
 
-    title.setSizePolicy(
-        QSizePolicy.Policy.Preferred,
-        QSizePolicy.Policy.Preferred,
-    )
-    title.show()
+    preferred = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+    if title.sizePolicy() != preferred:
+        title.setSizePolicy(preferred)
+    if title.isHidden():
+        title.show()
     for name in ("custom_icon_label", "custom_text_label"):
         child = getattr(app, name, None)
         if _widget_alive(child):
-            child.show()
+            if child.isHidden():
+                child.show()
             if name == "custom_text_label":
                 child.setMinimumWidth(0)
     # Leave ``btn_player_header_info`` alone — ``refresh_player_header_info``
@@ -620,13 +627,12 @@ def sync_centered_title_width(app) -> None:
 
     cap = title_cluster_max_width(app, header)
     title.setMaximumWidth(cap)
-    title.setMinimumWidth(0)
     # Soft min so short/placeholder titles are not crushed by Expanding spacers,
     # but never demand more than the dock-safe cap (that caused underlap).
+    # Set it once: a 0 → hint bounce per pass re-posts LayoutRequest into the filter.
     apply_header_title_elide(app, cap)
     hint = max(0, int(title.sizeHint().width()))
-    if hint > 0:
-        title.setMinimumWidth(min(hint, cap))
+    title.setMinimumWidth(min(hint, cap) if hint > 0 else 0)
 
 
 def sync_header_center_mirror(app) -> None:
@@ -751,6 +757,9 @@ class _HeaderCenterSyncFilter(QObject):
             # handle open→kiss path and twitches the player column (Stage B).
             if bool(getattr(app, "_splitter_dragging", False)):
                 return False
+            if getattr(self, "_syncing", False):
+                return False
+            self._syncing = True
             try:
                 if get_header_layout() == HEADER_LAYOUT_STEAM_LIKE:
                     sync_header_center_mirror(app)
@@ -758,6 +767,8 @@ class _HeaderCenterSyncFilter(QObject):
                     sync_centered_title_width(app)
             except Exception:
                 pass
+            finally:
+                self._syncing = False
         return False
 
 
