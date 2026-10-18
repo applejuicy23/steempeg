@@ -99,7 +99,9 @@ def _toast_exe_candidate() -> str | None:
     Dev/Code Runner processes are ``python.exe``; binding the AUMID shortcut to a
     different exe leaves the taskbar on the blank white file icon.
     """
-    if not getattr(sys, "frozen", False):
+    from steempeg.infra.paths import is_frozen_build
+
+    if not is_frozen_build():
         return None
     exe = os.path.abspath(sys.executable)
     if exe.lower().endswith(".exe") and os.path.isfile(exe):
@@ -119,7 +121,9 @@ def _shortcut_launch_target() -> tuple[str, str, str] | None:
     exe = _toast_exe_candidate()
     if exe:
         return exe, "", str(Path(exe).parent)
-    if getattr(sys, "frozen", False):
+    from steempeg.infra.paths import is_frozen_build
+
+    if is_frozen_build():
         return None
     py = os.path.abspath(sys.executable or "")
     if not py or not os.path.isfile(py):
