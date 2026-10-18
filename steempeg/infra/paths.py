@@ -18,14 +18,22 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _ASSETS_DIRNAME = "assets"
 
 
+def is_frozen_build() -> bool:
+    """True when running as a packed Steempeg.exe (PyInstaller or Nuitka), not from source.
+
+    Nuitka does not set ``sys.frozen``; it marks every compiled module with ``__compiled__``.
+    """
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
 def get_install_root() -> str:
     """Folder that owns the Steempeg install (launchers, bin/, logs/, cache/).
 
-    * Frozen (PyInstaller): directory of the executable.
+    * Frozen (PyInstaller / Nuitka): directory of the executable.
     * Portable Linux pack: directory with ``Steempeg-linux`` + ``venv/`` + ``steempeg/``.
     * Dev checkout: repository root.
     """
-    if getattr(sys, "frozen", False):
+    if is_frozen_build():
         return os.path.dirname(os.path.abspath(sys.executable))
 
     # Portable pack often runs as ``venv/bin/python -m steempeg`` — climb out of venv.
@@ -45,7 +53,7 @@ def get_install_root() -> str:
 
 def get_resource_path(relative_path):
     """Resolve a bundled asset (lives under assets/) for both the frozen build and a plain source run."""
-    if getattr(sys, "frozen", False):
+    if is_frozen_build():
         base_dir = get_install_root()
         direct_path = os.path.join(base_dir, _ASSETS_DIRNAME, relative_path)
         if os.path.exists(direct_path):
