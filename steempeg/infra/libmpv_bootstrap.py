@@ -51,8 +51,10 @@ def _is_gl_poison(path_or_name: str) -> bool:
 
 
 def _candidate_dirs() -> list[str]:
+    from steempeg.infra.paths import is_frozen_build
+
     dirs: list[str] = []
-    if getattr(sys, "frozen", False):
+    if is_frozen_build():
         exe_dir = os.path.dirname(os.path.abspath(sys.executable))
         # Wrapper renames ELF to *.bin — still same directory.
         meipass = getattr(sys, "_MEIPASS", None)
