@@ -15,6 +15,8 @@ def restart_application(app_obj=None) -> None:
     from PySide6.QtCore import QProcess
     from PySide6.QtWidgets import QApplication
 
+    from steempeg.infra.paths import is_frozen_build
+
     lock = getattr(app_obj, "_instance_lock", None) if app_obj is not None else None
     if lock is not None:
         try:
@@ -29,7 +31,7 @@ def restart_application(app_obj=None) -> None:
     exe = sys.executable
     # The user restarts from a visible window, so the new process must show it too.
     argv = [arg for arg in sys.argv if arg != "--background"]
-    if getattr(sys, "frozen", False):
+    if is_frozen_build():
         # Frozen: argv[0] is the exe; only pass trailing args.
         ok = QProcess.startDetached(exe, argv[1:])
     else:
