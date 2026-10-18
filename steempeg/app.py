@@ -35,7 +35,7 @@ import logging
 from datetime import datetime
 
 
-if getattr(sys, 'frozen', False):
+if paths.is_frozen_build():
     _base_dir = os.path.dirname(sys.executable)
 else:
     _base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
