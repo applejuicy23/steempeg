@@ -402,7 +402,9 @@ def ensure_toast_protocol_registered() -> None:
     try:
         import winreg
 
-        if getattr(sys, "frozen", False):
+        from steempeg.infra.paths import is_frozen_build
+
+        if is_frozen_build():
             cmd = f'"{os.path.abspath(sys.executable)}" --raise-existing "%1"'
         else:
             cmd = f'"{os.path.abspath(sys.executable)}" -m steempeg --raise-existing "%1"'
