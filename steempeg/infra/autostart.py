@@ -18,7 +18,9 @@ RUN_VALUE_NAME = "Steempeg"
 
 def autostart_is_supported() -> bool:
     """True on Windows builds packed into Steempeg.exe (not when running from source)."""
-    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+    from steempeg.infra.paths import is_frozen_build
+
+    return sys.platform == "win32" and is_frozen_build()
 
 
 def build_autostart_command() -> str:
