@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from steempeg.core import capabilities
+from steempeg.infra.paths import is_frozen_build
 from steempeg.ui.design_tokens import ACCENT_PRIMARY
 from steempeg.ui.cq_size_estimator import cq_size_text
 from steempeg.ui.render_pro_controls import (
@@ -173,7 +174,7 @@ def _fmt_mbps(value: float) -> str:
 
 # Folder holding the bundled ffmpeg/ffprobe binaries (repo/bin), mirroring the
 # PATH setup the application performs at startup.
-if getattr(sys, "frozen", False):
+if is_frozen_build():
     _base_dir = os.path.dirname(sys.executable)
 else:
     _base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
