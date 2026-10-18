@@ -1,11 +1,13 @@
 # Getting Started
 
-No installer. Extract the zip for your platform and run. Pick the build from
+Extract the zip for your platform and run, or use the Windows installer. Pick
+the build from
 **[Releases](https://github.com/applejuicy23/steempeg/releases/latest)**.
 
 | Platform | Download | Launch |
 |---|---|---|
-| **Windows** | `Steempeg_vXX.zip` (no platform suffix) | `Steempeg.exe` |
+| **Windows (installer)** | `Steempeg_vXX_setup.exe` | Start menu / desktop shortcut |
+| **Windows (portable)** | `Steempeg_vXX.zip` (no platform suffix) | `Steempeg.exe` |
 | **Linux** | `Steempeg_vXX_linux.zip` | `Steempeg-linux` / `Steempeg.sh` |
 | **Steam Deck** | `Steempeg_vXX_steamdeck.zip` | same as Linux |
 
@@ -13,11 +15,16 @@ No installer. Extract the zip for your platform and run. Pick the build from
 
 ## Windows
 
-1. Download **`Steempeg_vXX.zip`** from Releases.
-2. Extract to any folder.
-3. Run **`Steempeg.exe`**.
-4. At first launch, pick **Desktop** or **Portable** shell (you can keep that choice later).
-5. Point Steempeg at your Steam clips folder (or let it auto-detect), open a clip, set quality, hit **Start**.
+1. Get Steempeg one of two ways:
+    - **Installer:** run **`Steempeg_vXX_setup.exe`**. It installs for your
+      user only into `%LocalAppData%\Programs\Steempeg`, no admin needed.
+      Options: a desktop shortcut and **Start Steempeg with Windows** (hidden
+      in the tray, catches new Steam clips). Uninstall from Windows Settings →
+      Apps.
+    - **Portable:** extract **`Steempeg_vXX.zip`** to any folder and run
+      **`Steempeg.exe`**.
+2. At first launch, pick **Desktop** or **Portable** shell (you can keep that choice later).
+3. Point Steempeg at your Steam clips folder (or let it auto-detect), open a clip, set quality, hit **Start**.
 
 Steam Game Recording clips usually live under your Steam userdata `gamerecordings/clips` tree.
 
