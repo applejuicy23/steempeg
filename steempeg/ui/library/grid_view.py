@@ -455,7 +455,6 @@ class ClipCard(qtw.QWidget):
         from steempeg.ui.clip_card_style import (
             CARD_STYLE_ROUND,
             CARD_STYLE_SQUARE,
-            CARD_STYLE_STEEMPEG_UI,
             FOOTER_SOFT_RADIUS,
             OUTER_RADIUS,
             get_clip_card_style,
