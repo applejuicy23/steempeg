@@ -98,17 +98,6 @@ def is_steamdeck_like() -> bool:
     return False
 
 
-def linux_mesa_friendly() -> bool:
-    """AMD / Intel / Deck — Mesa VAAPI path; not proprietary NVIDIA."""
-    if linux_has_nvidia_proprietary():
-        return False
-    return (
-        is_steamdeck_like()
-        or linux_has_amdgpu()
-        or linux_has_intel_i915()
-    )
-
-
 def resolve_linux_embed_gpu_hwdec(requested: str) -> tuple[str, str]:
     """Map Settings hwdec for ``vo=gpu`` + ``wid=`` embeds.
 
