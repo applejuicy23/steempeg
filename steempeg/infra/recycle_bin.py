@@ -15,12 +15,6 @@ _FOF_NOERRORUI = 0x0400
 _FOF_NOCONFIRMMKDIR = 0x0200
 
 
-def recycle_bin_available() -> bool:
-    if sys.platform == "win32":
-        return True
-    return shutil.which("gio") is not None
-
-
 def _send_windows(path: str) -> None:
     import ctypes
     from ctypes import wintypes
