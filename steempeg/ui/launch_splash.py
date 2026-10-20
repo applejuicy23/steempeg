@@ -156,10 +156,6 @@ class _SplashProgressBar(QWidget):
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
 
-    def set_pro(self, pro: bool) -> None:
-        self._pro = bool(pro)
-        self.update()
-
     def set_progress(self, value: float, *, soft_ceiling: float | None = None) -> None:
         self._target = max(0.0, min(100.0, float(value)))
         if soft_ceiling is None:
@@ -275,10 +271,6 @@ class _SplashBusySpinner(QWidget):
         self._tick.setInterval(_SPINNER_INTERVAL_MS)
         self._tick.timeout.connect(self._on_tick)
         self._tick.start()
-
-    def set_pro(self, pro: bool) -> None:
-        self._pro = bool(pro)
-        self.update()
 
     def set_fast(self, fast: bool) -> None:
         """High-speed spin during «Preparing workspace…»."""
