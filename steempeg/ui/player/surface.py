@@ -1,8 +1,7 @@
-"""The video surface that libmpv renders into, plus a 16:9 aspect helper.
+"""The video surface that libmpv renders into.
 
 MPVWrapper owns the child window the mpv player attaches to, draws an optional
-highlight border and keeps the video centered at 16:9. VideoAspectKeeper caps a
-widget's height to a 16:9 ratio so black bars do not appear above and below.
+highlight border and keeps the video centered at 16:9.
 
 Geometry follows the Windows formula: synchronous update_geometry on resize /
 move / show and on splitterMoved, with an early-out when the video rect is
@@ -24,7 +23,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -243,21 +242,3 @@ class MPVWrapper(QWidget):
         self._last_screen_origin = None
         self.update_geometry()
         self.update()
-
-
-class VideoAspectKeeper(QObject):
-    """Keeps the widget strictly within the 16:9 aspect ratio."""
-
-    def __init__(self, video_widget):
-        super().__init__(video_widget)
-        self.video_widget = video_widget
-        self.video_widget.installEventFilter(self)
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Resize:
-            w = event.size().width()
-            ideal_height = int(w * 9 / 16)
-            if self.video_widget.maximumHeight() != ideal_height:
-                self.video_widget.setMaximumHeight(ideal_height)
-
-        return super().eventFilter(obj, event)
