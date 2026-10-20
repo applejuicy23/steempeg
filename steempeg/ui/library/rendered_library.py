@@ -30,15 +30,11 @@ from PySide6.QtWidgets import (
 
 from steempeg.infra import cache
 from steempeg.core.rendered_media import (
-    canvas_markers_to_sidecar,
     extract_poster_frame,
     is_default_rendered_basename,
-    load_markers_sidecar,
     load_rendered_companion_meta,
-    markers_to_canvas,
     parse_app_id_from_clip_folder,
     parse_app_id_from_name,
-    save_markers_sidecar,
 )
 from steempeg.infra.locale_time import to_display_datetime
 from steempeg.library.rendered_scan import ScannedRenderedFile
@@ -47,7 +43,6 @@ from steempeg.library.rendered_library_cache import (
     save_rendered_library_cache,
 )
 from steempeg.library.screenshots_library_cache import (
-    files_from_screenshots_library_cache,
     save_screenshots_library_cache,
     screenshot_thumb_path_nostat,
 )
