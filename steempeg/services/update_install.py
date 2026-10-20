@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -29,16 +27,6 @@ _LAUNCHER_NAMES = (
     "Steempeg-linux",
     "Steempeg-steamdeck",
 )
-_VERSIONED_BACKUP_RE = re.compile(
-    r"^(old_version_v|pre_restore_v)[\d.]+$", re.IGNORECASE
-)
-
-
-def _is_versioned_backup_dir(name: str) -> bool:
-    """True for flat sibling backups — never nest these into a newer old_version_*."""
-    return bool(_VERSIONED_BACKUP_RE.match(name or ""))
-
-
 def resolve_extract_source(extract_root: str) -> str:
     items = os.listdir(extract_root)
     if len(items) == 1 and os.path.isdir(os.path.join(extract_root, items[0])):
@@ -141,68 +129,6 @@ def _bat_preserve_dir_guards(var: str = "%%D") -> str:
     """Chain of ``if /I not …`` so cmd.exe leaves user-data folders alone."""
     parts = [f'if /I not "{var}"=="{name}"' for name in sorted(_PRESERVE_DIRS)]
     return " ".join(parts)
-
-
-def _should_preserve(name: str, *, backup_folder: str | None, tmp_asset: str | None) -> bool:
-    if name in _PRESERVE_DIRS:
-        return True
-    if backup_folder and name == backup_folder:
-        return True
-    # Keep prior backups as flat siblings (avoid old_version_v40/old_version_v39.5/…).
-    if _is_versioned_backup_dir(name):
-        return True
-    if tmp_asset and name == f"{tmp_asset}.tmp":
-        return True
-    if name.endswith(".bat"):
-        return True
-    return False
-
-
-def apply_installed_update(
-    exe_dir: str,
-    source_dir: str,
-    *,
-    keep_backup: bool,
-    from_version: str,
-    tmp_asset_name: str | None = None,
-) -> tuple[str, str]:
-    """Replace live install files. Returns (new_exe_name, backup_folder_name)."""
-    backup_folder_name = f"old_version_v{from_version}" if keep_backup else "None"
-    backup_path = os.path.join(exe_dir, backup_folder_name) if keep_backup else None
-
-    if keep_backup and backup_path:
-        os.makedirs(backup_path, exist_ok=True)
-
-    for name in list(os.listdir(exe_dir)):
-        if _should_preserve(name, backup_folder=backup_folder_name if keep_backup else None, tmp_asset=tmp_asset_name):
-            continue
-        path = os.path.join(exe_dir, name)
-        if keep_backup and backup_path:
-            dest = os.path.join(backup_path, name)
-            if os.path.exists(dest):
-                if os.path.isdir(dest):
-                    shutil.rmtree(dest, ignore_errors=True)
-                else:
-                    os.remove(dest)
-            shutil.move(path, dest)
-        else:
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                os.remove(path)
-
-    for name in os.listdir(source_dir):
-        src = os.path.join(source_dir, name)
-        dst = os.path.join(exe_dir, name)
-        if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
-
-    new_exe_name = find_app_executable(source_dir)
-    ensure_portable_executables(exe_dir)
-    logging.info("UPDATE_INSTALL: installed %s (backup=%s)", new_exe_name, backup_folder_name)
-    return new_exe_name, backup_folder_name
 
 
 def _bat_path(path: str) -> str:
