@@ -32,7 +32,6 @@ from steempeg.ui.widgets.combo_chrome import (
 import sys
 import os
 import logging
-from datetime import datetime
 
 
 if paths.is_frozen_build():
@@ -167,16 +166,12 @@ def _force_native_window_icon(widget, ico_path):
 def get_save_directory():
     return paths.get_save_directory()
 
-from PySide6.QtCore import Qt
 
 
-from PySide6.QtGui import QIcon
-from PySide6.QtCore import Qt
 
 
     
 
-from PySide6.QtCore import Qt
 
 
 _PLAYBACK_BUTTONS_QSS = """
@@ -3134,8 +3129,6 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self.ui, 'size_slider'):
             self.ui.size_slider.setVisible(False)
             self.ui.size_slider.valueChanged.connect(self.on_slider_moved)
-
-        self._setup_bitrate_labels()
 
         self._setup_custom_target_size()
         
@@ -6396,38 +6389,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     scaled = [total - bottom, bottom]
                 v_splitter.setSizes(scaled)
 
-    def _setup_bitrate_labels(self):
-        # --- UI INJECTION: INDEPENDENT BITRATE LABELS ---
-        # Instead of stuffing multiple lines into one label, we create separate
-        # widgets so the Qt layout engine handles the vertical spacing perfectly
-        return
-        if hasattr(self.ui, 'orig_res_label'):
-            from PySide6.QtWidgets import QLabel
-
-            parent_layout = self.ui.orig_res_label.parentWidget().layout()
-
-            # Find the exact index of orig_res_label to insert right below it
-            insert_index = -1
-            for i in range(parent_layout.count()):
-                if parent_layout.itemAt(i).widget() == self.ui.orig_res_label:
-                    insert_index = i
-                    break
-
-            if insert_index != -1:
-                # 1. Create the Video Bitrate label
-                self.ui.label_vbitrate = QLabel("Video Bitrate:")
-                self.ui.label_vbitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
-                parent_layout.insertWidget(insert_index + 1, self.ui.label_vbitrate)
-
-                # 2. Create the Audio Bitrate label
-                self.ui.label_abitrate = QLabel("Audio Bitrate:")
-                self.ui.label_abitrate.setStyleSheet(self.ui.orig_res_label.styleSheet())
-                parent_layout.insertWidget(insert_index + 2, self.ui.label_abitrate)
     def _setup_custom_target_size(self):
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
         if hasattr(self.ui, 'label_target_size'):
             from PySide6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QSizePolicy, QLabel, QToolTip
-            from PySide6.QtGui import QIntValidator, QPixmap
+            from PySide6.QtGui import QIntValidator
             from PySide6.QtCore import QObject, QEvent
 
             self.size_container = QWidget()
@@ -6493,16 +6459,14 @@ from PySide6.QtCore import QObject
 
 
     
-from PySide6.QtCore import Qt
 
 
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject
 
 
 
   
-from PySide6.QtCore import QTimer
 
 
 
@@ -6533,8 +6497,7 @@ def main():
             raise SystemExit(0)
         raise SystemExit(0 if raise_steempeg_window() else 1)
 
-    from PySide6.QtWidgets import QApplication, QMessageBox
-    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import QTimer
     
     if sys.platform == "win32":
@@ -6712,7 +6675,7 @@ def main():
 
     if not args.background:
         try:
-            from steempeg.ui.launch_splash import finish_launch_splash, show_launch_splash
+            from steempeg.ui.launch_splash import show_launch_splash
 
             show_launch_splash()
             _launch_splash_progress(4, "Starting Steempeg…")
@@ -7077,7 +7040,7 @@ def main():
 
         sys.exit(app.exec())
 
-    except Exception as e:
+    except Exception:
         # Now no mistake can hide =)))))))) =))))) dsfhnuijdfgbjiklgfvbjknlbfcvxjknml
         error_text = traceback.format_exc()
         print(error_text)
