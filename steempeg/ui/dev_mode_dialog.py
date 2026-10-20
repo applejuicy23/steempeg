@@ -11,15 +11,12 @@ import random
 import re
 import shutil
 import subprocess
-import time
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from steempeg.core.dash import discovery as dash_discovery
 
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
