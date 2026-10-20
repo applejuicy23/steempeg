@@ -5,7 +5,6 @@ decide Steam SVG vs Steempeg CS2 PNGs, class tint/name, and custom icons.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
