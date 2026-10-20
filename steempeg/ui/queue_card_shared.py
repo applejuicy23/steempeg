@@ -3,7 +3,7 @@ import os
 
 from PySide6.QtCore import Qt, QEasingCurve, QPropertyAnimation
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 
 from steempeg.core.clip_thumbnails import resolve_clip_thumbnail
 from steempeg.infra.paths import get_resource_path
