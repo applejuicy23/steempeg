@@ -33,4 +33,4 @@ jobs:
           python -c "from steempeg.services.release_catalog import fetch_releases"
           python -c "from steempeg.services.updater import UpdateDownloadThread"
           python -c "from steempeg.services.update_job import UpdateJob"
-          python -c "from steempeg.services.update_install import apply_installed_update"
+          python -c "from steempeg.services.update_install import find_app_executable"
