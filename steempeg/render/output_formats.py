@@ -4,7 +4,6 @@ Pure logic — no Qt. Uses only encoders that ship with stock FFmpeg (no libfdk_
 """
 from __future__ import annotations
 
-from typing import Optional
 
 from steempeg.render.encode_speed import video_encoder_extra_args  # noqa: F401 — re-export
 
