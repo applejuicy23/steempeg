@@ -701,10 +701,6 @@ class SplitterRulesMixin:
         self.right_h_splitter.setSizes([0, room])
         return True
 
-    def _queue_pane_floor(self) -> int:
-        """Narrowest the queue renders at — its own content minimum."""
-        return max(int(self.render_queue_panel.minimumSizeHint().width()), 1)
-
     def _queue_layout_floor(self) -> int:
         """Hard open floor from layout_defaults (same role as Clips left min)."""
         from steempeg.ui.layout_defaults import queue_panel_min_width
