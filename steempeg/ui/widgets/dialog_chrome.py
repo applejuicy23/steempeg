@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.infra.paths import get_resource_path
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_utils import (
     app_logo_pixmap,
