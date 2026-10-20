@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from steempeg.infra import paths
 from steempeg.infra.paths import get_save_directory
 from steempeg.ui.icon_assets import load_icon
 from steempeg.render.queue import STATUS_COLORS, JobStatus, RenderJob
