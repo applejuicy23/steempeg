@@ -1,16 +1,14 @@
 """Filter popup for the library: a date/time range picker plus game and type filters.
 
-DateGroup and TimeGroup are small composite pickers built from BlockCombo; FilterMenu
-is the popup itself. It receives the owning application via gather_statistics(app_window)
+FilterMenu is the popup itself. It receives the owning application via gather_statistics(app_window)
 rather than importing it, so this module stays free of any back-reference to the app.
 """
 from steempeg.ui import design_tokens as tok
 import os
 import re
 import tempfile
-from datetime import datetime
 
-from PySide6.QtCore import QEvent, Qt, QDate, QDateTime, QPoint, QTime, QSize
+from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -31,7 +29,7 @@ from steempeg.core.dash.health import ClipHealth
 from steempeg.core.steam_paths import steam_id_from_clips_folder
 from steempeg.ui.icon_assets import health_icon
 from steempeg.ui.library.filter_pill_paint import PillPaintDragMixin
-from steempeg.ui.widgets import BlockCombo, FlowLayout
+from steempeg.ui.widgets import FlowLayout
 
 _CLIP_HEALTH_ROLE = Qt.UserRole + 2
 _CLIP_CURED_ROLE = Qt.UserRole + 4
@@ -92,74 +90,6 @@ def _folder_pill_label(path: str) -> str:
         return f"Steam {sid} · {base}"
     return base[:16] + "…" if len(base) > 18 else base
 
-
-class DateGroup(QWidget):
-    def __init__(self):
-        super().__init__()
-        l = QHBoxLayout(self)
-        l.setContentsMargins(0,0,0,0); l.setSpacing(4)
-        self.d = BlockCombo([f"{i:02d}" for i in range(1,32)])
-        self.m = BlockCombo(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
-        self.y = BlockCombo([str(y) for y in range(2000, 2030)])
-        l.addWidget(self.d); l.addWidget(self.m); l.addWidget(self.y)
-        
-        self.d.setFixedWidth(36)  # Narrow day
-        self.m.setFixedWidth(46)  # Month
-        self.y.setFixedWidth(56)
-        self.m.currentTextChanged.connect(self.upd)
-        self.y.currentTextChanged.connect(self.upd)
-        
-    def upd(self):
-        if not self.y.is_valid() or not self.m.is_valid(): return 
-        
-        month_idx = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].index(self.m.currentText().lower()) + 1
-        days = QDate(int(self.y.currentText()), month_idx, 1).daysInMonth()
-        
-        cur = self.d.currentText()
-        self.d.blockSignals(True)
-        self.d.clear()
-        self.d.addItems([f"{i:02d}" for i in range(1, days+1)])
-        
-        if cur.isdigit() and 1 <= int(cur) <= days:
-            self.d.setCurrentText(f"{int(cur):02d}")
-        elif cur.isdigit() and int(cur) > days:
-            self.d.setCurrentText(f"{days:02d}")
-        else:
-            self.d.setCurrentText(cur)
-            
-        self.d.validate_text(self.d.currentText())
-        self.d.blockSignals(False)
-        
-class TimeGroup(QWidget):
-    def __init__(self, mode="time"): 
-        super().__init__()
-        l = QHBoxLayout(self)
-        l.setContentsMargins(0,0,0,0); l.setSpacing(4)
-        self.mode = mode
-        if mode == "time":
-            self.h = BlockCombo([f"{i:02d}" for i in range(1,13)])
-            self.m = BlockCombo([f"{i:02d}" for i in range(60)])
-            self.ap = BlockCombo(["AM", "PM"])
-            l.addWidget(self.h); l.addWidget(QLabel(":")); l.addWidget(self.m); l.addWidget(self.ap)
-            self.h.setFixedWidth(36)
-            self.m.setFixedWidth(36)
-            self.ap.setFixedWidth(40)
-        else:
-            self.h = BlockCombo([f"{i:02d}" for i in range(100)]) 
-            self.m = BlockCombo([f"{i:02d}" for i in range(60)])
-            self.s = BlockCombo([f"{i:02d}" for i in range(60)])
-            l.addWidget(self.h); l.addWidget(QLabel(":")); l.addWidget(self.m); l.addWidget(QLabel(":")); l.addWidget(self.s)
-            self.h.setFixedWidth(36)
-            self.m.setFixedWidth(36)
-            self.s.setFixedWidth(36)
-            
-
-    def set_t(self, qt):
-        h = qt.hour()
-        self.ap.setCurrentText("PM" if h >= 12 else "AM")
-        h = h % 12
-        self.h.setCurrentText(f"{12 if h==0 else h:02d}")
-        self.m.setCurrentText(f"{qt.minute():02d}")
 
 class FilterMenu(PillPaintDragMixin, QWidget):
     def __init__(self, parent=None):
