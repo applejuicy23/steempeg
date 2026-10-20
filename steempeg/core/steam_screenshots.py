@@ -17,7 +17,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
 
 from steempeg.core.steam_paths import (
     discover_steam_clips_folders,
