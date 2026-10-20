@@ -8274,5 +8274,3 @@ class RenderMixin:
             self._sync_portable_render_strip()
         if hasattr(self, "_sync_library_mode_chrome"):
             self._sync_library_mode_chrome()
-
-        return line_edit, warn_icon
