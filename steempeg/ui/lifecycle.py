@@ -7,12 +7,11 @@ state through self.
 """
 import logging
 import os
-import re
 import sys
 
 import psutil
 
-from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QRectF, Qt, QUrl
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -597,8 +596,6 @@ class LifecycleMixin:
                 
         # 2. Killing the frozen FFmpeg
         try:
-            import os
-            import subprocess
 
             current_process = psutil.Process()
             # We are looking for all child processes launched by our program.
@@ -688,8 +685,6 @@ class LifecycleMixin:
             
         # Killing all zombie FFmpeg child processes
         try:
-            import os
-            import subprocess
 
             current_process = psutil.Process()
             children = current_process.children(recursive=True)
