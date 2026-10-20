@@ -1,7 +1,7 @@
 """Steempeg-styled updater window for download / extract / install / launch."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel
 
 from steempeg.ui import design_tokens as tok
