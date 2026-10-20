@@ -22,7 +22,7 @@ from steempeg.services.update_install import (
     write_deferred_install_bat,
     write_deferred_install_sh,
 )
-from steempeg.services.update_job import UpdateJob, load_update_job
+from steempeg.services.update_job import load_update_job
 from steempeg.services.updater import UpdateDownloadThread
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.update_progress_dialog import UpdateProgressDialog
