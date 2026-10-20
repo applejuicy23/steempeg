@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
@@ -34,8 +33,6 @@ from steempeg.ui.design_tokens import ACCENT_PRIMARY
 from steempeg.ui.cq_size_estimator import cq_size_text
 from steempeg.ui.render_pro_controls import (
     pro_summary_tags,
-    refresh_pro_controls,
-    remember_quality_choice,
     sync_bitrate_lock as sync_pro_bitrate_lock,
 )
 
@@ -82,7 +79,6 @@ from steempeg.ui.icon_assets import (
     paused_badge_icon,
     rendering_badge_icon,
     update_arrows_spin_frame,
-    warning_pixmap,
 )
 from steempeg.render import bitrate
 from steempeg.render.output_formats import (
@@ -2115,7 +2111,6 @@ class RenderMixin:
         Used after Add so disk I/O does not contend with card rebuild on the
         same click. Other call sites keep the synchronous persist (quit-safe).
         """
-        import json
         import threading
 
         if bool(getattr(self, "_queue_persist_busy", False)):
@@ -4476,7 +4471,6 @@ class RenderMixin:
 
         if trim_only:
             full_path = getattr(self, "current_output_file", "") or ""
-            final_filename = os.path.basename(full_path) if full_path else "rendered"
         else:
             # 2. Calculate the file extension
             ext = output_extension(container, audio_only, audio_format)
@@ -4500,7 +4494,6 @@ class RenderMixin:
                 counter += 1
 
             full_path = test_path
-            final_filename = os.path.basename(full_path)
             self.current_output_file = full_path
 
             if hasattr(self.ui, 'label_location'):
@@ -4553,34 +4546,6 @@ class RenderMixin:
                     total_bitrate = video_bitrate + audio_bitrate_val
                     size_mb = (total_bitrate * duration) / 8
                     size_str = self._format_size_mb(size_mb)
-
-        # Pretty audio label that never shows the raw "⚙️ Custom Audio..." sentinel.
-        if "Custom" in audio_bitrate:
-            audio_display = f"{self._audio_kbps_from_ui()} kbps (Custom)"
-        else:
-            audio_display = audio_bitrate
-
-        if audio_only:
-            if audio_format in ("FLAC", "WAV", "Copy"):
-                sound_info = audio_format
-            else:
-                sound_info = f"{audio_format} {self._audio_kbps_from_ui()} kbps"
-            other_info = ">> EXTRACT AUDIO ONLY (NO VIDEO)"
-        elif mute_audio:
-            sound_info = "None"
-            other_info = ">> NO SOUND (MUTED)"
-        elif "Original" in quality and "Target File Size" not in quality:
-            sound_info = "Original audio (copy)"
-            other_info = "Original stream copy"
-        elif audio_format == "Copy":
-            sound_info = "Copy (from source)"
-            other_info = "Normal Render"
-        elif audio_format in ("FLAC", "WAV"):
-            sound_info = audio_format
-            other_info = "Normal Render"
-        else:
-            sound_info = audio_display
-            other_info = "Normal Render"
 
         # 5. Smart Detailed Summary in Export Settings
         
@@ -5493,7 +5458,6 @@ class RenderMixin:
         return text
 
     def refresh_export_presets_list(self) -> None:
-        import json
 
         from PySide6.QtWidgets import QListWidgetItem
 
@@ -5723,7 +5687,7 @@ class RenderMixin:
 
     def _prompt_export_preset_rename(self, current: str) -> str | None:
         """Steempeg-chrome rename prompt. Returns new name or None if cancelled."""
-        from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
 
         from steempeg.ui.message_dialog import _BTN_PRIMARY, _BTN_SECONDARY, dialog_theme
         from steempeg.ui.widgets.dialog_chrome import SteempegDialog
