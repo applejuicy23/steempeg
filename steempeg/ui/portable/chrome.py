@@ -5,7 +5,7 @@ import logging
 import os
 
 from PySide6.QtCore import QRectF, Qt, QSize, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QWidget
 
 from steempeg.ui import design_tokens as tok
