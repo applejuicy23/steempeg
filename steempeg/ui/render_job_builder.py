@@ -25,7 +25,6 @@ from steempeg.render.queue import (
     RenderJob,
     RenderJobSettings,
     ResolvedRenderParams,
-    compute_unique_output_path,
     game_icon_path_for_clip,
 )
 
