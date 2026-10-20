@@ -8,7 +8,6 @@ from PySide6.QtGui import QDrag, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
-    QHBoxLayout,
     QLabel,
     QMenu,
     QPushButton,
