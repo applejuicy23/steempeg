@@ -6,14 +6,12 @@ screenshots and markers. They run on the application instance and reach its widg
 and player through self.
 """
 from steempeg.ui import design_tokens as tok
-import json
 import logging
 import os
 import re
 import subprocess
 import sys
 import time
-from datetime import datetime
 
 from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QPropertyAnimation, QTimer
 from PySide6.QtGui import QCursor, QIcon, QPainterPath, QPixmap, QRegion
@@ -1158,31 +1156,6 @@ class PlayerMixin:
             self._maybe_start_thumbs_after_quality(clip)
         if hasattr(self, '_maybe_offer_salvage_verification'):
             self._maybe_offer_salvage_verification()
-
-    def _reopen_current_clip_paused(self):
-        """Reload the current clip and pause on the first frame.
-
-        Recovery path for a wedged DASH demuxer: some Steam clips (a non-zero
-        Period start plus keep_open) can't be seeked back to 0 after EOF — ffmpeg
-        fails to reload the first fragment and then spins on "Invalid data found"
-        forever, killing playback for this clip and sometimes the whole player.
-        Reopening the file tears down that broken demuxer and lands cleanly on
-        frame 0. The surface already shows video_container, so there's no flash.
-        """
-        path = getattr(self, '_current_play_abs_path', None) or getattr(self, '_current_mpd_abs_path', None)
-        if not path or not hasattr(self, 'player') or not self.player:
-            return
-        try:
-            self._ignore_playback_stall(0.8)
-            self._ensure_linux_mpv_vo()
-            self.player.play(path)
-            self.player.pause = True
-            if hasattr(self.ui, 'btn_play'):
-                self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_play.png")))
-            if hasattr(self, 'custom_timeline'):
-                self.custom_timeline.force_jump(0)
-        except Exception:
-            pass
 
     def _sync_play_button_icon(self, *, paused: bool | None = None) -> None:
         """Keep the centre play/pause glyph aligned with mpv pause state."""
@@ -4107,7 +4080,6 @@ class PlayerMixin:
                 )
                 return
 
-        from steempeg.ui.library.rendered_library import RENDERED_AUDIO_EXTS, RENDERED_VIDEO_EXTS
         from steempeg.core.rendered_media import load_markers_sidecar, markers_to_canvas
 
         switch_gen = self._begin_preview_switch()
@@ -5402,8 +5374,6 @@ class PlayerMixin:
             self.custom_timeline.current_video_path = play_path
             self.custom_timeline.thumb_dir = None
 
-        # Remember the source so the EOF watchdog can reopen it if a rewind wedges
-        # ffmpeg's DASH demuxer (see update_ui_from_vlc / _reopen_current_clip_paused).
         self._current_mpd_abs_path = abs_path
         self._current_play_abs_path = play_path
         self._eof_rewind_pending = 0
@@ -5706,7 +5676,7 @@ class PlayerMixin:
                     row = getattr(self, "_footer_controls_row", None)
                     if row is not None and hasattr(row, "refresh_center"):
                         row.refresh_center()
-        except Exception as e:
+        except Exception:
             pass # Ignore random missing property errors during video switching
 
     def add_user_marker(self, target_ms=None):
