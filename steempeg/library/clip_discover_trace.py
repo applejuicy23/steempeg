@@ -150,9 +150,6 @@ class ClipDiscoverTrace:
         self.final_candidates = [os.path.normpath(p) for p in paths]
         self.duplicate_count = int(duplicate_count)
 
-    def add_note(self, text: str) -> None:
-        self.notes.append(str(text))
-
     def flush(self) -> tuple[str, str] | None:
         if not tracing_enabled():
             return None
