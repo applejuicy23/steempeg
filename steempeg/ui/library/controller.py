@@ -41,7 +41,6 @@ from steempeg.ui.icon_assets import health_icon
 from steempeg.ui import design_tokens as tok
 from steempeg.core import games
 from steempeg.core.clip_identity import (
-    is_steam_package_internal_child,
     session_duplicate_paths_to_drop,
 )
 from steempeg.core.clip_thumbnails import (
@@ -4662,7 +4661,6 @@ class LibraryMixin:
         """Reformat clip/rendered date cells from stamps — no folder rescan."""
         from datetime import datetime
 
-        from steempeg.infra.locale_time import format_clip_date, format_clip_time
         from steempeg.library.scan import clip_folder_recorded_at
         from steempeg.ui.library.grid_view import ClipCard
 
