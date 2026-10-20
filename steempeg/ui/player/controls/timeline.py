@@ -9,7 +9,6 @@ fed by PreviewSniperWorker.
 import json
 import os
 import re
-import logging
 import sys
 import time
 
@@ -45,7 +44,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPushButton,
     QScrollArea,
     QScrollBar,
     QSizePolicy,
@@ -1667,13 +1665,6 @@ class TimelineCanvas(QWidget):
             current_sec += step
 
         # Drawing icons and tooltips
-
-        start_x_vp = 0
-        end_x_vp = width
-        scroll_area = self.parentWidget().parentWidget() if self.parentWidget() else None
-        if hasattr(scroll_area, 'horizontalScrollBar'):
-            start_x_vp = scroll_area.horizontalScrollBar().value()
-            end_x_vp = start_x_vp + scroll_area.viewport().width()
 
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
