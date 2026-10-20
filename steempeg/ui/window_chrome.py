@@ -27,7 +27,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from steempeg.infra.paths import get_resource_path
 from steempeg.ui.icon_utils import (
     app_logo_pixmap,
     apply_square_icon,
