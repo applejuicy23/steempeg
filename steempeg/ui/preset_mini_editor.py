@@ -725,7 +725,6 @@ class PresetMiniEditor(SteempegDialog):
             return
 
         existing = load_presets_map(self._app.load_user_settings)
-        target = self._edit_name or name
         if self._edit_name and name != self._edit_name and name in existing:
             steempeg_warning(
                 self,
