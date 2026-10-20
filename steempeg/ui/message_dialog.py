@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
 
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
