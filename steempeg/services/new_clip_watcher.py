@@ -188,10 +188,6 @@ class NewClipWatcher(QObject):
         self._known.clear()
         self._pending.clear()
 
-    def watched_containers(self) -> list[str]:
-        """Returns the folders currently being watched."""
-        return list(self._fs.directories())
-
     def is_paused(self) -> bool:
         """Tells whether new clips are currently being ignored."""
         return self._paused
