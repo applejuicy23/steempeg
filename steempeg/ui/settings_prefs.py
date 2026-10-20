@@ -1412,18 +1412,3 @@ def set_markers_on_strip(enabled: object | None) -> bool:
     global _runtime_markers_on_strip
     _runtime_markers_on_strip = normalize_markers_on_strip(enabled)
     return _runtime_markers_on_strip
-
-
-# Player chrome outline — runtime in player_outline.py; re-export for Settings.
-from steempeg.ui.player_outline import (  # noqa: E402
-    KEY_PLAYER_OUTLINE,
-    PLAYER_OUTLINE_CHROME_ONLY,
-    PLAYER_OUTLINE_DEFAULT,
-    PLAYER_OUTLINE_LABELS,
-    PLAYER_OUTLINE_WITH_LINES,
-    PLAYER_OUTLINE_WITHOUT_LINES,
-    get_player_outline,
-    load_player_outline_from_settings,
-    normalize_player_outline,
-    set_player_outline,
-)
