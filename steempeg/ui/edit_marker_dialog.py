@@ -93,7 +93,6 @@ class EditSteamMarkerDialog(SteempegDialog):
         icon_btns.addWidget(btn_icon)
         icon_btns.addWidget(btn_clear)
         icon_btns.addStretch(1)
-        icon_col = QHBoxLayout()
         # stack vertically beside preview via nested layout
         from PySide6.QtWidgets import QVBoxLayout
 
