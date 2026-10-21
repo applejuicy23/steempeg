@@ -392,6 +392,9 @@ def _resolve_clip_health(
             return health.ClipHealthReport(level, list(entry.get("issues") or []))
 
     report = health.assess_clip_health(full_path, probe=not fast)
+    if report.probe_failed:
+        health_cache.pop(norm, None)
+        return report
     health_cache[norm] = {
         "mtime": mtime,
         "level": report.level.value,
