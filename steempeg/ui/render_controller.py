@@ -107,6 +107,7 @@ from steempeg.render.queue import (
     STATUS_HEADER_LABELS,
     load_queue_from_file,
     resolve_job_game_icon_path,
+    save_queue_payload_to_file,
     save_queue_to_file,
 )
 from steempeg.render.queue_display import format_dash_job_summary
@@ -2099,24 +2100,40 @@ class RenderMixin:
         self._render_history_cache = None
         self._rendered_output_meta_index = None
 
+    def _queue_persist_lock(self):
+        """Returns the lock that serializes queue file writes across threads."""
+        lock = getattr(self, "_queue_persist_lock_obj", None)
+        if lock is None:
+            import threading
+
+            lock = threading.Lock()
+            self._queue_persist_lock_obj = lock
+        return lock
+
+    def _next_queue_persist_generation(self) -> int:
+        """Bumps and returns the counter that marks the newest queue snapshot."""
+        generation = int(getattr(self, "_queue_persist_generation", 0)) + 1
+        self._queue_persist_generation = generation
+        return generation
+
     def _persist_render_queue(self) -> None:
-        try:
-            save_queue_to_file(self._queue_persist_path(), self.render_queue)
-        except OSError as exc:
-            logging.warning("Could not save render queue: %s", exc)
+        """Writes the current queue to disk right away on the calling thread."""
+        self._next_queue_persist_generation()
+        with self._queue_persist_lock():
+            try:
+                save_queue_to_file(self._queue_persist_path(), self.render_queue)
+            except OSError as exc:
+                logging.warning("Could not save render queue: %s", exc)
 
     def _persist_render_queue_async(self) -> None:
         """Snapshot queue JSON on the UI thread; write the file off-thread.
 
         Used after Add so disk I/O does not contend with card rebuild on the
         same click. Other call sites keep the synchronous persist (quit-safe).
+        A snapshot that is older than the last write by the time its thread
+        runs is dropped, so a stale queue never overwrites a newer one.
         """
         import threading
-
-        if bool(getattr(self, "_queue_persist_busy", False)):
-            # Prior async write still running — sync so the newer snapshot wins.
-            self._persist_render_queue()
-            return
 
         try:
             path = self._queue_persist_path()
@@ -2126,17 +2143,17 @@ class RenderMixin:
             self._persist_render_queue()
             return
 
-        self._queue_persist_busy = True
+        generation = self._next_queue_persist_generation()
+        lock = self._queue_persist_lock()
 
         def _write() -> None:
-            try:
-                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-                with open(path, "w", encoding="utf-8") as handle:
-                    json.dump(payload, handle, indent=2)
-            except OSError as exc:
-                logging.warning("Could not save render queue: %s", exc)
-            finally:
-                self._queue_persist_busy = False
+            with lock:
+                if generation != getattr(self, "_queue_persist_generation", 0):
+                    return
+                try:
+                    save_queue_payload_to_file(path, payload)
+                except OSError as exc:
+                    logging.warning("Could not save render queue: %s", exc)
 
         threading.Thread(
             target=_write, name="steempeg-queue-persist", daemon=True
