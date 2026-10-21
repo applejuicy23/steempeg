@@ -545,6 +545,14 @@ class LifecycleMixin:
         self._force_pause = True
         self._is_closing = True
 
+        # A real close quits the app; an Express player left open would keep the
+        # process (and the new-clip watcher) alive after the ffmpeg kill below.
+        for express_player in list((getattr(self, "_express_players", None) or {}).values()):
+            try:
+                express_player.close()
+            except RuntimeError:
+                pass
+
         # Tear down the floating buffering window so it can't linger as a ghost.
         overlay = getattr(self, '_buffering_overlay', None)
         if overlay is not None:
