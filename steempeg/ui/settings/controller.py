@@ -7,10 +7,25 @@ reach its paths and in-memory caches through self.
 import json
 import logging
 import os
+import shutil
+import time
 
 from steempeg.infra import cache
 
 _log = logging.getLogger(__name__)
+
+_UNREADABLE = object()
+
+
+def set_aside_broken_settings(path: str) -> None:
+    """Copies an unreadable settings.json aside so the next save cannot erase it."""
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    broken_copy = f"{path}.broken-{stamp}"
+    try:
+        shutil.copy2(path, broken_copy)
+        _log.error("settings.json is unreadable; kept a copy at %s", broken_copy)
+    except OSError as exc:
+        _log.error("settings.json is unreadable and could not be copied aside: %s", exc)
 
 
 class SettingsMixin:
@@ -25,8 +40,13 @@ class SettingsMixin:
         if isinstance(memo, dict):
             return memo
         path = os.path.join(self.cache_dir, "settings.json")
-        loaded = cache.read_json(path)
-        memo = loaded if isinstance(loaded, dict) else {}
+        loaded = cache.read_json(path, default=_UNREADABLE)
+        if isinstance(loaded, dict):
+            memo = loaded
+        else:
+            memo = {}
+            if os.path.isfile(path):
+                set_aside_broken_settings(path)
         self._user_settings_memo = memo
         return memo
 
