@@ -723,11 +723,11 @@ def build_render_job_from_payload(payload: QueueAddPayload) -> Optional[RenderJo
     clip_path = payload.clip_path
     real_mpds = discovery.find_mpd_paths(clip_path)
     salvage_mpds = list(payload.salvage_mpds)
-    if not real_mpds:
-        if payload.is_cured:
-            found = _salvage_mpd_paths(clip_path)
-            if found:
-                salvage_mpds = found
+    if payload.is_cured and not salvage_mpds:
+        salvage_mpds = _salvage_mpd_paths(clip_path)
+    # A cured clip's own session.mpd is the broken one; render from the salvage
+    # manifest just like the main render path (_mpd_paths_for_clip) does.
+    if salvage_mpds and (payload.is_cured or not real_mpds):
         mpds = salvage_mpds
     else:
         mpds = real_mpds
@@ -809,9 +809,9 @@ def build_render_job_from_ui(app: SteempegApp, clip_path: str) -> Optional[Rende
 def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedRenderParams]:
     """Turn a job's stored settings into RenderThread arguments."""
     s = job.settings
-    all_mpds = discovery.find_mpd_paths(job.clip_path)
-    if not all_mpds:
-        all_mpds = list(getattr(job, "salvage_mpds", []) or [])
+    # Jobs only keep salvage manifests for cured or manifest-less clips.
+    salvage_mpds = [p for p in (getattr(job, "salvage_mpds", []) or []) if os.path.isfile(p)]
+    all_mpds = salvage_mpds or discovery.find_mpd_paths(job.clip_path)
     if not all_mpds:
         return None
 
