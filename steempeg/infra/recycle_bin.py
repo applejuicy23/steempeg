@@ -13,6 +13,9 @@ _FOF_NOCONFIRMATION = 0x0010
 _FOF_ALLOWUNDO = 0x0040
 _FOF_NOERRORUI = 0x0400
 _FOF_NOCONFIRMMKDIR = 0x0200
+# Without this, NOCONFIRMATION silently destroys items too big for the bin (or on
+# drives without one) while the call still reports success.
+_FOF_WANTNUKEWARNING = 0x4000
 
 
 def _send_windows(path: str) -> None:
@@ -38,7 +41,12 @@ def _send_windows(path: str) -> None:
     op.pFrom = path + "\0"
     op.pTo = None
     op.fFlags = (
-        _FOF_ALLOWUNDO | _FOF_NOCONFIRMATION | _FOF_SILENT | _FOF_NOERRORUI | _FOF_NOCONFIRMMKDIR
+        _FOF_ALLOWUNDO
+        | _FOF_NOCONFIRMATION
+        | _FOF_SILENT
+        | _FOF_NOERRORUI
+        | _FOF_NOCONFIRMMKDIR
+        | _FOF_WANTNUKEWARNING
     )
     result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
     if result != 0:
