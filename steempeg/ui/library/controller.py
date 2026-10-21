@@ -384,6 +384,9 @@ class LibraryMixin:
                 return health.ClipHealthReport(level, list(entry.get("issues") or []))
 
         report = health.assess_clip_health(full_path, probe=not fast)
+        if report.probe_failed:
+            self._clip_health_cache.pop(norm, None)
+            return report
         self._clip_health_cache[norm] = {
             "mtime": mtime,
             "level": report.level.value,
