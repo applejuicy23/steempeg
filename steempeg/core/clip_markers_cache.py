@@ -20,6 +20,8 @@ import os
 import re
 from typing import Any
 
+from steempeg.infra.cache import write_text_atomic
+
 _log = logging.getLogger(__name__)
 
 # Lives in the clip folder; not named timeline_* so Steam's own search stays clean.
@@ -196,8 +198,7 @@ def _read_timeline_entries(path: str) -> list[dict]:
 def _write_timeline_entries(path: str, entries: list[dict]) -> bool:
     try:
         payload = {"entries": entries, "steempeg": True}
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+        write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
         return True
     except OSError as exc:
         _log.warning("timeline write failed (%s): %s", path, exc)
@@ -378,8 +379,7 @@ def save_clip_markers_cache(
         "overrides": dict(data.get("overrides") or {}),
     }
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+        write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
         return True
     except OSError as exc:
         _log.warning("clip markers cache write failed: %s", exc)
