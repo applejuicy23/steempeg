@@ -140,8 +140,8 @@ def toggle_favourite(
         save_favourite_names(favs, load_settings=load_settings, save_settings=save_settings)
         return False
     if len(favs) >= MAX_FAVOURITES:
-        # Drop the oldest pin so the new one can land at the front.
-        favs = favs[1:]
+        # Newest pins sit at the front, so the oldest ones are at the end.
+        favs = favs[: MAX_FAVOURITES - 1]
     favs = [key] + [n for n in favs if n != key]
     save_favourite_names(favs, load_settings=load_settings, save_settings=save_settings)
     return True
