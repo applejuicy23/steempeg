@@ -54,6 +54,8 @@ class InstanceBridge(QObject):
         super().__init__(parent)
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._accept_connections)
+        # Set when «show» arrives before the main window is connected to show_requested.
+        self.show_was_requested = False
 
     def listen(self) -> bool:
         """Starts listening under the per-user name (clears a stale socket left by a crash)."""
@@ -80,4 +82,5 @@ class InstanceBridge(QObject):
         """Emits ``show_requested`` when the other launch sent «show»."""
         data = bytes(socket.readAll())
         if SHOW_COMMAND in data:
+            self.show_was_requested = True
             self.show_requested.emit()
