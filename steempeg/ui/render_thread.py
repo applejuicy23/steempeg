@@ -193,6 +193,14 @@ class RenderThread(QThread):
             except Exception:
                 pass
 
+    def _remove_partial_output(self):
+        """Deletes the half-written output file left by a killed finalize step."""
+        try:
+            if self.output_file and os.path.exists(self.output_file):
+                os.remove(self.output_file)
+        except OSError as exc:
+            logging.warning("Could not remove partial output %s: %s", self.output_file, exc)
+
     def toggle_pause(self):
         """ Pauses or resumes FFmpeg at the OS level. """
         if not self.current_process:
@@ -433,6 +441,9 @@ class RenderThread(QThread):
                             if len(remux_tail) > 5:
                                 remux_tail.pop(0)
                     remux.wait()
+                    if self.is_cancelled:
+                        self._remove_partial_output()
+                        raise Exception("Render cancelled by user.")
                     if remux.returncode != 0:
                         # Header rewrite failed; fall back to the raw copied file so the
                         # user still gets a playable (if slightly mis-tagged) result.
@@ -457,24 +468,41 @@ class RenderThread(QThread):
                 with open(concat_file, "w", encoding="utf-8") as f:
                     for tmp in temp_files:
                         safe_path = tmp.replace('\\', '/')
+                        # concat list quoting: a ' inside '...' is written as '\''
+                        safe_path = safe_path.replace("'", "'\\''")
                         f.write(f"file '{safe_path}'\n")
 
                 # Run the merge without compression (-c copy)
-                self.current_process = _popen_cmdline(
+                merge = _popen_cmdline(
                     f'"{self.ffmpeg_exe}" -f concat -safe 0 -i "{concat_file}" -c copy -y "{self.output_file}"',
                     cwd=self.save_dir,
                     creation_flags=creation_flags,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    universal_newlines=True,
+                    encoding="utf-8",
+                    errors="ignore",
                 )
-                self.current_process.wait()
+                self.current_process = merge
+                # The pipe must be drained, or ffmpeg blocks once it fills up.
+                merge_tail = []
+                for line in merge.stdout:
+                    clean = line.strip()
+                    if clean:
+                        logging.debug(f"[FFmpeg] {clean}")
+                        merge_tail.append(clean)
+                        if len(merge_tail) > 5:
+                            merge_tail.pop(0)
+                merge.wait()
 
                 if self.is_cancelled:
+                    self._remove_partial_output()
                     raise Exception("Render cancelled by user.")
 
-                if self.current_process.returncode == 0:
+                if merge.returncode == 0:
                     self.finished_signal.emit(True, "", self.output_file) # success
                 else:
+                    logging.error("Merge failed:\n" + "\n".join(merge_tail))
                     self.finished_signal.emit(False, "Merge failed.", "")
 
         except Exception as e:
