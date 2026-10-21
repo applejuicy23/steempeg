@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 
+from steempeg.infra.cache import write_text_atomic
 from steempeg.infra.logging import ffmpeg_cli_loglevel
 
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -310,8 +311,7 @@ def save_rendered_companion_meta(
         else companion_meta_path(file_path)
     )
     try:
-        with open(out_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        write_text_atomic(out_path, json.dumps(payload, indent=2))
     except OSError as exc:
         logging.debug("Could not write rendered companion meta for %s: %s", file_path, exc)
 
@@ -426,8 +426,7 @@ def save_markers_sidecar(cache_dir: str, file_path: str, entries: list[dict]) ->
         "identity": file_identity(file_path),
         "entries": entries,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    write_text_atomic(path, json.dumps(payload, indent=2))
 
 
 def markers_to_canvas(markers: list[dict]) -> list[dict]:
