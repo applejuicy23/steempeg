@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from steempeg.infra.cache import write_text_atomic
 from steempeg.render.queue import JobStatus, RenderJob, RenderQueue, job_from_dict, job_to_dict
 
 
@@ -123,10 +124,9 @@ def load_history(path: str) -> List[RenderBatchRecord]:
 
 
 def save_history(path: str, batches: List[RenderBatchRecord]) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    """Writes the newest render batches to `path`, replacing the old file in one step."""
     payload = {"batches": [b.to_dict() for b in batches[:MAX_BATCHES]]}
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    write_text_atomic(path, json.dumps(payload, indent=2))
 
 
 def append_batch(path: str, batch: RenderBatchRecord) -> List[RenderBatchRecord]:
