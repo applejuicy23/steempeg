@@ -6636,6 +6636,15 @@ def main():
         # Second instance: do not hold a lock (primary keeps it).
         _instance_lock = None
 
+    # Listen right away: a second launch during the slow window build must reach
+    # this instance instead of seeing "already running" with nobody answering.
+    _instance_bridge = None
+    if _got_lock:
+        from steempeg.infra.instance_bridge import InstanceBridge
+
+        _instance_bridge = InstanceBridge()
+        _instance_bridge.listen()
+
     from steempeg.ui.icon_utils import app_window_icon
 
     _app_icon = app_window_icon()
@@ -6688,12 +6697,11 @@ def main():
         window._instance_lock = _instance_lock
         window._ui_shell = ui_shell
         window.install_tray(background_launch=args.background)
-        if _got_lock:
-            from steempeg.infra.instance_bridge import InstanceBridge
-
-            window._instance_bridge = InstanceBridge(window.ui)
-            window._instance_bridge.show_requested.connect(window.bring_main_window_forward)
-            window._instance_bridge.listen()
+        if _instance_bridge is not None:
+            window._instance_bridge = _instance_bridge
+            _instance_bridge.show_requested.connect(window.bring_main_window_forward)
+            if _instance_bridge.show_was_requested:
+                QTimer.singleShot(0, window.bring_main_window_forward)
         _splash_keepalive()
         
         if getattr(window, 'ui', None) is None:
