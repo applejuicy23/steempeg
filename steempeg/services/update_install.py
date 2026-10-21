@@ -136,6 +136,31 @@ def _bat_path(path: str) -> str:
     return os.path.normpath(path).replace("%", "%%")
 
 
+def _bat_install_relative_path(path: str, exe_dir: str) -> str:
+    """Turns a path inside the install folder into a relative, escaped .bat path.
+
+    cmd.exe reads .bat files in the OEM code page, so absolute paths with
+    non-ASCII characters (a Cyrillic user name) arrive garbled. The script runs
+    with the install folder as its working directory, so relative paths that
+    only contain our own ASCII folder names stay intact.
+    """
+    try:
+        rel = os.path.relpath(path, exe_dir)
+    except ValueError:
+        return _bat_path(path)
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+        return _bat_path(path)
+    return _bat_path(rel)
+
+
+# Inno Setup's uninstaller lives in the install folder; updates must not move it away.
+_BAT_UNINSTALLER_GUARD = (
+    'if /I not "%%I"=="unins000.exe" '
+    'if /I not "%%I"=="unins000.dat" '
+    'if /I not "%%I"=="unins000.msg" '
+)
+
+
 def _sh_quote(path: str) -> str:
     return "'" + path.replace("'", "'\"'\"'") + "'"
 
@@ -161,23 +186,26 @@ def write_deferred_install_bat(
     bat_path = os.path.join(tempfile.gettempdir(), f"steempeg_install_{handler_pid}.bat")
 
     dir_guards = _bat_preserve_dir_guards("%%D")
+    file_guards = f"{tmp_guard}{_BAT_UNINSTALLER_GUARD}"
+    source_rel = _bat_install_relative_path(source_dir, exe_dir)
+    extract_rel = _bat_install_relative_path(extract_root, exe_dir)
     if keep_backup:
-        remove_block = f"""if exist "{_bat_path(os.path.join(exe_dir, backup_folder))}" rd /S /Q "{_bat_path(os.path.join(exe_dir, backup_folder))}"
-mkdir "{_bat_path(os.path.join(exe_dir, backup_folder))}"
+        remove_block = f"""if exist "{backup_folder}" rd /S /Q "{backup_folder}"
+mkdir "{backup_folder}"
 for %%I in (*.*) do (
-    {tmp_guard}move "%%I" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+    {file_guards}move "%%I" "{backup_folder}\\" > NUL 2>&1
 )
 for /D %%D in (*) do (
     {dir_guards} if /I not "%%D"=="{backup_folder}" (
         echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
         if errorlevel 1 (
-            if exist "%%D" move "%%D" "{_bat_path(os.path.join(exe_dir, backup_folder))}\\" > NUL 2>&1
+            if exist "%%D" move "%%D" "{backup_folder}\\" > NUL 2>&1
         )
     )
 )"""
     else:
         remove_block = f"""for %%I in (*.*) do (
-    {tmp_guard}del /F /Q "%%I" > NUL 2>&1
+    {file_guards}del /F /Q "%%I" > NUL 2>&1
 )
 for /D %%D in (*) do (
     {dir_guards} (
@@ -194,9 +222,10 @@ for /D %%D in (*) do (
         if tmp_asset_name
         else ""
     )
+    # The working directory is the install folder (set by spawn_deferred_install);
+    # every path below is relative to it.
     bat_content = f"""@echo off
 title Steempeg Update
-cd /D "{_bat_path(exe_dir)}"
 
 :wait_loop
 tasklist /FI "PID eq {handler_pid}" 2>NUL | find "{handler_pid}" >NUL
@@ -205,11 +234,23 @@ timeout /t 1 /nobreak >NUL
 goto wait_loop
 
 :do_install
+if not exist "{source_rel}\\{new_exe_name}" goto abort
 {remove_block}
-robocopy "{_bat_path(source_dir)}" "{_bat_path(exe_dir)}" /E /IS /IT /NFL /NDL /NJH /NJS /NC /NS /NP > NUL
-if exist "{_bat_path(extract_root)}" rd /S /Q "{_bat_path(extract_root)}"
+robocopy "{source_rel}" "." /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP > NUL
+if errorlevel 8 (
+    if not exist "logs" mkdir "logs"
+    >> "logs\\update_install.log" echo %DATE% %TIME% robocopy failed with code %ERRORLEVEL%
+)
+if exist "{extract_rel}" rd /S /Q "{extract_rel}"
 {tmp_cleanup}
 start "" "{new_exe_name}" --updated-from {from_version} --backup-folder {backup_arg}
+del "%~f0"
+exit /b
+
+:abort
+if not exist "logs" mkdir "logs"
+>> "logs\\update_install.log" echo %DATE% %TIME% update aborted: "{source_rel}\\{new_exe_name}" not found in %CD%
+if exist "{new_exe_name}" start "" "{new_exe_name}"
 del "%~f0"
 """
     with open(bat_path, "w", encoding="utf-8") as handle:
