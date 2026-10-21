@@ -129,8 +129,8 @@ def to_display_datetime(dt: datetime) -> datetime:
 
     resolved = _resolve_zoneinfo(str(_cfg.get("timezone") or TZ_SYSTEM))
     if dt.tzinfo is None:
-        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-        dt = dt.replace(tzinfo=local_tz)
+        # Uses the local offset in effect on dt's own date, not today's (DST).
+        dt = dt.astimezone()
     if resolved is None:
         return dt.astimezone()
     if isinstance(resolved, tuple) and resolved[0] == "qtimezone":
