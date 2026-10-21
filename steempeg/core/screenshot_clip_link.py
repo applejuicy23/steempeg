@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
+from steempeg.infra.cache import write_text_atomic
 from steempeg.core.rendered_media import (
     duration_from_source_clip,
     parse_app_id_from_clip_folder,
@@ -159,8 +160,7 @@ def save_screenshot_clip_meta(
         except (TypeError, ValueError):
             pass
     try:
-        with open(screenshot_sidecar_path(file_path), "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        write_text_atomic(screenshot_sidecar_path(file_path), json.dumps(payload, indent=2))
     except OSError as exc:
         logging.debug("Could not write screenshot clip meta for %s: %s", file_path, exc)
 
