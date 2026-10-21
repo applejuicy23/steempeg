@@ -11,8 +11,10 @@ from steempeg.infra.paths import get_save_directory
 _log = logging.getLogger(__name__)
 
 _LOCK_NAME = "steempeg_instance.lock"
-# If a previous process crashed, treat the lock as stale after this many ms.
-_STALE_LOCK_MS = 30_000
+# 0 = never call a lock stale by age. The lock is held for the whole session, and
+# an age limit lets a second launch (Linux has no open-handle protection) steal it
+# from a live instance. A crashed holder is still detected by its dead PID.
+_STALE_LOCK_MS = 0
 
 
 def instance_lock_path() -> str:
