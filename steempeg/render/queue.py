@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterator, List, Optional
 
+from steempeg.infra.cache import write_text_atomic
 from steempeg.render.output_formats import KNOWN_OUTPUT_EXTENSIONS, output_extension
 
 
@@ -353,6 +354,9 @@ def job_from_dict(data: Dict[str, Any]) -> Optional[RenderJob]:
         status = JobStatus(data.get("status", JobStatus.QUEUED.value))
     except ValueError:
         status = JobStatus.QUEUED
+    # A job saved mid-render was interrupted by quit or crash; nothing renders it now.
+    if status == JobStatus.RENDERING:
+        status = JobStatus.QUEUED
     settings = settings_from_dict(data.get("settings") or {})
     return RenderJob(
         clip_path=data["clip_path"],
@@ -372,9 +376,13 @@ def job_from_dict(data: Dict[str, Any]) -> Optional[RenderJob]:
 
 
 def save_queue_to_file(path: str, queue: RenderQueue) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(queue.to_json_list(), f, indent=2)
+    """Writes the queue jobs to `path` as JSON, replacing the old file in one step."""
+    save_queue_payload_to_file(path, queue.to_json_list())
+
+
+def save_queue_payload_to_file(path: str, payload: List[Dict[str, Any]]) -> None:
+    """Writes an already-snapshotted queue job list to `path` as JSON."""
+    write_text_atomic(path, json.dumps(payload, indent=2))
 
 
 def load_queue_from_file(path: str) -> RenderQueue:
