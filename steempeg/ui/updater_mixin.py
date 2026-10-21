@@ -462,9 +462,13 @@ class UpdaterMixin:
         env.pop("_MEIPASS", None)
 
         if sys.platform == "win32":
-            from steempeg.services.update_install import _bat_preserve_dir_guards
+            from steempeg.services.update_install import (
+                _BAT_UNINSTALLER_GUARD,
+                _bat_preserve_dir_guards,
+            )
 
             dir_guards = _bat_preserve_dir_guards("%%D")
+            uninstaller_guard = _BAT_UNINSTALLER_GUARD
             bat_path = os.path.join(exe_dir, "restore.bat")
             bat_content = f"""@echo off
 title Steempeg Restore
@@ -481,7 +485,7 @@ echo Moving current version aside...
 if exist "{staging_folder}" rd /S /Q "{staging_folder}"
 mkdir "{staging_folder}"
 
-for %%I in (*.*) do if /I not "%%I"=="restore.bat" move "%%I" "{staging_folder}\" > NUL
+for %%I in (*.*) do if /I not "%%I"=="restore.bat" {uninstaller_guard}move "%%I" "{staging_folder}\" > NUL
 for /D %%D in (*) do (
     if /I not "%%D"=="{backup_folder_name}" if /I not "%%D"=="{staging_folder}" {dir_guards} (
         echo %%D| findstr /I /B /C:"old_version_v" /C:"pre_restore_v" > NUL
