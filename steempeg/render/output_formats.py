@@ -94,10 +94,11 @@ def is_valid_output_combo(
     mute_audio: bool = False,
     stream_copy: bool = False,
 ) -> bool:
-    """Return False for container/codec/audio pairs FFmpeg cannot mux sanely."""
-    if mute_audio and not audio_only:
-        return True
+    """Return False for container/codec/audio pairs FFmpeg cannot mux sanely.
 
+    The video codec is always checked against the container; the audio format
+    only matters when the render keeps an audio track.
+    """
     c = normalize_container(container)
     codec = (codec_text or "").strip()
     audio = (audio_format or "AAC").strip()
@@ -105,26 +106,24 @@ def is_valid_output_combo(
     if audio_only:
         return audio in AUDIO_FORMATS
 
-    if stream_copy and not audio_only:
+    if stream_copy:
         # Original copies Steam DASH chunks (H.264 + AAC) — WebM cannot remux them.
         return c != "WebM"
 
-    if audio == "Copy":
+    if c == "MP4" and "VP9" in codec:
+        return False
+    if c == "WebM" and ("H.264" in codec or "H.265" in codec or "HEVC" in codec.upper()):
+        return False
+
+    if mute_audio:
         return True
 
     if c == "MP4":
-        if "VP9" in codec:
-            return False
-        if audio in ("Opus", "FLAC", "WAV"):
-            return False
-        return True
+        return audio not in ("Opus", "FLAC", "WAV")
 
     if c == "WebM":
-        if "H.264" in codec or "H.265" in codec or "HEVC" in codec.upper():
-            return False
-        if audio in ("AAC", "MP3", "FLAC", "WAV"):
-            return False
-        return True
+        # "Copy" keeps Steam's AAC track, which WebM cannot hold either.
+        return audio not in ("AAC", "MP3", "FLAC", "WAV", "Copy")
 
     # MKV / MOV — permissive
     return True
