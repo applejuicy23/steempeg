@@ -12,6 +12,8 @@ import os
 import re
 import subprocess
 
+from steempeg.infra.cache import write_text_atomic
+
 # Steam's fixed DASH timing. Video runs at timescale 1000 with 3000-tick (3s) chunks,
 # audio at 48000 with 144000-tick (3s) chunks.
 _VIDEO_TIMESCALE = 1000
@@ -178,8 +180,7 @@ def fix_steam_manifest(mpd_path):
                          content, flags=re.DOTALL)
 
         fixed_path = os.path.join(folder, "session_fixed.mpd")
-        with open(fixed_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        write_text_atomic(fixed_path, content)
         return fixed_path
 
     except Exception as e:
@@ -344,8 +345,7 @@ def recover_orphaned_clip(
 
     recovered_path = os.path.join(folder_path, out_name)
     try:
-        with open(recovered_path, "w", encoding="utf-8") as f:
-            f.write(mpd_xml.strip())
+        write_text_atomic(recovered_path, mpd_xml.strip())
         logging.info(f"Recovered orphaned clip at {recovered_path}")
         if probe_resolution:
             _annotate_video_resolution(recovered_path)
