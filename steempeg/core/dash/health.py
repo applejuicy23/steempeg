@@ -75,6 +75,9 @@ _RANK = {ClipHealth.HEALTHY: 0, ClipHealth.DEGRADED: 1, ClipHealth.DEAD: 2}
 class ClipHealthReport:
     level: ClipHealth
     issues: List[str] = field(default_factory=list)
+    # True when ffprobe could not run (missing, timed out); the level is then a guess
+    # and must not be cached as final.
+    probe_failed: bool = False
 
     @property
     def label(self) -> str:
@@ -107,7 +110,8 @@ def _segment_start_seconds(folder: str, stream_idx: int, chunk_num: int) -> Opti
     return base / media_ts
 
 
-def _ffprobe_opens(mpd_path: str, timeout: float = 6.0) -> bool:
+def _ffprobe_opens(mpd_path: str, timeout: float = 6.0) -> Optional[bool]:
+    """Asks ffprobe whether the manifest opens; None when ffprobe itself could not run."""
     try:
         proc = subprocess.run(
             ["ffprobe", "-v", "error", "-i", mpd_path],
@@ -118,7 +122,7 @@ def _ffprobe_opens(mpd_path: str, timeout: float = 6.0) -> bool:
         )
         return proc.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
 
 
 def _iter_segment_dirs(clip_path: str) -> Iterable[Tuple[str, str, str]]:
@@ -216,18 +220,25 @@ def assess_segment_folder(
         or any("timeline jump" in i for i in issues)
         or any("claims" in i for i in issues)
     )
-    if needs_probe and probe and not _ffprobe_opens(mpd_path):
-        return ClipHealthReport(ClipHealth.DEAD, ["Manifest cannot be opened (unplayable)"])
+    probe_failed = False
+    if needs_probe and probe:
+        opens = _ffprobe_opens(mpd_path)
+        if opens is False:
+            return ClipHealthReport(ClipHealth.DEAD, ["Manifest cannot be opened (unplayable)"])
+        probe_failed = opens is None
 
     if issues:
-        return ClipHealthReport(ClipHealth.DEGRADED, issues)
-    return ClipHealthReport(ClipHealth.HEALTHY, [])
+        return ClipHealthReport(ClipHealth.DEGRADED, issues, probe_failed=probe_failed)
+    return ClipHealthReport(ClipHealth.HEALTHY, [], probe_failed=probe_failed)
 
 
 def _worst(reports: List[ClipHealthReport]) -> ClipHealthReport:
     if not reports:
         return ClipHealthReport(ClipHealth.DEAD, ["No playable manifest"])
-    return max(reports, key=lambda r: _RANK[r.level])
+    worst = max(reports, key=lambda r: _RANK[r.level])
+    if any(r.probe_failed for r in reports):
+        worst.probe_failed = True
+    return worst
 
 
 def assess_clip_health(clip_path: str, *, probe: bool = True) -> ClipHealthReport:
