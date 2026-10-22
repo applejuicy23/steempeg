@@ -546,6 +546,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 logging.exception("configure_runtime_prefs failed")
         logging.info("Logs dir: %s", self.logs_dir)
         logging.info("Cache dir: %s", self.cache_dir)
+        try:
+            from steempeg.infra.installed_version import sync_installed_display_version
+
+            sync_installed_display_version()
+        except Exception:
+            logging.debug("Installed version sync failed", exc_info=True)
 
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir) # Create a cache folder if it doesn't exist
