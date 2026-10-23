@@ -45,12 +45,14 @@ from steempeg.services.release_catalog import (
     info_tooltip_text,
     latest_release_version,
     load_releases_cache,
+    newest_release,
     platform_display_name,
+    running_version_key,
     selection_marker_text,
     selection_notice,
     shows_info_icon,
+    version_key,
     version_label_color,
-    versions_equal,
 )
 
 from steempeg.ui import design_tokens as tok
@@ -539,7 +541,13 @@ class _VersionRow(QFrame):
         outer.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         label = entry.tag_name or f"v{entry.version_str}"
-        color = version_label_color(entry.version_float, installed=installed, latest=latest)
+        color = version_label_color(
+            entry.version_float,
+            installed=installed,
+            latest=latest,
+            version=entry.version,
+            installed_version=running_version_key(),
+        )
         self._version_label = QLabel(label)
         self._version_label.setStyleSheet(
             f"color: {color}; "
@@ -673,7 +681,10 @@ class _PatchGroupWidget(QWidget):
 
     def set_selected_entry(self, entry: ReleaseEntry | None) -> None:
         for row in self._rows:
-            row.set_selected(entry is not None and row._entry.version_float == entry.version_float)
+            row.set_selected(
+                entry is not None
+                and version_key(row._entry.version) == version_key(entry.version)
+            )
 
 
 class _ReleaseFetchThread(QThread):
@@ -1141,9 +1152,10 @@ class UpdateCenterDialog(SteempegDialog):
         ):
             self._releases = releases
             self._refreshing_catalog = False
-            self._latest_version = latest_release_version(releases)
-            latest_str = releases[0].version_str if releases else APP_VERSION_STR
-            if self._latest_version > APP_VERSION_FLOAT + 0.001:
+            newest = newest_release(releases)
+            self._latest_version = newest.version_float if newest else latest_release_version(releases)
+            latest_str = newest.version_str if newest else APP_VERSION_STR
+            if newest is not None and version_key(newest.version) > running_version_key():
                 self._status_label.setText(f"Update available: v{latest_str}")
                 self._status_label.setStyleSheet(
                     "color: #7ec8a3; font-size: 11px; font-weight: 600;"
@@ -1161,9 +1173,10 @@ class UpdateCenterDialog(SteempegDialog):
                 self._status_label.setText("No public releases found.")
             return
 
-        self._latest_version = latest_release_version(releases)
-        latest_str = releases[0].version_str
-        if self._latest_version > APP_VERSION_FLOAT + 0.001:
+        newest = newest_release(releases)
+        self._latest_version = newest.version_float if newest else 0.0
+        latest_str = newest.version_str if newest else APP_VERSION_STR
+        if newest is not None and version_key(newest.version) > running_version_key():
             status = f"Update available: v{latest_str}"
             if from_cache and self._refreshing_catalog:
                 status += " · refreshing…"
@@ -1203,7 +1216,7 @@ class UpdateCenterDialog(SteempegDialog):
 
         for block in self._group_widgets:
             for entry in block._group:
-                if versions_equal(entry.version_float, initial_entry.version_float):
+                if version_key(entry.version) == version_key(initial_entry.version):
                     block.expand()
                     break
 
@@ -1246,7 +1259,7 @@ class UpdateCenterDialog(SteempegDialog):
             self._notes_image_loader = None
         for widget in self._row_widgets:
             if isinstance(widget, _VersionRow):
-                widget.set_selected(widget._entry.version_float == entry.version_float)
+                widget.set_selected(version_key(widget._entry.version) == version_key(entry.version))
             else:
                 widget.set_selected_entry(entry)
         ver = (entry.version_str or "").strip() or "?"
@@ -1319,8 +1332,10 @@ class UpdateCenterDialog(SteempegDialog):
             self._ack_frame.hide()
             return
 
-        is_current = abs(entry.version_float - APP_VERSION_FLOAT) < 0.001
-        is_downgrade = entry.version_float < APP_VERSION_FLOAT - 0.001
+        installed_key = running_version_key()
+        entry_key = version_key(entry.version)
+        is_current = entry_key == installed_key
+        is_downgrade = entry_key < installed_key
         base_can_install = entry.installable and not is_current
         needs_ack = is_downgrade and base_can_install
 
@@ -1483,7 +1498,7 @@ class UpdateCenterDialog(SteempegDialog):
             if isinstance(widget, _VersionRow):
                 is_sel = (
                     selected is not None
-                    and widget._entry.version_float == selected.version_float
+                    and version_key(widget._entry.version) == version_key(selected.version)
                 )
                 widget.set_selected(is_sel)
             elif hasattr(widget, "set_selected_entry"):
