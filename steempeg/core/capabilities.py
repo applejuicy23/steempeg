@@ -104,3 +104,21 @@ def detect_optional_video_codecs():
 
 def av1_encoder_available() -> bool:
     return any(_encoder_works(code) for code in ("libsvtav1", "av1_nvenc", "av1_amf", "av1_qsv"))
+
+
+def hardware_av1_encoder(base_encoder: str) -> str | None:
+    """AV1 encoder for this GPU family, or None when that GPU cannot encode AV1.
+
+    RTX 20 and 30 expose NVENC for H.264 and HEVC but not AV1. AMF and
+    QuickSync get the same probe, so an old GPU falls through to libsvtav1.
+    """
+    base = (base_encoder or "").lower()
+    if "nvenc" in base:
+        code = "av1_nvenc"
+    elif "amf" in base:
+        code = "av1_amf"
+    elif "qsv" in base:
+        code = "av1_qsv"
+    else:
+        return None
+    return code if _encoder_works(code) else None
