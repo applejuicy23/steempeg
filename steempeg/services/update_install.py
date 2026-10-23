@@ -165,6 +165,37 @@ def _sh_quote(path: str) -> str:
     return "'" + path.replace("'", "'\"'\"'") + "'"
 
 
+def _bat_require_install_folder(abort_label: str) -> str:
+    """Cmd lines that jump to abort_label unless the working directory is named Steempeg.
+
+    The update moves or deletes every other file in that directory. A portable
+    zip extracted into Downloads must not be treated as an install folder.
+    A drive root fails the name check as well.
+    """
+    return (
+        'for %%I in ("%CD%") do set "STEEMPEG_FOLDER=%%~nxI"\n'
+        f'if /I not "%STEEMPEG_FOLDER%"=="Steempeg" goto {abort_label}\n'
+    )
+
+
+def _sh_require_install_folder(relaunch_name: str) -> str:
+    """Bash lines that stop unless the working directory is named Steempeg.
+
+    On refusal the log goes to the temp directory, not into the user's folder,
+    and the existing launcher is started again.
+    """
+    relaunch = (relaunch_name or "").replace('"', "")
+    return f"""folder=$(basename "$PWD" | tr '[:upper:]' '[:lower:]')
+if [[ "$folder" != "steempeg" ]]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) refused: install folder is not named Steempeg ($PWD)" >> "${{TMPDIR:-/tmp}}/steempeg_update_install.log"
+  if [[ -n "{relaunch}" && -e "./{relaunch}" ]]; then
+    exec "./{relaunch}"
+  fi
+  exit 1
+fi
+"""
+
+
 def write_deferred_install_bat(
     *,
     handler_pid: int,
@@ -234,7 +265,7 @@ timeout /t 1 /nobreak >NUL
 goto wait_loop
 
 :do_install
-if not exist "{source_rel}\\{new_exe_name}" goto abort
+{_bat_require_install_folder("abort_folder")}if not exist "{source_rel}\\{new_exe_name}" goto abort
 {remove_block}
 robocopy "{source_rel}" "." /E /IS /IT /R:5 /W:2 /NFL /NDL /NJH /NJS /NC /NS /NP > NUL
 if errorlevel 8 (
@@ -244,6 +275,12 @@ if errorlevel 8 (
 if exist "{extract_rel}" rd /S /Q "{extract_rel}"
 {tmp_cleanup}
 start "" "{new_exe_name}" --updated-from {from_version} --backup-folder {backup_arg}
+del "%~f0"
+exit /b
+
+:abort_folder
+>> "%TEMP%\\steempeg_update_install.log" echo %DATE% %TIME% update aborted: folder is not named Steempeg (%CD%)
+if exist "{new_exe_name}" start "" "{new_exe_name}"
 del "%~f0"
 exit /b
 
@@ -285,7 +322,7 @@ set -euo pipefail
 cd {_sh_quote(exe_dir)}
 while kill -0 {int(handler_pid)} 2>/dev/null; do sleep 0.4; done
 sleep 0.4
-
+{_sh_require_install_folder(new_exe_name)}
 PRESERVE=({preserve_list})
 should_keep() {{
   local n="$1"
