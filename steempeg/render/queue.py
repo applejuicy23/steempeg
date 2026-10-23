@@ -63,6 +63,10 @@ class RenderJobSettings:
     is_trim_mode: bool = False
     custom_target_bitrate: int = 1500
     custom_target_height: int = -1
+    # 0 means an older job that only stored kbps. A positive value is the
+    # requested file size, recomputed when the clip length changes.
+    custom_target_mb: int = 0
+    custom_target_lossless: bool = False
     size_slider_index: int = 0
     custom_fps: Optional[int] = None
     custom_vbitrate: Optional[float] = None
