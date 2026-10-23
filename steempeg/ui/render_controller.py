@@ -5011,6 +5011,13 @@ class RenderMixin:
 
     def calculate_strict_target(self, target_mb, is_lossless=False, is_custom=False):
         """Read the controls, run the bitrate math, show the result."""
+        self.custom_target_lossless = bool(is_lossless)
+        try:
+            requested_mb = int(target_mb)
+        except (TypeError, ValueError):
+            requested_mb = 0
+        # Lossless means "this clip's own size", so the megabyte number is not reused.
+        self.custom_target_mb = 0 if is_lossless else max(0, requested_mb)
         duration = float(self.get_effective_duration() or 0)
         if duration <= 0:
             duration = float(getattr(self, "current_clip_duration_sec", 0) or 0)
