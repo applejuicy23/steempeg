@@ -258,9 +258,11 @@ class ReleaseEntry:
     available_platforms: frozenset[str] = frozenset()
 
     def badge(self, current_version: float) -> str:
-        if abs(self.version_float - current_version) < 0.001:
+        key = version_key(self.version)
+        installed = running_version_key()
+        if key == installed:
             return "current"
-        if self.version_float > current_version:
+        if key > installed:
             if self.install_tier == InstallTier.STABLE:
                 return "newer"
             if self.install_tier == InstallTier.RISKY:
@@ -301,12 +303,49 @@ def parse_version(text: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def version_key(parts: tuple[int, ...]) -> tuple[int, int, int]:
+    """Orders a version so 55.10 is newer than 55.9 and is not the same as 55.1.
+
+    A missing minor or patch counts as 0, so 55, 55.0 and 55.0.0 are one release.
+    ``version_to_float`` cannot do this: 55.10 and 55.1 are the same float.
+    """
+    major = int(parts[0]) if parts else 0
+    minor = int(parts[1]) if len(parts) > 1 else 0
+    patch = int(parts[2]) if len(parts) > 2 else 0
+    return (major, minor, patch)
+
+
+def running_version_key() -> tuple[int, int, int]:
+    """The version this build reports, as a comparable (major, minor, patch) key."""
+    from steempeg.version import APP_VERSION_STR
+
+    return version_key(parse_version(APP_VERSION_STR) or ())
+
+
 def version_to_float(parts: tuple[int, ...]) -> float:
+    """Legacy float used by era bands and milestones.
+
+    Unambiguous only for a one-digit minor and no third component (51.1, 12.1).
+    Order releases with ``version_key`` instead.
+    """
     if not parts:
         return 0.0
     if len(parts) == 1:
         return float(parts[0])
     return parts[0] + parts[1] / (10 ** len(str(parts[1])))
+
+
+def version_float_is_unique(parts: tuple[int, ...]) -> bool:
+    """False when ``version_to_float`` collides with a different release.
+
+    A minor of 10 or more shares a float with a one-digit minor (55.10 and 55.1).
+    A non-zero third component is dropped, so 55.0.1 becomes 55.0.
+    """
+    if len(parts) > 2 and int(parts[2]) != 0:
+        return False
+    if len(parts) > 1 and int(parts[1]) >= 10:
+        return False
+    return True
 
 
 def format_version(parts: tuple[int, ...]) -> str:
@@ -338,7 +377,7 @@ def group_releases_by_major(releases: list[ReleaseEntry]) -> list[list[ReleaseEn
             major_order.append(major)
         groups[major].append(entry)
     return [
-        sorted(groups[major], key=lambda item: item.version_float, reverse=True)
+        sorted(groups[major], key=lambda item: version_key(item.version), reverse=True)
         for major in major_order
     ]
 
@@ -369,13 +408,26 @@ def latest_release_version(releases: list[ReleaseEntry]) -> float:
     return releases[0].version_float
 
 
+def newest_release(releases: list[ReleaseEntry]) -> ReleaseEntry | None:
+    """The release with the highest (major, minor, patch), independent of float order."""
+    if not releases:
+        return None
+    return max(releases, key=lambda entry: version_key(entry.version))
+
+
 def default_selected_release(releases: list[ReleaseEntry], installed: float) -> ReleaseEntry:
-    """Prefer the newest GitHub release when it is newer than the running build."""
-    latest = releases[0]
-    if latest.version_float > installed + 0.001:
+    """Prefer the newest GitHub release when it is newer than the running build.
+
+    ``installed`` stays for callers that still pass ``APP_VERSION_FLOAT``. The
+    comparison uses version components, so 55.10 is not treated as 55.1.
+    """
+    del installed  # ordering uses the running build's components, not the float
+    installed_key = running_version_key()
+    latest = newest_release(releases) or releases[0]
+    if version_key(latest.version) > installed_key:
         return latest
     for entry in releases:
-        if versions_equal(entry.version_float, installed):
+        if version_key(entry.version) == installed_key:
             return entry
     return latest
 
@@ -385,15 +437,29 @@ def version_label_color(
     *,
     installed: float,
     latest: float,
+    version: tuple[int, ...] | None = None,
+    installed_version: tuple[int, ...] | None = None,
+    latest_version: tuple[int, ...] | None = None,
 ) -> str:
-    if versions_equal(version_float, installed):
+    """Row color. Pass version tuples so 55.10 is not painted as if it were 55.1."""
+    if version is not None and installed_version is not None:
+        key = version_key(version)
+        installed_key = version_key(installed_version)
+        if key == installed_key:
+            return COLOR_VERSION_CURRENT
+        if key > installed_key:
+            return COLOR_VERSION_NEW
+    elif versions_equal(version_float, installed):
         return COLOR_VERSION_CURRENT
-    if version_float > installed + 0.001:
+    elif version_float > installed + 0.001:
         return COLOR_VERSION_NEW
     if version_float < 12.0 - 0.001:
         return COLOR_VERSION_LEGACY
 
-    gap = version_major(latest) - version_major(version_float)
+    if latest_version is not None and version is not None:
+        gap = version_key(latest_version)[0] - version_key(version)[0]
+    else:
+        gap = version_major(latest) - version_major(version_float)
     if gap <= WHITE_HOLD_GAP:
         return COLOR_VERSION_STABLE
     fade = min(1.0, (gap - WHITE_HOLD_GAP) / YELLOW_FADE_SPAN)
@@ -443,7 +509,7 @@ def selection_notice(entry: ReleaseEntry, current_version: float) -> str | None:
         )
     if entry.version_float < MIN_INSTALL_VERSION - 0.001:
         return "Too old for in-app install. Minimum is v12.1, and even that era is risky."
-    if entry.version_float >= current_version - 0.001:
+    if version_key(entry.version) >= running_version_key():
         return None
     if versions_equal(entry.version_float, RECOMMENDED_INSTALL_VERSION):
         return "Last safe version for in-app install."
@@ -690,7 +756,9 @@ def parse_release(data: dict) -> ReleaseEntry | None:
     zip_url, zip_name, zip_size, zip_sha256 = find_zip_asset(assets)
     era = classify_era(version_float)
     install_tier = classify_install_tier(version_float, zip_url)
-    milestones = milestones_for_version(version_float)
+    milestones = (
+        milestones_for_version(version_float) if version_float_is_unique(version) else ()
+    )
     block_reason = _block_reason_for(install_tier, version_float)
     if block_reason is None and install_tier == InstallTier.NO_ZIP:
         block_reason = _missing_channel_block_reason(
@@ -911,7 +979,7 @@ def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[Re
             ) from exc
         raise FetchError(f"Could not reach GitHub:\n{exc}") from exc
 
-    releases.sort(key=lambda entry: entry.version_float, reverse=True)
+    releases.sort(key=lambda entry: version_key(entry.version), reverse=True)
     logging.info("RELEASE_CATALOG: fetched %s releases", len(releases))
     if save_cache:
         save_releases_cache(releases)
@@ -970,7 +1038,10 @@ def _entry_from_dict(data: dict) -> ReleaseEntry | None:
         install_tier = InstallTier(str(data.get("install_tier", InstallTier.NO_ZIP.value)))
         version_float = float(data.get("version_float", version_to_float(version)))
         # Always prefer live VERSION_MILESTONES so (i) badges update without a GitHub refetch.
-        milestones = milestones_for_version(version_float)
+        # Skip the float match when it is ambiguous: 55.10 stores the same float as 55.1.
+        milestones = (
+            milestones_for_version(version_float) if version_float_is_unique(version) else ()
+        )
         platforms = frozenset(str(p) for p in (data.get("available_platforms") or []))
         return ReleaseEntry(
             tag_name=str(data.get("tag_name") or ""),
@@ -1039,7 +1110,7 @@ def load_releases_cache() -> list[ReleaseEntry] | None:
                 releases.append(entry)
         if not releases:
             return None
-        releases.sort(key=lambda entry: entry.version_float, reverse=True)
+        releases.sort(key=lambda entry: version_key(entry.version), reverse=True)
         return releases
     except Exception:
         logging.exception("RELEASE_CATALOG: failed reading cache")
@@ -1082,5 +1153,8 @@ def find_local_backups(exe_dir: str) -> list[LocalBackup]:
             )
         )
 
-    backups.sort(key=lambda item: item.version_float, reverse=True)
+    backups.sort(
+        key=lambda item: version_key(parse_version(item.version_str) or ()),
+        reverse=True,
+    )
     return backups
