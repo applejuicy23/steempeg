@@ -138,12 +138,12 @@ def resolve_video_encoder(codec_text: str, base_encoder: str, available_av1: boo
         return "libvpx-vp9"
 
     if "AV1" in codec:
-        if "nvenc" in base:
-            return "av1_nvenc"
-        if "amf" in base:
-            return "av1_amf"
-        if "qsv" in base:
-            return "av1_qsv"
+        from steempeg.core.capabilities import hardware_av1_encoder
+
+        # Probe the GPU. av1_nvenc on an RTX 20/30 fails the whole render.
+        hardware = hardware_av1_encoder(base)
+        if hardware:
+            return hardware
         return "libsvtav1" if available_av1 else "libx264"
 
     if "H.265" in codec or "HEVC" in codec.upper():
