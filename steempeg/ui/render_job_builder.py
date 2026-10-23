@@ -52,6 +52,8 @@ def apply_job_settings_to_ui(
     ui = app.ui
     app.custom_target_bitrate = settings.custom_target_bitrate
     app.custom_target_height = settings.custom_target_height
+    app.custom_target_mb = int(getattr(settings, "custom_target_mb", 0) or 0)
+    app.custom_target_lossless = bool(getattr(settings, "custom_target_lossless", False))
     app.current_orig_fps = settings.orig_fps
     app.current_orig_bitrate = settings.orig_video_mbps
     app.current_orig_audio_bitrate = settings.orig_audio_kbps
@@ -154,6 +156,13 @@ def apply_job_settings_to_ui(
 
         if hasattr(ui, "size_slider"):
             ui.size_slider.setValue(settings.size_slider_index)
+        # Quality changes rebuild the slider for the open clip and would keep
+        # that clip's bitrate. Recompute from the saved megabyte target instead.
+        if "Target File Size" in (settings.quality_text or "") and hasattr(app, "calculate_strict_target"):
+            if settings.custom_target_lossless:
+                app.calculate_strict_target(1, is_lossless=True)
+            elif int(settings.custom_target_mb or 0) > 0:
+                app.calculate_strict_target(int(settings.custom_target_mb), is_custom=True)
 
         fps_custom = "Custom" in (settings.fps_text or "")
         if hasattr(app, "input_custom_fps"):
@@ -533,6 +542,8 @@ def snapshot_settings_from_ui(app: SteempegApp) -> RenderJobSettings:
         is_trim_mode=is_trim_mode,
         custom_target_bitrate=int(getattr(app, "custom_target_bitrate", 1500)),
         custom_target_height=int(getattr(app, "custom_target_height", -1)),
+        custom_target_mb=int(getattr(app, "custom_target_mb", 0) or 0),
+        custom_target_lossless=bool(getattr(app, "custom_target_lossless", False)),
         size_slider_index=size_slider_index,
         custom_fps=custom_fps,
         custom_vbitrate=custom_vbitrate,
@@ -861,6 +872,9 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
     target_scale_h = -1
 
     if "Target File Size" in quality_text:
+        from steempeg.render.target_size import retarget_job_file_size
+
+        retarget_job_file_size(job)
         video_bitrate = f"{s.custom_target_bitrate}k"
         target_scale_h = s.custom_target_height
     elif "Custom" in bitrate_text:
