@@ -14,7 +14,6 @@ from steempeg.services.release_catalog import (
     LocalBackup,
     ReleaseEntry,
     find_local_backups,
-    latest_release_version,
 )
 from steempeg.services.update_job import UpdateJob, spawn_update_handler
 from steempeg.ui import design_tokens as tok
@@ -27,7 +26,7 @@ from steempeg.ui.message_dialog import (
 )
 from steempeg.ui.update_center import UpdateCenterDialog
 from steempeg.ui.update_confirm_dialog import UpdateConfirmChoice, UpdateConfirmDialog
-from steempeg.version import APP_VERSION_FLOAT, APP_VERSION_STR
+from steempeg.version import APP_VERSION_STR
 
 
 class _SilentUpdateCheckThread(QThread):
@@ -120,9 +119,10 @@ class UpdaterMixin:
             if not releases:
                 self._set_title_bar_update_available(False)
                 return
-            latest = latest_release_version(releases)
-            if latest > APP_VERSION_FLOAT + 0.001:
-                latest_entry = releases[0]
+            from steempeg.services.release_catalog import newest_release, running_version_key, version_key
+
+            latest_entry = newest_release(releases)
+            if latest_entry is not None and version_key(latest_entry.version) > running_version_key():
                 self._set_title_bar_update_available(
                     True, version=latest_entry.version_str
                 )
@@ -465,10 +465,13 @@ class UpdaterMixin:
             from steempeg.services.update_install import (
                 _BAT_UNINSTALLER_GUARD,
                 _bat_preserve_dir_guards,
+                _bat_require_install_folder,
             )
 
             dir_guards = _bat_preserve_dir_guards("%%D")
             uninstaller_guard = _BAT_UNINSTALLER_GUARD
+            folder_guard = _bat_require_install_folder("abort_restore")
+            live_exe = find_app_executable(exe_dir)
             bat_path = os.path.join(exe_dir, "restore.bat")
             bat_content = f"""@echo off
 title Steempeg Restore
@@ -481,7 +484,7 @@ timeout /t 1 /nobreak > NUL
 goto wait_loop
 
 :restore
-echo Moving current version aside...
+{folder_guard}echo Moving current version aside...
 if exist "{staging_folder}" rd /S /Q "{staging_folder}"
 mkdir "{staging_folder}"
 
@@ -499,12 +502,21 @@ xcopy /S /E /Y /C /I "{backup_folder_name}\\*" ".\\" > NUL
 echo Starting restored version...
 start "" "{exe_name}"
 del "%~f0"
+exit /b
+
+:abort_restore
+>> "%TEMP%\\steempeg_update_install.log" echo %DATE% %TIME% restore aborted: folder is not named Steempeg (%CD%)
+if exist "{live_exe}" start "" "{live_exe}"
+del "%~f0"
 """
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             subprocess.Popen([bat_path], shell=True, cwd=exe_dir, creationflags=0x08000000, env=env)
         else:
-            from steempeg.services.update_install import _PRESERVE_DIRS
+            from steempeg.services.update_install import (
+                _PRESERVE_DIRS,
+                _sh_require_install_folder,
+            )
 
             keep_tests = " || ".join(
                 f'[[ "$item" == "{name}" ]]' for name in sorted(_PRESERVE_DIRS)
@@ -515,6 +527,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 while kill -0 {pid} 2>/dev/null; do sleep 0.4; done
 sleep 0.4
+{_sh_require_install_folder(find_app_executable(exe_dir))}
 rm -rf "{staging_folder}"
 mkdir -p "{staging_folder}"
 for item in * .[!.]* ..?*; do
