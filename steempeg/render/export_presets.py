@@ -237,8 +237,13 @@ def _short_video_bitrate(settings: RenderJobSettings) -> str:
     match = re.search(r"([\d.]+)\s*Mbps", bitrate)
     if match:
         return _format_video_bitrate_mbps(float(match.group(1)))
-    if "Target File Size" in quality and settings.custom_target_bitrate:
-        return _format_video_bitrate_kbps(settings.custom_target_bitrate)
+    if "Target File Size" in quality:
+        if settings.custom_target_lossless:
+            return "source size"
+        if int(settings.custom_target_mb or 0) > 0:
+            return f"{int(settings.custom_target_mb)} MB"
+        if settings.custom_target_bitrate:
+            return _format_video_bitrate_kbps(settings.custom_target_bitrate)
     return ""
 
 
@@ -438,4 +443,7 @@ def apply_preset_to_job(job: RenderJob, preset: RenderJobSettings, *, preset_nam
     if preset_name:
         merged.output_preset = f"User: {_normalize_name(preset_name)}"
     job.settings = merged
+    from steempeg.render.target_size import retarget_job_file_size
+
+    retarget_job_file_size(job)
     job.refresh_output_path()
