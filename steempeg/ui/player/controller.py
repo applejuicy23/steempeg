@@ -4026,14 +4026,10 @@ class PlayerMixin:
         if not file_path or not os.path.isfile(file_path):
             return
 
-        # Same export already open — keep position (tab restore / re-select).
-        # Mirrors Clips Manager skip-reopen of the current clip.
-        if (
-            not getattr(self, "_is_switching", False)
-            and not getattr(self, "_awaiting_first_frame", False)
-            and self._norm_clip_path_key(file_path)
-            == self._norm_clip_path_key(getattr(self, "_active_play_media_path", None))
-        ):
+        # Same export already on screen — keep position (tab restore / re-select).
+        # A Steam clip in between clears the rendered path, so this must not
+        # trust a leftover ``_active_play_media_path``.
+        if self._rendered_export_is_current(file_path):
             logging.debug(
                 "Rendered play skipped (already open): %s", file_path
             )
@@ -4198,6 +4194,24 @@ class PlayerMixin:
 
         if hasattr(self, "update_clip_health_button"):
             self.update_clip_health_button()
+
+    def _rendered_export_is_current(self, file_path: str | None) -> bool:
+        """True when this export is the file the player is actually showing.
+
+        ``_active_play_media_path`` can outlive the export: opening a Steam clip
+        clears ``_rendered_media_path`` and used to leave the old file stamped,
+        so the first rendered card looked already open and ignored the click.
+        """
+        if not file_path:
+            return False
+        current = getattr(self, "_rendered_media_path", None)
+        if not current:
+            return False
+        if getattr(self, "_is_switching", False) or getattr(
+            self, "_awaiting_first_frame", False
+        ):
+            return False
+        return self._norm_clip_path_key(file_path) == self._norm_clip_path_key(current)
 
     def _norm_clip_path_key(self, path: str | None) -> str:
         if not path:
@@ -4595,6 +4609,9 @@ class PlayerMixin:
         mpd_override plays a specific manifest directly (used for salvage manifests
         that the health/discovery scanners intentionally ignore)."""
         self._rendered_media_path = None
+        # A previous export leaves this set. The rendered-grid click guard treats
+        # it as «already playing», so that file would not open again.
+        self._active_play_media_path = None
         if clip_path is None:
             if not hasattr(self.ui, 'table_clips') or self.ui.table_clips.currentRow() < 0:
                 return
