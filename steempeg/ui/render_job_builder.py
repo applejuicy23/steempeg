@@ -893,6 +893,11 @@ def resolve_render_params(job: RenderJob, ffmpeg_exe: str) -> Optional[ResolvedR
             final_bitrate = max(int(float(match.group(1)) * 1000), 100)
             video_bitrate = f"{final_bitrate}k"
 
+    if "Original" in quality_text and "Target File Size" not in quality_text:
+        # Unused while Original stream-copies. A trim re-encodes this window
+        # at the source rate, because copy cannot start mid-chunk.
+        video_bitrate = f"{max(int(round(float(orig_v_bitrate) * 1000)), 100)}k"
+
     orig_a_bitrate = s.orig_audio_kbps or 192
     audio_bitrate_kbps = "192k"
     if "Custom" in s.audio_bitrate_text:
