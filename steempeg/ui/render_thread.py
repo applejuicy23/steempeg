@@ -325,11 +325,23 @@ class RenderThread(QThread):
                     cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" -vn {base_audio} -y "{temp_mp4}"'
                     
                 elif "Original" in self.quality_text and "Target File" not in self.quality_text:
-                    self._stream_copy_used = True
-                    if self.mute_audio:
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c:v copy {copy_ts_fix}-an -y "{temp_mp4}"'
+                    if is_trim:
+                        # Copy can only begin on a segment keyframe. Steam chunks are
+                        # a few seconds, so the file would include that leading gap
+                        # and run longer than the trim handles. Re-encode the window.
+                        bitrate = self.video_bitrate or "12M"
+                        cmd = (
+                            f'"{self.ffmpeg_exe}" -ss {self.trim_start_sec:.3f} {input_fix}'
+                            f'-i "{safe_mpd}" -t {self.trim_duration_sec:.3f} '
+                            f'-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" {fps_arg}{v_extra}'
+                            f'-c:v {enc} -b:v {bitrate} {pix_args}{base_audio} -y "{temp_mp4}"'
+                        )
                     else:
-                        cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
+                        self._stream_copy_used = True
+                        if self.mute_audio:
+                            cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c:v copy {copy_ts_fix}-an -y "{temp_mp4}"'
+                        else:
+                            cmd = f'"{self.ffmpeg_exe}" {trim_args}-i "{safe_mpd}" {fps_arg}-c copy {copy_ts_fix}-y "{temp_mp4}"'
                         
                 elif "Target File Size" in self.quality_text:
                     bitrate_val = int(self.video_bitrate.replace('k', ''))
