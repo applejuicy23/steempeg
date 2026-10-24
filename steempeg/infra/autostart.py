@@ -7,7 +7,6 @@ can autostart: a source checkout has no stable exe to point Windows at.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 
 _log = logging.getLogger(__name__)
@@ -25,7 +24,9 @@ def autostart_is_supported() -> bool:
 
 def build_autostart_command() -> str:
     """Builds the command Windows runs at sign-in: this exe, hidden in the tray."""
-    return f'"{os.path.abspath(sys.executable)}" --background'
+    from steempeg.infra.paths import running_executable
+
+    return f'"{running_executable()}" --background'
 
 
 def read_autostart_enabled() -> bool:

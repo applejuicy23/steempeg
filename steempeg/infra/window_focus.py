@@ -402,12 +402,13 @@ def ensure_toast_protocol_registered() -> None:
     try:
         import winreg
 
-        from steempeg.infra.paths import is_frozen_build
+        from steempeg.infra.paths import is_frozen_build, running_executable
 
+        exe = running_executable()
         if is_frozen_build():
-            cmd = f'"{os.path.abspath(sys.executable)}" --raise-existing "%1"'
+            cmd = f'"{exe}" --raise-existing "%1"'
         else:
-            cmd = f'"{os.path.abspath(sys.executable)}" -m steempeg --raise-existing "%1"'
+            cmd = f'"{exe}" -m steempeg --raise-existing "%1"'
 
         base = r"Software\Classes\steempeg"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, base) as key:

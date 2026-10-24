@@ -26,6 +26,29 @@ def is_frozen_build() -> bool:
     return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
 
 
+def running_executable() -> str:
+    """Program file to start when this process should launch again.
+
+    Nuitka standalone sets ``sys.executable`` to ``python.exe`` beside the
+    binary and does not ship that file, so spawning it raises WinError 2.
+    ``sys.argv[0]`` is the real ``Steempeg.exe``.
+    """
+    if is_frozen_build():
+        install = os.path.dirname(os.path.abspath(sys.executable or (sys.argv[0] if sys.argv else "")))
+        candidates = []
+        if sys.argv and sys.argv[0]:
+            candidates.append(os.path.abspath(sys.argv[0]))
+        candidates.append(os.path.join(install, "Steempeg.exe"))
+        candidates.append(os.path.join(install, "Steempeg"))
+        for candidate in candidates:
+            if not candidate or not os.path.isfile(candidate):
+                continue
+            if os.path.basename(candidate).lower() in {"python.exe", "pythonw.exe"}:
+                continue
+            return candidate
+    return os.path.abspath(sys.executable or "")
+
+
 def get_install_root() -> str:
     """Folder that owns the Steempeg install (launchers, bin/, logs/, cache/).
 
