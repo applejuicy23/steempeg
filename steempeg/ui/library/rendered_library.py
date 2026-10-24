@@ -6429,18 +6429,14 @@ class RenderedLibraryMixin:
                         row_item.setSelected(True)
             else:
                 # Already the open export — ignore the click (no reload).
-                # Mirrors Clips Manager ``_grid_select_item`` skip-reopen.
+                # Only the file actually in the player counts. A leftover stamp
+                # from before a Clips Manager open must not swallow this card.
                 file_path = item.data(Qt.ItemDataRole.UserRole + 1)
                 if (
                     update_preview
                     and file_path
-                    and hasattr(self, "_norm_clip_path_key")
-                    and self._norm_clip_path_key(file_path)
-                    == self._norm_clip_path_key(
-                        getattr(self, "_active_play_media_path", None)
-                        or getattr(self, "_rendered_media_path", None)
-                        or getattr(self, "_preview_clip_path", None)
-                    )
+                    and hasattr(self, "_rendered_export_is_current")
+                    and self._rendered_export_is_current(file_path)
                 ):
                     item.setSelected(True)
                     grid.blockSignals(False)
@@ -6507,14 +6503,10 @@ class RenderedLibraryMixin:
         date_str = self.table_rendered.item(row, 2).text() if self.table_rendered.item(row, 2) else ""
         size_str = self.table_rendered.item(row, 3).text() if self.table_rendered.item(row, 3) else ""
 
-        already_open = (
-            hasattr(self, "_norm_clip_path_key")
-            and bool(file_path)
-            and self._norm_clip_path_key(file_path)
-            == self._norm_clip_path_key(
-                getattr(self, "_active_play_media_path", None)
-                or getattr(self, "_rendered_media_path", None)
-            )
+        already_open = bool(
+            file_path
+            and hasattr(self, "_rendered_export_is_current")
+            and self._rendered_export_is_current(file_path)
         )
 
         self._preview_clip_path = file_path
