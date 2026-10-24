@@ -14,6 +14,8 @@ import shutil
 from PySide6.QtCore import (
     Qt,
     QEasingCurve,
+    QEvent,
+    QObject,
     QPoint,
     QPropertyAnimation,
     QRect,
@@ -97,14 +99,52 @@ _CLIP_CARD_CASCADE_MAX_MS = 220
 _CLIP_CARD_CASCADE_WINDOW_S = 0.25
 _CLIP_VIEWPORT_OVERSCAN_PX = 220
 _CLIP_SCROLL_IDLE_MS = 120
-# Viewport fill after scroll stops — small bursts so the shelf never hitch-prints.
-_CLIP_VIEWPORT_CHUNK = 4
+# How many on-screen cards one tick may build. A 2K pane of big cards is about
+# a dozen; medium and small pack more into the same pixels, and building every
+# one of those in a single tick hitches startup. The rest of the visible rows
+# follow on the next short gap. Cards below the fold stay on the idle fill.
+_CLIP_VIEWPORT_FILL_CAP = 24
 _CLIP_VIEWPORT_GAP_MS = 20
 # Quiet background materialize while the user is idle / watching a clip.
 # One card + long gap = invisible; scroll always wins (idle fill stops).
 _CLIP_IDLE_FILL_CHUNK = 1
 _CLIP_IDLE_FILL_GAP_MS = 110
 _CLIP_IDLE_FILL_START_MS = 480
+
+
+class _GridViewportResizeFilter(QObject):
+    """Refill the clips shelf when the pane is shown or gets its real size.
+
+    Progressive discover finishes while the shell is still hidden. That pass
+    sees a short viewport (about three big rows) and used to treat it as the
+    whole screen. Show/resize is the first moment the 2K pane is real.
+    """
+
+    def __init__(self, host, parent=None):
+        super().__init__(parent)
+        self._host = host
+        self._last_size = None
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.Show:
+            note = getattr(self._host, "_clips_note_pane_shown", None)
+            if callable(note):
+                note()
+            return False
+        if kind != QEvent.Type.Resize:
+            return False
+        size = event.size()
+        if size == self._last_size:
+            return False
+        self._last_size = QSize(size)
+        # Ignore the pre-layout 0×0 pass; the real size arrives with the next resize.
+        if size.width() < 2 or size.height() < 2:
+            return False
+        refresh = getattr(self._host, "_schedule_clips_viewport_refresh", None)
+        if callable(refresh):
+            refresh(50)
+        return False
 
 
 def _clips_card_cell_size(app) -> QSize:
@@ -5517,6 +5557,11 @@ class LibraryMixin:
         if bar is not None:
             bar.valueChanged.connect(self._on_clips_scroll)
             bar.rangeChanged.connect(self._on_clips_scroll_range)
+        # Discover runs before ShowWindow. The grid's Show (not only a later
+        # resize) is what reveals the real 2K pane.
+        filt = _GridViewportResizeFilter(self, grid)
+        grid.installEventFilter(filt)
+        self._clips_viewport_resize_filter = filt
         self._clips_viewport_hooks_installed = True
 
     def _on_clips_scroll_range(self, *_args) -> None:
@@ -5569,6 +5614,11 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
         self._clips_progressive_active = True
+        # Shelf count is meaningless until the window is on screen.
+        self._clips_startup_fill_pending = True
+        self._clips_fit_retries = 0
+        self._clips_fit_seen_height = None
+        self._clips_fit_window_seen = False
         self._progressive_side_libs_pending = False
         self._progressive_quiet_hydrate = False
         self._library_clip_rows = []
@@ -5732,7 +5782,6 @@ class LibraryMixin:
         # One rematerialize — the old 0+120ms double pass fought marquees.
         QTimer.singleShot(0, self._clips_refresh_viewport)
         QTimer.singleShot(500, self._schedule_clip_duration_backfill)
-        QTimer.singleShot(_CLIP_IDLE_FILL_START_MS, self._schedule_clips_idle_fill)
         startup_trace("progressive_post_settle:scheduled")
 
     def _on_progressive_clips_failed(self, message: str) -> None:
@@ -5773,6 +5822,10 @@ class LibraryMixin:
     def _schedule_clips_idle_fill(self, delay_ms: int | None = None) -> None:
         """Slowly materialize off-screen ClipCards while the user is idle."""
         if not getattr(self, "_clips_progressive_active", False):
+            return
+        # The visible shelf is still waiting for the real pane. A drip here is
+        # the "six cards, then the rest a second later" startup.
+        if getattr(self, "_clips_startup_fill_pending", False):
             return
         if getattr(self, "_clips_scroll_active", False):
             return
@@ -5852,6 +5905,71 @@ class LibraryMixin:
                 return True
         return False
 
+    def _clips_note_pane_shown(self) -> None:
+        """The clips grid just became visible — measure again, don't drip."""
+        if not getattr(self, "_clips_progressive_active", False):
+            return
+        self._clips_fit_seen_height = None
+        self._clips_startup_fill_pending = True
+        self._clips_fit_retries = 0
+        self._clips_scroll_active = False
+        self._stop_clips_idle_fill()
+        self._schedule_clips_viewport_refresh(0)
+
+    def _clips_fitted_slot_count(self) -> int:
+        """How many cards the current viewport can hold. 0 when it has no size yet."""
+        grid = getattr(self, "grid_clips", None)
+        if grid is None:
+            return 0
+        vp = grid.viewport()
+        if vp is None:
+            return 0
+        width = int(vp.width())
+        height = int(vp.height())
+        if width < 80 or height < 80:
+            return 0
+        cols = max(1, int(self._clip_grid_column_count_for(grid)))
+        cell_h = max(
+            1,
+            _clips_card_cell_size(self).height() + max(0, int(grid.spacing())),
+        )
+        rows = max(1, (height + cell_h - 1) // cell_h)
+        # The row peeking under the fold, so a short scroll is not a blank band.
+        rows += 1
+        count = int(grid.count())
+        if count <= 0:
+            return 0
+        return min(count, cols * rows)
+
+    def _clips_shelf_items(self, slots: int) -> list:
+        """Placeholders that belong on the current screen.
+
+        At the top of the grid, visualRect under-counts until the window is
+        mapped, so the first ``slots`` cards are taken in order. Once the user
+        has scrolled, the laid-out rects are the ones on screen.
+        """
+        grid = getattr(self, "grid_clips", None)
+        if grid is None or slots <= 0:
+            return []
+        bar = grid.verticalScrollBar()
+        # Startup scrollbar range changes are not a user scroll. The first
+        # `slots` cards are the ones the pane will show once it is mapped.
+        if (
+            bar is not None
+            and int(bar.value()) > 0
+            and not getattr(self, "_clips_startup_fill_pending", False)
+        ):
+            return self._clips_visible_items()
+        out = []
+        for i in range(grid.count()):
+            if len(out) >= slots:
+                break
+            item = grid.item(i)
+            if item is None or item.isHidden():
+                continue
+            out.append(item)
+        return out
+
     def _clips_visible_items(self) -> list:
         grid = getattr(self, "grid_clips", None)
         if grid is None:
@@ -5910,7 +6028,9 @@ class LibraryMixin:
         off-screen widgets under a live-cap; fast scroll then looked like a
         reprinting press. Once printed, cards stay.
         """
-        if getattr(self, "_clips_scroll_active", False):
+        startup = bool(getattr(self, "_clips_startup_fill_pending", False))
+        # Scrollbar noise during the hidden layout pass is not the user scrolling.
+        if getattr(self, "_clips_scroll_active", False) and not startup:
             return
         if not getattr(self, "_clips_progressive_active", False):
             return
@@ -5920,23 +6040,83 @@ class LibraryMixin:
         if getattr(self, "_library_panel_mode", "clips") != "clips":
             if not grid.isVisible():
                 return
-        try:
-            grid.doItemsLayout()
-        except Exception:
-            pass
+        window = getattr(self, "ui", None)
+        window_up = window is not None and window.isVisible()
+        vp = grid.viewport()
+        if window_up:
+            try:
+                grid.doItemsLayout()
+            except Exception:
+                pass
+        height = int(vp.height()) if vp is not None else 0
+        # The hidden-shell retries must not eat the budget for the real window.
+        if startup and window_up and not getattr(self, "_clips_fit_window_seen", False):
+            self._clips_fit_window_seen = True
+            self._clips_fit_retries = 0
+            self._clips_fit_seen_height = None
+        # Hidden shell reports a short viewport (three big rows → six cards).
+        # A mapped 1440p window whose clips pane is still under ~40% of that
+        # height is the same pre-layout pass. Wait until the height holds.
+        seen = getattr(self, "_clips_fit_seen_height", None)
+        tall_enough = True
+        if window_up and window is not None:
+            window_h = int(window.height())
+            if window_h >= 900 and height < int(window_h * 0.4):
+                tall_enough = False
+        ready = window_up and height >= 80 and height == seen and tall_enough
+        if startup and not ready:
+            self._clips_fit_seen_height = height if window_up and height >= 80 else None
+            self._stop_clips_idle_fill()
+            retries = int(getattr(self, "_clips_fit_retries", 0)) + 1
+            self._clips_fit_retries = retries
+            # Keep polling while the shell is hidden. Once it is up, give the
+            # pane about two seconds to reach its real height, then paint it.
+            if (not window_up or retries <= 40) and getattr(
+                self, "_library_panel_mode", "clips"
+            ) == "clips":
+                QTimer.singleShot(50, self._clips_refresh_viewport)
+            if not window_up or retries <= 40:
+                return
+        elif not window_up:
+            try:
+                grid.doItemsLayout()
+            except Exception:
+                pass
 
+        slots = self._clips_fitted_slot_count()
+        if slots <= 0:
+            if startup:
+                retries = int(getattr(self, "_clips_fit_retries", 0)) + 1
+                self._clips_fit_retries = retries
+                if retries <= 40:
+                    QTimer.singleShot(50, self._clips_refresh_viewport)
+            return
         pending = [
             item
-            for item in self._clips_visible_items()
+            for item in self._clips_shelf_items(slots)
             if item is not None and grid.itemWidget(item) is None
         ]
-        for item in pending[:_CLIP_VIEWPORT_CHUNK]:
+        # Whole on-screen shelf, capped so a dense small-card grid cannot hitch.
+        budget = _CLIP_VIEWPORT_FILL_CAP
+        for item in pending[:budget]:
             self._materialize_clip_grid_item(item)
-        if len(pending) > _CLIP_VIEWPORT_CHUNK:
-            # Finish the visible shelf in tiny bursts — never one big print.
+        if len(pending) > budget:
             QTimer.singleShot(_CLIP_VIEWPORT_GAP_MS, self._clips_refresh_viewport)
             return
 
+        if startup:
+            self._clips_startup_fill_pending = False
+            self._clips_fit_retries = 0
+            shown = 0
+            for item in self._clips_shelf_items(slots):
+                if item is not None and grid.itemWidget(item) is not None:
+                    shown += 1
+            logging.info(
+                "Clips shelf: %d cards on the fitted pane (viewport %dx%d)",
+                shown,
+                int(vp.width()) if vp is not None else 0,
+                height,
+            )
         # visualRect was often 0×0 until this layout pass — shelf flush needs a redo.
         self._schedule_clip_card_edge_sync()
         self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_START_MS)
