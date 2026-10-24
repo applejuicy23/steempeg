@@ -1807,6 +1807,7 @@ class RenderMixin:
             self._clear_rendered_selection_visual()
         self._saved_rendered_selection_path = ""
         self._rendered_media_path = None
+        self._active_play_media_path = None
         if self._is_export_clip_path(clip_path):
             self._last_export_clip_path = os.path.normpath(clip_path)
 
@@ -1915,6 +1916,9 @@ class RenderMixin:
 
             quality = getattr(s, "quality_text", "") or ""
             stream_copy = "Original" in quality and "Target File" not in quality
+            if stream_copy and s.is_trim_mode and s.trim_end_ms > s.trim_start_ms:
+                # Trimmed Original is re-encoded so the cut can start mid-chunk.
+                stream_copy = False
 
             save_rendered_companion_meta(
                 output_file,
@@ -3994,6 +3998,7 @@ class RenderMixin:
         prev_preview = getattr(self, "_preview_clip_path", None)
         self._preview_clip_path = clip_path
         self._rendered_media_path = None
+        self._active_play_media_path = None
         # While Left with jobs kept, keep diversion so Resume does not snap the
         # header back to Ready #1 while this clip is still playing.
         has_jobs = bool(getattr(self, "render_queue", None)) and len(self.render_queue) > 0
@@ -6964,9 +6969,9 @@ class RenderMixin:
         if job is not None and job.status == JobStatus.ERROR:
             return STATUS_HEADER_LABELS[JobStatus.ERROR], ERROR_BADGE_COLOR
 
-        # Completed — always, including normal Start Render and Leave/deferred.
-        # Single-clip exports never land a COMPLETED row in render_queue, so we
-        # also honour ``_completed_plaque_clip_path`` set on successful finish.
+        # Completed — queue rows, and a single Start Render until its success
+        # dialog closes. Single-clip exports never land a COMPLETED row, so the
+        # header uses ``_completed_plaque_clip_path`` until that dialog returns.
         if job is not None and job.status == JobStatus.COMPLETED:
             return (
                 STATUS_HEADER_LABELS[JobStatus.COMPLETED],
@@ -8232,6 +8237,11 @@ class RenderMixin:
                 if not getattr(self, "_queue_batch_active", False):
                     self._archive_single_render_to_history(active_job, output_file)
                 self._show_render_complete_dialog(active_job, output_file)
+                # Queue rows keep their own Completed state. A normal Start Render
+                # only has this header plaque, and it leaves with the dialog.
+                if not getattr(self, "_queue_batch_active", False):
+                    self._completed_plaque_clip_path = None
+                    self.update_playback_badge()
 
             self.update_status_indicator("Ready", "ready")
 
