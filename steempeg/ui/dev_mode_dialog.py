@@ -1117,7 +1117,7 @@ class DevModeDialog(SteempegDialog):
         btn_popup_stack.clicked.connect(lambda: self._simulate_new_clip_popups(3))
         express_row.addWidget(btn_popup_stack)
         btn_player = QPushButton("Express player")
-        btn_player.setToolTip("Open the Steam-like mini player on the newest library clip.")
+        btn_player.setToolTip("Open the Steam-like mini player on the clip currently open in the player.")
         btn_player.clicked.connect(self._open_express_player_preview)
         express_row.addWidget(btn_player)
         express_row.addStretch()
@@ -1657,17 +1657,22 @@ class DevModeDialog(SteempegDialog):
         self._tools_log.appendPlainText(f"New clip popup preview: {len(clips)} card(s).")
 
     def _open_express_player_preview(self) -> None:
-        """Opens the Express mini player on the newest library clip."""
+        """Opens the Express mini player on the clip currently open in the player."""
         host = self._resolve_app_host()
         if host is None or not hasattr(host, "open_express_player"):
             self._tools_log.appendPlainText("ERROR: app host not available.")
             return
-        clips = host.list_newest_library_clips(1)
-        if not clips:
-            self._tools_log.appendPlainText("No library clips to preview.")
+        clip = getattr(host, "_preview_clip_path", None)
+        if not clip:
+            self._tools_log.appendPlainText("Express player: nothing is open in the player.")
             return
-        host.open_express_player(clips[0])
-        self._tools_log.appendPlainText(f"Express player: {os.path.basename(clips[0])}")
+        if not os.path.isdir(clip):
+            self._tools_log.appendPlainText(
+                "Express player: the player is showing a file, not a Steam clip folder."
+            )
+            return
+        host.open_express_player(clip)
+        self._tools_log.appendPlainText(f"Express player: {os.path.basename(clip)}")
 
     def _open_settings_in_layout(self, layout_name: str) -> None:
         """Opens the Settings window in the picked frame (rail / one scroll / classic tabs)."""
