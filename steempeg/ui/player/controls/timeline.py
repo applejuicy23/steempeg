@@ -234,26 +234,73 @@ class _TimelineMarkerTip(QFrame):
             "background-color: rgba(255, 255, 255, 22);"
             f" border-radius: {self._ICON_DISC // 2}px;"
         )
-        self._title.setStyleSheet(
-            f"background: transparent; color: {fg}; font-family: {tok.FONT_APP};"
-            " font-size: 13px; font-weight: bold;"
-        )
-        self._desc.setStyleSheet(
-            f"background: transparent; color: #a8a8a8; font-family: {tok.FONT_APP};"
-            " font-size: 11px;"
-        )
+        # Fonts live on the widgets. A stylesheet font is what gets painted, but
+        # fontMetrics() keeps the widget font, so a measured width clips the glyphs.
+        title_font = QFont(tok.FONT_FAMILIES[0])
+        title_font.setPixelSize(13)
+        title_font.setWeight(QFont.Weight.Bold)
+        self._title.setFont(title_font)
+        desc_font = QFont(tok.FONT_FAMILIES[0])
+        desc_font.setPixelSize(11)
+        desc_font.setWeight(QFont.Weight.Normal)
+        self._desc.setFont(desc_font)
+        self._title.setStyleSheet(f"background: transparent; color: {fg};")
+        self._desc.setStyleSheet("background: transparent; color: #a8a8a8;")
+
+    def _fit_card(self, title: str, desc: str, *, icon_on: bool) -> None:
+        """Size the card to this marker's own text.
+
+        A word-wrapped label that is already on screen reports its current
+        width as the preferred width, so a short neighbour kept the long card.
+        """
+        self._title.setText(title)
+        self._desc.setText(desc)
+        self._desc.setVisible(bool(desc))
+        self._title.setMinimumWidth(0)
+        self._title.setMaximumWidth(16777215)
+        self._desc.setMinimumWidth(0)
+        self._desc.setMaximumWidth(16777215)
+
+        title_w = self._title.fontMetrics().horizontalAdvance(title) + 8
+        if desc:
+            desc_w = min(
+                self._desc.fontMetrics().horizontalAdvance(desc) + 8,
+                self._DESC_MAX_W,
+            )
+        else:
+            desc_w = 0
+        text_w = max(title_w, desc_w, 1)
+        self._title.setFixedWidth(text_w)
+        if desc:
+            self._desc.setFixedWidth(text_w)
+            desc_h = self._desc.fontMetrics().boundingRect(
+                QRect(0, 0, text_w, 1000),
+                int(Qt.TextFlag.TextWordWrap),
+                desc,
+            ).height()
+        else:
+            desc_h = 0
+        text_h = self._title.fontMetrics().height()
+        if desc_h:
+            text_h += 1 + desc_h
+
+        margins = self.layout().contentsMargins()
+        card_w = margins.left() + margins.right() + text_w
+        row_h = text_h
+        if icon_on:
+            card_w += self._ICON_DISC + self.layout().spacing()
+            row_h = max(row_h, self._ICON_DISC)
+        card_h = margins.top() + margins.bottom() + row_h
+        # resize() alone loses to the layout's previous size hint, which clips
+        # the new text or keeps the previous marker's width.
+        self.setFixedSize(card_w, card_h)
+        self.layout().activate()
 
     def show_marker(self, title: str, desc: str, pix, anchor_x: int, top_y: int) -> None:
         """Pop under ``top_y`` with the caret on global ``anchor_x``."""
         was_visible = self.isVisible()
-        self._title.setText(title)
-        self._desc.setText(desc)
-        self._desc.setVisible(bool(desc))
-        if desc:
-            natural = self._desc.fontMetrics().horizontalAdvance(desc) + 2
-            title_w = self._title.fontMetrics().horizontalAdvance(title) + 2
-            self._desc.setFixedWidth(max(title_w, min(natural, self._DESC_MAX_W)))
-        if pix is not None and not pix.isNull():
+        icon_on = pix is not None and not pix.isNull()
+        if icon_on:
             from steempeg.ui.icon_utils import square_fit_pixmap
 
             self._icon.setPixmap(square_fit_pixmap(pix, self._ICON_PX))
@@ -261,7 +308,7 @@ class _TimelineMarkerTip(QFrame):
         else:
             self._icon.clear()
             self._icon.hide()
-        self.adjustSize()
+        self._fit_card(title, desc, icon_on=icon_on)
 
         w = self.width()
         x = int(anchor_x - w / 2)
@@ -457,7 +504,8 @@ class TimelineCanvas(QWidget):
 
         # LABELS AND ICONS CS2
         self.markers = []
-        # Express shows screenshot pins only and opens a preview, not Marker Settings.
+        # Express paints every pin. A screenshot opens a preview; right-click
+        # does not open Marker Settings.
         self.light_screenshot_marks = False
         self.mode_segments = []
         self.clip_ranges = []
@@ -1906,6 +1954,10 @@ class TimelineCanvas(QWidget):
             hit_bot = 0.0
             x_pad = 8.0
 
+        # Close pins overlap. The first one in the list used to keep the tip,
+        # so the neighbour showed that text and then the card clipped it.
+        best = None
+        best_dx = None
         for marker in getattr(self, "markers", []):
             m_x = self.ms_to_x(marker["time_ms"])
             pix = self.get_icon_pixmap(marker)
@@ -1917,15 +1969,19 @@ class TimelineCanvas(QWidget):
                 pw = float(TIMELINE_MARKER_LOGICAL)
                 ph = float(TIMELINE_MARKER_LOGICAL)
 
-            if abs(x - m_x) > (pw / 2.0) + x_pad:
+            dx = abs(x - m_x)
+            if dx > (pw / 2.0) + x_pad:
                 continue
             if on_strip:
                 icon_cy = track_y + track_h / 2.0
-                if abs(y - icon_cy) <= max(ph, track_h) / 2.0 + 2.0:
-                    return marker
-            elif hit_bot <= y <= hit_top:
-                return marker
-        return None
+                if abs(y - icon_cy) > max(ph, track_h) / 2.0 + 2.0:
+                    continue
+            elif not (hit_bot <= y <= hit_top):
+                continue
+            if best is None or dx < best_dx:
+                best = marker
+                best_dx = dx
+        return best
 
     def _prepare_immersive_safe_menu(self, menu: QMenu) -> None:
         """Keep timeline QMenus painted above immersive video / floating HUD.
