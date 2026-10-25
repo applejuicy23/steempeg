@@ -361,6 +361,7 @@ class TimelineCanvas(QWidget):
     trim_changed = Signal(int, int) 
     
     screenshot_requested = Signal(float) 
+    screenshot_preview_requested = Signal(object)
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
     open_steam_screenshot_folder_requested = Signal(object)
@@ -456,6 +457,8 @@ class TimelineCanvas(QWidget):
 
         # LABELS AND ICONS CS2
         self.markers = []
+        # Express shows screenshot pins only and opens a preview, not Marker Settings.
+        self.light_screenshot_marks = False
         self.mode_segments = []
         self.clip_ranges = []
         self.hovered_marker = None
@@ -1381,6 +1384,7 @@ class TimelineCanvas(QWidget):
             self.visual_ms = 0.0
             self.target_ms = 0.0
             self.vlc_last_update_time = time.time()
+        self.update()
 
     def set_vlc_time(self, vlc_ms, is_playing):
         was_playing = self.is_playing
@@ -1810,6 +1814,15 @@ class TimelineCanvas(QWidget):
         if self.duration_ms <= 0: return
         x, y = event.position().x(), event.position().y()
         ms = self.x_to_ms(x)
+
+        # Express: a screenshot pin opens that shot, and the marker menu stays away.
+        if getattr(self, "light_screenshot_marks", False):
+            marker = self._marker_at(x, y)
+            if marker is not None and marker.get("icon_key") == "screenshot":
+                self.screenshot_preview_requested.emit(marker)
+                return
+            if event.button() == Qt.RightButton:
+                return
 
         # CHECK ICON CLICK
         if event.button() == Qt.RightButton:
@@ -2727,6 +2740,7 @@ class CustomTimelineWidget(QScrollArea):
     
 
     screenshot_requested = Signal(object)
+    screenshot_preview_requested = Signal(object)
     add_marker_requested = Signal(float)
     open_steam_screenshot_requested = Signal(object)
     open_steam_screenshot_folder_requested = Signal(object)
@@ -2757,6 +2771,7 @@ class CustomTimelineWidget(QScrollArea):
         
         # Connecting the Canvas to the Widget
         self.canvas.screenshot_requested.connect(self.screenshot_requested.emit)
+        self.canvas.screenshot_preview_requested.connect(self.screenshot_preview_requested.emit)
         self.canvas.add_marker_requested.connect(self.add_marker_requested.emit)
         self.canvas.open_steam_screenshot_requested.connect(self.open_steam_screenshot_requested.emit)
         self.canvas.open_steam_screenshot_folder_requested.connect(
