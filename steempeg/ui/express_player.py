@@ -581,7 +581,7 @@ class ExpressPlayerWindow(QWidget):
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
         logging.info("Express player: play %s", play_path)
         self._attach_hover_preview(play_path)
-        self._load_screenshot_marks(play_path)
+        self._load_timeline_marks(play_path)
         self._player.play(play_path)
         self._player.pause = False
         self._poll.start()
@@ -595,11 +595,11 @@ class ExpressPlayerWindow(QWidget):
         self._timeline.sniper_source_path = play_path
         self._timeline.current_video_path = play_path
 
-    def _load_screenshot_marks(self, mpd_path: str) -> None:
-        """Loads this clip's screenshot pins onto the timeline, off the UI thread."""
+    def _load_timeline_marks(self, mpd_path: str) -> None:
+        """Loads this clip's timeline pins onto the Express timeline, off the UI thread."""
         from steempeg.ui.player.timeline_markers_worker import TimelineMarkersLoadWorker
 
-        self._stop_screenshot_marks()
+        self._stop_timeline_marks()
         self._marks_gen += 1
         generation = self._marks_gen
         worker = TimelineMarkersLoadWorker(
@@ -614,7 +614,7 @@ class ExpressPlayerWindow(QWidget):
             if gen != self._marks_gen:
                 return
             try:
-                self._apply_screenshot_marks(result)
+                self._apply_timeline_marks(result)
             except RuntimeError:
                 return
 
@@ -622,8 +622,8 @@ class ExpressPlayerWindow(QWidget):
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
-    def _stop_screenshot_marks(self) -> None:
-        """Drops a screenshot-pin load that is still running for the previous clip."""
+    def _stop_timeline_marks(self) -> None:
+        """Drops a timeline-pin load that is still running for the previous clip."""
         self._marks_gen += 1
         worker = getattr(self, "_marks_worker", None)
         self._marks_worker = None
@@ -635,14 +635,14 @@ class ExpressPlayerWindow(QWidget):
         except (RuntimeError, TypeError):
             pass
 
-    def _apply_screenshot_marks(self, result: object) -> None:
-        """Paints screenshot pins only. Game events stay on the main player."""
+    def _apply_timeline_marks(self, result: object) -> None:
+        """Paints every pin: game events, screenshots and recording errors."""
         if not isinstance(result, dict):
             return
         markers = [
             marker
             for marker in (result.get("markers") or [])
-            if isinstance(marker, dict) and marker.get("icon_key") == "screenshot"
+            if isinstance(marker, dict)
         ]
         canvas = self._timeline.canvas
         canvas.light_screenshot_marks = True
@@ -652,9 +652,9 @@ class ExpressPlayerWindow(QWidget):
             clip_path=self._info.path,
             cache_dir=getattr(self._app, "cache_dir", None),
             markers=markers,
-            mode_segments=[],
-            clip_ranges=[],
-            remembered_ids=[],
+            mode_segments=list(result.get("mode_segments") or []),
+            clip_ranges=list(result.get("clip_ranges") or []),
+            remembered_ids=list(result.get("remembered_ids") or []),
             json_start_utc=result.get("json_start_utc"),
             app_id=result.get("app_id"),
             reveal=True,
@@ -1067,7 +1067,7 @@ class ExpressPlayerWindow(QWidget):
 
     def _release_player(self) -> None:
         """Stops polling, the PyAV hover decoder and the mpv handle (frees the clip files)."""
-        self._stop_screenshot_marks()
+        self._stop_timeline_marks()
         preview = getattr(self, "_shot_preview", None)
         if preview is not None:
             preview.hide()
