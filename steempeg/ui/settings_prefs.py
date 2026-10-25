@@ -654,6 +654,70 @@ def load_keep_running_in_tray(settings: dict | None) -> bool:
     )
 
 
+# ----- Desktop shell: hide Clips | player | queue handles -----
+
+KEY_HIDE_SPLITTER_HANDLES = "hide_splitter_handles"
+KEY_SHELL_PANE_PERCENTS = "shell_pane_percents"
+DEFAULT_HIDE_SPLITTER_HANDLES = False
+DEFAULT_SHELL_PANE_PERCENTS = (34, 42, 24)
+
+
+def normalize_hide_splitter_handles(value: object | None) -> bool:
+    """Turns a stored value into the hide-splitter-handles flag."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_HIDE_SPLITTER_HANDLES
+
+
+def load_hide_splitter_handles(settings: dict | None) -> bool:
+    """Reads whether the desktop shell should hide its splitter handles."""
+    return normalize_hide_splitter_handles(
+        (settings or {}).get(KEY_HIDE_SPLITTER_HANDLES, DEFAULT_HIDE_SPLITTER_HANDLES)
+    )
+
+
+def normalize_shell_pane_percents(value: object | None) -> tuple[int, int, int]:
+    """Scales three pane weights so they add up to 100."""
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return DEFAULT_SHELL_PANE_PERCENTS
+    nums: list[int] = []
+    for part in value:
+        try:
+            nums.append(max(0, int(part)))
+        except (TypeError, ValueError):
+            return DEFAULT_SHELL_PANE_PERCENTS
+    total = sum(nums)
+    if total <= 0:
+        return DEFAULT_SHELL_PANE_PERCENTS
+    scaled = [part * 100 // total for part in nums]
+    drift = 100 - sum(scaled)
+    scaled[max(range(3), key=lambda index: scaled[index])] += drift
+    return (scaled[0], scaled[1], scaled[2])
+
+
+def load_shell_pane_percents(settings: dict | None) -> tuple[int, int, int]:
+    """Reads Clips / player / queue widths as percentages, or the default split."""
+    blob = (settings or {}).get(KEY_SHELL_PANE_PERCENTS)
+    if blob is None:
+        return DEFAULT_SHELL_PANE_PERCENTS
+    return normalize_shell_pane_percents(blob)
+
+
+def saved_shell_pane_percents(settings: dict | None) -> tuple[int, int, int] | None:
+    """Returns stored pane percentages, or None when the user has never set them."""
+    data = settings or {}
+    if KEY_SHELL_PANE_PERCENTS not in data:
+        return None
+    return normalize_shell_pane_percents(data.get(KEY_SHELL_PANE_PERCENTS))
+
+
 # ----- Update Center: Keep when updating -----
 
 KEY_UPDATE_KEEP_WHEN = "update_keep_when_updating"
