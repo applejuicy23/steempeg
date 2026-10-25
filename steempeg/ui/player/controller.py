@@ -1956,6 +1956,8 @@ class PlayerMixin:
             if restored_visible is None:
                 restored_visible = True
             self._set_splitter_handle_visible(self.right_h_splitter, bool(restored_visible))
+            if hasattr(self, "apply_hidden_shell_splitter_handles"):
+                self.apply_hidden_shell_splitter_handles()
 
             # Theatre forced the queue to 0; that is not a user collapse. Mirror
             # fullscreen's _exit_immersive_layout restore latch so sync reopens
