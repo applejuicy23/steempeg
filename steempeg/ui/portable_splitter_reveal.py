@@ -86,6 +86,7 @@ def paint_desktop_splitter_handles(app) -> None:
                     setter(main, False, 1)
                 except Exception:
                     pass
+    _enforce_user_hidden_handles(app)
 
 
 def _hide_queue_handle_for_hover(app) -> None:
@@ -155,6 +156,186 @@ def ensure_right_h_handle_chrome(app) -> None:
     except RuntimeError:
         return
     paint_desktop_splitter_handles(app)
+
+
+def user_hides_shell_handles(app) -> bool:
+    """True when Settings says the Clips / player / queue handles stay hidden."""
+    from steempeg.ui.settings_prefs import load_hide_splitter_handles
+
+    settings = {}
+    if hasattr(app, "load_user_settings"):
+        try:
+            settings = app.load_user_settings() or {}
+        except Exception:
+            settings = {}
+    return load_hide_splitter_handles(settings)
+
+
+def _shell_widgets(app):
+    """Return (main splitter, inner splitter, clips, player, queue) or None."""
+    ui = getattr(app, "ui", None)
+    main = getattr(ui, "main_splitter", None) if ui is not None else None
+    inner = getattr(app, "right_h_splitter", None)
+    clips = getattr(ui, "left_panel", None) if ui is not None else None
+    player = getattr(ui, "right_panel", None) if ui is not None else None
+    queue = getattr(app, "render_queue_panel", None)
+    if not all(isinstance(item, QSplitter) for item in (main, inner)):
+        return None
+    if clips is None or player is None or queue is None:
+        return None
+    return main, inner, clips, player, queue
+
+
+def _width_in_splitter(splitter: QSplitter, widget) -> int:
+    """Pixel width of ``widget`` inside ``splitter``, or 0 when it is not a child."""
+    try:
+        index = splitter.indexOf(widget)
+        sizes = splitter.sizes()
+    except RuntimeError:
+        return 0
+    if index < 0 or index >= len(sizes):
+        return 0
+    return int(sizes[index])
+
+
+def shell_pane_widths(app) -> tuple[int, int, int] | None:
+    """Live Clips, player and queue widths in pixels."""
+    found = _shell_widgets(app)
+    if found is None:
+        return None
+    main, inner, clips, player, queue = found
+    return (
+        _width_in_splitter(main, clips) or _width_in_splitter(inner, clips),
+        _width_in_splitter(inner, player) or _width_in_splitter(main, player),
+        _width_in_splitter(main, queue) or _width_in_splitter(inner, queue),
+    )
+
+
+def snapshot_shell_pane_percents(app) -> tuple[int, int, int]:
+    """Read the live three-pane layout as percentages that sum to 100."""
+    from steempeg.ui.settings_prefs import normalize_shell_pane_percents
+
+    widths = shell_pane_widths(app)
+    if widths is None or sum(widths) <= 0:
+        return normalize_shell_pane_percents(None)
+    return normalize_shell_pane_percents(widths)
+
+
+def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
+    """Size Clips, the player and the queue from percentages of their current total."""
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    main, inner, clips, player, queue = found
+    clips_pct, player_pct, queue_pct = percents
+    widths = shell_pane_widths(app)
+    total = sum(widths) if widths else 0
+    if total <= 0:
+        try:
+            total = int(main.width() or 0)
+        except RuntimeError:
+            total = 0
+    if total <= 0:
+        return
+    clips_w = total * int(clips_pct) // 100
+    queue_w = total * int(queue_pct) // 100
+    player_w = max(0, total - clips_w - queue_w)
+    main.blockSignals(True)
+    inner.blockSignals(True)
+    try:
+        _set_pair_sizes(main, clips, clips_w, player_w + queue_w)
+        if main.indexOf(queue) == 0:
+            _set_pair_sizes(main, queue, queue_w, player_w + clips_w)
+            _set_pair_sizes(inner, player, player_w, clips_w)
+        else:
+            _set_pair_sizes(inner, player, player_w, queue_w)
+    finally:
+        main.blockSignals(False)
+        inner.blockSignals(False)
+
+
+def _set_pair_sizes(splitter: QSplitter, first, first_w: int, second_w: int) -> None:
+    """Write a two-child splitter so ``first`` gets ``first_w`` pixels."""
+    try:
+        index = splitter.indexOf(first)
+    except RuntimeError:
+        return
+    if index < 0 or splitter.count() < 2:
+        return
+    sizes = [0, 0]
+    sizes[index] = max(0, int(first_w))
+    sizes[1 - index] = max(0, int(second_w))
+    try:
+        splitter.setSizes(sizes)
+    except RuntimeError:
+        return
+
+
+def _set_side_handles_visible(app, visible: bool) -> None:
+    """Show or hide the two handles that separate Clips, the player and the queue.
+
+    A width of 0 still paints the handle stylesheet as a dark seam, so a hidden
+    handle also drops that paint.
+    """
+    setter = getattr(app, "_set_splitter_handle_visible", None)
+    for _name, splitter in _iter_shell_splitters(app, _SIDE_SPLITTER_NAMES):
+        try:
+            if splitter.count() < 2:
+                continue
+            handle = splitter.handle(1)
+        except RuntimeError:
+            continue
+        if visible:
+            if handle is not None:
+                handle.setMinimumWidth(0)
+                handle.setMaximumWidth(16777215)
+                handle.setStyleSheet("")
+                handle.setEnabled(True)
+                handle.setVisible(True)
+                handle.show()
+            splitter.setHandleWidth(6)
+            if callable(setter):
+                setter(splitter, True, 1)
+            continue
+        splitter.setHandleWidth(0)
+        if handle is not None:
+            handle.setStyleSheet("background: transparent; border: none; margin: 0px;")
+            handle.setEnabled(False)
+            handle.setVisible(False)
+            handle.hide()
+        if callable(setter):
+            setter(splitter, False, 1)
+
+
+def _enforce_user_hidden_handles(app) -> None:
+    """Re-hide side handles after a paint pass that would show them again."""
+    if not user_hides_shell_handles(app):
+        return
+    _set_side_handles_visible(app, False)
+
+
+def apply_user_shell_handle_visibility(app) -> None:
+    """Apply the Settings choice: hidden handles keep the saved pane widths."""
+    if getattr(app, "_portable_shell", False):
+        return
+    if bool(getattr(app, "is_theater", False)) or bool(getattr(app, "is_fullscreen", False)):
+        return
+    if not user_hides_shell_handles(app):
+        _set_side_handles_visible(app, True)
+        paint_desktop_splitter_handles(app)
+        return
+    from steempeg.ui.settings_prefs import saved_shell_pane_percents
+
+    settings = {}
+    if hasattr(app, "load_user_settings"):
+        try:
+            settings = app.load_user_settings() or {}
+        except Exception:
+            settings = {}
+    percents = saved_shell_pane_percents(settings)
+    if percents is not None:
+        _apply_shell_pane_percents(app, percents)
+    _set_side_handles_visible(app, False)
 
 
 def _hide_middle_handle(app) -> None:
