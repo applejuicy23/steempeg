@@ -5355,6 +5355,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if self._queue_hover_is_floating():
                 self._set_queue_pane_width(0)
             self._sync_queue_hover_after_sides()
+            self.apply_hidden_shell_splitter_handles()
             return
 
         main_total = sum(main.sizes()) if sum(main.sizes()) > 0 else int(main.width() or 0)
@@ -5384,6 +5385,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             queue_left,
         )
         self._sync_queue_hover_after_sides()
+        self.apply_hidden_shell_splitter_handles()
 
     def sync_shell_side_gutters(self) -> None:
         """Keep handle-facing insets on Library and Queue after a side swap.
@@ -6326,6 +6328,18 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         if hasattr(self, "apply_desktop_render_layout"):
             self.apply_desktop_render_layout()
 
+    def apply_hidden_shell_splitter_handles(self) -> None:
+        """Show or hide the Clips / player / queue handles from Settings."""
+        from steempeg.ui.portable_splitter_reveal import apply_user_shell_handle_visibility
+
+        apply_user_shell_handle_visibility(self)
+
+    def snapshot_shell_pane_percents(self) -> tuple[int, int, int]:
+        """Read the live three-pane layout as percentages that sum to 100."""
+        from steempeg.ui.portable_splitter_reveal import snapshot_shell_pane_percents
+
+        return snapshot_shell_pane_percents(self)
+
     def _apply_startup_splitter_sizes(self):
         from steempeg.ui.layout_defaults import (
             DEFAULT_MAIN_SPLITTER_SIZES,
@@ -6394,6 +6408,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     bottom = min(bottom, max(total - 200, 1))
                     scaled = [total - bottom, bottom]
                 v_splitter.setSizes(scaled)
+        self.apply_hidden_shell_splitter_handles()
 
     def _setup_custom_target_size(self):
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
