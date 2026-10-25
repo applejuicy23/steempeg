@@ -1321,6 +1321,11 @@ class QueueHoverController(QObject):
 
     def _set_queue_handle_visible(self, visible: bool) -> None:
         app = self._app
+        if visible:
+            from steempeg.ui.portable_splitter_reveal import user_hides_shell_handles
+
+            if user_hides_shell_handles(app):
+                visible = False
         splitter = self._queue_handle_splitter()
         if splitter is None:
             return
