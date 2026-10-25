@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -166,7 +167,9 @@ from steempeg.ui.settings_prefs import (
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
     KEY_HIDE_UPDATE_AVAILABLE_BADGE,
+    KEY_HIDE_SPLITTER_HANDLES,
     KEY_KEEP_RUNNING_IN_TRAY,
+    KEY_SHELL_PANE_PERCENTS,
     KEY_UPDATE_CHECK_INTERVAL,
     LOG_LEVEL_LABELS,
     MARKER_TRIM_LABELS,
@@ -197,8 +200,10 @@ from steempeg.ui.settings_prefs import (
     load_display_timezone,
     load_ffmpeg_log_level,
     load_hwdec_preview,
+    load_hide_splitter_handles,
     load_hide_update_available_badge,
     load_keep_running_in_tray,
+    load_shell_pane_percents,
     load_marker_trim_offset_ms,
     load_markers_on_strip,
     load_media_cache_limit_gb,
@@ -559,6 +564,63 @@ class SettingsDialog(SteempegDialog):
         else:
             g.addWidget(self._chk_ask_shell)
             g.addWidget(self._hint("Applies the next time Steempeg starts."))
+
+        self._chk_hide_splitter_handles = SteempegCheckBox("Hide splitter handles")
+        handles_hidden = load_hide_splitter_handles(settings)
+        self._chk_hide_splitter_handles.setChecked(handles_hidden)
+        g.addWidget(self._chk_hide_splitter_handles)
+        g.addWidget(
+            self._hint(
+                "Hides the handles between Clips, the player and the queue. "
+                "Drag the panes first, then turn this on, or set the widths below. "
+                "Off, the handles stay."
+            )
+        )
+        # Filter time fields put the face on the field (bold 13px, padding
+        # 4px 10px, min-height 24). Three of those beside their names do not
+        # fit this card, so the name sits above the field. The whole group
+        # hides while the handles stay.
+        # A parentless QWidget is its own window. setVisible while the handles
+        # are hidden would map that window (caption «Steempeg», then the row's
+        # own 400×83) before Settings exists. Parent it first.
+        self._pane_row_host = QWidget(general)
+        self._pane_row_host.setStyleSheet("background: transparent;")
+        pane_row = QHBoxLayout(self._pane_row_host)
+        pane_row.setContentsMargins(0, 0, 0, 0)
+        pane_row.setSpacing(12)
+        self._pane_spins = {}
+        saved_percents = load_shell_pane_percents(settings)
+        label_qss = (
+            "color: #888888; font-weight: bold; font-size: 13px; "
+            f"font-family: {tok.FONT_APP}; background: transparent;"
+        )
+        for key, label, value in (
+            ("clips", "Clips", saved_percents[0]),
+            ("player", "Player", saved_percents[1]),
+            ("queue", "Queue", saved_percents[2]),
+        ):
+            column = QWidget(self._pane_row_host)
+            column.setStyleSheet("background: transparent;")
+            col = QVBoxLayout(column)
+            col.setContentsMargins(0, 0, 0, 0)
+            col.setSpacing(4)
+            name = QLabel(label, column)
+            name.setStyleSheet(label_qss)
+            col.addWidget(name)
+            spin = QSpinBox(column)
+            spin.setRange(0, 100)
+            spin.setSuffix(" %")
+            spin.setValue(int(value))
+            # 112 is the narrowest width where "100 %" still fits this field.
+            spin.setFixedWidth(120)
+            spin.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._pane_spins[key] = spin
+            col.addWidget(spin)
+            pane_row.addWidget(column)
+        pane_row.addStretch(1)
+        g.addWidget(self._pane_row_host)
+        self._pane_row_host.setVisible(handles_hidden)
+        self._chk_hide_splitter_handles.toggled.connect(self._on_hide_splitter_handles_toggled)
 
         self._chk_keep_running_in_tray = SteempegCheckBox("Keep Steempeg running in the tray")
         self._chk_keep_running_in_tray.setChecked(load_keep_running_in_tray(settings))
@@ -2147,12 +2209,43 @@ class SettingsDialog(SteempegDialog):
             if bool(chk_tray.isChecked()) != load_keep_running_in_tray(prev):
                 return True
 
+        chk_handles = getattr(self, "_chk_hide_splitter_handles", None)
+        if chk_handles is not None:
+            if bool(chk_handles.isChecked()) != load_hide_splitter_handles(prev):
+                return True
+            if self._shell_pane_percent_values() != load_shell_pane_percents(prev):
+                return True
+
         chk_autostart = getattr(self, "_chk_autostart", None)
         if chk_autostart is not None and autostart_is_supported():
             if bool(chk_autostart.isChecked()) != read_autostart_enabled():
                 return True
 
         return False
+
+    def _on_hide_splitter_handles_toggled(self, checked: bool) -> None:
+        """Show the width row only while the handles are hidden, and copy the live panes."""
+        host = getattr(self, "_pane_row_host", None)
+        if host is not None:
+            host.setVisible(bool(checked))
+        if not checked:
+            return
+        snapshot = getattr(self._app, "snapshot_shell_pane_percents", None)
+        if not callable(snapshot):
+            return
+        clips, player, queue = snapshot()
+        self._pane_spins["clips"].setValue(int(clips))
+        self._pane_spins["player"].setValue(int(player))
+        self._pane_spins["queue"].setValue(int(queue))
+
+    def _shell_pane_percent_values(self) -> tuple[int, int, int]:
+        """Read the three width fields as Clips, player, queue percentages."""
+        spins = getattr(self, "_pane_spins", {})
+        return (
+            int(spins["clips"].value()),
+            int(spins["player"].value()),
+            int(spins["queue"].value()),
+        )
 
     def _on_autostart_toggled(self, checked: bool) -> None:
         """Ticking autostart also ticks the tray box: a Windows-start launch lives in the tray."""
@@ -2232,7 +2325,22 @@ class SettingsDialog(SteempegDialog):
 
         edit_qss = ut.settings_dialog_line_edit_stylesheet()
         for edit in self.findChildren(QLineEdit):
+            # The spin's own editor is a QLineEdit. This field rule gives it a
+            # 26px min-height and a border, which is taller than the spin, so
+            # the glyphs draw outside the box. Filter time fields leave that
+            # editor alone and put the face on the field itself.
+            if isinstance(edit.parentWidget(), QSpinBox):
+                continue
             edit.setStyleSheet(edit_qss)
+
+        from steempeg.ui.smart_deletor_panel import _field_style
+
+        pane_qss = _field_style()
+        for spin in getattr(self, "_pane_spins", {}).values():
+            inner = spin.lineEdit()
+            if inner is not None:
+                inner.setStyleSheet("")
+            spin.setStyleSheet(pane_qss)
 
         sec_qss = ut.settings_dialog_secondary_button_stylesheet()
         about_sec = ut.about_secondary_button_stylesheet()
@@ -3147,6 +3255,18 @@ class SettingsDialog(SteempegDialog):
             pending[UI_SHELL_ASK_KEY] = self._chk_ask_shell.isChecked()
         elif is_steamdeck_build():
             pending[UI_SHELL_ASK_KEY] = False
+
+        from steempeg.ui.settings_prefs import normalize_shell_pane_percents
+
+        hide_handles = bool(self._chk_hide_splitter_handles.isChecked())
+        pane_percents = normalize_shell_pane_percents(self._shell_pane_percent_values())
+        pending[KEY_HIDE_SPLITTER_HANDLES] = hide_handles
+        pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
+        self._pane_spins["clips"].setValue(pane_percents[0])
+        self._pane_spins["player"].setValue(pane_percents[1])
+        self._pane_spins["queue"].setValue(pane_percents[2])
+        if hasattr(self._app, "apply_hidden_shell_splitter_handles"):
+            deferred.append(self._app.apply_hidden_shell_splitter_handles)
 
         if hasattr(self._app, "save_user_settings_batch"):
             saved = self._app.save_user_settings_batch(pending)
