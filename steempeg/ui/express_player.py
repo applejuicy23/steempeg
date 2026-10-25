@@ -14,7 +14,7 @@ import os
 import sys
 
 from PySide6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCursor, QGuiApplication, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -204,6 +204,69 @@ class _TopStrip(QWidget):
         super().mouseDoubleClickEvent(event)
 
 
+class ExpressScreenshotPreview(QWidget):
+    """One Steam screenshot, nothing else. Not the Screenshots manager."""
+
+    def __init__(self, host: QWidget):
+        super().__init__(
+            host,
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint,
+        )
+        self.setObjectName("ExpressShotPreview")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        palette = ut.active_palette()
+        self.setStyleSheet(
+            "QWidget#ExpressShotPreview {"
+            f" background-color: {palette.bg_shell};"
+            " border: 1px solid rgba(255, 255, 255, 0.12);"
+            " border-radius: 10px;"
+            "}"
+            "QLabel { color: white; background: transparent; }"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(8)
+        header = QHBoxLayout()
+        title = QLabel("Screenshot")
+        title.setObjectName("ExpressShotTitle")
+        header.addWidget(title, 1)
+        close = QPushButton("✕")
+        close.setObjectName("ExpressFlat")
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.clicked.connect(self.hide)
+        header.addWidget(close)
+        lay.addLayout(header)
+        self._image = QLabel("No screenshot for this mark.")
+        self._image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image.setMinimumSize(320, 180)
+        lay.addWidget(self._image)
+        self.hide()
+
+    def show_file(self, path: str | None) -> None:
+        """Shows ``path``, or a short note when that shot is not on disk."""
+        pix = QPixmap(path) if path and os.path.isfile(path) else QPixmap()
+        if pix.isNull():
+            self._image.setPixmap(QPixmap())
+            self._image.setText("No screenshot for this mark.")
+        else:
+            self._image.setText("")
+            self._image.setPixmap(
+                pix.scaled(
+                    720,
+                    405,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self.adjustSize()
+        host = self.parentWidget()
+        if host is not None:
+            frame = host.frameGeometry()
+            self.move(frame.center() - self.rect().center())
+        self.show()
+        self.raise_()
+
+
 class ExpressPlayerWindow(QWidget):
     """Mini player window for one clip with Express export."""
 
@@ -217,6 +280,9 @@ class ExpressPlayerWindow(QWidget):
         self._was_playing_before_drag = False
         self._render = None
         self._last_output = ""
+        self._marks_gen = 0
+        self._marks_worker = None
+        self._shot_preview = None
         self.setObjectName("ExpressPlayer")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -249,7 +315,7 @@ class ExpressPlayerWindow(QWidget):
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self.toggle_play)
         QShortcut(QKeySequence(Qt.Key.Key_Left), self, activated=lambda: self.skip_by(-_SKIP_MS))
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=lambda: self.skip_by(_SKIP_MS))
-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self._leave_fullscreen)
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=self._on_escape)
         QShortcut(QKeySequence(Qt.Key.Key_F), self, activated=self.toggle_fullscreen)
 
         if sys.platform == "win32":
@@ -370,6 +436,8 @@ class ExpressPlayerWindow(QWidget):
         lay.setSpacing(6)
 
         self._timeline = CustomTimelineWidget()
+        self._timeline.canvas.light_screenshot_marks = True
+        self._timeline.screenshot_preview_requested.connect(self._show_screenshot_preview)
         self._timeline.pause_requested.connect(self._on_timeline_press)
         self._timeline.seek_requested.connect(self._on_timeline_seek)
         self._timeline.resume_requested.connect(self._on_timeline_release)
@@ -513,6 +581,7 @@ class ExpressPlayerWindow(QWidget):
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
         logging.info("Express player: play %s", play_path)
         self._attach_hover_preview(play_path)
+        self._load_screenshot_marks(play_path)
         self._player.play(play_path)
         self._player.pause = False
         self._poll.start()
@@ -525,6 +594,115 @@ class ExpressPlayerWindow(QWidget):
             self._timeline.canvas.sniper.cache_dir = cache_dir
         self._timeline.sniper_source_path = play_path
         self._timeline.current_video_path = play_path
+
+    def _load_screenshot_marks(self, mpd_path: str) -> None:
+        """Loads this clip's screenshot pins onto the timeline, off the UI thread."""
+        from steempeg.ui.player.timeline_markers_worker import TimelineMarkersLoadWorker
+
+        self._stop_screenshot_marks()
+        self._marks_gen += 1
+        generation = self._marks_gen
+        worker = TimelineMarkersLoadWorker(
+            self._info.path,
+            mpd_path,
+            getattr(self._app, "cache_dir", None),
+            None,
+        )
+        self._marks_worker = worker
+
+        def _on_done(result: object, gen: int = generation) -> None:
+            if gen != self._marks_gen:
+                return
+            try:
+                self._apply_screenshot_marks(result)
+            except RuntimeError:
+                return
+
+        worker.finished_load.connect(_on_done)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _stop_screenshot_marks(self) -> None:
+        """Drops a screenshot-pin load that is still running for the previous clip."""
+        self._marks_gen += 1
+        worker = getattr(self, "_marks_worker", None)
+        self._marks_worker = None
+        if worker is None:
+            return
+        try:
+            worker.requestInterruption()
+            worker.finished_load.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+
+    def _apply_screenshot_marks(self, result: object) -> None:
+        """Paints screenshot pins only. Game events stay on the main player."""
+        if not isinstance(result, dict):
+            return
+        markers = [
+            marker
+            for marker in (result.get("markers") or [])
+            if isinstance(marker, dict) and marker.get("icon_key") == "screenshot"
+        ]
+        canvas = self._timeline.canvas
+        canvas.light_screenshot_marks = True
+        canvas.apply_preparsed_timeline(
+            json_path=result.get("json_path"),
+            offset_ms=int(result.get("offset_ms") or 0),
+            clip_path=self._info.path,
+            cache_dir=getattr(self._app, "cache_dir", None),
+            markers=markers,
+            mode_segments=[],
+            clip_ranges=[],
+            remembered_ids=[],
+            json_start_utc=result.get("json_start_utc"),
+            app_id=result.get("app_id"),
+            reveal=True,
+        )
+
+    def _show_screenshot_preview(self, marker: object) -> None:
+        """Opens the one Steam shot that belongs to this timeline pin."""
+        if not isinstance(marker, dict):
+            return
+        if self._shot_preview is None:
+            self._shot_preview = ExpressScreenshotPreview(self)
+        self._shot_preview.show_file(self._screenshot_path_for_marker(marker))
+
+    def _screenshot_path_for_marker(self, marker: dict) -> str | None:
+        """Finds the Steam file for a screenshot pin, or None when it is missing."""
+        from steempeg.core.steam_screenshots import (
+            find_steam_screenshot_files,
+            resolve_steam_id_for_clip,
+            timeline_json_start_utc,
+        )
+
+        canvas = self._timeline.canvas
+        clip_path = getattr(canvas, "current_clip_path", None) or self._info.path
+        app_id = getattr(canvas, "current_app_id", None)
+        if not clip_path or not app_id:
+            return None
+        folders = getattr(self._app, "clips_folders", None) or []
+        steam_id = resolve_steam_id_for_clip(clip_path, folders)
+        if not steam_id:
+            return None
+        marker_ms = float(marker.get("time_ms", 0) or 0)
+        raw_time_ms = marker.get("raw_time_ms")
+        if raw_time_ms is None:
+            raw_time_ms = marker_ms + float(getattr(canvas, "current_offset_ms", 0) or 0)
+        json_start = getattr(canvas, "current_json_start_utc", None)
+        if json_start is None:
+            json_start = timeline_json_start_utc(getattr(canvas, "current_json_path", None))
+        files = find_steam_screenshot_files(
+            steam_id=steam_id,
+            app_id=str(app_id),
+            json_start_utc=json_start,
+            raw_time_ms=float(raw_time_ms),
+            clip_path=clip_path,
+            marker_time_ms=marker_ms,
+        )
+        if not files:
+            return None
+        return files[0]
 
     def _create_player(self):
         """Builds a libmpv instance embedded in this window's video surface."""
@@ -659,6 +837,14 @@ class ExpressPlayerWindow(QWidget):
         self._header.hide()
         self.showFullScreen()
         self._btn_fullscreen.setIcon(QIcon(get_resource_path("btn_exit_fullscreen.png")))
+
+    def _on_escape(self) -> None:
+        """Closes the screenshot preview, or leaves fullscreen when it is closed."""
+        preview = getattr(self, "_shot_preview", None)
+        if preview is not None and preview.isVisible():
+            preview.hide()
+            return
+        self._leave_fullscreen()
 
     def _leave_fullscreen(self) -> None:
         """Restores the windowed layout."""
@@ -881,6 +1067,10 @@ class ExpressPlayerWindow(QWidget):
 
     def _release_player(self) -> None:
         """Stops polling, the PyAV hover decoder and the mpv handle (frees the clip files)."""
+        self._stop_screenshot_marks()
+        preview = getattr(self, "_shot_preview", None)
+        if preview is not None:
+            preview.hide()
         self._poll.stop()
         sniper = getattr(self._timeline.canvas, "sniper", None)
         if sniper is not None:
