@@ -796,11 +796,8 @@ class LifecycleMixin:
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
         lay.addSpacing(gap)
         lay.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
-        # Prefer minimum over fixed: FixedHeight + QSS min-height fights on Linux
-        # and was letting captions render past the cell into the hairline.
         cell_h = int(size) + gap + cap_h + 4
-        cell.setMinimumHeight(cell_h)
-        cell.setMaximumHeight(cell_h)
+        cell.setFixedHeight(cell_h)
         cell.setMinimumWidth(max(int(size) + 8, caption.minimumWidth()))
         return cell
 
@@ -861,6 +858,60 @@ class LifecycleMixin:
 
         show_marker_settings_dialog(self)
 
+    @staticmethod
+    def _seal_linux_about_dialog(dialog) -> None:
+        """Size About labels to the stylesheet font, then fit the dialog to that.
+
+        On Linux, QSS ``font-size`` paints taller than the layout box. A short
+        fixed dialog then drops the logo onto the title and the hairline onto
+        FFmpeg / PyAV / MPV. Pin each single-line label, then lock the window
+        to the real size hint so nothing is compressed.
+        """
+        if sys.platform == "win32":
+            return
+        from PySide6.QtGui import QFontMetrics
+        from PySide6.QtWidgets import QLabel
+
+        dialog.ensurePolished()
+        single = {
+            "AboutTitle",
+            "AboutDim",
+            "AboutPoweredName",
+            "AboutSectionLabel",
+            "AboutThanksHeart",
+            "AboutAmp",
+        }
+        for label in dialog.findChildren(QLabel):
+            name = label.objectName()
+            if name == "AboutDisclaimer":
+                label.ensurePolished()
+                fm = QFontMetrics(label.font())
+                label.setMinimumHeight(fm.lineSpacing() * 2 + 10)
+                continue
+            if name not in single:
+                continue
+            label.ensurePolished()
+            fm = QFontMetrics(label.font())
+            extra = 12 if name == "AboutTitle" else 8
+            label.setFixedHeight(fm.height() + extra)
+
+        for caption in dialog.findChildren(QLabel, "AboutPoweredName"):
+            cell = caption.parentWidget()
+            lay = cell.layout() if cell is not None else None
+            if lay is None:
+                continue
+            cell.setMinimumHeight(0)
+            cell.setMaximumHeight(16777215)
+            lay.invalidate()
+            lay.activate()
+            cell.setFixedHeight(max(lay.sizeHint().height(), caption.height() + 68))
+
+        root = dialog.layout()
+        if root is not None:
+            root.activate()
+        hint = dialog.sizeHint()
+        dialog.setFixedSize(max(dialog.width(), hint.width()), hint.height())
+
     def show_about_dialog(self):
         """Frameless About dialog — centered logo + developer / powered-by layout."""
         if getattr(self, '_about_is_open', False):
@@ -891,8 +942,8 @@ class LifecycleMixin:
 
         # Portable + Deck-class shells: scaled_dialog_size shrinks too hard for the
         # Report / Close row. Keep About wide enough for labels.
-        # Linux: never shrink height — QSS + density scale was packing sections
-        # on top of each other (title into logo, captions into hairline).
+        # Linux height is applied after the layout is pinned — a short fixed
+        # box was crushing the logo onto the title and the hairline onto the names.
         linux = sys.platform != "win32"
         if getattr(self, "_portable_shell", False):
             shell_w = 0
@@ -901,13 +952,17 @@ class LifecycleMixin:
             except Exception:
                 shell_w = 0
             if linux or shell_w <= 1600:
-                dialog.setFixedSize(560, 680 if linux else 640)
+                about_w, about_h = 560, 640
             else:
-                dialog.setFixedSize(*scaled_dialog_size(540, 620, parent=self.ui))
+                about_w, about_h = scaled_dialog_size(540, 620, parent=self.ui)
         elif linux:
-            dialog.setFixedSize(540, 680)
+            about_w, about_h = 540, 0
         else:
-            dialog.setFixedSize(*scaled_dialog_size(520, 600, parent=self.ui))
+            about_w, about_h = scaled_dialog_size(520, 600, parent=self.ui)
+        if linux:
+            dialog.setFixedWidth(about_w)
+        else:
+            dialog.setFixedSize(about_w, about_h)
         dialog.setStyleSheet(ut.about_dialog_stylesheet(pro=about_pro))
 
         shell_layout = QVBoxLayout(dialog)
@@ -1097,8 +1152,11 @@ class LifecycleMixin:
         content.addLayout(hair_wrap)
 
         # Keep the old "Special thanks…" band as empty air (text lives on ♥).
+        # Linux sizes the dialog to the content hint, so a stretch here would
+        # pad the card instead of filling a fixed window the way Windows does.
         content.addSpacing(28 if linux else 36)
-        content.addStretch(1)
+        if not linux:
+            content.addStretch(1)
 
         # Buttons above the Valve disclaimer (cleaner hierarchy).
         btn_row = QHBoxLayout()
@@ -1199,8 +1257,10 @@ class LifecycleMixin:
                 f'style="{new_link}">applejuicy23</a>',
             ))
             links_col.addStretch(1)
+            self._seal_linux_about_dialog(dialog)
 
         dialog.apply_ui_theme_chrome = apply_ui_theme_chrome  # type: ignore[attr-defined]
+        self._seal_linux_about_dialog(dialog)
 
         try:
             dialog.exec()
