@@ -2380,8 +2380,6 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
 
     ``pro`` — Steempeg PRO brand chrome (red title / heart accents).
     """
-    import sys
-
     if pro is None:
         try:
             from steempeg.ui.settings_prefs import resolve_steempeg_pro
@@ -2395,34 +2393,9 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
     # Warm red sibling to free violet — same tokens as ProBadge / splash wash.
     title = "#e85a5a" if pro else c["title"]
     heart_hover = "#f08080" if pro else "#d4c4f5"
-    # Linux (and non-Windows): QSS font-size often under-sizes QLabel geometry,
-    # so AboutTitle / Powered captions paint over the logo / circular badges.
-    linux_label_room = ""
-    if sys.platform != "win32":
-        linux_label_room = """
-    QLabel#AboutTitle {
-        min-height: 40px;
-        padding-top: 6px;
-        margin-top: 2px;
-    }
-    QLabel#AboutPoweredName {
-        min-height: 24px;
-        padding-top: 4px;
-        padding-bottom: 2px;
-    }
-    QLabel#AboutDim {
-        min-height: 16px;
-        padding-top: 2px;
-    }
-    QLabel#AboutSectionLabel {
-        min-height: 16px;
-        padding-bottom: 2px;
-    }
-    QLabel#AboutDisclaimer {
-        min-height: 32px;
-        padding-top: 4px;
-    }
-"""
+    # Do not add Linux min-height/padding here. Qt paints the QSS font outside
+    # the layout box, which is what put the logo on "Steempeg" and the hairline
+    # through FFmpeg/PyAV/MPV. Heights are pinned in code after polish.
     return f"""
     QWidget#AboutCard {{
         background-color: {c["card_bg"]};
@@ -2479,7 +2452,7 @@ def about_dialog_stylesheet(*, pro: bool | None = None) -> str:
         font-size: 10px;
         font-style: italic;
     }}
-""" + linux_label_room + about_secondary_button_stylesheet() + f"""
+""" + about_secondary_button_stylesheet() + f"""
     QPushButton#AboutReportBtn {{
         background-color: {c["danger_bg"]};
         border: 1px solid {c["danger_border"]};
