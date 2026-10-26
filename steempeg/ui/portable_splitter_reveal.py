@@ -221,37 +221,109 @@ def snapshot_shell_pane_percents(app) -> tuple[int, int, int]:
     return normalize_shell_pane_percents(widths)
 
 
+def _shell_span(app) -> tuple[int, int]:
+    """Return (window width, splitter width) for the desktop shell."""
+    ui = getattr(app, "ui", None)
+    win_w = 0
+    if ui is not None:
+        try:
+            win_w = int(ui.width() or 0)
+        except RuntimeError:
+            win_w = 0
+    main = getattr(ui, "main_splitter", None) if ui is not None else None
+    shell = 0
+    if main is not None:
+        try:
+            sizes = main.sizes()
+            shell = sum(int(part) for part in sizes)
+            if shell <= 0:
+                shell = int(main.width() or 0)
+        except RuntimeError:
+            shell = 0
+    if shell <= 0:
+        shell = win_w
+    return win_w, shell
+
+
+def _queue_hover_is_on(app) -> bool:
+    """True when the queue is the slide-out overlay, not a docked splitter pane."""
+    check = getattr(app, "_queue_hover_is_floating", None)
+    if not callable(check):
+        return False
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
+def _apply_hover_overlay_width(app, width: int) -> None:
+    """Resize the slide-out queue. A hidden overlay keeps the width for the next reveal."""
+    ctrl = getattr(app, "_queue_hover", None)
+    overlay = getattr(ctrl, "_overlay", None) if ctrl is not None else None
+    if overlay is None or not hasattr(overlay, "set_panel_width"):
+        return
+    try:
+        overlay.set_panel_width(int(width))
+    except RuntimeError:
+        return
+
+
 def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
-    """Size Clips, the player and the queue from percentages of their current total."""
+    """Size Clips, the player and the queue from percentages of their current total.
+
+    Hover queue is not a splitter pane: its percent is the overlay width, and
+    the docked slot stays shut. A stored queue of 0 means "leave the overlay
+    on its remembered width" so an older save does not collapse the slide-out.
+    """
+    from steempeg.ui.layout_defaults import (
+        fit_shell_pane_pixels,
+        shell_pane_pixel_limits,
+        shell_percents_to_pixels,
+    )
+
     found = _shell_widgets(app)
     if found is None:
         return
     main, inner, clips, player, queue = found
-    clips_pct, player_pct, queue_pct = percents
-    widths = shell_pane_widths(app)
-    total = sum(widths) if widths else 0
-    if total <= 0:
-        try:
-            total = int(main.width() or 0)
-        except RuntimeError:
-            total = 0
-    if total <= 0:
+    win_w, shell = _shell_span(app)
+    if shell <= 0:
         return
-    clips_w = total * int(clips_pct) // 100
-    queue_w = total * int(queue_pct) // 100
-    player_w = max(0, total - clips_w - queue_w)
+    hover = _queue_hover_is_on(app)
+    limits = shell_pane_pixel_limits(win_w or shell, hover=hover, shell_width=shell)
+    clips_pct, player_pct, queue_pct = (int(percents[0]), int(percents[1]), int(percents[2]))
+    clips_w, player_w, queue_w = shell_percents_to_pixels(
+        clips_pct,
+        player_pct,
+        queue_pct,
+        shell=shell,
+        window=win_w or shell,
+        hover=hover,
+    )
+    clips_w, player_w, queue_w = fit_shell_pane_pixels(
+        clips_w,
+        player_w,
+        queue_w,
+        limits,
+        shell,
+        hover=hover,
+        changed="clips",
+    )
+    # The overlay width must not be written into the splitter slot.
+    slot_q = 0 if hover else queue_w
     main.blockSignals(True)
     inner.blockSignals(True)
     try:
-        _set_pair_sizes(main, clips, clips_w, player_w + queue_w)
         if main.indexOf(queue) == 0:
-            _set_pair_sizes(main, queue, queue_w, player_w + clips_w)
+            _set_pair_sizes(main, queue, slot_q, player_w + clips_w)
             _set_pair_sizes(inner, player, player_w, clips_w)
         else:
-            _set_pair_sizes(inner, player, player_w, queue_w)
+            _set_pair_sizes(main, clips, clips_w, player_w + slot_q)
+            _set_pair_sizes(inner, player, player_w, slot_q)
     finally:
         main.blockSignals(False)
         inner.blockSignals(False)
+    if hover and queue_pct > 0:
+        _apply_hover_overlay_width(app, queue_w)
 
 
 def _set_pair_sizes(splitter: QSplitter, first, first_w: int, second_w: int) -> None:
@@ -274,10 +346,12 @@ def _set_pair_sizes(splitter: QSplitter, first, first_w: int, second_w: int) -> 
 def _set_side_handles_visible(app, visible: bool) -> None:
     """Show or hide the two handles that separate Clips, the player and the queue.
 
-    A width of 0 still paints the handle stylesheet as a dark seam, so a hidden
-    handle also drops that paint.
+    The handle property is 6px, but its stylesheet margin makes the widget 10px
+    and the layout keeps that. Width 0 alone leaves those 4px, still painted.
+    Hiding also drops the splitter's handle rule so the slot is really gone.
     """
     setter = getattr(app, "_set_splitter_handle_visible", None)
+    shell = _shell_bg(app)
     for _name, splitter in _iter_shell_splitters(app, _SIDE_SPLITTER_NAMES):
         try:
             if splitter.count() < 2:
@@ -297,6 +371,11 @@ def _set_side_handles_visible(app, visible: bool) -> None:
             if callable(setter):
                 setter(splitter, True, 1)
             continue
+        splitter.setStyleSheet(
+            f"QSplitter {{ background-color: {shell}; }} "
+            "QSplitter::handle, QSplitter::handle:hover {"
+            " background: transparent; border: none; margin: 0px; }"
+        )
         splitter.setHandleWidth(0)
         if handle is not None:
             handle.setStyleSheet("background: transparent; border: none; margin: 0px;")
@@ -314,17 +393,9 @@ def _enforce_user_hidden_handles(app) -> None:
     _set_side_handles_visible(app, False)
 
 
-def apply_user_shell_handle_visibility(app) -> None:
-    """Apply the Settings choice: hidden handles keep the saved pane widths."""
-    if getattr(app, "_portable_shell", False):
-        return
-    if bool(getattr(app, "is_theater", False)) or bool(getattr(app, "is_fullscreen", False)):
-        return
-    if not user_hides_shell_handles(app):
-        _set_side_handles_visible(app, True)
-        paint_desktop_splitter_handles(app)
-        return
-    from steempeg.ui.settings_prefs import saved_shell_pane_percents
+def _stored_pane_percents(app):
+    """Saved Clips / player / queue percents, or None if the user never set them."""
+    from steempeg.ui.settings_prefs import read_shell_pane_percents
 
     settings = {}
     if hasattr(app, "load_user_settings"):
@@ -332,10 +403,46 @@ def apply_user_shell_handle_visibility(app) -> None:
             settings = app.load_user_settings() or {}
         except Exception:
             settings = {}
-    percents = saved_shell_pane_percents(settings)
+    return read_shell_pane_percents(settings)
+
+
+def apply_user_shell_handle_visibility(app) -> None:
+    """Apply the Settings choice: hidden handles keep the saved pane widths.
+
+    Percents are a share of the panes, and the handle sits outside that sum.
+    Fit them after the handle slot appears or disappears. Doing it before lets
+    Qt add the freed handle pixels on top, so Clips is no longer the saved percent.
+    """
+    if getattr(app, "_portable_shell", False):
+        return
+    if bool(getattr(app, "is_theater", False)) or bool(getattr(app, "is_fullscreen", False)):
+        return
+    if not user_hides_shell_handles(app):
+        _set_side_handles_visible(app, True)
+        paint_desktop_splitter_handles(app)
+        _sync_hover_resize_grip(app)
+    else:
+        _set_side_handles_visible(app, False)
+        _sync_hover_resize_grip(app)
+    percents = _stored_pane_percents(app)
     if percents is not None:
         _apply_shell_pane_percents(app, percents)
-    _set_side_handles_visible(app, False)
+
+
+def _sync_hover_resize_grip(app) -> None:
+    """Hide the hover queue's drag tab while splitter handles are hidden.
+
+    That tab is its own window, not a QSplitter handle, so the side-handle
+    pass never sees it. Width then comes only from the pane percents.
+    """
+    ctrl = getattr(app, "_queue_hover", None)
+    sync = getattr(ctrl, "sync_resize_grip", None)
+    if not callable(sync):
+        return
+    try:
+        sync()
+    except Exception:
+        return
 
 
 def _hide_middle_handle(app) -> None:
