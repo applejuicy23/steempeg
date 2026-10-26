@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import webbrowser
 
 from PySide6.QtCore import Qt
@@ -86,6 +87,12 @@ def register_bundled_fredoka() -> str:
 
 def _cozy_stylesheet(*, support_font: str) -> str:
     support_css = f'"{support_font}", {_COZY_FALLBACK}' if support_font else _COZY_FALLBACK
+    # QLabel forces the Candara stack, which overrides the Fredoka set on the
+    # title. Candara is a Windows face; on Linux it substitutes Noto Sans and
+    # "Donate Me!" no longer matches the card. Pin the bundled face there.
+    title_face = ""
+    if sys.platform != "win32" and support_font:
+        title_face = f'font-family: "{support_font}", {_COZY_FALLBACK};'
     return f"""
     QWidget#KofiPlate {{
         background-color: {_CREAM};
@@ -109,6 +116,7 @@ def _cozy_stylesheet(*, support_font: str) -> str:
     }}
     QLabel#KofiTitle {{
         color: {_INK};
+        {title_face}
         font-size: 30px;
         font-weight: 700;
         letter-spacing: 0.3px;
@@ -184,7 +192,15 @@ def show_kofi_dialog(parent=None) -> None:
     # Rounded cream plate paints itself; dialog stays clear so corners aren't square.
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.setFixedSize(*scaled_dialog_size(420, 430, parent=parent))
+    # Linux font metrics are taller than this card. A fixed 430px box was
+    # crushing the 128px cup below its minimum, so "Donate Me!" sat on the disc.
+    # Height is applied after the layout exists. Windows already fits.
+    kofi_w, kofi_h = scaled_dialog_size(420, 430, parent=parent)
+    linux = sys.platform != "win32"
+    if linux:
+        dialog.setFixedWidth(kofi_w)
+    else:
+        dialog.setFixedSize(kofi_w, kofi_h)
     dialog.setStyleSheet(_cozy_stylesheet(support_font=fredoka))
 
     shell = QVBoxLayout(dialog)
@@ -300,5 +316,11 @@ def show_kofi_dialog(parent=None) -> None:
     close_row.addStretch(1)
     close_row.addWidget(btn_close, 0, Qt.AlignmentFlag.AlignRight)
     plate_lay.addLayout(close_row)
+
+    if linux:
+        dialog.ensurePolished()
+        shell.activate()
+        hint = dialog.sizeHint()
+        dialog.setFixedSize(dialog.width(), hint.height())
 
     dialog.exec()
