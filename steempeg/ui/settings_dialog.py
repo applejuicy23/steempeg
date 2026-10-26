@@ -203,7 +203,9 @@ from steempeg.ui.settings_prefs import (
     load_hide_splitter_handles,
     load_hide_update_available_badge,
     load_keep_running_in_tray,
+    DEFAULT_SHELL_PANE_PERCENTS,
     load_shell_pane_percents,
+    read_shell_pane_percents,
     load_marker_trim_offset_ms,
     load_markers_on_strip,
     load_media_cache_limit_gb,
@@ -243,6 +245,7 @@ from steempeg.ui.settings_prefs import (
     resolve_screenshots_folder,
     resolve_update_check_interval,
     set_markers_on_strip,
+    get_queue_hover,
     set_queue_hover,
     set_desktop_shell_tools_in_title_bar,
     set_shell_side_layout,
@@ -571,9 +574,11 @@ class SettingsDialog(SteempegDialog):
         g.addWidget(self._chk_hide_splitter_handles)
         g.addWidget(
             self._hint(
-                "Hides the handles between Clips, the player and the queue. "
+                "Hides the splitter handles and the hover queue's drag tab. "
                 "Drag the panes first, then turn this on, or set the widths below. "
-                "Off, the handles stay."
+                "Clips cannot pass its minimum; raising it shrinks the player. "
+                "The queue keeps the minimum and maximum of its current mode, "
+                "hover or the docked splitter. Off, the handles stay."
             )
         )
         # Filter time fields put the face on the field (bold 13px, padding
@@ -589,7 +594,9 @@ class SettingsDialog(SteempegDialog):
         pane_row.setContentsMargins(0, 0, 0, 0)
         pane_row.setSpacing(12)
         self._pane_spins = {}
-        saved_percents = load_shell_pane_percents(settings)
+        self._pane_percent_lock = False
+        self._pane_percent_baseline = None
+        saved_percents = read_shell_pane_percents(settings) or DEFAULT_SHELL_PANE_PERCENTS
         label_qss = (
             "color: #888888; font-weight: bold; font-size: 13px; "
             f"font-family: {tok.FONT_APP}; background: transparent;"
@@ -614,6 +621,9 @@ class SettingsDialog(SteempegDialog):
             # 112 is the narrowest width where "100 %" still fits this field.
             spin.setFixedWidth(120)
             spin.setCursor(Qt.CursorShape.PointingHandCursor)
+            spin.valueChanged.connect(
+                lambda _value, pane=key: self._on_pane_percent_edited(pane)
+            )
             self._pane_spins[key] = spin
             col.addWidget(spin)
             pane_row.addWidget(column)
@@ -794,6 +804,7 @@ class SettingsDialog(SteempegDialog):
                 )
             )
             self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
+        self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
 
         self._chk_shell_tools_title = SteempegCheckBox(
             "About / Updates / Settings / Dev in title bar"
@@ -2213,7 +2224,10 @@ class SettingsDialog(SteempegDialog):
         if chk_handles is not None:
             if bool(chk_handles.isChecked()) != load_hide_splitter_handles(prev):
                 return True
-            if self._shell_pane_percent_values() != load_shell_pane_percents(prev):
+            baseline = getattr(self, "_pane_percent_baseline", None)
+            if baseline is None:
+                baseline = load_shell_pane_percents(prev)
+            if self._shell_pane_percent_values() != tuple(baseline):
                 return True
 
         chk_autostart = getattr(self, "_chk_autostart", None)
@@ -2234,9 +2248,176 @@ class SettingsDialog(SteempegDialog):
         if not callable(snapshot):
             return
         clips, player, queue = snapshot()
-        self._pane_spins["clips"].setValue(int(clips))
-        self._pane_spins["player"].setValue(int(player))
-        self._pane_spins["queue"].setValue(int(queue))
+        self._pane_percent_lock = True
+        try:
+            self._pane_spins["clips"].setValue(int(clips))
+            self._pane_spins["player"].setValue(int(player))
+            self._pane_spins["queue"].setValue(int(queue))
+        finally:
+            self._pane_percent_lock = False
+        # A hover snapshot reports queue 0 because the dock is shut. The spin
+        # shows the overlay width instead, then both modes get their floors.
+        self._refit_pane_percent_spins(seed_hover_queue=True)
+
+    def _pane_queue_is_hover(self) -> bool:
+        """True when the queue spin edits the slide-out, not the docked pane."""
+        chk = getattr(self, "_chk_queue_hover", None)
+        if chk is not None:
+            return bool(chk.isChecked())
+        return bool(get_queue_hover())
+
+    def _shell_pane_measure(self) -> tuple[int, int]:
+        """Return (window width, shell splitter width) for the pane percents."""
+        ui = getattr(self._app, "ui", None)
+        win_w = 0
+        if ui is not None:
+            try:
+                win_w = int(ui.width() or 0)
+            except RuntimeError:
+                win_w = 0
+        main = getattr(ui, "main_splitter", None) if ui is not None else None
+        shell = 0
+        if main is not None:
+            try:
+                sizes = main.sizes()
+                shell = sum(int(part) for part in sizes)
+                if shell <= 0:
+                    shell = int(main.width() or 0)
+            except RuntimeError:
+                shell = 0
+        if shell <= 0:
+            shell = win_w
+        return win_w, shell
+
+    def _hover_overlay_width(self) -> int:
+        """Pixel width of the hover queue, or 0 when that controller is absent."""
+        ctrl = getattr(self._app, "_queue_hover", None)
+        if ctrl is None or not hasattr(ctrl, "overlay_width"):
+            return 0
+        try:
+            return max(0, int(ctrl.overlay_width()))
+        except (RuntimeError, TypeError, ValueError):
+            return 0
+
+    def _on_pane_percent_edited(self, changed: str) -> None:
+        """Keep the other two panes inside their floors after one spin moves."""
+        if getattr(self, "_pane_percent_lock", False):
+            return
+        self._refit_pane_percent_spins(changed)
+
+    def _refit_pane_percent_spins(
+        self,
+        changed: str | None = None,
+        *,
+        seed_hover_queue: bool = False,
+        remember_baseline: bool = False,
+    ) -> None:
+        """Clamp the three spins to the live Clips / player / queue floors.
+
+        Raising Clips or a docked queue lowers the player. Hover queue is a
+        separate percent of the window: it does not take width from the shell.
+        """
+        spins = getattr(self, "_pane_spins", None)
+        if not spins or "clips" not in spins:
+            return
+        win_w, shell = self._shell_pane_measure()
+        if win_w <= 0 or shell <= 0:
+            return
+        from steempeg.ui.layout_defaults import (
+            fit_shell_pane_pixels,
+            percent_at_least,
+            percent_at_most,
+            shell_pane_pixel_limits,
+            shell_percents_to_pixels,
+            shell_pixels_to_percents,
+        )
+
+        hover = self._pane_queue_is_hover()
+        limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell)
+        clips, player, queue = self._shell_pane_percent_values()
+        if hover and seed_hover_queue and queue <= 0:
+            overlay = self._hover_overlay_width()
+            if overlay > 0:
+                queue = int(round(100 * overlay / win_w))
+        # The edited spin is the one that wins. The player is the slack, except
+        # when the player itself moved: then Clips (hover) or the queue (docked)
+        # gives up the room.
+        if hover and changed == "clips":
+            player = max(0, 100 - int(clips))
+        elif hover and changed == "player":
+            clips = max(0, 100 - int(player))
+        elif changed == "player" and not hover:
+            rest = max(0, 100 - int(player))
+            pair = max(int(clips) + int(queue), 1)
+            clips = rest * int(clips) // pair
+            queue = rest - clips
+        clips_w, player_w, queue_w = shell_percents_to_pixels(
+            clips, player, queue, shell=shell, window=win_w, hover=hover
+        )
+        clips_w, player_w, queue_w = fit_shell_pane_pixels(
+            clips_w,
+            player_w,
+            queue_w,
+            limits,
+            shell,
+            hover=hover,
+            changed=changed or "clips",
+        )
+        clips, player, queue = shell_pixels_to_percents(
+            clips_w, player_w, queue_w, shell=shell, window=win_w, hover=hover
+        )
+        (clips_min, _), (player_min, player_max), (queue_min, queue_max) = limits
+        if hover:
+            clips_hi = max(clips_min, shell - player_min)
+            player_hi = max(player_min, shell - clips_min)
+            queue_base = win_w
+            queue_lo, queue_hi_px = queue_min, queue_max
+        else:
+            clips_hi = max(clips_min, shell - player_min - queue_w)
+            player_hi = max(player_min, min(player_max, shell - clips_min - queue_min))
+            queue_base = shell
+            queue_lo = queue_min
+            queue_hi_px = max(queue_min, shell - player_min - clips_w)
+        ranges = {
+            "clips": (percent_at_least(clips_min, shell), percent_at_most(clips_hi, shell)),
+            "player": (percent_at_least(player_min, shell), percent_at_most(player_hi, shell)),
+            "queue": (percent_at_least(queue_lo, queue_base), percent_at_most(queue_hi_px, queue_base)),
+        }
+        values = {"clips": clips, "player": player, "queue": queue}
+        tips = {
+            "clips": "Clips stays on the left. It cannot go under its minimum, and raising it shrinks the player.",
+            "player": "The player gives up width when Clips or the queue grows, and it cannot go under its own minimum.",
+            "queue": (
+                "Hover queue, as a percent of the window. It slides over the player and stops at the drag handle's minimum and maximum."
+                if hover
+                else "Docked queue. It keeps its splitter minimum and maximum, and the difference comes out of the player."
+            ),
+        }
+        self._pane_percent_lock = True
+        try:
+            clamped: dict[str, tuple[int, int]] = {}
+            for key, spin in spins.items():
+                low, high = ranges[key]
+                low = max(0, min(100, int(low)))
+                high = max(low, min(100, int(high)))
+                clamped[key] = (low, high)
+                spin.setRange(low, high)
+                spin.setValue(max(low, min(high, int(values[key]))))
+                spin.setToolTip(tips[key])
+            if hover:
+                low, high = clamped["player"]
+                player_now = max(low, min(high, 100 - spins["clips"].value()))
+                spins["player"].setValue(player_now)
+                low, high = clamped["clips"]
+                spins["clips"].setValue(max(low, min(high, 100 - player_now)))
+            else:
+                low, high = clamped["player"]
+                player_now = 100 - spins["clips"].value() - spins["queue"].value()
+                spins["player"].setValue(max(low, min(high, player_now)))
+        finally:
+            self._pane_percent_lock = False
+        if remember_baseline:
+            self._pane_percent_baseline = self._shell_pane_percent_values()
 
     def _shell_pane_percent_values(self) -> tuple[int, int, int]:
         """Read the three width fields as Clips, player, queue percentages."""
@@ -2515,6 +2696,7 @@ class SettingsDialog(SteempegDialog):
         set_queue_hover(enabled)
         logging.info("Queue hover preview → %s", enabled)
         self._refresh_queue_hover(enabled)
+        self._refit_pane_percent_spins()
 
     def _refresh_queue_hover(self, enabled: bool) -> None:
         if hasattr(self._app, "refresh_queue_hover"):
@@ -3256,15 +3438,42 @@ class SettingsDialog(SteempegDialog):
         elif is_steamdeck_build():
             pending[UI_SHELL_ASK_KEY] = False
 
-        from steempeg.ui.settings_prefs import normalize_shell_pane_percents
-
         hide_handles = bool(self._chk_hide_splitter_handles.isChecked())
-        pane_percents = normalize_shell_pane_percents(self._shell_pane_percent_values())
+        self._refit_pane_percent_spins()
+        pane_percents = self._shell_pane_percent_values()
         pending[KEY_HIDE_SPLITTER_HANDLES] = hide_handles
         pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
-        self._pane_spins["clips"].setValue(pane_percents[0])
-        self._pane_spins["player"].setValue(pane_percents[1])
-        self._pane_spins["queue"].setValue(pane_percents[2])
+        win_w, shell = self._shell_pane_measure()
+        if win_w > 0 and shell > 0:
+            from steempeg.ui.layout_defaults import (
+                fit_shell_pane_pixels,
+                shell_pane_pixel_limits,
+                shell_percents_to_pixels,
+            )
+
+            hover = self._pane_queue_is_hover()
+            limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell)
+            clips_w, player_w, queue_w = shell_percents_to_pixels(
+                pane_percents[0],
+                pane_percents[1],
+                pane_percents[2],
+                shell=shell,
+                window=win_w,
+                hover=hover,
+            )
+            _clips_w, _player_w, queue_w = fit_shell_pane_pixels(
+                clips_w,
+                player_w,
+                queue_w,
+                limits,
+                shell,
+                hover=hover,
+                changed="clips",
+            )
+            baseline = getattr(self, "_pane_percent_baseline", None)
+            queue_moved = baseline is None or int(baseline[2]) != int(pane_percents[2])
+            if queue_moved:
+                pending["queue_panel_width"] = int(queue_w)
         if hasattr(self._app, "apply_hidden_shell_splitter_handles"):
             deferred.append(self._app.apply_hidden_shell_splitter_handles)
 
