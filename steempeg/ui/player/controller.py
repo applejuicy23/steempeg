@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QPropertyAnimation, QTimer
+from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QPropertyAnimation, QTimer, Signal
 from PySide6.QtGui import QCursor, QIcon, QPainterPath, QPixmap, QRegion
 from PySide6.QtWidgets import (
     QApplication,
@@ -57,6 +57,26 @@ _FS_TRACE = os.environ.get("STEEMPEG_FS_TRACE") == "1"
 def _fstrace(msg, *args):
     if _FS_TRACE:
         logging.info("[fstrace] %.3f " + msg, time.perf_counter(), *args)
+
+
+class _LinuxPointerHop(QObject):
+    """Run a callable on the GUI thread.
+
+    mpv key bindings fire on libmpv's event thread. ``QTimer.singleShot`` from
+    that thread does not land on the Qt loop, so the play/pause click was lost.
+    """
+
+    call = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.call.connect(self._run, Qt.ConnectionType.QueuedConnection)
+
+    def _run(self, fn) -> None:
+        try:
+            fn()
+        except Exception:
+            logging.debug("linux pointer hop failed", exc_info=True)
 
 
 class _ScreenshotToastClickAwayFilter(QObject):
@@ -311,6 +331,7 @@ class PlayerMixin:
                 self.player["af"] = "rubberband"
             except Exception as exc:
                 logging.warning("mpv rubberband af unavailable: %s", exc)
+            self._install_linux_mpv_pointer_bindings()
             self._linux_mpv_vo_attached = True
             if hasattr(self, "_apply_saved_preview_quality_to_player"):
                 self._apply_saved_preview_quality_to_player()
@@ -1358,12 +1379,161 @@ class PlayerMixin:
             pass
         return moved
 
+    def _install_linux_mpv_pointer_bindings(self) -> None:
+        """Play/pause, pan, and wheel on the embedded picture.
+
+        libmpv reparents its own X window into ``mpv_screen`` and selects the
+        pointer there. Those events never reach the Qt filter on the parent
+        (Windows has the same hole and uses a native message filter). mpv
+        already has the click, so bind its mouse keys and hop back to the GUI
+        thread — the binding callback runs on libmpv's event thread.
+        """
+        if sys.platform == "win32":
+            return
+        player = getattr(self, "player", None)
+        if player is None or getattr(player, "_steempeg_pointer_bound", False):
+            return
+
+        def phase(state) -> str:
+            if isinstance(state, (bytes, bytearray)):
+                state = state.decode("utf-8", "replace")
+            text = str(state or "")
+            if len(text) > 1 and "c" in text[1:]:
+                return "cancel"
+            return text[:1]
+
+        def xy() -> tuple[float, float]:
+            try:
+                value = player._get_property("mouse-pos")
+            except Exception:
+                value = None
+            if isinstance(value, dict):
+                return float(value.get("x") or 0.0), float(value.get("y") or 0.0)
+            return 0.0, 0.0
+
+        def alive() -> bool:
+            return getattr(self, "player", None) is player
+
+        hop = getattr(self, "_linux_pointer_hop", None)
+        if hop is None:
+            hop = _LinuxPointerHop(self if isinstance(self, QObject) else None)
+            self._linux_pointer_hop = hop
+
+        def post(fn) -> None:
+            hop.call.emit(fn)
+
+        def on_left(state, _name, _char, _scale, _arg) -> None:
+            if not alive():
+                return
+            kind = phase(state)
+            x, y = xy()
+            if kind == "d":
+                self._linux_ptr_button = "left"
+                post(lambda x=x, y=y: self._preview_zoom_pan_begin(x, y, button="left"))
+            elif kind == "u":
+                self._linux_ptr_button = None
+                post(self._linux_embed_left_release)
+
+        def on_right(state, _name, _char, _scale, _arg) -> None:
+            if not alive():
+                return
+            kind = phase(state)
+            x, y = xy()
+            if kind == "d":
+                self._linux_ptr_button = "right"
+                post(lambda x=x, y=y: self._preview_zoom_pan_begin(x, y, button="right"))
+            elif kind == "u":
+                self._linux_ptr_button = None
+                post(self._preview_zoom_pan_end)
+
+        def on_wheel(direction: int):
+            def handler(state, _name, _char, scale, _arg) -> None:
+                if not alive():
+                    return
+                if phase(state) not in ("d", "p"):
+                    return
+                raw = scale.decode("utf-8", "replace") if isinstance(scale, (bytes, bytearray)) else scale
+                try:
+                    mag = float(raw)
+                except (TypeError, ValueError):
+                    mag = 1.0
+                if mag <= 0:
+                    mag = 1.0
+                x, y = xy()
+                post(
+                    lambda x=x, y=y, mag=mag, direction=direction: self._linux_embed_wheel(
+                        direction, x, y, mag
+                    )
+                )
+
+            return handler
+
+        def on_pos(_name, value) -> None:
+            if not alive():
+                return
+            hover = True
+            x = y = 0.0
+            if isinstance(value, dict):
+                hover = bool(value.get("hover", True))
+                x = float(value.get("x") or 0.0)
+                y = float(value.get("y") or 0.0)
+            if getattr(self, "_linux_ptr_button", None):
+                post(lambda x=x, y=y: self._preview_zoom_pan_move(x, y))
+            if not hover or not getattr(self, "is_fullscreen", False):
+                return
+            if not hasattr(self, "wake_up_fullscreen_controls"):
+                return
+            now = time.monotonic()
+            last = float(getattr(self, "_linux_fs_wake_at", 0.0) or 0.0)
+            if now - last < 0.25:
+                return
+            self._linux_fs_wake_at = now
+            post(self.wake_up_fullscreen_controls)
+
+        try:
+            player.register_key_binding("MBTN_LEFT", on_left, "force")
+            player.register_key_binding("MBTN_RIGHT", on_right, "force")
+            player.register_key_binding("WHEEL_UP", on_wheel(1), "force")
+            player.register_key_binding("WHEEL_DOWN", on_wheel(-1), "force")
+            player.observe_property("mouse-pos", on_pos)
+        except Exception:
+            logging.warning("Linux preview pointer bindings failed", exc_info=True)
+            return
+        player._steempeg_pointer_bound = True
+        logging.info(
+            "Linux preview pointer: video click toggles play/pause "
+            "(mpv embed owns the X window)"
+        )
+
+    def _linux_embed_left_release(self) -> None:
+        moved = self._preview_zoom_pan_end()
+        if not moved:
+            self._on_video_surface_click()
+
+    def _linux_embed_wheel(self, direction: int, x: float, y: float, scale: float) -> None:
+        try:
+            from steempeg.ui.player_zoom_chrome import nudge_preview_zoom_wheel
+
+            w, h = self._preview_zoom_surface_size()
+            nudge_preview_zoom_wheel(
+                self,
+                float(direction) * 120.0 * float(scale),
+                cursor_x=x,
+                cursor_y=y,
+                surface_w=w,
+                surface_h=h,
+            )
+        except Exception:
+            logging.debug("Linux embed wheel zoom failed", exc_info=True)
+
     def install_video_surface_click_handler(self) -> None:
         """Catch LMB on the video surface → play/pause pulse (or pan when zoomed).
 
         Windows: embedded mpv ``wid=`` HWND — ``WM_LBUTTON*`` / ``WM_MOUSEMOVE`` via
         native filter (Qt mouse on the embed is unreliable).
-        Linux: Qt event filter on ``mpv_screen``.
+        Linux: the same hole. The Qt filter below only sees clicks that actually
+        land on ``mpv_screen``; the embed's own X window is handled by mpv key
+        bindings (``_install_linux_mpv_pointer_bindings``).
         """
         if getattr(self, "_video_surface_click_handler_installed", False):
             return
