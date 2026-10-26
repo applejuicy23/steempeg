@@ -25,6 +25,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QRegion,
     QTransform,
 )
@@ -443,6 +444,10 @@ class QueueHoverOverlay(QWidget):
         self._from_left = False
         self._card = QRect()
         self._bulge = QRect()
+        # Linux: live queue repaint on every slide tick is a jerky X11 expose.
+        # One grab, then blit that pixmap while the window moves.
+        self._slide_pix: QPixmap | None = None
+        self._mask_key: tuple | None = None
         self.setObjectName("queueHoverOverlay")
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -486,6 +491,35 @@ class QueueHoverOverlay(QWidget):
         self._slide = max(0.0, min(1.0, float(value)))
         self._apply_geometry()
         self.update()
+
+    def _prepare_slide_snapshot(self) -> None:
+        """Grab the queue once so the slide does not repaint it every frame.
+
+        Windows DWM moves the live HWND cheaply. On Linux each move exposes the
+        tool window, and that repaints the whole Render Queue — a few frames
+        across 240 ms, which reads as a laggy pop in and out.
+        """
+        if sys.platform == "win32":
+            return
+        if self._slide_pix is not None and not self._slide_pix.isNull():
+            self._body.hide()
+            return
+        self._body.show()
+        pix = self._body.grab()
+        if pix.isNull() or pix.width() < 8 or pix.height() < 8:
+            self._slide_pix = None
+            self._body.show()
+            return
+        self._slide_pix = pix
+        self._body.hide()
+
+    def _release_slide_snapshot(self) -> None:
+        if sys.platform == "win32":
+            return
+        self._slide_pix = None
+        if self._slide > 0.001:
+            self._body.show()
+            self.update()
 
     slide = Property(float, get_slide, set_slide)
 
@@ -533,6 +567,7 @@ class QueueHoverOverlay(QWidget):
         super().leaveEvent(event)
 
     def _on_anim_finished(self) -> None:
+        self._release_slide_snapshot()
         if self._slide <= 0.001 and not self._controller.is_revealed():
             self.hide()
             try:
@@ -584,14 +619,20 @@ class QueueHoverOverlay(QWidget):
         else:
             grip_global = QRect(card_x - _BULGE_OUT, overlay_y + grip_y, _BULGE_OUT, grip_h)
         self._bulge = QRect(0, 0, grip_global.width(), grip_global.height())
-        try:
-            region = _round_region(self._card, float(_RADIUS))
-            if region.isEmpty():
+        # Same rounded plate for the whole slide — reshaping every tick forces
+        # a full X11 expose of the queue (the Windows path can afford it).
+        mask_key = (int(card_w), int(card_h), int(_RADIUS))
+        if sys.platform == "win32" or mask_key != self._mask_key:
+            try:
+                region = _round_region(self._card, float(_RADIUS))
+                if region.isEmpty():
+                    self.clearMask()
+                else:
+                    self.setMask(region)
+                self._mask_key = mask_key
+            except RuntimeError:
                 self.clearMask()
-            else:
-                self.setMask(region)
-        except RuntimeError:
-            self.clearMask()
+                self._mask_key = None
         if self._slide > 0.001 and self.isVisible():
             self._grip.place(grip_global)
         else:
@@ -618,6 +659,10 @@ class QueueHoverOverlay(QWidget):
             cr.adjusted(-1.0, -1.0, 1.0, 1.0), float(_RADIUS), float(_RADIUS)
         )
         painter.fillPath(fill_card, bg)
+        # Snapshot sits above the plate and under the hairline. Children are
+        # hidden for the slide, so this blit is the whole frame.
+        if self._slide_pix is not None and not self._slide_pix.isNull():
+            painter.drawPixmap(self._body.geometry().topLeft(), self._slide_pix)
         rim = QPen(border)
         rim.setWidthF(1.0)
         rim.setCosmetic(True)
@@ -887,6 +932,7 @@ class QueueHoverController(QObject):
         self._watch.stop()
         self._revealed = False
         if not animated or self._overlay._slide <= 0.001:
+            self._overlay._release_slide_snapshot()
             self._overlay.set_slide(0.0)
             self._overlay.hide()
             try:
@@ -1011,6 +1057,7 @@ class QueueHoverController(QObject):
         anim.stop()
         anim.blockSignals(False)
         if not animated:
+            self._overlay._release_slide_snapshot()
             self._overlay.set_slide(target)
             if target <= 0.0:
                 self._overlay.hide()
@@ -1024,6 +1071,9 @@ class QueueHoverController(QObject):
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.setStartValue(float(self._overlay._slide))
         anim.setEndValue(float(target))
+        # Grab before the clock starts so the first frames are blits, not a
+        # stall that the easing then skips over.
+        self._overlay._prepare_slide_snapshot()
         anim.start()
 
     def _on_hot_enter(self) -> None:
