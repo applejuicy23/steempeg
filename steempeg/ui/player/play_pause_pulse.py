@@ -9,7 +9,9 @@ the appear→hold→fade cycle restarts for the new play/pause action.
 
 On Windows the Tool HWND must be ``WS_EX_TRANSPARENT`` so clicks pass through to
 the embed while the circle is visible — otherwise the center of the picture
-eats LMB and YouTube-style interrupt is impossible.
+eats LMB and YouTube-style interrupt is impossible. Linux uses an empty X11
+input shape for the same reason (Qt's transparent-for-mouse flag does not
+punch a hole in the X window).
 """
 from __future__ import annotations
 
@@ -123,8 +125,20 @@ class PlayPausePulseOverlay(QWidget):
         self.hide()
 
     def _apply_click_through(self) -> None:
-        """Win32: hit-test transparent so LMB reaches the mpv embed underneath."""
+        """Hit-test transparent so LMB reaches the mpv embed underneath."""
         if sys.platform != "win32":
+            try:
+                from PySide6.QtGui import QGuiApplication
+
+                from steempeg.ui.player.x11_clickthrough import set_x11_input_clickthrough
+
+                app = QGuiApplication.instance()
+                if app is None or app.platformName() != "xcb":
+                    return
+                self.createWinId()
+                set_x11_input_clickthrough(int(self.winId()))
+            except Exception:
+                pass
             return
         try:
             import ctypes
