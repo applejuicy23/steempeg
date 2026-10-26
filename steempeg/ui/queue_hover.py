@@ -311,6 +311,9 @@ class _Grip(QWidget):
 
     def place(self, global_rect: QRect) -> None:
         """Move/show this brace grip in global screen coords."""
+        if self._overlay._controller.resize_grip_hidden():
+            self.hide()
+            return
         if global_rect.width() < 2 or global_rect.height() < 2:
             self.hide()
             return
@@ -533,17 +536,20 @@ class QueueHoverOverlay(QWidget):
         win_w = int(win.width() or 0) if win is not None else 0
         min_w = 520
         floor = 360
+        gap = 80
         try:
             from steempeg.ui.layout_defaults import (
                 PLAYER_COLUMN_FLOOR,
+                QUEUE_HOVER_EDGE_GAP,
                 queue_hover_min_width,
             )
 
             floor = int(PLAYER_COLUMN_FLOOR)
+            gap = int(QUEUE_HOVER_EDGE_GAP)
             min_w = int(queue_hover_min_width(win_w, widget=win) if win_w else min_w)
         except Exception:
             pass
-        max_w = max(min_w, win_w - floor - 80) if win_w else max(min_w, int(width))
+        max_w = max(min_w, win_w - floor - gap) if win_w else max(min_w, int(width))
         return max(min_w, min(int(width), int(max_w)))
 
     def host_panel(self, panel: QWidget) -> None:
@@ -633,7 +639,11 @@ class QueueHoverOverlay(QWidget):
             except RuntimeError:
                 self.clearMask()
                 self._mask_key = None
-        if self._slide > 0.001 and self.isVisible():
+        if (
+            self._slide > 0.001
+            and self.isVisible()
+            and not self._controller.resize_grip_hidden()
+        ):
             self._grip.place(grip_global)
         else:
             try:
@@ -704,6 +714,40 @@ class QueueHoverController(QObject):
         qapp = QApplication.instance()
         if qapp is not None:
             qapp.installEventFilter(self)
+
+    def resize_grip_hidden(self) -> bool:
+        """True when Settings hides splitter handles, so the hover tab stays off.
+
+        The slide-out width then comes only from the pane percents.
+        """
+        from steempeg.ui.portable_splitter_reveal import user_hides_shell_handles
+
+        try:
+            return bool(user_hides_shell_handles(self._app))
+        except Exception:
+            return False
+
+    def sync_resize_grip(self) -> None:
+        """Show or hide the hover drag tab to match Hide splitter handles."""
+        overlay = getattr(self, "_overlay", None)
+        grip = getattr(overlay, "_grip", None) if overlay is not None else None
+        if grip is None:
+            return
+        if self.resize_grip_hidden():
+            try:
+                grip._finish_drag()
+            except Exception:
+                pass
+            try:
+                grip.hide()
+            except RuntimeError:
+                pass
+            return
+        try:
+            if overlay.isVisible() and float(getattr(overlay, "_slide", 0.0)) > 0.001:
+                overlay._apply_geometry()
+        except RuntimeError:
+            pass
 
     def is_enabled(self) -> bool:
         return bool(self._enabled) and not bool(self._suspended)
@@ -1226,6 +1270,15 @@ class QueueHoverController(QObject):
                 self._hotspot.setGeometry(0, 0, 0, 0)
             except RuntimeError:
                 pass
+
+    def overlay_width(self) -> int:
+        """Pixel width of the slide-out, including a remembered width while it is hidden."""
+        overlay = getattr(self, "_overlay", None)
+        if overlay is not None:
+            live = int(getattr(overlay, "_panel_w", 0) or 0)
+            if live > 48 and hasattr(overlay, "_clamp_width"):
+                return int(overlay._clamp_width(live))
+        return int(self._current_width())
 
     def _current_width(self) -> int:
         app = self._app
