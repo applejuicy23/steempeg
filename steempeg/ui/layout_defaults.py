@@ -517,6 +517,185 @@ def queue_hover_min_width(window_width: int, *, widget=None, screen=None) -> int
 
 # Soft floor for the player/settings column inside right_h_splitter.
 PLAYER_COLUMN_FLOOR = 360
+# Hover overlay stops this far short of the player floor, same as the drag handle.
+QUEUE_HOVER_EDGE_GAP = 80
+
+
+def _clamp_px(value: int, low: int, high: int) -> int:
+    """Clamp ``value`` into ``low``..``high``. A reversed range collapses to ``low``."""
+    low = int(low)
+    high = int(high)
+    if high < low:
+        high = low
+    return max(low, min(int(value), high))
+
+
+def shell_pane_pixel_limits(
+    window_width: int,
+    *,
+    hover: bool,
+    shell_width: int = 0,
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
+    """Min and max pixel widths for Clips, the player and the queue.
+
+    Clips cannot shrink past ``left_panel_min_width`` and only grows by taking
+    room from the player. The player keeps ``PLAYER_COLUMN_FLOOR``. Splitter
+    queue is a real pane: its floor is ``queue_panel_min_width`` and its max
+    still leaves Clips and the player their floors. Hover queue is an overlay,
+    so its width is not part of that sum; it uses the same clamp as the drag
+    handle (``queue_hover_min_width`` through window, minus the player floor and the edge gap).
+    """
+    win = max(0, int(window_width or 0))
+    shell = int(shell_width or 0)
+    if shell <= 0:
+        shell = win
+    basis = win or shell
+    clips_min = left_panel_min_width(basis) if basis else MIN_LEFT_PANEL_WIDTH_COMPACT
+    player_min = int(PLAYER_COLUMN_FLOOR)
+    if hover:
+        queue_min = queue_hover_min_width(basis) if basis else MIN_QUEUE_HOVER_WIDTH
+        span = win or shell
+        queue_max = max(queue_min, span - player_min - int(QUEUE_HOVER_EDGE_GAP))
+        if shell > 0 and clips_min + player_min > shell:
+            player_min = max(0, shell - clips_min)
+        clips_max = max(clips_min, shell - player_min) if shell else clips_min
+        player_max = max(player_min, shell - clips_min) if shell else player_min
+        return (clips_min, clips_max), (player_min, player_max), (queue_min, queue_max)
+
+    queue_min = queue_panel_min_width(basis) if basis else MIN_QUEUE_PANEL_WIDTH
+    if shell > 0 and clips_min + player_min + queue_min > shell:
+        queue_min = max(0, shell - clips_min - player_min)
+        if clips_min + player_min > shell:
+            player_min = max(0, shell - clips_min)
+            queue_min = 0
+    clips_max = max(clips_min, shell - player_min - queue_min) if shell else clips_min
+    player_max = max(player_min, shell - clips_min - queue_min) if shell else player_min
+    queue_max = max(queue_min, shell - clips_min - player_min) if shell else queue_min
+    return (clips_min, clips_max), (player_min, player_max), (queue_min, queue_max)
+
+
+def fit_shell_pane_pixels(
+    clips: int,
+    player: int,
+    queue: int,
+    limits: tuple[tuple[int, int], tuple[int, int], tuple[int, int]],
+    shell_width: int,
+    *,
+    hover: bool,
+    changed: str = "clips",
+) -> tuple[int, int, int]:
+    """Pull the three widths back inside ``limits``.
+
+    Raising Clips or the queue takes the difference from the player. The player
+    can move left only while Clips is still above its floor; once the queue is
+    at its own floor, further player growth comes out of Clips. In hover mode
+    the queue is an overlay, so clamping it does not resize the other two.
+    """
+    (clips_min, clips_max), (player_min, player_max), (queue_min, queue_max) = limits
+    shell = max(0, int(shell_width))
+    clips = _clamp_px(clips, clips_min, clips_max)
+    queue = _clamp_px(queue, queue_min, queue_max)
+    if hover or shell <= 0:
+        if changed == "player":
+            player = _clamp_px(player, player_min, player_max)
+            clips = _clamp_px(shell - player, clips_min, clips_max)
+        player = max(0, shell - clips)
+        if player < player_min or player > player_max:
+            player = _clamp_px(player, player_min, player_max)
+            clips = _clamp_px(max(0, shell - player), clips_min, clips_max)
+            player = max(0, shell - clips)
+        return clips, player, queue
+
+    if changed == "player":
+        player = _clamp_px(player, player_min, player_max)
+        queue = _clamp_px(shell - clips - player, queue_min, queue_max)
+        clips = _clamp_px(shell - player - queue, clips_min, clips_max)
+        queue = _clamp_px(shell - clips - player, queue_min, queue_max)
+        player = max(0, shell - clips - queue)
+        return clips, player, queue
+
+    if changed == "queue":
+        player = shell - clips - queue
+        if player < player_min or player > player_max:
+            player = _clamp_px(player, player_min, player_max)
+            queue = _clamp_px(shell - clips - player, queue_min, queue_max)
+            player = max(0, shell - clips - queue)
+        return clips, player, queue
+
+    player = shell - clips - queue
+    if player < player_min or player > player_max:
+        player = _clamp_px(player, player_min, player_max)
+        clips = _clamp_px(shell - player - queue, clips_min, clips_max)
+        player = max(0, shell - clips - queue)
+    return clips, max(0, player), queue
+
+
+def percent_at_least(pixels: int, total: int) -> int:
+    """Smallest whole percent of ``total`` that is still at least ``pixels`` wide."""
+    total = int(total or 0)
+    pixels = max(0, int(pixels))
+    if total <= 0 or pixels <= 0:
+        return 0
+    return max(0, min(100, (pixels * 100 + total - 1) // total))
+
+
+def percent_at_most(pixels: int, total: int) -> int:
+    """Largest whole percent of ``total`` that is no wider than ``pixels``."""
+    total = int(total or 0)
+    pixels = max(0, int(pixels))
+    if total <= 0:
+        return 0
+    return max(0, min(100, pixels * 100 // total))
+
+
+def shell_percents_to_pixels(
+    clips: int,
+    player: int,
+    queue: int,
+    *,
+    shell: int,
+    window: int,
+    hover: bool,
+) -> tuple[int, int, int]:
+    """Turn pane percents into pixels. Hover queue is a percent of the window."""
+    shell = max(0, int(shell))
+    window = max(0, int(window))
+    if hover:
+        pair = max(int(clips) + int(player), 1)
+        clips_w = shell * int(clips) // pair if shell else 0
+        player_w = max(0, shell - clips_w)
+        queue_w = (window or shell) * int(queue) // 100
+        return clips_w, player_w, queue_w
+    clips_w = shell * int(clips) // 100
+    queue_w = shell * int(queue) // 100
+    return clips_w, max(0, shell - clips_w - queue_w), queue_w
+
+
+def shell_pixels_to_percents(
+    clips: int,
+    player: int,
+    queue: int,
+    *,
+    shell: int,
+    window: int,
+    hover: bool,
+) -> tuple[int, int, int]:
+    """Turn pane pixels back into percents that match ``shell_percents_to_pixels``."""
+    shell = max(0, int(shell))
+    window = max(0, int(window))
+    if hover:
+        pair = max(int(clips) + int(player), 1)
+        clips_pct = int(round(100 * int(clips) / pair))
+        clips_pct = max(0, min(100, clips_pct))
+        base = window or shell or 1
+        queue_pct = int(round(100 * int(queue) / base))
+        return clips_pct, 100 - clips_pct, max(0, min(100, queue_pct))
+    total = max(int(clips) + int(player) + int(queue), 1)
+    clips_pct = max(0, min(100, int(round(100 * int(clips) / total))))
+    queue_pct = max(0, min(100, int(round(100 * int(queue) / total))))
+    if clips_pct + queue_pct > 100:
+        queue_pct = 100 - clips_pct
+    return clips_pct, 100 - clips_pct - queue_pct, queue_pct
 
 
 def horizontal_shell_chrome() -> int:
