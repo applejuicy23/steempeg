@@ -718,6 +718,27 @@ def saved_shell_pane_percents(settings: dict | None) -> tuple[int, int, int] | N
     return normalize_shell_pane_percents(data.get(KEY_SHELL_PANE_PERCENTS))
 
 
+def read_shell_pane_percents(settings: dict | None) -> tuple[int, int, int] | None:
+    """Return the stored triple without scaling it back to 100.
+
+    Hover mode keeps the queue number as an overlay percent of the window.
+    Rescaling the three together would steal that width from Clips and the player.
+    """
+    data = settings or {}
+    if KEY_SHELL_PANE_PERCENTS not in data:
+        return None
+    value = data.get(KEY_SHELL_PANE_PERCENTS)
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    nums: list[int] = []
+    for part in value:
+        try:
+            nums.append(max(0, min(100, int(part))))
+        except (TypeError, ValueError):
+            return None
+    return (nums[0], nums[1], nums[2])
+
+
 # ----- Update Center: Keep when updating -----
 
 KEY_UPDATE_KEEP_WHEN = "update_keep_when_updating"
