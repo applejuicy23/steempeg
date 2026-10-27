@@ -70,6 +70,24 @@ _PLATFORM_ASSET = {
     "steamdeck": "steamdeck.png",
 }
 
+def _release_date_label(published: str) -> str:
+    """``2026-10-28T…`` → ``28 Oct 2026``. Empty when the catalog has no date."""
+    text = (published or "").strip()
+    if len(text) < 10 or text[4] != "-" or text[7] != "-":
+        return ""
+    months = (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    )
+    try:
+        month = months[int(text[5:7]) - 1]
+        day = int(text[8:10])
+        year = text[0:4]
+    except (ValueError, IndexError):
+        return ""
+    return f"{day} {month} {year}"
+
+
 def _row_stylesheet(*, band: str, selected: bool, indent: bool) -> str:
     from steempeg.ui import ui_theme as ut
 
@@ -541,6 +559,8 @@ class _VersionRow(QFrame):
         outer.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         label = entry.tag_name or f"v{entry.version_str}"
+        if entry.milestones:
+            label = f"★ {label}"
         color = version_label_color(
             entry.version_float,
             installed=installed,
@@ -911,13 +931,27 @@ class UpdateCenterDialog(SteempegDialog):
         self._notes_label.setStyleSheet(tok.STYLE_PANEL_HEADING)
         right.addWidget(self._notes_label)
 
+        notes_sub = QHBoxLayout()
+        notes_sub.setContentsMargins(0, 0, 0, 0)
+        notes_sub.setSpacing(12)
         self._notes_subtitle = QLabel("Changelog for the selected version.")
         self._notes_subtitle.setWordWrap(True)
         self._notes_subtitle.setStyleSheet(
             f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
             "font-size: 11px; background: transparent;"
         )
-        right.addWidget(self._notes_subtitle)
+        notes_sub.addWidget(self._notes_subtitle, 1)
+        self._notes_date = QLabel("")
+        self._notes_date.setStyleSheet(
+            f"color: {tok.TEXT_MUTED}; font-family: {tok.FONT_APP}; "
+            "font-size: 11px; background: transparent;"
+        )
+        notes_sub.addWidget(
+            self._notes_date,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        right.addLayout(notes_sub)
 
         self._notes = QTextEdit()
         self._notes.setReadOnly(True)
@@ -1264,6 +1298,7 @@ class UpdateCenterDialog(SteempegDialog):
                 widget.set_selected_entry(entry)
         ver = (entry.version_str or "").strip() or "?"
         self._notes_label.setText(f"What's new in v{ver}")
+        self._notes_date.setText(_release_date_label(entry.published_at))
         self._notes_image_loader = _render_release_notes(self._notes, entry.body, self)
 
         notice = selection_notice(entry, APP_VERSION_FLOAT)
