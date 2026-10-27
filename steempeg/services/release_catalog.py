@@ -6,13 +6,16 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 import requests
 
 REPO = "applejuicy23/steempeg"
 API_BASE = f"https://api.github.com/repos/{REPO}/releases"
+# Public changelog. The release list and notes live here; GitHub API is the fallback.
+CHANGELOG_INDEX_URL = "https://applejuicy23.github.io/steempeg/changelog/index.json"
+CHANGELOG_RELEASES_URL = "https://applejuicy23.github.io/steempeg/changelog/releases.json"
 HEADERS = {"User-Agent": "Steempeg-Updater"}
 
 # Install policy (see Steempegold smpeg8/9/12.1/16 for era references).
@@ -466,6 +469,90 @@ def version_label_color(
     return _lerp_color(COLOR_VERSION_STABLE, COLOR_VERSION_RISKY, fade)
 
 
+def _version_major_key(version: tuple[int, ...]) -> str:
+    """``(50, 0)`` and ``(50,)`` are ``50``. ``(50, 1)`` stays ``50.1``."""
+    parts = [str(part) for part in version]
+    while len(parts) > 1 and parts[-1] == "0":
+        parts.pop()
+    return ".".join(parts)
+
+
+def fetch_site_majors(*, timeout: float = 8.0) -> dict[str, tuple[str, str]]:
+    """Read major labels from the public changelog. Empty when Pages is unreachable.
+
+    Keys match ``_version_major_key``. Values are ``(label, detail)``.
+    """
+    try:
+        response = requests.get(CHANGELOG_INDEX_URL, headers=HEADERS, timeout=timeout)
+    except requests.RequestException:
+        logging.warning("RELEASE_CATALOG: changelog index unreachable")
+        return {}
+    if response.status_code != 200:
+        logging.warning(
+            "RELEASE_CATALOG: changelog index returned %s", response.status_code
+        )
+        return {}
+    try:
+        payload = response.json()
+    except ValueError:
+        logging.warning("RELEASE_CATALOG: changelog index was not JSON")
+        return {}
+    rows = payload.get("versions") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    majors: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("major") or "").strip()
+        version = str(row.get("version") or "").strip()
+        if not label or not version:
+            continue
+        try:
+            parts = tuple(int(part) for part in version.split(".") if part.isdigit())
+        except ValueError:
+            continue
+        if not parts:
+            continue
+        detail = str(row.get("major_detail") or "").strip()
+        majors[_version_major_key(parts)] = (label, detail)
+    logging.info("RELEASE_CATALOG: site majors %s", len(majors))
+    return majors
+
+
+def apply_site_majors(
+    releases: list[ReleaseEntry],
+    majors: dict[str, tuple[str, str]],
+) -> list[ReleaseEntry]:
+    """Replace built-in milestones with the site label when the site names that version.
+
+    Versions the site does not mark keep their built-in milestones, so a missing
+    index does not strip the stars already shipped in the app.
+    """
+    if not majors:
+        return releases
+    updated: list[ReleaseEntry] = []
+    for entry in releases:
+        found = majors.get(_version_major_key(entry.version))
+        if not found:
+            updated.append(entry)
+            continue
+        label, detail = found
+        milestone = VersionMilestone(
+            entry.version_float,
+            "⭐",
+            label,
+            detail or label,
+        )
+        updated.append(replace(entry, milestones=(milestone,)))
+    return updated
+
+
+def overlay_site_majors(releases: list[ReleaseEntry]) -> list[ReleaseEntry]:
+    """Fetch the public major list and apply it. The catalog is unchanged on failure."""
+    return apply_site_majors(releases, fetch_site_majors())
+
+
 def shows_info_icon(entry: ReleaseEntry) -> bool:
     """(i) only on keyed Early builds v8–v11, and on v12+ milestone releases."""
     if entry.version_float < 12.0 - 0.001:
@@ -896,8 +983,54 @@ def _looks_like_transport_block(exc: BaseException) -> bool:
     return any(n in text for n in needles)
 
 
+def _fetch_releases_from_pages(*, timeout: float) -> list[ReleaseEntry] | None:
+    """Read the release list and notes published with the site.
+
+    Returns None when Pages has no catalog yet or the file cannot be read,
+    so the caller can fall back to the GitHub API.
+    """
+    try:
+        response = requests.get(CHANGELOG_RELEASES_URL, headers=HEADERS, timeout=timeout)
+    except requests.RequestException:
+        logging.warning("RELEASE_CATALOG: Pages catalog unreachable")
+        return None
+    if response.status_code != 200:
+        logging.warning("RELEASE_CATALOG: Pages catalog returned %s", response.status_code)
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        logging.warning("RELEASE_CATALOG: Pages catalog was not JSON")
+        return None
+    rows = payload.get("releases") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list) or not rows:
+        return None
+    releases: list[ReleaseEntry] = []
+    for item in rows:
+        if not isinstance(item, dict) or item.get("draft"):
+            continue
+        entry = parse_release(item)
+        if entry is not None:
+            releases.append(entry)
+    if not releases:
+        return None
+    releases.sort(key=lambda entry: version_key(entry.version), reverse=True)
+    logging.info("RELEASE_CATALOG: fetched %s releases from Pages", len(releases))
+    return releases
+
+
 def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[ReleaseEntry]:
-    """Fetch all public releases, newest first."""
+    """Fetch all public releases, newest first.
+
+    The site catalog is first. The GitHub API is used only when that file
+    is missing or unreadable. A successful list is written to the offline cache.
+    """
+    pages = _fetch_releases_from_pages(timeout=timeout)
+    if pages:
+        if save_cache:
+            save_releases_cache(pages)
+        return pages
+    logging.info("RELEASE_CATALOG: Pages catalog missed, asking GitHub")
     releases: list[ReleaseEntry] = []
     page = 1
 

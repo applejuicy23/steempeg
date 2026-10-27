@@ -714,7 +714,9 @@ class _ReleaseFetchThread(QThread):
 
     def run(self):
         try:
-            releases = fetch_releases()
+            from steempeg.services.release_catalog import overlay_site_majors
+
+            releases = overlay_site_majors(fetch_releases())
             self.finished_ok.emit(releases)
         except FetchError as exc:
             if exc.rate_limit:
@@ -1177,8 +1179,18 @@ class UpdateCenterDialog(SteempegDialog):
         self._group_widgets.clear()
 
     def _on_releases_loaded(self, releases: list, *, from_cache: bool = False):
-        new_tags = [entry.tag_name for entry in releases]
-        old_tags = [entry.tag_name for entry in self._releases] if self._releases else []
+        new_tags = [
+            (entry.tag_name, tuple(m.short_label for m in entry.milestones))
+            for entry in releases
+        ]
+        old_tags = (
+            [
+                (entry.tag_name, tuple(m.short_label for m in entry.milestones))
+                for entry in self._releases
+            ]
+            if self._releases
+            else []
+        )
         if (
             self._row_widgets
             and new_tags == old_tags
