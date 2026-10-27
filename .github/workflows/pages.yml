@@ -10,8 +10,9 @@ on:
       - "assets/logo.png"
       - "docs/readme/**"
       - ".github/workflows/pages.yml"
-  release:
-    types: [published]
+  # A published release is not built here. The github-pages environment
+  # rejects tags, so pages-on-release.yml starts this workflow on main.
+  # Release text still comes from the GitHub API at build time.
   workflow_dispatch:
 
 permissions:
@@ -28,10 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # A published release checks out the tag. Overlays and this script
-          # live on main, and the release text comes from the GitHub API.
-          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.sha }}
 
       - uses: actions/setup-python@v5
         with:

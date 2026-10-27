@@ -1,0 +1,22 @@
+# A published release runs as the tag. github-pages only deploys from main,
+# so this starts the Pages workflow there. The site build reads the new
+# release text from the GitHub API.
+
+name: Pages on release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild the site from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --ref main
