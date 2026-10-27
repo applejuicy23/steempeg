@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Changelog — Steempeg</title>
+  <meta name="description" content="What changed in each Steempeg release.">
+  <link rel="icon" href="assets/logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="changelog.css">
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header class="top">
+    <a class="brand" href="./">
+      <img src="assets/logo.png" alt="" width="36" height="36">
+      <span>Steempeg</span>
+    </a>
+    <nav class="nav">
+      <a href="changelog.html" aria-current="page">Changelog</a>
+      <a href="docs/getting-started/">Getting Started</a>
+      <a href="docs/">Docs</a>
+      <a href="donate.html">Donate Me</a>
+      <a class="nav-download" href="https://github.com/applejuicy23/steempeg/releases/latest">Download</a>
+    </nav>
+  </header>
+
+  <main class="cl-main">
+    <h1>Changelog</h1>
+    <p class="cl-lede">Every public release. Open a version to read what changed. Screenshots load with that version.</p>
+    <div class="cl-filters" role="group" aria-label="Filter notes"></div>
+    <div class="cl-layout">
+      <div class="cl-list" id="cl-list">
+        <p class="cl-status">Loading versions…</p>
+      </div>
+      <article class="cl-notes" id="cl-notes">
+        <p class="cl-status">Pick a version.</p>
+      </article>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <span>© Steempeg · GPL-3.0</span>
+    <a href="https://github.com/applejuicy23/steempeg">Source</a>
+    <a href="docs/">Documentation</a>
+  </footer>
+
+  <dialog class="cl-lightbox" id="cl-lightbox">
+    <img alt="" id="cl-lightbox-img">
+  </dialog>
+
+  <script>
+    const FILTERS = [
+      { id: "all", label: "All" },
+      { id: "new", label: "New" },
+      { id: "improvements", label: "Improvements" },
+      { id: "fixes", label: "Fixes" },
+    ];
+    const SECTION_TITLES = {
+      new: "New",
+      improvements: "Improvements",
+      fixes: "Fixes",
+      other: "Also",
+    };
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const state = {
+      filter: "all",
+      versions: [],
+      openTag: "",
+      notes: new Map(),
+    };
+
+    const listEl = document.getElementById("cl-list");
+    const notesEl = document.getElementById("cl-notes");
+    const filtersEl = document.querySelector(".cl-filters");
+    const lightbox = document.getElementById("cl-lightbox");
+    const lightboxImg = document.getElementById("cl-lightbox-img");
+
+    function formatDate(value) {
+      const parts = String(value || "").split("-");
+      if (parts.length !== 3) return value || "";
+      const month = MONTHS[Number(parts[1]) - 1];
+      if (!month) return value;
+      return Number(parts[2]) + " " + month + " " + parts[0];
+    }
+
+    function countLine(counts) {
+      const bits = [];
+      if (counts.new) bits.push(counts.new + " new");
+      if (counts.improvements) bits.push(counts.improvements + " improvements");
+      if (counts.fixes) bits.push(counts.fixes + " fixes");
+      return bits.join(" | ");
+    }
+
+    function visibleVersions() {
+      if (state.filter === "all") return state.versions;
+      return state.versions.filter(function (row) {
+        return Number((row.counts || {})[state.filter] || 0) > 0;
+      });
+    }
+
+    function renderFilters() {
+      filtersEl.replaceChildren();
+      FILTERS.forEach(function (item) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = item.label;
+        button.setAttribute("aria-pressed", item.id === state.filter ? "true" : "false");
+        button.addEventListener("click", function () {
+          state.filter = item.id;
+          renderFilters();
+          renderList();
+          if (state.openTag) showOpen();
+        });
+        filtersEl.appendChild(button);
+      });
+    }
+
+    function renderList() {
+      const rows = visibleVersions();
+      listEl.replaceChildren();
+      if (!rows.length) {
+        const empty = document.createElement("p");
+        empty.className = "cl-status";
+        empty.textContent = "No versions in this filter.";
+        listEl.appendChild(empty);
+        return;
+      }
+      rows.forEach(function (row) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "cl-version";
+        button.setAttribute("aria-expanded", row.tag === state.openTag ? "true" : "false");
+        const top = document.createElement("span");
+        top.className = "cl-version-top";
+        const name = document.createElement("span");
+        name.textContent = (row.major ? "★ " : "") + "v" + row.version;
+        const time = document.createElement("time");
+        time.dateTime = row.date || "";
+        time.textContent = formatDate(row.date);
+        top.append(name, time);
+        const title = document.createElement("p");
+        title.textContent = row.title || "";
+        const counts = document.createElement("p");
+        counts.className = "cl-counts";
+        counts.textContent = countLine(row.counts || {});
+        button.append(top, title, counts);
+        if (row.major && row.major_detail) {
+          button.title = row.major + ": " + row.major_detail;
+        }
+        button.addEventListener("click", function () {
+          openVersion(row);
+        });
+        listEl.appendChild(button);
+      });
+    }
+
+    function sectionNames() {
+      if (state.filter === "all") return ["new", "improvements", "fixes", "other"];
+      return [state.filter];
+    }
+
+    function openLightbox(src, alt) {
+      lightboxImg.src = src;
+      lightboxImg.alt = alt || "";
+      lightbox.showModal();
+    }
+
+    function addShots(parent, images) {
+      if (!images || !images.length) return;
+      const row = document.createElement("div");
+      row.className = "cl-shots";
+      images.forEach(function (src) {
+        const button = document.createElement("button");
+        button.type = "button";
+        const img = document.createElement("img");
+        img.src = "changelog/" + src.replace(/^\/+/, "");
+        img.alt = "";
+        img.loading = "lazy";
+        if (/^https?:\/\//.test(src)) img.src = src;
+        button.addEventListener("click", function () {
+          openLightbox(img.src, img.alt);
+        });
+        button.appendChild(img);
+        row.appendChild(button);
+      });
+      parent.appendChild(row);
+    }
+
+    function renderNotes(payload) {
+      notesEl.replaceChildren();
+      const head = document.createElement("div");
+      head.className = "cl-notes-head";
+      const titles = document.createElement("div");
+      const heading = document.createElement("h2");
+      heading.textContent = payload.title || ("v" + payload.version);
+      titles.appendChild(heading);
+      if (payload.major) {
+        const major = document.createElement("p");
+        major.className = "cl-major";
+        major.textContent = "⭐ " + payload.major;
+        if (payload.major_detail) {
+          major.title = payload.major + ": " + payload.major_detail;
+        }
+        titles.appendChild(major);
+      }
+      const when = formatDate(payload.date);
+      const time = document.createElement("time");
+      time.dateTime = payload.date || "";
+      time.textContent = when;
+      head.append(titles, time);
+      const meta = document.createElement("p");
+      meta.className = "cl-meta";
+      if (payload.html_url) {
+        const link = document.createElement("a");
+        link.href = payload.html_url;
+        link.textContent = "View on GitHub";
+        meta.appendChild(link);
+      }
+      notesEl.append(head, meta);
+      const sections = payload.sections || {};
+      let shown = 0;
+      sectionNames().forEach(function (name) {
+        const items = sections[name] || [];
+        if (!items.length) return;
+        shown += 1;
+        const block = document.createElement("section");
+        block.className = "cl-section";
+        const title = document.createElement("h3");
+        title.textContent = SECTION_TITLES[name] || name;
+        const list = document.createElement("ul");
+        items.forEach(function (item) {
+          const li = document.createElement("li");
+          li.textContent = item.text || "";
+          addShots(li, item.images || []);
+          if (!item.text && (item.images || []).length) li.textContent = "";
+          list.appendChild(li);
+        });
+        block.append(title, list);
+        notesEl.appendChild(block);
+      });
+      if (!shown) {
+        const empty = document.createElement("p");
+        empty.className = "cl-status";
+        empty.textContent = "Nothing in this filter.";
+        notesEl.appendChild(empty);
+      }
+    }
+
+    function showOpen() {
+      const payload = state.notes.get(state.openTag);
+      if (payload) renderNotes(payload);
+    }
+
+    function openVersion(row) {
+      state.openTag = row.tag;
+      history.replaceState(null, "", "#v" + row.version);
+      renderList();
+      if (state.notes.has(row.tag)) {
+        renderNotes(state.notes.get(row.tag));
+        return;
+      }
+      notesEl.replaceChildren();
+      const waiting = document.createElement("p");
+      waiting.className = "cl-status";
+      waiting.textContent = "Loading notes…";
+      notesEl.appendChild(waiting);
+      fetch("changelog/" + row.file)
+        .then(function (response) {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.json();
+        })
+        .then(function (payload) {
+          state.notes.set(row.tag, payload);
+          if (state.openTag === row.tag) renderNotes(payload);
+        })
+        .catch(function () {
+          if (state.openTag !== row.tag) return;
+          notesEl.replaceChildren();
+          const failed = document.createElement("p");
+          failed.className = "cl-status";
+          failed.textContent = "Could not load this version.";
+          notesEl.appendChild(failed);
+        });
+    }
+
+    lightbox.addEventListener("click", function () {
+      lightbox.close();
+    });
+
+    renderFilters();
+    fetch("changelog/index.json")
+      .then(function (response) {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.json();
+      })
+      .then(function (index) {
+        state.versions = index.versions || [];
+        renderList();
+        const wanted = decodeURIComponent(location.hash.replace(/^#/, ""));
+        const match = state.versions.find(function (row) {
+          return ("v" + row.version) === wanted || row.tag === wanted;
+        });
+        if (match) openVersion(match);
+      })
+      .catch(function () {
+        listEl.replaceChildren();
+        const failed = document.createElement("p");
+        failed.className = "cl-status";
+        failed.textContent = "Changelog is not published yet.";
+        listEl.appendChild(failed);
+      });
+  </script>
+</body>
+</html>

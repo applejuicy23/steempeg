@@ -10,6 +10,8 @@ on:
       - "assets/logo.png"
       - "docs/readme/**"
       - ".github/workflows/pages.yml"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -26,6 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A published release checks out the tag. Overlays and this script
+          # live on main, and the release text comes from the GitHub API.
+          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -37,11 +43,14 @@ jobs:
         run: pip install -r website/requirements.txt
 
       - name: Assemble public site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           rm -rf public
-          mkdir -p public/assets public/media
-          cp website/landing/index.html website/landing/styles.css website/landing/donate.html website/landing/steempeg-meta.json public/
+          mkdir -p public/assets public/media public/changelog
+          python website/build_changelog.py --out public/changelog
+          cp website/landing/index.html website/landing/styles.css website/landing/changelog.html website/landing/changelog.css website/landing/donate.html website/landing/steempeg-meta.json public/
           cp assets/logo.png public/assets/logo.png
           # Product screenshots (README gallery)
           cp docs/readme/steempeg50_1.png public/media/
