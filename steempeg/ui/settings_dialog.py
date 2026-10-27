@@ -1393,15 +1393,8 @@ class SettingsDialog(SteempegDialog):
         # ----- PRO -----
         pro_page, pro_lay = _tab_page()
         self._steempeg_pro = bool(load_steempeg_pro(settings))
-        pro_lay.addWidget(self._section("Steempeg PRO"))
         self._pro_banner = self._build_pro_promo_banner()
         pro_lay.addWidget(self._pro_banner)
-        pro_lay.addWidget(
-            self._hint(
-                "PRO is free brand chrome for now (title-bar badge, red splash, "
-                "About accents). Converter extras will land here later."
-            )
-        )
         pro_lay.addStretch(1)
         self._settings_pages.append(("PRO", pro_page, pro_lay))
 
@@ -1571,7 +1564,11 @@ class SettingsDialog(SteempegDialog):
             root.addWidget(tabs, 1)
             return
 
-        for _title, _page, page_layout in self._settings_pages:
+        for title, _page, page_layout in self._settings_pages:
+            # PRO is only the red banner. A section card would paint a gray
+            # frame around it and shrink the banner inside the card padding.
+            if title == "PRO":
+                continue
             settings_layouts.regroup_page_into_cards(page_layout)
         pages = [(title, page) for title, page, _layout in self._settings_pages]
 
@@ -1728,6 +1725,7 @@ class SettingsDialog(SteempegDialog):
         frame = QFrame()
         frame.setObjectName("ProPromoBanner")
         frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         frame.setStyleSheet(
             f"""
             QFrame#ProPromoBanner {{
@@ -1870,7 +1868,7 @@ class SettingsDialog(SteempegDialog):
         if isinstance(pitch, QLabel):
             if enabled:
                 pitch.setText(
-                    "You're on Steempeg PRO — title-bar badge and red splash are live."
+                    "You're on Steempeg PRO."
                 )
             else:
                 pitch.setText("Get it now for free.")
