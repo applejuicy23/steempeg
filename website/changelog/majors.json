@@ -1,0 +1,118 @@
+{
+  "55": {
+    "label": "Installer and Express",
+    "detail": "Per-user Windows installer; tray background with a new-clip popup; Express player and Express render."
+  },
+  "53": {
+    "label": "Smart Deletor",
+    "detail": "A closable tab beside the Render Queue: rules for size, duration, health, age and game."
+  },
+  "51": {
+    "label": "Steempeg PRO",
+    "detail": "About PRO badge and red accents; Settings PRO tab; Donate Me on the title bar."
+  },
+  "50": {
+    "label": "Product site",
+    "detail": "GitHub Pages landing + Docs; library Size chrome; stock Desktop title-bar tools; TrueDark OLED."
+  },
+  "49": {
+    "label": "Progressive library",
+    "detail": "Viewport-lazy Clips on launch; Create… presets; Console mode; Marker Settings by game."
+  },
+  "43": {
+    "label": "Skip library startup",
+    "detail": "Session snapshot paints Clips / Rendered / Screenshots instantly; expanded Main Settings."
+  },
+  "42": {
+    "label": "Visual settings",
+    "detail": "Game-icon shapes and player-header layout; Clip info chip and popup; permanent export folder."
+  },
+  "41": {
+    "label": "Export presets",
+    "detail": "Named Video/Audio/Export presets; custom marker classes; title-bar Check for Updates."
+  },
+  "40": {
+    "label": "Linux, Deck, channels",
+    "detail": "First desktop Linux build, Steam Deck channel, and per-platform Update Center zips."
+  },
+  "38": {
+    "label": "Fast library refresh",
+    "detail": "Background scan, clip posters, live preview quality ladder, and encode-speed presets."
+  },
+  "37": {
+    "label": "Update Center",
+    "detail": "Browse and install any GitHub release, upgrade or downgrade, with backup and a detached updater."
+  },
+  "36": {
+    "label": "Frameless chrome",
+    "detail": "Custom title bar with traffic lights; chrome color themes; dead-clip salvage."
+  },
+  "35": {
+    "label": "Export codecs and presets",
+    "detail": "MP4/MKV/MOV/WebM and codecs; Share/Edit/Web named presets; honest source bitrate."
+  },
+  "34": {
+    "label": "Rendered library",
+    "detail": "Rendered videos tab with filters and a companion meta sidecar."
+  },
+  "33": {
+    "label": "Queue grid and history",
+    "detail": "Render queue thumbnail grid and batch export history."
+  },
+  "32": {
+    "label": "Multi-folder library",
+    "detail": "Scan multiple Steam recording folders; clip health indicators; bug reports."
+  },
+  "30": {
+    "label": "Render queue",
+    "detail": "Batch render queue with drag-reorder; Steam marker icons loaded automatically."
+  },
+  "29": {
+    "label": "UI redesign kickoff",
+    "detail": "Global UI overhaul start; in-player screenshots and markers."
+  },
+  "27": {
+    "label": "Sort and filter",
+    "detail": "Clips Manager filter by game and type; marker-to-trim snapping."
+  },
+  "26": {
+    "label": "Custom markers",
+    "detail": "Drop custom timeline markers; advanced trim snap tools."
+  },
+  "22": {
+    "label": "Clips grid",
+    "detail": "Clips library grid view with a grid and list toggle."
+  },
+  "20": {
+    "label": "Timeline markers",
+    "detail": "CS2 and JSON timeline markers, hover preview, and a zoomable ruler."
+  },
+  "16": {
+    "label": "MPV player",
+    "detail": "VLC replaced with mpv; download, unzip and updater.bat."
+  },
+  "12.1": {
+    "label": "Zip installer",
+    "detail": "First working in-app zip download and install."
+  },
+  "12": {
+    "label": "Broken release",
+    "detail": "Do not install. Shipped dead. Use v12.1."
+  },
+  "11": {
+    "label": "VLC player",
+    "detail": "VLC-based video playback."
+  },
+  "10": {
+    "label": "Early player",
+    "detail": "Early player update."
+  },
+  "9": {
+    "label": "UI update",
+    "detail": "UI refresh."
+  },
+  "8": {
+    "label": "Early dev",
+    "detail": "Select Clip and Render only."
+  }
+}
