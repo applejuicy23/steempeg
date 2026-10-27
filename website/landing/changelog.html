@@ -21,9 +21,9 @@
       <span>Steempeg</span>
     </a>
     <nav class="nav">
-      <a href="changelog.html" aria-current="page">Changelog</a>
       <a href="docs/getting-started/">Getting Started</a>
       <a href="docs/">Docs</a>
+      <a href="changelog.html" aria-current="page">Changelog</a>
       <a href="donate.html">Donate Me</a>
       <a class="nav-download" href="https://github.com/applejuicy23/steempeg/releases/latest">Download</a>
     </nav>
@@ -38,7 +38,7 @@
         <p class="cl-status">Loading versions…</p>
       </div>
       <article class="cl-notes" id="cl-notes">
-        <p class="cl-status">Pick a version.</p>
+        <p class="cl-status">Loading notes…</p>
       </article>
     </div>
   </main>
@@ -59,6 +59,7 @@
       { id: "new", label: "New" },
       { id: "improvements", label: "Improvements" },
       { id: "fixes", label: "Fixes" },
+      { id: "major", label: "Major" },
     ];
     const SECTION_TITLES = {
       new: "New",
@@ -99,6 +100,11 @@
 
     function visibleVersions() {
       if (state.filter === "all") return state.versions;
+      if (state.filter === "major") {
+        return state.versions.filter(function (row) {
+          return !!row.major;
+        });
+      }
       return state.versions.filter(function (row) {
         return Number((row.counts || {})[state.filter] || 0) > 0;
       });
@@ -161,7 +167,9 @@
     }
 
     function sectionNames() {
-      if (state.filter === "all") return ["new", "improvements", "fixes", "other"];
+      if (state.filter === "all" || state.filter === "major") {
+        return ["new", "improvements", "fixes", "other"];
+      }
       return [state.filter];
     }
 
@@ -307,6 +315,7 @@
           return ("v" + row.version) === wanted || row.tag === wanted;
         });
         if (match) openVersion(match);
+        else if (state.versions.length) openVersion(state.versions[0]);
       })
       .catch(function () {
         listEl.replaceChildren();
