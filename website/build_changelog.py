@@ -303,7 +303,55 @@ def build_changelog(releases: list[dict], overlay_root: Path, out_dir: Path) -> 
         json.dumps(index, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    (out_dir / "releases.json").write_text(
+        json.dumps(
+            {"releases": [_catalog_release(item, overlay_root) for item in releases if not item.get("draft")]},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     return index
+
+
+def _catalog_release(release: dict, overlay_root: Path) -> dict:
+    """One release in the shape Update Center already parses, without the GitHub API.
+
+    Only zip assets are kept: the app installs from those. The installer exe
+    is not an update download.
+    """
+    assets = []
+    for asset in release.get("assets") or []:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        if not name.lower().endswith(".zip"):
+            continue
+        assets.append(
+            {
+                "name": name,
+                "browser_download_url": asset.get("browser_download_url") or "",
+                "size": asset.get("size"),
+                "digest": asset.get("digest") or "",
+            }
+        )
+    tag = str(release.get("tag_name") or "")
+    name = str(release.get("name") or tag)
+    body = str(release.get("body") or "")
+    notes = overlay_root / _version_label(tag, name) / "notes.md"
+    if notes.is_file():
+        extra = notes.read_text(encoding="utf-8").strip()
+        if extra:
+            body = body.rstrip() + "\n\n" + extra
+    return {
+        "tag_name": tag,
+        "name": name,
+        "body": body,
+        "html_url": release.get("html_url") or "",
+        "published_at": release.get("published_at") or "",
+        "draft": False,
+        "assets": assets,
+    }
 
 
 def fetch_releases(token: str | None = None) -> list[dict]:
