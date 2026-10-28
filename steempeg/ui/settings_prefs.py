@@ -624,6 +624,35 @@ def save_hide_update_available_badge(app, hide: bool) -> None:
     )
 
 
+# ----- Settings dialog helper lines -----
+
+KEY_HIDE_SETTINGS_HINTS = "hide_settings_hints"
+DEFAULT_HIDE_SETTINGS_HINTS = False
+
+
+def normalize_hide_settings_hints(value: object | None) -> bool:
+    """Stock off: helper lines stay. Explicit true hides every optional hint."""
+    if value is None:
+        return DEFAULT_HIDE_SETTINGS_HINTS
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return DEFAULT_HIDE_SETTINGS_HINTS
+
+
+def load_hide_settings_hints(settings: dict | None) -> bool:
+    """Read whether Settings should hide its helper lines."""
+    if settings is None or KEY_HIDE_SETTINGS_HINTS not in settings:
+        return DEFAULT_HIDE_SETTINGS_HINTS
+    return normalize_hide_settings_hints(settings.get(KEY_HIDE_SETTINGS_HINTS))
+
+
 # ----- Tray / background mode -----
 
 # Red close button hides the main window to the tray instead of quitting.
