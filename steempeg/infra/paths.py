@@ -26,13 +26,35 @@ def is_frozen_build() -> bool:
     return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
 
 
+def onefile_home() -> str | None:
+    """Directory of the Nuitka onefile executable, when this process is its payload.
+
+    The payload runs from a temporary unpack folder. Settings, cache and renders
+    belong next to the file the user launched. Unset for standalone builds.
+    """
+    home = os.environ.get("NUITKA_ONEFILE_DIRECTORY", "").strip()
+    if home and os.path.isdir(home):
+        return os.path.abspath(home)
+    return None
+
+
 def running_executable() -> str:
     """Program file to start when this process should launch again.
 
     Nuitka standalone sets ``sys.executable`` to ``python.exe`` beside the
     binary and does not ship that file, so spawning it raises WinError 2.
-    ``sys.argv[0]`` is the real ``Steempeg.exe``.
+    ``sys.argv[0]`` is the real ``Steempeg.exe``. A onefile payload must
+    relaunch the executable the user started, not the copy in the temp folder.
     """
+    original = os.environ.get("NUITKA_ORIGINAL_ARGV0", "").strip().strip('"')
+    if original:
+        if os.path.isfile(original):
+            return os.path.abspath(original)
+        home = onefile_home()
+        if home:
+            beside = os.path.join(home, os.path.basename(original))
+            if os.path.isfile(beside):
+                return os.path.abspath(beside)
     if is_frozen_build():
         install = os.path.dirname(os.path.abspath(sys.executable or (sys.argv[0] if sys.argv else "")))
         candidates = []
@@ -94,7 +116,7 @@ def get_resource_path(relative_path):
 
 def get_save_directory():
     """Return the default folder where the program saves videos, caches and logs."""
-    return get_install_root()
+    return onefile_home() or get_install_root()
 
 
 def display_path(path: str) -> str:
