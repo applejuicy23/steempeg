@@ -13,7 +13,8 @@ import requests
 
 REPO = "applejuicy23/steempeg"
 API_BASE = f"https://api.github.com/repos/{REPO}/releases"
-# Public changelog. The release list and notes live here; GitHub API is the fallback.
+# Public changelog. Notes come from here. GitHub still supplies zip assets the
+# site snapshot does not have yet.
 CHANGELOG_INDEX_URL = "https://applejuicy23.github.io/steempeg/changelog/index.json"
 CHANGELOG_RELEASES_URL = "https://applejuicy23.github.io/steempeg/changelog/releases.json"
 HEADERS = {"User-Agent": "Steempeg-Updater"}
@@ -983,12 +984,8 @@ def _looks_like_transport_block(exc: BaseException) -> bool:
     return any(n in text for n in needles)
 
 
-def _fetch_releases_from_pages(*, timeout: float) -> list[ReleaseEntry] | None:
-    """Read the release list and notes published with the site.
-
-    Returns None when Pages has no catalog yet or the file cannot be read,
-    so the caller can fall back to the GitHub API.
-    """
+def _fetch_pages_release_rows(*, timeout: float) -> list[dict] | None:
+    """Raw site catalog rows, or None when Pages has no readable catalog."""
     try:
         response = requests.get(CHANGELOG_RELEASES_URL, headers=HEADERS, timeout=timeout)
     except requests.RequestException:
@@ -1005,6 +1002,90 @@ def _fetch_releases_from_pages(*, timeout: float) -> list[ReleaseEntry] | None:
     rows = payload.get("releases") if isinstance(payload, dict) else payload
     if not isinstance(rows, list) or not rows:
         return None
+    cleaned = [item for item in rows if isinstance(item, dict) and not item.get("draft")]
+    if not cleaned:
+        return None
+    logging.info("RELEASE_CATALOG: fetched %s releases from Pages", len(cleaned))
+    return cleaned
+
+
+def _fetch_releases_from_pages(*, timeout: float) -> list[ReleaseEntry] | None:
+    """Read the release list and notes published with the site.
+
+    Returns None when Pages has no catalog yet or the file cannot be read,
+    so the caller can fall back to the GitHub API.
+    """
+    rows = _fetch_pages_release_rows(timeout=timeout)
+    if not rows:
+        return None
+    releases = _entries_from_rows(rows)
+    return releases or None
+
+
+def _merge_asset_lists(site_assets: list | None, github_assets: list | None) -> list[dict]:
+    """Union of two asset lists. A GitHub row with a download URL wins on a name clash."""
+    by_name: dict[str, dict] = {}
+    order: list[str] = []
+    for asset in list(site_assets or []) + list(github_assets or []):
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key not in by_name:
+            order.append(key)
+            by_name[key] = asset
+            continue
+        if asset.get("browser_download_url"):
+            by_name[key] = asset
+    return [by_name[key] for key in order]
+
+
+def merge_release_catalogs(site_rows: list[dict], github_rows: list[dict]) -> list[dict]:
+    """Keep site notes, and fill in zip assets GitHub has that the site snapshot missed.
+
+    A release that exists only on GitHub is kept too. Uploading ``*_linux.zip``
+    after Pages already published the catalog must still show the Linux icon.
+    """
+    github_by_tag: dict[str, dict] = {}
+    for item in github_rows:
+        if not isinstance(item, dict) or item.get("draft"):
+            continue
+        tag = str(item.get("tag_name") or "")
+        if tag:
+            github_by_tag[tag] = item
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for item in site_rows:
+        if not isinstance(item, dict) or item.get("draft"):
+            continue
+        tag = str(item.get("tag_name") or "")
+        github = github_by_tag.get(tag)
+        if github is None:
+            merged.append(item)
+            if tag:
+                seen.add(tag)
+            continue
+        row = dict(item)
+        row["assets"] = _merge_asset_lists(item.get("assets"), github.get("assets"))
+        if not str(row.get("body") or "").strip():
+            row["body"] = github.get("body") or ""
+        if not row.get("html_url"):
+            row["html_url"] = github.get("html_url") or ""
+        if not row.get("published_at"):
+            row["published_at"] = github.get("published_at") or ""
+        merged.append(row)
+        if tag:
+            seen.add(tag)
+    for tag, github in github_by_tag.items():
+        if tag not in seen:
+            merged.append(github)
+    return merged
+
+
+def _entries_from_rows(rows: list[dict]) -> list[ReleaseEntry]:
+    """Parse catalog rows into install entries, newest version first."""
     releases: list[ReleaseEntry] = []
     for item in rows:
         if not isinstance(item, dict) or item.get("draft"):
@@ -1012,28 +1093,14 @@ def _fetch_releases_from_pages(*, timeout: float) -> list[ReleaseEntry] | None:
         entry = parse_release(item)
         if entry is not None:
             releases.append(entry)
-    if not releases:
-        return None
     releases.sort(key=lambda entry: version_key(entry.version), reverse=True)
-    logging.info("RELEASE_CATALOG: fetched %s releases from Pages", len(releases))
     return releases
 
 
-def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[ReleaseEntry]:
-    """Fetch all public releases, newest first.
-
-    The site catalog is first. The GitHub API is used only when that file
-    is missing or unreadable. A successful list is written to the offline cache.
-    """
-    pages = _fetch_releases_from_pages(timeout=timeout)
-    if pages:
-        if save_cache:
-            save_releases_cache(pages)
-        return pages
-    logging.info("RELEASE_CATALOG: Pages catalog missed, asking GitHub")
-    releases: list[ReleaseEntry] = []
+def _fetch_github_release_rows(*, timeout: float) -> list[dict]:
+    """Every public GitHub release object, including assets added after a site build."""
+    rows: list[dict] = []
     page = 1
-
     try:
         while True:
             response = requests.get(
@@ -1076,17 +1143,9 @@ def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[Re
             batch = response.json()
             if not batch:
                 break
-
             for item in batch:
-                if item.get("draft"):
-                    continue
-                entry = parse_release(item)
-                if not entry:
-                    continue
-                # List every public release. Install is gated by zip for this channel
-                # (icons show which platforms shipped; missing channel → no download).
-                releases.append(entry)
-
+                if isinstance(item, dict) and not item.get("draft"):
+                    rows.append(item)
             if len(batch) < 100:
                 break
             page += 1
@@ -1096,7 +1155,6 @@ def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[Re
         # VPN / drop / "Max retries exceeded" often masks a spent hourly quota.
         rate_limit = probe_github_rate_limit(timeout=min(timeout, 8.0))
         if rate_limit is None and _looks_like_transport_block(exc):
-            # Soft wait: show countdown dialog instead of a dead red error string.
             now = int(time.time())
             rate_limit = RateLimitInfo(reset_at=now + 60, limit=60, remaining=0)
             logging.warning(
@@ -1111,10 +1169,43 @@ def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[Re
                 rate_limit=rate_limit,
             ) from exc
         raise FetchError(f"Could not reach GitHub:\n{exc}") from exc
+    logging.info("RELEASE_CATALOG: fetched %s releases from GitHub", len(rows))
+    return rows
 
-    releases.sort(key=lambda entry: version_key(entry.version), reverse=True)
-    logging.info("RELEASE_CATALOG: fetched %s releases", len(releases))
-    if save_cache:
+
+def fetch_releases(*, timeout: float = 10.0, save_cache: bool = True) -> list[ReleaseEntry]:
+    """Fetch all public releases, newest first.
+
+    Notes come from the site catalog. GitHub is asked as well, and its zip
+    assets are merged in, so a Linux or Steam Deck file uploaded after the
+    site was built still shows up. If GitHub cannot be reached and the site
+    catalog is already in hand, that catalog is used alone. The offline cache
+    stores whichever list comes back.
+    """
+    site_rows = _fetch_pages_release_rows(timeout=timeout)
+    github_rows: list[dict] | None = None
+    github_error: FetchError | None = None
+    try:
+        github_rows = _fetch_github_release_rows(timeout=timeout)
+    except FetchError as exc:
+        github_error = exc
+        if not site_rows:
+            raise
+        logging.warning(
+            "RELEASE_CATALOG: GitHub supplement missed (%s); using the site catalog",
+            exc,
+        )
+    if site_rows and github_rows:
+        rows = merge_release_catalogs(site_rows, github_rows)
+        logging.info("RELEASE_CATALOG: merged site notes with GitHub assets (%s releases)", len(rows))
+    elif site_rows:
+        rows = site_rows
+    else:
+        rows = github_rows or []
+    releases = _entries_from_rows(rows)
+    if not releases and github_error is not None:
+        raise github_error
+    if save_cache and releases:
         save_releases_cache(releases)
     return releases
 
