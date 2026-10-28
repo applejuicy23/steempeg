@@ -126,6 +126,14 @@ _BASE_ASSETS = (
     "audiosettings.png",
     "exportsettings.png",
     "presetsettings.png",
+    # Settings rail glyphs (Lucide outline icons).
+    "settings_tab_general.svg",
+    "settings_tab_visual.svg",
+    "settings_tab_notifications.svg",
+    "settings_tab_performance.svg",
+    "settings_tab_support.svg",
+    "settings_tab_pro.svg",
+    "settings_tab_advanced.svg",
 )
 
 _HEALTH_ASSETS = tuple(sorted({*HEALTH_ICON_FILES.values(), WARNING_ICON_FILE}))
