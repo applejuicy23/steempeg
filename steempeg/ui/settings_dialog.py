@@ -167,6 +167,7 @@ from steempeg.ui.settings_prefs import (
     KEY_STARTUP_LIBRARY_SCAN,
     KEY_TEST_NEW_FULLSCREEN,
     KEY_HIDE_UPDATE_AVAILABLE_BADGE,
+    KEY_HIDE_SETTINGS_HINTS,
     KEY_HIDE_SPLITTER_HANDLES,
     KEY_KEEP_RUNNING_IN_TRAY,
     KEY_SHELL_PANE_PERCENTS,
@@ -200,6 +201,7 @@ from steempeg.ui.settings_prefs import (
     load_display_timezone,
     load_ffmpeg_log_level,
     load_hwdec_preview,
+    load_hide_settings_hints,
     load_hide_splitter_handles,
     load_hide_update_available_badge,
     load_keep_running_in_tray,
@@ -401,6 +403,93 @@ def _scroll_settings_tab(inner: QWidget, bg: str | None = None) -> QScrollArea:
     return scroll
 
 
+def _pro_action_button_stylesheet() -> str:
+    """Solid red face for Get it now for free and Turn off PRO."""
+    return f"""
+        QPushButton {{
+            background-color: #d64545;
+            color: #ffffff;
+            border: 1px solid #e85a5a;
+            border-radius: 10px;
+            padding: 10px 18px;
+            font-size: 13px;
+            font-weight: bold;
+            font-family: {tok.FONT_APP};
+        }}
+        QPushButton:hover {{
+            background-color: #e25555;
+            border-color: #ff8a8a;
+        }}
+        QPushButton:pressed {{
+            background-color: #b33838;
+        }}
+    """
+
+
+def _pro_kofi_support_stylesheet() -> str:
+    """Cream Ko-fi pill, the same height as the red PRO action."""
+    return """
+        QPushButton {
+            background-color: #FFF9F3;
+            color: #3A342E;
+            border: 1px solid #E0D5C8;
+            border-radius: 18px;
+            padding: 10px 18px 10px 12px;
+            font-family: "Fredoka", "Candara", "Calibri", "Segoe UI", sans-serif;
+            font-size: 13px;
+            font-weight: 700;
+            outline: none;
+        }
+        QPushButton:hover {
+            background-color: #F3EBE2;
+            border-color: #D4C8B8;
+        }
+        QPushButton:pressed {
+            background-color: #EDE4D8;
+        }
+    """
+
+
+def _kofi_cup_pixmap(height: int):
+    """Crop kofi.png to the cup and scale that ink to ``height`` px."""
+    from PySide6.QtGui import QPixmap
+
+    from steempeg.infra.paths import get_resource_path
+    from steempeg.ui.icon_assets import _opaque_content_rect
+
+    raw = QPixmap(get_resource_path("kofi.png"))
+    if raw.isNull() or height <= 0:
+        return QPixmap()
+    x, y, width, tall = _opaque_content_rect(raw)
+    cropped = raw.copy(x, y, max(width, 1), max(tall, 1))
+    target_w = max(1, round(cropped.width() * height / max(cropped.height(), 1)))
+    return cropped.scaled(
+        target_w,
+        height,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
+class _PromoKofiMark(QLabel):
+    """Ko-fi cup at the link's text size. A click opens the tip page."""
+
+    def __init__(self, on_click, parent=None):
+        super().__init__(parent)
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Opens Ko-fi")
+        self.setStyleSheet("background: transparent; border: none; padding: 0;")
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        """Open the tip page. The cup is the click target, not a second button."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._on_click()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class SettingsDialog(SteempegDialog):
     """App Settings — General · Visual · Notifications · Performance · Support · PRO · Advanced.
 
@@ -450,23 +539,14 @@ class SettingsDialog(SteempegDialog):
         cur_upd = resolve_update_check_interval(settings)
         uidx = self._combo_update_interval.findData(cur_upd)
         self._combo_update_interval.setCurrentIndex(max(0, uidx))
-        self._combo_update_interval.setToolTip(
-            "Every launch checks once each time the app starts. "
-            "Daily and Weekly wait for that cooldown."
-        )
         upd_row.addWidget(upd_lbl)
         upd_row.addWidget(self._combo_update_interval, 1)
         g.addLayout(upd_row)
-        g.addWidget(self._hint("Quiet badge only: never installs without you."))
         self._chk_hide_update_available = SteempegCheckBox(
             "Never show Update Available badge"
         )
         self._chk_hide_update_available.setChecked(
             load_hide_update_available_badge(settings)
-        )
-        self._chk_hide_update_available.setToolTip(
-            "Hides the title-bar Update Available plaque. "
-            "Check for updates and Update Center still work."
         )
         g.addWidget(self._chk_hide_update_available)
 
@@ -488,10 +568,8 @@ class SettingsDialog(SteempegDialog):
         export_row.addWidget(btn_browse_export, 0)
         export_row.addWidget(btn_clear_export, 0)
         g.addLayout(export_row)
-        self._export_folder_hint = self._hint(
-            "Permanent output folder for exports. Save syncs the Export panel. "
-            "Folders outside rendered_videos still work; Open in Steempeg may be limited."
-        )
+        self._export_folder_hint = self._hint("")
+        self._export_folder_hint.setProperty("helper_when_outside", True)
         g.addWidget(self._export_folder_hint)
         self._refresh_export_folder_hint()
 
@@ -510,12 +588,6 @@ class SettingsDialog(SteempegDialog):
         tab_row.addWidget(tab_lbl)
         tab_row.addWidget(self._combo_render_tab, 1)
         g.addLayout(tab_row)
-        g.addWidget(
-            self._hint(
-                "Landing tab when the Render panel / neo-nav opens. "
-                "Default is Video Settings. Save switches the open panel."
-            )
-        )
 
         layout_row = QHBoxLayout()
         layout_row.setSpacing(8)
@@ -560,8 +632,8 @@ class SettingsDialog(SteempegDialog):
             self._chk_ask_shell.setEnabled(False)
             g.addWidget(
                 self._hint(
-                    "Steam Deck builds start in Portable. Desktop is available "
-                    "here if you want it. Applies next launch."
+                    "Steam Deck builds start in Portable. "
+                    "Applies the next time Steempeg starts."
                 )
             )
         else:
@@ -683,14 +755,6 @@ class SettingsDialog(SteempegDialog):
         btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_restart.clicked.connect(self._restart_app)
         restart_row.addWidget(btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
-        restart_row.addWidget(
-            self._hint(
-                "Quit and relaunch. If this window has unsaved choices, "
-                "you'll be asked to Save, Don't save, or Cancel."
-            ),
-            1,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
         g.addLayout(restart_row)
         g.addStretch(1)
         self._settings_pages.append(("General", general, g))
@@ -714,10 +778,8 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(theme_row)
         v.addWidget(
             self._hint(
-                "TrueDark is the stock look (new installs). Default keeps the classic "
-                "Steempeg chrome. TrueDark OLED uses pure black shell with hairline "
-                "panel borders (less matte fill). Save applies; Cancel keeps the last "
-                "saved theme."
+                "TrueDark is the stock look. Default keeps the classic chrome. "
+                "TrueDark OLED is pure black with hairline borders."
             )
         )
 
@@ -741,10 +803,9 @@ class SettingsDialog(SteempegDialog):
             v.addLayout(font_row)
             v.addWidget(
                 self._hint(
-                    "Auto uses real Segoe UI files if present, otherwise bundled "
-                    "Selawik (OFL). Selawik vs System default should look clearly "
-                    "different after Save. Fontconfig aliases that only substitute "
-                    "Adwaita/Noto do not count as Segoe. Cancel keeps the last saved font."
+                    "Auto uses real Segoe UI files when they are present, otherwise "
+                    "bundled Selawik. A fontconfig alias that only substitutes "
+                    "Adwaita or Noto does not count as Segoe."
                 )
             )
 
@@ -766,20 +827,7 @@ class SettingsDialog(SteempegDialog):
         portable_shell = bool(getattr(self._app, "_portable_shell", False))
         if portable_shell:
             self._combo_shell_sides.setEnabled(False)
-            v.addWidget(
-                self._hint(
-                    "Desktop only. Portable has no side docks. "
-                    "Switch to Desktop to place Library and Render Queue left or right."
-                )
-            )
-        else:
-            v.addWidget(
-                self._hint(
-                    "Library chrome on one side, Render Queue on the other. "
-                    "The player stays in the middle. Render Queue stays one tab. "
-                    "Combo previews live; Save persists. Cancel restores the last saved sides."
-                )
-            )
+            v.addWidget(self._hint("Desktop only. Portable has no side docks."))
 
         self._chk_queue_hover = SteempegCheckBox("Hover Render Queue")
         cur_hover = load_queue_hover(settings)
@@ -791,16 +839,15 @@ class SettingsDialog(SteempegDialog):
             v.addWidget(
                 self._hint(
                     "Desktop only. Hover the window edge to slide Render Queue out. "
-                    "On by default. Off keeps the docked splitter pane."
+                    "Off keeps the docked splitter pane."
                 )
             )
         else:
             v.addWidget(
                 self._hint(
-                    "On (default): hover the window edge on the Render Queue side "
-                    "to slide a rounded copy out. Drag the inner edge to resize. "
-                    "Off keeps the docked splitter pane. "
-                    "Checkbox previews live; Save persists. Cancel restores."
+                    "Hover the window edge on the Render Queue side to slide a "
+                    "rounded copy out. Drag the inner edge to resize. "
+                    "Off keeps the docked splitter pane."
                 )
             )
             self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
@@ -817,17 +864,14 @@ class SettingsDialog(SteempegDialog):
             self._chk_shell_tools_title.setEnabled(False)
             v.addWidget(
                 self._hint(
-                    "Desktop only. Portable already keeps About / Updates / Settings "
-                    "in the title bar (same as stock Desktop)."
+                    "Desktop only. Portable already keeps these tools in the title bar."
                 )
             )
         else:
             v.addWidget(
                 self._hint(
-                    "On (default): About · Check for updates · Settings · Dev in the "
-                    "window title bar. Off: same tools stay in the library footer "
-                    "mega-pill. Folder / Refresh always stay in the footer. "
-                    "Checkbox previews live; Save persists. Cancel restores."
+                    "Off: those tools stay in the library footer. "
+                    "Folder and Refresh always stay in the footer."
                 )
             )
             self._chk_shell_tools_title.toggled.connect(self._preview_shell_tools_title)
@@ -858,14 +902,6 @@ class SettingsDialog(SteempegDialog):
         shape_row.addWidget(shape_lbl)
         shape_row.addWidget(self._combo_icon_shape, 1)
         v.addLayout(shape_row)
-        v.addWidget(
-            self._hint(
-                "Square · Soft (Steam-like, default) · Circle. "
-                "Applies to Clips list/grid, Rendered, queue cards, and headers. "
-                "Combo previews live; Save persists. Cancel restores "
-                "the last saved shape."
-            )
-        )
         self._icon_shape_preview_timer = QTimer(self)
         self._icon_shape_preview_timer.setSingleShot(True)
         self._icon_shape_preview_timer.setInterval(200)
@@ -892,12 +928,9 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(card_row)
         v.addWidget(
             self._hint(
-                "SteempegUI (default: shelf — flat top on first row, flat bottom on last; "
-                "middle rows fully round) · Square (square top, round bottom on every card) · "
-                "Round (round top and bottom everywhere). "
-                "Applies to Clips Manager, Rendered videos, and Choose a Clip. "
-                "Combo previews live; Save persists. Cancel restores "
-                "the last saved style."
+                "SteempegUI: flat top on the first row, flat bottom on the last, "
+                "middle rows fully round. Square: square top, round bottom. "
+                "Round: round top and bottom. Clips, Rendered videos, and Choose a Clip."
             )
         )
         self._clip_card_style_preview_timer = QTimer(self)
@@ -925,10 +958,8 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(header_row)
         v.addWidget(
             self._hint(
-                "Steam-like (default): centered logo + game name; date/duration only in the "
-                "info (i) tip. SteempegUI: left-aligned title with date/time and duration. "
-                "Combo previews live; Save persists. "
-                "Cancel restores the last saved layout."
+                "Steam-like: centered logo and game name. Date and duration sit in "
+                "the info tip. SteempegUI: left-aligned title with date, time, and duration."
             )
         )
         self._header_layout_preview_timer = QTimer(self)
@@ -956,14 +987,8 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(header_size_row)
         v.addWidget(
             self._hint(
-                "Mostly height, padding, and chips of the upper player header "
-                "(game title / Select a clip chrome, status chips, queue badges); "
-                "same typeface at all sizes (mild size only). "
-                "Small / Medium / Large — Large is the stock default "
-                "(pre-pref height). "
-                "Works with window density; empty and filled stay the same height. "
-                "Combo previews live; Save persists. Cancel restores "
-                "the last saved size."
+                "Changes the header height, padding, and chips. "
+                "The typeface stays the same. Large is the stock height."
             )
         )
         self._header_size_preview_timer = QTimer(self)
@@ -991,10 +1016,8 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(player_layout_row)
         v.addWidget(
             self._hint(
-                "Panel spacing only. Reunited: flush stack (header, canvas, footer). "
-                "Fractured: gaps between those panels. "
-                "Outline borders are controlled separately below. "
-                "Combo previews live; Save persists. Cancel restores the last saved layout."
+                "Reunited: header, video, and footer sit flush. "
+                "Fractured: gaps between them. Outline is the setting below."
             )
         )
         self._player_layout_preview_timer = QTimer(self)
@@ -1021,12 +1044,10 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(outline_row)
         v.addWidget(
             self._hint(
-                "With lines: stock chrome borders (Reunited seam box or Fractured "
-                "panel frames). Without lines: no player outline. "
-                "With lines, not wrapping the video: header and footer keep borders; "
-                "the video plane stays flush. Desktop theatre and fullscreen hide "
-                "outlines; Portable keeps this setting. Combo previews live; Save "
-                "persists. Cancel restores the last saved outline."
+                "With lines: borders on the player chrome. Without lines: no outline. "
+                "With lines, not wrapping the video: header and footer keep borders, "
+                "and the video plane stays flush. Theatre and fullscreen hide outlines. "
+                "Portable keeps this setting."
             )
         )
         self._player_outline_preview_timer = QTimer(self)
@@ -1060,11 +1081,7 @@ class SettingsDialog(SteempegDialog):
         v.addWidget(
             self._hint(
                 "Time labels and tick marks under the scrubber. "
-                "Small / Medium / Large — Large is the stock default "
-                "(full-size ruler). The progress track stays the same "
-                "height. Same typeface at all sizes. "
-                "Combo previews live; Save persists. Cancel restores "
-                "the last saved size."
+                "The progress track stays the same height."
             )
         )
         self._timeline_strip_preview_timer = QTimer(self)
@@ -1109,10 +1126,8 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(spd_row)
         v.addWidget(
             self._hint(
-                "Optional boost above the normal player caps. "
-                "Volume default is 100% (unity); choose 150%–500% to soft-amp louder. "
-                "Speed default is 5.0x; choose 8.0x or 10.0x to extend the slider. "
-                "Combo previews live; Save persists. Cancel restores the last saved ceilings."
+                "Raises the slider past the normal cap. "
+                "Volume starts at 100%. Speed starts at 5.0x."
             )
         )
         self._player_boost_preview_timer = QTimer(self)
@@ -1167,13 +1182,6 @@ class SettingsDialog(SteempegDialog):
         tz_row.addWidget(tz_lbl)
         tz_row.addWidget(self._combo_timezone, 1)
         v.addLayout(tz_row)
-        v.addWidget(
-            self._hint(
-                "Queue, library, filters, and render history. "
-                "Named timezones use Qt IANA data. "
-                "Save updates date labels instantly, with no library reload."
-            )
-        )
 
         v.addWidget(self._section("Markers"))
         self._chk_markers_on_strip = SteempegCheckBox("Markers on the strip")
@@ -1184,10 +1192,8 @@ class SettingsDialog(SteempegDialog):
         v.addWidget(self._chk_markers_on_strip)
         v.addWidget(
             self._hint(
-                "Optional: draw kill/round icons on the purple seekbar "
-                "(v20-style) instead of the row above. Saves vertical space "
-                "on small screens. Off by default. Hover shows a tooltip; "
-                "Ctrl+click jumps to a marker so scrubbing stays free."
+                "Draws kill and round icons on the purple seekbar instead of "
+                "the row above. Hover shows a tooltip. Ctrl+click jumps to a marker."
             )
         )
         trim_row = QHBoxLayout()
@@ -1203,12 +1209,6 @@ class SettingsDialog(SteempegDialog):
         trim_row.addWidget(trim_lbl)
         trim_row.addWidget(self._combo_marker_trim, 1)
         v.addLayout(trim_row)
-        v.addWidget(
-            self._hint(
-                "When setting trim start from a marker: Exact snaps to the mark; "
-                "lead-in starts 1s or 2s earlier."
-            )
-        )
 
         v.addStretch(1)
         self._settings_pages.append(("Visual", visual, v))
@@ -1252,7 +1252,6 @@ class SettingsDialog(SteempegDialog):
             bool(settings.get(KEY_PAUSE_PREVIEW_DURING_RENDER, False))
         )
         p.addWidget(self._chk_pause_preview)
-        p.addWidget(self._hint("Keeps CPU/GPU freer for FFmpeg. Off by default."))
 
         p.addWidget(self._section("Library startup"))
         scan_row = QHBoxLayout()
@@ -1270,16 +1269,10 @@ class SettingsDialog(SteempegDialog):
         p.addLayout(scan_row)
         p.addWidget(
             self._hint(
-                "Progressive (stock): placeholders first, cards fill as you scroll — "
-                "fastest everyday launch. Once a card has loaded it stays "
-                "(scrolling back should not hitch); a new stretch may hitch. "
-                "First unpack when Steam folders are auto-found runs Full once; "
-                "later launches stay Progressive. "
-                "Refresh and adding a clips folder always run Full while Progressive "
-                "is selected — Progressive is launch-only after that. "
-                "Quick: rescan folders with cached health. "
-                "Full: ffprobe + Steam icons/names on every launch. "
-                "Skip: paint last session list (often feels as slow as old Smart)."
+                "A card stays once it has loaded. A new stretch of the grid may hitch. "
+                "The first launch after Steam folders are found runs Full once. "
+                "Refresh and adding a clips folder always run Full, even when "
+                "Progressive is selected. Skip can feel as slow as a full scan."
             )
         )
 
@@ -1310,10 +1303,18 @@ class SettingsDialog(SteempegDialog):
         # ----- Support -----
         support, s = _tab_page()
         s.addWidget(self._section("Hints"))
+        self._chk_hide_helper_text = SteempegCheckBox("Hide helper text")
+        self._committed_hide_helper_text = load_hide_settings_hints(settings)
+        self._chk_hide_helper_text.setChecked(self._committed_hide_helper_text)
+        self._chk_hide_helper_text.toggled.connect(self._apply_helper_visibility)
+        s.addWidget(self._chk_hide_helper_text)
         hints_row = QHBoxLayout()
         hints_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         hints_row.addWidget(
-            self._hint("Restore dismissed «Don't show again» dialogs."),
+            self._hint(
+                "Restore dismissed «Don't show again» dialogs.",
+                optional=False,
+            ),
             1,
             Qt.AlignmentFlag.AlignVCenter,
         )
@@ -1411,9 +1412,8 @@ class SettingsDialog(SteempegDialog):
         a.addWidget(self._chk_test_new_fullscreen)
         a.addWidget(
             self._hint(
-                "On by default (Desktop and Portable). Skips the grey transition "
-                "cover on fullscreen enter/exit (same as STEEMPEG_FS_COVER=0). "
-                "May briefly show a black edge on exit — turn off to restore the cover."
+                "May briefly show a black edge on exit. "
+                "Turn off to bring the grey cover back."
             )
         )
 
@@ -1426,9 +1426,6 @@ class SettingsDialog(SteempegDialog):
         self._chk_remember_tab = SteempegCheckBox("Remember last library tab")
         self._chk_remember_tab.setChecked(load_remember_library_tab(settings))
         a.addWidget(self._chk_remember_tab)
-        a.addWidget(
-            self._hint("Off = always open Clips Manager. On = restore Clips / Rendered.")
-        )
         self._chk_allow_list = SteempegCheckBox(
             "Restore classic List view (Clips / Rendered / Screenshots)"
         )
@@ -1457,7 +1454,6 @@ class SettingsDialog(SteempegDialog):
         shot_row.addWidget(btn_browse_shots, 0)
         shot_row.addWidget(btn_reset_shots, 0)
         a.addLayout(shot_row)
-        a.addWidget(self._hint("Player screenshots save here (PNG)."))
 
         shelf_row = QHBoxLayout()
         shelf_row.setSpacing(8)
@@ -1475,10 +1471,8 @@ class SettingsDialog(SteempegDialog):
         a.addLayout(shelf_row)
         a.addWidget(
             self._hint(
-                "As you scroll (default): open Screenshots instantly — plant cards "
-                "near the bottom as you scroll; thumbs stay viewport-lazy. "
-                "Full shelf: quietly plant all placeholders after launch (v50) — "
-                "scrollbar is complete sooner, but the UI may hitch while they land."
+                "Full shelf plants every placeholder after launch, so the scrollbar "
+                "fills sooner. The UI may hitch while they land."
             )
         )
 
@@ -1498,9 +1492,9 @@ class SettingsDialog(SteempegDialog):
         a.addLayout(hw_row)
         a.addWidget(
             self._hint(
-                "MPV hwdec for preview. Applies on next player create / restart. "
-                "On Linux embed, Auto is GPU-aware: NVIDIA → software; "
-                "Deck/AMD/Intel → auto (VAAPI). Force on → auto-copy. Off = software."
+                "Applies the next time the player is created. On Linux, Auto uses "
+                "software on NVIDIA and VAAPI on Deck, AMD, and Intel. "
+                "Force on uses auto-copy."
             )
         )
 
@@ -1512,13 +1506,6 @@ class SettingsDialog(SteempegDialog):
             "Also enables Console gamepad actions for QA."
         )
         a.addWidget(self._chk_dev_mode)
-        a.addWidget(
-            self._hint(
-                "Console mode lives under General → Shell. "
-                "Dev Mode → Deck pad emulates the controller. "
-                "Steempeg PRO lives under the PRO tab."
-            )
-        )
 
         a.addStretch(1)
         self._settings_pages.append(("Advanced", advanced, a))
@@ -1546,6 +1533,7 @@ class SettingsDialog(SteempegDialog):
         install_no_wheel_value_filter(self)
 
         self._apply_settings_form_chrome()
+        self._apply_helper_visibility()
 
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
@@ -1669,10 +1657,16 @@ class SettingsDialog(SteempegDialog):
         return lbl
 
     @staticmethod
-    def _hint(text: str) -> QWidget:
-        """Muted helper line with circled info icon, optically centered on the text."""
+    def _hint(text: str, *, optional: bool = True) -> QWidget:
+        """Muted helper line with circled info icon, optically centered on the text.
+
+        Optional lines hide together from Support → Hints. A line that is the
+        only label for a control stays (``optional=False``).
+        """
         row = QWidget()
         row.setStyleSheet("background: transparent;")
+        if optional:
+            row.setProperty("settings_helper", True)
         # Prefer intrinsic height so a button row cannot stretch the icon to the top.
         row.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
@@ -1716,6 +1710,23 @@ class SettingsDialog(SteempegDialog):
         elif isinstance(hint_widget, QLabel):
             hint_widget.setText(text)
 
+    def _apply_helper_visibility(self, *_args) -> None:
+        """Show or hide every optional helper line. The checkbox itself stays."""
+        chk = getattr(self, "_chk_hide_helper_text", None)
+        show = True if chk is None else not chk.isChecked()
+        edit = getattr(self, "_edit_export_folder", None)
+        folder = ""
+        if edit is not None:
+            folder = normalize_export_folder(edit.text()) or default_export_dir()
+        outside = is_outside_default_rendered(folder) if folder else False
+        for widget in self.findChildren(QWidget):
+            if not widget.property("settings_helper"):
+                continue
+            if widget.property("helper_when_outside"):
+                widget.setVisible(show and outside)
+            else:
+                widget.setVisible(show)
+
     def _build_pro_promo_banner(self) -> QFrame:
         """Red promo card — Get free / already unlocked."""
         from steempeg.infra.paths import get_resource_path
@@ -1746,43 +1757,13 @@ class SettingsDialog(SteempegDialog):
                 background: transparent;
                 font-family: {tok.FONT_APP};
             }}
-            QPushButton#ProPromoGetBtn {{
-                background-color: #6a2e2e;
-                color: #ffffff;
-                border: 2px solid #c44;
-                border-radius: 10px;
-                padding: 10px 18px;
-                font-size: 13px;
-                font-weight: bold;
-                font-family: {tok.FONT_APP};
-            }}
-            QPushButton#ProPromoGetBtn:hover {{
-                background-color: #823838;
-                border-color: #e85a5a;
-            }}
-            QPushButton#ProPromoGetBtn:pressed {{
-                background-color: #4a2020;
-            }}
-            QPushButton#ProPromoOffBtn {{
-                background-color: #383838;
-                color: #e0e0e0;
-                border: 2px solid #555555;
-                border-radius: 10px;
-                padding: 8px 14px;
-                font-size: 12px;
-                font-weight: bold;
-                font-family: {tok.FONT_APP};
-            }}
-            QPushButton#ProPromoOffBtn:hover {{
-                background-color: #404040;
-                border-color: #8b3a3a;
-                color: #ffb3b3;
-            }}
             """
         )
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(18, 18, 18, 16)
-        lay.setSpacing(10)
+        # Gaps are explicit: +3px only under the title block. The link keeps
+        # the old 10px, and nothing extra is added under ko-fi.com.
+        lay.setSpacing(0)
 
         head = QHBoxLayout()
         head.setSpacing(12)
@@ -1819,33 +1800,68 @@ class SettingsDialog(SteempegDialog):
         title_col.addWidget(pitch)
         head.addLayout(title_col, 1)
         lay.addLayout(head)
+        lay.addSpacing(13)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         btn_get = QPushButton("Get it now for free")
         btn_get.setObjectName("ProPromoGetBtn")
         btn_get.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_get.setStyleSheet(_pro_action_button_stylesheet())
         btn_get.clicked.connect(self._on_get_steempeg_pro)
         btn_off = QPushButton("Turn off PRO")
         btn_off.setObjectName("ProPromoOffBtn")
         btn_off.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_off.setStyleSheet(_pro_action_button_stylesheet())
         btn_off.setToolTip("Hide PRO badge / red splash chrome (settings only).")
         btn_off.clicked.connect(lambda: self._apply_steempeg_pro(False))
         btn_support = QPushButton("Support on Ko-fi")
-        btn_support.setObjectName("ProPromoOffBtn")
+        btn_support.setObjectName("ProPromoSupportBtn")
         btn_support.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_support.setStyleSheet(_pro_kofi_support_stylesheet())
         btn_support.setToolTip("Opens the tip URL from steempeg-meta.json on the website.")
         btn_support.clicked.connect(self._on_pro_support_kofi)
+        from steempeg.ui.kofi_dialog import register_bundled_fredoka
+
+        fredoka = register_bundled_fredoka()
+        support_font = QFont()
+        if fredoka:
+            support_font.setFamily(fredoka)
+        else:
+            support_font.setFamilies(["Candara", "Calibri", "Segoe UI"])
+        support_font.setPixelSize(13)
+        support_font.setWeight(QFont.Weight.Bold)
+        btn_support.setFont(support_font)
+        from PySide6.QtGui import QIcon
+
+        cup_btn = _kofi_cup_pixmap(16)
+        if not cup_btn.isNull():
+            btn_support.setIcon(QIcon(cup_btn))
+            btn_support.setIconSize(cup_btn.size())
         btn_row.addWidget(btn_get)
         btn_row.addWidget(btn_off)
         btn_row.addWidget(btn_support)
         btn_row.addStretch(1)
         lay.addLayout(btn_row)
+        lay.addSpacing(10)
 
+        host_row = QHBoxLayout()
+        host_row.setSpacing(6)
+        host_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        # Pitch label is 12px. The cup is cropped to its ink and scaled to that
+        # same size so it sits on the link, not above it.
+        mark = _PromoKofiMark(self._on_pro_support_kofi, frame)
+        cup = _kofi_cup_pixmap(12)
+        if not cup.isNull():
+            mark.setPixmap(cup)
+            mark.setFixedSize(cup.size())
+        host_row.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
         host = QLabel("")
         host.setObjectName("ProPromoPitch")
-        host.setWordWrap(True)
-        lay.addWidget(host)
+        host.setWordWrap(False)
+        host_row.addWidget(host, 0, Qt.AlignmentFlag.AlignVCenter)
+        host_row.addStretch(1)
+        lay.addLayout(host_row)
 
         frame._pro_pitch = pitch  # type: ignore[attr-defined]
         frame._pro_btn_get = btn_get  # type: ignore[attr-defined]
@@ -1958,19 +1974,15 @@ class SettingsDialog(SteempegDialog):
         self._edit_screenshots.setText(default_screenshots_dir())
 
     def _refresh_export_folder_hint(self) -> None:
+        """Warn only when the export folder leaves the Rendered library."""
         folder = normalize_export_folder(self._edit_export_folder.text()) or default_export_dir()
         if is_outside_default_rendered(folder):
             self._set_hint_text(
                 self._export_folder_hint,
-                "Outside rendered_videos: exports OK; Rendered library still "
-                "scans this path, but «Open in Steempeg» may be limited.",
+                "Outside rendered_videos: exports still work, and the Rendered "
+                "library still scans this path. Open in Steempeg may be limited.",
             )
-        else:
-            self._set_hint_text(
-                self._export_folder_hint,
-                "Permanent output folder for exports. Save syncs the Export "
-                "panel. Reset returns to the default rendered_videos folder.",
-            )
+        self._apply_helper_visibility()
 
     def _reset_hints(self) -> None:
         for key in HINT_DISMISS_KEYS:
@@ -2231,6 +2243,13 @@ class SettingsDialog(SteempegDialog):
         chk_autostart = getattr(self, "_chk_autostart", None)
         if chk_autostart is not None and autostart_is_supported():
             if bool(chk_autostart.isChecked()) != read_autostart_enabled():
+                return True
+
+        chk_hints = getattr(self, "_chk_hide_helper_text", None)
+        if chk_hints is not None:
+            if bool(chk_hints.isChecked()) != bool(
+                getattr(self, "_committed_hide_helper_text", False)
+            ):
                 return True
 
         return False
@@ -2532,6 +2551,12 @@ class SettingsDialog(SteempegDialog):
                 btn.update()
                 continue
             if btn.objectName() == settings_layouts.RAIL_BUTTON_OBJECT_NAME:
+                continue
+            if btn.objectName() in ("ProPromoGetBtn", "ProPromoOffBtn"):
+                btn.setStyleSheet(_pro_action_button_stylesheet())
+                continue
+            if btn.objectName() == "ProPromoSupportBtn":
+                btn.setStyleSheet(_pro_kofi_support_stylesheet())
                 continue
             if btn.objectName() == "settingsPrimaryBtn" or btn is getattr(
                 self, "_btn_save", None
@@ -3269,6 +3294,10 @@ class SettingsDialog(SteempegDialog):
         if hover != getattr(self, "_committed_queue_hover", hover):
             deferred.append(lambda h=hover: self._refresh_queue_hover(h))
         self._committed_queue_hover = hover
+
+        hide_hints = bool(self._chk_hide_helper_text.isChecked())
+        pending[KEY_HIDE_SETTINGS_HINTS] = hide_hints
+        self._committed_hide_helper_text = hide_hints
 
         shell_tools = normalize_desktop_shell_tools_in_title_bar(
             self._chk_shell_tools_title.isChecked()
