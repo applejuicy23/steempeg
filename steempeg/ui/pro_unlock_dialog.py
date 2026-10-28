@@ -1,6 +1,7 @@
 """Steempeg PRO unlock ask — About-style card, exact Ko-fi Support CTA."""
 from __future__ import annotations
 
+import sys
 import webbrowser
 from typing import Literal
 
@@ -37,7 +38,17 @@ def _unlock_extra_stylesheet(*, support_font: str) -> str:
 
     support_css = f'"{support_font}", {_COZY_FALLBACK}' if support_font else _COZY_FALLBACK
     # About Close is a bare QPushButton under about_secondary_button_stylesheet.
-    return ut.about_secondary_button_stylesheet() + f"""
+    # AboutTitle sets size and weight but no family. On Linux that drops the
+    # app face (Selawik / Segoe) for the style default, so "Steempeg" no longer
+    # matches the rest of the card. Windows already resolves to Segoe.
+    title_rule = ""
+    if sys.platform != "win32":
+        title_rule = f"""
+    QLabel#AboutTitle {{
+        font-family: {tok.FONT_APP};
+    }}
+"""
+    return ut.about_secondary_button_stylesheet() + title_rule + f"""
     QLabel#ProUnlockHeadline {{
         color: #ffffff;
         font-size: 16px;
@@ -98,7 +109,14 @@ def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
     dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
     dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.setFixedSize(*scaled_dialog_size(440, 480, parent=parent))
+    # Deck scale shrinks 480 toward ~390, which is shorter than the logo plus
+    # the brand line. Linux grows to the real layout instead. Windows already fits.
+    unlock_w, unlock_h = scaled_dialog_size(440, 480, parent=parent)
+    linux = sys.platform != "win32"
+    if linux:
+        dialog.setFixedWidth(unlock_w)
+    else:
+        dialog.setFixedSize(unlock_w, unlock_h)
     dialog.setStyleSheet(
         ut.about_dialog_stylesheet(pro=True) + _unlock_extra_stylesheet(support_font=fredoka)
     )
@@ -133,7 +151,8 @@ def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
     logo_row.addWidget(logo)
     logo_row.addStretch(1)
     content.addLayout(logo_row)
-    content.addSpacing(4)
+    # Linux brand glyphs paint past a 4px gap and land on the disc.
+    content.addSpacing(12 if linux else 4)
 
     brand_row = QHBoxLayout()
     brand_row.setSpacing(8)
@@ -218,5 +237,29 @@ def ask_steempeg_pro_unlock(parent=None) -> ProUnlockChoice:
     cancel_row.addStretch(1)
     content.addLayout(cancel_row)
 
+    if linux:
+        _seal_linux_unlock_dialog(dialog)
+
     dialog.exec()
     return choice["value"]
+
+
+def _seal_linux_unlock_dialog(dialog) -> None:
+    """Fit the brand line to its glyphs, then the card to that layout.
+
+    QSS ``font-size`` on Linux is taller than the label's layout box, so
+    "Steempeg" draws upward onto the logo when the dialog height is fixed.
+    """
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QLabel
+
+    dialog.ensurePolished()
+    for label in dialog.findChildren(QLabel, "AboutTitle"):
+        label.ensurePolished()
+        fm = QFontMetrics(label.font())
+        label.setFixedHeight(fm.height() + 12)
+    root = dialog.layout()
+    if root is not None:
+        root.activate()
+    hint = dialog.sizeHint()
+    dialog.setFixedSize(dialog.width(), hint.height())
