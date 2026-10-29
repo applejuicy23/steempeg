@@ -209,17 +209,19 @@ def player_wrap_side_margins(
 ) -> tuple[int, int, int, int]:
     """Player column + old Render Settings stack insets (``right_content_wrap``).
 
-    Docked queue keeps the handle gutter. Hover / theatre / fullscreen stay
-    flush on the right — shell air comes only from ``appContent`` margins
-    (``SHELL_EDGE_INSET``). Never stack ``theater_right`` on top of that or the
-    right edge reads fatter than the left.
+    Docked queue keeps the handle gutter on the edge that faces the queue.
+    Hover / theatre / fullscreen stay flush — shell air comes only from
+    ``appContent`` margins (``SHELL_EDGE_INSET``). Never stack
+    ``theater_right`` on top of that or one window edge reads fatter.
     """
     del theater_right  # kept for call-site compat; content-wrap owns edge air
     if fullscreen or theater:
         return (0, 0, 0, 0)
     top = RIGHT_PANEL_PLAYER_TOP_INSET
-    if hover_floating and not queue_on_left:
+    if hover_floating:
         return (0, top, 0, 0)
+    if queue_on_left:
+        return (QUEUE_SPLITTER_GUTTER, top, 0, 0)
     return (0, top, QUEUE_SPLITTER_GUTTER, 0)
 
 
