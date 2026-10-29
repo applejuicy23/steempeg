@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 
-from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize
+from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize, QTimer
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -1907,6 +1907,12 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 self.app._update_library_count_label()
         if hasattr(self.app, "_persist_library_filter_memory"):
             self.app._persist_library_filter_memory()
+        # Durations are filled only for cards that were on screen. Clear jumps
+        # to the top of the full shelf, which was hidden and still says --:--,
+        # and the footer hides that placeholder. Ask for the missing ones again.
+        refill = getattr(self.app, "_schedule_clip_duration_backfill", None)
+        if callable(refill):
+            QTimer.singleShot(400, lambda: refill(live_only=False))
         self.hide()
         if hasattr(self.app, "sync_filter_pill_badge"):
             self.app.sync_filter_pill_badge()
