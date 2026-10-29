@@ -188,6 +188,14 @@ class ExpressRender(QObject):
             self.finished.emit(False, "No playable session.mpd found for this clip.", "")
             return False
 
+        from steempeg.render.gpu_decode import job_uses_nvdec
+
+        gpu_decode = job_uses_nvdec(
+            self._app,
+            job,
+            params.selected_encoder,
+            audio_only=params.audio_only,
+        )
         self._temp_dir = tempfile.mkdtemp(prefix="steempeg_express_")
         self._thread = RenderThread(
             params.all_mpds,
@@ -213,6 +221,7 @@ class ExpressRender(QObject):
             preset=params.preset,
             tune=params.tune,
             keyint_frames=params.keyint_frames,
+            gpu_decode=gpu_decode,
         )
         self._thread.progress_signal.connect(self._on_progress)
         self._thread.finished_signal.connect(self._on_finished)
