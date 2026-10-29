@@ -256,6 +256,41 @@ def _queue_hover_is_on(app) -> bool:
         return False
 
 
+def _queue_slot(app, panel):
+    """Widget that occupies the queue's splitter slot.
+
+    Hover mode lifts the real panel into the overlay and leaves a zero-width
+    placeholder in the splitter. Side checks have to use that placeholder:
+    the panel itself is no longer a splitter child, so ``indexOf`` misses it
+    and a queue-left layout is written as if the library were still on the left.
+    """
+    getter = getattr(app, "_queue_dock_widget", None)
+    if callable(getter):
+        try:
+            dock = getter()
+        except Exception:
+            dock = None
+        if dock is not None:
+            return dock
+    return panel
+
+
+def _cancel_shell_pane_snap(app) -> None:
+    """Drop a kiss snap armed by a programmatic splitter change.
+
+    ``splitterMoved`` starts the same timer a handle drag uses. A side swap or
+    a percent apply must not be finished as a kiss, or the width just written
+    for the library or the player is replaced with 0.
+    """
+    timer = getattr(app, "_right_h_snap_timer", None)
+    if timer is None:
+        return
+    try:
+        timer.stop()
+    except RuntimeError:
+        return
+
+
 def _apply_hover_overlay_width(app, width: int) -> None:
     """Resize the slide-out queue. A hidden overlay keeps the width for the next reveal."""
     ctrl = getattr(app, "_queue_hover", None)
@@ -310,11 +345,18 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     )
     # The overlay width must not be written into the splitter slot.
     slot_q = 0 if hover else queue_w
+    dock = _queue_slot(app, queue)
+    try:
+        queue_on_left = main.indexOf(dock) == 0
+    except RuntimeError:
+        queue_on_left = False
     main.blockSignals(True)
     inner.blockSignals(True)
     try:
-        if main.indexOf(queue) == 0:
-            _set_pair_sizes(main, queue, slot_q, player_w + clips_w)
+        if queue_on_left:
+            # Queue slot | (player | library). The library is the inner
+            # sibling, so it must receive the Clips width, not the shut slot.
+            _set_pair_sizes(main, dock, slot_q, player_w + clips_w)
             _set_pair_sizes(inner, player, player_w, clips_w)
         else:
             _set_pair_sizes(main, clips, clips_w, player_w + slot_q)
@@ -322,6 +364,7 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     finally:
         main.blockSignals(False)
         inner.blockSignals(False)
+    _cancel_shell_pane_snap(app)
     if hover and queue_pct > 0:
         _apply_hover_overlay_width(app, queue_w)
 
@@ -427,6 +470,9 @@ def apply_user_shell_handle_visibility(app) -> None:
     percents = _stored_pane_percents(app)
     if percents is not None:
         _apply_shell_pane_percents(app, percents)
+    # Hiding the handle emits splitterMoved and arms the kiss snap. Stop it
+    # after the widths are written, including when the percent pass bails out.
+    _cancel_shell_pane_snap(app)
 
 
 def _sync_hover_resize_grip(app) -> None:
