@@ -2758,7 +2758,7 @@ class PlayerMixin:
         self._hide_immersive_esc_hint()
         if hasattr(self, 'fs_timer'):
             self.fs_timer.stop()
-        self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+        self._set_fullscreen_cursor_hidden(False)
         self._set_hide_watcher_suppressed(True)
 
         if hasattr(self, 'player_footer_frame'):
@@ -3307,7 +3307,7 @@ class PlayerMixin:
             canvas is not None and getattr(canvas, "_context_menu_open", False)
         )
         
-        self.ui.setCursor(Qt.ArrowCursor) 
+        self._set_fullscreen_cursor_hidden(False)
         if hasattr(self, 'player_footer_frame'):
             if self.player_footer_frame.isHidden():
                 # Align on the way in only: a freshly re-flagged Tool window would
@@ -3336,7 +3336,7 @@ class PlayerMixin:
             if hasattr(self, 'player_footer_frame'):
                 self.player_footer_frame.show()
                 self.player_footer_frame.raise_()
-            self.ui.setCursor(Qt.CursorShape.ArrowCursor)
+            self._set_fullscreen_cursor_hidden(False)
             return
 
         # Marker / timeline QMenu (and any other popup) lives outside the HUD
@@ -3357,11 +3357,87 @@ class PlayerMixin:
             self.fs_timer.start() 
             return
             
-        self.ui.setCursor(Qt.BlankCursor) 
+        self._set_fullscreen_cursor_hidden(True)
         if hasattr(self, 'player_footer_frame'):
-            self.player_footer_frame.hide()   
-        
+            self.player_footer_frame.hide()
+
         QToolTip.hideText()
+
+    def _fullscreen_cursor_widgets(self):
+        """Surfaces whose own cursor would keep an arrow after the bar hides."""
+        widgets = []
+        ui = getattr(self, "ui", None)
+        if ui is not None:
+            widgets.append(ui)
+            container = getattr(ui, "video_container", None)
+            if container is not None:
+                widgets.append(container)
+        for name in ("mpv_screen", "aspect_frame", "video_wrapper"):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widgets.append(widget)
+        return widgets
+
+    def _set_fullscreen_cursor_hidden(self, hidden: bool) -> None:
+        """Hide the pointer with the fullscreen bar, and bring it back on motion.
+
+        ``ui.setCursor(BlankCursor)`` never reaches the embedded mpv window, so
+        the arrow stayed over the picture after the bar faded. The override
+        covers Qt chrome; mpv is told to keep its own cursor hidden until the
+        pointer moves.
+        """
+        hidden = bool(hidden)
+        for widget in self._fullscreen_cursor_widgets():
+            try:
+                if hidden:
+                    widget.setCursor(Qt.CursorShape.BlankCursor)
+                else:
+                    widget.unsetCursor()
+            except RuntimeError:
+                pass
+        ui = getattr(self, "ui", None)
+        if ui is not None and not hidden:
+            try:
+                ui.setCursor(Qt.CursorShape.ArrowCursor)
+            except RuntimeError:
+                pass
+
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                top = app.overrideCursor()
+                top_blank = (
+                    top is not None and top.shape() == Qt.CursorShape.BlankCursor
+                )
+                if hidden and not top_blank:
+                    app.setOverrideCursor(Qt.CursorShape.BlankCursor)
+                    self._fs_cursor_override = True
+                elif not hidden and getattr(self, "_fs_cursor_override", False):
+                    if top_blank:
+                        app.restoreOverrideCursor()
+                    self._fs_cursor_override = False
+            except RuntimeError:
+                self._fs_cursor_override = False
+
+        player = getattr(self, "player", None)
+        if player is not None:
+            try:
+                player["cursor-autohide"] = "always" if hidden else "no"
+            except Exception:
+                pass
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                user32 = ctypes.windll.user32
+                if hidden:
+                    user32.SetCursor(None)
+                else:
+                    user32.LoadCursorW.restype = ctypes.c_void_p
+                    user32.LoadCursorW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+                    user32.SetCursor(user32.LoadCursorW(None, 32512))
+            except Exception:
+                pass
 
     def keyPressEvent(self, event):
         """ Captures keyboard events. Exits fullscreen seamlessly if Escape key is pressed. """
