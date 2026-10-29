@@ -573,6 +573,8 @@ class SettingsDialog(SteempegDialog):
         g.addWidget(self._export_folder_hint)
         self._refresh_export_folder_hint()
 
+        portable_shell = bool(getattr(self._app, "_portable_shell", False))
+
         g.addWidget(self._section("Render panel"))
         tab_row = QHBoxLayout()
         tab_row.setSpacing(8)
@@ -603,13 +605,22 @@ class SettingsDialog(SteempegDialog):
         layout_row.addWidget(layout_lbl)
         layout_row.addWidget(self._combo_desktop_render, 1)
         g.addLayout(layout_row)
-        g.addWidget(
-            self._hint(
-                "Like a Portable is stock: purple Render Settings beside Start opens a "
-                "floating settings window (minimize / maximize; click again to close). "
-                "It's a Desktop keeps the classic docked Render panel."
+        if portable_shell:
+            self._combo_desktop_render.setEnabled(False)
+            g.addWidget(
+                self._hint(
+                    "Desktop only. Portable has one Render window, with the queue "
+                    "and the render controls in it."
+                )
             )
-        )
+        else:
+            g.addWidget(
+                self._hint(
+                    "Like a Portable is stock: purple Render Settings beside Start opens a "
+                    "floating settings window (minimize / maximize; click again to close). "
+                    "It's a Desktop keeps the classic docked Render panel."
+                )
+            )
 
         g.addWidget(self._section("Shell"))
         shell_row = QHBoxLayout()
@@ -644,15 +655,23 @@ class SettingsDialog(SteempegDialog):
         handles_hidden = load_hide_splitter_handles(settings)
         self._chk_hide_splitter_handles.setChecked(handles_hidden)
         g.addWidget(self._chk_hide_splitter_handles)
-        g.addWidget(
-            self._hint(
-                "Hides the splitter handles and the hover queue's drag tab. "
-                "Drag the panes first, then turn this on, or set the widths below. "
-                "Clips cannot pass its minimum; raising it shrinks the player. "
-                "The queue keeps the minimum and maximum of its current mode, "
-                "hover or the docked splitter. Off, the handles stay."
+        if portable_shell:
+            self._chk_hide_splitter_handles.setEnabled(False)
+            g.addWidget(
+                self._hint(
+                    "Desktop only. Portable has no splitter handles to hide."
+                )
             )
-        )
+        else:
+            g.addWidget(
+                self._hint(
+                    "Hides the splitter handles and the hover queue's drag tab. "
+                    "Drag the panes first, then turn this on, or set the widths below. "
+                    "Clips cannot pass its minimum; raising it shrinks the player. "
+                    "The queue keeps the minimum and maximum of its current mode, "
+                    "hover or the docked splitter. Off, the handles stay."
+                )
+            )
         # Filter time fields put the face on the field (bold 13px, padding
         # 4px 10px, min-height 24). Three of those beside their names do not
         # fit this card, so the name sits above the field. The whole group
@@ -701,8 +720,14 @@ class SettingsDialog(SteempegDialog):
             pane_row.addWidget(column)
         pane_row.addStretch(1)
         g.addWidget(self._pane_row_host)
-        self._pane_row_host.setVisible(handles_hidden)
-        self._chk_hide_splitter_handles.toggled.connect(self._on_hide_splitter_handles_toggled)
+        self._pane_row_host.setVisible(handles_hidden and not portable_shell)
+        if portable_shell:
+            for spin in self._pane_spins.values():
+                spin.setEnabled(False)
+        else:
+            self._chk_hide_splitter_handles.toggled.connect(
+                self._on_hide_splitter_handles_toggled
+            )
 
         self._chk_keep_running_in_tray = SteempegCheckBox("Keep Steempeg running in the tray")
         self._chk_keep_running_in_tray.setChecked(load_keep_running_in_tray(settings))
@@ -824,7 +849,6 @@ class SettingsDialog(SteempegDialog):
         sides_row.addWidget(sides_lbl)
         sides_row.addWidget(self._combo_shell_sides, 1)
         v.addLayout(sides_row)
-        portable_shell = bool(getattr(self._app, "_portable_shell", False))
         if portable_shell:
             self._combo_shell_sides.setEnabled(False)
             v.addWidget(self._hint("Desktop only. Portable has no side docks."))
