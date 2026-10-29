@@ -6510,7 +6510,11 @@ class RenderedLibraryMixin:
         )
 
         self._preview_clip_path = file_path
-        self._rendered_media_path = file_path
+        # Do not stamp the export as current before play. schedule_play_media_file
+        # runs later, and play_media_file treats a matching _rendered_media_path
+        # as "already open" and never calls MPV.
+        if already_open:
+            self._rendered_media_path = file_path
         queue_active = hasattr(self, "_queue_is_active") and self._queue_is_active()
         if hasattr(self, "_clear_queue_selection"):
             self._clear_queue_selection()
