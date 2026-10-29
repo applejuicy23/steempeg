@@ -5422,8 +5422,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             else:
                 left_lay.setContentsMargins(0, 0, gutter, 0)
 
-        # Player stays in the middle: left inset faces the left handle, right
-        # gutter faces the right handle — same in both layouts.
+        # Player stays in the middle. A docked neighbour keeps the 12px inset
+        # on the player's left. A window edge does not: appContent already
+        # has the same air the library uses on its outer side.
         ui = getattr(self, "ui", None)
         right_panel = getattr(ui, "right_panel", None) if ui is not None else None
         right_layout = right_panel.layout() if right_panel is not None else None
@@ -5437,13 +5438,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     hover = bool(check())
                 except Exception:
                     hover = False
-            # Hover: match window-edge air on both sides of the player (no 12px
-            # left + 9px right mismatch, and no docked queue gutter on the right).
-            left_inset = (
-                int(shell_edge_inset(ui))
-                if hover and not queue_left
-                else int(RIGHT_PANEL_SIDE_INSET)
-            )
+            if hover and queue_left:
+                # Queue slot is shut, so the player is the left window edge.
+                left_inset = 0
+            elif hover:
+                left_inset = int(shell_edge_inset(ui))
+            else:
+                left_inset = int(RIGHT_PANEL_SIDE_INSET)
             right_layout.setContentsMargins(
                 left_inset, 0, 0, RIGHT_PANEL_BOTTOM_INSET
             )
