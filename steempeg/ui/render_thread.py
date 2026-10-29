@@ -18,6 +18,11 @@ from PySide6.QtCore import QThread, Signal
 
 from steempeg.render.output_formats import build_audio_args, video_encoder_extra_args
 from steempeg.render import pro_encoding as pro
+from steempeg.render.gpu_decode import (
+    ffprobe_beside,
+    probe_nvdec_source,
+    promote_nvdec_command,
+)
 from steempeg.core.dash.mpd import estimate_render_duration_sec
 
 
@@ -38,8 +43,12 @@ class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
 
-    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False, preset="", tune="", keyint_frames=0):
+    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False, preset="", tune="", keyint_frames=0, gpu_decode=False):
         super().__init__()
+        self._gpu_decode_enabled = bool(gpu_decode)
+        self._nvdec_probed = False
+        self._nvdec_color_suffix = ""
+        self._nvdec_announced = False
         self.rate_control = pro.normalize_rate_control(rate_control)
         self.quality_value = quality_value
         self.two_pass = bool(two_pass)
@@ -181,6 +190,101 @@ class RenderThread(QThread):
             raise Exception(
                 f"Failed to render part {part_index + 1}.\nFFmpeg error:\n{error_details}"
             )
+
+    def _nvdec_color_for(self, mpd: str) -> str | None:
+        """Confirms the manifest with ffprobe once. None means stay on the CPU.
+
+        The check runs on this worker, before the first CUDA command. A clip
+        the library already called Healthy is asked again here, because NVDEC
+        only starts when ffprobe itself can open the manifest.
+        """
+        if not self._gpu_decode_enabled:
+            return None
+        if not self._nvdec_probed:
+            self._nvdec_probed = True
+            source = probe_nvdec_source(ffprobe_beside(self.ffmpeg_exe), mpd)
+            if not source.opens:
+                self._gpu_decode_enabled = False
+                return None
+            self._nvdec_color_suffix = source.color_suffix
+        return self._nvdec_color_suffix
+
+    def _discard_failed_gpu_part(self, temp_mp4: str, part_index: int, cmd: str) -> None:
+        """Drops a half-written CUDA part so the CPU retry starts clean."""
+        if temp_mp4 and os.path.isfile(temp_mp4):
+            try:
+                os.remove(temp_mp4)
+            except OSError as exc:
+                logging.warning(
+                    "Could not remove partial NVDEC part %s: %s", temp_mp4, exc
+                )
+        if " -pass 1" in cmd or " -f null" in cmd:
+            pro.remove_two_pass_logs(pro.two_pass_log_prefix(self.save_dir, part_index))
+
+    def _run_encoded_part(
+        self,
+        cpu_cmd: str,
+        *,
+        mpd: str,
+        temp_mp4: str,
+        cwd: str,
+        creation_flags: int,
+        part_index: int,
+        expected_duration: float,
+        step: int,
+        steps: int,
+    ) -> None:
+        """Runs one encode. A dead NVDEC child is retried once on the CPU.
+
+        The hardware decoder is a separate process. Its crash does not take
+        the window down, but that part has to be encoded again in software
+        or the export would stop on a broken temporary file.
+        """
+        gpu_cmd = None
+        if self._gpu_decode_enabled:
+            draft = promote_nvdec_command(
+                cpu_cmd, ten_bit=self.ten_bit, color_suffix=""
+            )
+            if draft is not None:
+                color = self._nvdec_color_for(mpd)
+                if color is not None:
+                    gpu_cmd = promote_nvdec_command(
+                        cpu_cmd, ten_bit=self.ten_bit, color_suffix=color
+                    )
+        if gpu_cmd:
+            if not self._nvdec_announced:
+                logging.info("NVDEC decode+scale on (%s)", self.selected_encoder)
+                self._nvdec_announced = True
+            try:
+                self._run_part_command(
+                    gpu_cmd,
+                    cwd=cwd,
+                    creation_flags=creation_flags,
+                    part_index=part_index,
+                    expected_duration=expected_duration,
+                    step=step,
+                    steps=steps,
+                )
+                return
+            except Exception as exc:
+                if self.is_cancelled or "cancelled by user" in str(exc).lower():
+                    raise
+                logging.warning(
+                    "NVDEC failed on part %s; encoding that part on the CPU. %s",
+                    part_index + 1,
+                    exc,
+                )
+                self._gpu_decode_enabled = False
+                self._discard_failed_gpu_part(temp_mp4, part_index, gpu_cmd)
+        self._run_part_command(
+            cpu_cmd,
+            cwd=cwd,
+            creation_flags=creation_flags,
+            part_index=part_index,
+            expected_duration=expected_duration,
+            step=step,
+            steps=steps,
+        )
 
     def cancel(self):
         """ Force kills the FFmpeg process. """
@@ -393,8 +497,10 @@ class RenderThread(QThread):
 
                 runs = pre_cmds + [cmd]
                 for step, run_cmd in enumerate(runs):
-                    self._run_part_command(
+                    self._run_encoded_part(
                         run_cmd,
+                        mpd=mpd,
+                        temp_mp4=temp_mp4,
                         cwd=os.path.dirname(mpd),
                         creation_flags=creation_flags,
                         part_index=idx,
