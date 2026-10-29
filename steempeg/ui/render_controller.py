@@ -7712,6 +7712,14 @@ class RenderMixin:
         logging.info(f"Source: {job.clip_path}")
         logging.info(f"Saving in: {params.output_file}")
 
+        from steempeg.render.gpu_decode import job_uses_nvdec
+
+        gpu_decode = job_uses_nvdec(
+            self,
+            job,
+            params.selected_encoder,
+            audio_only=params.audio_only,
+        )
         try:
             self.render_thread = RenderThread(
                 params.all_mpds,
@@ -7737,6 +7745,7 @@ class RenderMixin:
                 preset=params.preset,
                 tune=params.tune,
                 keyint_frames=params.keyint_frames,
+                gpu_decode=gpu_decode,
             )
             logging.info(
                 "PRO encode: rate=%s quality=%s two_pass=%s ten_bit=%s preset=%s tune=%s keyint=%s",
