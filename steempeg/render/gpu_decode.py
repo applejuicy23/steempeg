@@ -17,7 +17,6 @@ _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 _VF = re.compile(r'-vf\s+(?:"([^"]+)"|(\S+))')
 _ENCODER = re.compile(r"-c:v\s+(\S+)")
-_FPS = re.compile(r"(?:^|\s)-r\s+\d+")
 
 _RANGE = {
     "pc": "pc",
@@ -187,11 +186,12 @@ def _cuda_scale_body(body: str, *, ten_bit: bool) -> str | None:
 def promote_nvdec_command(cmd: str, *, ten_bit: bool, color_suffix: str) -> str | None:
     """Returns the same ffmpeg command with CUDA decode and scale, or None.
 
-    None keeps the CPU command: stream copy, a frame-rate change, a
-    non-NVIDIA encoder, or a filter that is not a plain scale. A frame-rate
-    change needs a software filter, so that command is not mixed with CUDA.
+    None keeps the CPU command: stream copy, a non-NVIDIA encoder, or a
+    filter that is not a plain scale. An output ``-r`` stays in the command.
+    NVENC drops or repeats frames while they are still CUDA frames, so a
+    frame-rate change does not pull the decode back onto the CPU.
     """
-    if not cmd or _FPS.search(cmd):
+    if not cmd:
         return None
     encoder = _ENCODER.search(cmd)
     if encoder is None or "nvenc" not in encoder.group(1).lower():
