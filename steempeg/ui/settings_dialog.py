@@ -145,6 +145,9 @@ from steempeg.ui.settings_prefs import (
     KEY_DATE_FORMAT,
     KEY_DEFAULT_RENDER_TAB,
     KEY_DECK_CONTROLS,
+    KEY_DECK_CONTROLS_STYLE,
+    DECK_STYLE_SIMPLE,
+    DECK_STYLE_ACTIONS,
     KEY_DESKTOP_RENDER_LAYOUT,
     KEY_DEV_MODE,
     KEY_STEEMPEG_PRO,
@@ -195,6 +198,7 @@ from steempeg.ui.settings_prefs import (
     load_date_format,
     load_default_render_tab,
     load_deck_controls,
+    load_deck_controls_style,
     load_dev_mode,
     load_steempeg_pro,
     load_desktop_render_layout,
@@ -223,6 +227,7 @@ from steempeg.ui.settings_prefs import (
     normalize_clock_format,
     normalize_date_format,
     normalize_deck_controls,
+    normalize_deck_controls_style,
     normalize_dev_mode,
     normalize_steempeg_pro,
     normalize_desktop_render_layout,
@@ -755,23 +760,50 @@ class SettingsDialog(SteempegDialog):
         self._chk_deck_controls.setChecked(load_deck_controls(settings))
         if is_steamdeck_build():
             self._chk_deck_controls.setToolTip(
-                "Gamepad mapping for Portable: player, Choose a Clip, Render. "
-                "On by default for Steam Deck builds. Developer mode also enables it."
+                "Gamepad for Portable. On by default for Steam Deck builds. "
+                "Developer mode also enables it."
             )
         else:
             self._chk_deck_controls.setToolTip(
-                "Gamepad mapping for Portable: player, Choose a Clip, Render. "
-                "Off by default on Windows / Linux. Turn on to test with a pad "
-                "or Dev Mode → Deck pad. Developer mode also enables it."
+                "Gamepad for Portable. Off by default on Windows / Linux. "
+                "Turn on to test with a pad or Dev Mode → Deck pad. "
+                "Developer mode also enables it."
             )
         g.addWidget(self._chk_deck_controls)
-        g.addWidget(
-            self._hint(
-                "Player: A play · Y trim · L1/R1 ±15s · R2 fullscreen · "
-                "in trim X/A = start/end. Sheets: View / Menu / D-pad. "
-                "Later: a simpler ▲▼◀▶-only Console style."
-            )
+
+        self._deck_style_host = QWidget()
+        self._deck_style_host.setStyleSheet("background: transparent;")
+        style_row = QHBoxLayout(self._deck_style_host)
+        style_row.setContentsMargins(0, 0, 0, 0)
+        style_row.setSpacing(8)
+        style_lbl = QLabel("Console style")
+        style_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
+        self._combo_deck_style = QComboBox()
+        self._combo_deck_style.addItem("Simple", DECK_STYLE_SIMPLE)
+        self._combo_deck_style.addItem("Actions", DECK_STYLE_ACTIONS)
+        style_now = load_deck_controls_style(settings)
+        style_idx = self._combo_deck_style.findData(style_now)
+        self._combo_deck_style.setCurrentIndex(max(0, style_idx))
+        self._combo_deck_style.setToolTip(
+            "Simple moves a highlight with the D-pad. "
+            "Actions is the shortcut map (A play, Y trim, and the rest)."
         )
+        style_row.addWidget(style_lbl)
+        style_row.addWidget(self._combo_deck_style, 1)
+        g.addWidget(self._deck_style_host)
+        self._deck_simple_hint = self._hint(
+            "D-pad moves the highlight, like Tab: up and down from top to bottom, "
+            "left and right along a row. A presses that control. B goes back."
+        )
+        self._deck_actions_hint = self._hint(
+            "Player: A play · Y trim · L1/R1 ±15s · R2 fullscreen · "
+            "in trim X/A = start/end. Sheets: View / Menu / D-pad."
+        )
+        g.addWidget(self._deck_simple_hint)
+        g.addWidget(self._deck_actions_hint)
+        self._chk_deck_controls.toggled.connect(self._sync_deck_style_rows)
+        self._combo_deck_style.currentIndexChanged.connect(self._sync_deck_style_rows)
+        self._sync_deck_style_rows()
 
         restart_row = QHBoxLayout()
         restart_row.setSpacing(8)
@@ -1750,6 +1782,26 @@ class SettingsDialog(SteempegDialog):
                 widget.setVisible(show and outside)
             else:
                 widget.setVisible(show)
+        self._sync_deck_style_rows()
+
+    def _sync_deck_style_rows(self, *_args) -> None:
+        """Show Simple or Actions help, and only while Console mode is on."""
+        host = getattr(self, "_deck_style_host", None)
+        combo = getattr(self, "_combo_deck_style", None)
+        chk = getattr(self, "_chk_deck_controls", None)
+        if host is None or combo is None or chk is None:
+            return
+        on = chk.isChecked()
+        host.setVisible(on)
+        hide_hints = getattr(self, "_chk_hide_helper_text", None)
+        hints_on = True if hide_hints is None else not hide_hints.isChecked()
+        simple = combo.currentData() == DECK_STYLE_SIMPLE
+        simple_hint = getattr(self, "_deck_simple_hint", None)
+        actions_hint = getattr(self, "_deck_actions_hint", None)
+        if simple_hint is not None:
+            simple_hint.setVisible(on and hints_on and simple)
+        if actions_hint is not None:
+            actions_hint.setVisible(on and hints_on and not simple)
 
     def _build_pro_promo_banner(self) -> QFrame:
         """Red promo card — Get free / already unlocked."""
@@ -3471,9 +3523,11 @@ class SettingsDialog(SteempegDialog):
         dev_mode = normalize_dev_mode(self._chk_dev_mode.isChecked())
         steempeg_pro = normalize_steempeg_pro(getattr(self, "_steempeg_pro", False))
         deck_controls = normalize_deck_controls(self._chk_deck_controls.isChecked())
+        deck_style = normalize_deck_controls_style(self._combo_deck_style.currentData())
         pending[KEY_DEV_MODE] = dev_mode
         pending[KEY_STEEMPEG_PRO] = steempeg_pro
         pending[KEY_DECK_CONTROLS] = deck_controls
+        pending[KEY_DECK_CONTROLS_STYLE] = deck_style
         if hasattr(self._app, "_refresh_dev_button_visibility"):
             deferred.append(self._app._refresh_dev_button_visibility)
         if hasattr(self._app, "_refresh_steempeg_pro_chrome"):
