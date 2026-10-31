@@ -1,6 +1,11 @@
 """Map Deck buttons → Portable / theatre actions (Console mode).
 
-Theatre (no sheet) — player:
+Two styles (Settings → General → Console style):
+
+* **Simple** — ▲▼◀▶ moves a highlight, A presses it, B goes back.
+* **Actions** — the shortcut map below.
+
+Theatre (no sheet) — player, Actions style only:
 
 | Button | Trim off | Trim on |
 |--------|----------|---------|
@@ -12,12 +17,10 @@ Theatre (no sheet) — player:
 | **L2** | — | Jump to trim start |
 | **View** / **Menu** | Choose a Clip / Render | same |
 
-Sheets keep their own maps in ``deck_navigation`` (Queue / Choose a Clip / Render).
+Sheets keep their own maps in ``deck_navigation`` when the style is Actions.
 
 Console mode: Settings → General → Shell. Default on for Steam Deck builds,
 off for Windows / Linux. Developer mode also enables the pad for QA.
-
-Future: a simpler ▲▼◀▶-only Console style (PlayStation-home focus).
 """
 from __future__ import annotations
 
@@ -33,7 +36,7 @@ from steempeg.input.deck_navigation import (
     try_deck_navigation,
 )
 from steempeg.input.gamepad import DeckButton, gamepad_bus
-from steempeg.ui.settings_prefs import deck_controls_enabled
+from steempeg.ui.settings_prefs import deck_controls_enabled, deck_style_is_simple
 
 _log = logging.getLogger(__name__)
 _installed_apps: set[int] = set()
@@ -68,6 +71,13 @@ def _dispatch(app: Any, button: DeckButton) -> None:
             return
         if _close_top_sheet(app):
             return
+        return
+
+    # Simple never falls through to Y/X/View shortcuts.
+    if deck_style_is_simple(app=app):
+        from steempeg.input.deck_simple import try_simple_deck
+
+        try_simple_deck(app, button)
         return
 
     if try_deck_navigation(app, button):
