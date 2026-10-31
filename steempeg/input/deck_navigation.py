@@ -402,7 +402,13 @@ def _focus_ring_host(app: Any, target: QWidget) -> QWidget | None:
         ):
             return content
         return settings_dlg
-    return page
+    # Player chrome and other dialogs have no sheet host. The ring sits on
+    # the window and is raised over the control it outlines.
+    try:
+        window = target.window()
+    except RuntimeError:
+        return None
+    return window if isinstance(window, QWidget) else None
 
 
 def console_focus_ring_allowed(app: Any) -> bool:
@@ -425,9 +431,11 @@ def console_focus_ring_allowed(app: Any) -> bool:
         return False
 
 
-def _show_focus_ring(app: Any, target: QWidget) -> None:
+def _show_focus_ring(app: Any, target: QWidget, *, require_console: bool = True) -> None:
     # Console off → never paint (Dev mode alone is not enough).
-    if not console_focus_ring_allowed(app):
+    # Simple highlight passes require_console=False: Dev mode is how the pad
+    # is tested, and the ring is the whole point of that style.
+    if require_console and not console_focus_ring_allowed(app):
         hide_deck_focus_ring(app)
         return
     if target is None:
