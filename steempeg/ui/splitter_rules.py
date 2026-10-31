@@ -276,11 +276,21 @@ class SplitterRulesMixin:
             pass
         # Custom handle drags can shut the queue without Qt's snap timer seeing
         # a "user collapse" — latch + persist so clip select cannot reopen.
+        # The ratio is stored now, before a window resize can scale the old
+        # pixels. The snap timer may still kiss a scrap; it stores again.
+        self._shell_ratio_pending_drag = True
+        snap_armed = False
         if self._splitter_rules_active():
             if hasattr(self, "_persist_queue_state_from_geometry"):
                 self._persist_queue_state_from_geometry()
             if hasattr(self, "_on_right_h_splitter_moved"):
                 self._on_right_h_splitter_moved()
+                snap_armed = bool(getattr(self, "_shell_ratio_pending_drag", False))
+        from steempeg.ui.portable_splitter_reveal import remember_shell_pane_ratio
+
+        remember_shell_pane_ratio(self)
+        if not snap_armed:
+            self._shell_ratio_pending_drag = False
 
     def _sync_kiss_flag(self) -> None:
         """Match the hysteresis flag to the sizes the drag actually left.
