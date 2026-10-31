@@ -1259,14 +1259,26 @@ class DevModeDialog(SteempegDialog):
         lay = QVBoxLayout(page)
         lay.setSpacing(10)
 
-        tip = QLabel(
-            "Same bus as a real pad. Enable Settings → General → Shell → Console mode "
-            "(or Developer mode). View → Choose a Clip · Menu → Render · Y Trim · "
-            "A play (trim: set end) · X queue (trim: set start) · "
-            "L1/R1 ±15s · R2 fullscreen · L2 jump trim start. "
-            "Sheets + Settings: L1/R1 tabs · D-pad focus · A · B. "
-            "STEAM / QAM are SteamOS-only."
-        )
+        from steempeg.ui.settings_prefs import deck_style_is_simple
+
+        simple = deck_style_is_simple()
+        if simple:
+            tip_text = (
+                "Simple console. ▲▼◀▶ moves the highlight, like Tab. "
+                "A presses it. B goes back. "
+                "Settings → General → Console style → Actions restores the shortcut map. "
+                "STEAM / QAM are SteamOS-only."
+            )
+        else:
+            tip_text = (
+                "Actions console. View → Choose a Clip · Menu → Render · Y Trim · "
+                "A play (trim: set end) · X queue (trim: set start) · "
+                "L1/R1 ±15s · R2 fullscreen · L2 jump trim start. "
+                "Sheets + Settings: L1/R1 tabs · D-pad focus · A · B. "
+                "Settings → General → Console style → Simple moves a highlight instead. "
+                "STEAM / QAM are SteamOS-only."
+            )
+        tip = QLabel(tip_text)
         tip.setWordWrap(True)
         tip.setStyleSheet("color: #b0b0b0;")
         lay.addWidget(tip)
@@ -1284,7 +1296,7 @@ class DevModeDialog(SteempegDialog):
         # Left cluster
         g_left = QGroupBox("Left")
         left = QVBoxLayout(g_left)
-        left.addWidget(_mk("View", DeckButton.VIEW))
+        left.addWidget(_mk("View", DeckButton.VIEW) if simple else _mk("View → Choose a Clip", DeckButton.VIEW))
         dpad = QHBoxLayout()
         dpad.addWidget(_mk("◀", DeckButton.DPAD_LEFT))
         dpad_mid = QVBoxLayout()
@@ -1303,15 +1315,17 @@ class DevModeDialog(SteempegDialog):
         # Right cluster
         g_right = QGroupBox("Right")
         right = QVBoxLayout(g_right)
-        right.addWidget(_mk("Menu ☰ → Render", DeckButton.MENU))
+        right.addWidget(
+            _mk("Menu", DeckButton.MENU) if simple else _mk("Menu ☰ → Render", DeckButton.MENU)
+        )
         face = QHBoxLayout()
         face_mid = QVBoxLayout()
-        face_mid.addWidget(_mk("Y → Trim", DeckButton.Y))
+        face_mid.addWidget(_mk("Y", DeckButton.Y) if simple else _mk("Y → Trim", DeckButton.Y))
         face_row = QHBoxLayout()
-        face_row.addWidget(_mk("X → Queue", DeckButton.X))
-        face_row.addWidget(_mk("B → Back", DeckButton.B))
+        face_row.addWidget(_mk("X", DeckButton.X) if simple else _mk("X → Queue", DeckButton.X))
+        face_row.addWidget(_mk("B", DeckButton.B) if simple else _mk("B → Back", DeckButton.B))
         face_mid.addLayout(face_row)
-        face_mid.addWidget(_mk("A → Play", DeckButton.A))
+        face_mid.addWidget(_mk("A", DeckButton.A) if simple else _mk("A → Play", DeckButton.A))
         face.addLayout(face_mid)
         right.addLayout(face)
         right.addWidget(_mk("R1", DeckButton.R1))
