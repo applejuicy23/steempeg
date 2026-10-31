@@ -1281,13 +1281,16 @@ def load_test_new_fullscreen(settings: dict | None) -> bool:
 
 # ----- Console mode / Deck gamepad (General → Shell) -----
 # Stored as deck_controls for older settings.json. Default: on for steamdeck
-# builds, off for Windows / Linux desktop. Future: a simpler D-pad-only
-# "PlayStation home" nav style beside this full Console mapping.
+# builds, off for Windows / Linux desktop.
+# deck_controls_style: "simple" (D-pad highlight) or "actions" (shortcut map).
 
 KEY_DEV_MODE = "dev_mode"
 KEY_DEV_SNIPER_SENSOR = "dev_sniper_sensor"
 KEY_STEEMPEG_PRO = "steempeg_pro"
 KEY_DECK_CONTROLS = "deck_controls"
+KEY_DECK_CONTROLS_STYLE = "deck_controls_style"
+DECK_STYLE_SIMPLE = "simple"
+DECK_STYLE_ACTIONS = "actions"
 DEFAULT_DEV_MODE = False
 DEFAULT_DEV_SNIPER_SENSOR = False
 DEFAULT_STEEMPEG_PRO = False
@@ -1407,6 +1410,52 @@ def load_deck_controls(settings: dict | None) -> bool:
     if KEY_DECK_CONTROLS not in settings:
         return default_deck_controls()
     return normalize_deck_controls(settings.get(KEY_DECK_CONTROLS))
+
+
+def normalize_deck_controls_style(value: object | None) -> str:
+    """``simple`` walks a highlight. ``actions`` is the shortcut map."""
+    text = str(value or "").strip().lower()
+    if text in ("actions", "action", "full", "advanced", "map"):
+        return DECK_STYLE_ACTIONS
+    return DECK_STYLE_SIMPLE
+
+
+def load_deck_controls_style(settings: dict | None) -> str:
+    """Missing key is Simple. The shortcut map is the explicit choice."""
+    settings = settings or {}
+    if KEY_DECK_CONTROLS_STYLE not in settings:
+        return DECK_STYLE_SIMPLE
+    return normalize_deck_controls_style(settings.get(KEY_DECK_CONTROLS_STYLE))
+
+
+def _settings_for_deck(app=None) -> dict:
+    """Live app settings, or the cache file when the caller has no app."""
+    if app is not None and hasattr(app, "load_user_settings"):
+        try:
+            data = app.load_user_settings() or {}
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return {}
+    try:
+        from steempeg.infra.paths import get_save_directory
+        from steempeg.infra import cache as _cache
+
+        path = os.path.join(get_save_directory(), "cache", "settings.json")
+        if os.path.isfile(path):
+            data = _cache.read_json(path) or {}
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def deck_style_is_simple(settings: dict | None = None, *, app=None) -> bool:
+    """True when Console mode should move a highlight instead of firing shortcuts."""
+    if settings is None:
+        settings = _settings_for_deck(app)
+    return load_deck_controls_style(settings) == DECK_STYLE_SIMPLE
 
 
 def deck_controls_enabled(settings: dict | None = None, *, app=None) -> bool:
