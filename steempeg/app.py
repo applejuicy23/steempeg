@@ -4901,6 +4901,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         # Clamp splitter sizes to new mins without resetting to comfort defaults.
         self._clamp_splitters_to_mins(left_min=left_min)
+        # The clamp's setSizes becomes QSplitter's new ratio. Put the user's
+        # shares back, or the next maximize grows the small-window floor.
+        from steempeg.ui.portable_splitter_reveal import refit_shell_panes_for_window
+
+        refit_shell_panes_for_window(self)
 
         if not apply_density:
             from steempeg.ui.player.controls.adaptive_trim_tools import (
@@ -5059,6 +5064,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         """
         if getattr(self, "_splitter_dragging", False):
             return
+        # Hidden handles cannot be dragged. A Windows autostart also emits this
+        # while the window is still hidden and only a few pixels wide. Either
+        # one makes the snap kiss the player shut, and a hidden handle is 0px
+        # wide, so the whole column disappears.
+        if not self._kiss_snap_allowed():
+            timer = getattr(self, "_right_h_snap_timer", None)
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
+            if getattr(self, "_shell_ratio_pending_drag", False):
+                self._shell_ratio_pending_drag = False
+                from steempeg.ui.portable_splitter_reveal import remember_shell_pane_ratio
+
+                remember_shell_pane_ratio(self)
+            return
         timer = getattr(self, "_right_h_snap_timer", None)
         if timer is None:
             from PySide6.QtCore import QTimer
@@ -5070,9 +5092,40 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self._right_h_snap_timer = timer
         timer.start()
 
+    def _kiss_snap_allowed(self) -> bool:
+        """True when a handle drag can really be finishing.
+
+        The snap is for a visible handle the user just let go of. It is not
+        for layout math: hidden handles, or a window Windows has not shown yet.
+        """
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return False
+        try:
+            if not ui.isVisible():
+                return False
+        except RuntimeError:
+            return False
+        from steempeg.ui.portable_splitter_reveal import user_hides_shell_handles
+
+        return not user_hides_shell_handles(self)
+
     def _snap_right_h_splitter_after_drag(self) -> None:
         """Finish a near-kiss: zero scrap panes. Never inflate the player back."""
+        try:
+            self._snap_right_h_splitter_after_drag_body()
+        finally:
+            if getattr(self, "_shell_ratio_pending_drag", False):
+                self._shell_ratio_pending_drag = False
+                from steempeg.ui.portable_splitter_reveal import remember_shell_pane_ratio
+
+                remember_shell_pane_ratio(self)
+
+    def _snap_right_h_splitter_after_drag_body(self) -> None:
+        """Kiss scrap panes once a handle drag has settled."""
         if getattr(self, "_splitter_dragging", False):
+            return
+        if not self._kiss_snap_allowed():
             return
         rhs = getattr(self, "right_h_splitter", None)
         panel = getattr(self, "render_queue_panel", None)
@@ -6410,6 +6463,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     scaled = [total - bottom, bottom]
                 v_splitter.setSizes(scaled)
         self.apply_hidden_shell_splitter_handles()
+        if getattr(self, "_shell_pane_ratio", None) is None:
+            from steempeg.ui.portable_splitter_reveal import remember_shell_pane_ratio
+
+            remember_shell_pane_ratio(self)
 
     def _setup_custom_target_size(self):
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
@@ -6938,6 +6995,11 @@ def main():
             # One coherent post-maximize settle under the veil; reveal on timer
             # (or STARTUP_SETTLE_TIMEOUT_MS failsafe).
             kick_startup_settle_after_show(window)
+            from steempeg.ui.portable_splitter_reveal import (
+                schedule_hidden_handle_pane_restore,
+            )
+
+            schedule_hidden_handle_pane_restore(window)
             startup_trace("main_window_shown")
             try:
                 from steempeg.services.kofi_remote import refresh_kofi_url_async
