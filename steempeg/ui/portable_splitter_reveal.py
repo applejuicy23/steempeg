@@ -10,6 +10,8 @@ splitter handle and drag snap.
 """
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSplitter, QSplitterHandle
 
@@ -326,6 +328,11 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     hover = _queue_hover_is_on(app)
     limits = shell_pane_pixel_limits(win_w or shell, hover=hover, shell_width=shell)
     clips_pct, player_pct, queue_pct = (int(percents[0]), int(percents[1]), int(percents[2]))
+    # Keep the requested shares. fit_shell_pane_pixels may legally floor a pane
+    # on a short window, and those pixels are not the ratio a later maximize
+    # should grow back to.
+    if not getattr(app, "_shell_pane_refitting", False):
+        app._shell_pane_ratio = (clips_pct, player_pct, queue_pct)
     clips_w, player_w, queue_w = shell_percents_to_pixels(
         clips_pct,
         player_pct,
@@ -350,6 +357,9 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
         queue_on_left = main.indexOf(dock) == 0
     except RuntimeError:
         queue_on_left = False
+    # A boot-time kiss latches the player shut. Saved percents are the layout
+    # the user asked for, so writing them opens the column again.
+    app._player_column_kissed = False
     main.blockSignals(True)
     inner.blockSignals(True)
     try:
@@ -473,6 +483,167 @@ def apply_user_shell_handle_visibility(app) -> None:
     # Hiding the handle emits splitterMoved and arms the kiss snap. Stop it
     # after the widths are written, including when the percent pass bails out.
     _cancel_shell_pane_snap(app)
+
+
+def remember_shell_pane_ratio(app) -> None:
+    """Store the live Clips / player / queue split as the resize ratio.
+
+    A handle drag is the user choosing new proportions. Queue width 0 is a
+    closed pane, not a new percent: the previous queue share stays, and the
+    collapsed flag keeps it shut until it is opened again.
+    """
+    if getattr(app, "_shell_pane_refitting", False):
+        return
+    if getattr(app, "_splitter_dragging", False):
+        return
+    from steempeg.ui.layout_defaults import shell_pixels_to_percents
+
+    widths = shell_pane_widths(app)
+    if widths is None or sum(widths) <= 0:
+        return
+    win_w, shell = _shell_span(app)
+    if shell <= 0:
+        return
+    hover = _queue_hover_is_on(app)
+    clips, player, queue = shell_pixels_to_percents(
+        widths[0],
+        widths[1],
+        widths[2],
+        shell=shell,
+        window=win_w or shell,
+        hover=hover,
+    )
+    prev = getattr(app, "_shell_pane_ratio", None)
+    if queue <= 0 and isinstance(prev, tuple) and len(prev) == 3 and int(prev[2]) > 0:
+        queue = int(prev[2])
+    app._shell_pane_ratio = (int(clips), int(player), int(queue))
+
+
+def _shut_queue_pane(app) -> None:
+    """Give a closed legacy queue's pixels to its sibling.
+
+    The percent fit will not leave the pane at 0: an open queue has a floor,
+    and that floor is what a later maximize would scale into a wide column.
+    """
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    _main, inner, _clips, _player, queue = found
+    dock = _queue_slot(app, queue)
+    try:
+        dock.setMinimumWidth(1)
+    except RuntimeError:
+        return
+    for splitter in (inner, _main):
+        try:
+            index = splitter.indexOf(dock)
+            sizes = [int(part) for part in splitter.sizes()]
+        except RuntimeError:
+            continue
+        if index < 0 or len(sizes) < 2:
+            continue
+        other = 1 - index
+        sizes[other] = sizes[other] + sizes[index]
+        sizes[index] = 0
+        splitter.blockSignals(True)
+        try:
+            splitter.setSizes(sizes)
+        except RuntimeError:
+            return
+        finally:
+            splitter.blockSignals(False)
+        return
+
+
+def refit_shell_panes_for_window(app) -> None:
+    """Put Clips, the player and the queue back on their chosen shares.
+
+    QSplitter scales whatever pixel sizes it was last given. The minimum-width
+    clamp writes a new pair while the window is small, and the next maximize
+    scales that pair, so Clips stays fatter than the setting. The share itself
+    (Settings when the handles are hidden, otherwise the last drag) is applied
+    again for the width the window has now.
+    """
+    if getattr(app, "_portable_shell", False):
+        return
+    if getattr(app, "is_theater", False) or getattr(app, "is_fullscreen", False):
+        return
+    if getattr(app, "_splitter_dragging", False):
+        return
+    if getattr(app, "_shell_pane_refitting", False):
+        return
+    ui = getattr(app, "ui", None)
+    if ui is None:
+        return
+    try:
+        if not bool(ui.isVisible()):
+            return
+        width = int(ui.width() or 0)
+    except RuntimeError:
+        return
+    if width < 200:
+        return
+    if user_hides_shell_handles(app):
+        percents = _stored_pane_percents(app)
+        if percents is None:
+            percents = getattr(app, "_shell_pane_ratio", None)
+    else:
+        percents = getattr(app, "_shell_pane_ratio", None)
+    if not isinstance(percents, tuple) or len(percents) != 3:
+        return
+    clips, player, queue = (int(percents[0]), int(percents[1]), int(percents[2]))
+    # A closed legacy queue is a latch, not a saved share of 0. Keep the share
+    # for the next open, and give its pixels to the player until then.
+    if not _queue_hover_is_on(app) and bool(getattr(app, "_queue_user_collapsed", False)):
+        queue = 0
+    app._shell_pane_refitting = True
+    try:
+        _apply_shell_pane_percents(app, (clips, player, queue))
+        if queue == 0 and not _queue_hover_is_on(app):
+            _shut_queue_pane(app)
+    finally:
+        app._shell_pane_refitting = False
+
+
+def schedule_hidden_handle_pane_restore(app) -> None:
+    """Write the saved pane percents again once the window is really on screen.
+
+    Autostart keeps the shell hidden through sign-in. The percent pass can
+    run while that shell is still a few pixels wide, and hiding the handles
+    then looks like a closed player. Try again after the first show, including
+    once maximize has settled.
+    """
+    if getattr(app, "_portable_shell", False):
+        return
+    if not user_hides_shell_handles(app):
+        return
+    from PySide6.QtCore import QTimer
+
+    for delay in (0, 400, 900, 1800):
+        QTimer.singleShot(delay, lambda: restore_hidden_handle_panes(app))
+
+
+def restore_hidden_handle_panes(app) -> None:
+    """Re-apply saved Clips / player / queue percents if the window is wide enough."""
+    if getattr(app, "is_theater", False) or getattr(app, "is_fullscreen", False):
+        return
+    ui = getattr(app, "ui", None)
+    if ui is None:
+        return
+    try:
+        visible = bool(ui.isVisible())
+        width = int(ui.width() or 0)
+    except RuntimeError:
+        return
+    if not visible or width < 640:
+        return
+    app._player_column_kissed = False
+    apply_user_shell_handle_visibility(app)
+    if not getattr(app, "_hidden_handle_panes_restored", False):
+        app._hidden_handle_panes_restored = True
+        logging.info(
+            "Shell panes restored after show (hidden handles, width=%s)", width
+        )
 
 
 def _sync_hover_resize_grip(app) -> None:
