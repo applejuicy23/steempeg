@@ -581,6 +581,7 @@ class ExpressPlayerWindow(QWidget):
         play_path = os.path.abspath(mpds[0]).replace("\\", "/")
         logging.info("Express player: play %s", play_path)
         self._attach_hover_preview(play_path)
+        self._prefetch_marker_sprite()
         self._load_timeline_marks(play_path)
         self._player.play(play_path)
         self._player.pause = False
@@ -592,8 +593,24 @@ class ExpressPlayerWindow(QWidget):
         if cache_dir:
             self._timeline.canvas._markers_cache_dir = cache_dir
             self._timeline.canvas.sniper.cache_dir = cache_dir
+            store = getattr(self._timeline.canvas, "marker_store", None)
+            if store is not None and getattr(store, "_cache_dir", None) != cache_dir:
+                store.set_cache_dir(cache_dir)
         self._timeline.sniper_source_path = play_path
         self._timeline.current_video_path = play_path
+
+    def _prefetch_marker_sprite(self) -> None:
+        """Start the same markers.svg fetch the main player does before pins paint."""
+        from steempeg.services.steam_markers import app_id_from_clip_paths
+
+        canvas = self._timeline.canvas
+        store = getattr(canvas, "marker_store", None)
+        if store is None:
+            return
+        app_id = app_id_from_clip_paths(clip_path=self._info.path)
+        if not app_id:
+            return
+        store.prefetch(app_id, on_ready=canvas.update)
 
     def _load_timeline_marks(self, mpd_path: str) -> None:
         """Loads this clip's timeline pins onto the Express timeline, off the UI thread."""
@@ -644,6 +661,11 @@ class ExpressPlayerWindow(QWidget):
             for marker in (result.get("markers") or [])
             if isinstance(marker, dict)
         ]
+        logging.info(
+            "Express markers: %d pin(s) from %s",
+            len(markers),
+            result.get("json_path") or "(no timeline json)",
+        )
         canvas = self._timeline.canvas
         canvas.light_screenshot_marks = True
         canvas.apply_preparsed_timeline(
