@@ -1,7 +1,9 @@
-"""Simple Console style: the D-pad moves a highlight, A presses it.
+"""Simple Console style: the D-pad moves a highlight.
 
-Actions style keeps the shortcut map in ``deck_actions``. This path never
-fires Y / X / View / Menu on its own. B is still handled before we get here.
+The scroller click (L3) presses the highlighted control. A plays on the
+bare player and presses the highlight while a window is open. X, Y, seek,
+and the View / Menu shortcuts are applied in ``deck_actions``. B is handled
+before we get here: an open list closes first, then the window.
 """
 from __future__ import annotations
 
@@ -37,17 +39,30 @@ _SKIP_DIALOG_TYPES = frozenset({"DevModeDialog"})
 
 
 def try_simple_deck(app: Any, button: DeckButton) -> bool:
-    """Consume one pad press. True always: shortcuts must not run after this."""
+    """Consume one pad press. True always: the Actions map must not run after this."""
+    from steempeg.input.deck_actions import dispatch_simple_verb, play_simple_a
+
+    # No window was open, or X would already have closed it.
+    if button == DeckButton.X:
+        dispatch_simple_verb(app, button)
+        return True
     if _nav_open_combo(app, button):
         return True
-    if getattr(app, "_portable_clip_picker_open", False):
+    if getattr(app, "_portable_clip_picker_open", False) and _picker_owns(button):
         _simple_picker(app, button)
         return True
-    if button == DeckButton.A:
+    if button == DeckButton.L3:
         _activate_current(app)
+        return True
+    if button == DeckButton.A:
+        if _highlight_owns_confirm(app):
+            _activate_current(app)
+        else:
+            play_simple_a(app)
         return True
     direction = _DPAD.get(button)
     if direction is None:
+        dispatch_simple_verb(app, button)
         return True
     items = _focusables(app)
     if not items:
@@ -57,6 +72,18 @@ def try_simple_deck(app: Any, button: DeckButton) -> bool:
         return True
     _move(app, items, direction)
     return True
+
+
+def _picker_owns(button: DeckButton) -> bool:
+    """Choose a Clip keeps the highlight keys. Seek and trim still reach the player."""
+    return button in _DPAD or button in (DeckButton.A, DeckButton.L3)
+
+
+def _highlight_owns_confirm(app: Any) -> bool:
+    """True while a window is open, so A presses the ring instead of Play."""
+    from steempeg.input.deck_actions import _sheet_in_front
+
+    return _sheet_in_front(app)
 
 
 def pick_focus_neighbor(
@@ -112,7 +139,7 @@ def _simple_picker(app: Any, button: DeckButton) -> None:
     """Choose a Clip: the grid moves like a list. Up from the top row reaches the toolbar."""
     chrome_on = bool(getattr(app, "_deck_simple_picker_chrome", False))
     chrome = _picker_chrome(app)
-    if button == DeckButton.A:
+    if button in (DeckButton.A, DeckButton.L3):
         if chrome_on:
             _activate_listed(app, chrome)
         else:
@@ -235,24 +262,54 @@ def _focus_roots(app: Any) -> list[QWidget]:
     overlay = _overlay_dialog(app)
     if overlay is not None:
         return [overlay]
-    active = QApplication.activeWindow()
-    if active is not None and active.objectName() == "ExpressPlayer":
-        try:
-            if active.isVisible():
-                return [active]
-        except RuntimeError:
-            pass
+    from steempeg.input.deck_actions import _front_express
+
+    express = _front_express(app)
+    if express is not None:
+        return [express]
     roots: list[QWidget] = []
+    for frame in _player_surfaces(app):
+        roots.append(frame)
+    return roots
+
+
+def _player_surfaces(app: Any) -> list[QWidget]:
+    """Player chrome plus the title-bar tools (About, Settings, Updates).
+
+    Those three sit on the window title bar, not in the player header, so a
+    walk that only sees the header can never land on them.
+    """
+    found: list[QWidget] = []
     for name in ("player_header_frame", "player_footer_frame"):
         frame = getattr(app, name, None)
-        if frame is None:
-            continue
-        try:
-            if frame.isVisible():
-                roots.append(frame)
-        except RuntimeError:
-            continue
-    return roots
+        if _is_shown(frame):
+            found.append(frame)
+    tools = _title_shell_tools(app)
+    if _is_shown(tools):
+        found.append(tools)
+    return found
+
+
+def _is_shown(widget: QWidget | None) -> bool:
+    """True when the widget exists and is on screen."""
+    if widget is None:
+        return False
+    try:
+        return bool(widget.isVisible())
+    except RuntimeError:
+        return False
+
+
+def _title_shell_tools(app: Any) -> QWidget | None:
+    """The (i) / Settings / Updates cluster drawn in the title bar."""
+    ui = getattr(app, "ui", None)
+    bar = getattr(ui, "title_bar", None) if ui is not None else None
+    if bar is None:
+        return None
+    tools = getattr(bar, "_shell_tools", None)
+    if tools is not None:
+        return tools
+    return bar.findChild(QWidget, "TitleBarShellTools")
 
 
 def _overlay_dialog(app: Any) -> QDialog | None:
