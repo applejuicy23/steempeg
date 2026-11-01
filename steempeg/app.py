@@ -6591,6 +6591,10 @@ def main():
     parser.add_argument('--background', action='store_true')
     args, unknown = parser.parse_known_args()
 
+    from steempeg.infra.tls_ca import ensure_tls_ca_bundle
+
+    ensure_tls_ca_bundle()
+
     if args.update_handler:
         from steempeg.update_handler import run_update_handler
         sys.exit(run_update_handler(args.job))
