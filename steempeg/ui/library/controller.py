@@ -3358,6 +3358,55 @@ class LibraryMixin:
                 self.open_express_player, self.express_new_clip_from_popup
             )
         self._new_clip_popups.show_clip(info)
+        self._resolve_new_clip_identity(info)
+
+    def _resolve_new_clip_identity(self, info) -> None:
+        """Fetch a missing game name and icon without blocking the card."""
+        from steempeg.core.games import is_unresolved_game_name
+
+        app_id = (info.app_id or "").strip()
+        if not app_id:
+            return
+        needs_name = is_unresolved_game_name(info.game_name, app_id)
+        cache_dir = getattr(self, "cache_dir", "") or ""
+        cached_icon = os.path.join(cache_dir, f"{app_id}.jpg") if cache_dir else ""
+        needs_icon = not (info.icon_path and os.path.isfile(info.icon_path))
+        if cached_icon and os.path.isfile(cached_icon):
+            needs_icon = False
+        if not needs_name and not needs_icon:
+            return
+
+        from steempeg.ui.new_clip_popup import NewClipIdentityWorker
+
+        host = self
+        worker = NewClipIdentityWorker(app_id, cache_dir, needs_name, needs_icon)
+        workers = getattr(self, "_new_clip_identity_workers", None)
+        if workers is None:
+            workers = []
+            self._new_clip_identity_workers = workers
+        workers.append(worker)
+
+        def _apply(got_id: str, name: str, icon: str, clip_path: str = info.path) -> None:
+            if name:
+                cache = getattr(host, "game_names_cache", None)
+                if cache is None:
+                    cache = {}
+                    host.game_names_cache = cache
+                cache[got_id] = name
+                if hasattr(host, "save_json_cache"):
+                    host.save_json_cache()
+            stack = getattr(host, "_new_clip_popups", None)
+            if stack is not None:
+                stack.update_game_face(clip_path, name, icon)
+
+        def _drop() -> None:
+            if worker in workers:
+                workers.remove(worker)
+
+        worker.resolved.connect(_apply)
+        worker.finished.connect(_drop)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
     def list_newest_library_clips(self, count: int) -> list[str]:
         """Returns up to ``count`` saved Steam clips (``clip_*``) from the library, newest first."""
