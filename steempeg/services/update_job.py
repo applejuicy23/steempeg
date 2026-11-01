@@ -76,12 +76,16 @@ def spawn_update_handler(job: UpdateJob) -> None:
     popen_kwargs: dict = {
         "cwd": job.exe_dir,
         "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
     }
     if sys.platform == "win32":
+        # Detach so the updater window still appears after the main process exits.
+        # Inherited stdio handles were keeping that window from showing.
         popen_kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
-        popen_kwargs["close_fds"] = False
     else:
         popen_kwargs["start_new_session"] = True
-        popen_kwargs["close_fds"] = True
 
     subprocess.Popen(cmd, **popen_kwargs)
