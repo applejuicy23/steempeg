@@ -103,6 +103,7 @@ class QualityPresetDualPopup(QFrame):
 
         self._left["list"].itemClicked.connect(self._on_pick)
         self._right["list"].itemClicked.connect(self._on_pick)
+        self._deck_column = "left"
 
     def _make_column(self, title: str) -> dict:
         host = QWidget()
@@ -177,9 +178,17 @@ class QualityPresetDualPopup(QFrame):
                 if i == current:
                     left.setCurrentItem(item)
         # Prefer highlighting the checked Custom recipe over a drifted Standard row.
+        # setCurrentRow(-1) drops the other column's current item. clearSelection
+        # leaves it, and the next ▲▼ would walk the hidden column and snap back.
         if active_right_item is not None:
             right.setCurrentItem(active_right_item)
-            left.clearSelection()
+            left.setCurrentRow(-1)
+            self._deck_column = "right"
+        elif right.currentItem() is not None and left.currentItem() is None:
+            self._deck_column = "right"
+        else:
+            right.setCurrentRow(-1)
+            self._deck_column = "left"
 
     def present(self) -> None:
         # Refresh QSS in case theme tokens changed since construct.
@@ -239,37 +248,34 @@ class QualityPresetDualPopup(QFrame):
         self.activateWindow()
 
     def deck_navigate(self, button_name: str) -> bool:
-        """Gamepad nav while the dual popup is open. button_name: up/down/left/right."""
-        left = self._left["list"]
-        right = self._right["list"]
-        active = self._deck_active_list()
+        """Move the highlight. The combo value changes only on A.
+
+        ▲▼ stays in the column. ◀▶ switches Standard and Custom.
+        """
         if button_name == "left":
-            if active is right and left.count() > 0:
-                row = max(0, min(left.count() - 1, active.currentRow()))
-                right.clearSelection()
-                left.setCurrentRow(row if row < left.count() else 0)
-                left.scrollToItem(left.currentItem())
-                self._deck_sync_combo_from_list(left)
+            self._focus_column("left")
             return True
         if button_name == "right":
-            if active is left and right.count() > 0:
-                row = max(0, min(right.count() - 1, active.currentRow()))
-                left.clearSelection()
-                right.setCurrentRow(row if row < right.count() else 0)
-                right.scrollToItem(right.currentItem())
-                self._deck_sync_combo_from_list(right)
+            self._focus_column("right")
             return True
-        if button_name in ("up", "down") and active is not None and active.count() > 0:
-            delta = -1 if button_name == "up" else 1
-            row = active.currentRow()
-            if row < 0:
-                row = 0
-            else:
-                row = max(0, min(active.count() - 1, row + delta))
-            active.setCurrentRow(row)
-            active.scrollToItem(active.currentItem())
-            self._deck_sync_combo_from_list(active)
+        active = self._deck_active_list()
+        if active is None or active.count() <= 0:
             return True
+        if button_name not in ("up", "down"):
+            return True
+        delta = -1 if button_name == "up" else 1
+        row = active.currentRow()
+        if row < 0:
+            row = 0
+        else:
+            nxt = row + delta
+            if nxt < 0 or nxt >= active.count():
+                return True
+            row = nxt
+        active.setCurrentRow(row)
+        item = active.currentItem()
+        if item is not None:
+            active.scrollToItem(item)
         return True
 
     def deck_confirm(self) -> bool:
@@ -289,31 +295,36 @@ class QualityPresetDualPopup(QFrame):
         return True
 
     def _deck_active_list(self) -> QListWidget | None:
+        """The column the pad is in. The other column's current item is ignored."""
         left = self._left["list"]
         right = self._right["list"]
-        if left.currentItem() is not None:
-            return left
-        if right.currentItem() is not None:
+        if getattr(self, "_deck_column", "left") == "right" and right.count() > 0:
             return right
         if left.count() > 0:
-            left.setCurrentRow(0)
             return left
         if right.count() > 0:
-            right.setCurrentRow(0)
             return right
         return None
 
-    def _deck_sync_combo_from_list(self, lst: QListWidget) -> None:
-        item = lst.currentItem()
-        if item is None:
+    def _focus_column(self, which: str) -> None:
+        """Highlight one column and clear the other so ▲▼ cannot snap back."""
+        left = self._left["list"]
+        right = self._right["list"]
+        target = left if which == "left" else right
+        other = right if which == "left" else left
+        if target.count() <= 0:
             return
-        idx = item.data(Qt.ItemDataRole.UserRole)
-        if idx is None:
-            return
-        combo = self._combo
-        idx = int(idx)
-        if combo.currentIndex() != idx:
-            combo.setCurrentIndex(idx)
+        row = target.currentRow()
+        if row < 0:
+            other_row = other.currentRow()
+            row = other_row if other_row >= 0 else 0
+            row = min(row, target.count() - 1)
+        other.setCurrentRow(-1)
+        target.setCurrentRow(row)
+        item = target.currentItem()
+        if item is not None:
+            target.scrollToItem(item)
+        self._deck_column = which
 
     def _on_pick(self, item: QListWidgetItem) -> None:
         idx = item.data(Qt.ItemDataRole.UserRole)
