@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -1264,8 +1265,16 @@ class DevModeDialog(SteempegDialog):
         simple = deck_style_is_simple()
         if simple:
             tip_text = (
-                "Simple console. ▲▼◀▶ moves the highlight, like Tab. "
-                "A presses it. B goes back. "
+                "Simple console. ▲▼◀▶ moves the highlight. "
+                "Click presses that control. A plays (trim: set the end); "
+                "inside a window, A presses the highlight too. "
+                "In an open list, ▲▼ moves the row, Click or A keeps it, "
+                "and B closes only the list. ◀▶ leaves a one-column list. "
+                "In Quality, ◀▶ switches Standard and Custom. "
+                "X closes the front window. On the player it queues the clip "
+                "(trim: set the start). Y trims. L1/R1 ±15s. R2 fullscreen. "
+                "L2 jumps to the trim start. View opens Choose a Clip. "
+                "Menu opens Render. "
                 "Settings → General → Console style → Actions restores the shortcut map. "
                 "STEAM / QAM are SteamOS-only."
             )
@@ -1296,17 +1305,27 @@ class DevModeDialog(SteempegDialog):
         # Left cluster
         g_left = QGroupBox("Left")
         left = QVBoxLayout(g_left)
-        left.addWidget(_mk("View", DeckButton.VIEW) if simple else _mk("View → Choose a Clip", DeckButton.VIEW))
-        dpad = QHBoxLayout()
-        dpad.addWidget(_mk("◀", DeckButton.DPAD_LEFT))
-        dpad_mid = QVBoxLayout()
-        dpad_mid.addWidget(_mk("▲", DeckButton.DPAD_UP))
-        dpad_mid.addWidget(_mk("▼", DeckButton.DPAD_DOWN))
-        dpad.addLayout(dpad_mid)
-        dpad.addWidget(_mk("▶", DeckButton.DPAD_RIGHT))
+        left.addWidget(
+            _mk("View → Clips", DeckButton.VIEW) if simple else _mk("View → Choose a Clip", DeckButton.VIEW)
+        )
+        # The Deck scroller aims in four directions and also clicks.
+        # The center button is that click.
+        dpad = QGridLayout()
+        dpad.setHorizontalSpacing(6)
+        dpad.setVerticalSpacing(6)
+        dpad.addWidget(_mk("▲", DeckButton.DPAD_UP), 0, 1)
+        dpad.addWidget(_mk("◀", DeckButton.DPAD_LEFT), 1, 0)
+        click = _mk("Click", DeckButton.L3 if simple else DeckButton.A)
+        if simple:
+            click.setToolTip("Press the scroller. Presses the highlighted control.")
+        else:
+            click.setToolTip("Press the scroller. Same as A.")
+        dpad.addWidget(click, 1, 1)
+        dpad.addWidget(_mk("▶", DeckButton.DPAD_RIGHT), 1, 2)
+        dpad.addWidget(_mk("▼", DeckButton.DPAD_DOWN), 2, 1)
         left.addLayout(dpad)
-        left.addWidget(_mk("L1", DeckButton.L1))
-        left.addWidget(_mk("L2", DeckButton.L2))
+        left.addWidget(_mk("L1 −15s", DeckButton.L1) if simple else _mk("L1", DeckButton.L1))
+        left.addWidget(_mk("L2 start", DeckButton.L2) if simple else _mk("L2", DeckButton.L2))
         left.addWidget(
             _mk("STEAM (OS)", DeckButton.STEAM, enabled=False)
         )
@@ -1316,20 +1335,26 @@ class DevModeDialog(SteempegDialog):
         g_right = QGroupBox("Right")
         right = QVBoxLayout(g_right)
         right.addWidget(
-            _mk("Menu", DeckButton.MENU) if simple else _mk("Menu ☰ → Render", DeckButton.MENU)
+            _mk("Menu → Render", DeckButton.MENU) if simple else _mk("Menu ☰ → Render", DeckButton.MENU)
         )
         face = QHBoxLayout()
         face_mid = QVBoxLayout()
-        face_mid.addWidget(_mk("Y", DeckButton.Y) if simple else _mk("Y → Trim", DeckButton.Y))
+        face_mid.addWidget(_mk("Y → Trim", DeckButton.Y))
         face_row = QHBoxLayout()
-        face_row.addWidget(_mk("X", DeckButton.X) if simple else _mk("X → Queue", DeckButton.X))
-        face_row.addWidget(_mk("B", DeckButton.B) if simple else _mk("B → Back", DeckButton.B))
+        face_x = _mk("X → Close", DeckButton.X) if simple else _mk("X → Queue", DeckButton.X)
+        if simple:
+            face_x.setToolTip("Closes the front window. On the player, queue (trim: set start).")
+        face_row.addWidget(face_x)
+        face_row.addWidget(_mk("B → Back", DeckButton.B))
         face_mid.addLayout(face_row)
-        face_mid.addWidget(_mk("A", DeckButton.A) if simple else _mk("A → Play", DeckButton.A))
+        face_a = _mk("A → Play", DeckButton.A) if simple else _mk("A → Play", DeckButton.A)
+        if simple:
+            face_a.setToolTip("Play on the player. Trim: set the end. In a window, presses the highlight.")
+        face_mid.addWidget(face_a)
         face.addLayout(face_mid)
         right.addLayout(face)
-        right.addWidget(_mk("R1", DeckButton.R1))
-        right.addWidget(_mk("R2", DeckButton.R2))
+        right.addWidget(_mk("R1 +15s", DeckButton.R1) if simple else _mk("R1", DeckButton.R1))
+        right.addWidget(_mk("R2 full", DeckButton.R2) if simple else _mk("R2", DeckButton.R2))
         right.addWidget(
             _mk("QAM … (OS)", DeckButton.QAM, enabled=False)
         )
