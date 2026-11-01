@@ -132,13 +132,20 @@ def describe_new_clip(
 
             game_name = find_local_steam_game_name(app_id) or ""
     from steempeg.core.clip_thumbnails import find_clip_thumbnail
+    from steempeg.core.games import find_local_steam_icon
 
-    icon_path = os.path.join(cache_dir, f"{app_id}.jpg") if app_id else ""
+    icon_path = ""
+    if app_id:
+        cached_icon = os.path.join(cache_dir, f"{app_id}.jpg") if cache_dir else ""
+        if cached_icon and os.path.isfile(cached_icon):
+            icon_path = cached_icon
+        else:
+            icon_path = find_local_steam_icon(app_id) or ""
     return NewClipInfo(
         path=clip_path,
         app_id=app_id,
         game_name=game_name or (f"App {app_id}" if app_id else "Steam clip"),
-        icon_path=icon_path if icon_path and os.path.isfile(icon_path) else "",
+        icon_path=icon_path,
         thumbnail_path=find_clip_thumbnail(clip_path),
         duration_sec=read_clip_duration_sec(clip_path),
     )
