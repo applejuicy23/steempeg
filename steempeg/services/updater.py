@@ -249,6 +249,9 @@ class UpdateDownloadThread(QThread):
         self.progress_signal.emit(percent, label_text)
 
     def run(self):
+        from steempeg.infra.tls_ca import ensure_tls_ca_bundle
+
+        ensure_tls_ca_bundle()
         last_error = "Download failed."
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             if self.is_cancelled:
