@@ -239,7 +239,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         )
         self._games_scroll.setWidget(self.games_container)
         self._games_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self._games_scroll.setMinimumHeight(104)
+        self._games_scroll.setMinimumHeight(36)
         self._games_capsule = create_category_capsule("🎮 Games:", self._games_scroll)
 
         # --- TYPE ---
@@ -705,11 +705,9 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         if avail >= 160:
             target = max(mid_natural + 4, min(target, max(mid_natural, avail - chrome)))
 
-        games_floor = 108 if getattr(self, "_density", None) and getattr(self._density, "compact", False) else 124
-        games_chrome = 12 + 12 + 22 + 8
-        # Match Games capsule bottom to mid body (Folders), not extra empty under mid.
-        mid_body = max(games_floor + games_chrome, mid_natural - radius_pad)
-        games_body = max(games_floor, mid_body - games_chrome)
+        # Games hugs the chips. The column can be taller; the box itself stays short.
+        games_body = self._games_content_px(max(120, int(self._col_games.width() or 260) - 28))
+        self._games_scroll.setMinimumHeight(self._games_row_px())
         self._games_scroll.setFixedHeight(games_body)
 
         self._col_games.setFixedHeight(target)
@@ -1077,7 +1075,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 if "#888888" in ss and "font-weight: bold" in ss:
                     lbl.setStyleSheet(cap_lbl)
 
-        games_min = 92 if compact else 104
+        games_min = self._games_row_px()
         self._games_scroll.setMinimumHeight(games_min)
         from steempeg.ui.widgets.vertical_scrollbar import (
             ensure_steempg_vertical_scrollbar,
@@ -1117,6 +1115,20 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         }
     """.replace("<<FONT>>", tok.FONT_APP)
 
+    def _games_row_px(self) -> int:
+        """One chip row. The Games box must not reserve a tall empty band."""
+        dense = getattr(self, "_density", None)
+        compact = bool(dense is not None and getattr(dense, "compact", False))
+        return 28 if compact else 36
+
+    def _games_content_px(self, width: int) -> int:
+        """Painted height of the Games chips at ``width``, at least one row."""
+        try:
+            content = int(self.games_layout.heightForWidth(max(80, int(width))) or 0) + 4
+        except Exception:
+            content = 0
+        return max(self._games_row_px(), content)
+
     def set_content_max_height(self, max_px: int, *, relayout: bool = True) -> None:
         """Size Games + pick stack vs 3-col.
 
@@ -1125,7 +1137,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
         """
         self._popup_avail_h = max(160, int(max_px))
         dense = getattr(self, "_density", None)
-        games_floor = 108 if dense is not None and getattr(dense, "compact", False) else 124
+        games_floor = self._games_row_px()
         inset = 64 if dense is not None and getattr(dense, "compact", False) else 84
         avail = self._popup_avail_h
 
@@ -1140,24 +1152,20 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 target_w = self._width_for_mode(False, dense)
                 self.setFixedWidth(target_w)
                 width = max(120, target_w - inset)
-                content = self.games_layout.heightForWidth(width) + 4
+                content = self._games_content_px(width)
                 chrome = self._chrome_and_buttons_h()
-                self._games_scroll.setFixedHeight(games_floor)
-                non_games = max(80, self._stack_sections_h(games_floor) - games_floor)
-                # Modest games band for fit math — not "half the shell".
-                stack_games_h = max(games_floor, min(content, 220))
+                self._games_scroll.setFixedHeight(content)
+                non_games = max(80, self._stack_sections_h(content) - content)
+                stack_games_h = content
                 stack_h = chrome + non_games + stack_games_h
 
-                # Big desks: classic vertical stack (popup may scroll).
-                # Small / Deck: wide 3-col when the stack would stick past the floor.
+                # Wide columns when the vertical stack would run off the bottom.
+                # A 1080p laptop is tall enough to miss the old "small shell" cutoff
+                # and still clip Duration under the pill.
                 shell_w = self._filter_shell_width()
                 can_three = shell_w <= 0 or shell_w >= 780
                 stack_fits = stack_h <= avail - 8
-                three = bool(
-                    self._filter_shell_is_small()
-                    and can_three
-                    and not stack_fits
-                )
+                three = bool(can_three and not stack_fits)
 
                 if three:
                     self._place_filter_columns(three_col=True)
@@ -1172,17 +1180,19 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                     # (that opened the void under the Games: title).
                     room = max(games_floor, avail - chrome - non_games)
                     fit_games = max(games_floor, min(content, room))
+                    self._games_scroll.setMinimumHeight(games_floor)
                     self._games_scroll.setFixedHeight(fit_games)
             elif getattr(self, "_three_col", False):
                 self._stretch_games_column()
             else:
                 # Re-pack only: keep mode, refit games to new avail.
                 width = max(120, self.width() - inset)
-                content = self.games_layout.heightForWidth(width) + 4
+                content = self._games_content_px(width)
                 chrome = self._chrome_and_buttons_h()
-                non_games = max(80, self._stack_sections_h(games_floor) - games_floor)
+                non_games = max(80, self._stack_sections_h(content) - content)
                 room = max(games_floor, avail - chrome - non_games)
                 fit_games = max(games_floor, min(content, room))
+                self._games_scroll.setMinimumHeight(games_floor)
                 self._games_scroll.setFixedHeight(fit_games)
 
             self._pack_popup_height()
