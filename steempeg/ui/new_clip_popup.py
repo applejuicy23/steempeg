@@ -8,6 +8,7 @@ upwards from the bottom-right corner of the primary screen.
 from __future__ import annotations
 
 import os
+import time
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -17,6 +18,7 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QRectF,
     Qt,
+    QThread,
     QTimer,
     Signal,
 )
@@ -59,6 +61,22 @@ _SAVED_QSS = (
     "color: #888888; font-size: 12px;"
     f" font-family: {tok.FONT_APP}; background: transparent; border: none;"
 )
+
+
+def format_saved_ago(elapsed_sec: float) -> str:
+    """Relative save line: just now, then minutes, then hours."""
+    elapsed = int(max(0, elapsed_sec))
+    if elapsed < 45:
+        return "Saved just now"
+    if elapsed < 90:
+        return "Saved 1 min ago"
+    minutes = elapsed // 60
+    if minutes < 60:
+        return f"Saved {minutes} min ago"
+    hours = minutes // 60
+    if hours == 1:
+        return "Saved 1 hour ago"
+    return f"Saved {hours} hours ago"
 
 
 def format_clip_duration(seconds: float | None) -> str:
@@ -117,6 +135,36 @@ def build_game_icon_pixmap(icon_path: str, size: int) -> QPixmap:
     return shaped_game_icon_pixmap(
         QPixmap(get_resource_path("unknown_icon.png")), size, ICON_SHAPE_CIRCLE
     )
+
+
+class NewClipIdentityWorker(QThread):
+    """Looks up one game's name and icon off the UI thread."""
+
+    resolved = Signal(str, str, str)
+
+    def __init__(self, app_id: str, cache_dir: str, need_name: bool, need_icon: bool):
+        """Remember what is still missing for ``app_id``."""
+        super().__init__()
+        self._app_id = app_id
+        self._cache_dir = cache_dir
+        self._need_name = need_name
+        self._need_icon = need_icon
+
+    def run(self) -> None:
+        """Ask Steam for the display name and write the icon into the cache."""
+        from steempeg.core.games import download_icon, fetch_game_name
+        from steempeg.infra.tls_ca import ensure_tls_ca_bundle
+
+        ensure_tls_ca_bundle()
+        name = fetch_game_name(self._app_id) if self._need_name else ""
+        icon = ""
+        dest = os.path.join(self._cache_dir, f"{self._app_id}.jpg") if self._cache_dir else ""
+        if dest and self._need_icon and not os.path.isfile(dest):
+            if download_icon(self._app_id, dest):
+                icon = dest
+        elif dest and os.path.isfile(dest):
+            icon = dest
+        self.resolved.emit(self._app_id, name or "", icon)
 
 
 class NewClipPopup(QWidget):
@@ -203,10 +251,17 @@ class NewClipPopup(QWidget):
         game = QLabel(info.game_name)
         game.setStyleSheet(_GAME_QSS)
         text_col.addWidget(game)
+        self._game_label = game
+        self._icon_label = icon
         saved = QLabel("Saved just now")
         saved.setStyleSheet(_SAVED_QSS)
         text_col.addWidget(saved)
         self._status_label = saved
+        self._shown_at = time.time()
+        self._age_timer = QTimer(self)
+        self._age_timer.setInterval(15000)
+        self._age_timer.timeout.connect(self._refresh_saved_age)
+        self._age_timer.start()
         game_row.addLayout(text_col, 1)
         body.addLayout(game_row)
 
@@ -255,12 +310,34 @@ class NewClipPopup(QWidget):
         # that was presented a moment ago.
         self._run_animation(target, 1.0, _SHOW_MS, QEasingCurve.Type.OutCubic)
 
+    def apply_game_face(self, game_name: str, icon_path: str) -> None:
+        """Replace the placeholder name or icon once Steam answers."""
+        if self._closing:
+            return
+        if game_name:
+            self._game_label.setText(game_name)
+        if icon_path and os.path.isfile(icon_path):
+            from steempeg.ui.icon_utils import apply_square_icon
+
+            apply_square_icon(
+                self._icon_label,
+                build_game_icon_pixmap(icon_path, _ICON_PX),
+                _ICON_PX,
+            )
+
+    def _refresh_saved_age(self) -> None:
+        """Keep the save line moving while the card is open, including on hover."""
+        if self._closing or self._render is not None or self._output_file:
+            return
+        self._status_label.setText(format_saved_ago(time.time() - self._shown_at))
+
     def dismiss(self) -> None:
         """Fades the card out and closes it."""
         if self._closing:
             return
         self._closing = True
         self._dismiss_timer.stop()
+        self._age_timer.stop()
         self.dismissed.emit(self)
         self._run_animation(self.pos() + QPoint(0, _SLIDE_PX), 0.0, _HIDE_MS, QEasingCurve.Type.InCubic)
         if self._anim is not None:
@@ -392,6 +469,13 @@ class NewClipPopupStack:
         for index, existing in enumerate(self._popups[1:], start=1):
             existing.move_to(targets[index])
         popup.present(targets[0])
+
+    def update_game_face(self, clip_path: str, game_name: str, icon_path: str) -> None:
+        """Fills name and icon on the card that is already showing this clip."""
+        for popup in self._popups:
+            if popup.clip_path == clip_path:
+                popup.apply_game_face(game_name, icon_path)
+                return
 
     def _remove_popup(self, popup: NewClipPopup) -> None:
         """Drops a closing card and slides the cards above it down."""
