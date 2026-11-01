@@ -18,10 +18,10 @@ class DeckButton(str, Enum):
     """Physical Deck controls we may bind (STEAM / QAM stay OS-only)."""
 
     # Face + chrome
-    A = "a"  # south — confirm / play-pause
-    B = "b"  # east — back / close sheet
-    X = "x"  # west — add to queue
-    Y = "y"  # north — (reserved / trim later)
+    A = "a"  # south — play-pause; in a window, the highlighted control
+    B = "b"  # east — one step back (list, then the window)
+    X = "x"  # west — close the front window; on the player, queue / trim start
+    Y = "y"  # north — toggle trim
     VIEW = "view"  # left Select-like — Choose a Clip
     MENU = "menu"  # right Options — Render settings
     # D-pad
@@ -34,7 +34,7 @@ class DeckButton(str, Enum):
     R1 = "r1"
     L2 = "l2"
     R2 = "r2"
-    # Stick clicks (optional later)
+    # Left stick / Deck scroller click — press the highlighted control
     L3 = "l3"
     R3 = "r3"
     # OS-only — exposed in Dev UI as disabled labels, never dispatched
