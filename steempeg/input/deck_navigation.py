@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QPoint, QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -22,6 +22,13 @@ from PySide6.QtWidgets import (
 from steempeg.input.gamepad import DeckButton
 
 _log = logging.getLogger(__name__)
+
+# Qt.Popup closes on any outside click, including the Dev pad, before the
+# button can move the row. A tool window stays up so the pad can drive it.
+_PINNED_POPUP = "_steempeg_popup_pinned"
+_POPUP_CLASS_NAMES = frozenset(
+    {"QComboBoxPrivateContainer", "QualityPresetDualPopup"}
+)
 
 _DPAD = frozenset(
     {
@@ -44,6 +51,138 @@ _ACTION_BUTTON_ATTRS = (
     "btn_cancel",
     "btn_logs",
 )
+
+
+class _DeckPopupHold(QObject):
+    """Keep an open combo list alive while the Dev pad is clicked."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Pin a freshly shown list, and let clicks outside it dismiss it."""
+        kind = event.type()
+        if kind == QEvent.Type.Show:
+            _queue_pin_combo_popup(watched)
+        elif kind == QEvent.Type.MouseButtonPress:
+            _dismiss_pinned_popup(watched)
+        return False
+
+
+def install_deck_popup_hold(app: Any) -> None:
+    """Install the popup hold once. ``app`` is the Steempeg controller."""
+    qapp = QApplication.instance()
+    if qapp is None:
+        return
+    qapp._steempeg_popup_hold_app = app
+    if getattr(qapp, "_steempeg_popup_hold", None) is not None:
+        return
+    hold = _DeckPopupHold(qapp)
+    qapp._steempeg_popup_hold = hold
+    qapp.installEventFilter(hold)
+
+
+def _popup_window(widget: QObject) -> QWidget | None:
+    """The combo list window, when ``widget`` is that window."""
+    if not isinstance(widget, QWidget) or not widget.isWindow():
+        return None
+    try:
+        name = widget.metaObject().className()
+    except RuntimeError:
+        return None
+    if name not in _POPUP_CLASS_NAMES:
+        return None
+    return widget
+
+
+def _popup_is_tool(window: QWidget) -> bool:
+    """True after the list has been taken off the Qt.Popup flag."""
+    flags = window.windowFlags()
+    return bool(flags & Qt.WindowType.Tool) and not bool(flags & Qt.WindowType.Popup)
+
+
+def _queue_pin_combo_popup(widget: QObject) -> None:
+    """Schedule the flag swap. Doing it inside Show re-enters the popup."""
+    window = _popup_window(widget)
+    if window is None or window.property("_steempeg_pinning"):
+        return
+    if _popup_is_tool(window):
+        window.setProperty(_PINNED_POPUP, True)
+        return
+    if window.property("_steempeg_popup_pin_queued"):
+        return
+    window.setProperty("_steempeg_popup_pin_queued", True)
+    QTimer.singleShot(0, lambda w=window: _pin_combo_popup(w))
+
+
+def _pin_combo_popup(window: QWidget) -> None:
+    """Turn a Qt.Popup list into a tool window so the Dev pad can click it."""
+    try:
+        if window.property("_steempeg_pinning"):
+            return
+    except RuntimeError:
+        return
+    window.setProperty("_steempeg_popup_pin_queued", False)
+    if _popup_is_tool(window):
+        window.setProperty(_PINNED_POPUP, True)
+        return
+    from steempeg.ui.settings_prefs import deck_controls_enabled
+
+    qapp = QApplication.instance()
+    holder = getattr(qapp, "_steempeg_popup_hold_app", None) if qapp is not None else None
+    if not deck_controls_enabled(app=holder):
+        return
+    window.setProperty("_steempeg_pinning", True)
+    geo = window.geometry()
+    window.setWindowFlags(
+        Qt.WindowType.Tool
+        | Qt.WindowType.FramelessWindowHint
+        | Qt.WindowType.WindowStaysOnTopHint
+        | Qt.WindowType.NoDropShadowWindowHint
+    )
+    window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+    window.setProperty(_PINNED_POPUP, True)
+    window.setGeometry(geo)
+    window.show()
+    window.setProperty("_steempeg_pinning", False)
+
+
+def _combo_for_pinned(window: QWidget) -> QComboBox | None:
+    """The combo that owns this list window."""
+    if window.metaObject().className() == "QualityPresetDualPopup":
+        combo = getattr(window, "_combo", None)
+        return combo if isinstance(combo, QComboBox) else None
+    for widget in QApplication.allWidgets():
+        if not isinstance(widget, QComboBox):
+            continue
+        view = widget.view()
+        if view is not None and view.window() is window:
+            return widget
+    return None
+
+
+def _dismiss_pinned_popup(widget: QObject) -> None:
+    """A click off the list closes it. The Dev pad is not off the list."""
+    if not isinstance(widget, QWidget):
+        return
+    try:
+        host = widget.window()
+    except RuntimeError:
+        return
+    if type(host).__name__ == "DevModeDialog":
+        return
+    for popup in QApplication.topLevelWidgets():
+        try:
+            if not popup.property(_PINNED_POPUP) or not popup.isVisible():
+                continue
+            if popup is host or popup.isAncestorOf(widget):
+                continue
+        except RuntimeError:
+            continue
+        combo = _combo_for_pinned(popup)
+        if combo is not None and (combo is widget or combo.isAncestorOf(widget)):
+            continue
+        if combo is not None:
+            combo.hidePopup()
+        else:
+            popup.hide()
 
 
 def try_deck_navigation(app: Any, button: DeckButton) -> bool:
@@ -361,7 +500,17 @@ def hide_deck_focus_ring(app: Any) -> None:
 
 
 def _ensure_focus_ring(host: QWidget) -> QFrame:
-    ring = host.findChild(QFrame, _RING_OBJECT)
+    """The outline for ``host``. It has to be a direct child.
+
+    ``findChild`` would reuse a ring that still sits on a nested page. The
+    next ``setGeometry`` is in the new host's coordinates, so a queue card
+    or the Start strip would paint as a loose box over Video Settings.
+    """
+    ring = None
+    for child in host.children():
+        if isinstance(child, QFrame) and child.objectName() == _RING_OBJECT:
+            ring = child
+            break
     if ring is None:
         ring = QFrame(host)
         ring.setObjectName(_RING_OBJECT)
@@ -371,6 +520,10 @@ def _ensure_focus_ring(host: QWidget) -> QFrame:
             f" border: 2px solid {_RING_ACCENT};"
             f" border-radius: 8px;"
             f" background: transparent;"
+            f" padding: 0px;"
+            f" margin: 0px;"
+            f" min-width: 0px;"
+            f" min-height: 0px;"
             f"}}"
         )
     return ring
@@ -451,6 +604,9 @@ def _show_focus_ring(app: Any, target: QWidget, *, require_console: bool = True)
         app._deck_focus_ring = ring
         pad = 3
         tl = target.mapTo(host, QPoint(-pad, -pad))
+        # A reused ring may still be clamped to the previous control's size.
+        ring.setMinimumSize(0, 0)
+        ring.setMaximumSize(16777215, 16777215)
         ring.setGeometry(
             tl.x(), tl.y(), target.width() + pad * 2, target.height() + pad * 2
         )
@@ -461,16 +617,24 @@ def _show_focus_ring(app: Any, target: QWidget, *, require_console: bool = True)
 
 
 def _focused_combo(app: Any) -> QComboBox | None:
-    w = QApplication.focusWidget()
-    while w is not None:
-        if isinstance(w, QComboBox):
-            return w
-        w = w.parentWidget()
+    """The combo whose list is open, or the combo that still has focus.
+
+    The popup is its own window, so walking from the focus widget often
+    misses the box. Simple mode keeps the box on the purple highlight.
+    """
+    focused = _combo_from_focus_widget()
+    if focused is not None and _combo_popup_visible(focused):
+        return focused
     # Choose a Clip sort — popup may steal focus onto the list view.
     if getattr(app, "_portable_clip_picker_open", False):
         sort = getattr(app, "combo_sort", None)
         if isinstance(sort, QComboBox) and _combo_popup_visible(sort):
             return sort
+    simple = _simple_open_combo(app)
+    if simple is not None:
+        return simple
+    if focused is not None:
+        return focused
     if getattr(app, "_app_settings_open", False):
         items = _collect_app_settings_focusables(app)
         idx = int(getattr(app, "_deck_app_settings_focus_idx", 0))
@@ -517,15 +681,122 @@ def close_deck_combo_popup(app: Any) -> bool:
     return True
 
 
+def _combo_from_focus_widget() -> QComboBox | None:
+    """A combo that still owns keyboard focus, if there is one."""
+    widget = QApplication.focusWidget()
+    while widget is not None:
+        if isinstance(widget, QComboBox):
+            return widget
+        widget = widget.parentWidget()
+    return None
+
+
+def _simple_open_combo(app: Any) -> QComboBox | None:
+    """The Simple highlight when its list is open, else any open list on that surface."""
+    try:
+        from steempeg.input.deck_simple import _current_index, _focusables
+    except Exception:
+        return None
+    try:
+        items = _focusables(app)
+    except Exception:
+        return None
+    if not items:
+        return None
+    highlighted = items[_current_index(app, items)]
+    if isinstance(highlighted, QComboBox) and _combo_popup_visible(highlighted):
+        return highlighted
+    for widget in items:
+        if isinstance(widget, QComboBox) and _combo_popup_visible(widget):
+            return widget
+    return None
+
+
+def _combo_row_enabled(combo: QComboBox, index: int) -> bool:
+    """False for a disabled row. Those are skipped while browsing."""
+    model = combo.model()
+    if model is None:
+        return True
+    try:
+        model_index = model.index(index, combo.modelColumn())
+    except RuntimeError:
+        return True
+    if not model_index.isValid():
+        return False
+    return bool(model.flags(model_index) & Qt.ItemFlag.ItemIsEnabled)
+
+
+def _popup_row(combo: QComboBox) -> int:
+    """The row the open list is showing, before it is committed."""
+    view = combo.view()
+    if view is not None:
+        try:
+            current = view.currentIndex()
+            if current.isValid():
+                return current.row()
+        except RuntimeError:
+            pass
+    return combo.currentIndex()
+
+
+def _reveal_combo_row(combo: QComboBox, index: int) -> None:
+    """Move the list highlight without committing the combo value."""
+    view = combo.view()
+    model = combo.model()
+    if view is None or model is None:
+        return
+    try:
+        model_index = model.index(index, combo.modelColumn())
+        if not model_index.isValid():
+            return
+        view.setCurrentIndex(model_index)
+        view.scrollTo(model_index)
+    except RuntimeError:
+        return
+
+
+def _step_open_combo(combo: QComboBox, delta: int) -> None:
+    """Highlight the next enabled row. The value changes only on A."""
+    count = combo.count()
+    if count <= 0 or delta == 0:
+        return
+    nxt = _popup_row(combo)
+    if nxt < 0:
+        nxt = 0 if delta > 0 else count - 1
+    for _ in range(count):
+        nxt += 1 if delta > 0 else -1
+        if nxt < 0 or nxt >= count:
+            return
+        if _combo_row_enabled(combo, nxt):
+            _reveal_combo_row(combo, nxt)
+            return
+
+
+def _confirm_open_combo(combo: QComboBox) -> None:
+    """Keep the highlighted row and close the list."""
+    row = _popup_row(combo)
+    combo.hidePopup()
+    if row < 0 or row >= combo.count() or row == combo.currentIndex():
+        return
+    if not _combo_row_enabled(combo, row):
+        return
+    combo.setCurrentIndex(row)
+
+
 def _nav_open_combo(app: Any, button: DeckButton) -> bool:
-    """Drive an open QComboBox / Quality dual-popup. True = consumed."""
+    """Drive an open QComboBox / Quality dual-popup. True = consumed.
+
+    ▲▼ moves the row. A and the scroller click (L3) commit it. In Simple,
+    ◀▶ closes a one-column list and returns False so the highlight can
+    step. B is handled earlier and just closes the list.
+    """
     combo = _focused_combo(app)
     if combo is None or not _combo_popup_visible(combo):
         return False
 
     dual = _dual_quality_popup(combo)
     if dual is not None:
-        if button == DeckButton.A:
+        if button in (DeckButton.A, DeckButton.L3):
             dual.deck_confirm()
             return True
         if button == DeckButton.B:
@@ -543,22 +814,26 @@ def _nav_open_combo(app: Any, button: DeckButton) -> bool:
         return True
 
     count = combo.count()
-    if button == DeckButton.A:
-        combo.hidePopup()
+    if button in (DeckButton.A, DeckButton.L3):
+        _confirm_open_combo(combo)
         return True
     if button == DeckButton.B:
         combo.hidePopup()
         return True
     if count <= 0:
         return True
-    idx = combo.currentIndex()
     if button == DeckButton.DPAD_UP:
-        combo.setCurrentIndex(max(0, idx - 1))
+        _step_open_combo(combo, -1)
         return True
     if button == DeckButton.DPAD_DOWN:
-        combo.setCurrentIndex(min(count - 1, idx + 1))
+        _step_open_combo(combo, 1)
         return True
     if button in (DeckButton.DPAD_LEFT, DeckButton.DPAD_RIGHT):
+        from steempeg.ui.settings_prefs import deck_style_is_simple
+
+        if deck_style_is_simple(app=app):
+            combo.hidePopup()
+            return False
         return True
     return True
 
