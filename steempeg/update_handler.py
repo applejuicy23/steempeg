@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -29,8 +30,31 @@ from steempeg.ui.update_progress_dialog import UpdateProgressDialog
 from steempeg.ui.message_dialog import steempeg_critical
 
 
+def _relaunch_main(exe_dir: str) -> None:
+    """Start Steempeg again after a cancelled or failed update."""
+    from steempeg.infra.paths import running_executable
+
+    exe = running_executable()
+    if not exe or not os.path.isfile(exe):
+        logging.error("UPDATE_HANDLER: cannot relaunch, missing %s", exe)
+        return
+    kwargs: dict = {"cwd": exe_dir or None, "close_fds": True}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0)
+        kwargs["stdin"] = subprocess.DEVNULL
+        kwargs["stdout"] = subprocess.DEVNULL
+        kwargs["stderr"] = subprocess.DEVNULL
+    else:
+        kwargs["start_new_session"] = True
+    logging.info("UPDATE_HANDLER: relaunch %s", exe)
+    subprocess.Popen([exe], **kwargs)
+
+
 def run_update_handler(job_path: str) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    from steempeg.infra.tls_ca import ensure_tls_ca_bundle
+
+    ensure_tls_ca_bundle()
     job = load_update_job(job_path)
     os.chdir(job.exe_dir)
 
@@ -47,17 +71,26 @@ def run_update_handler(job_path: str) -> int:
     )
     dialog.show()
 
-    state: dict = {"thread": None}
+    state: dict = {"thread": None, "left": False, "handoff": False}
+
+    def leave_and_relaunch() -> None:
+        """Quit this updater and bring the app back. The install bat does its own launch."""
+        if state["left"] or state["handoff"]:
+            return
+        state["left"] = True
+        _relaunch_main(job.exe_dir)
+        app.quit()
 
     def fail(message: str) -> None:
         dialog.set_phase("error")
         dialog.set_detail(message)
         steempeg_critical(dialog, "Update Failed", message)
+        leave_and_relaunch()
 
     def on_download_done(success: bool, filepath: str, asset_name: str) -> None:
         if not success:
             if not filepath and not asset_name:
-                app.quit()
+                leave_and_relaunch()
                 return
             fail(filepath or "Download was cancelled or failed.")
             return
@@ -82,6 +115,8 @@ def run_update_handler(job_path: str) -> int:
             dialog.set_phase("install", percent=85)
             dialog.set_detail("Preparing file replacement…")
             QApplication.processEvents()
+            # The deferred script starts Steempeg. This process must not launch a second one.
+            state["handoff"] = True
 
             if sys.platform == "win32":
                 bat_path = write_deferred_install_bat(
