@@ -285,6 +285,19 @@ def plain_header_title(html_or_text: str) -> str:
     return plain
 
 
+def _header_helper_host(app):
+    """Parent for header pads so they are not a top-level «Steempeg» window.
+
+    A parentless QWidget is its own HWND. Showing it while the splash still
+    says Finishing setup maps a captioned frame plus a transparent title-bar
+    outline, then both vanish once the widget joins the header layout.
+    """
+    header = getattr(app, "player_header_frame", None)
+    if header is not None:
+        return header
+    return getattr(app, "ui", None)
+
+
 def ensure_header_spacers(app) -> tuple[QWidget | None, QWidget | None]:
     """Create expanding spacer widgets used to center or left-align the title cluster."""
     left = getattr(app, "player_header_left_spacer", None)
@@ -298,7 +311,7 @@ def ensure_header_spacers(app) -> tuple[QWidget | None, QWidget | None]:
             pass
 
     def _spacer(name: str) -> QWidget:
-        w = QWidget()
+        w = QWidget(_header_helper_host(app))
         w.setObjectName(name)
         w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         w.setMinimumWidth(0)
@@ -324,7 +337,7 @@ def ensure_header_center_wings(app) -> tuple[QWidget | None, QWidget | None]:
             pass
 
     def _wing(name: str) -> QWidget:
-        w = QWidget()
+        w = QWidget(_header_helper_host(app))
         w.setObjectName(name)
         w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         w.setMinimumWidth(0)
@@ -354,7 +367,7 @@ def ensure_header_right_dock_mirror(app) -> QWidget | None:
             return mirror
         except RuntimeError:
             pass
-    mirror = QWidget()
+    mirror = QWidget(_header_helper_host(app))
     mirror.setObjectName("playerHeaderDockMirror")
     mirror.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
     mirror.setFixedWidth(0)
@@ -691,7 +704,7 @@ def ensure_header_right_pad(app) -> QWidget:
     pad = getattr(app, "player_header_right_pad", None)
     if _widget_alive(pad):
         return pad
-    pad = QWidget()
+    pad = QWidget(_header_helper_host(app))
     pad.setObjectName("playerHeaderRightPad")
     pad.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
     pad.setFixedWidth(0)
@@ -949,9 +962,6 @@ def apply_player_header_layout(app, layout: object | None = None) -> str:
         left.setMaximumWidth(16777215)
         right.setVisible(True)
         right.setMaximumWidth(16777215)
-        left_wing.show()
-        right_wing.show()
-        mirror.show()
 
         insert_at = dock_idx if dock_idx >= 0 else lay.count()
         # Recompute after removals — dock may have shifted.
@@ -962,6 +972,11 @@ def apply_player_header_layout(app, layout: object | None = None) -> str:
         lay.insertWidget(insert_at + 1, left_wing, 1)
         lay.insertWidget(insert_at + 2, divider, 0)
         lay.insertWidget(insert_at + 3, right_wing, 1)
+        # Show only after the wings sit in the header. A bare show() while
+        # they were parentless mapped a real «Steempeg» frame at 98%.
+        mirror.show()
+        left_wing.show()
+        right_wing.show()
         divider.show()
         choose_btn.show()
         title.show()
