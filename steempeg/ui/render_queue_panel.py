@@ -452,7 +452,7 @@ class QueueJobCard(QFrame):
 
         trim_text = format_job_trim(job.settings)
         has_trim = job.settings.is_trim_mode and job.settings.trim_end_ms > job.settings.trim_start_ms
-        trim_lbl = ElidedLabel(trim_text)
+        trim_lbl = ElidedLabel(trim_text, self)
         trim_lbl.setStyleSheet(f"color: #b29ae7; font-size: 11px; {_FONT}")
         trim_lbl.setVisible(has_trim)
         trim_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
