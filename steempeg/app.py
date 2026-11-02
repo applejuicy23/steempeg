@@ -89,6 +89,35 @@ def _splash_keepalive() -> None:
         pass
 
 
+def _seal_offscreen(widget) -> None:
+    """Unparent without mapping a captioned «Steempeg» window.
+
+    A parentless QWidget is a real window, and Windows titles it with the
+    application name. The launch splash is already up while the shell is
+    assembled, so that window appears beside the loading card. Hide and
+    WA_DontShowOnScreen first. Clear the attribute with ``_unseal_offscreen``
+    after the widget has a parent again, before anything calls show().
+    """
+    if widget is None:
+        return
+    try:
+        widget.hide()
+        widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        widget.setParent(None)
+    except RuntimeError:
+        return
+
+
+def _unseal_offscreen(widget) -> None:
+    """Let a sealed widget map once it sits inside a real parent."""
+    if widget is None:
+        return
+    try:
+        widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+    except RuntimeError:
+        return
+
+
 def _is_enabled_setting(value) -> bool:
     """Parse settings flag values that may arrive as bool/str/int."""
     if isinstance(value, bool):
@@ -413,6 +442,10 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         _launch_splash_progress(8, "Building window…")
 
         self.ui = MainWindow(app_host=self)
+        # Splash is already on screen. winId() / mpv / frame changes must not
+        # map this shell beside it — the caption would be «Steempeg» again.
+        self.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self.ui.hide()
         _launch_splash_progress(22, "Window ready…")
         self._install_animated_render_bar()
 
@@ -1154,11 +1187,13 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 if insert_idx != -1:
                     parent_layout.removeWidget(self.ui.settings_tabs)
             
-            self.ui.settings_tabs.setParent(None)
+            _seal_offscreen(self.ui.settings_tabs)
             
             # 2. MAIN CONTAINER
-
-            self.neo_wrapper = QWidget()
+            # Parent immediately. A parentless card is its own «Steempeg» window
+            # for the whole neo build, which runs under the launch splash.
+            neo_parent = parent_widget if parent_widget is not None else self.ui
+            self.neo_wrapper = QWidget(neo_parent)
             self.neo_wrapper.setObjectName("neo_wrapper")
             self.neo_wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.neo_wrapper.setStyleSheet(
@@ -1312,7 +1347,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 QPushButton:pressed { background-color: #141414; border: 2px solid #b29ae7; }
             """))
             
-            # Place tabs in the scroll area
+            # Place tabs in the scroll area. Unseal first — setWidget shows it.
+            _unseal_offscreen(self.ui.settings_tabs)
             self.right_scroll.setWidget(self.ui.settings_tabs)
             
             # --- SAFE MASK (QRegion), applied after the resize settles ---
@@ -1692,7 +1728,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     parent_widget.layout().setContentsMargins(0, 0, 0, 0)
 
             # 3. Creating Our Single Monolithic Circle
-            self.render_dashboard = qtw.QFrame()
+            dash_parent = parent_widget if parent_widget is not None else self.ui
+            self.render_dashboard = qtw.QFrame(dash_parent)
             self.render_dashboard.setObjectName("renderDashboard")
             from steempeg.ui import ui_theme as ut
             self.render_dashboard.setStyleSheet(
@@ -2318,7 +2355,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         
         # 1. Mercilessly destroy the old Windows slider
         if hasattr(self.ui, 'slider_timeline'):
-            self.ui.slider_timeline.setParent(None)
+            _seal_offscreen(self.ui.slider_timeline)
             self.ui.slider_timeline.deleteLater()
             delattr(self.ui, 'slider_timeline')
 
@@ -2345,10 +2382,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 while old_controls_layout.count():
                     item = old_controls_layout.takeAt(0)
                     if item.widget():
-                        item.widget().setParent(None) 
+                        # DontShow only for the detach. Do not hide — label_time
+                        # and the play buttons are shown again from this footer,
+                        # and an explicit hide would keep them off the player.
+                        taken = item.widget()
+                        try:
+                            taken.setAttribute(
+                                Qt.WidgetAttribute.WA_DontShowOnScreen, True
+                            )
+                            taken.setParent(None)
+                            taken.setAttribute(
+                                Qt.WidgetAttribute.WA_DontShowOnScreen, False
+                            )
+                        except RuntimeError:
+                            pass 
                         
                 # 4. Create a styled QFrame container for the footer (matches the header panel)
-                self.player_footer_frame = QFrame()
+                self.player_footer_frame = QFrame(self.ui.right_panel)
                 self.player_footer_frame.setObjectName("HudFrame")
                 self.player_footer_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 
@@ -2695,7 +2745,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 while right_layout.count():
                     all_items.append(right_layout.takeAt(0))
 
-                self.main_v_splitter = QSplitter(Qt.Vertical)
+                self.main_v_splitter = QSplitter(Qt.Vertical, self.ui)
 
                 from steempeg.ui.layout_defaults import (
                     DESKTOP_BOTTOM_PANE_SPACING,
@@ -2705,14 +2755,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
 
                 # 3. Top Box (Player and Buttons)
-                self.top_v_wrap = QWidget()
+                self.top_v_wrap = QWidget(self.main_v_splitter)
                 top_v_layout = QVBoxLayout(self.top_v_wrap)
                 # Breath before the splitter handle (not a thick dark band).
                 top_v_layout.setContentsMargins(0, 0, 0, MAIN_V_SPLIT_TOP_PAD)
                 top_v_layout.setSpacing(PLAYER_COLUMN_SPACING)
 
                 # 4. Bottom Box (Tabs and Status)
-                self.bottom_v_wrap = QWidget()
+                self.bottom_v_wrap = QWidget(self.main_v_splitter)
                 bottom_v_layout = QVBoxLayout(self.bottom_v_wrap)
                 bottom_v_layout.setContentsMargins(0, MAIN_V_SPLIT_BOTTOM_PAD, 0, 0)
                 # Neo ↔ dash gap (tighter than right_panel's generic 8).
@@ -2815,7 +2865,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     self.apply_desktop_render_layout()
 
                 # 7. Place the splitter back into the CLEAN right-hand panel.
-                self.right_content_wrap = QWidget()
+                self.right_content_wrap = QWidget(self.ui.right_panel)
                 self.right_content_wrap.setAttribute(Qt.WA_StyledBackground, True)
                 self.right_content_wrap.setStyleSheet("background: transparent;")
                 right_content_layout = QVBoxLayout(self.right_content_wrap)
@@ -2837,7 +2887,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 from steempeg.ui.render_queue_panel import RenderQueuePanel
 
                 queue_view = self.get_layout_setting("queue_view_mode", DEFAULT_QUEUE_VIEW)
-                self.render_queue_panel = RenderQueuePanel(initial_view_mode=queue_view)
+                self.render_queue_panel = RenderQueuePanel(
+                    queue_view, self.ui
+                )
                 self.render_queue_panel._app = self
                 # Closed at startup (sizes […, 0]); keep min at 0 until the pane opens
                 # so nested mins cannot fight Clips Manager on the outer splitter.
@@ -2876,7 +2928,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                         activate=self.get_layout_setting("queue_panel_page", "queue") == "smart_deletor",
                     )
 
-                self.right_h_splitter = QSplitter(Qt.Horizontal)
+                self.right_h_splitter = QSplitter(Qt.Horizontal, self.ui)
                 self.right_h_splitter.setObjectName("right_h_splitter")
                 self.right_h_splitter.setHandleWidth(6)
                 self.right_h_splitter.setChildrenCollapsible(True)
@@ -2886,9 +2938,14 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 right_layout.addWidget(self.right_content_wrap)
 
                 panel_idx = self.ui.main_splitter.indexOf(self.ui.right_panel)
-                self.ui.right_panel.setParent(None)
+                _seal_offscreen(self.ui.right_panel)
                 self.ui.right_panel.setMinimumWidth(0)
+                _unseal_offscreen(self.ui.right_panel)
                 self.right_h_splitter.addWidget(self.ui.right_panel)
+                # addWidget leaves an already-hidden child hidden. The seal hid
+                # the panel so the detach could not map a window; show it again
+                # now that the splitter is its parent.
+                self.ui.right_panel.show()
                 self.right_h_splitter.addWidget(self.render_queue_panel)
                 # After addWidget — setCollapsible before children is Index out of range.
                 # Player column may collapse to 0 so the two handles can "kiss"
@@ -2971,9 +3028,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         mpv_log_path_str = self.current_mpv_log_file
         logging.info("MPV log: %s", mpv_log_path_str)
 
-        # Clean up any junk, if present
-        if self.ui.video_container.layout():
-            QWidget().setLayout(self.ui.video_container.layout())
+        # Clean up any junk, if present. A parentless sink is a «Steempeg»
+        # window; this runs while the launch splash is on screen.
+        old_video_layout = self.ui.video_container.layout()
+        if old_video_layout is not None:
+            layout_sink = QWidget(self.ui.video_container)
+            layout_sink.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            layout_sink.hide()
+            layout_sink.setLayout(old_video_layout)
+            layout_sink.deleteLater()
             
         self.ui.video_container.setStyleSheet("background-color: transparent; border: none;")
         # UI file pins min height 280 — that makes the embed overflow when the
@@ -6796,17 +6859,12 @@ def main():
 
         from PySide6.QtCore import Qt
         if sys.platform == "win32":
-            # Custom Win32 chrome: keep native frame styles, hide painted caption later.
-            # WindowSystemMenuHint keeps Alt+F4 / Alt+Space wired to the shell HWND.
+            # Flags and the native HWND wait until the splash has closed.
+            # Building them here, while the card still says Finishing setup,
+            # maps empty bordered frames (Win11 draws the outline, the interior
+            # is still unpainted) that appear and vanish beside the splash.
             # NonModal: QDialog defaults must not keep the shell above other apps.
             window.ui.setWindowModality(Qt.WindowModality.NonModal)
-            window.ui.setWindowFlags(
-                Qt.WindowType.Window
-                | Qt.WindowType.WindowSystemMenuHint
-                | Qt.WindowType.WindowMinimizeButtonHint
-                | Qt.WindowType.WindowMaximizeButtonHint
-                | Qt.WindowType.WindowCloseButtonHint
-            )
         else:
             # Frameless QWidget + SteempegTitleBar (drag via startSystemMove).
             # Skip setModal — MainWindow is QWidget on Linux, not QDialog.
@@ -6872,18 +6930,6 @@ def main():
             window.apply_portable_theatre_shell()
         _splash_keepalive()
 
-        # Hide the painted caption before the first ShowWindow — otherwise Windows
-        # briefly maps a native-framed "Steempeg" HWND, then frameless leaves a
-        # translucent stub at the top of the monitor.
-        if sys.platform == "win32":
-            from steempeg.ui.window_chrome import enable_frameless
-
-            # Frameless FRAMECHANGED first — then stamp the icon so Explorer does
-            # not fall back to the python.exe blank-document taskbar face.
-            enable_frameless(window.ui)
-            _force_native_window_icon(window.ui, icon_path)
-        _splash_keepalive()
-
         # Handoff order (do not reshuffle — black HWND / Not Responding):
         # 1) settle veil on the still-HIDDEN shell
         # 2) density + library restore + Progressive kick WHILE HIDDEN, splash up
@@ -6935,6 +6981,37 @@ def main():
             except Exception:
                 QApplication.processEvents()
 
+            # Shell was sealed in __init__ so startup could not map a second
+            # «Steempeg» window beside the splash. Windows flags and the native
+            # frame are applied only now, still sealed, then the seal drops
+            # for the first real ShowWindow. Doing that earlier flashed empty
+            # bordered frames over «Finishing setup…».
+            if sys.platform == "win32":
+                from steempeg.ui.window_chrome import (
+                    enable_frameless,
+                    set_window_transitions,
+                )
+
+                window.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+                window.ui.hide()
+                window.ui.setWindowFlags(
+                    Qt.WindowType.Window
+                    | Qt.WindowType.WindowSystemMenuHint
+                    | Qt.WindowType.WindowMinimizeButtonHint
+                    | Qt.WindowType.WindowMaximizeButtonHint
+                    | Qt.WindowType.WindowCloseButtonHint
+                )
+                window.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+                window.ui.hide()
+                _reveal_screen = app.primaryScreen()
+                if _reveal_screen is not None:
+                    window.ui.setGeometry(_reveal_screen.availableGeometry())
+                enable_frameless(window.ui)
+                set_window_transitions(window.ui, False)
+                _force_native_window_icon(window.ui, icon_path)
+                QTimer.singleShot(
+                    700, lambda: set_window_transitions(window.ui, True)
+                )
             if sys.platform == "win32":
                 # Maximize on the *first* show. Showing the inset normal state first
                 # and maximizing right after gives Windows no state change to record,
@@ -6953,6 +7030,7 @@ def main():
                     seed_windows_restore_geometry(
                         window.ui, stock_restore_geometry(_screen.availableGeometry())
                     )
+                window.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
                 window.ui.showMaximized()
             else:
                 # Linux/XWayland+NVIDIA: never call showMaximized (hard-freeze).
@@ -6964,6 +7042,7 @@ def main():
                     window.ui._linux_restore_geometry = stock_restore_geometry(
                         _screen.availableGeometry()
                     )
+                window.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
                 window.ui.show()
                 logging.info("Linux: fake-maximize via work-area geometry (no showMaximized)")
 
