@@ -1287,7 +1287,9 @@ def install_title_bar(main_window) -> SteempegTitleBar:
 
     # Title bar stays flush to the window edges; the content keeps the old
     # breathing room around the splitter (restored after zeroing outer margins).
-    content_wrap = QWidget()
+    # Parent before the splitter moves onto it. A parentless wrap is a
+    # window titled «Steempeg», and this runs while the launch splash is up.
+    content_wrap = QWidget(shell)
     content_wrap.setObjectName("appContent")
     content_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
     content_wrap.setStyleSheet(f"QWidget#appContent {{ background-color: {tok.BG_SHELL}; }}")
