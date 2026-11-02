@@ -79,6 +79,7 @@ def _show_timeline_tool(widget) -> None:
     if widget is None:
         return
     try:
+        widget.setAttribute(Qt.WA_DontShowOnScreen, False)
         widget.setAttribute(Qt.WA_ShowWithoutActivating, True)
     except Exception:
         pass
@@ -528,6 +529,7 @@ class TimelineCanvas(QWidget):
         # No WindowStaysOnTopHint — owned TOPMOST Tools yank the Steempeg shell
         # over Explorer / browser when the tip shows. Tool alone still stacks
         # above the shell (incl. native mpv) without promoting other apps under us.
+        self.text_tooltip.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.text_tooltip.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -3238,6 +3240,7 @@ class ThumbnailPreviewWidget(QWidget):
         # Qt.ToolTip is killed by QToolTip.hideText() and often stacks under the
         # native mpv HWND. Tool (no StaysOnTop) stays above the shell without
         # yanking Steempeg over Explorer when the tip appears.
+        self.setAttribute(Qt.WA_DontShowOnScreen, True)
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
