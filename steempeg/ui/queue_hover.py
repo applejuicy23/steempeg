@@ -290,6 +290,7 @@ class _Grip(QWidget):
         super().__init__(None)
         self._overlay = overlay
         self.setObjectName("queueHoverGrip")
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -317,6 +318,7 @@ class _Grip(QWidget):
         if global_rect.width() < 2 or global_rect.height() < 2:
             self.hide()
             return
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
         self.setGeometry(global_rect)
         open_left = not bool(getattr(self._overlay, "_from_left", False))
         body = _brace_body_path(QRectF(self.rect()), open_left=open_left)
@@ -452,6 +454,9 @@ class QueueHoverOverlay(QWidget):
         self._slide_pix: QPixmap | None = None
         self._mask_key: tuple | None = None
         self.setObjectName("queueHoverOverlay")
+        # Seal before the Tool HWND exists. Otherwise Windows flashes an empty
+        # bordered frame (transparent inside) while the splash is still up.
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
@@ -1068,6 +1073,7 @@ class QueueHoverController(QObject):
 
     def _show_overlay(self) -> None:
         overlay = self._overlay
+        overlay.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
         overlay.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         if sys.platform == "win32":
             try:
