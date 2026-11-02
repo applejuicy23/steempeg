@@ -2243,7 +2243,9 @@ class RenderMixin:
                 font=12, radius=8, pad="6px 14px"
             )
 
-        btn = QPushButton()
+        # Parent before setVisible. A parentless button maps as its own
+        # «Steempeg» window during startup, beside the launch splash.
+        btn = QPushButton(getattr(self, "ui", None))
         btn.setObjectName("btn_render_settings")
         btn.setText(" Render Settings")
         btn.setIcon(preview_settings_icon(16))
