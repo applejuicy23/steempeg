@@ -639,6 +639,31 @@ class LaunchSplash(QWidget):
         )
 
 
+def _quiet_splash_frame(splash: LaunchSplash) -> None:
+    """Drop the Win11 system border on the loading card.
+
+    The card is translucent and paints its own edge. Without this, DWM draws
+    a second outline that flashes as the percent walks through the 90s.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        hwnd = int(splash.winId())
+        if not hwnd:
+            return
+        dwm = ctypes.windll.dwmapi
+        # DWMWA_COLOR_NONE hides the system border. 3 disables open animations
+        # so the card does not strobe a stack of empty frames.
+        no_border = ctypes.c_uint(0xFFFFFFFE)
+        dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(no_border), ctypes.sizeof(no_border))
+        frozen = ctypes.c_int(1)
+        dwm.DwmSetWindowAttribute(hwnd, 3, ctypes.byref(frozen), ctypes.sizeof(frozen))
+    except Exception:
+        logging.debug("Splash frame quiet failed", exc_info=True)
+
+
 def show_launch_splash(*, force: bool = False, pro: bool | None = None) -> LaunchSplash | None:
     global _splash
     if _splash_disabled() and not force:
@@ -661,6 +686,7 @@ def show_launch_splash(*, force: bool = False, pro: bool | None = None) -> Launc
     splash.set_progress(0, "Starting…")
     splash.show()
     splash.raise_()
+    _quiet_splash_frame(splash)
     _pump()
     _splash = splash
     return splash
