@@ -6526,10 +6526,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     scaled = [total - bottom, bottom]
                 v_splitter.setSizes(scaled)
         self.apply_hidden_shell_splitter_handles()
-        if getattr(self, "_shell_pane_ratio", None) is None:
-            from steempeg.ui.portable_splitter_reveal import remember_shell_pane_ratio
-
-            remember_shell_pane_ratio(self)
+        # Do not remember a ratio here. The splitter often still has the
+        # pre-layout width, and the next maximize would scale that fat share.
 
     def _setup_custom_target_size(self):
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
