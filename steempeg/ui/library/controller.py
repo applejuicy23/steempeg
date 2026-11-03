@@ -143,7 +143,9 @@ class _GridViewportResizeFilter(QObject):
             return False
         refresh = getattr(self._host, "_schedule_clips_viewport_refresh", None)
         if callable(refresh):
-            refresh(50)
+            # Same turn as the resize. A 50ms delay was another gap between
+            # the short shelf and the cards that fit the new height.
+            refresh(0)
         return False
 
 
@@ -556,11 +558,27 @@ class LibraryMixin:
                 return True
         return False
 
-    def _start_startup_steam_meta_refresh(self) -> None:
-        """Full launch: refresh Steam icons then names after the clips list is up.
+    def _steam_icon_is_cached(self, app_id: str) -> bool:
+        """True when this game's icon file is already a real image."""
+        path = os.path.join(self.cache_dir, f"{app_id}.jpg")
+        try:
+            return os.path.isfile(path) and os.path.getsize(path) > 100
+        except OSError:
+            return False
 
-        Same workers as Refresh ▾ — background QThreads so the UI stays usable.
-        Quiet: status/logs only, no modal dialogs.
+    def _steam_name_is_known(self, app_id: str) -> bool:
+        """True when the name cache already has a real title for this app id."""
+        name = str((getattr(self, "game_names_cache", None) or {}).get(str(app_id)) or "").strip()
+        if not name:
+            return False
+        return not name.startswith("Unknown Game")
+
+    def _start_startup_steam_meta_refresh(self) -> None:
+        """Full launch: fill Steam icons and names the clip scan did not already cache.
+
+        Refresh ▾ still re-downloads everything. Startup only asks Steam for
+        app ids whose icon file or name is missing, so a second pass does not
+        repeat work the scan just finished.
         """
         if self._refresh_menu_busy():
             QTimer.singleShot(500, self._start_startup_steam_meta_refresh)
@@ -571,11 +589,24 @@ class LibraryMixin:
                 "Startup Full: no library app ids for Steam icons/names refresh"
             )
             return
+        icon_ids = [app_id for app_id in app_ids if not self._steam_icon_is_cached(app_id)]
+        name_ids = [app_id for app_id in app_ids if not self._steam_name_is_known(app_id)]
+        self._startup_steam_name_ids = name_ids
+        if not icon_ids and not name_ids:
+            logging.info("Startup Full: game icons and names already cached")
+            return
         logging.info(
-            "Startup Full: refreshing %d game icon(s) then name(s) from Steam",
-            len(app_ids),
+            "Startup Full: %d icon(s) and %d name(s) still missing",
+            len(icon_ids),
+            len(name_ids),
         )
-        self.refresh_steam_icons(quiet=True, chain_names=True)
+        if icon_ids:
+            self.refresh_steam_icons(
+                quiet=True, chain_names=bool(name_ids), app_ids=icon_ids
+            )
+            return
+        self._steam_names_after_icons = False
+        self.refresh_steam_names(quiet=True, app_ids=name_ids)
 
     def _steam_meta_progress_pct(self, done: int, total: int, *, stage: str) -> int:
         """Map icons (then optional names) onto one Full-style 0–100% strip."""
@@ -623,27 +654,36 @@ class LibraryMixin:
         elif hasattr(self, "set_status"):
             self.set_status(msg)
 
-    def refresh_steam_icons(self, *, quiet: bool = False, chain_names: bool = False):
-        """Re-download game icons for every app id in the current library list."""
+    def refresh_steam_icons(
+        self,
+        *,
+        quiet: bool = False,
+        chain_names: bool = False,
+        app_ids: list | None = None,
+    ):
+        """Re-download game icons for every app id in the current library list.
+
+        ``app_ids`` limits the job. Startup passes only ids with no cached file.
+        """
         if self._refresh_menu_busy():
             if hasattr(self, "set_status"):
                 self.set_status("A library refresh job is already running…")
             return
-        app_ids = sorted(self._collect_library_app_ids())
-        if not app_ids:
+        ids = list(app_ids) if app_ids is not None else sorted(self._collect_library_app_ids())
+        if not ids:
             return
         self._steam_refresh_quiet = bool(quiet)
         self._steam_refresh_chain_names = bool(chain_names)
         self._steam_names_after_icons = False
         self.game_icons_cache.clear()
         self._paint_steam_meta_status(
-            f"Refreshing game icons from Steam (0/{len(app_ids)})",
+            f"Refreshing game icons from Steam (0/{len(ids)})",
             done=0,
-            total=len(app_ids),
+            total=len(ids),
             stage="icons",
         )
 
-        worker = SteamIconsRefreshWorker(app_ids, self.cache_dir, self.ui)
+        worker = SteamIconsRefreshWorker(ids, self.cache_dir, self.ui)
         self._steam_icons_worker = worker
         worker.progress.connect(self._on_steam_icons_progress)
         worker.finished_icons.connect(self._on_steam_icons_finished)
@@ -719,40 +759,47 @@ class LibraryMixin:
             # Keep purple strip alive across the icons→names handoff.
             self._steam_names_after_icons = True
             self._steam_meta_refresh_active = True
-            QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
+            name_ids = getattr(self, "_startup_steam_name_ids", None)
+            self._startup_steam_name_ids = None
+            QTimer.singleShot(
+                0,
+                lambda ids=name_ids: self.refresh_steam_names(quiet=True, app_ids=ids),
+            )
             return
         self._finish_steam_meta_status(msg, quiet=quiet)
 
-    def refresh_steam_names(self, *, quiet: bool = False):
-        """Re-fetch game names from Steam for every app id in the library list."""
+    def refresh_steam_names(self, *, quiet: bool = False, app_ids: list | None = None):
+        """Re-fetch game names from Steam for every app id in the library list.
+
+        ``app_ids`` limits the job. Startup passes only ids still named Unknown.
+        """
         if self._refresh_menu_busy():
             if hasattr(self, "set_status"):
                 self.set_status("A library refresh job is already running…")
             return
-        app_ids = sorted(self._collect_library_app_ids())
-        if not app_ids:
+        ids = list(app_ids) if app_ids is not None else sorted(self._collect_library_app_ids())
+        if not ids:
             self._steam_meta_refresh_active = False
             self._steam_names_after_icons = False
             return
         self._steam_refresh_quiet = bool(quiet)
         self._steam_refresh_chain_names = False
         after_icons = bool(getattr(self, "_steam_names_after_icons", False))
-        start_done = 0
         self._paint_steam_meta_status(
-            f"Refreshing game names from Steam (0/{len(app_ids)})",
-            done=start_done,
-            total=len(app_ids),
+            f"Refreshing game names from Steam (0/{len(ids)})",
+            done=0,
+            total=len(ids),
             stage="names",
         )
         # When chained, show the 50% floor immediately.
         if after_icons and hasattr(self, "update_status_indicator"):
             self.update_status_indicator(
-                f"Refreshing game names from Steam (0/{len(app_ids)}) (50%)",
+                f"Refreshing game names from Steam (0/{len(ids)}) (50%)",
                 "busy",
                 scan_phase="loading",
             )
 
-        worker = SteamNamesRefreshWorker(app_ids, self.ui)
+        worker = SteamNamesRefreshWorker(ids, self.ui)
         self._steam_names_worker = worker
         worker.progress.connect(self._on_steam_names_progress)
         worker.finished_names.connect(self._on_steam_names_finished)
@@ -1039,7 +1086,12 @@ class LibraryMixin:
         if quiet:
             logging.warning("Startup Steam refresh failed: %s", message)
             if chain:
-                QTimer.singleShot(0, lambda: self.refresh_steam_names(quiet=True))
+                name_ids = getattr(self, "_startup_steam_name_ids", None)
+                self._startup_steam_name_ids = None
+                QTimer.singleShot(
+                    0,
+                    lambda ids=name_ids: self.refresh_steam_names(quiet=True, app_ids=ids),
+                )
             elif hasattr(self, "update_status_indicator"):
                 self.update_status_indicator("Ready", "ready")
             return
@@ -5273,12 +5325,10 @@ class LibraryMixin:
         finally:
             if table is not None:
                 table.setUpdatesEnabled(True)
-            if grid is not None:
-                if self._should_freeze_clips_grid_for_scan():
-                    self._freeze_clips_grid()
-                else:
-                    self._unfreeze_clips_grid()
-                    grid.setUpdatesEnabled(True)
+            # Painting stays off only for this insert. Leaving it off discarded
+            # the visible cards and never drew them back until a splitter drag
+            # or a screenshot forced a paint.
+            self._release_clips_grid_updates(grid)
 
         if (
             last_row is not None
@@ -5314,10 +5364,12 @@ class LibraryMixin:
             self._update_library_count_label()
 
         self._schedule_clip_card_edge_sync()
-        # Lazy Refresh: fill the first screen, then leave the grid alone until the
-        # scan finalizes — a relayout per arriving clip strobed the visible cards.
+        # Build ClipCards for the first screen only. Later rows stay placeholders
+        # until they scroll into view. One paint per batch, not per clip.
         if getattr(self, "_clips_progressive_active", False) and not self._clips_first_screen_filled():
-            self._schedule_clips_viewport_refresh(50)
+            # Do not restart the timer. A batch every 20ms was postponing the
+            # 50ms build forever, so the grid stayed empty until a stall.
+            self._schedule_clips_viewport_refresh(50, keep=True)
 
         if pending:
             self._scan_flush_scheduled = True
@@ -5336,52 +5388,19 @@ class LibraryMixin:
                 QTimer.singleShot(0, self.sync_clip_card_edge_roles)
                 QTimer.singleShot(50, self.sync_clip_card_edge_roles)
 
-    def _should_freeze_clips_grid_for_scan(self) -> bool:
-        """Lazy Refresh with the first screen printed — later rows land off-screen."""
-        if not getattr(self, "_clips_refresh_lazy", False):
-            return False
-        if not getattr(self, "_clips_scan_active", False):
-            return False
-        grid = getattr(self, "grid_clips", None)
-        if grid is None or not grid.isVisible():
-            return False
-        return self._clips_first_screen_filled()
+    def _release_clips_grid_updates(self, grid=None) -> None:
+        """Allow the Clips grid to paint again after a batch insert.
 
-    def _freeze_clips_grid(self) -> None:
-        """Hold the Clips grid's last frame while a lazy Refresh streams rows in.
-
-        Each inserted row relayouts the QListView and re-places the item widgets;
-        painting that per clip strobed the cards until the scan finished.
+        Updates are turned off only while the rows go in, so one batch does not
+        repaint once per clip. They come back before the function returns.
+        Leaving them off blanked the cards that were already on screen.
         """
-        grid = getattr(self, "grid_clips", None)
         if grid is None:
-            return
-        if not getattr(self, "_clips_grid_freeze_filter", None):
-            from PySide6.QtCore import QEvent, QObject
-
-            app = self
-
-            class _ThawOnShow(QObject):
-                def eventFilter(self, obj, event):  # noqa: N802
-                    if event.type() == QEvent.Type.Show:
-                        app._unfreeze_clips_grid()
-                    return False
-
-            self._clips_grid_freeze_filter = _ThawOnShow(grid)
-            grid.installEventFilter(self._clips_grid_freeze_filter)
-        self._clips_grid_frozen = True
-        grid.setUpdatesEnabled(False)
-
-    def _unfreeze_clips_grid(self) -> None:
-        if not getattr(self, "_clips_grid_frozen", False):
-            return
-        self._clips_grid_frozen = False
-        grid = getattr(self, "grid_clips", None)
+            grid = getattr(self, "grid_clips", None)
         if grid is None:
             return
         try:
             grid.setUpdatesEnabled(True)
-            grid.viewport().update()
         except RuntimeError:
             pass
 
@@ -5404,7 +5423,7 @@ class LibraryMixin:
 
     def _finalize_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         """Run the original scan-finished logic once both worker + UI insert are done."""
-        self._unfreeze_clips_grid()
+        self._release_clips_grid_updates()
 
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
@@ -5552,7 +5571,7 @@ class LibraryMixin:
         self._startup_refresh_steam_meta = False
         logging.error("Library scan failed: %s", message)
         self._clips_refresh_lazy = False
-        self._unfreeze_clips_grid()
+        self._release_clips_grid_updates()
         self._clips_scan_active = False
         self._sync_library_scan_interaction_lock(busy=False)
         if hasattr(self, "update_status_indicator"):
@@ -5619,6 +5638,11 @@ class LibraryMixin:
             return
         if getattr(self, "_clips_scan_active", False) and self._clips_first_screen_filled():
             # Range grows on every inserted row during Refresh — not a real resize.
+            return
+        if getattr(self, "_clips_scan_active", False):
+            # Same reason: do not postpone the first screen for another 50ms
+            # on every batch. The scan flush already asked for a fill.
+            self._schedule_clips_viewport_refresh(0, keep=True)
             return
         self._schedule_clips_viewport_refresh(50)
 
@@ -5917,17 +5941,27 @@ class LibraryMixin:
         if filled:
             self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_GAP_MS)
 
-    def _schedule_clips_viewport_refresh(self, delay_ms: int = 0) -> None:
+    def _schedule_clips_viewport_refresh(self, delay_ms: int = 0, *, keep: bool = False) -> None:
+        """Queue a viewport fill. ``keep`` leaves an armed timer alone.
+
+        This timer only builds ClipCards. The scroll-idle timer is a different
+        one: scan inserts change the scrollbar every batch, and that path used
+        to restart the fill forever, so the first screen waited until reading
+        paused.
+        """
         if not getattr(self, "_clips_progressive_active", False):
             return
-        timer = getattr(self, "_clips_viewport_timer", None)
+        grid = getattr(self, "grid_clips", None)
+        timer = getattr(self, "_clips_viewport_refresh_timer", None)
         if timer is None:
-            QTimer.singleShot(max(0, int(delay_ms)), self._clips_refresh_viewport)
+            parent = grid if grid is not None else getattr(self, "ui", None)
+            timer = QTimer(parent)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._clips_refresh_viewport)
+            self._clips_viewport_refresh_timer = timer
+        if keep and timer.isActive():
             return
-        if delay_ms <= 0:
-            timer.start(1)
-        else:
-            timer.start(int(delay_ms))
+        timer.start(1 if delay_ms <= 0 else int(delay_ms))
 
     def _clips_first_screen_filled(self) -> bool:
         """True once the top screen of visible grid items all have ClipCards."""
@@ -5965,26 +5999,66 @@ class LibraryMixin:
         self._stop_clips_idle_fill()
         self._schedule_clips_viewport_refresh(0)
 
+    def _clips_card_area_size(self, grid) -> tuple[int, int]:
+        """Width and height of the pane that actually shows ClipCards.
+
+        ``viewport()`` stays about three rows (six cards at two columns) while
+        the window is already open. The clips page and the stack have the
+        column the user is looking at.
+        """
+        hosts = [grid]
+        vp = grid.viewport()
+        if vp is not None:
+            hosts.append(vp)
+        for name in ("clips_page", "library_stack"):
+            host = getattr(self, name, None)
+            if host is not None:
+                hosts.append(host)
+        width = 0
+        height = 0
+        for host in hosts:
+            try:
+                width = max(width, int(host.width()))
+                height = max(height, int(host.height()))
+            except RuntimeError:
+                continue
+        # The list widget is still the short hidden stub when the shell has
+        # already been sized to the work area. Eight cards was that stub
+        # (four rows). The other four waited until a later resize. The card
+        # column is the window minus the title, the tab row and the sort row.
+        ui = getattr(self, "ui", None)
+        if ui is not None:
+            try:
+                win_h = int(ui.height())
+            except RuntimeError:
+                win_h = 0
+            if win_h >= 700:
+                column = win_h - 200
+                if column > height:
+                    height = column
+            panel = getattr(ui, "left_panel", None)
+            if panel is not None:
+                try:
+                    width = max(width, int(panel.width()))
+                except RuntimeError:
+                    pass
+        return width, height
+
     def _clips_fitted_slot_count(self) -> int:
         """How many cards the current viewport can hold. 0 when it has no size yet."""
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return 0
-        vp = grid.viewport()
-        if vp is None:
-            return 0
-        width = int(vp.width())
-        height = int(vp.height())
+        width, height = self._clips_card_area_size(grid)
         if width < 80 or height < 80:
             return 0
-        cols = max(1, int(self._clip_grid_column_count_for(grid)))
-        cell_h = max(
-            1,
-            _clips_card_cell_size(self).height() + max(0, int(grid.spacing())),
-        )
-        rows = max(1, (height + cell_h - 1) // cell_h)
-        # The row peeking under the fold, so a short scroll is not a blank band.
-        rows += 1
+        spacing = max(0, int(grid.spacing()))
+        cell_w = max(1, _clips_card_cell_size(self).width())
+        cols = max(1, (width + spacing) // (cell_w + spacing))
+        cell_h = max(1, _clips_card_cell_size(self).height() + spacing)
+        # How many full rows the card area can hold. No extra peek row:
+        # that peek was the third row which made the fast shelf stop at six.
+        rows = max(1, height // cell_h)
         count = int(grid.count())
         if count <= 0:
             return 0
@@ -6078,8 +6152,14 @@ class LibraryMixin:
         reprinting press. Once printed, cards stay.
         """
         startup = bool(getattr(self, "_clips_startup_fill_pending", False))
-        # Scrollbar noise during the hidden layout pass is not the user scrolling.
-        if getattr(self, "_clips_scroll_active", False) and not startup:
+        # Inserting rows grows the scrollbar and looks like a user scroll.
+        # That used to skip the shelf fill for the whole scan, so a short
+        # first paint stayed at six cards until a later idle pass.
+        if (
+            getattr(self, "_clips_scroll_active", False)
+            and not startup
+            and not getattr(self, "_clips_scan_active", False)
+        ):
             return
         if not getattr(self, "_clips_progressive_active", False):
             return
@@ -6098,39 +6178,17 @@ class LibraryMixin:
             except Exception:
                 pass
         height = int(vp.height()) if vp is not None else 0
-        # The hidden-shell retries must not eat the budget for the real window.
-        if startup and window_up and not getattr(self, "_clips_fit_window_seen", False):
-            self._clips_fit_window_seen = True
-            self._clips_fit_retries = 0
-            self._clips_fit_seen_height = None
-        # Hidden shell reports a short viewport (three big rows → six cards).
-        # A mapped 1440p window whose clips pane is still under ~40% of that
-        # height is the same pre-layout pass. Wait until the height holds.
-        seen = getattr(self, "_clips_fit_seen_height", None)
-        tall_enough = True
-        if window_up and window is not None:
-            window_h = int(window.height())
-            if window_h >= 900 and height < int(window_h * 0.4):
-                tall_enough = False
-        ready = window_up and height >= 80 and height == seen and tall_enough
-        if startup and not ready:
-            self._clips_fit_seen_height = height if window_up and height >= 80 else None
-            self._stop_clips_idle_fill()
-            retries = int(getattr(self, "_clips_fit_retries", 0)) + 1
-            self._clips_fit_retries = retries
-            # Keep polling while the shell is hidden. Once it is up, give the
-            # pane about two seconds to reach its real height, then paint it.
-            if (not window_up or retries <= 40) and getattr(
-                self, "_library_panel_mode", "clips"
-            ) == "clips":
-                QTimer.singleShot(50, self._clips_refresh_viewport)
-            if not window_up or retries <= 40:
-                return
-        elif not window_up:
-            try:
-                grid.doItemsLayout()
-            except Exception:
-                pass
+        area_w, area_h = self._clips_card_area_size(grid)
+        if area_h > height:
+            height = area_h
+        # Do not wait for the window to be mapped. The six fast cards were
+        # built from the short list while it was still hidden. Refusing that
+        # until ShowWindow, and relaying the whole grid on every incoming
+        # batch, left the shelf blank for several seconds.
+        if height < 80:
+            if startup or getattr(self, "_clips_scan_active", False):
+                QTimer.singleShot(16, self._clips_refresh_viewport)
+            return
 
         slots = self._clips_fitted_slot_count()
         if slots <= 0:
@@ -6510,7 +6568,7 @@ class LibraryMixin:
         self._scan_finalize_pending = None
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
-        self._unfreeze_clips_grid()
+        self._release_clips_grid_updates()
         self._clips_progressive_active = bool(lazy_cards)
         self._clips_refresh_lazy = bool(lazy_cards)
         if lazy_cards:
