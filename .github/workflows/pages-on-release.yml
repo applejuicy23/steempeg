@@ -16,7 +16,10 @@ jobs:
   rebuild:
     runs-on: ubuntu-latest
     steps:
+      # gh has no git repo in a fresh runner, so it cannot see this repository
+      # and the dispatch dies before it starts. Point it at the repo explicitly.
       - name: Rebuild the site from main
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: gh workflow run pages.yml --ref main

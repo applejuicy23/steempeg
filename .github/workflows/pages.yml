@@ -10,8 +10,8 @@ on:
       - "assets/logo.png"
       - "docs/readme/**"
       - ".github/workflows/pages.yml"
-  # A published release is not built here. The github-pages environment
-  # rejects tags, so pages-on-release.yml starts this workflow on main.
+  # A published release is not built on the tag. The github-pages environment
+  # rejects tags, so pages-on-release.yml dispatches this workflow on main.
   # Release text still comes from the GitHub API at build time.
   workflow_dispatch:
 
