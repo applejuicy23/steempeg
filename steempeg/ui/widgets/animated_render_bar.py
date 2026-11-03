@@ -87,13 +87,14 @@ class AnimatedRenderBar(QWidget):
         self.update()
 
     def set_loading_progress(self, percent: float) -> None:
-        """Determinate left-to-right fill while library rows load (eased)."""
+        """Determinate left-to-right fill while library rows load (eased).
+
+        The target is the announced percent. The paint eases toward it.
+        Capping the target made the bar lag the number beside it.
+        """
         self._indeterminate = None
         self._state = "busy"
         clamped = max(0.0, min(100.0, float(percent)))
-        # Cap step size so bursty scan updates still animate smoothly.
-        if clamped > self._target:
-            clamped = min(clamped, self._target + 2.5)
         self._target = clamped
         if clamped < self._display:
             self._display = clamped
