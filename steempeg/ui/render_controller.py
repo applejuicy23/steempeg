@@ -178,6 +178,18 @@ else:
 _bin_dir = os.path.join(_base_dir, "bin")
 
 
+def _render_history_file_has_batches(path: str) -> bool:
+    """True when a render-history file exists and is larger than an empty list.
+
+    ``{"batches": []}`` is a few dozen bytes. A real batch is much larger.
+    The startup line is only for a file that can actually take a moment to read.
+    """
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 80
+    except OSError:
+        return False
+
+
 class RenderMixin:
     def _detect_clip_has_audio(self, all_mpds) -> bool:
         """True if any source manifest/folder carries a real audio stream."""
@@ -2074,6 +2086,16 @@ class RenderMixin:
         from steempeg.ui.library.history_load_worker import HistoryLoadWorker
 
         path = self._queue_history_path()
+        # A fresh install has no render_queue_history.json. Announcing a load
+        # then looks like the app is searching for something that is not there.
+        # An update that kept cache still has the file, and that one is announced.
+        if announce and not _render_history_file_has_batches(path):
+            if getattr(self, "_render_history_cache", None) is None:
+                self._render_history_cache = []
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator("Ready", "ready")
+            logging.info("Render history preload skipped: no saved batches")
+            return
         self._history_preload_running = True
         if announce and hasattr(self, "update_status_indicator"):
             self.update_status_indicator("Loading render history…", "busy", scan_phase="search")
