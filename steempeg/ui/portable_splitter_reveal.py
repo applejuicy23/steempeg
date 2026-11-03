@@ -555,6 +555,53 @@ def _shut_queue_pane(app) -> None:
         return
 
 
+def _pin_clips_to_column_floor(app) -> None:
+    """Open Clips at the two-column minimum and give the spare width to the player.
+
+    A cold start has no drag yet. Scaling whatever pixels the splitter happened
+    to hold before layout opened several card columns and left a thin player.
+    """
+    from steempeg.ui.layout_defaults import left_panel_min_width
+
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    main, inner, clips, player, queue = found
+    win_w, shell = _shell_span(app)
+    if shell <= 0:
+        return
+    floor = left_panel_min_width(win_w or shell, widget=getattr(app, "ui", None))
+    hover = _queue_hover_is_on(app)
+    queue_w = 0 if hover else (
+        _width_in_splitter(main, queue) or _width_in_splitter(inner, queue)
+    )
+    if queue_w < 48:
+        queue_w = 0
+    floor = min(int(floor), max(0, shell - queue_w))
+    player_w = max(0, shell - floor - queue_w)
+    app._shell_pane_refitting = True
+    try:
+        dock = _queue_slot(app, queue)
+        try:
+            queue_on_left = main.indexOf(dock) == 0
+        except RuntimeError:
+            queue_on_left = False
+        main.blockSignals(True)
+        inner.blockSignals(True)
+        try:
+            if queue_on_left:
+                _set_pair_sizes(main, dock, queue_w, player_w + floor)
+                _set_pair_sizes(inner, player, player_w, floor)
+            else:
+                _set_pair_sizes(main, clips, floor, player_w + queue_w)
+                _set_pair_sizes(inner, player, player_w, queue_w)
+        finally:
+            main.blockSignals(False)
+            inner.blockSignals(False)
+    finally:
+        app._shell_pane_refitting = False
+
+
 def refit_shell_panes_for_window(app) -> None:
     """Put Clips, the player and the queue back on their chosen shares.
 
@@ -590,6 +637,10 @@ def refit_shell_panes_for_window(app) -> None:
     else:
         percents = getattr(app, "_shell_pane_ratio", None)
     if not isinstance(percents, tuple) or len(percents) != 3:
+        # No drag and no saved share yet. Keep Clips on the two-column floor.
+        # Remembering the pre-layout pixels and scaling them made the first
+        # launch open several columns wide, with the player as a thin strip.
+        _pin_clips_to_column_floor(app)
         return
     clips, player, queue = (int(percents[0]), int(percents[1]), int(percents[2]))
     # A closed legacy queue is a latch, not a saved share of 0. Keep the share
