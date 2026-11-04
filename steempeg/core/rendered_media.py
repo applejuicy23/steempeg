@@ -75,6 +75,59 @@ def is_default_rendered_basename(stem: str, app_id: str | None) -> bool:
     return False
 
 
+# Second and later exports of one clip: ``…_rendered_1``, ``…_rendered_2``.
+_REPEAT_RENDER_RE = re.compile(
+    r"^(?:clip|bg|fg)_\d+_(\d{8})_(\d{6})_rendered_\d+$",
+    re.IGNORECASE,
+)
+
+
+def repeat_render_friendly_title(stem: str, game_name: str) -> str | None:
+    """Readable title for a second-or-later export of the same clip.
+
+    ``clip_3513350_20261017_175214_rendered_1`` becomes
+    ``Wuthering Waves_2026-10-17_175214``. The first export has no ``_N``
+    and stays the game name. Returns None when ``stem`` is not a repeat.
+    """
+    game = (game_name or "").strip()
+    if not game:
+        return None
+    match = _REPEAT_RENDER_RE.match((stem or "").strip())
+    if match is None:
+        return None
+    ymd, hms = match.group(1), match.group(2)
+    return f"{game}_{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}_{hms}"
+
+
+def repeat_render_info_name(stem: str, display_title: str, basename: str) -> str:
+    """Real file name for the info chip, when the header shows the friendly title."""
+    if not display_title or display_title == stem:
+        return ""
+    if _REPEAT_RENDER_RE.match((stem or "").strip()) is None:
+        return ""
+    return os.path.splitext(os.path.basename(basename))[0]
+
+
+def rendered_library_title(
+    stem: str,
+    app_id: str | None,
+    game_name: str,
+    *,
+    friendly_repeats: bool = False,
+) -> str:
+    """Title shown for a rendered file. The name on disk is unchanged."""
+    game = (game_name or "").strip()
+    if app_id and game and is_default_rendered_basename(stem, str(app_id)):
+        return game
+    if friendly_repeats:
+        pretty = repeat_render_friendly_title(stem, game)
+        if pretty:
+            return pretty
+    if app_id and game:
+        return stem
+    return game or stem
+
+
 def companion_meta_path(file_path: str) -> str:
     """Legacy beside-file sidecar (still read; new writes prefer cache)."""
     return file_path + _COMPANION_SUFFIX
