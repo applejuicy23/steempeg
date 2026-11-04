@@ -657,6 +657,8 @@ def load_hide_settings_hints(settings: dict | None) -> bool:
 
 # Red close button hides the main window to the tray instead of quitting.
 KEY_KEEP_RUNNING_IN_TRAY = "keep_running_in_tray"
+KEY_FRIENDLY_REPEAT_RENDER_TITLES = "friendly_repeat_render_titles"
+DEFAULT_FRIENDLY_REPEAT_RENDER_TITLES = False
 DEFAULT_KEEP_RUNNING_IN_TRAY = False
 
 
@@ -674,6 +676,20 @@ def normalize_keep_running_in_tray(value: object | None) -> bool:
     if text in ("0", "false", "no", "off", ""):
         return False
     return DEFAULT_KEEP_RUNNING_IN_TRAY
+
+
+def load_friendly_repeat_render_titles(settings: dict | None) -> bool:
+    """True when a repeat export shows the game and the clip date in the player."""
+    raw = (settings or {}).get(
+        KEY_FRIENDLY_REPEAT_RENDER_TITLES,
+        DEFAULT_FRIENDLY_REPEAT_RENDER_TITLES,
+    )
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw or "").strip().lower()
+    return text in ("1", "true", "yes", "on")
 
 
 def load_keep_running_in_tray(settings: dict | None) -> bool:
