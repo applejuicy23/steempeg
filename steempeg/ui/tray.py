@@ -23,6 +23,147 @@ def tray_is_supported() -> bool:
     return QSystemTrayIcon.isSystemTrayAvailable()
 
 
+_CMD_OPEN = 1
+_CMD_LAST_CLIP = 2
+_CMD_PAUSE = 3
+_CMD_QUEUE = 4
+_CMD_QUIT = 5
+
+
+def _windows_menu_owner():
+    """Hidden popup that owns the native tray menu, not the main window.
+
+    ``TrackPopupMenu`` needs an owner. The main window would come forward and
+    Explorer would drop the auto-hide taskbar. A zero-size tool window does not.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        wintypes.HMENU,
+        wintypes.HINSTANCE,
+        wintypes.LPVOID,
+    ]
+    user32.CreateWindowExW.restype = wintypes.HWND
+    hwnd = user32.CreateWindowExW(
+        0x00000080 | 0x08000000,  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        "STATIC",
+        "SteempegTrayMenu",
+        0x80000000,  # WS_POPUP
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        kernel32.GetModuleHandleW(None),
+        None,
+    )
+    return int(hwnd or 0)
+
+
+def _show_windows_tray_menu(app, *, pause_checked: bool, last_clip_enabled: bool, queue_label: str) -> int:
+    """Open a Win32 menu at the cursor. Returns the chosen command id, or 0.
+
+    A Qt popup is an ordinary window, so Explorer treats it as leaving the tray
+    and slides the taskbar away. A real menu stays inside that click, the same
+    way other tray icons do.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.CreatePopupMenu.restype = wintypes.HMENU
+    user32.AppendMenuW.argtypes = [
+        wintypes.HMENU,
+        wintypes.UINT,
+        ctypes.c_size_t,
+        wintypes.LPCWSTR,
+    ]
+    user32.AppendMenuW.restype = wintypes.BOOL
+    user32.SetMenuDefaultItem.argtypes = [wintypes.HMENU, wintypes.UINT, wintypes.UINT]
+    user32.SetMenuDefaultItem.restype = wintypes.BOOL
+    user32.DestroyMenu.argtypes = [wintypes.HMENU]
+    user32.DestroyMenu.restype = wintypes.BOOL
+    user32.GetCursorPos.argtypes = [ctypes.c_void_p]
+    user32.GetCursorPos.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.TrackPopupMenu.argtypes = [
+        wintypes.HMENU,
+        wintypes.UINT,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        ctypes.c_void_p,
+    ]
+    user32.TrackPopupMenu.restype = wintypes.UINT
+    user32.PostMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        ctypes.c_size_t,
+        ctypes.c_ssize_t,
+    ]
+    user32.PostMessageW.restype = wintypes.BOOL
+
+    owner = int(getattr(app, "_tray_menu_owner", 0) or 0)
+    if not owner:
+        owner = _windows_menu_owner()
+        app._tray_menu_owner = owner
+    if not owner:
+        return 0
+
+    mf_string = 0x0000
+    mf_grayed = 0x0001
+    mf_checked = 0x0008
+    mf_separator = 0x0800
+    menu = user32.CreatePopupMenu()
+    if not menu:
+        return 0
+    try:
+        user32.AppendMenuW(menu, mf_string, _CMD_OPEN, "Open Steempeg")
+        user32.SetMenuDefaultItem(menu, 0, 1)
+        last_flags = mf_string if last_clip_enabled else mf_string | mf_grayed
+        user32.AppendMenuW(menu, last_flags, _CMD_LAST_CLIP, "Open last clip in Express player")
+        user32.AppendMenuW(menu, mf_separator, 0, None)
+        pause_flags = mf_string | (mf_checked if pause_checked else 0)
+        user32.AppendMenuW(menu, pause_flags, _CMD_PAUSE, "Pause new-clip detection")
+        user32.AppendMenuW(menu, mf_string, _CMD_QUEUE, queue_label)
+        user32.AppendMenuW(menu, mf_separator, 0, None)
+        user32.AppendMenuW(menu, mf_string, _CMD_QUIT, "Quit Steempeg")
+
+        class _Point(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        point = _Point()
+        user32.GetCursorPos(ctypes.byref(point))
+        # Required so the menu closes on a click outside it. The owner is not
+        # the main window, so this does not raise Steempeg over the taskbar.
+        user32.SetForegroundWindow(owner)
+        flags = 0x0008 | 0x0020 | 0x0002 | 0x0100  # RIGHTALIGN BOTTOMALIGN RIGHTBUTTON RETURNCMD
+        chosen = int(
+            user32.TrackPopupMenu(menu, flags, int(point.x), int(point.y), 0, owner, None) or 0
+        )
+        user32.PostMessageW(owner, 0, 0, 0)  # WM_NULL, per the Shell_NotifyIcon sample
+        return chosen
+    finally:
+        user32.DestroyMenu(menu)
+
+
 def describe_render_queue(app) -> str:
     """Builds the tray menu label for the render queue: idle / rendering / waiting jobs."""
     queue = getattr(app, "render_queue", None)
@@ -56,8 +197,11 @@ class SteempegTray(QObject):
         self._icon = QSystemTrayIcon(app_window_icon(), self)
         self._icon.setToolTip("Steempeg")
         self._icon.activated.connect(self._on_icon_activated)
-        self._menu = self._build_menu()
-        self._icon.setContextMenu(self._menu)
+        # Windows uses a native menu. A Qt popup takes the foreground and
+        # Explorer then hides the auto-hide taskbar and the tray flyout.
+        self._menu = None if sys.platform == "win32" else self._build_menu()
+        if self._menu is not None:
+            self._icon.setContextMenu(self._menu)
 
     # -- state ----------------------------------------------------------------
 
@@ -142,9 +286,39 @@ class SteempegTray(QObject):
         self._icon.setToolTip("Steempeg · new-clip detection paused" if checked else "Steempeg")
 
     def _on_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Single left click on the icon opens the main window."""
+        """Left click opens the window. Right click opens the native Windows menu."""
+        if reason == QSystemTrayIcon.ActivationReason.Context and sys.platform == "win32":
+            self._popup_windows_menu()
+            return
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.show_main_window()
+
+    def _popup_windows_menu(self) -> None:
+        """Shows the tray menu without pulling the taskbar down."""
+        try:
+            chosen = _show_windows_tray_menu(
+                self._app,
+                pause_checked=bool(self._app.is_new_clip_watch_paused()),
+                last_clip_enabled=bool(self._app.find_last_clip_for_express()),
+                queue_label=describe_render_queue(self._app),
+            )
+        except Exception:
+            _log.debug("Tray: native menu failed", exc_info=True)
+            return
+        if chosen == _CMD_OPEN:
+            self.show_main_window()
+        elif chosen == _CMD_LAST_CLIP:
+            self.open_last_clip()
+        elif chosen == _CMD_PAUSE:
+            paused = not bool(self._app.is_new_clip_watch_paused())
+            self._app.set_new_clip_watch_paused(paused)
+            self._icon.setToolTip(
+                "Steempeg · new-clip detection paused" if paused else "Steempeg"
+            )
+        elif chosen == _CMD_QUEUE:
+            self.open_render_queue()
+        elif chosen == _CMD_QUIT:
+            self.quit_app()
 
     # -- actions --------------------------------------------------------------
 
