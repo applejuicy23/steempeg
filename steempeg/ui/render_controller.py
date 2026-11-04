@@ -1613,11 +1613,21 @@ class RenderMixin:
             if hasattr(self, "custom_text_label"):
                 from steempeg.ui.player_header_layout import set_player_header_game_text
 
+                preview_base = os.path.basename(preview_norm)
                 display_title, icon_path, _t, is_unknown, _k = self._resolved_rendered_meta(
-                    preview_norm, os.path.basename(preview_norm)
+                    preview_norm, preview_base
                 )
                 extra = ["Unknown"] if is_unknown else []
-                set_player_header_game_text(self, display_title, extra=extra)
+                from steempeg.core.rendered_media import repeat_render_info_name
+
+                set_player_header_game_text(
+                    self,
+                    display_title,
+                    extra=extra,
+                    file_name=repeat_render_info_name(
+                        os.path.splitext(preview_base)[0], display_title, preview_base
+                    ),
+                )
                 if icon_path and hasattr(self, "_set_player_header_game_icon"):
                     self._set_player_header_game_icon(icon_path=icon_path)
             return
