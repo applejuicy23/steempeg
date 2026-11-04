@@ -946,6 +946,22 @@ class SteempegTitleBar(QWidget):
             if isinstance(hit, QAbstractButton):
                 return True
             hit = hit.parentWidget()
+        # childAt misses the dots when a resize grip or a stuck mouse receiver
+        # is what Qt hit-tests. The discs still occupy this rectangle — a press
+        # here must not start a caption drag (the app filter clicks the dot).
+        try:
+            global_pos = self.mapToGlobal(pos)
+        except RuntimeError:
+            return False
+        for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+            btn = getattr(self, attr, None)
+            if not isinstance(btn, _TrafficLight):
+                continue
+            try:
+                if btn.isVisible() and btn.rect().contains(btn.mapFromGlobal(global_pos)):
+                    return True
+            except RuntimeError:
+                continue
         return False
 
     def mousePressEvent(self, event) -> None:
@@ -1465,17 +1481,96 @@ def refresh_traffic_lights_under_cursor(
     return any_light_hot
 
 
+def _traffic_light_at_global(global_pos: QPoint) -> _TrafficLight | None:
+    """Window-control dot under ``global_pos``, even when Qt's hit-test misses it.
+
+    Hover paints from this rectangle. The press often does not: a library tab
+    can keep the mouse receiver, and the top-right resize grip is stacked above
+    the dots. Either way ``clicked`` never fires and the title bar drags instead.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return None
+    matches: list[_TrafficLight] = []
+    for widget in app.topLevelWidgets():
+        try:
+            if not widget.isVisible() or widget.isMinimized():
+                continue
+        except RuntimeError:
+            continue
+        for bar in _title_bars_for_window(widget):
+            for attr in ("btn_close", "btn_minimize", "btn_maximize"):
+                btn = getattr(bar, attr, None)
+                if not isinstance(btn, _TrafficLight):
+                    continue
+                try:
+                    if not btn.isVisible() or not btn.isEnabled():
+                        continue
+                    if btn.rect().contains(btn.mapFromGlobal(global_pos)):
+                        matches.append(btn)
+                except RuntimeError:
+                    continue
+    if not matches:
+        return None
+
+    popup = QApplication.activePopupWidget()
+    if popup is not None:
+        for btn in matches:
+            try:
+                if btn.window() is popup or popup.isAncestorOf(btn):
+                    return btn
+            except RuntimeError:
+                continue
+        return None
+
+    modal = QApplication.activeModalWidget()
+    if modal is not None:
+        try:
+            modal_window = modal.window()
+        except RuntimeError:
+            modal_window = None
+        for btn in matches:
+            try:
+                if btn.window() is modal_window:
+                    return btn
+            except RuntimeError:
+                continue
+        return None
+
+    try:
+        under = QApplication.widgetAt(global_pos)
+    except RuntimeError:
+        under = None
+    if isinstance(under, _TrafficLight):
+        return under
+    if under is not None:
+        try:
+            under_window = under.window()
+        except RuntimeError:
+            under_window = None
+        for btn in matches:
+            try:
+                if btn.window() is under_window:
+                    return btn
+            except RuntimeError:
+                continue
+    return matches[0]
+
+
 class _TrafficLightHoverFilter(QObject):
     """App-wide mouse moves → re-sync traffic-light glyphs.
 
     Library tabs (and similar) can keep sticky WA_UnderMouse after a click, so
     HoverEnter never fires on the close/minimize/maximize dots until the user
     clicks a light. MouseMove still goes to the stuck widget — we catch it here
-    and paint from cursor geometry.
+    and paint from cursor geometry. Presses use the same rectangle: otherwise
+    the dots light up and the click does nothing.
     """
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         et = event.type()
+        if et == QEvent.Type.MouseButtonPress:
+            return self._press_traffic_light(event)
         if et not in (
             QEvent.Type.MouseMove,
             QEvent.Type.HoverMove,
@@ -1484,6 +1579,24 @@ class _TrafficLightHoverFilter(QObject):
             return False
         refresh_traffic_lights_under_cursor_all()
         return False
+
+    def _press_traffic_light(self, event) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        if not hasattr(event, "globalPosition"):
+            return False
+        btn = _traffic_light_at_global(event.globalPosition().toPoint())
+        if btn is None:
+            return False
+        grabber = QWidget.mouseGrabber()
+        if grabber is not None and grabber is not btn:
+            try:
+                grabber.releaseMouse()
+            except Exception:
+                pass
+        # Defer so Close can destroy the shell without running inside notify.
+        QTimer.singleShot(0, btn.click)
+        return True
 
 
 _traffic_light_hover_filter: _TrafficLightHoverFilter | None = None
@@ -1676,6 +1789,9 @@ class _WinResizeGrip(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return super().mousePressEvent(event)
         if _edge_resize_blocked(self._host):
+            # A still-mapped grip must not swallow the press (traffic lights sit
+            # under the top-right corner). Ignore so the click can land elsewhere.
+            event.ignore()
             return
         self._origin = event.globalPosition().toPoint()
         self._start_geo = self._host.geometry()
