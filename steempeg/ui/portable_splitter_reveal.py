@@ -238,8 +238,13 @@ def _shell_span(app) -> tuple[int, int]:
         try:
             sizes = main.sizes()
             shell = sum(int(part) for part in sizes)
-            if shell <= 0:
-                shell = int(main.width() or 0)
+            # sizes() lags setHandleWidth(0). The widget is already the full
+            # width, and the freed slot is no longer a handle, so count it in
+            # the pane budget. Otherwise Qt adds those pixels back onto Clips.
+            handle_w = int(main.handleWidth() or 0)
+            outer = int(main.width() or 0)
+            if handle_w <= 0 and outer > shell:
+                shell = outer
         except RuntimeError:
             shell = 0
     if shell <= 0:
@@ -460,26 +465,31 @@ def _stored_pane_percents(app):
 
 
 def apply_user_shell_handle_visibility(app) -> None:
-    """Apply the Settings choice: hidden handles keep the saved pane widths.
+    """Apply the Settings choice for the Clips / player / queue handles.
 
-    Percents are a share of the panes, and the handle sits outside that sum.
-    Fit them after the handle slot appears or disappears. Doing it before lets
-    Qt add the freed handle pixels on top, so Clips is no longer the saved percent.
+    Hidden handles cannot be dragged, so Clips sits on the same floor a drag
+    would hit. The saved share is wider than that floor, and applying it here
+    is what left the empty card gutter. Showing the handles again restores
+    the saved share, which the drag can still pull back down to the floor.
     """
     if getattr(app, "_portable_shell", False):
         return
     if bool(getattr(app, "is_theater", False)) or bool(getattr(app, "is_fullscreen", False)):
         return
-    if not user_hides_shell_handles(app):
+    hidden = user_hides_shell_handles(app)
+    if not hidden:
         _set_side_handles_visible(app, True)
         paint_desktop_splitter_handles(app)
         _sync_hover_resize_grip(app)
     else:
         _set_side_handles_visible(app, False)
         _sync_hover_resize_grip(app)
-    percents = _stored_pane_percents(app)
-    if percents is not None:
-        _apply_shell_pane_percents(app, percents)
+    if hidden:
+        _pin_clips_to_column_floor(app)
+    else:
+        percents = _stored_pane_percents(app)
+        if percents is not None:
+            _apply_shell_pane_percents(app, percents)
     # Hiding the handle emits splitterMoved and arms the kiss snap. Stop it
     # after the widths are written, including when the percent pass bails out.
     _cancel_shell_pane_snap(app)
@@ -607,9 +617,9 @@ def refit_shell_panes_for_window(app) -> None:
 
     QSplitter scales whatever pixel sizes it was last given. The minimum-width
     clamp writes a new pair while the window is small, and the next maximize
-    scales that pair, so Clips stays fatter than the setting. The share itself
-    (Settings when the handles are hidden, otherwise the last drag) is applied
-    again for the width the window has now.
+    scales that pair, so Clips stays fatter than the setting. With the handles
+    hidden, Clips stays on the drag floor. With them shown, the last drag is
+    applied again for the width the window has now.
     """
     if getattr(app, "_portable_shell", False):
         return
@@ -631,11 +641,11 @@ def refit_shell_panes_for_window(app) -> None:
     if width < 200:
         return
     if user_hides_shell_handles(app):
-        percents = _stored_pane_percents(app)
-        if percents is None:
-            percents = getattr(app, "_shell_pane_ratio", None)
-    else:
-        percents = getattr(app, "_shell_pane_ratio", None)
+        # No handle to drag. Stay on the same floor the handle would snap to,
+        # or a resize grows Clips back to the saved share and the gutter returns.
+        _pin_clips_to_column_floor(app)
+        return
+    percents = getattr(app, "_shell_pane_ratio", None)
     if not isinstance(percents, tuple) or len(percents) != 3:
         # No drag and no saved share yet. Keep Clips on the two-column floor.
         # Remembering the pre-layout pixels and scaling them made the first
