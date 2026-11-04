@@ -8,10 +8,10 @@ from datetime import datetime
 from typing import Callable, Dict, List
 
 from steempeg.core.rendered_media import (
-    is_default_rendered_basename,
     load_rendered_companion_meta,
     parse_app_id_from_clip_folder,
     parse_app_id_from_name,
+    rendered_library_title,
 )
 from steempeg.infra.locale_time import format_clip_date, format_clip_time
 from steempeg.library.scan import _resolve_game_name, _resolve_icon_path
@@ -105,6 +105,7 @@ def scan_single_rendered_file(
     cache_dir: str,
     game_names_cache: Dict[str, str],
     icons_cache: Dict[str, str],
+    friendly_repeats: bool = False,
 ) -> ScannedRenderedFile:
     basename = os.path.basename(full_path)
     stem = os.path.splitext(basename)[0]
@@ -129,10 +130,12 @@ def scan_single_rendered_file(
         game_name = source["game_name"]
     game_name = str(game_name or "").strip()
 
-    if app_id and game_name:
-        title = game_name if is_default_rendered_basename(stem, str(app_id)) else stem
-    else:
-        title = game_name or stem
+    title = rendered_library_title(
+        stem,
+        str(app_id) if app_id else None,
+        game_name,
+        friendly_repeats=friendly_repeats,
+    )
 
     # Known when we have a real game name (sidecar / Steam cache) — not only app_id.
     if app_id and not game_name:
@@ -203,6 +206,7 @@ def run_rendered_scan(
     game_names_cache: Dict[str, str],
     *,
     icons_cache: Dict[str, str] | None = None,
+    friendly_repeats: bool = False,
     on_discovered: Callable[[int], None] | None = None,
     on_file: Callable[[ScannedRenderedFile, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -225,6 +229,7 @@ def run_rendered_scan(
             cache_dir=cache_dir,
             game_names_cache=game_names_cache,
             icons_cache=resolved_icons,
+            friendly_repeats=friendly_repeats,
         )
         if on_file is not None:
             on_file(row, index, total)
