@@ -110,8 +110,8 @@ class FilterPillButton(QWidget):
 
         self._dense = dense
         sz = dense.filter_size
-        icon = max(12, sz - 14)
-        border = 1
+        icon = max(10, sz // 2 - (1 if dense.compact else 2))
+        border = 1 if dense.compact else 2
         radius = 6 if dense.compact else 8
         pad = 1 if dense.compact else 2
         # Readable digit; still fits the square without eating the funnel.
