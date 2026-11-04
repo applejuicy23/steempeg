@@ -31,10 +31,10 @@ from PySide6.QtWidgets import (
 from steempeg.infra import cache
 from steempeg.core.rendered_media import (
     extract_poster_frame,
-    is_default_rendered_basename,
     load_rendered_companion_meta,
     parse_app_id_from_clip_folder,
     parse_app_id_from_name,
+    rendered_library_title,
 )
 from steempeg.infra.locale_time import to_display_datetime
 from steempeg.library.rendered_scan import ScannedRenderedFile
@@ -1881,6 +1881,7 @@ class RenderedLibraryMixin:
             cache_dir=self.cache_dir,
             game_names_cache=self.game_names_cache,
             icons_cache=icons_cache,
+            friendly_repeats=self._friendly_repeat_render_titles(),
         )
         table_row = self._insert_rendered_file_row(scanned)
         if table_row >= 0:
@@ -5313,6 +5314,7 @@ class RenderedLibraryMixin:
             self.cache_dir,
             self.game_names_cache,
             icons_cache=self._seed_rendered_icons_cache(),
+            friendly_repeats=self._friendly_repeat_render_titles(),
             parent=getattr(self, "ui", None),
         )
         self._rendered_scan_worker = worker
@@ -5933,6 +5935,40 @@ class RenderedLibraryMixin:
         self.build_rendered_grid()
         self._update_library_count_label()
 
+    def _friendly_repeat_render_titles(self) -> bool:
+        """True when a second export of one clip shows the game and the clip date."""
+        from steempeg.ui.settings_prefs import load_friendly_repeat_render_titles
+
+        settings = {}
+        if hasattr(self, "load_user_settings"):
+            try:
+                settings = self.load_user_settings() or {}
+            except Exception:
+                settings = {}
+        return load_friendly_repeat_render_titles(settings)
+
+    def apply_friendly_repeat_render_titles(self) -> None:
+        """Repaint rendered titles after the Settings checkbox changes."""
+        if not hasattr(self, "table_rendered"):
+            return
+        for row in range(self.table_rendered.rowCount()):
+            item = self.table_rendered.item(row, 0)
+            if item is None:
+                continue
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                continue
+            title, _icon, _thumb, _unknown, _game = self._resolved_rendered_meta(
+                path, os.path.basename(path)
+            )
+            item.setText(f"   {title}")
+        if hasattr(self, "build_rendered_grid"):
+            self.build_rendered_grid()
+        if getattr(self, "_library_panel_mode", "") == "rendered" and hasattr(
+            self, "update_rendered_selection"
+        ):
+            self.update_rendered_selection()
+
     def _resolved_rendered_meta(self, file_path: str, filename: str) -> tuple[str, str, str, bool, str]:
         """Return (display_title, icon_path, thumb_path, is_unknown, game_filter_name)."""
         basename = os.path.basename(filename) if filename else os.path.basename(file_path)
@@ -5955,10 +5991,12 @@ class RenderedLibraryMixin:
             game_name = source["game_name"]
         game_name = str(game_name or "").strip()
 
-        if app_id and game_name:
-            title = game_name if is_default_rendered_basename(stem, str(app_id)) else stem
-        else:
-            title = game_name or stem
+        title = rendered_library_title(
+            stem,
+            str(app_id) if app_id else None,
+            game_name,
+            friendly_repeats=self._friendly_repeat_render_titles(),
+        )
 
         # Sidecar/filename may carry game_name without app_id — still not «Unknown».
         if app_id and not game_name and hasattr(self, "get_game_name"):
@@ -6546,12 +6584,18 @@ class RenderedLibraryMixin:
                 bits = date_str.split("\n", 1)
                 date_part = bits[0].strip()
                 time_part = bits[1].strip()
+            base = os.path.basename(file_path or "")
+            from steempeg.core.rendered_media import repeat_render_info_name
+
             set_player_header_game_text(
                 self,
                 display_title,
                 date=date_part,
                 time=time_part,
                 extra=extra,
+                file_name=repeat_render_info_name(
+                    os.path.splitext(base)[0], display_title, base
+                ),
             )
         if hasattr(self, "custom_icon_label"):
             from steempeg.ui.icon_utils import apply_square_icon
