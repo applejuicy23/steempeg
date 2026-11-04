@@ -3451,6 +3451,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 title = plain_header_title(name_lbl.text() or "")
         if title and "select a clip" not in title.lower():
             lines.append(title)
+        file_name = str(meta.get("file_name") or "").strip()
+        if file_name and file_name != title:
+            lines.append(file_name)
 
         datetime_line = join_clip_date_time(
             str(meta.get("date") or ""),
