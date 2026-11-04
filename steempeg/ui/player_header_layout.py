@@ -1120,6 +1120,7 @@ def store_player_header_meta(
     duration: str = "",
     extra: list[str] | tuple[str, ...] | None = None,
     placeholder: bool = False,
+    file_name: str = "",
 ) -> None:
     app._player_header_meta = {
         "title": title,
@@ -1128,6 +1129,8 @@ def store_player_header_meta(
         "duration": duration or "",
         "extra": list(extra or ()),
         "placeholder": bool(placeholder),
+        # Real export name, when the title is the friendly repeat label.
+        "file_name": file_name or "",
     }
 
 
@@ -1140,6 +1143,7 @@ def set_player_header_game_text(
     duration: str = "",
     extra: list[str] | tuple[str, ...] | None = None,
     placeholder: bool = False,
+    file_name: str = "",
 ) -> None:
     """Store meta, paint the label, and refresh the Clip info chip."""
     store_player_header_meta(
@@ -1150,6 +1154,7 @@ def set_player_header_game_text(
         duration=duration,
         extra=extra,
         placeholder=placeholder,
+        file_name=file_name,
     )
     label = getattr(app, "custom_text_label", None)
     if label is None:
