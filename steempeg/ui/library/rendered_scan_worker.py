@@ -25,6 +25,7 @@ class RenderedScanWorker(QThread):
         cache_dir: str,
         game_names_cache: Dict[str, str],
         icons_cache: Dict[str, str] | None = None,
+        friendly_repeats: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -33,6 +34,7 @@ class RenderedScanWorker(QThread):
         self._cache_dir = cache_dir
         self._game_names_cache = dict(game_names_cache)
         self._icons_cache = dict(icons_cache or {})
+        self._friendly_repeats = bool(friendly_repeats)
         self._stats: RenderedScanStats | None = None
 
     @property
@@ -53,6 +55,7 @@ class RenderedScanWorker(QThread):
                 self._cache_dir,
                 self._game_names_cache,
                 icons_cache=self._icons_cache,
+                friendly_repeats=self._friendly_repeats,
                 on_discovered=on_discovered,
                 on_file=on_file,
                 should_cancel=self.isInterruptionRequested,
