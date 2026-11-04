@@ -1308,6 +1308,23 @@ class SettingsDialog(SteempegDialog):
             bool(settings.get(KEY_PAUSE_PREVIEW_DURING_RENDER, False))
         )
         p.addWidget(self._chk_pause_preview)
+        from steempeg.ui.settings_prefs import load_friendly_repeat_render_titles
+
+        self._chk_friendly_repeat_titles = SteempegCheckBox(
+            "Show the clip date on a repeat render"
+        )
+        self._chk_friendly_repeat_titles.setChecked(
+            load_friendly_repeat_render_titles(settings)
+        )
+        p.addWidget(self._chk_friendly_repeat_titles)
+        p.addWidget(
+            self._hint(
+                "Off, a second render of the same clip keeps the file name in the player. "
+                "On, the player shows the game and the clip's date. "
+                "The info button still shows the real file name. "
+                "The file on disk stays the same."
+            )
+        )
 
         p.addWidget(self._section("Library startup"))
         scan_row = QHBoxLayout()
@@ -2292,6 +2309,13 @@ class SettingsDialog(SteempegDialog):
             from steempeg.ui.settings_prefs import load_library_allow_list_view
 
             if bool(chk_allow.isChecked()) != bool(load_library_allow_list_view(prev)):
+                return True
+
+        chk_friendly = getattr(self, "_chk_friendly_repeat_titles", None)
+        if chk_friendly is not None:
+            from steempeg.ui.settings_prefs import load_friendly_repeat_render_titles
+
+            if bool(chk_friendly.isChecked()) != load_friendly_repeat_render_titles(prev):
                 return True
 
         chk_notify = getattr(self, "_chk_notify", None)
@@ -3305,6 +3329,16 @@ class SettingsDialog(SteempegDialog):
 
         pending[KEY_NOTIFY_ON_RENDER_COMPLETE] = self._chk_notify.isChecked()
         pending[KEY_PAUSE_PREVIEW_DURING_RENDER] = self._chk_pause_preview.isChecked()
+        from steempeg.ui.settings_prefs import (
+            KEY_FRIENDLY_REPEAT_RENDER_TITLES,
+            load_friendly_repeat_render_titles,
+        )
+
+        friendly_repeats = bool(self._chk_friendly_repeat_titles.isChecked())
+        pending[KEY_FRIENDLY_REPEAT_RENDER_TITLES] = friendly_repeats
+        if friendly_repeats != load_friendly_repeat_render_titles(prev):
+            if hasattr(self._app, "apply_friendly_repeat_render_titles"):
+                deferred.append(self._app.apply_friendly_repeat_render_titles)
         prio = self._combo_priority.currentData()
         pending[KEY_RENDER_PROCESS_PRIORITY] = prio if prio else PRIORITY_NORMAL
 
