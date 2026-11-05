@@ -3354,10 +3354,53 @@ class LibraryMixin:
         self._new_clip_watcher.start(list(getattr(self, "clips_folders", []) or []))
 
     def _on_new_clip_ready(self, clip_path: str) -> None:
-        """Remembers the clip, shows the «New clip» popup and quietly adds it to the library."""
+        """Remembers the clip, notifies, and quietly adds it to the library."""
         self._last_new_clip_path = clip_path
-        self.show_new_clip_popup(clip_path)
+        if not self._notify_new_clip_while_away(clip_path):
+            self.show_new_clip_popup(clip_path)
         self._append_new_clip_to_library()
+
+    def _notify_new_clip_while_away(self, clip_path: str) -> bool:
+        """OS toast instead of the corner card when the window is off screen.
+
+        Returns True when the toast replaced the card.
+        """
+        from steempeg.infra.os_notify import main_window_is_off_screen, notify_new_clip
+        from steempeg.ui.settings_dialog import KEY_NOTIFY_ON_NEW_CLIP
+
+        enabled = True
+        if hasattr(self, "load_user_settings"):
+            try:
+                enabled = bool(self.load_user_settings().get(KEY_NOTIFY_ON_NEW_CLIP, True))
+            except Exception:
+                enabled = True
+        if not enabled:
+            return False
+        parent = getattr(self, "ui", None)
+        if not main_window_is_off_screen(parent):
+            return False
+        from steempeg.services.new_clip_watcher import describe_new_clip
+        from steempeg.ui.new_clip_popup import format_clip_duration
+
+        info = describe_new_clip(
+            clip_path,
+            getattr(self, "game_names_cache", None),
+            getattr(self, "cache_dir", ""),
+        )
+        body = info.game_name
+        length = format_clip_duration(info.duration_sec)
+        if length:
+            body = f"{info.game_name} · {length}"
+        notify_new_clip("New clip", body, clip_path, parent=parent)
+        return True
+
+    def open_clip_from_os_toast(self, clip_path: str) -> None:
+        """Opens the Express player for a clip chosen from an OS notification."""
+        path = os.path.normpath(str(clip_path or "").strip().strip('"'))
+        if not path or not os.path.isdir(path):
+            logging.info("OS toast clip is not a folder: %s", path)
+            return
+        self.open_express_player(path)
 
     def is_new_clip_watch_paused(self) -> bool:
         """Tells whether new Steam clips are currently ignored (tray menu toggle)."""
