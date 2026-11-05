@@ -11,8 +11,8 @@ import logging
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QObject, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QObject, QTimer, Qt
+from PySide6.QtGui import QAction, QHideEvent, QIcon, QShowEvent
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 _log = logging.getLogger(__name__)
@@ -23,145 +23,182 @@ def tray_is_supported() -> bool:
     return QSystemTrayIcon.isSystemTrayAvailable()
 
 
-_CMD_OPEN = 1
-_CMD_LAST_CLIP = 2
-_CMD_PAUSE = 3
-_CMD_QUEUE = 4
-_CMD_QUIT = 5
+# Mouse-down messages. The menu does not activate, so Qt never sees a click
+# on the desktop; a low-level hook is what closes it.
+_OUTSIDE_CLICKS = frozenset({
+    0x0201,  # WM_LBUTTONDOWN
+    0x0204,  # WM_RBUTTONDOWN
+    0x0207,  # WM_MBUTTONDOWN
+    0x00A1,  # WM_NCLBUTTONDOWN
+    0x00A4,  # WM_NCRBUTTONDOWN
+    0x00A7,  # WM_NCMBUTTONDOWN
+})
+_WH_MOUSE_LL = 14
+
+_outside_hook = None
+_outside_hook_cb = None
+_outside_menu: QMenu | None = None
 
 
-def _windows_menu_owner():
-    """Hidden popup that owns the native tray menu, not the main window.
+class _TrayMenu(QMenu):
+    """App-styled tray menu that does not take the foreground on Windows.
 
-    ``TrackPopupMenu`` needs an owner. The main window would come forward and
-    Explorer would drop the auto-hide taskbar. A zero-size tool window does not.
+    A normal popup becomes the foreground window, and Explorer then slides an
+    auto-hide taskbar away. The menu stays up if the pointer leaves. A click
+    anywhere else closes it, the same way a Telegram tray card does.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._show_generation = 0
+        if sys.platform == "win32":
+            self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        self._show_generation += 1
+        if sys.platform == "win32":
+            _keep_windows_taskbar(self)
+            _arm_outside_click(self)
+        super().showEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        if sys.platform == "win32":
+            _disarm_outside_click(self)
+        super().hideEvent(event)
+
+
+def _keep_windows_taskbar(menu: QMenu) -> None:
+    """Stop this popup from becoming the foreground window."""
+    try:
+        menu.createWinId()
+        hwnd = int(menu.winId())
+        if not hwnd:
+            return
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        ex = int(user32.GetWindowLongW(hwnd, -20))
+        noactivate = 0x08000000
+        if not (ex & noactivate):
+            user32.SetWindowLongW(hwnd, -20, ex | noactivate)
+    except Exception:
+        _log.debug("Tray menu: keep taskbar visible failed", exc_info=True)
+
+
+def _click_is_on_menu(menu: QMenu, x: int, y: int) -> bool:
+    """True when the screen point lands on the tray menu window."""
+    try:
+        hwnd = int(menu.winId())
+    except RuntimeError:
+        return False
+    if not hwnd:
+        return False
     import ctypes
     from ctypes import wintypes
 
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    class _Rect(ctypes.Structure):
+        _fields_ = [
+            ("left", wintypes.LONG),
+            ("top", wintypes.LONG),
+            ("right", wintypes.LONG),
+            ("bottom", wintypes.LONG),
+        ]
+
+    rect = _Rect()
+    if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return False
+    return rect.left <= x < rect.right and rect.top <= y < rect.bottom
+
+
+def _outside_mouse_proc(n_code: int, w_param: int, l_param: int) -> int:
+    """Close the tray menu when a click lands outside it."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    try:
+        if n_code >= 0 and int(w_param) in _OUTSIDE_CLICKS:
+            menu = _outside_menu
+            if menu is not None:
+                class _HookPoint(ctypes.Structure):
+                    _fields_ = [
+                        ("x", wintypes.LONG),
+                        ("y", wintypes.LONG),
+                        ("mouseData", wintypes.DWORD),
+                        ("flags", wintypes.DWORD),
+                        ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ctypes.c_void_p),
+                    ]
+
+                info = ctypes.cast(l_param, ctypes.POINTER(_HookPoint)).contents
+                try:
+                    on_menu = _click_is_on_menu(menu, int(info.x), int(info.y))
+                except RuntimeError:
+                    on_menu = False
+                if not on_menu:
+                    generation = menu._show_generation
+
+                    def _close(shown: int = generation, target: QMenu = menu) -> None:
+                        try:
+                            if target._show_generation == shown and target.isVisible():
+                                target.hide()
+                        except RuntimeError:
+                            return
+
+                    QTimer.singleShot(0, _close)
+    except Exception:
+        _log.debug("Tray menu: outside click ignored", exc_info=True)
+    return int(user32.CallNextHookEx(None, n_code, w_param, l_param) or 0)
+
+
+def _arm_outside_click(menu: QMenu) -> None:
+    """Watch mouse clicks until this menu closes."""
+    global _outside_hook, _outside_hook_cb, _outside_menu
+    import ctypes
+    from ctypes import wintypes
+
+    _disarm_outside_click(None)
+    _outside_menu = menu
+    proc = ctypes.WINFUNCTYPE(
+        ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t
+    )(_outside_mouse_proc)
+    _outside_hook_cb = proc
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
     kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
     kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-    user32.CreateWindowExW.argtypes = [
-        wintypes.DWORD,
-        wintypes.LPCWSTR,
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
+    user32.SetWindowsHookExW.argtypes = [
         ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        wintypes.HWND,
-        wintypes.HMENU,
-        wintypes.HINSTANCE,
-        wintypes.LPVOID,
-    ]
-    user32.CreateWindowExW.restype = wintypes.HWND
-    hwnd = user32.CreateWindowExW(
-        0x00000080 | 0x08000000,  # WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
-        "STATIC",
-        "SteempegTrayMenu",
-        0x80000000,  # WS_POPUP
-        0,
-        0,
-        0,
-        0,
-        None,
-        None,
-        kernel32.GetModuleHandleW(None),
-        None,
-    )
-    return int(hwnd or 0)
-
-
-def _show_windows_tray_menu(app, *, pause_checked: bool, last_clip_enabled: bool, queue_label: str) -> int:
-    """Open a Win32 menu at the cursor. Returns the chosen command id, or 0.
-
-    A Qt popup is an ordinary window, so Explorer treats it as leaving the tray
-    and slides the taskbar away. A real menu stays inside that click, the same
-    way other tray icons do.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.CreatePopupMenu.restype = wintypes.HMENU
-    user32.AppendMenuW.argtypes = [
-        wintypes.HMENU,
-        wintypes.UINT,
-        ctypes.c_size_t,
-        wintypes.LPCWSTR,
-    ]
-    user32.AppendMenuW.restype = wintypes.BOOL
-    user32.SetMenuDefaultItem.argtypes = [wintypes.HMENU, wintypes.UINT, wintypes.UINT]
-    user32.SetMenuDefaultItem.restype = wintypes.BOOL
-    user32.DestroyMenu.argtypes = [wintypes.HMENU]
-    user32.DestroyMenu.restype = wintypes.BOOL
-    user32.GetCursorPos.argtypes = [ctypes.c_void_p]
-    user32.GetCursorPos.restype = wintypes.BOOL
-    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
-    user32.SetForegroundWindow.restype = wintypes.BOOL
-    user32.TrackPopupMenu.argtypes = [
-        wintypes.HMENU,
-        wintypes.UINT,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_int,
-        wintypes.HWND,
         ctypes.c_void_p,
+        wintypes.HINSTANCE,
+        wintypes.DWORD,
     ]
-    user32.TrackPopupMenu.restype = wintypes.UINT
-    user32.PostMessageW.argtypes = [
-        wintypes.HWND,
-        wintypes.UINT,
-        ctypes.c_size_t,
-        ctypes.c_ssize_t,
-    ]
-    user32.PostMessageW.restype = wintypes.BOOL
+    user32.SetWindowsHookExW.restype = wintypes.HHOOK
+    _outside_hook = user32.SetWindowsHookExW(
+        _WH_MOUSE_LL, proc, kernel32.GetModuleHandleW(None), 0
+    )
+    if not _outside_hook:
+        _log.debug("Tray menu: outside-click hook was not installed")
 
-    owner = int(getattr(app, "_tray_menu_owner", 0) or 0)
-    if not owner:
-        owner = _windows_menu_owner()
-        app._tray_menu_owner = owner
-    if not owner:
-        return 0
 
-    mf_string = 0x0000
-    mf_grayed = 0x0001
-    mf_checked = 0x0008
-    mf_separator = 0x0800
-    menu = user32.CreatePopupMenu()
-    if not menu:
-        return 0
+def _disarm_outside_click(menu: QMenu | None) -> None:
+    """Drop the click watch. ``menu`` limits the drop to that popup."""
+    global _outside_hook, _outside_hook_cb, _outside_menu
+    if menu is not None and _outside_menu is not menu:
+        return
+    hook = _outside_hook
+    _outside_hook = None
+    _outside_hook_cb = None
+    _outside_menu = None
+    if not hook:
+        return
     try:
-        user32.AppendMenuW(menu, mf_string, _CMD_OPEN, "Open Steempeg")
-        user32.SetMenuDefaultItem(menu, 0, 1)
-        last_flags = mf_string if last_clip_enabled else mf_string | mf_grayed
-        user32.AppendMenuW(menu, last_flags, _CMD_LAST_CLIP, "Open last clip in Express player")
-        user32.AppendMenuW(menu, mf_separator, 0, None)
-        pause_flags = mf_string | (mf_checked if pause_checked else 0)
-        user32.AppendMenuW(menu, pause_flags, _CMD_PAUSE, "Pause new-clip detection")
-        user32.AppendMenuW(menu, mf_string, _CMD_QUEUE, queue_label)
-        user32.AppendMenuW(menu, mf_separator, 0, None)
-        user32.AppendMenuW(menu, mf_string, _CMD_QUIT, "Quit Steempeg")
+        import ctypes
 
-        class _Point(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-        point = _Point()
-        user32.GetCursorPos(ctypes.byref(point))
-        # Required so the menu closes on a click outside it. The owner is not
-        # the main window, so this does not raise Steempeg over the taskbar.
-        user32.SetForegroundWindow(owner)
-        flags = 0x0008 | 0x0020 | 0x0002 | 0x0100  # RIGHTALIGN BOTTOMALIGN RIGHTBUTTON RETURNCMD
-        chosen = int(
-            user32.TrackPopupMenu(menu, flags, int(point.x), int(point.y), 0, owner, None) or 0
-        )
-        user32.PostMessageW(owner, 0, 0, 0)  # WM_NULL, per the Shell_NotifyIcon sample
-        return chosen
-    finally:
-        user32.DestroyMenu(menu)
+        ctypes.windll.user32.UnhookWindowsHookEx(hook)
+    except Exception:
+        _log.debug("Tray menu: outside-click hook remove failed", exc_info=True)
 
 
 def describe_render_queue(app) -> str:
@@ -175,7 +212,7 @@ def describe_render_queue(app) -> str:
         parts.append("rendering")
     if waiting:
         parts.append(f"{waiting} waiting")
-    return "Render Queue · " + (" · ".join(parts) if parts else "idle")
+    return "Render Queue | " + (" | ".join(parts) if parts else "idle")
 
 
 class SteempegTray(QObject):
@@ -197,11 +234,8 @@ class SteempegTray(QObject):
         self._icon = QSystemTrayIcon(app_window_icon(), self)
         self._icon.setToolTip("Steempeg")
         self._icon.activated.connect(self._on_icon_activated)
-        # Windows uses a native menu. A Qt popup takes the foreground and
-        # Explorer then hides the auto-hide taskbar and the tray flyout.
-        self._menu = None if sys.platform == "win32" else self._build_menu()
-        if self._menu is not None:
-            self._icon.setContextMenu(self._menu)
+        self._menu = self._build_menu()
+        self._icon.setContextMenu(self._menu)
 
     # -- state ----------------------------------------------------------------
 
@@ -235,13 +269,21 @@ class SteempegTray(QObject):
 
     # -- menu -----------------------------------------------------------------
 
+    def _menu_icon(self, name: str) -> QIcon:
+        """Loads a small tray-menu glyph from the bundled assets."""
+        from steempeg.infra.paths import get_resource_path
+
+        return QIcon(get_resource_path(name))
+
     def _build_menu(self) -> QMenu:
         """Creates the right-click menu (labels refresh every time it opens)."""
         from steempeg.ui import ui_theme as ut
+        from steempeg.ui.icon_utils import app_window_icon
 
-        menu = QMenu()
+        menu = _TrayMenu()
         menu.setStyleSheet(ut.menu_stylesheet())
         self._act_open = QAction("Open Steempeg", menu)
+        self._act_open.setIcon(app_window_icon())
         font = self._act_open.font()
         font.setBold(True)
         self._act_open.setFont(font)
@@ -249,21 +291,25 @@ class SteempegTray(QObject):
         menu.addAction(self._act_open)
 
         self._act_last_clip = QAction("Open last clip in Express player", menu)
+        self._act_last_clip.setIcon(self._menu_icon("play2.png"))
         self._act_last_clip.triggered.connect(self.open_last_clip)
         menu.addAction(self._act_last_clip)
         menu.addSeparator()
 
         self._act_pause_watch = QAction("Pause new-clip detection", menu)
+        self._act_pause_watch.setIcon(self._menu_icon("pause_player.png"))
         self._act_pause_watch.setCheckable(True)
         self._act_pause_watch.toggled.connect(self._on_pause_watch_toggled)
         menu.addAction(self._act_pause_watch)
 
         self._act_queue = QAction("Render Queue", menu)
+        self._act_queue.setIcon(self._menu_icon("queue.png"))
         self._act_queue.triggered.connect(self.open_render_queue)
         menu.addAction(self._act_queue)
         menu.addSeparator()
 
         act_quit = QAction("Quit Steempeg", menu)
+        act_quit.setIcon(self._menu_icon("exit.png"))
         act_quit.triggered.connect(self.quit_app)
         menu.addAction(act_quit)
         menu.aboutToShow.connect(self._refresh_menu)
@@ -286,39 +332,9 @@ class SteempegTray(QObject):
         self._icon.setToolTip("Steempeg · new-clip detection paused" if checked else "Steempeg")
 
     def _on_icon_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Left click opens the window. Right click opens the native Windows menu."""
-        if reason == QSystemTrayIcon.ActivationReason.Context and sys.platform == "win32":
-            self._popup_windows_menu()
-            return
+        """Left click opens the window. Right click is the context menu."""
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.show_main_window()
-
-    def _popup_windows_menu(self) -> None:
-        """Shows the tray menu without pulling the taskbar down."""
-        try:
-            chosen = _show_windows_tray_menu(
-                self._app,
-                pause_checked=bool(self._app.is_new_clip_watch_paused()),
-                last_clip_enabled=bool(self._app.find_last_clip_for_express()),
-                queue_label=describe_render_queue(self._app),
-            )
-        except Exception:
-            _log.debug("Tray: native menu failed", exc_info=True)
-            return
-        if chosen == _CMD_OPEN:
-            self.show_main_window()
-        elif chosen == _CMD_LAST_CLIP:
-            self.open_last_clip()
-        elif chosen == _CMD_PAUSE:
-            paused = not bool(self._app.is_new_clip_watch_paused())
-            self._app.set_new_clip_watch_paused(paused)
-            self._icon.setToolTip(
-                "Steempeg · new-clip detection paused" if paused else "Steempeg"
-            )
-        elif chosen == _CMD_QUEUE:
-            self.open_render_queue()
-        elif chosen == _CMD_QUIT:
-            self.quit_app()
 
     # -- actions --------------------------------------------------------------
 
