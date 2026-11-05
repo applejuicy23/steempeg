@@ -278,6 +278,7 @@ from steempeg.ui.ui_theme import (
 
 # Persisted preference keys
 KEY_NOTIFY_ON_RENDER_COMPLETE = "notify_on_render_complete"
+KEY_NOTIFY_ON_NEW_CLIP = "notify_on_new_clip"
 KEY_RENDER_PROCESS_PRIORITY = "render_process_priority"
 KEY_PAUSE_PREVIEW_DURING_RENDER = "pause_preview_during_render"
 
@@ -1281,6 +1282,18 @@ class SettingsDialog(SteempegDialog):
             self._hint(
                 "When Steempeg is minimized: OS notification center toast + "
                 "system alert sound (Windows / Linux / SteamOS). Off = silent."
+            )
+        )
+        self._chk_notify_new_clip = SteempegCheckBox("Notify when a new clip appears")
+        self._chk_notify_new_clip.setChecked(
+            bool(settings.get(KEY_NOTIFY_ON_NEW_CLIP, True))
+        )
+        n.addWidget(self._chk_notify_new_clip)
+        n.addWidget(
+            self._hint(
+                "When Steempeg is minimized or in the tray: an OS notification. "
+                "Clicking it opens the clip. While the window is open, the "
+                "New clip card is enough."
             )
         )
         n.addStretch(1)
@@ -2325,6 +2338,13 @@ class SettingsDialog(SteempegDialog):
             ):
                 return True
 
+        chk_new_clip = getattr(self, "_chk_notify_new_clip", None)
+        if chk_new_clip is not None:
+            if bool(chk_new_clip.isChecked()) != bool(
+                prev.get(KEY_NOTIFY_ON_NEW_CLIP, True)
+            ):
+                return True
+
         chk_tray = getattr(self, "_chk_keep_running_in_tray", None)
         if chk_tray is not None:
             if bool(chk_tray.isChecked()) != load_keep_running_in_tray(prev):
@@ -3316,6 +3336,7 @@ class SettingsDialog(SteempegDialog):
         self._committed_desktop_render = desktop_layout
 
         pending[KEY_NOTIFY_ON_RENDER_COMPLETE] = self._chk_notify.isChecked()
+        pending[KEY_NOTIFY_ON_NEW_CLIP] = self._chk_notify_new_clip.isChecked()
         pending[KEY_PAUSE_PREVIEW_DURING_RENDER] = self._chk_pause_preview.isChecked()
         from steempeg.ui.settings_prefs import (
             KEY_FRIENDLY_REPEAT_RENDER_TITLES,
