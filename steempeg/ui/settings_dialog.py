@@ -2355,26 +2355,14 @@ class SettingsDialog(SteempegDialog):
         return False
 
     def _on_hide_splitter_handles_toggled(self, checked: bool) -> None:
-        """Show the width row only while the handles are hidden, and copy the live panes."""
+        """Show the width row only while the handles are hidden.
+
+        The spins are the saved hidden-handles layout. Copying the live drag
+        into them would make the next Save replace that layout with the drag.
+        """
         host = getattr(self, "_pane_row_host", None)
         if host is not None:
             host.setVisible(bool(checked))
-        if not checked:
-            return
-        snapshot = getattr(self._app, "snapshot_shell_pane_percents", None)
-        if not callable(snapshot):
-            return
-        clips, player, queue = snapshot()
-        self._pane_percent_lock = True
-        try:
-            self._pane_spins["clips"].setValue(int(clips))
-            self._pane_spins["player"].setValue(int(player))
-            self._pane_spins["queue"].setValue(int(queue))
-        finally:
-            self._pane_percent_lock = False
-        # A hover snapshot reports queue 0 because the dock is shut. The spin
-        # shows the overlay width instead, then both modes get their floors.
-        self._refit_pane_percent_spins(seed_hover_queue=True)
 
     def _pane_queue_is_hover(self) -> bool:
         """True when the queue spin edits the slide-out, not the docked pane."""
@@ -3578,43 +3566,52 @@ class SettingsDialog(SteempegDialog):
             pending[UI_SHELL_ASK_KEY] = False
 
         hide_handles = bool(self._chk_hide_splitter_handles.isChecked())
-        self._refit_pane_percent_spins()
-        pane_percents = self._shell_pane_percent_values()
+        prev_hide = load_hide_splitter_handles(prev)
+        hide_changed = hide_handles != prev_hide
         pending[KEY_HIDE_SPLITTER_HANDLES] = hide_handles
-        pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
-        win_w, shell = self._shell_pane_measure()
-        if win_w > 0 and shell > 0:
-            from steempeg.ui.layout_defaults import (
-                fit_shell_pane_pixels,
-                shell_pane_pixel_limits,
-                shell_percents_to_pixels,
-            )
+        # The spins belong to the hidden-handles layout. An ordinary Save
+        # (audio spread, theme, …) must not write them or paint them onto
+        # the drag. With the handles showing, the drag is the width.
+        baseline = getattr(self, "_pane_percent_baseline", None)
+        if baseline is None:
+            baseline = load_shell_pane_percents(prev)
+        pane_percents = self._shell_pane_percent_values()
+        percents_changed = tuple(int(v) for v in pane_percents) != tuple(
+            int(v) for v in baseline
+        )
+        if hide_handles and percents_changed:
+            pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
+            win_w, shell_w = self._shell_pane_measure()
+            if win_w > 0 and shell_w > 0 and int(baseline[2]) != int(pane_percents[2]):
+                from steempeg.ui.layout_defaults import (
+                    fit_shell_pane_pixels,
+                    shell_pane_pixel_limits,
+                    shell_percents_to_pixels,
+                )
 
-            hover = self._pane_queue_is_hover()
-            limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell)
-            clips_w, player_w, queue_w = shell_percents_to_pixels(
-                pane_percents[0],
-                pane_percents[1],
-                pane_percents[2],
-                shell=shell,
-                window=win_w,
-                hover=hover,
-            )
-            _clips_w, _player_w, queue_w = fit_shell_pane_pixels(
-                clips_w,
-                player_w,
-                queue_w,
-                limits,
-                shell,
-                hover=hover,
-                changed="clips",
-            )
-            baseline = getattr(self, "_pane_percent_baseline", None)
-            queue_moved = baseline is None or int(baseline[2]) != int(pane_percents[2])
-            if queue_moved:
+                hover = self._pane_queue_is_hover()
+                limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell_w)
+                clips_w, player_w, queue_w = shell_percents_to_pixels(
+                    pane_percents[0],
+                    pane_percents[1],
+                    pane_percents[2],
+                    shell=shell_w,
+                    window=win_w,
+                    hover=hover,
+                )
+                _clips_w, _player_w, queue_w = fit_shell_pane_pixels(
+                    clips_w,
+                    player_w,
+                    queue_w,
+                    limits,
+                    shell_w,
+                    hover=hover,
+                    changed="queue",
+                )
                 pending["queue_panel_width"] = int(queue_w)
-        if hasattr(self._app, "apply_hidden_shell_splitter_handles"):
-            deferred.append(self._app.apply_hidden_shell_splitter_handles)
+        if hide_changed or (hide_handles and percents_changed):
+            if hasattr(self._app, "apply_hidden_shell_splitter_handles"):
+                deferred.append(self._app.apply_hidden_shell_splitter_handles)
 
         if hasattr(self._app, "save_user_settings_batch"):
             saved = self._app.save_user_settings_batch(pending)
