@@ -68,6 +68,26 @@ def _sound_for(kind: NotifyKind) -> SystemSound:
     return SystemSound.SUCCESS
 
 
+def main_window_is_off_screen(widget: QWidget | None = None) -> bool:
+    """True when the main window is minimized or hidden in the tray.
+
+    A visible window that is not focused still counts as on screen: the
+    corner card is the notice in that case.
+    """
+    win = None
+    if widget is not None:
+        try:
+            win = widget.window()
+        except Exception:
+            win = None
+    if win is None:
+        return True
+    try:
+        return bool(win.isMinimized() or not win.isVisible())
+    except Exception:
+        return False
+
+
 def app_is_in_background(widget: QWidget | None = None) -> bool:
     """True when Steempeg is minimized or not the foreground app."""
     app = QApplication.instance()
@@ -271,7 +291,31 @@ def _ensure_steempeg_toast_shortcut() -> bool:
     return ensure_steempeg_aumid_shortcut(force=False)
 
 
-def _windows_toast(title: str, body: str) -> bool:
+def new_clip_toast_launch(clip_path: str) -> str:
+    """Builds the ``steempeg:`` URI a new-clip toast click hands back to us."""
+    from urllib.parse import quote
+
+    return "steempeg:clip?path=" + quote(clip_path, safe="")
+
+
+def clip_path_from_toast_launch(argv: list[str]) -> str:
+    """Pulls a clip folder out of a ``steempeg:clip?path=`` launch argument."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    for arg in argv:
+        text = str(arg).strip().strip('"')
+        if not text.lower().startswith("steempeg:clip"):
+            continue
+        values = parse_qs(urlparse(text).query).get("path") or []
+        if not values:
+            continue
+        path = unquote(values[0]).strip().strip('"')
+        if path:
+            return path
+    return ""
+
+
+def _windows_toast(title: str, body: str, launch: str | None = None) -> bool:
     """Post an Action Center toast via WinRT (fire-and-forget)."""
     try:
         ensure_toast_protocol_registered()
@@ -279,10 +323,11 @@ def _windows_toast(title: str, body: str) -> bool:
         # otherwise fall back to the PowerShell host AUMID that Win11 always shows.
         use_steempeg_id = _ensure_steempeg_toast_shortcut()
         app_id = _WINDOWS_AUMID if use_steempeg_id else _PS_HOST_AUMID
+        launch_uri = escape(launch or TOAST_PROTOCOL_LAUNCH, {'"': "&quot;"})
 
         xml = (
             "<toast activationType=\"protocol\" "
-            f"launch=\"{TOAST_PROTOCOL_LAUNCH}\">"
+            f"launch=\"{launch_uri}\">"
             "<visual><binding template=\"ToastGeneric\">"
             f"<text>{escape(title)}</text>"
             f"<text>{escape(body)}</text>"
@@ -389,12 +434,14 @@ class OsNotifier(QObject):
         kind: NotifyKind = NotifyKind.SUCCESS,
         play_sound: bool = True,
         msec: int = 8000,
+        launch: str | None = None,
     ) -> None:
+        """Shows one toast. ``launch`` is the Windows click target (``steempeg:`` URI)."""
         if play_sound:
             play_system_sound(_sound_for(kind))
         delivered = False
         if sys.platform == "win32":
-            delivered = _windows_toast(title, body)
+            delivered = _windows_toast(title, body, launch)
         else:
             delivered = _notify_send(title, body, kind)
             if not delivered and self._tray is not None and self._tray.isVisible():
@@ -430,4 +477,23 @@ def notify_render_event(
     if not force and not app_is_in_background(parent):
         return False
     get_os_notifier(parent).show(title, body, kind=kind, play_sound=play_sound)
+    return True
+
+
+def notify_new_clip(
+    title: str,
+    body: str,
+    clip_path: str,
+    *,
+    parent: QWidget | None = None,
+    play_sound: bool = True,
+) -> bool:
+    """Posts an OS toast whose click opens ``clip_path`` in the running app."""
+    get_os_notifier(parent).show(
+        title,
+        body,
+        kind=NotifyKind.SUCCESS,
+        play_sound=play_sound,
+        launch=new_clip_toast_launch(clip_path),
+    )
     return True
