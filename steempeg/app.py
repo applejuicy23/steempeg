@@ -6631,11 +6631,18 @@ def main():
         for a in sys.argv[1:]
     ):
         from PySide6.QtCore import QCoreApplication
-        from steempeg.infra.instance_bridge import ask_running_instance_to_show
+        from steempeg.infra.instance_bridge import (
+            ask_running_instance_to_open_clip,
+            ask_running_instance_to_show,
+        )
+        from steempeg.infra.os_notify import clip_path_from_toast_launch
         from steempeg.infra.window_focus import raise_steempeg_window
 
         _bridge_core = QCoreApplication(sys.argv)
         # The bridge also reaches a window hidden in the tray; Win32 raise only sees visible ones.
+        clip_path = clip_path_from_toast_launch(sys.argv[1:])
+        if clip_path and ask_running_instance_to_open_clip(clip_path):
+            raise SystemExit(0)
         if ask_running_instance_to_show():
             raise SystemExit(0)
         raise SystemExit(0 if raise_steempeg_window() else 1)
@@ -6847,8 +6854,14 @@ def main():
         if _instance_bridge is not None:
             window._instance_bridge = _instance_bridge
             _instance_bridge.show_requested.connect(window.bring_main_window_forward)
+            _instance_bridge.open_clip_requested.connect(window.open_clip_from_os_toast)
             if _instance_bridge.show_was_requested:
                 QTimer.singleShot(0, window.bring_main_window_forward)
+            pending_clip = _instance_bridge.pending_open_clip
+            if pending_clip:
+                QTimer.singleShot(
+                    0, lambda path=pending_clip: window.open_clip_from_os_toast(path)
+                )
         _splash_keepalive()
         
         if getattr(window, 'ui', None) is None:
