@@ -23,21 +23,18 @@ def tray_is_supported() -> bool:
     return QSystemTrayIcon.isSystemTrayAvailable()
 
 
-# Mouse-down messages. The menu does not activate, so Qt never sees a click
-# on the desktop; a low-level hook is what closes it.
-_OUTSIDE_CLICKS = frozenset({
-    0x0201,  # WM_LBUTTONDOWN
-    0x0204,  # WM_RBUTTONDOWN
-    0x0207,  # WM_MBUTTONDOWN
-    0x00A1,  # WM_NCLBUTTONDOWN
-    0x00A4,  # WM_NCRBUTTONDOWN
-    0x00A7,  # WM_NCMBUTTONDOWN
-})
-_WH_MOUSE_LL = 14
+# The menu does not activate, so Qt never sees a click on the desktop.
+# A low-level mouse hook would sit on every move and stall the pointer,
+# so a timer only samples the buttons.
+_VK_LBUTTON = 0x01
+_VK_RBUTTON = 0x02
+_VK_MBUTTON = 0x04
+_OUTSIDE_POLL_MS = 32
 
-_outside_hook = None
-_outside_hook_cb = None
+_outside_timer: QTimer | None = None
 _outside_menu: QMenu | None = None
+_outside_prev_buttons = 0
+_outside_ignore_buttons = 0
 
 
 class _TrayMenu(QMenu):
@@ -45,7 +42,8 @@ class _TrayMenu(QMenu):
 
     A normal popup becomes the foreground window, and Explorer then slides an
     auto-hide taskbar away. The menu stays up if the pointer leaves. A click
-    anywhere else closes it, the same way a Telegram tray card does.
+    anywhere else closes it, the same way a Telegram tray card does. That
+    click is sampled on a timer: a low-level mouse hook stalls the pointer.
     """
 
     def __init__(self) -> None:
@@ -111,94 +109,100 @@ def _click_is_on_menu(menu: QMenu, x: int, y: int) -> bool:
     return rect.left <= x < rect.right and rect.top <= y < rect.bottom
 
 
-def _outside_mouse_proc(n_code: int, w_param: int, l_param: int) -> int:
-    """Close the tray menu when a click lands outside it."""
+def _mouse_buttons_down() -> int:
+    """Bitmask of mouse buttons held now. This does not sit on the cursor path."""
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    mask = 0
+    if user32.GetAsyncKeyState(_VK_LBUTTON) & 0x8000:
+        mask |= 1
+    if user32.GetAsyncKeyState(_VK_RBUTTON) & 0x8000:
+        mask |= 2
+    if user32.GetAsyncKeyState(_VK_MBUTTON) & 0x8000:
+        mask |= 4
+    return mask
+
+
+def _cursor_pos() -> tuple[int, int]:
+    """Screen position of the pointer, in pixels."""
     import ctypes
     from ctypes import wintypes
 
-    user32 = ctypes.windll.user32
+    point = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    return int(point.x), int(point.y)
+
+
+def _poll_outside_click() -> None:
+    """Hide the tray menu when a new click starts outside it."""
+    global _outside_prev_buttons, _outside_ignore_buttons
+    menu = _outside_menu
+    if menu is None:
+        return
     try:
-        if n_code >= 0 and int(w_param) in _OUTSIDE_CLICKS:
-            menu = _outside_menu
-            if menu is not None:
-                class _HookPoint(ctypes.Structure):
-                    _fields_ = [
-                        ("x", wintypes.LONG),
-                        ("y", wintypes.LONG),
-                        ("mouseData", wintypes.DWORD),
-                        ("flags", wintypes.DWORD),
-                        ("time", wintypes.DWORD),
-                        ("dwExtraInfo", ctypes.c_void_p),
-                    ]
-
-                info = ctypes.cast(l_param, ctypes.POINTER(_HookPoint)).contents
-                try:
-                    on_menu = _click_is_on_menu(menu, int(info.x), int(info.y))
-                except RuntimeError:
-                    on_menu = False
-                if not on_menu:
-                    generation = menu._show_generation
-
-                    def _close(shown: int = generation, target: QMenu = menu) -> None:
-                        try:
-                            if target._show_generation == shown and target.isVisible():
-                                target.hide()
-                        except RuntimeError:
-                            return
-
-                    QTimer.singleShot(0, _close)
+        if not menu.isVisible():
+            return
+        down = _mouse_buttons_down()
     except Exception:
-        _log.debug("Tray menu: outside click ignored", exc_info=True)
-    return int(user32.CallNextHookEx(None, n_code, w_param, l_param) or 0)
+        _log.debug("Tray menu: outside click poll failed", exc_info=True)
+        return
+    # The click that opened the menu is still held. Wait until it is released.
+    if _outside_ignore_buttons:
+        _outside_ignore_buttons &= down
+        _outside_prev_buttons = down
+        return
+    pressed = down & ~_outside_prev_buttons
+    _outside_prev_buttons = down
+    if not pressed:
+        return
+    try:
+        x, y = _cursor_pos()
+        on_menu = _click_is_on_menu(menu, x, y)
+    except RuntimeError:
+        return
+    if on_menu:
+        return
+    generation = menu._show_generation
+
+    def _close(shown: int = generation, target: QMenu = menu) -> None:
+        try:
+            if target._show_generation == shown and target.isVisible():
+                target.hide()
+        except RuntimeError:
+            return
+
+    QTimer.singleShot(0, _close)
 
 
 def _arm_outside_click(menu: QMenu) -> None:
     """Watch mouse clicks until this menu closes."""
-    global _outside_hook, _outside_hook_cb, _outside_menu
-    import ctypes
-    from ctypes import wintypes
-
+    global _outside_timer, _outside_menu, _outside_prev_buttons, _outside_ignore_buttons
     _disarm_outside_click(None)
+    held = _mouse_buttons_down()
     _outside_menu = menu
-    proc = ctypes.WINFUNCTYPE(
-        ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t
-    )(_outside_mouse_proc)
-    _outside_hook_cb = proc
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
-    user32.SetWindowsHookExW.argtypes = [
-        ctypes.c_int,
-        ctypes.c_void_p,
-        wintypes.HINSTANCE,
-        wintypes.DWORD,
-    ]
-    user32.SetWindowsHookExW.restype = wintypes.HHOOK
-    _outside_hook = user32.SetWindowsHookExW(
-        _WH_MOUSE_LL, proc, kernel32.GetModuleHandleW(None), 0
-    )
-    if not _outside_hook:
-        _log.debug("Tray menu: outside-click hook was not installed")
+    _outside_prev_buttons = held
+    _outside_ignore_buttons = held
+    timer = _outside_timer
+    if timer is None:
+        timer = QTimer(menu)
+        timer.setInterval(_OUTSIDE_POLL_MS)
+        timer.timeout.connect(_poll_outside_click)
+        _outside_timer = timer
+    timer.start()
 
 
 def _disarm_outside_click(menu: QMenu | None) -> None:
     """Drop the click watch. ``menu`` limits the drop to that popup."""
-    global _outside_hook, _outside_hook_cb, _outside_menu
+    global _outside_timer, _outside_menu, _outside_prev_buttons, _outside_ignore_buttons
     if menu is not None and _outside_menu is not menu:
         return
-    hook = _outside_hook
-    _outside_hook = None
-    _outside_hook_cb = None
     _outside_menu = None
-    if not hook:
-        return
-    try:
-        import ctypes
-
-        ctypes.windll.user32.UnhookWindowsHookEx(hook)
-    except Exception:
-        _log.debug("Tray menu: outside-click hook remove failed", exc_info=True)
+    _outside_prev_buttons = 0
+    _outside_ignore_buttons = 0
+    timer = _outside_timer
+    if timer is not None:
+        timer.stop()
 
 
 def describe_render_queue(app) -> str:
