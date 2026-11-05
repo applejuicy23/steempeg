@@ -464,13 +464,21 @@ def _stored_pane_percents(app):
     return read_shell_pane_percents(settings)
 
 
-def apply_user_shell_handle_visibility(app) -> None:
-    """Apply the Settings choice for the Clips / player / queue handles.
+def _apply_percents_keeping_drag(app, percents: tuple[int, int, int]) -> None:
+    """Paint a share without replacing the drag the handles remember."""
+    app._shell_pane_refitting = True
+    try:
+        _apply_shell_pane_percents(app, percents)
+    finally:
+        app._shell_pane_refitting = False
 
-    Hidden handles cannot be dragged, so Clips sits on the same floor a drag
-    would hit. The saved share is wider than that floor, and applying it here
-    is what left the empty card gutter. Showing the handles again restores
-    the saved share, which the drag can still pull back down to the floor.
+
+def apply_user_shell_handle_visibility(app) -> None:
+    """Show or hide the handles without mixing the two layouts.
+
+    With handles, the width is the last drag. Without handles, the width is
+    the saved percents. Painting one onto the other is what made an ordinary
+    Save move Clips.
     """
     if getattr(app, "_portable_shell", False):
         return
@@ -481,15 +489,15 @@ def apply_user_shell_handle_visibility(app) -> None:
         _set_side_handles_visible(app, True)
         paint_desktop_splitter_handles(app)
         _sync_hover_resize_grip(app)
+        ratio = getattr(app, "_shell_pane_ratio", None)
+        if isinstance(ratio, tuple) and len(ratio) == 3:
+            _apply_percents_keeping_drag(app, ratio)
     else:
         _set_side_handles_visible(app, False)
         _sync_hover_resize_grip(app)
-    if hidden:
-        _pin_clips_to_column_floor(app)
-    else:
         percents = _stored_pane_percents(app)
         if percents is not None:
-            _apply_shell_pane_percents(app, percents)
+            _apply_percents_keeping_drag(app, percents)
     # Hiding the handle emits splitterMoved and arms the kiss snap. Stop it
     # after the widths are written, including when the percent pass bails out.
     _cancel_shell_pane_snap(app)
@@ -618,8 +626,8 @@ def refit_shell_panes_for_window(app) -> None:
     QSplitter scales whatever pixel sizes it was last given. The minimum-width
     clamp writes a new pair while the window is small, and the next maximize
     scales that pair, so Clips stays fatter than the setting. With the handles
-    hidden, Clips stays on the drag floor. With them shown, the last drag is
-    applied again for the width the window has now.
+    hidden, the saved percents are the width. With them shown, the last drag is
+    applied again. Neither pass replaces the other layout's memory.
     """
     if getattr(app, "_portable_shell", False):
         return
@@ -641,8 +649,10 @@ def refit_shell_panes_for_window(app) -> None:
     if width < 200:
         return
     if user_hides_shell_handles(app):
-        # No handle to drag. Stay on the same floor the handle would snap to,
-        # or a resize grows Clips back to the saved share and the gutter returns.
+        stored = _stored_pane_percents(app)
+        if stored is not None:
+            _apply_percents_keeping_drag(app, stored)
+            return
         _pin_clips_to_column_floor(app)
         return
     percents = getattr(app, "_shell_pane_ratio", None)
