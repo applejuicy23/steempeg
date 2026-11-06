@@ -641,6 +641,24 @@ def percent_at_least(pixels: int, total: int) -> int:
     return max(0, min(100, (pixels * 100 + total - 1) // total))
 
 
+def percent_of_pixel_floor(pixels: int, total: int) -> int:
+    """Percent of ``total`` that converts back to ``pixels``, not a wider pane.
+
+    ``percent_at_least`` rounds up. A floor that is really 23% becomes a 25%
+    spin, and applying 25% paints Clips wider than the handle's stop.
+    """
+    pixels = max(0, int(pixels))
+    total = int(total or 0)
+    if total <= 0 or pixels <= 0:
+        return 0
+    share = min(100, pixels * 100 // total)
+    got = total * share // 100
+    nxt = total * (share + 1) // 100
+    if got < pixels and nxt <= pixels:
+        share += 1
+    return max(0, min(100, share))
+
+
 def percent_at_most(pixels: int, total: int) -> int:
     """Largest whole percent of ``total`` that is no wider than ``pixels``."""
     total = int(total or 0)
