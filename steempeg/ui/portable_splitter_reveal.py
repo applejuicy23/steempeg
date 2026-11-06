@@ -238,12 +238,11 @@ def _shell_span(app) -> tuple[int, int]:
         try:
             sizes = main.sizes()
             shell = sum(int(part) for part in sizes)
-            # sizes() lags setHandleWidth(0). The widget is already the full
-            # width, and the freed slot is no longer a handle, so count it in
-            # the pane budget. Otherwise Qt adds those pixels back onto Clips.
+            # Hidden handle: the percent is of the whole bar you see, not of
+            # the pane sum that already swallowed the handle into Clips.
             handle_w = int(main.handleWidth() or 0)
             outer = int(main.width() or 0)
-            if handle_w <= 0 and outer > shell:
+            if handle_w <= 0 and outer > 0:
                 shell = outer
         except RuntimeError:
             shell = 0
@@ -374,14 +373,47 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
             _set_pair_sizes(main, dock, slot_q, player_w + clips_w)
             _set_pair_sizes(inner, player, player_w, clips_w)
         else:
-            _set_pair_sizes(main, clips, clips_w, player_w + slot_q)
-            _set_pair_sizes(inner, player, player_w, slot_q)
+            outer = int(main.width() or 0)
+            hidden_handle = int(main.handleWidth() or 0) <= 0
+            if hidden_handle and outer > clips_w:
+                # Clips is exactly its share of the whole bar. Every pixel
+                # that used to be a handle stays in the right block, on the
+                # player. Queue keeps the width it was given.
+                right = outer - int(clips_w)
+                _set_pair_sizes(main, clips, int(clips_w), right)
+                _stretch_hidden_gap_to_player(main, inner, clips, player, queue)
+                if slot_q > 0 and right > slot_q:
+                    _set_pair_sizes(inner, player, right - slot_q, slot_q)
+                else:
+                    _set_pair_sizes(inner, player, right, 0)
+            else:
+                _set_pair_sizes(main, clips, clips_w, player_w + slot_q)
+                _set_pair_sizes(inner, player, player_w, slot_q)
     finally:
         main.blockSignals(False)
         inner.blockSignals(False)
     _cancel_shell_pane_snap(app)
     if hover and queue_pct > 0:
         _apply_hover_overlay_width(app, queue_w)
+
+
+def _stretch_hidden_gap_to_player(
+    main: QSplitter, inner: QSplitter, clips, player, queue
+) -> None:
+    """Leftover pixels from a hidden handle grow the player, never Clips."""
+    try:
+        clips_i = main.indexOf(clips)
+        if clips_i >= 0:
+            main.setStretchFactor(clips_i, 0)
+            main.setStretchFactor(1 - clips_i, 1)
+        player_i = inner.indexOf(player)
+        queue_i = inner.indexOf(queue)
+        if player_i >= 0:
+            inner.setStretchFactor(player_i, 1)
+        if queue_i >= 0:
+            inner.setStretchFactor(queue_i, 0)
+    except RuntimeError:
+        return
 
 
 def _set_pair_sizes(splitter: QSplitter, first, first_w: int, second_w: int) -> None:
@@ -465,20 +497,136 @@ def _stored_pane_percents(app):
 
 
 def _apply_percents_keeping_drag(app, percents: tuple[int, int, int]) -> None:
-    """Paint a share without replacing the drag the handles remember."""
+    """Paint a share. That share becomes the layout the handles remember.
+
+    A typed 25% must replace the drag from before the handles were hidden.
+    Keeping the old ratio is what snapped the shell back to 60% when the
+    handles came back.
+    """
     app._shell_pane_refitting = True
     try:
         _apply_shell_pane_percents(app, percents)
     finally:
         app._shell_pane_refitting = False
+    app._shell_pane_ratio = tuple(int(v) for v in percents)
+
+
+def _give_handle_gap_to_player(app, clips_w: int, player_w: int, queue_w: int) -> None:
+    """Keep Clips at ``clips_w``. The player takes the rest, including the old handle.
+
+    Qt's default is to dump a vanished handle onto the first pane, so Clips
+    grows to the right. The gap belongs to the player.
+    """
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    main, inner, clips, player, queue = found
+    hover = _queue_hover_is_on(app)
+    slot_q = 0 if hover else max(0, int(queue_w))
+    dock = _queue_slot(app, queue)
+    try:
+        queue_on_left = main.indexOf(dock) == 0
+    except RuntimeError:
+        queue_on_left = False
+    app._shell_pane_refitting = True
+    try:
+        main.blockSignals(True)
+        inner.blockSignals(True)
+        try:
+            if queue_on_left:
+                outer = int(main.width() or 0)
+                queue_kept = min(slot_q, max(0, outer - 1))
+                right = max(0, outer - queue_kept)
+                _set_pair_sizes(main, dock, queue_kept, right)
+                if right > int(clips_w):
+                    _set_pair_sizes(inner, player, right - int(clips_w), int(clips_w))
+                else:
+                    _set_pair_sizes(inner, player, int(player_w), int(clips_w))
+            else:
+                outer = int(main.width() or 0)
+                clips_kept = min(max(0, int(clips_w)), max(0, outer - 1))
+                right = max(0, outer - clips_kept)
+                _set_pair_sizes(main, clips, clips_kept, right)
+                if hover or slot_q <= 0 or right <= slot_q:
+                    _set_pair_sizes(inner, player, right, 0)
+                else:
+                    _set_pair_sizes(inner, player, right - slot_q, slot_q)
+        finally:
+            main.blockSignals(False)
+            inner.blockSignals(False)
+    finally:
+        app._shell_pane_refitting = False
+    _cancel_shell_pane_snap(app)
+
+
+def _handles_are_hidden_now(app) -> bool:
+    """True when the Clips handle is already hidden, not merely requested."""
+    ui = getattr(app, "ui", None)
+    main = getattr(ui, "main_splitter", None) if ui is not None else None
+    if not isinstance(main, QSplitter):
+        return False
+    try:
+        return int(main.handleWidth() or 0) <= 0
+    except RuntimeError:
+        return False
+
+
+def _show_handles_keeping_clips(app, clips_w: int, queue_w: int) -> None:
+    """Put the handles back. Clips and the queue stay. The player gives the gap.
+
+    The layout on screen is the one she saved (the 25%), not the drag from
+    the moment the handles were first hidden.
+    """
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    main, inner, clips, player, queue = found
+    hover = _queue_hover_is_on(app)
+    slot_q = 0 if hover else max(0, int(queue_w))
+    dock = _queue_slot(app, queue)
+    try:
+        queue_on_left = main.indexOf(dock) == 0
+    except RuntimeError:
+        queue_on_left = False
+    app._shell_pane_refitting = True
+    try:
+        main.blockSignals(True)
+        inner.blockSignals(True)
+        try:
+            outer = int(main.width() or 0)
+            main_handle = max(0, int(main.handleWidth() or 0))
+            inner_handle = max(0, int(inner.handleWidth() or 0))
+            if queue_on_left:
+                queue_kept = min(slot_q, max(0, outer - main_handle - 1))
+                right = max(0, outer - main_handle - queue_kept)
+                _set_pair_sizes(main, dock, queue_kept, right)
+                room = max(0, right - inner_handle)
+                clips_kept = min(max(0, int(clips_w)), room)
+                _set_pair_sizes(inner, player, max(0, room - clips_kept), clips_kept)
+            else:
+                clips_kept = min(max(0, int(clips_w)), max(0, outer - main_handle - 1))
+                right = max(0, outer - main_handle - clips_kept)
+                _set_pair_sizes(main, clips, clips_kept, right)
+                room = max(0, right - inner_handle)
+                if hover or slot_q <= 0 or room <= slot_q:
+                    _set_pair_sizes(inner, player, room, 0)
+                else:
+                    _set_pair_sizes(inner, player, room - slot_q, slot_q)
+        finally:
+            main.blockSignals(False)
+            inner.blockSignals(False)
+    finally:
+        app._shell_pane_refitting = False
+    _cancel_shell_pane_snap(app)
+    remember_shell_pane_ratio(app)
 
 
 def apply_user_shell_handle_visibility(app) -> None:
-    """Show or hide the handles without mixing the two layouts.
+    """Show or hide the handles. The panes stay on the layout that is current.
 
-    With handles, the width is the last drag. Without handles, the width is
-    the saved percents. Painting one onto the other is what made an ordinary
-    Save move Clips.
+    Hiding feeds the handle gap to the player, not to Clips. Showing does the
+    reverse: Clips stays on the share she saved, and the player gives those
+    pixels back to the handles. An older drag is not restored.
     """
     if getattr(app, "_portable_shell", False):
         return
@@ -486,18 +634,44 @@ def apply_user_shell_handle_visibility(app) -> None:
         return
     hidden = user_hides_shell_handles(app)
     if not hidden:
+        found = _shell_widgets(app)
+        if found is not None:
+            main, inner, clips, player, queue = found
+            try:
+                for index in range(main.count()):
+                    main.setStretchFactor(index, 1)
+                for index in range(inner.count()):
+                    inner.setStretchFactor(index, 1)
+            except RuntimeError:
+                pass
+        widths = shell_pane_widths(app)
         _set_side_handles_visible(app, True)
         paint_desktop_splitter_handles(app)
         _sync_hover_resize_grip(app)
-        ratio = getattr(app, "_shell_pane_ratio", None)
-        if isinstance(ratio, tuple) and len(ratio) == 3:
-            _apply_percents_keeping_drag(app, ratio)
+        if widths is not None:
+            _show_handles_keeping_clips(app, widths[0], widths[2])
+        else:
+            remember_shell_pane_ratio(app)
     else:
+        found = _shell_widgets(app)
+        if found is not None:
+            # Before the handle width hits 0, so Qt's own relayout already
+            # gives the gap to the player instead of to Clips.
+            _stretch_hidden_gap_to_player(*found[:2], found[2], found[3], found[4])
+        already_hidden = _handles_are_hidden_now(app)
+        widths = shell_pane_widths(app)
         _set_side_handles_visible(app, False)
         _sync_hover_resize_grip(app)
-        percents = _stored_pane_percents(app)
-        if percents is not None:
-            _apply_percents_keeping_drag(app, percents)
+        if already_hidden:
+            # The spins are the layout. A typed 25% has to move the panes,
+            # and it replaces the drag remembered from before.
+            percents = _stored_pane_percents(app)
+            if percents is not None:
+                _apply_percents_keeping_drag(app, percents)
+        elif widths is not None:
+            # First hide only: Clips stays, the player takes the handle gap.
+            _give_handle_gap_to_player(app, widths[0], widths[1], widths[2])
+            remember_shell_pane_ratio(app)
     # Hiding the handle emits splitterMoved and arms the kiss snap. Stop it
     # after the widths are written, including when the percent pass bails out.
     _cancel_shell_pane_snap(app)
