@@ -1565,16 +1565,27 @@ class _TrafficLightHoverFilter(QObject):
     clicks a light. MouseMove still goes to the stuck widget — we catch it here
     and paint from cursor geometry. Presses use the same rectangle: otherwise
     the dots light up and the click does nothing.
+
+    The click itself waits for release. Windows drops SC_MAXIMIZE / SC_RESTORE
+    when they arrive while the mouse button is still down, so the green dot
+    looked dead. Close is also deferred so it does not destroy the shell
+    inside the event filter.
     """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._armed: _TrafficLight | None = None
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         et = event.type()
         if et == QEvent.Type.MouseButtonPress:
             return self._press_traffic_light(event)
+        if et == QEvent.Type.MouseButtonRelease:
+            refresh_traffic_lights_under_cursor_all()
+            return self._release_traffic_light(event)
         if et not in (
             QEvent.Type.MouseMove,
             QEvent.Type.HoverMove,
-            QEvent.Type.MouseButtonRelease,
         ):
             return False
         refresh_traffic_lights_under_cursor_all()
@@ -1586,6 +1597,7 @@ class _TrafficLightHoverFilter(QObject):
         if not hasattr(event, "globalPosition"):
             return False
         btn = _traffic_light_at_global(event.globalPosition().toPoint())
+        self._armed = btn
         if btn is None:
             return False
         grabber = QWidget.mouseGrabber()
@@ -1594,8 +1606,27 @@ class _TrafficLightHoverFilter(QObject):
                 grabber.releaseMouse()
             except Exception:
                 pass
-        # Defer so Close can destroy the shell without running inside notify.
-        QTimer.singleShot(0, btn.click)
+        return True
+
+    def _release_traffic_light(self, event) -> bool:
+        """Fire the dot that was pressed, if the pointer is still on it."""
+        armed = self._armed
+        self._armed = None
+        if armed is None or event.button() != Qt.MouseButton.LeftButton:
+            return False
+        if not hasattr(event, "globalPosition"):
+            return True
+        try:
+            if not armed.isVisible() or not armed.isEnabled():
+                return True
+            on_dot = armed.rect().contains(
+                armed.mapFromGlobal(event.globalPosition().toPoint())
+            )
+        except RuntimeError:
+            return True
+        if not on_dot:
+            return True
+        QTimer.singleShot(0, armed.click)
         return True
 
 
