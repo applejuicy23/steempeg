@@ -535,14 +535,19 @@ class SplitterRulesMixin:
         return self._scaled_player_floor(avail, self._outer_pane_floor())
 
     def _snap_outer_width(self, left: int, avail: int, floor: int) -> int:
-        """States 1 and 2 — outer pane is either shut or at least minimally open."""
-        outer_min = self._outer_pane_floor()
-        if avail < outer_min + floor:
-            # Shell too narrow to honour both floors; the player column wins.
-            return left
+        """States 1 and 2 — outer pane is either shut or at least minimally open.
+
+        The open floor is the same pixel width the hidden-handle layout uses.
+        A tight shell used to return the raw drag, so Clips could sit narrower
+        with the handles than without them.
+        """
+        del floor
+        outer_min = min(self._outer_pane_floor(), max(0, int(avail)))
         if left >= outer_min:
-            return left
-        return 0 if left < outer_min * CLIPS_SNAP_SHUT else outer_min
+            return min(int(left), max(0, int(avail)))
+        if left < outer_min * CLIPS_SNAP_SHUT:
+            return 0
+        return outer_min
 
     def _resolve_player_width(self, wanted: int, floor: int) -> int:
         """States 3 to 5 — free travel, held at the floor, or collapsed."""
