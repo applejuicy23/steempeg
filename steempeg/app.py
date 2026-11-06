@@ -1021,6 +1021,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             self.grid_clips.itemSelectionChanged.connect(self.on_grid_selection_changed)
             self.grid_clips.setStyleSheet(library_grid_stylesheet())
             self.grid_clips.setVerticalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
+            # A too-narrow pane used to grow a horizontal bar and slide the
+            # cards off the left edge. Columns wrap; they do not scroll sideways.
+            self.grid_clips.setHorizontalScrollBarPolicy(qtc.Qt.ScrollBarAlwaysOff)
 
             original_parent_layout = self.ui.table_clips.parentWidget().layout()
             original_idx = -1
