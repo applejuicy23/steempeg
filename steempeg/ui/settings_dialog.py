@@ -574,7 +574,7 @@ class SettingsDialog(SteempegDialog):
         export_row.addWidget(btn_browse_export, 0)
         export_row.addWidget(btn_clear_export, 0)
         g.addLayout(export_row)
-        self._export_folder_hint = self._hint("")
+        self._export_folder_hint = self._hint("", inline=True)
         self._export_folder_hint.setProperty("helper_when_outside", True)
         g.addWidget(self._export_folder_hint)
         self._refresh_export_folder_hint()
@@ -647,6 +647,8 @@ class SettingsDialog(SteempegDialog):
         if is_steamdeck_build():
             self._chk_ask_shell.setChecked(False)
             self._chk_ask_shell.setEnabled(False)
+        g.addWidget(self._chk_ask_shell)
+        if is_steamdeck_build():
             g.addWidget(
                 self._hint(
                     "Steam Deck builds start in Portable. "
@@ -654,7 +656,6 @@ class SettingsDialog(SteempegDialog):
                 )
             )
         else:
-            g.addWidget(self._chk_ask_shell)
             g.addWidget(self._hint("Applies the next time Steempeg starts."))
 
         self._chk_hide_splitter_handles = SteempegCheckBox("Hide splitter handles")
@@ -694,6 +695,7 @@ class SettingsDialog(SteempegDialog):
         self._pane_percent_lock = False
         self._pane_percent_baseline = None
         saved_percents = read_shell_pane_percents(settings) or DEFAULT_SHELL_PANE_PERCENTS
+        self._pane_percent_loaded = tuple(int(v) for v in saved_percents)
         label_qss = (
             "color: #888888; font-weight: bold; font-size: 13px; "
             f"font-family: {tok.FONT_APP}; background: transparent;"
@@ -908,6 +910,7 @@ class SettingsDialog(SteempegDialog):
                 )
             )
             self._chk_queue_hover.toggled.connect(self._preview_queue_hover)
+        self._seed_pane_spins_from_live()
         self._refit_pane_percent_spins(seed_hover_queue=True, remember_baseline=True)
 
         self._chk_shell_tools_title = SteempegCheckBox(
@@ -1164,6 +1167,11 @@ class SettingsDialog(SteempegDialog):
         vol_row.addWidget(vol_lbl)
         vol_row.addWidget(self._combo_volume_ceiling, 1)
         v.addLayout(vol_row)
+        v.addWidget(
+            self._hint(
+                "Raises the volume slider past the normal cap. It starts at 100%."
+            )
+        )
 
         spd_row = QHBoxLayout()
         spd_row.setSpacing(8)
@@ -1183,8 +1191,7 @@ class SettingsDialog(SteempegDialog):
         v.addLayout(spd_row)
         v.addWidget(
             self._hint(
-                "Raises the slider past the normal cap. "
-                "Volume starts at 100%. Speed starts at 5.0x."
+                "Raises the speed slider past the normal cap. It starts at 5.0x."
             )
         )
         self._player_boost_preview_timer = QTimer(self)
@@ -1428,10 +1435,13 @@ class SettingsDialog(SteempegDialog):
         s.addLayout(support_row)
 
         s.addWidget(self._section("Log levels"))
-        for attr, label, loader, _default in (
-            ("_combo_app_log", "App", load_app_log_level, DEFAULT_APP_LOG_LEVEL),
-            ("_combo_ffmpeg_log", "FFmpeg", load_ffmpeg_log_level, DEFAULT_FFMPEG_LOG_LEVEL),
-            ("_combo_mpv_log", "MPV", load_mpv_log_level, DEFAULT_MPV_LOG_LEVEL),
+        for attr, label, loader, _default, help_text in (
+            ("_combo_app_log", "App", load_app_log_level, DEFAULT_APP_LOG_LEVEL,
+             "Applies immediately."),
+            ("_combo_ffmpeg_log", "FFmpeg", load_ffmpeg_log_level, DEFAULT_FFMPEG_LOG_LEVEL,
+             "Applies on the next encode or thumbnail."),
+            ("_combo_mpv_log", "MPV", load_mpv_log_level, DEFAULT_MPV_LOG_LEVEL,
+             "Applies the next time the player is created, or when Steempeg restarts."),
         ):
             row = QHBoxLayout()
             row.setSpacing(8)
@@ -1447,12 +1457,7 @@ class SettingsDialog(SteempegDialog):
             row.addWidget(lbl)
             row.addWidget(combo, 1)
             s.addLayout(row)
-        s.addWidget(
-            self._hint(
-                "App applies immediately. FFmpeg on the next encode/thumb. "
-                "MPV on the next player create / app restart."
-            )
-        )
+            s.addWidget(self._hint(help_text))
 
         import_row = QHBoxLayout()
         import_row.setSpacing(8)
@@ -1627,6 +1632,10 @@ class SettingsDialog(SteempegDialog):
     def _mount_settings_frame(self, root: QVBoxLayout) -> None:
         """Puts the built pages into the picked frame: rail + cards, one scroll, or classic tabs."""
         from steempeg.ui import ui_theme as ut
+        from steempeg.ui.widgets.setting_help import place_setting_help
+
+        for _title, _page, page_layout in self._settings_pages:
+            place_setting_help(page_layout)
 
         if self._settings_layout == settings_layouts.SETTINGS_LAYOUT_TABS:
             tabs = QTabWidget()
@@ -1743,12 +1752,17 @@ class SettingsDialog(SteempegDialog):
         return lbl
 
     @staticmethod
-    def _hint(text: str, *, optional: bool = True) -> QWidget:
-        """Muted helper line with circled info icon, optically centered on the text.
+    def _hint(text: str, *, optional: bool = True, inline: bool = False) -> QWidget:
+        """Explanation for one setting.
 
-        Optional lines hide together from Support → Hints. A line that is the
-        only label for a control stays (``optional=False``).
+        The usual result is a ? circle. ``inline`` and ``optional=False`` keep
+        a line on the card: a live warning, or the only label a control has.
+        Optional circles hide together from Support → Hints.
         """
+        if not inline and optional:
+            from steempeg.ui.widgets.setting_help import SettingHelpButton
+
+            return SettingHelpButton(text)
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         if optional:
@@ -1790,6 +1804,11 @@ class SettingsDialog(SteempegDialog):
 
     @staticmethod
     def _set_hint_text(hint_widget: QWidget, text: str) -> None:
+        from steempeg.ui.widgets.setting_help import SettingHelpButton
+
+        if isinstance(hint_widget, SettingHelpButton):
+            hint_widget.set_help_text(text)
+            return
         lbl = getattr(hint_widget, "_hint_label", None)
         if isinstance(lbl, QLabel):
             lbl.setText(text)
@@ -2424,6 +2443,45 @@ class SettingsDialog(SteempegDialog):
         except (RuntimeError, TypeError, ValueError):
             return 0
 
+    def _seed_pane_spins_from_live(self) -> None:
+        """Fill the percent fields from the panes on screen.
+
+        The saved share can say 25% while Clips is stretched across the
+        window. The fields should show that stretch, not the old number.
+        """
+        spins = getattr(self, "_pane_spins", None)
+        if not spins:
+            return
+        from steempeg.ui.layout_defaults import shell_pixels_to_percents
+        from steempeg.ui.portable_splitter_reveal import shell_pane_widths
+
+        widths = shell_pane_widths(self._app)
+        if widths is None or sum(int(v) for v in widths) <= 0:
+            return
+        win_w, shell = self._shell_pane_measure()
+        if shell <= 0:
+            return
+        hover = self._pane_queue_is_hover()
+        clips, player, queue = shell_pixels_to_percents(
+            widths[0],
+            widths[1],
+            widths[2],
+            shell=shell,
+            window=win_w or shell,
+            hover=hover,
+        )
+        if hover:
+            overlay = self._hover_overlay_width()
+            if overlay > 0 and win_w > 0:
+                queue = int(round(100 * overlay / max(1, win_w)))
+        self._pane_percent_lock = True
+        try:
+            spins["clips"].setValue(max(0, min(100, int(clips))))
+            spins["player"].setValue(max(0, min(100, int(player))))
+            spins["queue"].setValue(max(0, min(100, int(queue))))
+        finally:
+            self._pane_percent_lock = False
+
     def _on_pane_percent_edited(self, changed: str) -> None:
         """Keep the other two panes inside their floors after one spin moves."""
         if getattr(self, "_pane_percent_lock", False):
@@ -2452,6 +2510,7 @@ class SettingsDialog(SteempegDialog):
             fit_shell_pane_pixels,
             percent_at_least,
             percent_at_most,
+            percent_of_pixel_floor,
             shell_pane_pixel_limits,
             shell_percents_to_pixels,
             shell_pixels_to_percents,
@@ -2503,8 +2562,12 @@ class SettingsDialog(SteempegDialog):
             queue_base = shell
             queue_lo = queue_min
             queue_hi_px = max(queue_min, shell - player_min - clips_w)
+        clips_floor_pct = percent_of_pixel_floor(clips_min, shell)
+        if clips_w <= clips_min:
+            # The spin was showing the rounded-up floor (25% for a 23% stop).
+            clips = clips_floor_pct
         ranges = {
-            "clips": (percent_at_least(clips_min, shell), percent_at_most(clips_hi, shell)),
+            "clips": (clips_floor_pct, percent_at_most(clips_hi, shell)),
             "player": (percent_at_least(player_min, shell), percent_at_most(player_hi, shell)),
             "queue": (percent_at_least(queue_lo, queue_base), percent_at_most(queue_hi_px, queue_base)),
         }
@@ -3596,9 +3659,13 @@ class SettingsDialog(SteempegDialog):
         baseline = getattr(self, "_pane_percent_baseline", None)
         if baseline is None:
             baseline = load_shell_pane_percents(prev)
+        loaded = getattr(self, "_pane_percent_loaded", None)
+        if loaded is None:
+            loaded = baseline
         pane_percents = self._shell_pane_percent_values()
-        percents_changed = tuple(int(v) for v in pane_percents) != tuple(
-            int(v) for v in baseline
+        shown = tuple(int(v) for v in pane_percents)
+        percents_changed = shown != tuple(int(v) for v in baseline) or shown != tuple(
+            int(v) for v in loaded
         )
         if hide_handles and percents_changed:
             pending[KEY_SHELL_PANE_PERCENTS] = list(pane_percents)
