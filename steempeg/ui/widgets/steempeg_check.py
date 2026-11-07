@@ -4,7 +4,7 @@ from __future__ import annotations
 from steempeg.ui import design_tokens as tok
 
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QCheckBox
 
 
@@ -60,6 +60,21 @@ class SteempegCheckBox(QCheckBox):
     def sizeHint(self):
         base = super().sizeHint()
         return QSize(base.width() + self._text_left(), base.height())
+
+    def content_width(self) -> int:
+        """Width of the box and the painted label, with nothing after the text.
+
+        ``sizeHint`` follows the style's checkbox, which is wider than the
+        glyphs this control actually draws. A neighbour placed after the
+        widget would otherwise sit in that spare strip.
+        """
+        font = tok.ui_qfont(pixel_size=self._font_size)
+        if self._label_bold:
+            font.setWeight(QFont.Weight.Bold)
+        elif self._accent_label:
+            font.setWeight(QFont.Weight.DemiBold)
+        advance = QFontMetrics(font).horizontalAdvance(self.text())
+        return self._text_left() + advance + self._PAD
 
     def minimumSizeHint(self):
         return self.sizeHint()
