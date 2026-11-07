@@ -269,3 +269,39 @@ class HeaderLayoutDiagram(QWidget):
             rect = self._chip(painter, x, cy, w, "#e05555", QColor(224, 85, 85, 46))
             self._icon(painter, self._close, rect)
 
+
+def header_size_copy(style: str) -> tuple[str, str, str]:
+    """Name of the size. The picture carries the rest, so there is no blurb."""
+    size = str(style or "").split("|", 1)[0]
+    names = {"small": "Small", "medium": "Medium", "large": "Large"}
+    return (names.get(size, "Large"), "", "")
+
+
+class HeaderSizeCombo(ClipCardStyleCombo):
+    """Size list. The strip uses whichever Layout is chosen beside it."""
+
+    def __init__(self, parent: QWidget | None = None, *, layout_of=None):
+        super().__init__(
+            parent,
+            diagram_factory=HeaderLayoutDiagram,
+            copy_of=header_size_copy,
+        )
+        self._layout_of = layout_of
+
+    def _guide_style(self, raw: str) -> str:
+        """Packs the current Layout into the size, so the strip matches it."""
+        layout = _STEAM
+        if callable(self._layout_of):
+            layout = str(self._layout_of() or layout)
+        return f"{raw}|{layout}"
+
+
+class HeaderLayoutCombo(ClipCardStyleCombo):
+    """Layout list with the header strip beside the open popup."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(
+            parent,
+            diagram_factory=HeaderLayoutDiagram,
+            copy_of=header_layout_copy,
+        )
