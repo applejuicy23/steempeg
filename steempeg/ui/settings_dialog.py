@@ -973,7 +973,12 @@ class SettingsDialog(SteempegDialog):
         card_row.setSpacing(8)
         card_lbl = QLabel("ClipCard style")
         card_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_clip_card_style = QComboBox()
+        from steempeg.ui.widgets.clip_card_style_guide import (
+            ClipCardStyleCombo,
+            clip_card_style_help,
+        )
+
+        self._combo_clip_card_style = ClipCardStyleCombo()
         for value, label in CARD_STYLE_LABELS:
             self._combo_clip_card_style.addItem(label, value)
         migrate_clip_card_style_in_settings(settings)
@@ -986,13 +991,18 @@ class SettingsDialog(SteempegDialog):
         card_row.addWidget(card_lbl)
         card_row.addWidget(self._combo_clip_card_style, 1)
         v.addLayout(card_row)
-        v.addWidget(
-            self._hint(
-                "SteempegUI: flat top on the first row, flat bottom on the last, "
-                "middle rows fully round. Square: square top, round bottom. "
-                "Round: round top and bottom. Clips, Rendered videos, and Choose a Clip."
+        card_hint = self._hint(clip_card_style_help(cur_card))
+        v.addWidget(card_hint)
+        from steempeg.ui.widgets.setting_help import SettingHelpButton
+
+        if isinstance(card_hint, SettingHelpButton):
+            card_hint.set_help_diagram(
+                "clip_card_style",
+                lambda: normalize_clip_card_style(
+                    self._combo_clip_card_style.currentData()
+                ),
             )
-        )
+            self._clip_card_style_hint = card_hint
         self._clip_card_style_preview_timer = QTimer(self)
         self._clip_card_style_preview_timer.setSingleShot(True)
         self._clip_card_style_preview_timer.setInterval(200)
@@ -1004,7 +1014,12 @@ class SettingsDialog(SteempegDialog):
         header_row.setSpacing(8)
         header_lbl = QLabel("Layout")
         header_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_header_layout = QComboBox()
+        from steempeg.ui.widgets.header_layout_guide import (
+            HeaderLayoutCombo,
+            header_layout_help,
+        )
+
+        self._combo_header_layout = HeaderLayoutCombo()
         for value, label in HEADER_LAYOUT_LABELS:
             self._combo_header_layout.addItem(label, value)
         cur_header = normalize_header_layout(
@@ -1016,12 +1031,17 @@ class SettingsDialog(SteempegDialog):
         header_row.addWidget(header_lbl)
         header_row.addWidget(self._combo_header_layout, 1)
         v.addLayout(header_row)
-        v.addWidget(
-            self._hint(
-                "Steam-like: centered logo and game name. Date and duration sit in "
-                "the info tip. SteempegUI: left-aligned title with date, time, and duration."
+        header_hint = self._hint(header_layout_help(cur_header))
+        v.addWidget(header_hint)
+        if isinstance(header_hint, SettingHelpButton):
+            header_hint.set_help_diagram(
+                "header_layout",
+                lambda: normalize_header_layout(self._combo_header_layout.currentData()),
+                text_of=lambda: header_layout_help(
+                    normalize_header_layout(self._combo_header_layout.currentData())
+                ),
             )
-        )
+            self._header_layout_hint = header_hint
         self._header_layout_preview_timer = QTimer(self)
         self._header_layout_preview_timer.setSingleShot(True)
         self._header_layout_preview_timer.setInterval(200)
@@ -1032,7 +1052,13 @@ class SettingsDialog(SteempegDialog):
         header_size_row.setSpacing(8)
         header_size_lbl = QLabel("Size")
         header_size_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_header_size = QComboBox()
+        from steempeg.ui.widgets.header_layout_guide import HeaderSizeCombo
+
+        self._combo_header_size = HeaderSizeCombo(
+            layout_of=lambda: normalize_header_layout(
+                self._combo_header_layout.currentData()
+            ),
+        )
         for value, label in PLAYER_HEADER_SIZE_LABELS:
             self._combo_header_size.addItem(label, value)
         migrate_player_header_size_in_settings(settings)
@@ -1045,12 +1071,18 @@ class SettingsDialog(SteempegDialog):
         header_size_row.addWidget(header_size_lbl)
         header_size_row.addWidget(self._combo_header_size, 1)
         v.addLayout(header_size_row)
-        v.addWidget(
-            self._hint(
-                "Changes the header height, padding, and chips. "
-                "The typeface stays the same. Large is the stock height."
+        size_hint = self._hint("")
+        v.addWidget(size_hint)
+        if isinstance(size_hint, SettingHelpButton):
+            size_hint.set_help_diagram(
+                "header_size",
+                lambda: (
+                    f"{normalize_player_header_size(self._combo_header_size.currentData())}"
+                    f"|{normalize_header_layout(self._combo_header_layout.currentData())}"
+                ),
+                text_of=lambda: "",
             )
-        )
+            self._header_size_hint = size_hint
         self._header_size_preview_timer = QTimer(self)
         self._header_size_preview_timer.setSingleShot(True)
         self._header_size_preview_timer.setInterval(200)
@@ -1062,7 +1094,16 @@ class SettingsDialog(SteempegDialog):
         player_layout_row.setSpacing(8)
         player_layout_lbl = QLabel("Layout")
         player_layout_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_player_layout = QComboBox()
+        from steempeg.ui.widgets.player_layout_guide import (
+            PlayerLayoutCombo,
+            player_layout_help,
+        )
+
+        self._combo_player_layout = PlayerLayoutCombo(
+            outline_of=lambda: normalize_player_outline(
+                self._combo_player_outline.currentData()
+            ),
+        )
         for value, label in PLAYER_LAYOUT_LABELS:
             self._combo_player_layout.addItem(label, value)
         cur_player_layout = normalize_player_layout(
@@ -1074,12 +1115,20 @@ class SettingsDialog(SteempegDialog):
         player_layout_row.addWidget(player_layout_lbl)
         player_layout_row.addWidget(self._combo_player_layout, 1)
         v.addLayout(player_layout_row)
-        v.addWidget(
-            self._hint(
-                "Reunited: header, video, and footer sit flush. "
-                "Fractured: gaps between them. Outline is the setting below."
+        layout_hint = self._hint(player_layout_help(cur_player_layout))
+        v.addWidget(layout_hint)
+        if isinstance(layout_hint, SettingHelpButton):
+            layout_hint.set_help_diagram(
+                "player_layout",
+                lambda: (
+                    f"{normalize_player_layout(self._combo_player_layout.currentData())}"
+                    f"|{normalize_player_outline(self._combo_player_outline.currentData())}"
+                ),
+                text_of=lambda: player_layout_help(
+                    normalize_player_layout(self._combo_player_layout.currentData())
+                ),
             )
-        )
+            self._player_layout_hint = layout_hint
         self._player_layout_preview_timer = QTimer(self)
         self._player_layout_preview_timer.setSingleShot(True)
         self._player_layout_preview_timer.setInterval(200)
@@ -1090,7 +1139,16 @@ class SettingsDialog(SteempegDialog):
         outline_row.setSpacing(8)
         outline_lbl = QLabel("Outline")
         outline_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_player_outline = QComboBox()
+        from steempeg.ui.widgets.player_layout_guide import (
+            PlayerOutlineCombo,
+            player_outline_help,
+        )
+
+        self._combo_player_outline = PlayerOutlineCombo(
+            layout_of=lambda: normalize_player_layout(
+                self._combo_player_layout.currentData()
+            ),
+        )
         for value, label in PLAYER_OUTLINE_LABELS:
             self._combo_player_outline.addItem(label, value)
         cur_player_outline = normalize_player_outline(
@@ -1102,14 +1160,20 @@ class SettingsDialog(SteempegDialog):
         outline_row.addWidget(outline_lbl)
         outline_row.addWidget(self._combo_player_outline, 1)
         v.addLayout(outline_row)
-        v.addWidget(
-            self._hint(
-                "With lines: borders on the player chrome. Without lines: no outline. "
-                "With lines, not wrapping the video: header and footer keep borders, "
-                "and the video plane stays flush. Theatre and fullscreen hide outlines. "
-                "Portable keeps this setting."
+        outline_hint = self._hint(player_outline_help(cur_player_outline))
+        v.addWidget(outline_hint)
+        if isinstance(outline_hint, SettingHelpButton):
+            outline_hint.set_help_diagram(
+                "player_outline",
+                lambda: (
+                    f"{normalize_player_outline(self._combo_player_outline.currentData())}"
+                    f"|{normalize_player_layout(self._combo_player_layout.currentData())}"
+                ),
+                text_of=lambda: player_outline_help(
+                    normalize_player_outline(self._combo_player_outline.currentData())
+                ),
             )
-        )
+            self._player_outline_hint = outline_hint
         self._player_outline_preview_timer = QTimer(self)
         self._player_outline_preview_timer.setSingleShot(True)
         self._player_outline_preview_timer.setInterval(200)
@@ -2853,6 +2917,11 @@ class SettingsDialog(SteempegDialog):
         set_clip_card_style(style)
         logging.info("ClipCard style preview → %s", style)
         self._refresh_clip_card_styles(style)
+        from steempeg.ui.widgets.clip_card_style_guide import clip_card_style_help
+
+        hint = getattr(self, "_clip_card_style_hint", None)
+        if hint is not None:
+            hint.set_help_text(clip_card_style_help(style))
 
     def _refresh_clip_card_styles(self, style: str) -> None:
         if hasattr(self._app, "refresh_clip_card_styles"):
@@ -2926,6 +2995,12 @@ class SettingsDialog(SteempegDialog):
 
     def _preview_header_layout(self, *_args) -> None:
         self._header_layout_preview_timer.start()
+        hint = getattr(self, "_header_layout_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
+        size_hint = getattr(self, "_header_size_hint", None)
+        if size_hint is not None:
+            size_hint.refresh_diagram()
 
     def _apply_header_layout_preview(self) -> None:
         import logging
@@ -2934,6 +3009,17 @@ class SettingsDialog(SteempegDialog):
         set_header_layout(layout)
         logging.info("Player header layout preview → %s", layout)
         self._refresh_header_layout(layout)
+        from steempeg.ui.widgets.header_layout_guide import header_layout_help
+
+        hint = getattr(self, "_header_layout_hint", None)
+        if hint is not None:
+            hint.set_help_text(header_layout_help(layout))
+        size_hint = getattr(self, "_header_size_hint", None)
+        if size_hint is not None:
+            size_hint.refresh_diagram()
+        size_combo = getattr(self, "_combo_header_size", None)
+        if size_combo is not None and size_combo._popup_is_open():
+            size_combo._show_under_cursor()
 
     def _refresh_header_layout(self, layout: str) -> None:
         if hasattr(self._app, "refresh_player_header_layout"):
@@ -2946,6 +3032,9 @@ class SettingsDialog(SteempegDialog):
 
     def _preview_header_size(self, *_args) -> None:
         self._header_size_preview_timer.start()
+        hint = getattr(self, "_header_size_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
 
     def _apply_header_size_preview(self) -> None:
         import logging
@@ -2954,6 +3043,9 @@ class SettingsDialog(SteempegDialog):
         set_player_header_size(size)
         logging.info("Player header size preview → %s", size)
         self._refresh_header_size(size)
+        size_hint = getattr(self, "_header_size_hint", None)
+        if size_hint is not None:
+            size_hint.refresh_diagram()
 
     def _refresh_header_size(self, size: str) -> None:
         if hasattr(self._app, "refresh_player_header_size"):
@@ -2966,6 +3058,12 @@ class SettingsDialog(SteempegDialog):
 
     def _preview_player_layout(self, *_args) -> None:
         self._player_layout_preview_timer.start()
+        hint = getattr(self, "_player_layout_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
+        outline_hint = getattr(self, "_player_outline_hint", None)
+        if outline_hint is not None:
+            outline_hint.refresh_diagram()
 
     def _apply_player_layout_preview(self) -> None:
         import logging
@@ -2974,6 +3072,17 @@ class SettingsDialog(SteempegDialog):
         set_player_layout(layout)
         logging.info("Player layout preview → %s", layout)
         self._refresh_player_layout(layout)
+        from steempeg.ui.widgets.player_layout_guide import player_layout_help
+
+        hint = getattr(self, "_player_layout_hint", None)
+        if hint is not None:
+            hint.set_help_text(player_layout_help(layout))
+        outline_hint = getattr(self, "_player_outline_hint", None)
+        if outline_hint is not None:
+            outline_hint.refresh_diagram()
+        outline_combo = getattr(self, "_combo_player_outline", None)
+        if outline_combo is not None and outline_combo._popup_is_open():
+            outline_combo._show_under_cursor()
 
     def _refresh_player_layout(self, layout: str) -> None:
         if hasattr(self._app, "refresh_player_layout_mode"):
@@ -2986,6 +3095,12 @@ class SettingsDialog(SteempegDialog):
 
     def _preview_player_outline(self, *_args) -> None:
         self._player_outline_preview_timer.start()
+        hint = getattr(self, "_player_outline_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
+        layout_hint = getattr(self, "_player_layout_hint", None)
+        if layout_hint is not None:
+            layout_hint.refresh_diagram()
 
     def _apply_player_outline_preview(self) -> None:
         import logging
@@ -2994,6 +3109,17 @@ class SettingsDialog(SteempegDialog):
         set_player_outline(mode)
         logging.info("Player outline preview → %s", mode)
         self._refresh_player_outline(mode)
+        from steempeg.ui.widgets.player_layout_guide import player_outline_help
+
+        hint = getattr(self, "_player_outline_hint", None)
+        if hint is not None:
+            hint.set_help_text(player_outline_help(mode))
+        layout_hint = getattr(self, "_player_layout_hint", None)
+        if layout_hint is not None:
+            layout_hint.refresh_diagram()
+        layout_combo = getattr(self, "_combo_player_layout", None)
+        if layout_combo is not None and layout_combo._popup_is_open():
+            layout_combo._show_under_cursor()
 
     def _refresh_player_outline(self, mode: str) -> None:
         if hasattr(self._app, "refresh_player_outline_mode"):
