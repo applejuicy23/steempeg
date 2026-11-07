@@ -60,8 +60,8 @@ SHELL_SIDE_QUEUE_LEFT = "queue_left"
 DEFAULT_SHELL_SIDE_LAYOUT = SHELL_SIDE_LIBRARY_LEFT
 
 SHELL_SIDE_LAYOUT_LABELS: tuple[tuple[str, str], ...] = (
-    (SHELL_SIDE_LIBRARY_LEFT, "Library left · Queue right"),
-    (SHELL_SIDE_QUEUE_LEFT, "Queue left · Library right"),
+    (SHELL_SIDE_LIBRARY_LEFT, "Library left | Queue right"),
+    (SHELL_SIDE_QUEUE_LEFT, "Queue left | Library right"),
 )
 
 _current_shell_side_layout: str = DEFAULT_SHELL_SIDE_LAYOUT
