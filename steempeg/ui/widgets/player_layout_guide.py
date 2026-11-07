@@ -250,3 +250,40 @@ class PlayerStackDiagram(QWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawPath(tri)
 
+
+class PlayerLayoutCombo(ClipCardStyleCombo):
+    """Player layout list. The drawing uses the outline chosen below it."""
+
+    def __init__(self, parent: QWidget | None = None, *, outline_of=None):
+        super().__init__(
+            parent,
+            diagram_factory=PlayerStackDiagram,
+            copy_of=player_layout_copy,
+        )
+        self._outline_of = outline_of
+
+    def _guide_style(self, raw: str) -> str:
+        """Packs the current outline so the lines match that setting."""
+        outline = _WITH
+        if callable(self._outline_of):
+            outline = str(self._outline_of() or outline)
+        return f"{raw}|{outline}"
+
+
+class PlayerOutlineCombo(ClipCardStyleCombo):
+    """Outline list. The drawing uses whichever Layout is chosen above it."""
+
+    def __init__(self, parent: QWidget | None = None, *, layout_of=None):
+        super().__init__(
+            parent,
+            diagram_factory=PlayerStackDiagram,
+            copy_of=player_outline_copy,
+        )
+        self._layout_of = layout_of
+
+    def _guide_style(self, raw: str) -> str:
+        """Packs the current layout in front, so the check still sees the outline."""
+        layout = _REUNITED
+        if callable(self._layout_of):
+            layout = str(self._layout_of() or layout)
+        return f"{raw}|{layout}"
