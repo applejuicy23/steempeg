@@ -327,16 +327,17 @@ class _SettingHelpSplash(QWidget):
             row_h = max(row_h, self._diagram.height())
         self.setFixedSize(card_w, margins.top() + margins.bottom() + row_h)
 
-    def _shape(self) -> QPainterPath:
+    def _shape(self, inset: float = 0.5) -> QPainterPath:
         """Rounded card. No caret: that spike belongs to the marker pin."""
         path = QPainterPath()
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rect = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
         path.addRoundedRect(rect, self._RADIUS, self._RADIUS)
         return path
 
     def _apply_mask(self) -> None:
         """Clips the Tool window to the painted round rect, including on Windows."""
-        poly = self._shape().toFillPolygon().toPolygon()
+        # The mask encloses the stroke; its half-pixel centerline would clip it.
+        poly = self._shape(inset=0.0).toFillPolygon().toPolygon()
         if poly.isEmpty():
             self.clearMask()
         else:
