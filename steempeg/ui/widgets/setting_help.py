@@ -44,6 +44,8 @@ from steempeg.ui.widgets.player_layout_guide import (
     player_layout_copy,
     player_outline_copy,
 )
+from steempeg.ui.widgets.timeline_strip_guide import TimelineStripDiagram, timeline_strip_copy
+from steempeg.ui.widgets.player_ceiling_guide import PlayerCeilingDiagram, player_ceiling_copy
 from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
 
 _CIRCLE = 16
@@ -77,6 +79,8 @@ class _SettingHelpSplash(QWidget):
         self._show_diagram = False
         self._show_header = False
         self._show_player = False
+        self._show_timeline = False
+        self._show_control = False
         self._show_chosen = False
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -93,6 +97,7 @@ class _SettingHelpSplash(QWidget):
         self._mark.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._mark.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         text_col = QVBoxLayout()
+        self._text_col = text_col
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(1)
         # Short explanations must not spread out to fill the diagram's height.
@@ -133,6 +138,12 @@ class _SettingHelpSplash(QWidget):
         self._player.hide()
         text_col.addWidget(self._header)
         text_col.addWidget(self._player)
+        self._timeline = TimelineStripDiagram(self)
+        self._timeline.hide()
+        text_col.addWidget(self._timeline)
+        self._control = PlayerCeilingDiagram(self)
+        self._control.hide()
+        text_col.addWidget(self._control)
         self._diagram = _ClipCardStyleDiagram(self)
         self._diagram.hide()
         row.addWidget(self._mark, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -154,17 +165,25 @@ class _SettingHelpSplash(QWidget):
         card = kind == "clip_card_style" and callable(style_of)
         header = kind in ("header_layout", "header_size") and callable(style_of)
         player = kind in ("player_layout", "player_outline") and callable(style_of)
+        timeline = kind in ("timeline_strip", "markers_on_strip") and callable(style_of)
+        control = kind == "player_ceiling" and callable(style_of)
         # isVisible() is false until the card itself is on screen, so the
         # width has to follow these flags, not the widget's visible bit.
         self._show_diagram = card
         self._show_header = header
         self._show_player = player
+        self._show_timeline = timeline
+        self._show_control = control
         self._diagram.setVisible(card)
         self._header.setVisible(header)
         self._player.setVisible(player)
-        self._header_gap.setVisible(header or player)
-        self._show_chosen = card or header or player
-        if card or header or player:
+        self._timeline.setVisible(timeline)
+        self._control.setVisible(control)
+        self._header_gap.setVisible(header or player or timeline or control)
+        self._text_col.removeWidget(self._chosen_row)
+        self._text_col.insertWidget(2 if timeline or control else 1, self._chosen_row)
+        self._show_chosen = card or header or player or timeline or control
+        if self._show_chosen:
             style = str(style_of() or "")
             if card:
                 self._diagram.set_style(style)
@@ -175,6 +194,12 @@ class _SettingHelpSplash(QWidget):
                     name = header_size_copy(style)[0]
                 else:
                     name = header_layout_copy(style)[0]
+            elif timeline:
+                self._timeline.set_style(style)
+                name = style.upper() if kind == "markers_on_strip" else timeline_strip_copy(style)[0]
+            elif control:
+                self._control.set_style(style)
+                name = player_ceiling_copy(style)[0]
             else:
                 self._player.set_style(style)
                 if kind == "player_outline":
@@ -281,6 +306,10 @@ class _SettingHelpSplash(QWidget):
             text_w_floor = self._header.width()
         elif self._show_player:
             text_w_floor = self._player.width()
+        elif self._show_timeline:
+            text_w_floor = self._timeline.width()
+        elif self._show_control:
+            text_w_floor = self._control.width()
         else:
             text_w_floor = 0
         text_w = max(title_w, chosen_w, desc_w, text_w_floor, 1)
