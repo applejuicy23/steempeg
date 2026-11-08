@@ -345,20 +345,21 @@ class _TimelineMarkerTip(QFrame):
         self._slide.stop()
         super().hideEvent(event)
 
-    def _shape(self) -> QPainterPath:
-        r = QRectF(self.rect()).adjusted(0.5, self._CARET_H + 0.5, -0.5, -0.5)
+    def _shape(self, inset: float = 0.5) -> QPainterPath:
+        r = QRectF(self.rect()).adjusted(inset, self._CARET_H + inset, -inset, -inset)
         path = QPainterPath()
         path.addRoundedRect(r, self._RADIUS, self._RADIUS)
         caret = QPainterPath()
         cx = self._caret_x
         caret.moveTo(cx - self._CARET_W / 2, r.top() + 1.0)
-        caret.lineTo(cx, 0.5)
+        caret.lineTo(cx, inset)
         caret.lineTo(cx + self._CARET_W / 2, r.top() + 1.0)
         caret.closeSubpath()
         return path.united(caret)
 
     def _apply_mask(self) -> None:
-        poly = self._shape().toFillPolygon().toPolygon()
+        # Keep the full painted border inside the integer window mask.
+        poly = self._shape(inset=0.0).toFillPolygon().toPolygon()
         if poly.isEmpty():
             self.clearMask()
         else:
