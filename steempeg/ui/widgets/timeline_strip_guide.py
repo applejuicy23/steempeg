@@ -45,7 +45,8 @@ class TimelineStripDiagram(QWidget):
             QFontMetrics(self._font).height(),
             round(self._metrics.major_tick_h * self._SCALE),
         )
-        self._track_top = 24.0
+        # On-track markers do not need a separate row above the scrubber.
+        self._track_top = 10.0 if self._marker_mode == "on" else 24.0
         height = int(self._track_top) + 2 + round(self._metrics.track_h * self._SCALE)
         height += self._metrics.ruler_gap + self._ruler_h
         height += self._metrics.bottom_pad + 9
