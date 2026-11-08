@@ -33,7 +33,11 @@ class TimelineStripDiagram(QWidget):
         """Uses the same ticks, type, and padding as the player preference."""
         self._metrics = metrics_for(style)
         self._font = QFont(tok.FONT_FAMILIES[0])
-        self._font.setPixelSize(round(self._metrics.ruler_font_pt * 4 / 3 * self._SCALE))
+        font_px = self._metrics.ruler_font_pt * 4 / 3 * self._SCALE
+        # Rounding Medium up makes its miniature almost as large as Large.
+        self._font.setPixelSize(
+            int(font_px) if normalize_timeline_strip_size(style) == "medium" else round(font_px)
+        )
         self._ruler_h = max(
             QFontMetrics(self._font).height(),
             round(self._metrics.major_tick_h * self._SCALE),
