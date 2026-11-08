@@ -284,48 +284,17 @@ class _SettingHelpSplash(QWidget):
         else:
             text_w_floor = 0
         text_w = max(title_w, chosen_w, desc_w, text_w_floor, 1)
-        text_h = 0
-        if title:
-            self._title.setFixedWidth(text_w)
-            text_h += self._title.fontMetrics().boundingRect(
-                QRect(0, 0, text_w, 1000),
-                int(Qt.TextFlag.TextWordWrap),
-                title,
-            ).height()
-        if chosen:
-            lead = self._chosen_mark.width() + 6
-            self._chosen.setFixedWidth(max(1, text_w - lead))
-            if text_h:
-                text_h += 1
-            pad = self._chosen_row.layout().contentsMargins()
-            text_h += pad.top() + pad.bottom()
-            text_h += max(
-                self._chosen_mark.height(),
-                self._chosen.fontMetrics().boundingRect(
-                    QRect(0, 0, max(1, text_w - lead), 1000),
-                    int(Qt.TextFlag.TextWordWrap),
-                    chosen,
-                ).height(),
-            )
-        if text:
-            self._desc.setFixedWidth(text_w)
-            if text_h:
-                text_h += 1
-            text_h += self._desc.fontMetrics().boundingRect(
-                QRect(0, 0, text_w, 1000),
-                int(Qt.TextFlag.TextWordWrap),
-                text,
-            ).height()
-        if self._show_header or self._show_player:
-            text_h += self._header_gap.height()
-            text_h += self._header.height() if self._show_header else self._player.height()
+        self._title.setFixedWidth(text_w)
+        self._desc.setFixedWidth(text_w)
+        lead = self._chosen_mark.width() + 6
+        self._chosen.setFixedWidth(max(1, text_w - lead))
         margins = self.layout().contentsMargins()
         card_w = margins.left() + margins.right() + text_w + self._DISC + self.layout().spacing()
-        row_h = max(text_h, self._DISC)
         if self._show_diagram:
             card_w += self.layout().spacing() + self._diagram.width()
-            row_h = max(row_h, self._diagram.height())
-        self.setFixedSize(card_w, margins.top() + margins.bottom() + row_h)
+        from steempeg.ui.widgets.splash_layout import fit_splash_layout
+
+        fit_splash_layout(self, card_w)
 
     def _shape(self, inset: float = 0.5) -> QPainterPath:
         """Rounded card. No caret: that spike belongs to the marker pin."""
