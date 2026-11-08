@@ -25,6 +25,12 @@ _MIDDLE_SPLITTER_NAME = "main_v_splitter"
 _SHELL_SPLITTER_NAMES = _SIDE_SPLITTER_NAMES + (_MIDDLE_SPLITTER_NAME,)
 
 
+def _set_style_if_changed(widget, stylesheet: str) -> None:
+    """Avoid repolishing an entire splitter subtree for an unchanged style."""
+    if widget.styleSheet() != stylesheet:
+        widget.setStyleSheet(stylesheet)
+
+
 def _desktop_portable_like(app) -> bool:
     check = getattr(app, "_desktop_render_layout_is_portable_like", None)
     if callable(check):
@@ -62,7 +68,7 @@ def sync_portable_splitter_reveal(app) -> None:
 
 
 def paint_desktop_splitter_handles(app) -> None:
-    """Always-visible side handles; hide middle handle when pref is off."""
+    """Apply the final handle styles without restyling unchanged widget trees."""
     _clear_handle_widget_styles(app)
     _apply_visible_splitter_styles(app)
     if _portable_like_hides_middle_handle(app):
@@ -151,7 +157,7 @@ def ensure_right_h_handle_chrome(app) -> None:
             if handle is not None:
                 handle.setMinimumWidth(0)
                 handle.setMaximumWidth(16777215)
-                handle.setStyleSheet("")
+                _set_style_if_changed(handle, "")
                 handle.setVisible(True)
                 handle.show()
         splitter.setHandleWidth(width)
@@ -453,7 +459,7 @@ def _set_side_handles_visible(app, visible: bool) -> None:
             if handle is not None:
                 handle.setMinimumWidth(0)
                 handle.setMaximumWidth(16777215)
-                handle.setStyleSheet("")
+                _set_style_if_changed(handle, "")
                 handle.setEnabled(True)
                 handle.setVisible(True)
                 handle.show()
@@ -461,14 +467,17 @@ def _set_side_handles_visible(app, visible: bool) -> None:
             if callable(setter):
                 setter(splitter, True, 1)
             continue
-        splitter.setStyleSheet(
+        _set_style_if_changed(
+            splitter,
             f"QSplitter {{ background-color: {shell}; }} "
             "QSplitter::handle, QSplitter::handle:hover {"
             " background: transparent; border: none; margin: 0px; }"
         )
         splitter.setHandleWidth(0)
         if handle is not None:
-            handle.setStyleSheet("background: transparent; border: none; margin: 0px;")
+            _set_style_if_changed(
+                handle, "background: transparent; border: none; margin: 0px;"
+            )
             handle.setEnabled(False)
             handle.setVisible(False)
             handle.hide()
@@ -989,34 +998,43 @@ def _apply_visible_splitter_styles(app) -> None:
     h_qss = f"QSplitter {{ {shell} }} {_visible_handle_qss(vertical=False)}"
     v_qss = _visible_handle_qss(vertical=True)
     hide_middle = _portable_like_hides_middle_handle(app)
+    hide_sides = user_hides_shell_handles(app)
 
     for name, splitter in _iter_shell_splitters(app):
         try:
             splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            # Hidden sides receive their final style in _enforce_user_hidden_handles.
+            # Painting visible then hidden restyled every child twice per settle pass.
+            if hide_sides and name in _SIDE_SPLITTER_NAMES:
+                continue
             if name == _MIDDLE_SPLITTER_NAME:
                 if hide_middle:
                     # No painted bar — gap comes from layout margins only.
-                    splitter.setStyleSheet(
+                    _set_style_if_changed(
+                        splitter,
                         f"QSplitter {{ {shell} }} "
                         "QSplitter::handle { height: 0px; margin: 0px; "
                         "background: transparent; }"
                     )
                 else:
-                    splitter.setStyleSheet(v_qss)
+                    _set_style_if_changed(splitter, v_qss)
             else:
-                splitter.setStyleSheet(h_qss)
+                _set_style_if_changed(splitter, h_qss)
         except RuntimeError:
             continue
 
 
 def _clear_handle_widget_styles(app) -> None:
-    for _name, splitter in _iter_shell_splitters(app):
+    hide_sides = user_hides_shell_handles(app)
+    for name, splitter in _iter_shell_splitters(app):
         try:
+            if hide_sides and name in _SIDE_SPLITTER_NAMES:
+                continue
             if splitter.count() < 2:
                 continue
             handle = splitter.handle(1)
             if handle is not None:
-                handle.setStyleSheet("")
+                _set_style_if_changed(handle, "")
                 handle.unsetCursor()
         except RuntimeError:
             continue
