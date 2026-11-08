@@ -1369,7 +1369,7 @@ def _under_tab_bar(widget: QWidget) -> bool:
 
 
 def _collect_app_settings_focusables(app: Any) -> list[QWidget]:
-    """Current tab fields + Cancel / Save footer."""
+    """Current tab fields + Cancel / Apply / Save footer."""
     content = _app_settings_content(app)
     items: list[QWidget] = []
     if content is not None:
@@ -1381,7 +1381,7 @@ def _collect_app_settings_focusables(app: Any) -> list[QWidget]:
 
     dlg = getattr(app, "_app_settings_dlg", None)
     if dlg is not None:
-        for attr in ("_btn_cancel", "_btn_save"):
+        for attr in ("_btn_cancel", "_btn_apply", "_btn_save"):
             btn = getattr(dlg, attr, None)
             if btn is None:
                 continue

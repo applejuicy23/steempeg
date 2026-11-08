@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -1693,13 +1694,18 @@ class SettingsDialog(SteempegDialog):
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_cancel.clicked.connect(self.reject)
+        btn_apply = QPushButton("Apply")
+        btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_apply.clicked.connect(self._apply)
         btn_save = QPushButton("Save")
         btn_save.setObjectName("settingsPrimaryBtn")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.clicked.connect(self._save)
         self._btn_cancel = btn_cancel
+        self._btn_apply = btn_apply
         self._btn_save = btn_save
         actions.addWidget(btn_cancel)
+        actions.addWidget(btn_apply)
         actions.addWidget(btn_save)
         root.addLayout(actions)
 
@@ -1713,6 +1719,7 @@ class SettingsDialog(SteempegDialog):
 
         # Content can inflate sizeHint during build — re-cap before first map/center.
         self._apply_settings_geometry()
+        self._init_apply_tracking()
 
     def _mount_settings_frame(self, root: QVBoxLayout) -> None:
         """Puts the built pages into the picked frame: rail + cards, one scroll, or classic tabs."""
@@ -2279,204 +2286,52 @@ class SettingsDialog(SteempegDialog):
             except Exception:
                 pass
 
+    def _init_apply_tracking(self) -> None:
+        """Watch form fields, not the number of edits or temporary player previews."""
+        self._apply_controls = {
+            name: widget for name, widget in vars(self).items()
+            if isinstance(widget, (QComboBox, QCheckBox, QLineEdit, QSpinBox))
+        }
+        self._apply_controls.update({
+            f"pane_{name}": spin for name, spin in getattr(self, "_pane_spins", {}).items()
+        })
+        for widget in self._apply_controls.values():
+            if isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self._update_apply_state)
+            elif isinstance(widget, QCheckBox):
+                widget.toggled.connect(self._update_apply_state)
+            elif isinstance(widget, QSpinBox):
+                widget.valueChanged.connect(self._update_apply_state)
+            else:
+                widget.textChanged.connect(self._update_apply_state)
+        self._reset_apply_baseline()
+
+    def _settings_form_values(self) -> dict:
+        """Read all editable settings, including fields without live previews."""
+        values = {}
+        for name, widget in self._apply_controls.items():
+            if isinstance(widget, QComboBox):
+                values[name] = (widget.currentData(), widget.currentText())
+            elif isinstance(widget, QCheckBox):
+                values[name] = widget.isChecked()
+            elif isinstance(widget, QSpinBox):
+                values[name] = widget.value()
+            else:
+                values[name] = widget.text()
+        return values
+
+    def _reset_apply_baseline(self) -> None:
+        """Opening Settings or a successful write starts a clean form."""
+        self._applied_form_values = self._settings_form_values()
+        self._update_apply_state()
+
+    def _update_apply_state(self, *_args) -> None:
+        self._btn_apply.setEnabled(self._form_has_unsaved_changes())
+
     def _form_has_unsaved_changes(self) -> bool:
-        """True when current widgets differ from last Save / dialog open baseline."""
-        from steempeg.ui.shell_chooser import load_ask_ui_shell, load_ui_shell
-
-        # Shell — Restart's main reason to care about dirty.
-        current_shell = load_ui_shell() or UI_SHELL_DESKTOP
-        if self._combo_shell.currentData() != current_shell:
-            return True
-        ask_chk = getattr(self, "_chk_ask_shell", None)
-        if ask_chk is not None and ask_chk.isEnabled():
-            if bool(ask_chk.isChecked()) != bool(load_ask_ui_shell()):
-                return True
-
-        def _combo_diff(combo_attr: str, committed_attr: str, normalize) -> bool:
-            combo = getattr(self, combo_attr, None)
-            if combo is None:
-                return False
-            cur = normalize(combo.currentData())
-            opened = normalize(getattr(self, committed_attr, cur))
-            return cur != opened
-
-        from steempeg.ui.clip_card_style import normalize_clip_card_style
-        from steempeg.ui.design_tokens import normalize_ui_font
-        from steempeg.ui.icon_shape import normalize_icon_shape
-        from steempeg.ui.player_boost import (
-            normalize_speed_boost_ceiling,
-            normalize_volume_boost_ceiling,
-        )
-        from steempeg.ui.player_header_layout import normalize_header_layout
-        from steempeg.ui.player_header_size import normalize_player_header_size
-        from steempeg.ui.player_layout import normalize_player_layout
-        from steempeg.ui.player_outline import normalize_player_outline
-        from steempeg.ui.settings_prefs import (
-            normalize_desktop_render_layout,
-            normalize_desktop_shell_tools_in_title_bar,
-            normalize_markers_on_strip,
-            normalize_queue_hover,
-            normalize_render_tab,
-            normalize_shell_side_layout,
-        )
-        from steempeg.ui.timeline_strip_size import normalize_timeline_strip_size
-        from steempeg.ui.ui_theme import normalize_ui_theme
-
-        checks = (
-            ("_combo_ui_theme", "_committed_ui_theme", normalize_ui_theme),
-            ("_combo_shell_sides", "_committed_shell_sides", normalize_shell_side_layout),
-            (
-                "_combo_desktop_render",
-                "_committed_desktop_render",
-                normalize_desktop_render_layout,
-            ),
-            ("_combo_icon_shape", "_committed_icon_shape", normalize_icon_shape),
-            (
-                "_combo_clip_card_style",
-                "_committed_clip_card_style",
-                normalize_clip_card_style,
-            ),
-            ("_combo_header_layout", "_committed_header_layout", normalize_header_layout),
-            (
-                "_combo_header_size",
-                "_committed_header_size",
-                normalize_player_header_size,
-            ),
-            ("_combo_player_layout", "_committed_player_layout", normalize_player_layout),
-            (
-                "_combo_player_outline",
-                "_committed_player_outline",
-                normalize_player_outline,
-            ),
-            (
-                "_combo_timeline_strip",
-                "_committed_timeline_strip",
-                normalize_timeline_strip_size,
-            ),
-            (
-                "_combo_volume_ceiling",
-                "_committed_volume_ceiling",
-                normalize_volume_boost_ceiling,
-            ),
-            (
-                "_combo_speed_ceiling",
-                "_committed_speed_ceiling",
-                normalize_speed_boost_ceiling,
-            ),
-            ("_combo_render_tab", "_committed_render_tab", normalize_render_tab),
-        )
-        for combo_attr, committed_attr, normalize in checks:
-            if _combo_diff(combo_attr, committed_attr, normalize):
-                return True
-
-        if self._combo_ui_font is not None and _combo_diff(
-            "_combo_ui_font", "_committed_ui_font", normalize_ui_font
-        ):
-            return True
-
-        chk_hover = getattr(self, "_chk_queue_hover", None)
-        if chk_hover is not None:
-            if normalize_queue_hover(chk_hover.isChecked()) != normalize_queue_hover(
-                getattr(self, "_committed_queue_hover", chk_hover.isChecked())
-            ):
-                return True
-
-        chk_tools = getattr(self, "_chk_shell_tools_title", None)
-        if chk_tools is not None:
-            if normalize_desktop_shell_tools_in_title_bar(
-                chk_tools.isChecked()
-            ) != normalize_desktop_shell_tools_in_title_bar(
-                getattr(
-                    self,
-                    "_committed_shell_tools_title",
-                    chk_tools.isChecked(),
-                )
-            ):
-                return True
-
-        chk_markers = getattr(self, "_chk_markers_on_strip", None)
-        if chk_markers is not None:
-            if normalize_markers_on_strip(
-                chk_markers.isChecked()
-            ) != normalize_markers_on_strip(
-                getattr(self, "_committed_markers_on_strip", chk_markers.isChecked())
-            ):
-                return True
-
-        # Export folder text vs committed path.
-        edit = getattr(self, "_edit_export_folder", None)
-        committed_export = getattr(self, "_committed_export_folder", None)
-        if edit is not None and committed_export is not None:
-            from steempeg.ui.settings_prefs import normalize_export_folder
-
-            if normalize_export_folder(edit.text()) != normalize_export_folder(
-                committed_export
-            ):
-                return True
-
-        # Allow-list + other Advanced toggles vs disk (no committed_*).
-        prev: dict = {}
-        if hasattr(self._app, "load_user_settings"):
-            try:
-                prev = self._app.load_user_settings() or {}
-            except Exception:
-                prev = {}
-        chk_allow = getattr(self, "_chk_allow_list", None)
-        if chk_allow is not None:
-            from steempeg.ui.settings_prefs import load_library_allow_list_view
-
-            if bool(chk_allow.isChecked()) != bool(load_library_allow_list_view(prev)):
-                return True
-
-        chk_friendly = getattr(self, "_chk_friendly_repeat_titles", None)
-        if chk_friendly is not None:
-            from steempeg.ui.settings_prefs import load_friendly_repeat_render_titles
-
-            if bool(chk_friendly.isChecked()) != load_friendly_repeat_render_titles(prev):
-                return True
-
-        chk_notify = getattr(self, "_chk_notify", None)
-        if chk_notify is not None:
-            if bool(chk_notify.isChecked()) != bool(
-                prev.get(KEY_NOTIFY_ON_RENDER_COMPLETE, True)
-            ):
-                return True
-
-        chk_new_clip = getattr(self, "_chk_notify_new_clip", None)
-        if chk_new_clip is not None:
-            if bool(chk_new_clip.isChecked()) != bool(
-                prev.get(KEY_NOTIFY_ON_NEW_CLIP, True)
-            ):
-                return True
-
-        chk_tray = getattr(self, "_chk_keep_running_in_tray", None)
-        if chk_tray is not None:
-            if bool(chk_tray.isChecked()) != load_keep_running_in_tray(prev):
-                return True
-
-        chk_handles = getattr(self, "_chk_hide_splitter_handles", None)
-        if chk_handles is not None:
-            if bool(chk_handles.isChecked()) != load_hide_splitter_handles(prev):
-                return True
-            baseline = getattr(self, "_pane_percent_baseline", None)
-            if baseline is None:
-                baseline = load_shell_pane_percents(prev)
-            if self._shell_pane_percent_values() != tuple(baseline):
-                return True
-
-        chk_autostart = getattr(self, "_chk_autostart", None)
-        if chk_autostart is not None and autostart_is_supported():
-            if bool(chk_autostart.isChecked()) != read_autostart_enabled():
-                return True
-
-        chk_hints = getattr(self, "_chk_hide_helper_text", None)
-        if chk_hints is not None:
-            if bool(chk_hints.isChecked()) != bool(
-                getattr(self, "_committed_hide_helper_text", False)
-            ):
-                return True
-
-        return False
+        """True only while at least one field differs from the last saved form."""
+        baseline = getattr(self, "_applied_form_values", None)
+        return baseline is not None and self._settings_form_values() != baseline
 
     def _on_hide_splitter_handles_toggled(self, checked: bool) -> None:
         """Show the width row only while the handles are hidden.
@@ -2819,7 +2674,7 @@ class SettingsDialog(SteempegDialog):
             ):
                 btn.setStyleSheet(about_accent)
                 continue
-            if btn is getattr(self, "_btn_cancel", None):
+            if btn in (getattr(self, "_btn_cancel", None), getattr(self, "_btn_apply", None)):
                 btn.setStyleSheet(about_sec)
                 continue
             btn.setStyleSheet(sec_qss)
@@ -3450,6 +3305,7 @@ class SettingsDialog(SteempegDialog):
         self._refresh_player_boost(committed_vol, committed_spd)
 
     def reject(self) -> None:
+        self._stop_visual_preview_timers()
         self._restore_ui_theme_on_cancel()
         self._restore_ui_font_on_cancel()
         self._restore_icon_shape_on_cancel()
@@ -3482,7 +3338,7 @@ class SettingsDialog(SteempegDialog):
             if timer is not None:
                 timer.stop()
 
-    def _persist_settings(self) -> list:
+    def _persist_settings(self) -> list | None:
         """Write settings.json once; return deferred UI apply callbacks."""
         import logging
         import time
@@ -3884,27 +3740,48 @@ class SettingsDialog(SteempegDialog):
         try:
             configure_runtime_prefs(merged)
         except Exception:
-            logging.exception("configure_runtime_prefs after Save failed")
+            logging.exception("configure_runtime_prefs after settings write failed")
 
         if date_changed and hasattr(self._app, "refresh_library_datetime_displays"):
             deferred.append(self._app.refresh_library_datetime_displays)
 
         logging.info(
-            "Settings Save persisted in %.0f ms (%d deferred task(s))",
+            "Settings persisted in %.0f ms (%d deferred task(s))",
             (time.perf_counter() - t0) * 1000,
             len(deferred),
         )
         return deferred
 
     def _save(self) -> None:
+        """Save the form and close Settings."""
+        self._commit_settings(close=True)
+
+    def _apply(self) -> None:
+        """Save a new Cancel baseline while keeping Settings open."""
+        if not self._form_has_unsaved_changes():
+            return
+        self._commit_settings(close=False)
+
+    def _commit_settings(self, *, close: bool) -> None:
         import logging
         import time
 
-        deferred = self._persist_settings()
+        self._stop_visual_preview_timers()
+        baseline = {key: value for key, value in vars(self).items() if key.startswith("_committed_")}
+        try:
+            deferred = self._persist_settings()
+        except Exception:
+            self._restore_commit_baseline(baseline)
+            self._update_apply_state()
+            raise
         if deferred is None:
+            self._restore_commit_baseline(baseline)
+            self._update_apply_state()
             return
-        self.accept()
+        if close:
+            self.accept()
         if not deferred:
+            self._reset_apply_baseline()
             return
 
         def _run_deferred() -> None:
@@ -3913,13 +3790,27 @@ class SettingsDialog(SteempegDialog):
                 try:
                     fn()
                 except Exception:
-                    logging.exception("Settings Save deferred apply failed")
+                    logging.exception("Settings %s callback failed", "Save" if close else "Apply")
             logging.info(
-                "Settings Save deferred apply finished in %.0f ms",
+                "Settings %s callbacks finished in %.0f ms",
+                "Save" if close else "Apply",
                 (time.perf_counter() - t0) * 1000,
             )
 
-        QTimer.singleShot(0, _run_deferred)
+        if close:
+            QTimer.singleShot(0, _run_deferred)
+        else:
+            # Finish this Apply before later edits can start another preview.
+            _run_deferred()
+        self._reset_apply_baseline()
+
+    def _restore_commit_baseline(self, baseline: dict) -> None:
+        """A failed write must not replace the values Cancel restores."""
+        for key in list(vars(self)):
+            if key.startswith("_committed_") and key not in baseline:
+                delattr(self, key)
+        for key, value in baseline.items():
+            setattr(self, key, value)
 
 
 def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
