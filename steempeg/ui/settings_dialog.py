@@ -1334,12 +1334,17 @@ class SettingsDialog(SteempegDialog):
         self._chk_markers_on_strip.setChecked(cur_on_strip)
         self._chk_markers_on_strip.toggled.connect(self._preview_markers_on_strip)
         v.addWidget(self._chk_markers_on_strip)
-        v.addWidget(
-            self._hint(
-                "Draws kill and round icons on the purple seekbar instead of "
-                "the row above. Hover shows a tooltip. Ctrl+click jumps to a marker."
-            )
+        markers_hint = self._hint(
+            "Draws kill and round icons on the purple seekbar instead of "
+            "the row above. Hover shows a tooltip. Ctrl+click jumps to a marker."
         )
+        v.addWidget(markers_hint)
+        if isinstance(markers_hint, SettingHelpButton):
+            markers_hint.set_help_diagram(
+                "markers_on_strip",
+                lambda: "on" if self._chk_markers_on_strip.isChecked() else "off",
+            )
+            self._markers_on_strip_hint = markers_hint
         trim_row = QHBoxLayout()
         trim_row.setSpacing(8)
         trim_lbl = QLabel("Trim from marker")
@@ -3170,6 +3175,9 @@ class SettingsDialog(SteempegDialog):
                 logging.exception("Timeline strip size refresh failed for %s", size)
 
     def _preview_markers_on_strip(self, *_args) -> None:
+        hint = getattr(self, "_markers_on_strip_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
         enabled = bool(self._chk_markers_on_strip.isChecked())
         set_markers_on_strip(enabled)
         self._refresh_markers_on_strip(enabled)
