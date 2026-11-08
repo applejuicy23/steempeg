@@ -95,6 +95,8 @@ class _SettingHelpSplash(QWidget):
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(1)
+        # Short explanations must not spread out to fill the diagram's height.
+        text_col.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._title = QLabel(self)
         self._title.setWordWrap(True)
         self._title.setTextFormat(Qt.TextFormat.PlainText)
