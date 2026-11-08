@@ -1223,7 +1223,9 @@ class SettingsDialog(SteempegDialog):
         vol_row.setSpacing(8)
         vol_lbl = QLabel("Volume ceiling")
         vol_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_volume_ceiling = QComboBox()
+        from steempeg.ui.widgets.player_ceiling_guide import PlayerCeilingCombo
+
+        self._combo_volume_ceiling = PlayerCeilingCombo("volume")
         for value, label in VOLUME_CEILING_LABELS:
             self._combo_volume_ceiling.addItem(label, value)
         cur_vol = normalize_volume_boost_ceiling(
@@ -1235,17 +1237,22 @@ class SettingsDialog(SteempegDialog):
         vol_row.addWidget(vol_lbl)
         vol_row.addWidget(self._combo_volume_ceiling, 1)
         v.addLayout(vol_row)
-        v.addWidget(
-            self._hint(
-                "Raises the volume slider past the normal cap. It starts at 100%."
-            )
+        volume_hint = self._hint(
+            "Raises the volume slider past the normal cap. It starts at 100%."
         )
+        v.addWidget(volume_hint)
+        if isinstance(volume_hint, SettingHelpButton):
+            volume_hint.set_help_diagram(
+                "player_ceiling",
+                lambda: f"volume|{self._combo_volume_ceiling.currentData()}",
+            )
+            self._volume_ceiling_hint = volume_hint
 
         spd_row = QHBoxLayout()
         spd_row.setSpacing(8)
         spd_lbl = QLabel("Speed ceiling")
         spd_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_speed_ceiling = QComboBox()
+        self._combo_speed_ceiling = PlayerCeilingCombo("speed")
         for value, label in SPEED_CEILING_LABELS:
             self._combo_speed_ceiling.addItem(label, value)
         cur_spd = normalize_speed_boost_ceiling(
@@ -1257,11 +1264,16 @@ class SettingsDialog(SteempegDialog):
         spd_row.addWidget(spd_lbl)
         spd_row.addWidget(self._combo_speed_ceiling, 1)
         v.addLayout(spd_row)
-        v.addWidget(
-            self._hint(
-                "Raises the speed slider past the normal cap. It starts at 5.0x."
-            )
+        speed_hint = self._hint(
+            "Raises the speed slider past the normal cap. It starts at 5.0x."
         )
+        v.addWidget(speed_hint)
+        if isinstance(speed_hint, SettingHelpButton):
+            speed_hint.set_help_diagram(
+                "player_ceiling",
+                lambda: f"speed|{self._combo_speed_ceiling.currentData()}",
+            )
+            self._speed_ceiling_hint = speed_hint
         self._player_boost_preview_timer = QTimer(self)
         self._player_boost_preview_timer.setSingleShot(True)
         self._player_boost_preview_timer.setInterval(200)
@@ -3186,6 +3198,10 @@ class SettingsDialog(SteempegDialog):
         self._refresh_markers_on_strip(committed)
 
     def _preview_player_boost(self, *_args) -> None:
+        for name in ("_volume_ceiling_hint", "_speed_ceiling_hint"):
+            hint = getattr(self, name, None)
+            if hint is not None:
+                hint.refresh_diagram()
         self._player_boost_preview_timer.start()
 
     def _apply_player_boost_preview(self) -> None:
