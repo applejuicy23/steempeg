@@ -11,9 +11,12 @@ import logging
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QObject, QTimer, Qt
-from PySide6.QtGui import QAction, QHideEvent, QIcon, QShowEvent
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtCore import QObject, QRect, QSize, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QFontMetrics, QHideEvent, QIcon, QPen, QShowEvent
+from PySide6.QtWidgets import (
+    QApplication, QMenu, QStyle, QStyleOption, QStyleOptionMenuItem,
+    QStylePainter, QSystemTrayIcon,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -52,6 +55,73 @@ class _TrayMenu(QMenu):
         if sys.platform == "win32":
             self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+
+    # Match the shared menu's 24 px item padding and 4 px item margin.
+    _CONTENT_INSET = 28
+    _ICON_SIZE = 16
+    _ICON_GAP = 6
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        """Size rows for an inline asset and label, without Qt's icon gutter."""
+        size = super().sizeHint()
+        width = 0
+        for action in self.actions():
+            if action.isSeparator() or not action.isVisible():
+                continue
+            option = QStyleOptionMenuItem()
+            self.initStyleOption(option, action)
+            width = max(width, QFontMetrics(option.font).horizontalAdvance(action.text()))
+        size.setWidth(width + self._CONTENT_INSET * 2 + self._ICON_SIZE + self._ICON_GAP)
+        return size
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        """Keep Qt's row chrome, but draw assets in the same inset as text emoji."""
+        from steempeg.ui import ui_theme as ut
+
+        del event
+        painter = QStylePainter(self)
+        panel = QStyleOption()
+        panel.initFrom(self)
+        painter.drawPrimitive(QStyle.PrimitiveElement.PE_PanelMenu, panel)
+        colors = ut.menu_popup_colors()
+        for action in self.actions():
+            if not action.isVisible():
+                continue
+            option = QStyleOptionMenuItem()
+            self.initStyleOption(option, action)
+            option.rect = self.actionGeometry(action)
+            icon = action.icon()
+            option.icon = QIcon()
+            option.text = ""
+            option.maxIconWidth = 0
+            option.menuHasCheckableItems = False
+            option.checkType = QStyleOptionMenuItem.CheckType.NotCheckable
+            option.checked = False
+            painter.save()
+            painter.drawControl(QStyle.ControlElement.CE_MenuItem, option)
+            painter.restore()
+            if action.isSeparator():
+                continue
+            rect = option.rect
+            icon_rect = QRect(rect.left() + self._CONTENT_INSET,
+                              rect.center().y() - self._ICON_SIZE // 2,
+                              self._ICON_SIZE, self._ICON_SIZE)
+            icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter,
+                       QIcon.Mode.Normal if action.isEnabled() else QIcon.Mode.Disabled)
+            selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            painter.setFont(option.font)
+            painter.setPen(QColor(colors.item_selected_fg if selected else colors.fg))
+            painter.setOpacity(1.0 if action.isEnabled() else 0.45)
+            text_rect = rect.adjusted(self._CONTENT_INSET + self._ICON_SIZE + self._ICON_GAP,
+                                      0, -self._CONTENT_INSET, 0)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             action.text())
+            painter.setOpacity(1.0)
+            if action.isCheckable() and action.isChecked():
+                painter.setPen(QPen(QColor(colors.fg), 1.5))
+                x, y = rect.left() + 10, rect.center().y()
+                painter.drawLine(x, y, x + 3, y + 3)
+                painter.drawLine(x + 3, y + 3, x + 8, y - 3)
 
     def showEvent(self, event: QShowEvent) -> None:
         self._show_generation += 1
