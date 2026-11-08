@@ -1189,7 +1189,9 @@ class SettingsDialog(SteempegDialog):
         strip_row.setSpacing(8)
         strip_lbl = QLabel("Strip size")
         strip_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_timeline_strip = QComboBox()
+        from steempeg.ui.widgets.timeline_strip_guide import STRIP_SIZE_HELP, TimelineStripCombo
+
+        self._combo_timeline_strip = TimelineStripCombo()
         for value, label in TIMELINE_STRIP_LABELS:
             self._combo_timeline_strip.addItem(label, value)
         migrate_timeline_strip_size_in_settings(settings)
@@ -1202,12 +1204,14 @@ class SettingsDialog(SteempegDialog):
         strip_row.addWidget(strip_lbl)
         strip_row.addWidget(self._combo_timeline_strip, 1)
         v.addLayout(strip_row)
-        v.addWidget(
-            self._hint(
-                "Time labels and tick marks under the scrubber. "
-                "The progress track stays the same height."
+        strip_hint = self._hint(STRIP_SIZE_HELP)
+        v.addWidget(strip_hint)
+        if isinstance(strip_hint, SettingHelpButton):
+            strip_hint.set_help_diagram(
+                "timeline_strip",
+                lambda: normalize_timeline_strip_size(self._combo_timeline_strip.currentData()),
             )
-        )
+            self._timeline_strip_hint = strip_hint
         self._timeline_strip_preview_timer = QTimer(self)
         self._timeline_strip_preview_timer.setSingleShot(True)
         self._timeline_strip_preview_timer.setInterval(200)
@@ -3131,6 +3135,9 @@ class SettingsDialog(SteempegDialog):
                 logging.exception("Player outline refresh failed for %s", mode)
 
     def _preview_timeline_strip(self, *_args) -> None:
+        hint = getattr(self, "_timeline_strip_hint", None)
+        if hint is not None:
+            hint.refresh_diagram()
         self._timeline_strip_preview_timer.start()
 
     def _apply_timeline_strip_preview(self) -> None:
