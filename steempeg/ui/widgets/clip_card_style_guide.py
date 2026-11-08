@@ -244,28 +244,11 @@ class _ClipCardStylePopupGuide(QWidget):
         text_w = max(title_w, blurb_w, self._diagram.width(), 1)
         lead = (self._mark.width() + 6) if self._mark.isVisible() else 0
         self._title.setFixedWidth(max(1, text_w - lead))
-        blurb_h = 0
-        if has_blurb:
-            self._blurb.setFixedWidth(text_w)
-            blurb_h = self._blurb.fontMetrics().boundingRect(
-                QRect(0, 0, text_w, 400),
-                int(Qt.TextFlag.TextWordWrap),
-                blurb,
-            ).height()
-        title_h = self._title.fontMetrics().height()
-        if self._mark.isVisible():
-            title_h = max(title_h, self._mark.height())
+        self._blurb.setFixedWidth(text_w)
         margins = self.layout().contentsMargins()
-        blurb_block = (self.layout().spacing() + blurb_h) if blurb_h else 0
-        self.setFixedSize(
-            margins.left() + margins.right() + text_w,
-            margins.top()
-            + margins.bottom()
-            + title_h
-            + blurb_block
-            + self.layout().spacing()
-            + self._diagram.height(),
-        )
+        from steempeg.ui.widgets.splash_layout import fit_splash_layout
+
+        fit_splash_layout(self, margins.left() + margins.right() + text_w)
 
     def _place(self, combo: QComboBox) -> None:
         """Sits just to the right of the open list, or to the left if it would not fit."""
