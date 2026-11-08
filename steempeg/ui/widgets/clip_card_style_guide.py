@@ -306,14 +306,15 @@ class _ClipCardStylePopupGuide(QWidget):
         self._title.setStyleSheet(f"background: transparent; color: {fg};")
         self._blurb.setStyleSheet("background: transparent; color: #a8a8a8;")
 
-    def _shape(self) -> QPainterPath:
+    def _shape(self, inset: float = 0.5) -> QPainterPath:
         path = QPainterPath()
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rect = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
         path.addRoundedRect(rect, self._RADIUS, self._RADIUS)
         return path
 
     def _apply_mask(self) -> None:
-        poly = self._shape().toFillPolygon().toPolygon()
+        # The mask encloses the stroke; its half-pixel centerline would clip it.
+        poly = self._shape(inset=0.0).toFillPolygon().toPolygon()
         if poly.isEmpty():
             self.clearMask()
         else:
