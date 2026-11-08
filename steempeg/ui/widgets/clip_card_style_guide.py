@@ -288,9 +288,9 @@ class _ClipCardStylePopupGuide(QWidget):
 
     def _apply_font(self) -> None:
         """Same faces as the ? card. A stylesheet font would measure wrong."""
-        bg, border, _, fg = ut.timeline_hover_preview_colors()
+        bg, _, _, fg = ut.timeline_hover_preview_colors()
         self._bg = bg
-        self._border = border
+        self._border = ut.player_chrome_border_color()
         from steempeg.ui.icon_assets import tinted_pixmap
 
         title_font = QFont(tok.FONT_FAMILIES[0])
