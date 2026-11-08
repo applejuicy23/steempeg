@@ -31,6 +31,9 @@ class TimelineStripDiagram(QWidget):
 
     def set_style(self, style: str) -> None:
         """Uses the same ticks, type, and padding as the player preference."""
+        self._marker_mode = style if style in ("on", "off") else None
+        if self._marker_mode is not None:
+            style = "large"
         self._metrics = metrics_for(style)
         self._font = QFont(tok.FONT_FAMILIES[0])
         font_px = self._metrics.ruler_font_pt * 4 / 3 * self._SCALE
@@ -62,8 +65,15 @@ class TimelineStripDiagram(QWidget):
         painter.fillRect(QRectF(left, top, width, track_h), QColor("#49434f"))
         painter.fillRect(QRectF(left, top, width * 0.62, track_h), QColor("#b29ae7"))
         # Pins stay the same size for every ruler setting.
-        for fraction in (0.21, 0.69):
+        for fraction in ((0.18, 0.48, 0.79) if self._marker_mode else (0.21, 0.69)):
             x = left + width * fraction
+            if self._marker_mode is not None:
+                from steempeg.ui.icon_assets import load_pixmap
+
+                icon = load_pixmap("screenshot.png", 16)
+                marker_y = top + (track_h - 16) / 2 if self._marker_mode == "on" else top - 19
+                painter.drawPixmap(int(x - 8), int(marker_y), icon)
+                continue
             pin = QPainterPath()
             pin.moveTo(x, 20)
             pin.cubicTo(x - 1, 16, x - 5, 14, x - 5, 10)
