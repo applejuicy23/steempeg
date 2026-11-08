@@ -414,6 +414,7 @@ class SettingHelpButton(QWidget):
         self._pinned = False
         self._hot = False
         self._splash: _SettingHelpSplash | None = None
+        self._splash_content: tuple | None = None
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self._hide_if_idle)
@@ -441,7 +442,7 @@ class SettingHelpButton(QWidget):
         # isVisible() is false while a combo popup is up, even though the card
         # is still on screen. isHidden() is the flag hide() actually sets.
         if splash is not None and not splash.isHidden():
-            splash.set_content(self._help_title, self._text)
+            self._show()
 
     def _pull_live_text(self) -> None:
         """Reads the explanation for whatever the list shows right now."""
@@ -561,12 +562,19 @@ class SettingHelpButton(QWidget):
         splash.place_at_cursor()
 
     def _ensure_splash(self) -> _SettingHelpSplash:
-        """Creates the card on the settings window the first time it opens."""
+        """Rebuilds a changed choice instead of reusing its previous native card."""
+        style = str(self._diagram_style() or "") if callable(self._diagram_style) else ""
+        content = (self._help_title, self._text, self._diagram_kind, style)
+        if self._splash is not None and self._splash_content != content:
+            self._splash.hide()
+            self._splash.deleteLater()
+            self._splash = None
         if self._splash is None:
             host = self.window()
             if not isinstance(host, QWidget):
                 host = self
             self._splash = _SettingHelpSplash(self, host)
+            self._splash_content = content
         return self._splash
 
     def _hide_if_idle(self) -> None:
