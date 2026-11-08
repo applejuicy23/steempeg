@@ -211,9 +211,9 @@ class _SettingHelpSplash(QWidget):
 
     def _apply_font(self) -> None:
         """Marker tip faces. A stylesheet font would measure as a different width."""
-        bg, border, _, fg = ut.timeline_hover_preview_colors()
+        bg, _, _, fg = ut.timeline_hover_preview_colors()
         self._bg = bg
-        self._border = border
+        self._border = ut.player_chrome_border_color()
         self._mark.setStyleSheet(
             "background-color: rgba(255, 255, 255, 22); color: "
             f"{fg}; border-radius: {self._DISC // 2}px;"
