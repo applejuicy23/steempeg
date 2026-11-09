@@ -2304,6 +2304,51 @@ class LibraryMixin:
             action_open.triggered.connect(lambda: self.open_clip_folders(paths))
             action_delete.triggered.connect(lambda: self.delete_clips(paths))
 
+    def _clip_cards_for_keys(self, keys: set[str]) -> list:
+        """Grid ClipCards whose clip path is in ``keys``."""
+        if not keys or not hasattr(self, "grid_clips"):
+            return []
+        found = []
+        for i in range(self.grid_clips.count()):
+            item = self.grid_clips.item(i)
+            if self._grid_item_clip_key(item) not in keys:
+                continue
+            card = self.grid_clips.itemWidget(item)
+            if isinstance(card, ClipCard):
+                found.append(card)
+        return found
+
+    def _arm_library_context_cards(self, paths: list) -> None:
+        """Light every card the menu covers. A multi-selection lights all of them."""
+        self._disarm_library_context_cards()
+        keys = [self._clip_key(path) for path in paths if path]
+        self._library_context_card_keys = keys
+        for card in self._clip_cards_for_keys(set(keys)):
+            card.set_context_target(True)
+
+    def _context_menu_cards(self) -> list:
+        keys = getattr(self, "_library_context_card_keys", None) or []
+        return self._clip_cards_for_keys(set(keys))
+
+    def _set_context_card_blink(self, blinking: bool) -> None:
+        """Breathe every card in the open menu, not only the one under the cursor."""
+        for card in self._context_menu_cards():
+            card.set_context_blink(bool(blinking))
+
+    def _disarm_library_context_cards(self) -> None:
+        keys = list(getattr(self, "_library_context_card_keys", None) or [])
+        self._library_context_card_keys = []
+        for card in self._clip_cards_for_keys(set(keys)):
+            card.set_context_target(False)
+
+    def _run_library_context_menu(self, menu, anchor, paths: list) -> None:
+        """Show the menu. Every covered card stays lit until the menu closes."""
+        self._arm_library_context_cards(paths)
+        try:
+            menu.exec(anchor)
+        finally:
+            self._disarm_library_context_cards()
+
     def _on_library_context_shown(self) -> None:
         QTimer.singleShot(0, self._peek_queue_if_cursor_on_add_action)
 
@@ -2311,6 +2356,7 @@ class LibraryMixin:
         action = getattr(self, "_library_menu_queue_action", None)
         paths = getattr(self, "_library_menu_queue_paths", None) or []
         if action is None or not paths:
+            self._set_context_card_blink(False)
             return
         menu = action.parent()
         if not isinstance(menu, QMenu):
@@ -2319,13 +2365,17 @@ class LibraryMixin:
             at = menu.actionAt(menu.mapFromGlobal(QCursor.pos()))
         except RuntimeError:
             return
-        if at is action:
+        on_add = at is action
+        self._set_context_card_blink(on_add)
+        if on_add:
             self._peek_hover_queue_for_add(paths)
 
     def _on_library_context_hovered(self, action) -> None:
         target = getattr(self, "_library_menu_queue_action", None)
         paths = getattr(self, "_library_menu_queue_paths", None) or []
-        if target is not None and action is target:
+        on_add = target is not None and action is target
+        self._set_context_card_blink(on_add)
+        if on_add:
             self._peek_hover_queue_for_add(paths)
         else:
             self._clear_hover_queue_add_peek()
@@ -2334,6 +2384,7 @@ class LibraryMixin:
         self._library_menu_queue_action = None
         self._library_menu_queue_paths = None
         self._clear_hover_queue_add_peek()
+        self._set_context_card_blink(False)
 
     def _peek_hover_queue_for_add(self, clip_paths: list) -> None:
         ctrl = getattr(self, "_queue_hover", None)
@@ -2844,7 +2895,11 @@ class LibraryMixin:
         menu = QMenu(self.grid_clips)
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_library_context_menu(menu, clip_paths)
-        menu.exec(event.globalPosition().toPoint())
+        self._run_library_context_menu(
+            menu,
+            event.globalPosition().toPoint(),
+            clip_paths,
+        )
 
     def _handle_grid_viewport_press(self, event) -> bool:
         if not self._clips_library_accepts_selection():
@@ -2878,7 +2933,11 @@ class LibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
-        menu.exec(self.grid_clips.viewport().mapToGlobal(pos))
+        self._run_library_context_menu(
+            menu,
+            self.grid_clips.viewport().mapToGlobal(pos),
+            clip_paths,
+        )
 
     def show_clip_context_menu(self, pos):
         """ Pop-up menu for a standard list (List/Table) """
@@ -2894,7 +2953,11 @@ class LibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
 
         self._populate_library_context_menu(menu, clip_paths)
-        menu.exec(self.ui.table_clips.viewport().mapToGlobal(pos))
+        self._run_library_context_menu(
+            menu,
+            self.ui.table_clips.viewport().mapToGlobal(pos),
+            clip_paths,
+        )
 
     def open_clip_folder(self, clip_path):
         """Open the clip folder in the file manager with the clip folder selected."""
