@@ -6532,8 +6532,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     scaled = [total - bottom, bottom]
                 v_splitter.setSizes(scaled)
         self.apply_hidden_shell_splitter_handles()
-        # Do not remember a ratio here. The splitter often still has the
-        # pre-layout width, and the next maximize would scale that fat share.
+        # The handle pass can still run while the HWND is hidden. Pin Clips to
+        # its minimum afterwards so the first maximize cannot grow a size-hint share.
+        from steempeg.ui.portable_splitter_reveal import seed_startup_main_split
+
+        seed_startup_main_split(self, int(self.ui.width() or 0))
 
     def _setup_custom_target_size(self):
         # --- UI INJECTION: STRICT CUSTOM TARGET SIZE ---
@@ -7025,6 +7028,14 @@ def main():
                     window.ui.setGeometry(_reveal_screen.availableGeometry())
                 enable_frameless(window.ui)
                 set_window_transitions(window.ui, False)
+                if _reveal_screen is not None:
+                    from steempeg.ui.portable_splitter_reveal import (
+                        seed_startup_main_split,
+                    )
+
+                    seed_startup_main_split(
+                        window, int(_reveal_screen.availableGeometry().width())
+                    )
                 _force_native_window_icon(window.ui, icon_path)
                 QTimer.singleShot(
                     700, lambda: set_window_transitions(window.ui, True)
@@ -7058,6 +7069,13 @@ def main():
                 if _screen is not None:
                     window.ui._linux_restore_geometry = stock_restore_geometry(
                         _screen.availableGeometry()
+                    )
+                    from steempeg.ui.portable_splitter_reveal import (
+                        seed_startup_main_split,
+                    )
+
+                    seed_startup_main_split(
+                        window, int(_screen.availableGeometry().width())
                     )
                 window.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
                 window.ui.show()

@@ -644,8 +644,19 @@ def apply_user_shell_handle_visibility(app) -> None:
     hidden = user_hides_shell_handles(app)
     if not hidden:
         found = _shell_widgets(app)
+        if found is not None and not _user_dragged_shell_split(app):
+            # No drag yet. Equal stretch would give the first maximize half of
+            # the new width to Clips, on top of whatever size hint it already held.
+            _stretch_hidden_gap_to_player(*found[:2], found[2], found[3], found[4])
+            _set_side_handles_visible(app, True)
+            paint_desktop_splitter_handles(app)
+            _sync_hover_resize_grip(app)
+            width = _known_shell_width(app)
+            _pin_clips_to_column_floor(app, window_width=width if width >= 640 else None)
+            _cancel_shell_pane_snap(app)
+            return
         if found is not None:
-            main, inner, clips, player, queue = found
+            main, inner, _clips, _player, _queue = found
             try:
                 for index in range(main.count()):
                     main.setStretchFactor(index, 1)
@@ -686,17 +697,31 @@ def apply_user_shell_handle_visibility(app) -> None:
     _cancel_shell_pane_snap(app)
 
 
+def _user_dragged_shell_split(app) -> bool:
+    """True after the user has dragged a shell handle in this session."""
+    return bool(getattr(app, "_shell_pane_user_drag", False))
+
+
 def remember_shell_pane_ratio(app) -> None:
     """Store the live Clips / player / queue split as the resize ratio.
 
     A handle drag is the user choosing new proportions. Queue width 0 is a
     closed pane, not a new percent: the previous queue share stays, and the
-    collapsed flag keeps it shut until it is opened again.
+    collapsed flag keeps it shut until it is opened again. A hidden window
+    still has the pre-layout width, and remembering that share is what the
+    first maximize scales into a wide Clips column.
     """
     if getattr(app, "_shell_pane_refitting", False):
         return
     if getattr(app, "_splitter_dragging", False):
         return
+    ui = getattr(app, "ui", None)
+    if ui is not None:
+        try:
+            if not bool(ui.isVisible()):
+                return
+        except RuntimeError:
+            return
     from steempeg.ui.layout_defaults import shell_pixels_to_percents
 
     widths = shell_pane_widths(app)
@@ -718,6 +743,8 @@ def remember_shell_pane_ratio(app) -> None:
     if queue <= 0 and isinstance(prev, tuple) and len(prev) == 3 and int(prev[2]) > 0:
         queue = int(prev[2])
     app._shell_pane_ratio = (int(clips), int(player), int(queue))
+    if getattr(app, "_shell_ratio_pending_drag", False):
+        app._shell_pane_user_drag = True
 
 
 def _shut_queue_pane(app) -> None:
@@ -756,11 +783,13 @@ def _shut_queue_pane(app) -> None:
         return
 
 
-def _pin_clips_to_column_floor(app) -> None:
+def _pin_clips_to_column_floor(app, window_width: int | None = None) -> None:
     """Open Clips at the two-column minimum and give the spare width to the player.
 
     A cold start has no drag yet. Scaling whatever pixels the splitter happened
     to hold before layout opened several card columns and left a thin player.
+    ``window_width`` is the width the shell is about to take, when the splitter
+    itself still reports the size-hint span.
     """
     from steempeg.ui.layout_defaults import left_panel_min_width
 
@@ -769,9 +798,17 @@ def _pin_clips_to_column_floor(app) -> None:
         return
     main, inner, clips, player, queue = found
     win_w, shell = _shell_span(app)
+    forced = int(window_width or 0)
+    if forced >= 640:
+        win_w = forced
+        shell = forced
     if shell <= 0:
         return
     floor = left_panel_min_width(win_w or shell, widget=getattr(app, "ui", None))
+    try:
+        clips.setMinimumWidth(int(floor))
+    except RuntimeError:
+        return
     hover = _queue_hover_is_on(app)
     queue_w = 0 if hover else (
         _width_in_splitter(main, queue) or _width_in_splitter(inner, queue)
@@ -801,6 +838,40 @@ def _pin_clips_to_column_floor(app) -> None:
             inner.blockSignals(False)
     finally:
         app._shell_pane_refitting = False
+
+
+def _known_shell_width(app, window_width: int = 0) -> int:
+    """Window width to budget against, preferring an explicit target."""
+    width = int(window_width or 0)
+    if width >= 640:
+        return width
+    ui = getattr(app, "ui", None)
+    if ui is None:
+        return 0
+    try:
+        return int(ui.width() or 0)
+    except RuntimeError:
+        return 0
+
+
+def seed_startup_main_split(app, window_width: int = 0) -> None:
+    """Put Clips on its minimum before the first paint.
+
+    The opening layout otherwise follows the child size hints, and equal
+    stretch on maximize grows that share across the first frame.
+    """
+    if getattr(app, "_portable_shell", False):
+        return
+    if bool(getattr(app, "is_theater", False)) or bool(getattr(app, "is_fullscreen", False)):
+        return
+    if _user_dragged_shell_split(app) or user_hides_shell_handles(app):
+        return
+    found = _shell_widgets(app)
+    if found is None:
+        return
+    _stretch_hidden_gap_to_player(*found[:2], found[2], found[3], found[4])
+    width = _known_shell_width(app, window_width)
+    _pin_clips_to_column_floor(app, window_width=width if width >= 640 else None)
 
 
 def refit_shell_panes_for_window(app) -> None:
