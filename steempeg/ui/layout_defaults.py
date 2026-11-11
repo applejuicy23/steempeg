@@ -537,6 +537,8 @@ def shell_pane_pixel_limits(
     *,
     hover: bool,
     shell_width: int = 0,
+    widget=None,
+    player_floor: int = PLAYER_COLUMN_FLOOR,
 ) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
     """Min and max pixel widths for Clips, the player and the queue.
 
@@ -552,19 +554,20 @@ def shell_pane_pixel_limits(
     if shell <= 0:
         shell = win
     basis = win or shell
-    clips_min = left_panel_min_width(basis) if basis else MIN_LEFT_PANEL_WIDTH_COMPACT
-    player_min = int(PLAYER_COLUMN_FLOOR)
+    clips_min = left_panel_min_width(basis, widget=widget) if basis else MIN_LEFT_PANEL_WIDTH_COMPACT
+    player_min = max(1, int(player_floor))
     if hover:
-        queue_min = queue_hover_min_width(basis) if basis else MIN_QUEUE_HOVER_WIDTH
+        queue_min = queue_hover_min_width(basis, widget=widget) if basis else MIN_QUEUE_HOVER_WIDTH
         span = win or shell
-        queue_max = max(queue_min, span - player_min - int(QUEUE_HOVER_EDGE_GAP))
+        # The overlay has its own drag limit; it does not resize the player.
+        queue_max = max(queue_min, span - PLAYER_COLUMN_FLOOR - int(QUEUE_HOVER_EDGE_GAP))
         if shell > 0 and clips_min + player_min > shell:
             player_min = max(0, shell - clips_min)
         clips_max = max(clips_min, shell - player_min) if shell else clips_min
         player_max = max(player_min, shell - clips_min) if shell else player_min
         return (clips_min, clips_max), (player_min, player_max), (queue_min, queue_max)
 
-    queue_min = queue_panel_min_width(basis) if basis else MIN_QUEUE_PANEL_WIDTH
+    queue_min = queue_panel_min_width(basis, widget=widget) if basis else MIN_QUEUE_PANEL_WIDTH
     if shell > 0 and clips_min + player_min + queue_min > shell:
         queue_min = max(0, shell - clips_min - player_min)
         if clips_min + player_min > shell:

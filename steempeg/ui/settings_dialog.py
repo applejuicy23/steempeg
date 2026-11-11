@@ -2451,13 +2451,14 @@ class SettingsDialog(SteempegDialog):
             percent_at_least,
             percent_at_most,
             percent_of_pixel_floor,
-            shell_pane_pixel_limits,
             shell_percents_to_pixels,
             shell_pixels_to_percents,
         )
 
         hover = self._pane_queue_is_hover()
-        limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell)
+        from steempeg.ui.portable_splitter_reveal import live_shell_pane_limits
+
+        limits = live_shell_pane_limits(self._app, win_w, shell, hover=hover)
         clips, player, queue = self._shell_pane_percent_values()
         if hover and seed_hover_queue and queue <= 0:
             overlay = self._hover_overlay_width()
@@ -3686,12 +3687,13 @@ class SettingsDialog(SteempegDialog):
             if win_w > 0 and shell_w > 0 and int(baseline[2]) != int(pane_percents[2]):
                 from steempeg.ui.layout_defaults import (
                     fit_shell_pane_pixels,
-                    shell_pane_pixel_limits,
                     shell_percents_to_pixels,
                 )
 
                 hover = self._pane_queue_is_hover()
-                limits = shell_pane_pixel_limits(win_w, hover=hover, shell_width=shell_w)
+                from steempeg.ui.portable_splitter_reveal import live_shell_pane_limits
+
+                limits = live_shell_pane_limits(self._app, win_w, shell_w, hover=hover)
                 clips_w, player_w, queue_w = shell_percents_to_pixels(
                     pane_percents[0],
                     pane_percents[1],

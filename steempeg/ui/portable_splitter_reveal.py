@@ -324,7 +324,6 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     """
     from steempeg.ui.layout_defaults import (
         fit_shell_pane_pixels,
-        shell_pane_pixel_limits,
         shell_percents_to_pixels,
     )
 
@@ -336,7 +335,7 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     if shell <= 0:
         return
     hover = _queue_hover_is_on(app)
-    limits = shell_pane_pixel_limits(win_w or shell, hover=hover, shell_width=shell)
+    limits = live_shell_pane_limits(app, win_w or shell, shell, hover=hover)
     clips_pct, player_pct, queue_pct = (int(percents[0]), int(percents[1]), int(percents[2]))
     # Keep the requested shares. fit_shell_pane_pixels may legally floor a pane
     # on a short window, and those pixels are not the ratio a later maximize
@@ -401,6 +400,18 @@ def _apply_shell_pane_percents(app, percents: tuple[int, int, int]) -> None:
     _cancel_shell_pane_snap(app)
     if hover and queue_pct > 0:
         _apply_hover_overlay_width(app, queue_w)
+
+
+def live_shell_pane_limits(app, window: int, shell: int, *, hover: bool):
+    """Use the same screen metrics and player content floor as handle dragging."""
+    from steempeg.ui.layout_defaults import PLAYER_COLUMN_FLOOR, shell_pane_pixel_limits
+
+    ui = getattr(app, "ui", None)
+    panel = getattr(ui, "right_panel", None)
+    floor = max(1, panel.minimumSizeHint().width()) if panel is not None else PLAYER_COLUMN_FLOOR
+    return shell_pane_pixel_limits(
+        window, hover=hover, shell_width=shell, widget=ui, player_floor=floor
+    )
 
 
 def _stretch_hidden_gap_to_player(
