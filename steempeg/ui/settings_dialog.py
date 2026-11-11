@@ -2322,6 +2322,12 @@ class SettingsDialog(SteempegDialog):
 
     def _reset_apply_baseline(self) -> None:
         """Opening Settings or a successful write starts a clean form."""
+        if hasattr(self, "_applied_form_values"):
+            # Pane persistence has its own change check. Advance it with the
+            # general form baseline so returning to the opening percentages
+            # after an Apply still writes and reapplies the requested widths.
+            self._pane_percent_baseline = self._shell_pane_percent_values()
+            self._pane_percent_loaded = self._pane_percent_baseline
         self._applied_form_values = self._settings_form_values()
         self._update_apply_state()
 
