@@ -3712,7 +3712,17 @@ class SettingsDialog(SteempegDialog):
                 pending["queue_panel_width"] = int(queue_w)
         if hide_changed or (hide_handles and percents_changed):
             if hasattr(self._app, "apply_hidden_shell_splitter_handles"):
-                deferred.append(self._app.apply_hidden_shell_splitter_handles)
+                def _apply_pane_layout():
+                    self._app.apply_hidden_shell_splitter_handles()
+                    if hide_handles and percents_changed:
+                        from steempeg.ui.portable_splitter_reveal import _apply_percents_keeping_drag
+
+                        _apply_percents_keeping_drag(self._app, pane_percents)
+                        # An explicit width choice must survive showing handles,
+                        # just like a deliberate handle drag in this session.
+                        self._app._shell_pane_user_drag = True
+
+                deferred.append(_apply_pane_layout)
 
         if hasattr(self._app, "save_user_settings_batch"):
             saved = self._app.save_user_settings_batch(pending)
