@@ -2363,10 +2363,8 @@ class SettingsDialog(SteempegDialog):
         shell = 0
         if main is not None:
             try:
-                sizes = main.sizes()
-                shell = sum(int(part) for part in sizes)
-                if shell <= 0:
-                    shell = int(main.width() or 0)
+                # The fields edit the layout after the handles disappear.
+                shell = int(main.width() or 0)
             except RuntimeError:
                 shell = 0
         if shell <= 0:
