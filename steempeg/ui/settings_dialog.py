@@ -2510,6 +2510,11 @@ class SettingsDialog(SteempegDialog):
             "player": (percent_at_least(player_min, shell), percent_at_most(player_hi, shell)),
             "queue": (percent_at_least(queue_lo, queue_base), percent_at_most(queue_hi_px, queue_base)),
         }
+        if hover:
+            # The Clips minimum represents the exact pixel floor after fitting.
+            # Rounding the complementary player maximum down would push Clips
+            # back up by one percent (e.g. 24 -> 25) before Apply even runs.
+            ranges["player"] = (ranges["player"][0], 100 - clips_floor_pct)
         values = {"clips": clips, "player": player, "queue": queue}
         tips = {
             "clips": "Clips stays on the left. It cannot go under its minimum, and raising it shrinks the player.",
