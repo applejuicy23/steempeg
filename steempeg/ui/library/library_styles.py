@@ -243,9 +243,13 @@ class LibraryScrollSyncFilter(QObject):
         ):
             host._schedule_screenshots_grid_reflow(0)
 
+    def schedule_sync(self, *_args) -> None:
+        """Wait for item layout to publish the new scroll range."""
+        self._timer.start(0)
+
     def eventFilter(self, obj, event):  # noqa: N802
         if event.type() == QEvent.Type.Resize:
-            self._timer.start(0)
+            self.schedule_sync()
         return False
 
 
@@ -259,4 +263,10 @@ def install_library_scroll_sync(host) -> None:
     if container is not None:
         filt = LibraryScrollSyncFilter(host, container)
         container.installEventFilter(filt)
+        # IconMode can finish wrapping after the container's resize callback.
+        # Its new range must wake a bar previously set to AlwaysOff, even when
+        # the outer container did not receive another resize event.
+        for view in _library_scroll_views(host):
+            view.viewport().installEventFilter(filt)
+            view.verticalScrollBar().rangeChanged.connect(filt.schedule_sync)
         host._library_scroll_sync_filter = filt
