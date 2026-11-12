@@ -946,114 +946,52 @@ class ClipCard(qtw.QWidget):
         self._apply_selection_style()
 
     def set_context_blink(self, blinking: bool) -> None:
-        """Breathe this card the way a queue row does for "would be added"."""
+        """Breathe the outline while this card would be added to the queue."""
         blinking = bool(blinking) and bool(getattr(self, "_context_lit", False))
         if bool(getattr(self, "_context_blink", False)) == blinking:
             return
         self._context_blink = blinking
         self._sync_context_chrome()
 
-    def _context_frame_style(self, color: str) -> str:
-        """Fill that follows the card's outer corners."""
-        tl, tr, br, bl = self._corner_radii()
-        return (
-            f"background-color: {color}; border: none;"
-            f"border-top-left-radius: {tl}px;"
-            f"border-top-right-radius: {tr}px;"
-            f"border-bottom-right-radius: {br}px;"
-            f"border-bottom-left-radius: {bl}px;"
-        )
-
-    def _ensure_context_wash(self) -> qtw.QFrame:
-        """Soft purple plate under the border: the card is the menu's target."""
-        wash = getattr(self, "_context_wash", None)
-        if wash is None:
-            wash = qtw.QFrame(self)
-            wash.setGeometry(0, 0, self._cw, self._ch)
-            wash.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            wash.hide()
-            self._context_wash = wash
-        wash.setStyleSheet(self._context_frame_style("rgba(178, 154, 231, 72)"))
-        return wash
-
-    def _ensure_context_veil(self) -> qtw.QFrame:
-        """Black plate whose opacity breathes. Not on the card itself.
-
-        A graphics effect on the ClipCard lets the list item's sort key show
-        through an empty thumb. The veil darkens the card by the same amount
-        the queue row fades (opacity 1.0 → 0.6).
-        """
-        veil = getattr(self, "_context_veil", None)
-        if veil is None:
-            veil = qtw.QFrame(self)
-            veil.setGeometry(0, 0, self._cw, self._ch)
-            veil.setAttribute(qtc.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            effect = qtw.QGraphicsOpacityEffect(veil)
-            effect.setOpacity(0.0)
-            veil.setGraphicsEffect(effect)
-            veil.hide()
-            self._context_veil = veil
-        veil.setStyleSheet(self._context_frame_style("#000000"))
-        return veil
-
     def _stop_context_blink(self) -> None:
+        """Restore the border without changing the card's contents."""
         anim = getattr(self, "_context_blink_anim", None)
         if anim is not None:
-            try:
-                anim.stop()
-            except RuntimeError:
-                pass
+            anim.stop()
+            anim.deleteLater()
             self._context_blink_anim = None
-        veil = getattr(self, "_context_veil", None)
-        if veil is not None:
-            effect = veil.graphicsEffect()
-            if isinstance(effect, qtw.QGraphicsOpacityEffect):
-                effect.setOpacity(0.0)
-            veil.hide()
+        effect = self._border_overlay.graphicsEffect()
+        if isinstance(effect, qtw.QGraphicsOpacityEffect):
+            effect.setOpacity(1.0)
 
     def _sync_context_chrome(self) -> None:
-        """Steady glow while the menu is open; breathe while Add to queue is hovered."""
-        lit = bool(getattr(self, "_context_lit", False))
-        blinking = lit and bool(getattr(self, "_context_blink", False))
-        wash = self._ensure_context_wash() if lit else getattr(self, "_context_wash", None)
-        if not lit:
-            self._stop_context_blink()
-            if wash is not None:
-                wash.hide()
-            return
+        """Breathe only the target outline while Add to queue is hovered."""
+        border = self._border_overlay
+        blinking = bool(getattr(self, "_context_lit", False)) and bool(
+            getattr(self, "_context_blink", False)
+        )
         if not blinking:
             self._stop_context_blink()
-            wash.show()
-            wash.raise_()
-        else:
-            if wash is not None:
-                wash.hide()
-            veil = self._ensure_context_veil()
-            veil.show()
-            veil.raise_()
-            effect = veil.graphicsEffect()
+        elif getattr(self, "_context_blink_anim", None) is None:
+            effect = border.graphicsEffect()
             if not isinstance(effect, qtw.QGraphicsOpacityEffect):
-                effect = qtw.QGraphicsOpacityEffect(veil)
-                veil.setGraphicsEffect(effect)
-            anim = getattr(self, "_context_blink_anim", None)
-            if anim is None:
-                anim = qtc.QPropertyAnimation(effect, b"opacity", veil)
-                anim.setDuration(1400)
-                anim.setStartValue(0.0)
-                anim.setKeyValueAt(0.5, 0.4)
-                anim.setEndValue(0.0)
-                anim.setEasingCurve(qtc.QEasingCurve.Type.InOutSine)
-                anim.setLoopCount(-1)
-                anim.start()
-                self._context_blink_anim = anim
-        border = getattr(self, "_border_overlay", None)
-        if border is not None:
-            border.raise_()
+                effect = qtw.QGraphicsOpacityEffect(border)
+                border.setGraphicsEffect(effect)
+            anim = qtc.QPropertyAnimation(effect, b"opacity", border)
+            anim.setDuration(1400)
+            anim.setStartValue(1.0)
+            anim.setKeyValueAt(0.5, 0.35)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(qtc.QEasingCurve.Type.InOutSine)
+            anim.setLoopCount(-1)
+            anim.start()
+            self._context_blink_anim = anim
+        border.raise_()
 
     def _apply_selection_style(self) -> None:
         _, _, idle_border = _ut.clip_card_chrome()
         if getattr(self, "_context_lit", False):
-            border = "3px solid #efe7ff"
+            border = "3px solid #ffffff" if self._selected else "3px solid #b29ae7"
         elif self._selected:
             border = "3px solid #b29ae7"
         elif self._hovered:
