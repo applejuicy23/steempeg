@@ -1985,7 +1985,6 @@ class RenderMixin:
         jobs = list(jobs if jobs is not None else self.render_queue.jobs)
         if not jobs:
             return
-        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
         always_clear = bool(
             self.load_user_settings().get("always_clear_render_queue_after_batch", True)
         )
@@ -1993,8 +1992,6 @@ class RenderMixin:
         dlg = BatchCompleteDialog(
             jobs,
             parent=parent,
-            bar_color=theme["title_bar"],
-            bg_color=theme["app_bg"],
             always_clear_queue=always_clear,
         )
         dlg.open_output_requested.connect(self.open_rendered_file)
@@ -2012,10 +2009,8 @@ class RenderMixin:
             self._clear_render_queue_silent()
 
     def _show_render_complete_dialog(self, job, output_file: str) -> None:
-        from steempeg.ui import design_tokens as tok
         from steempeg.ui.render_complete_dialog import RenderCompleteChoice, RenderCompleteDialog
 
-        theme = tok.chrome_theme_colors(getattr(self, "_chrome_theme", tok.DEFAULT_CHROME_THEME))
         clip_path = getattr(job, "clip_path", None)
         queue_rows = (
             self.render_queue.find_all_by_clip_path(clip_path)
@@ -2034,8 +2029,6 @@ class RenderMixin:
             job,
             output_file,
             parent=parent,
-            bar_color=theme["title_bar"],
-            bg_color=theme["app_bg"],
             show_clear_queue=show_clear,
             always_clear_queue=always_clear,
         )
