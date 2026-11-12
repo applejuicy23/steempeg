@@ -18,26 +18,6 @@ from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
 
-_BTN_PRIMARY = """
-    QPushButton {
-        background-color: #4a3d66; color: #f0ecff; border: 2px solid #6b5a8e;
-        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #5a4d76; border-color: #b29ae7; }
-    QPushButton:pressed { background-color: #3a324a; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
-_BTN_SECONDARY = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
 _MASCOT_H = 140
 
 
@@ -148,7 +128,7 @@ class RenderCompleteDialog(SteempegDialog):
 
         btn_history = QPushButton("📜  Open Render History")
         btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_history.setStyleSheet(_BTN_SECONDARY)
+        btn_history.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_history.clicked.connect(lambda: self._pick(RenderCompleteChoice.OPEN_HISTORY))
         actions.addWidget(btn_history)
 
@@ -156,13 +136,13 @@ class RenderCompleteDialog(SteempegDialog):
 
         btn_ok = QPushButton("OK")
         btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_ok.setStyleSheet(_BTN_SECONDARY)
+        btn_ok.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_ok.clicked.connect(lambda: self._pick(RenderCompleteChoice.OK))
         actions.addWidget(btn_ok)
 
         btn_folder = QPushButton("📂  Open folder")
         btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_folder.setStyleSheet(_BTN_SECONDARY)
+        btn_folder.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_folder.clicked.connect(lambda: self._pick(RenderCompleteChoice.OPEN_FOLDER))
         actions.addWidget(btn_folder)
 
