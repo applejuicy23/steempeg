@@ -47,7 +47,10 @@ def _pill_btn_style() -> str:
 def _action_btn_style() -> str:
     from steempeg.ui import ui_theme as ut
 
-    return ut.render_history_pill_button_stylesheet(bold=False)
+    # Keep history button geometry; match the Settings Browse / Reset type.
+    return ut.render_history_pill_button_stylesheet(bold=True).replace(
+        "font-size: 13px;", "font-size: 12px;"
+    )
 
 
 def _close_btn_style() -> str:
