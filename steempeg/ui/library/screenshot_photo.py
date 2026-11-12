@@ -298,6 +298,11 @@ class ScreenshotPhoto(QWidget):
         self._selected = bool(selected)
         self.update()
 
+    def set_context_target(self, lit: bool) -> None:
+        """Highlight the menu target without changing screenshot selection."""
+        self._context_lit = bool(lit)
+        self.update()
+
     def set_opened(self, opened: bool) -> None:
         if self._opened == opened:
             return
@@ -609,7 +614,9 @@ class ScreenshotPhoto(QWidget):
         p.restore()
 
         # --- ClipCard border overlay ---
-        if self._opened:
+        if getattr(self, "_context_lit", False):
+            border, width = (QColor("#ffffff") if self._opened or self._selected else _ACCENT), 3.0
+        elif self._opened:
             border, width = _ACCENT_OPENED, 2.5
         elif self._selected:
             border, width = _ACCENT, 3.0

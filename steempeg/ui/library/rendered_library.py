@@ -2556,7 +2556,7 @@ class RenderedLibraryMixin:
             action_open.setEnabled(False)
             action_folder.setEnabled(False)
             action_related.setEnabled(False)
-        menu.exec(table.viewport().mapToGlobal(pos))
+        self._run_media_context_menu(menu, table.viewport().mapToGlobal(pos), paths, screenshots=True)
 
     def _attach_screenshot_photo(
         self,
@@ -3751,7 +3751,7 @@ class RenderedLibraryMixin:
             action_open.setEnabled(False)
             action_folder.setEnabled(False)
             action_related.setEnabled(False)
-        menu.exec(self.grid_screenshots.viewport().mapToGlobal(pos))
+        self._run_media_context_menu(menu, self.grid_screenshots.viewport().mapToGlobal(pos), paths, screenshots=True)
 
     def _library_clip_refs_for_screenshot_link(self) -> list:
         """Clips Manager rows as ``LibraryClipRef`` for screenshot → clip matching."""
@@ -6752,7 +6752,7 @@ class RenderedLibraryMixin:
         menu = QMenu(self.grid_rendered)
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
-        menu.exec(self.grid_rendered.viewport().mapToGlobal(pos))
+        self._run_media_context_menu(menu, self.grid_rendered.viewport().mapToGlobal(pos), file_paths)
 
     def show_rendered_table_context_menu(self, pos) -> None:
         file_paths = self._context_menu_rendered_paths_table(pos)
@@ -6763,7 +6763,32 @@ class RenderedLibraryMixin:
         menu = QMenu(self.table_rendered)
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
-        menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
+        self._run_media_context_menu(menu, self.table_rendered.viewport().mapToGlobal(pos), file_paths)
+
+    def _run_media_context_menu(self, menu, anchor, paths, *, screenshots: bool = False) -> None:
+        """Keep every targeted tile outlined until its menu closes."""
+        grid = getattr(self, "grid_screenshots" if screenshots else "grid_rendered", None)
+        role = Qt.ItemDataRole.UserRole if screenshots else Qt.ItemDataRole.UserRole + 1
+        keys = {os.path.normcase(os.path.normpath(str(path))) for path in paths}
+        cards = []
+        if grid is not None:
+            for index in range(grid.count()):
+                item = grid.item(index)
+                path = item.data(role)
+                if not path or os.path.normcase(os.path.normpath(str(path))) not in keys:
+                    continue
+                card = grid.itemWidget(item)
+                if card is not None and hasattr(card, "set_context_target"):
+                    card.set_context_target(True)
+                    cards.append(card)
+        try:
+            menu.exec(anchor)
+        finally:
+            for card in cards:
+                try:
+                    card.set_context_target(False)
+                except RuntimeError:
+                    pass
 
     def _open_rendered_folders(self, paths) -> None:
         """Reveal all selected exports together in their containing folder."""
