@@ -20,58 +20,18 @@ from steempeg.infra.paths import get_resource_path, reveal_in_file_manager
 from steempeg.render.queue import JobStatus, RenderJob, STATUS_COLORS, job_to_dict
 from steempeg.render.queue_display import format_job_output, format_job_preset, format_job_trim
 from steempeg.ui import design_tokens as tok
+from steempeg.ui import ui_theme as ut
 from steempeg.ui.icon_assets import close_clip_icon, load_icon
 from steempeg.ui.queue_card_shared import _FONT, set_game_icon_label
 from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
-_BTN_PRIMARY = """
-    QPushButton {
-        background-color: #4a3d66; color: #f0ecff; border: 2px solid #6b5a8e;
-        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #5a4d76; border-color: #b29ae7; }
-    QPushButton:pressed { background-color: #3a324a; }
-""".replace("<<FONT>>", tok.FONT_APP)
+def _result_action_style() -> str:
+    """Compact sibling of the shared dialog footer buttons."""
+    return ut.about_secondary_button_stylesheet() + """
+        QPushButton { min-height: 24px; padding: 4px 14px; border-radius: 12px; }
+    """
 
-_BTN_SECONDARY = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
-_PILL_BTN_STYLE = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
-_ACTION_BTN_STYLE = """
-    QPushButton {
-        background-color: #383838; color: #e0e0e0; border: 2px solid #4a4a4a;
-        border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: normal;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #404040; color: #ffffff; border: 2px solid #6b5a8e; }
-    QPushButton:pressed { background-color: #3a324a; border: 2px solid #b29ae7; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
-_JOB_FRAME = """
-    QFrame#jobFrame {
-        background-color: #242424;
-        border: 1px solid #353535;
-        border-radius: 8px;
-    }
-"""
 
 _MASCOT_H = 120
 _JOB_TITLE_ICON = 22
@@ -161,7 +121,7 @@ class BatchCompleteDialog(SteempegDialog):
         self.setMinimumSize(mw, mh)
         self.resize(rw, rh)
         self._choice = BatchCompleteChoice.OK
-        self.setStyleSheet(self.styleSheet() + _JOB_FRAME)
+        self.setStyleSheet(self.styleSheet() + ut.render_result_card_stylesheet())
 
         done = sum(1 for j in jobs if j.status == JobStatus.COMPLETED)
         heading_text, summary_text = _batch_heading_summary(jobs)
@@ -174,7 +134,8 @@ class BatchCompleteDialog(SteempegDialog):
         header_text.setSpacing(6)
         heading = QLabel(heading_text)
         heading.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-size: 15px; font-weight: 600; background: transparent;"
+            f"color: {tok.TEXT_TITLE}; font-family: {tok.FONT_SEMIBOLD}; "
+            "font-size: 16px; font-weight: 700; background: transparent;"
         )
         summary = QLabel(summary_text)
         summary.setStyleSheet(f"color: #b29ae7; font-size: 13px; font-weight: 600; background: transparent; {_FONT}")
@@ -197,8 +158,9 @@ class BatchCompleteDialog(SteempegDialog):
         install_library_vertical_scrollbar(scroll)
 
         host = QWidget()
+        host.setObjectName("batchResultsHost")
         host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        host.setStyleSheet(f"background-color: {self._bg_color};")
+        host.setStyleSheet(f"QWidget#batchResultsHost {{ background-color: {self._bg_color}; }}")
         host_layout = QVBoxLayout(host)
         host_layout.setContentsMargins(0, 4, 0, 0)
         host_layout.setSpacing(8)
@@ -217,7 +179,7 @@ class BatchCompleteDialog(SteempegDialog):
 
         btn_history = QPushButton("📜  Open Render History")
         btn_history.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_history.setStyleSheet(_BTN_SECONDARY)
+        btn_history.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_history.clicked.connect(lambda: self._pick(BatchCompleteChoice.OPEN_HISTORY))
         actions.addWidget(btn_history)
 
@@ -225,7 +187,7 @@ class BatchCompleteDialog(SteempegDialog):
 
         btn_ok = QPushButton("OK")
         btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_ok.setStyleSheet(_BTN_PRIMARY)
+        btn_ok.setStyleSheet(ut.about_accent_button_stylesheet())
         btn_ok.clicked.connect(lambda: self._pick(BatchCompleteChoice.OK))
         actions.addWidget(btn_ok)
 
@@ -244,6 +206,7 @@ class BatchCompleteDialog(SteempegDialog):
     def _build_job_row(self, job: RenderJob) -> QFrame:
         frame = QFrame()
         frame.setObjectName("jobFrame")
+        frame.setStyleSheet(ut.render_result_card_stylesheet())
         row = QVBoxLayout(frame)
         row.setContentsMargins(10, 8, 10, 8)
         row.setSpacing(3)
@@ -296,15 +259,15 @@ class BatchCompleteDialog(SteempegDialog):
             btn_row.addStretch()
             btn_folder = QPushButton("Open folder")
             btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_folder.setStyleSheet(_ACTION_BTN_STYLE)
+            btn_folder.setStyleSheet(_result_action_style())
             btn_folder.clicked.connect(lambda _=False, p=out_path: reveal_in_file_manager(p))
             btn_open = QPushButton("Open file")
             btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_open.setStyleSheet(_ACTION_BTN_STYLE)
+            btn_open.setStyleSheet(_result_action_style())
             btn_open.clicked.connect(lambda _=False, p=out_path: self.open_output_requested.emit(p))
             btn_library = QPushButton("Rendered videos")
             btn_library.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_library.setStyleSheet(_ACTION_BTN_STYLE)
+            btn_library.setStyleSheet(_result_action_style())
             btn_library.clicked.connect(
                 lambda _=False, p=out_path: self.open_in_rendered_requested.emit(p)
             )
@@ -319,7 +282,7 @@ class BatchCompleteDialog(SteempegDialog):
             btn_row.addStretch()
             btn_details = QPushButton("Details")
             btn_details.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_details.setStyleSheet(_PILL_BTN_STYLE)
+            btn_details.setStyleSheet(_result_action_style())
             job_data = job_to_dict(job)
             btn_details.clicked.connect(lambda _=False, data=job_data: self._show_job_details(data))
             btn_row.addWidget(btn_details)
@@ -327,7 +290,7 @@ class BatchCompleteDialog(SteempegDialog):
             if clip_path and os.path.isdir(clip_path):
                 btn_source = QPushButton("Source clip")
                 btn_source.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn_source.setStyleSheet(_PILL_BTN_STYLE)
+                btn_source.setStyleSheet(_result_action_style())
                 btn_source.clicked.connect(
                     lambda _=False, p=clip_path: self.open_source_clip_requested.emit(p)
                 )
