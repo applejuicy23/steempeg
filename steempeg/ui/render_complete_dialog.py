@@ -170,6 +170,16 @@ class RenderCompleteDialog(SteempegDialog):
         actions.addWidget(play_split, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.content_layout.addLayout(actions)
+        # Fit the actual font and shared button padding without a spare gap.
+        self.ensurePolished()
+        self.content_layout.activate()
+        buttons = (btn_history, btn_ok, btn_folder, play_split)
+        row_width = sum(button.sizeHint().width() for button in buttons) + 3 * actions.spacing()
+        content = self.content_layout.contentsMargins()
+        body = self.content_layout.parentWidget().parentWidget().layout().contentsMargins()
+        fitted_width = row_width + content.left() + content.right() + body.left() + body.right()
+        self.setMinimumWidth(fitted_width)
+        self.resize(fitted_width, self.minimumSizeHint().height())
 
     def _setup_play_menu(self, play_split: PlayVideoSplitButton, output_file: str) -> None:
         in_library = is_in_default_rendered_videos(output_file)
