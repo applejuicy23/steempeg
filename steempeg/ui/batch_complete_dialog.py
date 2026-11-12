@@ -27,10 +27,8 @@ from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 
 def _result_action_style() -> str:
-    """Compact sibling of the shared dialog footer buttons."""
-    return ut.about_secondary_button_stylesheet() + """
-        QPushButton { min-height: 24px; padding: 4px 14px; border-radius: 12px; }
-    """
+    """Use the same action buttons as Settings General Browse / Reset."""
+    return ut.settings_dialog_secondary_button_stylesheet()
 
 
 _MASCOT_H = 120
