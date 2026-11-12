@@ -2303,6 +2303,14 @@ def _frameless_card_dialog_colors() -> dict[str, str]:
     }
 
 
+def render_result_card_stylesheet(object_name: str = "jobFrame") -> str:
+    """Shared result surface for single exports and completed queue entries."""
+    return (
+        f"QFrame#{object_name} {{ background-color: {_active.bg_card};"
+        f" border: 1px solid {_active.border_card}; border-radius: 10px; }}"
+    )
+
+
 def about_secondary_button_stylesheet() -> str:
     """About Close / Report-sibling gray pill — use on dialog footers app-wide."""
     c = _frameless_card_dialog_colors()
