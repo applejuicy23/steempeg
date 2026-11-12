@@ -6,7 +6,7 @@ from enum import Enum
 
 from PySide6.QtCore import Qt, QPoint, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout
 
 from steempeg.infra.paths import get_resource_path, is_in_default_rendered_videos
 from steempeg.render.queue import RenderJob
@@ -18,7 +18,7 @@ from steempeg.ui.widgets import ElidedLabel, SteempegCheckBox
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.play_video_button import PlayVideoSplitButton
 
-_MASCOT_H = 140
+_MASCOT_H = 110
 
 
 class RenderCompleteChoice(Enum):
@@ -70,14 +70,30 @@ class RenderCompleteDialog(SteempegDialog):
         body_row.setSpacing(18)
         body_row.addWidget(_success_mascot(), 0, Qt.AlignmentFlag.AlignVCenter)
 
-        details = QVBoxLayout()
-        details.setSpacing(8)
+        header_text = QVBoxLayout()
+        header_text.setSpacing(6)
+        header_text.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         heading = QLabel("Clip exported successfully")
         heading.setStyleSheet(
-            f"color: {tok.TEXT_TITLE}; font-size: 15px; font-weight: 600; background: transparent;"
+            f"color: {tok.TEXT_TITLE}; font-family: {tok.FONT_SEMIBOLD}; "
+            "font-size: 16px; font-weight: 700; background: transparent;"
         )
-        details.addWidget(heading)
+        header_text.addWidget(heading)
+        summary = QLabel("Your video is ready")
+        summary.setStyleSheet(
+            f"color: #b29ae7; font-size: 13px; background: transparent; {_FONT}"
+        )
+        header_text.addWidget(summary)
+        body_row.addLayout(header_text, 1)
+        self.content_layout.addLayout(body_row)
+
+        result_card = QFrame()
+        result_card.setObjectName("renderResultCard")
+        result_card.setStyleSheet(ut.render_result_card_stylesheet("renderResultCard"))
+        details = QVBoxLayout(result_card)
+        details.setContentsMargins(14, 12, 14, 12)
+        details.setSpacing(8)
 
         title_row = QHBoxLayout()
         title_row.setSpacing(10)
@@ -88,16 +104,15 @@ class RenderCompleteDialog(SteempegDialog):
         game_name = job.game_name.strip() or os.path.basename(job.clip_path or "Clip")
         name_lbl = QLabel(game_name)
         name_lbl.setStyleSheet(
-            f"color: #f0f0f0; font-size: 14px; font-weight: 600; background: transparent; {_FONT}"
+            f"color: {tok.TEXT_TITLE}; font-size: 14px; font-weight: 600; background: transparent; {_FONT}"
         )
         preset_lbl = QLabel(format_job_preset(job.settings))
-        preset_lbl.setStyleSheet(f"color: #999999; font-size: 11px; background: transparent; {_FONT}")
+        preset_lbl.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}")
         title_col.addWidget(name_lbl)
         title_col.addWidget(preset_lbl)
         title_row.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignTop)
         title_row.addLayout(title_col, 1)
         details.addLayout(title_row)
-
         trim_text = format_job_trim(job.settings)
         if trim_text != "Full clip":
             trim_lbl = QLabel(trim_text)
@@ -107,11 +122,10 @@ class RenderCompleteDialog(SteempegDialog):
         out_path = output_file or format_job_output(job)
         path_lbl = ElidedLabel(f"📁 {out_path}")
         path_lbl.setToolTip(out_path)
-        path_lbl.setStyleSheet(f"color: #aaaaaa; font-size: 11px; background: transparent; {_FONT}")
+        path_lbl.setStyleSheet(f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}")
         details.addWidget(path_lbl)
 
-        body_row.addLayout(details, 1)
-        self.content_layout.addLayout(body_row)
+        self.content_layout.addWidget(result_card)
 
         self._chk_clear_queue = None
         if self._show_clear_queue:
@@ -121,8 +135,6 @@ class RenderCompleteDialog(SteempegDialog):
             self._chk_clear_queue.setChecked(bool(always_clear_queue))
             self.content_layout.addWidget(self._chk_clear_queue)
 
-        self.content_layout.addStretch(1)
-
         actions = QHBoxLayout()
         actions.setSpacing(8)
 
@@ -131,8 +143,6 @@ class RenderCompleteDialog(SteempegDialog):
         btn_history.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_history.clicked.connect(lambda: self._pick(RenderCompleteChoice.OPEN_HISTORY))
         actions.addWidget(btn_history)
-
-        actions.addStretch(1)
 
         btn_ok = QPushButton("OK")
         btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
