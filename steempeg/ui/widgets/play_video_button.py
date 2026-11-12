@@ -1,4 +1,4 @@
-"""Split Play video button — same chrome as Refresh ▾, play action + arrow menu."""
+"""About/Settings-style Play video button with a separate arrow menu."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QSize, Signal
@@ -8,103 +8,57 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWi
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.icon_assets import arrow_icon, load_icon
 
-# Match RefreshButton (refresh_button.py): 13px bold, pill radius 14, #444 border.
-
 
 def _play_label_font() -> QFont:
-    return tok.ui_qfont(pixel_size=13, weight=QFont.Weight.Bold)
+    return tok.ui_qfont(pixel_size=12, weight=QFont.Weight.Bold)
 
 
 def _play_split_style() -> str:
-    return """
-    QPushButton#PlayMain {
-        font-family: <<FONT>>;
-        font-size: 13px;
-        font-weight: bold;
-        background-color: #383838;
-        color: #ffffff;
-        border: 2px solid #444444;
+    """Share About/Settings footer chrome, with joined split segments."""
+    from steempeg.ui import ui_theme as ut
+
+    base = ut.about_secondary_button_stylesheet()
+    main = base.replace("QPushButton", "QPushButton#PlayMain")
+    menu = base.replace("QPushButton", "QPushButton#PlayMenu")
+    return main + menu + f"""
+    QPushButton#PlayMain {{
         border-right: none;
-        border-top-left-radius: 14px;
-        border-bottom-left-radius: 14px;
         border-top-right-radius: 0px;
         border-bottom-right-radius: 0px;
         padding: 0;
-        min-height: 24px;
-    }
-    QPushButton#PlayMain:hover {
-        background-color: #404040;
-        border: 2px solid #6b5a8e;
-        border-right: none;
-    }
-    QPushButton#PlayMain:pressed {
-        background-color: #3a324a;
-        border: 2px solid #b29ae7;
-        border-right: none;
-    }
-    QPushButton#PlayMenu {
-        background-color: #383838;
-        color: #ffffff;
-        border: 2px solid #444444;
-        border-left: 1px solid #555555;
+        min-height: 0px;
+    }}
+    QPushButton#PlayMain:hover {{ border-right: none; }}
+    QPushButton#PlayMenu {{
         border-top-left-radius: 0px;
         border-bottom-left-radius: 0px;
-        border-top-right-radius: 14px;
-        border-bottom-right-radius: 14px;
-        font-family: <<FONT>>;
-        font-size: 12px;
-        font-weight: bold;
-        min-width: 28px;
+        padding: 0;
+        min-width: 32px;
         max-width: 32px;
-        padding: 4px 0;
-        min-height: 24px;
-    }
-    QPushButton#PlayMenu:hover {
-        background-color: #404040;
-        color: #d4c4ff;
-        border: 2px solid #6b5a8e;
-        border-left: 1px solid #6b5a8e;
-    }
-    QPushButton#PlayMenu:pressed {
-        background-color: #3a324a;
-        border: 2px solid #b29ae7;
-        border-left: 1px solid #b29ae7;
-    }
-    QPushButton#PlayMenu:disabled {
-        background-color: #333333;
-        color: #666666;
-        border: 2px solid #444444;
-        border-left: 1px solid #555555;
-    }
-    QLabel#PlayText {
-        background: transparent;
-        border: none;
-        font-family: <<FONT>>;
-        font-size: 13px;
-        font-weight: bold;
-        color: #ffffff;
-    }
-    QLabel#PlayIcon {
-        background: transparent;
-        border: none;
-    }
-""".replace("<<FONT>>", tok.FONT_APP)
+        min-height: 0px;
+    }}
+    QLabel#PlayText {{
+        background: transparent; border: none; color: white;
+        font-family: {tok.FONT_APP}; font-size: 12px; font-weight: bold;
+    }}
+    QLabel#PlayIcon {{ background: transparent; border: none; }}
+    """
 
 
 class _PlayMainButton(QPushButton):
     """Left split segment — icon + label with explicit gap; honest sizeHint for layouts."""
 
-    _BORDER = 4  # 2px border × 2 sides
-    _MIN_BODY_H = 24  # RefreshMain min-height
+    _BORDER = 2  # 1px border on each side
+    _MIN_BODY_H = 24
 
     def sizeHint(self) -> QSize:  # noqa: D102 — Qt override
         lay = self.layout()
         if lay is not None:
-            m = lay.contentsMargins()
             inner = lay.sizeHint()
-            body_h = max(inner.height() + m.top() + m.bottom(), self._MIN_BODY_H)
+            # Layout sizeHint already includes its content margins.
+            body_h = max(inner.height(), self._MIN_BODY_H)
             return QSize(
-                inner.width() + m.left() + m.right() + self._BORDER,
+                inner.width() + self._BORDER,
                 body_h + self._BORDER,
             )
         return super().sizeHint()
@@ -114,7 +68,7 @@ class _PlayMainButton(QPushButton):
 
 
 class PlayVideoSplitButton(QWidget):
-    """Play video (left) with a ▾ menu trigger (right) — Refresh-style split."""
+    """About/Settings footer button with separate play and menu actions."""
 
     play_clicked = Signal()
 
@@ -133,9 +87,9 @@ class PlayVideoSplitButton(QWidget):
         self.main_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.main_btn.clicked.connect(self.play_clicked.emit)
 
-        # RefreshMain uses padding: 4px 12px — mirror via inner margins.
+        # Match the shared footer padding around the icon and label.
         main_inner = QHBoxLayout(self.main_btn)
-        main_inner.setContentsMargins(12, 4, 12, 4)
+        main_inner.setContentsMargins(24, 6, 24, 6)
         main_inner.setSpacing(8)
         main_inner.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
@@ -164,7 +118,7 @@ class PlayVideoSplitButton(QWidget):
         layout.addWidget(self.main_btn)
         layout.addWidget(self.menu_btn)
 
-        split_h = max(self.main_btn.sizeHint().height(), self.menu_btn.sizeHint().height())
+        split_h = 46  # Shared footer: 32px body + 12px padding + 2px border.
         self.main_btn.setFixedHeight(split_h)
         self.menu_btn.setFixedHeight(split_h)
         self.setFixedHeight(split_h)
