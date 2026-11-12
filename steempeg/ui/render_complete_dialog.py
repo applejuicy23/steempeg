@@ -113,6 +113,14 @@ class RenderCompleteDialog(SteempegDialog):
         title_row.addWidget(game_icon, 0, Qt.AlignmentFlag.AlignTop)
         title_row.addLayout(title_col, 1)
         details.addLayout(title_row)
+        source_date = " ".join(part for part in (job.clip_date, job.clip_time) if part)
+        if source_date:
+            date_lbl = QLabel(source_date)
+            date_lbl.setStyleSheet(
+                f"color: {tok.TEXT_MUTED}; font-size: 11px; background: transparent; {_FONT}"
+            )
+            details.addWidget(date_lbl)
+
         trim_text = format_job_trim(job.settings)
         if trim_text != "Full clip":
             trim_lbl = QLabel(trim_text)
