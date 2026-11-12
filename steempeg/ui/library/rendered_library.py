@@ -6736,7 +6736,9 @@ class RenderedLibraryMixin:
                     lambda _checked=False, p=clip_path: self.open_source_clip(p)
                 )
         else:
-            action_open.setEnabled(False)
+            action_open.triggered.connect(
+                lambda _checked=False, paths=list(file_paths): self._open_rendered_folders(paths)
+            )
         action_delete.triggered.connect(
             lambda _checked=False, paths=paths_for_delete: self.delete_rendered_files(paths)
         )
@@ -6762,6 +6764,12 @@ class RenderedLibraryMixin:
         menu.setStyleSheet(ut.library_menu_stylesheet())
         self._populate_rendered_context_menu(menu, file_paths)
         menu.exec(self.table_rendered.viewport().mapToGlobal(pos))
+
+    def _open_rendered_folders(self, paths) -> None:
+        """Reveal all selected exports together in their containing folder."""
+        from steempeg.infra.paths import reveal_many_in_file_manager
+
+        reveal_many_in_file_manager(paths)
 
     def _handle_rendered_grid_card_context_menu(self, item, event) -> None:
         # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
