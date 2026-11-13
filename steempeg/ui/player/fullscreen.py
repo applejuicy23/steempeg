@@ -7,6 +7,13 @@ wakes the floating controls, and minimizing the window hides the timeline previe
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QTextEdit
 
+_PLAYER_INPUT_EVENTS = frozenset((
+    QEvent.Type.ApplicationStateChange,
+    QEvent.Type.KeyPress,
+    QEvent.Type.ShortcutOverride,
+    QEvent.Type.MouseMove,
+))
+
 
 class FullscreenEventFilter(QObject):
     """ Global radar for hotkeys and fullscreen control. """
@@ -15,17 +22,20 @@ class FullscreenEventFilter(QObject):
         self.app_instance = app_instance
 
     def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind not in _PLAYER_INPUT_EVENTS:
+            return False
         if getattr(self.app_instance, '_is_closing', False):
             return False
 
         # Hide preview when minimizing the window
-        if event.type() == QEvent.Type.ApplicationStateChange:
+        if kind == QEvent.Type.ApplicationStateChange:
             if QApplication.instance().applicationState() != Qt.ApplicationState.ApplicationActive:
                 if hasattr(self.app_instance, 'custom_timeline') and hasattr(self.app_instance.custom_timeline, 'preview_widget'):
                     self.app_instance.custom_timeline.preview_widget.hide()
 
         # GLOBAL KEYBOARD INTERCEPTION (WORKS EVERYWHERE)
-        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
+        if kind in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
             # Alt+F4: close the main shell. Needed when Windows does not map the
             # combo to SC_CLOSE (custom chrome / focus on a Qt child without a
             # system menu). Win32 native filter covers embedded mpv HWNDs.
@@ -40,14 +50,14 @@ class FullscreenEventFilter(QObject):
                 ui = getattr(self.app_instance, "ui", None)
                 if ui is not None and QApplication.activeWindow() not in (None, ui):
                     return False
-                if event.type() == QEvent.Type.ShortcutOverride:
+                if kind == QEvent.Type.ShortcutOverride:
                     event.accept()
                     return True
                 if ui is not None:
                     ui.close()
                     return True
 
-        if event.type() == QEvent.Type.KeyPress:
+        if kind == QEvent.Type.KeyPress:
             # 1. SPACE: Play / Pause
             if event.key() == Qt.Key_Space:
                 focus_w = QApplication.focusWidget()
@@ -83,7 +93,7 @@ class FullscreenEventFilter(QObject):
 
         # MOUSE LOGIC (FULLSCREEN ONLY)
         if getattr(self.app_instance, 'is_fullscreen', False):
-            if event.type() == QEvent.Type.MouseMove:
+            if kind == QEvent.Type.MouseMove:
                 self.app_instance.wake_up_fullscreen_controls()
 
         return False
