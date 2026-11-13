@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import xml.etree.ElementTree as ET
 
@@ -60,10 +61,18 @@ def preview_bucket_sec(hover_ms: float, duration_ms: float = 0, *, interval: int
 
 
 def _kill_process_tree(proc, *, label: str = "ffmpeg") -> None:
-    """Terminate a subprocess and its children."""
+    """Reap subprocesses off the UI thread; workers may wait for cleanup."""
     from steempeg.infra.process import kill_process_tree
 
-    kill_process_tree(proc, label=label)
+    def reap():
+        # A completed process may already have been reaped before this runs.
+        if proc is not None and proc.poll() is None:
+            kill_process_tree(proc, label=label)
+
+    if threading.current_thread() is threading.main_thread():
+        threading.Thread(target=reap, name=f"stop-{label}", daemon=True).start()
+    else:
+        reap()
 
 
 def _ensure_thumb_dir(path: str) -> None:
@@ -904,16 +913,13 @@ class ThumbnailBatchThread(QThread):
 
         Clip open used to ``wait(3000)`` here on every switch — that froze the
         main window after ``mpv.play`` (audio running, card stuck at ~70%).
-        Kill the process tree and let the QThread exit in the background.
+        The batch loop kills its process tree on the next cancellation check.
 
         Callers must keep a strong reference to this QThread until ``finished``
         (see ``PlayerMixin._stop_timeline_thumb_batch``) — dropping a
         running QThread aborts in Qt6Core on Windows.
         """
         self._cancelled = True
-        if self.process:
-            _kill_process_tree(self.process, label="batch-thumbs")
-            self.process = None
 
     def _emit_if_current(self) -> None:
         if self._cancelled:
