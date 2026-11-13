@@ -1,6 +1,8 @@
 """Shared pixmap/icon loaders for bundled UI assets."""
 from __future__ import annotations
 
+from functools import lru_cache
+
 from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QTransform, QImage
 from PySide6.QtCore import Qt
 
@@ -591,6 +593,7 @@ def view_mode_list_icon(
     return _icon_from_pixmap(view_mode_list_pixmap(size, color=color))
 
 
+@lru_cache(maxsize=128)
 def _glyph_pixmap_from_bw(name: str, size: int = 16, *, color: str = "#ffffff") -> QPixmap:
     """Black-bg white line art → tinted glyph with alpha (black becomes transparent)."""
     src = QPixmap(get_resource_path(name))
@@ -599,22 +602,30 @@ def _glyph_pixmap_from_bw(name: str, size: int = 16, *, color: str = "#ffffff") 
     tint = QColor(color)
     img = src.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     w, h = img.width(), img.height()
-    for y in range(h):
-        for x in range(w):
-            c = img.pixelColor(x, y)
-            # Luminance as alpha so anti-aliased edges stay soft.
-            alpha = max(c.red(), c.green(), c.blue())
-            img.setPixelColor(
-                x,
-                y,
-                QColor(tint.red(), tint.green(), tint.blue(), alpha),
-            )
+    try:
+        from PIL import Image, ImageChops
+
+        rgba = Image.frombytes(
+            "RGBA", (w, h), bytes(img.constBits()), "raw", "BGRA", img.bytesPerLine(), 1
+        )
+        red, green, blue, _ = rgba.split()
+        alpha = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+        tinted = Image.new("RGBA", (w, h), (tint.red(), tint.green(), tint.blue(), 255))
+        tinted.putalpha(alpha)
+        img = QImage(tinted.tobytes(), w, h, w * 4, QImage.Format.Format_RGBA8888).copy()
+    except ImportError:
+        for y in range(h):
+            for x in range(w):
+                c = img.pixelColor(x, y)
+                alpha = max(c.red(), c.green(), c.blue())
+                img.setPixelColor(x, y, QColor(tint.red(), tint.green(), tint.blue(), alpha))
     pix = QPixmap.fromImage(img)
     from steempeg.ui.icon_utils import square_fit_pixmap
 
     return square_fit_pixmap(pix, size, dpr=1.0)
 
 
+@lru_cache(maxsize=64)
 def _dash_button_glyph_icon(name: str, size: int = 16) -> QIcon:
     """Enabled = white; disabled = #555555 to match dash ``QPushButton:disabled`` text."""
     normal = _glyph_pixmap_from_bw(name, size, color="#ffffff")
