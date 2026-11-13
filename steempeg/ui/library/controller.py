@@ -4725,6 +4725,20 @@ class LibraryMixin:
         if not hasattr(self, "grid_clips") or not hasattr(self.ui, "table_clips"):
             return
 
+        if (
+            getattr(self, "_clips_scan_active", False)
+            and getattr(self, "_clips_progressive_active", False)
+            and not getattr(self, "_scan_append_new_only", False)
+            and not getattr(self, "_publishing_scan_grid", False)
+        ):
+            deferred = getattr(self, "_scan_deferred_grid_rows", None)
+            if deferred is not None or self._clips_first_screen_filled():
+                if deferred is None:
+                    deferred = []
+                    self._scan_deferred_grid_rows = deferred
+                deferred.append(row)
+                return
+
         table = self.ui.table_clips
         title_item = table.item(row, 0)
         if not title_item:
@@ -4742,6 +4756,17 @@ class LibraryMixin:
             # Placeholder only — ClipCard waits for viewport materialize.
             return
         self._attach_clip_card_to_grid_item(item)
+
+    def _publish_deferred_scan_grid_rows(self) -> None:
+        """Append off-screen scan placeholders once, keeping scan state intact."""
+        rows = getattr(self, "_scan_deferred_grid_rows", None) or []
+        self._scan_deferred_grid_rows = None
+        self._publishing_scan_grid = True
+        try:
+            for row in rows:
+                self._append_grid_card_for_row(row)
+        finally:
+            self._publishing_scan_grid = False
 
     def _table_row_for_grid_item(self, item) -> int:
         """Table row of the grid item's clip, matched by path (row ids go stale)."""
@@ -5531,6 +5556,10 @@ class LibraryMixin:
     def _finalize_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         """Run the original scan-finished logic once both worker + UI insert are done."""
         self._release_clips_grid_updates()
+        # Once the first screen is populated, keep its item model stable while
+        # the worker scans off-screen clips. Publish the remaining placeholders
+        # together before the final sort, rather than relaying the shelf per +1.
+        self._publish_deferred_scan_grid_rows()
 
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
@@ -5678,6 +5707,7 @@ class LibraryMixin:
         self._startup_refresh_steam_meta = False
         logging.error("Library scan failed: %s", message)
         self._clips_refresh_lazy = False
+        self._publish_deferred_scan_grid_rows()
         self._release_clips_grid_updates()
         self._clips_scan_active = False
         self._sync_library_scan_interaction_lock(busy=False)
@@ -6652,6 +6682,7 @@ class LibraryMixin:
             return
 
         self._stop_library_scan()
+        self._scan_deferred_grid_rows = None
         self._stop_progressive_clips_discover()
         self._stop_clips_idle_fill()
         self._stop_clip_poster_backfill()
