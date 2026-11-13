@@ -1112,12 +1112,8 @@ class PlayerMixin:
             except Exception:
                 pass
 
-        if playback_alive and getattr(self, "_clip_open_loading_hosts", None):
-            # Overlay tracks "open", not "surface visible" — hide as soon as
-            # media is actually playing so we never sit on a stuck ~70% while
-            # sound already plays. Keep _opening_clip_path for spam-click guards.
-            self._hide_clip_open_loading_hosts()
-            self._clip_open_load_pct = 100
+        if ready or playback_alive:
+            self._complete_clip_open_loading()
 
         if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
             if (
@@ -3945,7 +3941,8 @@ class PlayerMixin:
             if sys.platform != "win32":
                 QTimer.singleShot(0, self._kick_linux_embed_surface)
         if hasattr(self, "clear_clip_open_loading"):
-            self.clear_clip_open_loading()
+            if getattr(self, "_clip_open_completion_gen", None) != getattr(self, "_media_switch_gen", 0):
+                self.clear_clip_open_loading()
         has_trim = bool(getattr(self, "_pending_trim_restore", None))
         if has_trim:
             QTimer.singleShot(50, self._deferred_apply_trim_restore)
@@ -4549,10 +4546,30 @@ class PlayerMixin:
 
     def clear_clip_open_loading(self) -> None:
         """Hide open-spinner on library cards and queue rows."""
+        self._clip_open_completion_gen = None
         self._opening_clip_path = None
         self._clip_open_play_t0 = None
         self._clip_open_load_pct = -1
         self._hide_clip_open_loading_hosts()
+
+    def _complete_clip_open_loading(self) -> None:
+        """Show completion briefly without delaying playback or the next selection."""
+        gen = getattr(self, "_media_switch_gen", 0)
+        if getattr(self, "_clip_open_completion_gen", None) == gen:
+            return
+        if not getattr(self, "_clip_open_loading_hosts", None):
+            return
+        self._clip_open_completion_gen = gen
+        self.update_clip_open_loading_progress(100)
+
+        def hide_if_current():
+            if (
+                gen == getattr(self, "_media_switch_gen", 0)
+                and getattr(self, "_clip_open_completion_gen", None) == gen
+            ):
+                self.clear_clip_open_loading()
+
+        QTimer.singleShot(140, hide_if_current)
 
     def _hide_clip_open_loading_hosts(self) -> None:
         """Drop card/queue spinners without clearing the in-flight open path."""
