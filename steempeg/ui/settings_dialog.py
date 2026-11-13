@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QFontMetrics
@@ -457,6 +458,7 @@ def _pro_kofi_support_stylesheet() -> str:
     """
 
 
+@lru_cache(maxsize=8)
 def _kofi_cup_pixmap(height: int):
     """Crop kofi.png to the cup and scale that ink to ``height`` px."""
     from PySide6.QtGui import QPixmap
