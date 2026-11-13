@@ -97,6 +97,27 @@ def _opaque_content_rect(pix: QPixmap, *, alpha_min: int = 24) -> tuple[int, int
     if w <= 0 or h <= 0:
         return 0, 0, max(w, 0), max(h, 0)
 
+    # Pillow scans the alpha plane in native code. Large transparent PNGs
+    # otherwise cost a Python loop per pixel before a dialog can be shown.
+    try:
+        from PIL import Image
+
+        image = Image.frombytes(
+            "RGBA", (w, h), bytes(img.constBits()), "raw", "BGRA", img.bytesPerLine(), 1
+        )
+        bounds = image.getchannel("A").point(
+            [255 if alpha >= alpha_min else 0 for alpha in range(256)]
+        ).getbbox()
+        if bounds is None:
+            result = (0, 0, w, h)
+        else:
+            left, top, right, bottom = bounds
+            result = (left, top, right - left, bottom - top)
+        _OPAQUE_RECT_CACHE[key] = result
+        return result
+    except (ImportError, TypeError, ValueError, BufferError):
+        pass
+
     min_x, min_y, max_x, max_y = w, h, -1, -1
     bpl = img.bytesPerLine()
     # ARGB32 little-endian layout is B,G,R,A — alpha at +3.
