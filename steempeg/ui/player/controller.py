@@ -4417,7 +4417,9 @@ class PlayerMixin:
             pq.reset_source_height_cache()
         except Exception:
             pass
-        QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
+        QTimer.singleShot(
+            80, lambda g=switch_gen: self._apply_saved_preview_quality_to_player(switch_gen=g)
+        )
 
         if hasattr(self, "custom_timeline") and hasattr(self.custom_timeline, "canvas"):
             self.custom_timeline.canvas.playback_speed = float(getattr(self.player, "speed", 1.0) or 1.0)
@@ -5267,8 +5269,9 @@ class PlayerMixin:
             if sg == getattr(self, "_media_switch_gen", 0):
                 QTimer.singleShot(
                     0,
-                    lambda src=thumb_src, dur=clip_dur: self._start_timeline_thumb_batch(
-                        src, dur
+                    lambda g=sg, src=thumb_src, dur=clip_dur: (
+                        self._start_timeline_thumb_batch(src, dur)
+                        if g == getattr(self, "_media_switch_gen", 0) else None
                     ),
                 )
 
@@ -5703,7 +5706,9 @@ class PlayerMixin:
             pq.reset_source_height_cache()
         except Exception:
             pass
-        QTimer.singleShot(80, self._apply_saved_preview_quality_to_player)
+        QTimer.singleShot(
+            80, lambda g=switch_gen: self._apply_saved_preview_quality_to_player(switch_gen=g)
+        )
 
         # Keep the timeline interpolation in sync with mpv's current rate from the start
         # (the speed setting persists across clips), so the playhead doesn't jitter.
@@ -6628,7 +6633,13 @@ class PlayerMixin:
         saved = self.load_user_settings().get(pq.SETTINGS_KEY, pq.DEFAULT_QUALITY)
         self._preview_quality_id = pq.normalize_quality_id(saved)
 
-    def _apply_saved_preview_quality_to_player(self, retry: int = 0) -> None:
+    def _apply_saved_preview_quality_to_player(
+        self, retry: int = 0, *, switch_gen: int | None = None
+    ) -> None:
+        if switch_gen is None:
+            switch_gen = getattr(self, "_media_switch_gen", 0)
+        if switch_gen != getattr(self, "_media_switch_gen", 0):
+            return
         from steempeg.ui.player import preview_quality as pq
 
         preset_id = pq.normalize_quality_id(getattr(self, "_preview_quality_id", pq.DEFAULT_QUALITY))
@@ -6643,7 +6654,10 @@ class PlayerMixin:
             return
         # Height unknown / filter not ready yet — retry, do not wipe the setting.
         if retry < 25:
-            QTimer.singleShot(100, lambda: self._apply_saved_preview_quality_to_player(retry + 1))
+            QTimer.singleShot(
+                100,
+                lambda g=switch_gen: self._apply_saved_preview_quality_to_player(retry + 1, switch_gen=g),
+            )
 
     def set_preview_quality(self, preset_id: str, *, persist: bool = True) -> None:
         from steempeg.ui.player import preview_quality as pq
