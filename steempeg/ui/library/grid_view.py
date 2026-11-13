@@ -668,8 +668,9 @@ class ClipCard(qtw.QWidget):
         if overlay is None:
             return
         if self._loading:
-            # Snapshot press mode hides thumb_label — drop it so the spinner can paint.
-            self._yield_press_for_overlay()
+            # During press animation the thumbnail parent is temporarily hidden.
+            # Prepare the live overlay now; it appears when the animation restores
+            # the children, without cancelling a held click or snapping the scale.
             overlay.setGeometry(0, 0, self.thumb_label.width(), self.thumb_label.height())
             ttl, ttr, tbr, tbl = self._radius_plan()["thumb"]
             overlay.set_clip_radii(ttl, ttr, tbr, tbl)
@@ -749,7 +750,9 @@ class ClipCard(qtw.QWidget):
         self._sync_unavailable_dim()
 
     def _sync_unavailable_dim(self) -> None:
-        dim = bool(getattr(self, "_dim_dead", False) or getattr(self, "_dim_no_preview", False))
+        dim = not getattr(self, "_loading", False) and bool(
+            getattr(self, "_dim_dead", False) or getattr(self, "_dim_no_preview", False)
+        )
         veil = getattr(self, "_dim_veil", None)
         if veil is None:
             return
@@ -794,6 +797,7 @@ class ClipCard(qtw.QWidget):
                 child.setVisible(True)
             except RuntimeError:
                 pass
+        self._sync_unavailable_dim()
         self._press_snapshot = None
         self._press_snapshot = self.grab()
         for child in hidden:
@@ -1089,6 +1093,7 @@ class ClipCard(qtw.QWidget):
             except RuntimeError:
                 pass
         self._press_hidden_children = []
+        self._sync_unavailable_dim()
         self.update()
 
     def _begin_press(self, modifiers=qtc.Qt.NoModifier) -> None:
@@ -1107,23 +1112,6 @@ class ClipCard(qtw.QWidget):
         if self.mouseGrabber() is self:
             self.releaseMouse()
         self._animate_press_to(1.0)
-
-    def _yield_press_for_overlay(self) -> None:
-        """End snapshot press so ThumbLoadingOverlay (child of thumb) can show."""
-        was_pressed = bool(self._pressed)
-        self._pressed = False
-        if was_pressed and self.mouseGrabber() is self:
-            self.releaseMouse()
-        anim = getattr(self, "_press_anim", None)
-        if anim is not None:
-            anim.stop()
-            anim.deleteLater()
-            self._press_anim = None
-        self._press_scale = 1.0
-        if self._press_snapshot is not None:
-            self._end_press_paint_mode()
-        else:
-            self.update()
 
     def _animate_press_to(self, target: float) -> None:
         """Whole-card press scale — same timing/easing as ScreenshotPhoto._animate_to."""
