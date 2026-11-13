@@ -3841,10 +3841,18 @@ def show_settings_dialog(app, *, settings_layout: str | None = None) -> None:
     from PySide6.QtWidgets import QWidget
 
     from steempeg.ui.window_chrome import force_app_cursor_resync
+    import logging
+    import time
 
+    opened_at = time.perf_counter()
     dlg = SettingsDialog(
         app, parent=getattr(app, "ui", None), settings_layout=settings_layout
     )
+    built_ms = (time.perf_counter() - opened_at) * 1000
+    QTimer.singleShot(0, lambda: logging.info(
+        "Settings opening: build_ms=%.1f first_ui_turn_ms=%.1f",
+        built_ms, (time.perf_counter() - opened_at) * 1000,
+    ))
     app._app_settings_dlg = dlg
     app._app_settings_open = True
     app._deck_app_settings_focus_idx = 0
