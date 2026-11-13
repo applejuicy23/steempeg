@@ -6503,8 +6503,9 @@ class RenderedLibraryMixin:
             # Empty space keeps the current selection (same as Clips Manager).
             return True
 
-        # Same deferred path as ClipCard — never open on the press stack.
-        self._defer_rendered_grid_select_item(item, event)
+        card = self._materialize_rendered_grid_item(item)
+        if card is not None:
+            card.begin_external_press(event.globalPosition().toPoint(), event.modifiers())
         return True
 
     def _on_rendered_grid_selection_changed(self):

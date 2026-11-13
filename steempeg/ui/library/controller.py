@@ -2914,8 +2914,11 @@ class LibraryMixin:
             # (the purple outline stays); only clicking another card changes it.
             return True
 
-        # Same deferred path as ClipCard — never load on the press stack.
-        self._defer_grid_select_item(item, event)
+        card = self.grid_clips.itemWidget(item)
+        if card is None:
+            card = self._materialize_clip_grid_item(item)
+        if card is not None:
+            card.begin_external_press(event.globalPosition().toPoint(), event.modifiers())
         return True
 
     def show_grid_context_menu(self, pos):

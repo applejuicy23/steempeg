@@ -813,6 +813,8 @@ class ClipCard(qtw.QWidget):
             self._apply_selection_style()
 
     def hideEvent(self, event) -> None:  # noqa: N802
+        if self._pressed:
+            self._finish_press()
         self.clear_chrome_hover()
         super().hideEvent(event)
 
@@ -852,6 +854,13 @@ class ClipCard(qtw.QWidget):
         super().leaveEvent(event)
 
     def mouseMoveEvent(self, event: qtc.QMouseEvent) -> None:
+        if self._pressed:
+            inside = self.rect().contains(event.position().toPoint())
+            if inside != self._press_inside:
+                self._press_inside = inside
+                self._animate_press_to(float(CARD_PRESS_SCALE) if inside else 1.0)
+            event.accept()
+            return
         if getattr(self, "_thumb_peek_enabled", False):
             pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             self._set_thumb_hover(self.thumb_label.geometry().contains(pos))
@@ -1017,21 +1026,29 @@ class ClipCard(qtw.QWidget):
             event.accept()
             return
         if event.button() == qtc.Qt.MouseButton.LeftButton:
-            # Press anim must start before selection/load. Callers should keep
-            # _on_left_click light (schedule work); never open clips on this stack.
-            self._begin_press()
-            if self._on_left_click is not None:
-                self._on_left_click(event)
+            self._begin_press(event.modifiers())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: qtc.QMouseEvent) -> None:
         if event.button() == qtc.Qt.MouseButton.LeftButton and self._pressed:
+            activate = self.rect().contains(event.position().toPoint())
+            modifiers = self._press_modifiers
             self._finish_press()
+            if activate and self._on_left_click is not None:
+                click = qtg.QMouseEvent(
+                    event.type(), event.position(), event.globalPosition(),
+                    event.button(), event.buttons(), modifiers,
+                )
+                self._on_left_click(click)
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def begin_external_press(self, global_pos, modifiers=qtc.Qt.NoModifier) -> None:
+        """Continue a press delivered to a lazily materialized grid item."""
+        self._begin_press(modifiers)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         snap = getattr(self, "_press_snapshot", None)
@@ -1074,9 +1091,11 @@ class ClipCard(qtw.QWidget):
         self._press_hidden_children = []
         self.update()
 
-    def _begin_press(self) -> None:
+    def _begin_press(self, modifiers=qtc.Qt.NoModifier) -> None:
         # Mirror ScreenshotPhoto: animate 1.0 → CARD_PRESS_SCALE (no snap / min-peek).
         self._pressed = True
+        self._press_modifiers = modifiers
+        self._press_inside = True
         self._begin_press_paint_mode()
         self._animate_press_to(float(CARD_PRESS_SCALE))
         self.grabMouse()
