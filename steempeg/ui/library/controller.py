@@ -3194,6 +3194,10 @@ class LibraryMixin:
 
     def _fade_in_new_card(self, card, item) -> None:
         """Freshly printed on-screen cards appear in a short cascade instead of popping."""
+        # Scan inserts arrive throughout the fade. Keep the first painted shelf
+        # opaque while Full / Quick is still appending rows behind it.
+        if getattr(self, "_clips_scan_active", False):
+            return
         grid = getattr(self, "grid_clips", None)
         if grid is None or not grid.isVisible():
             return
@@ -5403,8 +5407,6 @@ class LibraryMixin:
         grid = getattr(self, "grid_clips", None)
         if table is not None:
             table.setUpdatesEnabled(False)
-        if grid is not None:
-            grid.setUpdatesEnabled(False)
         try:
             for _ in range(n):
                 row, index, total = pending.pop(0)
@@ -5431,10 +5433,9 @@ class LibraryMixin:
         finally:
             if table is not None:
                 table.setUpdatesEnabled(True)
-            # Painting stays off only for this insert. Leaving it off discarded
-            # the visible cards and never drew them back until a splitter drag
-            # or a screenshot forced a paint.
-            self._release_clips_grid_updates(grid)
+            # Qt coalesces painting until this callback returns. Toggling grid
+            # updates invalidates every existing card/effect for each scan tick.
+            # Leave its current paint state alone when appending new items.
 
         if (
             last_row is not None
