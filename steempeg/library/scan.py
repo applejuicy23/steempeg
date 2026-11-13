@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
+from functools import wraps
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -385,12 +387,14 @@ def _resolve_clip_health(
     if not force:
         entry = health_cache.get(norm)
         if entry and entry.get("mtime") == mtime:
+            logging.info("Scan trace: health source=cache path=%s", full_path)
             try:
                 level = health.ClipHealth(entry["level"])
             except ValueError:
                 level = health.ClipHealth.DEAD
             return health.ClipHealthReport(level, list(entry.get("issues") or []))
 
+    logging.info("Scan trace: health source=%s path=%s", "filesystem" if fast else "ffprobe", full_path)
     report = health.assess_clip_health(full_path, probe=not fast)
     if report.probe_failed:
         health_cache.pop(norm, None)
@@ -487,6 +491,26 @@ def _resolve_icon_path(
     return ""
 
 
+# Temporary per-clip diagnostics for the Full / Quick scan investigation.
+def _scan_timed(stage, path, operation, *args, **kwargs):
+    started = time.perf_counter()
+    logging.info("Scan trace: begin stage=%s path=%s", stage, path)
+    try:
+        return operation(*args, **kwargs)
+    finally:
+        elapsed = (time.perf_counter() - started) * 1000
+        logging.info("Scan trace: end stage=%s elapsed_ms=%.1f path=%s", stage, elapsed, path)
+
+
+def _trace_clip_scan(operation):
+    @wraps(operation)
+    def traced(full_path, *args, **kwargs):
+        mode = "Quick" if kwargs.get("fast") else "Full"
+        return _scan_timed(f"clip total ({mode})", full_path, operation, full_path, *args, **kwargs)
+    return traced
+
+
+@_trace_clip_scan
 def scan_single_clip(
     full_path: str,
     *,
@@ -497,23 +521,24 @@ def scan_single_clip(
     fast: bool,
     allow_network: bool = True,
 ) -> Optional[ScannedClip]:
-    has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
+    has_mpd, has_chunks, mpd_path = _scan_timed("manifest discovery", full_path, _find_mpd, full_path)
 
     if has_chunks and not has_mpd:
-        if allow_network and repair.recover_orphaned_clip(full_path):
-            has_mpd, has_chunks, mpd_path = _find_mpd(full_path)
+        if allow_network and _scan_timed("orphan recovery", full_path, repair.recover_orphaned_clip, full_path):
+            has_mpd, has_chunks, mpd_path = _scan_timed("manifest discovery", full_path, _find_mpd, full_path)
 
     folder_name = os.path.basename(full_path)
     is_steam_name = folder_name.lower().startswith(("clip_", "bg_", "fg_"))
-    has_video = folder_has_video_chunks(full_path)
+    has_video = _scan_timed("video chunk discovery", full_path, folder_has_video_chunks, full_path)
 
     # Empty non-Steam folders stay out. Steam clip_/bg_/fg_ trees with no
     # playable media still enter as Dead (Dead filter used to show 0).
     if not has_mpd and not has_chunks and not has_video and not is_steam_name:
         return None
 
-    health_report = _resolve_clip_health(full_path, health_cache, fast=fast)
-    duration_str = _parse_duration_from_mpd(
+    health_report = _scan_timed("health check", full_path, _resolve_clip_health, full_path, health_cache, fast=fast)
+    duration_str = _scan_timed(
+        "manifest duration", full_path, _parse_duration_from_mpd,
         mpd_path, dead=health_report.level == health.ClipHealth.DEAD
     )
 
@@ -531,11 +556,13 @@ def scan_single_clip(
         else:
             rec_type = "Unknown"
 
-        raw_name = _resolve_game_name(
+        raw_name = _scan_timed(
+            "game name", full_path, _resolve_game_name,
             app_id, game_names_cache, allow_network=allow_network
         )
         game_name = f"   {raw_name}"
-        icon_disk_path = _resolve_icon_path(
+        icon_disk_path = _scan_timed(
+            "game icon", full_path, _resolve_icon_path,
             app_id,
             cache_dir,
             icons_cache,
@@ -544,7 +571,7 @@ def scan_single_clip(
         use_unknown_icon = False
 
         try:
-            dt_utc = clip_folder_recorded_at(full_path)
+            dt_utc = _scan_timed("recording date", full_path, clip_folder_recorded_at, full_path)
             if dt_utc is None:
                 raise ValueError("no folder stamp")
             formatted_date = format_clip_date(dt_utc)
