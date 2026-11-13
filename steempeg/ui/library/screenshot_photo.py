@@ -323,25 +323,30 @@ class ScreenshotPhoto(QWidget):
         self.update()
         super().leaveEvent(event)
 
+    def hideEvent(self, event) -> None:  # noqa: N802
+        if self._pressed:
+            self._finish_press(activate=False)
+        super().hideEvent(event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.RightButton and self._on_right_click:
             self._on_right_click(event)
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton:
-            self._begin_press(event.position().toPoint())
-            if self._on_left_click:
-                self._on_left_click(event)
+            self._begin_press(event.position().toPoint(), event.modifiers())
             event.accept()
             return
         super().mousePressEvent(event)
 
-    def begin_external_press(self, global_pos: QPoint) -> None:
+    def begin_external_press(self, global_pos: QPoint, modifiers=Qt.NoModifier) -> None:
         """Continue an LMB press that started on a lazy placeholder (viewport)."""
-        self._begin_press(self.mapFromGlobal(global_pos))
+        self._begin_press(self.mapFromGlobal(global_pos), modifiers)
 
-    def _begin_press(self, local_pos: QPoint) -> None:
+    def _begin_press(self, local_pos: QPoint, modifiers=Qt.NoModifier) -> None:
         self._pressed = True
+        self._press_modifiers = modifiers
+        self._press_inside = True
         self._dragged = False
         self._press_pos = QPoint(local_pos)
         self._sync_info_footer_widgets()
@@ -350,21 +355,29 @@ class ScreenshotPhoto(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._pressed and self._press_pos is not None:
-            delta = event.position().toPoint() - self._press_pos
-            if abs(delta.x()) > _DRAG_SLOP or abs(delta.y()) > _DRAG_SLOP:
-                self._dragged = True
-                # Paint-select: while LMB is held, select every card under the cursor
-                # (mouse is grabbed, so other cards never see enter events).
-                if self._on_drag_over is not None:
-                    self._on_drag_over(event.globalPosition().toPoint())
+            inside = self.rect().contains(event.position().toPoint())
+            if inside != self._press_inside:
+                self._press_inside = inside
+                self._animate_to(float(CARD_PRESS_SCALE) if inside else 1.0)
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self._pressed:
-            activate = not self._dragged
-            self._finish_press(activate=activate)
+            inside = self.rect().contains(event.position().toPoint())
+            modifiers = self._press_modifiers
+            self._finish_press(activate=False)
+            if inside:
+                if self._on_left_click:
+                    click = QMouseEvent(
+                        event.type(), event.position(), event.globalPosition(),
+                        event.button(), event.buttons(), modifiers,
+                    )
+                    self._on_left_click(click)
+                multi = Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier
+                if not modifiers & multi and self._on_activate:
+                    self._on_activate()
             event.accept()
             return
         super().mouseReleaseEvent(event)

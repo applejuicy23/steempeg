@@ -2631,7 +2631,7 @@ class RenderedLibraryMixin:
             info_tip=info_tip,
             source=source_key,
             on_left_click=lambda ev, grid_item=item: self._screenshot_grid_select_item(
-                grid_item, ev, force_single=True
+                grid_item, ev
             ),
             on_right_click=lambda ev, grid_item=item: self._handle_screenshot_photo_context_menu(
                 grid_item, ev

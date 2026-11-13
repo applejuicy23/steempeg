@@ -375,23 +375,15 @@ class LifecycleMixin:
                             self._clear_screenshots_selection_visual()
                         return True
                     if self.grid_screenshots.itemWidget(item) is None:
-                        # Bare placeholder: materialize, select, then hand the press to
-                        # the new photo so paint-drag + release-open match live tiles.
+                        # Materialize without selecting; the photo commits only
+                        # when the left button is released inside its bounds.
                         if hasattr(self, "_materialize_screenshot_item"):
                             self._materialize_screenshot_item(item)
-                        if hasattr(self, "_screenshot_grid_select_item"):
-                            self._screenshot_grid_select_item(
-                                item, event, force_single=True
-                            )
                         photo = self.grid_screenshots.itemWidget(item)
                         if photo is not None and hasattr(photo, "begin_external_press"):
                             photo.begin_external_press(
-                                event.globalPosition().toPoint()
+                                event.globalPosition().toPoint(), event.modifiers()
                             )
-                        else:
-                            path = item.data(Qt.ItemDataRole.UserRole) or ""
-                            if path and hasattr(self, "_on_screenshot_open"):
-                                self._on_screenshot_open(str(path))
                         return True
             if event.type() == QEvent.Type.MouseMove and event.buttons() & Qt.LeftButton:
                 return True
