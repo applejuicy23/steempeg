@@ -5658,8 +5658,8 @@ class LibraryMixin:
         if quiet_append:
             # New folders often land before MPD duration is written — backfill
             # after a short settle, then once more for still-recording clips.
-            QTimer.singleShot(800, self._schedule_clip_duration_backfill)
-            QTimer.singleShot(5000, self._schedule_clip_duration_backfill)
+            QTimer.singleShot(800, lambda: self._schedule_clip_duration_backfill(live_only=False))
+            QTimer.singleShot(5000, lambda: self._schedule_clip_duration_backfill(live_only=False))
         elif progressive_launch:
             # Progressive discover paints ``--:--`` placeholders; durations are
             # filled from MPD after discover finishes (see progressive finished).
@@ -6500,6 +6500,8 @@ class LibraryMixin:
             return
         worker = getattr(self, "_clip_duration_worker", None)
         if worker is not None and worker.isRunning():
+            if live_only is False:
+                self._clip_duration_full_pass_pending = True
             return
         self._stop_clip_duration_backfill()
         if live_only is None:
@@ -6510,7 +6512,7 @@ class LibraryMixin:
         live = getattr(self, "_clip_live_paths", None)
         live_keys = live if isinstance(live, set) else set()
         for row in range(table.rowCount()):
-            if table.isRowHidden(row):
+            if live_only and table.isRowHidden(row):
                 continue
             name_item = table.item(row, 0)
             dur_item = table.item(row, 3)
@@ -6589,6 +6591,10 @@ class LibraryMixin:
         if updated:
             self._persist_clips_library_snapshot()
             logging.info("Filled %d clip duration(s) from MPD", updated)
+        if getattr(self, "_clip_duration_full_pass_pending", False):
+            self._clip_duration_full_pass_pending = False
+            QTimer.singleShot(0, lambda: self._schedule_clip_duration_backfill(live_only=False))
+            return
         # One Progressive follow-up over the rest of the filtered shelf.
         if (
             getattr(self, "_clips_progressive_active", False)
