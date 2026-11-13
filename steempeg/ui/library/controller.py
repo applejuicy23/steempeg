@@ -6071,29 +6071,15 @@ class LibraryMixin:
         timer.start(1 if delay_ms <= 0 else int(delay_ms))
 
     def _clips_first_screen_filled(self) -> bool:
-        """True once the top screen of visible grid items all have ClipCards."""
+        """Use exactly the same shelf capacity as the viewport materializer."""
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return True
-        vp = grid.viewport()
-        if vp is None:
-            return True
-        cols_fn = getattr(self, "_clip_grid_column_count_for", None)
-        cols = max(1, int(cols_fn(grid)) if callable(cols_fn) else 6)
-        cell_h = max(1, _clips_card_cell_size(self).height() + max(0, int(grid.spacing())))
-        rows = max(1, int(vp.height()) // cell_h + 1)
-        need = cols * rows
-        seen = 0
-        for i in range(grid.count()):
-            item = grid.item(i)
-            if item is None or item.isHidden():
-                continue
-            if grid.itemWidget(item) is None:
-                return False
-            seen += 1
-            if seen >= need:
-                return True
-        return False
+        slots = self._clips_shelf_capacity()
+        if slots <= 0:
+            return False
+        items = self._clips_shelf_items(slots)
+        return len(items) == slots and all(grid.itemWidget(item) is not None for item in items)
 
     def _clips_note_pane_shown(self) -> None:
         """The clips grid just became visible — measure again, don't drip."""
@@ -6151,7 +6137,7 @@ class LibraryMixin:
                     pass
         return width, height
 
-    def _clips_fitted_slot_count(self) -> int:
+    def _clips_shelf_capacity(self) -> int:
         """How many cards the current viewport can hold. 0 when it has no size yet."""
         grid = getattr(self, "grid_clips", None)
         if grid is None:
@@ -6166,10 +6152,12 @@ class LibraryMixin:
         # How many full rows the card area can hold. No extra peek row:
         # that peek was the third row which made the fast shelf stop at six.
         rows = max(1, height // cell_h)
-        count = int(grid.count())
-        if count <= 0:
-            return 0
-        return min(count, cols * rows)
+        return cols * rows
+
+    def _clips_fitted_slot_count(self) -> int:
+        """Number of existing items that fit the shared first-screen capacity."""
+        grid = getattr(self, "grid_clips", None)
+        return min(grid.count(), self._clips_shelf_capacity()) if grid is not None else 0
 
     def _clips_shelf_items(self, slots: int) -> list:
         """Placeholders that belong on the current screen.
