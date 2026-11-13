@@ -5088,11 +5088,12 @@ class PlayerMixin:
             worker.requestInterruption()
         except Exception:
             pass
-        if worker.isRunning():
-            try:
-                worker.wait(50)
-            except Exception:
-                pass
+        # Keep the QThread alive until finished, without waiting on the UI.
+        retired = getattr(self, "_retired_timeline_markers_workers", None)
+        if retired is None:
+            retired = self._retired_timeline_markers_workers = []
+        if worker.isRunning() and worker not in retired:
+            retired.append(worker)
         self._timeline_markers_worker = None
 
     def _start_timeline_markers_load_early(
@@ -5144,6 +5145,9 @@ class PlayerMixin:
         def _release(w=worker) -> None:
             if getattr(self, "_timeline_markers_worker", None) is w:
                 self._timeline_markers_worker = None
+            retired = getattr(self, "_retired_timeline_markers_workers", [])
+            if w in retired:
+                retired.remove(w)
 
         worker.finished_load.connect(_on_done)
         worker.finished.connect(_release)
