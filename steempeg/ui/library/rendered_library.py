@@ -3738,8 +3738,22 @@ class RenderedLibraryMixin:
                 lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
             )
         else:
-            action_related = menu.addAction("🎬 Open related clip")
-            action_related.setEnabled(False)
+            related = menu.addMenu("🎬 Open related clip")
+            related.setStyleSheet(menu.styleSheet())
+            available = False
+            for path in paths:
+                item = self._screenshot_item_for_path(path)
+                game = str(item.data(_SHOT_GAME_ROLE) or "").strip() if item is not None else ""
+                name = os.path.basename(path)
+                action = related.addAction(f"{game} — {name}" if game else name)
+                action.setToolTip(path)
+                enabled = self._screenshot_related_clip_action_enabled(path)
+                action.setEnabled(enabled)
+                available = available or enabled
+                action.triggered.connect(
+                    lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
+                )
+            related.menuAction().setEnabled(available)
 
     def _library_clip_refs_for_screenshot_link(self) -> list:
         """Clips Manager rows as ``LibraryClipRef`` for screenshot → clip matching."""
