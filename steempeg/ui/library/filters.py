@@ -681,6 +681,10 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                 self._stack_lay.addWidget(w)
             self._cols_page.hide()
             self._stack_page.show()
+        # Reparenting hides the capsules. Mark them shown even while the popup
+        # itself is hidden so size hints include them before the first paint.
+        for widget in (games, type_c, health, folders, date, time_c, dur):
+            widget.show()
 
     def _clear_fixed_col_heights(self) -> None:
         for w in (
@@ -853,6 +857,16 @@ class FilterMenu(PillPaintDragMixin, QWidget):
     def minimumSizeHint(self):
         return self.sizeHint()
 
+    def _activate_popup_layouts(self) -> None:
+        """Resolve child geometry while the popup is still hidden."""
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.ensurePolished()
+            child_layout = widget.layout()
+            if child_layout is not None:
+                child_layout.invalidate()
+                child_layout.activate()
+                child_layout.setGeometry(widget.contentsRect())
+
     def _pack_popup_height(self) -> None:
         """Snap popup height. 3-col is deterministic; stack shrink-wraps to buttons."""
         avail = int(getattr(self, "_popup_avail_h", 0) or 0)
@@ -891,14 +905,12 @@ class FilterMenu(PillPaintDragMixin, QWidget):
             probe = min(probe, avail)
         self.resize(max(self.width(), 1), probe)
 
-        btn = getattr(self, "btn_apply", None) or getattr(self, "btn_clear", None)
-        if btn is not None and btn.height() > 0:
-            bottom_y = btn.mapTo(self, QPoint(0, btn.height())).y()
-            outer = getattr(self, "_outer_layout", None)
-            pad = outer.contentsMargins().bottom() if outer is not None else 8
-            hint_h = bottom_y + pad
-        else:
-            hint_h = probe
+        self._activate_popup_layouts()
+        # Measure content, not the previous footer position: that position can
+        # lag behind a hidden resize and shrink the popup on each reopening.
+        hint_h = lay.totalHeightForWidth(self.width()) if lay is not None else -1
+        if hint_h <= 0:
+            hint_h = lay.totalSizeHint().height() if lay is not None else probe
 
         hint_h = max(120, int(hint_h))
         if avail >= 160:
@@ -1191,6 +1203,7 @@ class FilterMenu(PillPaintDragMixin, QWidget):
                     self._place_filter_columns(three_col=True)
                     self.setFixedWidth(self._width_for_mode(True, dense))
                     self._tighten_three_col_chrome()
+                    self._activate_popup_layouts()
                     self._stretch_games_column()
                 else:
                     self._place_filter_columns(three_col=False)

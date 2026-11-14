@@ -6994,10 +6994,8 @@ class LibraryMixin:
         avail = max(160, floor_y - menu_y - 8)
         if relayout:
             menu.set_content_max_height(avail, relayout=True)
-        elif not bool(getattr(menu, "_three_col", False)):
-            # Stack may need a ceiling tweak after show; 3-col height is
-            # deterministic — re-packing made Clear/Apply drift across opens.
-            menu.set_content_max_height(avail, relayout=False)
+        # A post-show pass only moves the popup. Repacking visible sections here
+        # made Type and everything below it jump after Games was already painted.
 
         # Width may change with mode — compute X after sizing.
         x_shift = menu.width() - self.btn_filter_pill.width()
