@@ -3972,6 +3972,7 @@ class LibraryMixin:
             label.setProperty("missing", True)
         row_layout.addWidget(label, 1)
 
+        controls = []
         if is_main:
             btn_replace = self._folder_row_icon_button(
                 "clipcutback.png",
@@ -3980,6 +3981,7 @@ class LibraryMixin:
                 lambda _checked=False: (menu.close(), self.choose_folder()),
             )
             row_layout.addWidget(btn_replace)
+            controls.append(btn_replace)
 
         btn_x = self._folder_row_icon_button(
             "multiplier.png",
@@ -3988,6 +3990,7 @@ class LibraryMixin:
             lambda _checked=False, p=path: (menu.close(), self.remove_clips_folder(p)),
         )
         row_layout.addWidget(btn_x)
+        controls.append(btn_x)
 
         frame = QWidget()
         frame.setObjectName("FolderRowFrame")
@@ -3999,42 +4002,52 @@ class LibraryMixin:
         action_row = QWidgetAction(menu)
         action_row.setDefaultWidget(frame)
         menu.addAction(action_row)
+        return controls
 
     def show_folders_panel(self):
         """Dropdown panel (styled like Logs) listing the main + extra library folders."""
-        if not self.clips_folders:
-            menu = QMenu(self.folder_picker)
-            menu.setStyleSheet(ut.folders_menu_stylesheet())
-            action_discover = menu.addAction("🔍  Discover Steam folders…")
-            action_discover.triggered.connect(self.discover_steam_folders)
-            action_choose = menu.addAction("📂  Choose folder manually…")
-            action_choose.triggered.connect(self.choose_folder)
-            btn = self.folder_picker.add_btn
-            size = menu.sizeHint()
-            top_right = btn.mapToGlobal(btn.rect().topRight())
-            pos = QPoint(top_right.x() - size.width(), top_right.y() - size.height())
-            menu.exec(pos)
-            return
+        from steempeg.ui.widgets.folder_picker_button import FolderScanHeader
 
         menu = QMenu(self.folder_picker)
         menu.setStyleSheet(ut.folders_menu_stylesheet())
 
-        header = menu.addAction("Library folders")
-        header.setEnabled(False)
+        header = FolderScanHeader(menu)
+        header_action = QWidgetAction(menu)
+        header_action.setDefaultWidget(header)
+        menu.addAction(header_action)
         menu.addSeparator()
 
+        controls = []
         for idx, path in enumerate(self.clips_folders):
-            self._folder_panel_row(menu, path, is_main=(idx == 0))
+            controls.extend(self._folder_panel_row(menu, path, is_main=(idx == 0)))
 
         menu.addSeparator()
         action_discover = menu.addAction("🔍  Discover Steam folders…")
         action_discover.triggered.connect(self.discover_steam_folders)
-        action_add = menu.addAction("➕  Add another folder…")
-        action_add.triggered.connect(self.add_clips_folder)
+        action_add = menu.addAction("➕  Add another folder…" if self.clips_folders else "📂  Choose folder manually…")
+        action_add.triggered.connect(self.add_clips_folder if self.clips_folders else self.choose_folder)
+        controls.extend((action_discover, action_add))
 
         if len(self.clips_folders) > 1:
             action_clear = menu.addAction("🧹  Clear list")
             action_clear.triggered.connect(self.clear_clips_folders)
+            controls.append(action_clear)
+
+        def sync_scan_state():
+            busy = self._library_folder_changes_locked()
+            total = int(getattr(self, "_scan_total", 0) or 0)
+            done = int(getattr(self, "_scan_inserted", 0) or 0)
+            percent = min(99, int(100 * done / total)) if total > 0 else None
+            header.set_progress(busy, percent)
+            for control in controls:
+                control.setEnabled(not busy)
+            self.folder_picker.main_btn.setEnabled(not busy)
+
+        sync_scan_state()
+        timer = QTimer(menu)
+        timer.setInterval(80)
+        timer.timeout.connect(sync_scan_state)
+        timer.start()
 
         # Open the panel directly above the + button: align the panel's bottom-right
         # corner with the + 's top-right corner so it grows upward, not off to the side.
@@ -4042,7 +4055,13 @@ class LibraryMixin:
         size = menu.sizeHint()
         top_right = btn.mapToGlobal(btn.rect().topRight())
         pos = QPoint(top_right.x() - size.width(), top_right.y() - size.height())
-        menu.exec(pos)
+        try:
+            menu.exec(pos)
+        finally:
+            timer.stop()
+            header.set_progress(False)
+            self.folder_picker.main_btn.setEnabled(not self._library_folder_changes_locked())
+            menu.deleteLater()
 
     def fast_sync_grid(self):
         """ INSTANT GRID SYNCHRONIZATION """

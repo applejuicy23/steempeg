@@ -1661,11 +1661,13 @@ def folders_menu_stylesheet() -> str:
         border: none;
     }}
     QMenu::item:disabled {{
-        color: {row_label};
+        color: #777777;
         background: transparent;
-        padding: 6px 20px 4px 20px;
-        font-size: 13px;
-        font-weight: bold;
+    }}
+    QWidget#FolderScanHeader, QWidget#FolderScanHeader QLabel {{
+        background: transparent;
+        border: none;
+        color: {row_label};
     }}
     QWidget#FolderRowFrame {{
         background: transparent;
@@ -1701,6 +1703,10 @@ def folders_menu_stylesheet() -> str:
     QPushButton#FolderRowRemove:hover {{
         background-color: #8a2525;
         border: 1px solid #a82e2e;
+    }}
+    QPushButton#FolderRowRemove:disabled, QPushButton#FolderRowReplace:disabled {{
+        background-color: {row_bg};
+        border-color: {row_border};
     }}
     QPushButton#FolderRowRemove:pressed {{
         background-color: #661a1a;

@@ -1,8 +1,8 @@
 """Composite Choose Folder button with a combobox-style side that opens a panel."""
 from steempeg.ui import design_tokens as tok
 from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QSizePolicy, QWidget
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 from steempeg.ui.ui_density import COMFORT, UiDensity
 
@@ -138,6 +138,39 @@ class _FolderPickerAddButton(QPushButton):
         # Qt arcs: 16ths of a degree, 0 = 3 o'clock, counter-clockwise.
         painter.drawArc(rect, int((90 - self._angle) * 16), int(-110 * 16))
         painter.end()
+
+
+class FolderScanHeader(QWidget):
+    """Read-only folders heading with live scan progress on the right."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("FolderScanHeader")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 6, 20, 6)
+        layout.setSpacing(6)
+        title = QLabel("📁 Library folders")
+        title.setFont(tok.ui_qfont(13, weight=QFont.Weight.Bold))
+        layout.addWidget(title)
+        layout.addStretch(1)
+        self.percent = QLabel()
+        self.percent.setMinimumWidth(36)
+        self.percent.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.percent)
+        self.spinner = _FolderPickerAddButton(self)
+        self.spinner.setObjectName("FolderScanSpinner")
+        self.spinner.setFixedSize(20, 20)
+        self.spinner.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.spinner.setStyleSheet("background: transparent; border: none; padding: 0;")
+        layout.addWidget(self.spinner)
+        self.set_progress(False)
+
+    def set_progress(self, busy: bool, percent: int | None = None):
+        self.percent.setVisible(busy)
+        self.spinner.setVisible(busy)
+        self.spinner.set_busy(busy)
+        self.percent.setText(f"{max(0, min(100, int(percent)))}%" if percent is not None else "…")
 
 
 class FolderPickerButton(QWidget):
