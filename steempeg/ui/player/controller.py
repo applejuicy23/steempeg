@@ -4106,7 +4106,9 @@ class PlayerMixin:
                 self._start_timeline_thumb_batch(abs_path, duration_sec)
             if hasattr(self, "custom_timeline"):
                 self.custom_timeline.setEnabled(True)
-            self._clear_preview_switch_gates()
+            # Duration can be known before a decoded frame. Clearing awaiting
+            # here cancels the reveal timer and leaves the native embed parked
+            # behind video_blank_frame. Reveal/finish own the switch gates.
             if hasattr(self.ui, "btn_play"):
                 self.ui.btn_play.setIcon(QIcon(get_resource_path("icon_pause.png")))
             return
@@ -4121,7 +4123,6 @@ class PlayerMixin:
                 if ext not in RENDERED_AUDIO_EXTS:
                     abs_path = os.path.abspath(file_path).replace("\\", "/")
                     self._start_timeline_thumb_batch(abs_path, resolved)
-            self._clear_preview_switch_gates()
 
     def _reap_timeline_thumb_thread(self, thread) -> None:
         """Drop a finished batch thread from the keep-alive list (safe to GC)."""
