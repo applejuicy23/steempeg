@@ -1239,27 +1239,18 @@ class PlayerMixin:
         """Brief YouTube-style circle with play/pause glyph over the video."""
         overlay = getattr(self, "_play_pause_pulse", None)
         if overlay is None:
-            if sys.platform == "win32":
-                from steempeg.ui.player.mpv_osd import MpvPlayPausePulse
+            from steempeg.ui.player.mpv_osd import MpvPlayPausePulse
 
-                overlay = MpvPlayPausePulse(lambda: getattr(self, "player", None), self.mpv_screen)
-            else:
-                from steempeg.ui.player.play_pause_pulse import PlayPausePulseOverlay
-
-                overlay = PlayPausePulseOverlay(parent=None)
+            overlay = MpvPlayPausePulse(lambda: getattr(self, "player", None), self.mpv_screen)
             self._play_pause_pulse = overlay
         anchor = getattr(self, "mpv_wrapper", None) or getattr(
             getattr(self, "ui", None), "video_container", None
         )
         try:
-            newly_mapped = bool(overlay.pulse(anchor, paused=paused))
+            overlay.pulse(anchor, paused=paused)
         except Exception:
             logging.debug("play/pause pulse failed", exc_info=True)
             return
-        # ShowWindow on a fresh Tool HWND often synthesizes a second LMB — that
-        # immediately re-pauses after play (feels like "play needs a double click").
-        if newly_mapped:
-            self._video_surface_ignore_until = time.monotonic() + 0.025
 
     def _on_video_surface_click(self) -> None:
         """LMB on the picture → same as footer Play/Pause, with pulse feedback.
