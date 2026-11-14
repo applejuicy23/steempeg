@@ -6111,6 +6111,18 @@ class LibraryMixin:
         grid = getattr(self, "grid_clips", None)
         if grid is None:
             return
+        viewport = grid.viewport()
+        pointer_in_shelf = bool(
+            viewport is not None and viewport.isVisible()
+            and viewport.rect().contains(viewport.mapFromGlobal(QCursor.pos()))
+        )
+        if (pointer_in_shelf or getattr(self, "_is_switching", False)
+                or getattr(self, "_awaiting_first_frame", False)
+                or getattr(self, "_opening_clip_path", None)
+                or getattr(self, "_pending_quality_populate", None)
+                or getattr(self, "_deferred_quality_populate", None)):
+            self._schedule_clips_idle_fill(delay_ms=_CLIP_IDLE_FILL_START_MS)
+            return
         # Keep going while watching a clip or just sitting on Clips — shelf
         # warms in the background so the next scroll already has cards.
         filled = 0
