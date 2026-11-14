@@ -163,16 +163,12 @@ class MpvPlayPausePulse(QObject):
     def pulse(self, anchor_widget=None, *, paused: bool) -> bool:
         """Start (or restart) the pulse; never maps a window, so always False."""
         del anchor_widget
-        interrupted = self._tick.isActive()
         self._paused = bool(paused)
-        if interrupted and self._opacity > 0.15:
-            self._opacity = min(1.0, max(0.35, self._opacity))
-            self._scale = 0.88
-            self._t0 = time.monotonic() - (_FADE_IN_S * 0.55)
-        else:
-            self._opacity = 0.0
-            self._scale = 0.82
-            self._t0 = time.monotonic()
+        # Show the latest action on this frame, even when clicks arrive faster
+        # than the animation timer. Only the trailing fade is animated.
+        self._opacity = 1.0
+        self._scale = 1.0
+        self._t0 = time.monotonic() - _FADE_IN_S
         if not self._tick.isActive():
             self._tick.start()
         self._draw()
