@@ -6821,6 +6821,13 @@ class RenderedLibraryMixin:
                 pending.append(path)
         files = iter(pending)
         independent_players = not screenshots and len(pending) > 1
+        if independent_players:
+            steempeg_information(
+                getattr(self, "ui", None),
+                "Open multiple files",
+                "Default players, including Windows Media Player, may reuse a single window.\n\n"
+                f"These {len(pending)} files will open in {len(pending)} separate Steempeg player windows.",
+            )
 
         def open_next():
             if getattr(self, "_is_closing", False):
