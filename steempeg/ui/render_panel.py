@@ -1148,6 +1148,16 @@ def set_settings_panel_locked(app, locked: bool):
         disabled = []
         seen = set()
         scroll = getattr(app, 'right_scroll', None)
+        pages = tuple(_iter_settings_pages(app))
+        if scroll is not None:
+            # Disabling a focused field makes Qt focus the next enabled field,
+            # which QScrollArea scrolls into view. Park focus on the scroll area
+            # first, including a modeless settings window's inactive focus child.
+            focused = scroll.window().focusWidget()
+            if focused is not None and any(
+                focused is page or page.isAncestorOf(focused) for page in pages
+            ):
+                scroll.setFocus(Qt.FocusReason.OtherFocusReason)
         if scroll is not None and not hasattr(app, '_render_wheel_filter'):
             app._render_wheel_filter = _WheelToScrollFilter(scroll)
         wheel_filter = getattr(app, '_render_wheel_filter', None)
@@ -1163,7 +1173,7 @@ def set_settings_panel_locked(app, locked: bool):
             if wheel_filter is not None:
                 widget.installEventFilter(wheel_filter)
 
-        for page in _iter_settings_pages(app):
+        for page in pages:
             for child in page.findChildren(QWidget):
                 if _is_lockable_widget(child):
                     lock_widget(child)
