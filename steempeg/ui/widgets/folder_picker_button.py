@@ -196,6 +196,7 @@ class FolderPickerButton(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         """Spin the + chip while the clips library is loading."""
+        self.main_btn.setEnabled(not busy)
         if hasattr(self.add_btn, "set_busy"):
             self.add_btn.set_busy(bool(busy))
 

@@ -3749,8 +3749,15 @@ class LibraryMixin:
         logging.info("Express requested from popup: %s", clip_path)
         return self.start_express_render(clip_path, preset_name="")
 
+    def _library_folder_changes_locked(self) -> bool:
+        """Keep roots stable until both scan results and discovery are published."""
+        return bool(getattr(self, "_clips_scan_active", False)
+                    or getattr(self, "_progressive_clips_worker", None) is not None)
+
     def discover_steam_folders(self):
         """User action: merge any newly found Steam clip folders into the library."""
+        if self._library_folder_changes_locked():
+            return
         from steempeg.core.steam_paths import get_steam_path
 
         before = {os.path.normpath(p) for p in getattr(self, "clips_folders", [])}
@@ -3799,10 +3806,12 @@ class LibraryMixin:
 
     def choose_folder(self):
         """Pick the primary clips folder (first library root)."""
+        if self._library_folder_changes_locked():
+            return
         folder = QFileDialog.getExistingDirectory(
             self.ui, "Select primary clips folder", self._default_clips_dialog_path()
         )
-        if not folder:
+        if not folder or self._library_folder_changes_locked():
             return
         folder = os.path.normpath(folder)
         was_empty = not bool(getattr(self, "clips_folders", None))
@@ -3825,10 +3834,12 @@ class LibraryMixin:
 
     def add_clips_folder(self):
         """Append another folder to the library scan list."""
+        if self._library_folder_changes_locked():
+            return
         folder = QFileDialog.getExistingDirectory(
             self.ui, "Add clips folder", self._default_clips_dialog_path()
         )
-        if not folder:
+        if not folder or self._library_folder_changes_locked():
             return
         folder = os.path.normpath(folder)
         if folder in self.clips_folders:
@@ -3881,6 +3892,8 @@ class LibraryMixin:
 
     def remove_clips_folder(self, path):
         """Remove one library root and rescan like Refresh (filters wiped)."""
+        if self._library_folder_changes_locked():
+            return
         if path in self.clips_folders:
             self.clips_folders.remove(path)
         self.clips_folder = self.clips_folders[0] if self.clips_folders else ""
@@ -3894,6 +3907,8 @@ class LibraryMixin:
 
     def clear_clips_folders(self):
         """Drop every saved library root."""
+        if self._library_folder_changes_locked():
+            return
         if not self.clips_folders:
             return
         if not steempeg_question(
@@ -3902,6 +3917,8 @@ class LibraryMixin:
             "Remove all clips folders from the library?",
             detail="Use + → Discover Steam folders… or Choose Folder to add them again.",
         ):
+            return
+        if self._library_folder_changes_locked():
             return
         self.clips_folders = []
         self.clips_folder = ""
@@ -5316,13 +5333,14 @@ class LibraryMixin:
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "set_busy"):
             try:
-                # Quiet top-ups stay unlocked — don't spin the + for those.
+                # Quiet top-ups keep the shelf unlocked; root mutations stay guarded.
                 picker_busy = bool(busy) and not getattr(
                     self, "_scan_append_new_only", False
                 )
                 if not picker_busy and getattr(self, "_progressive_clips_worker", None) is not None:
                     picker_busy = True
                 picker.set_busy(picker_busy)
+                picker.main_btn.setEnabled(not self._library_folder_changes_locked())
             except RuntimeError:
                 pass
         try:
@@ -5467,6 +5485,7 @@ class LibraryMixin:
             # updates invalidates every existing card/effect for each scan tick.
             # Leave its current paint state alone when appending new items.
 
+        self._scan_inserted = inserted_before + n
         if (
             last_row is not None
             and hasattr(self, "update_status_indicator")
@@ -5876,6 +5895,9 @@ class LibraryMixin:
             parent=getattr(self, "ui", None),
         )
         self._progressive_clips_worker = worker
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None:
+            picker.set_busy(True)
         worker.batch_ready.connect(self._on_progressive_clips_batch)
         worker.finished_ok.connect(self._on_progressive_clips_finished)
         worker.discover_failed.connect(self._on_progressive_clips_failed)
@@ -5936,6 +5958,9 @@ class LibraryMixin:
             self._clip_health_cache.update(worker._health_cache)
             self._save_clip_health_cache()
         self._progressive_clips_worker = None
+        picker = getattr(self, "folder_picker", None)
+        if picker is not None:
+            picker.set_busy(False)
         if not getattr(self, "_clips_progressive_active", False):
             return
         table = getattr(getattr(self, "ui", None), "table_clips", None)
