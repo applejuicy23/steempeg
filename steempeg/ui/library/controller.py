@@ -2604,6 +2604,7 @@ class LibraryMixin:
         self._media_switch_gen = getattr(self, "_media_switch_gen", 0) + 1
         self._pending_preview_post_open = None
         self._pending_quality_populate = None
+        self._deferred_quality_populate = None
         self._pending_timeline_thumbs = None
         # Bumping media gen orphans the soft 800ms finish — clear BOTH gates here
         # or a cancelled rapid switch leaves _is_switching stuck and ignores clicks.

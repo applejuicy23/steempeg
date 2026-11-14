@@ -5259,12 +5259,7 @@ class PlayerMixin:
                 q_gen, clip_path, session, preserve = pending_quality[:4]
             else:
                 q_gen, clip_path, session = pending_quality[:3]
-            QTimer.singleShot(
-                0,
-                lambda g=q_gen, p=clip_path, s=session, keep=bool(preserve): (
-                    self._run_quality_populate_after_open(g, p, s, keep)
-                ),
-            )
+            self._defer_quality_populate_after_open(q_gen, clip_path, session, bool(preserve))
         pending_thumbs = getattr(self, "_pending_timeline_thumbs", None)
         if pending_thumbs:
             self._pending_timeline_thumbs = None
@@ -5795,6 +5790,11 @@ class PlayerMixin:
 
     def update_ui_from_vlc(self):
         """ Updates UI and Timeline from MPV engine """
+        # A synchronous property query can wait for demux/decoder initialization.
+        # The reveal path owns readiness; leave the GUI timer free during open.
+        if (getattr(self, "_is_switching", False)
+                or getattr(self, "_awaiting_first_frame", False)):
+            return
         if not hasattr(self, 'player') or not self.player:
             return
         if sys.platform != "win32" and not self._mpv_core_alive():
@@ -6644,6 +6644,13 @@ class PlayerMixin:
         if switch_gen != getattr(self, "_media_switch_gen", 0):
             return
         from steempeg.ui.player import preview_quality as pq
+
+        if (getattr(self, "_is_switching", False)
+                or getattr(self, "_awaiting_first_frame", False)):
+            QTimer.singleShot(
+                60, lambda g=switch_gen: self._apply_saved_preview_quality_to_player(retry, switch_gen=g)
+            )
+            return
 
         preset_id = pq.normalize_quality_id(getattr(self, "_preview_quality_id", pq.DEFAULT_QUALITY))
         player = getattr(self, "player", None)

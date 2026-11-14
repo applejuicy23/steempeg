@@ -3222,7 +3222,9 @@ class RenderMixin:
         """Enable Start for a selected clip, or for pending jobs while queue mode is on."""
         if not hasattr(self.ui, "btn_start"):
             return
-        if getattr(self, "_is_rendering", False):
+        if (getattr(self, "_is_rendering", False)
+                or getattr(self, "_pending_quality_populate", None)
+                or getattr(self, "_deferred_quality_populate", None)):
             self.ui.btn_start.setEnabled(False)
         else:
             if self._queue_drives_start_cta():
@@ -4086,6 +4088,7 @@ class RenderMixin:
         self._pending_quality_populate = (
             gen, clip_path, session, bool(preserve_ui_selection)
         )
+        self._sync_start_render_enabled()
         # Already revealed / idle — flush on next tick; otherwise finish does it.
         if not getattr(self, "_awaiting_first_frame", False) and not getattr(
             self, "_is_switching", False
@@ -4135,6 +4138,20 @@ class RenderMixin:
         # Duration is known now — start timeline thumbs if play deferred them.
         if hasattr(self, "_maybe_start_thumbs_after_quality"):
             self._maybe_start_thumbs_after_quality(clip_path)
+
+    def _defer_quality_populate_after_open(self, gen, clip_path, session, preserve=False):
+        """Give rapid re-selection priority over rebuilding export controls."""
+        pending = (gen, clip_path, session, preserve)
+        self._deferred_quality_populate = pending
+        self._sync_start_render_enabled()
+
+        def populate_if_current():
+            if pending is not getattr(self, "_deferred_quality_populate", None):
+                return
+            self._deferred_quality_populate = None
+            self._run_quality_populate_after_open(*pending)
+
+        QTimer.singleShot(240, populate_if_current)
 
     def fit_settings_tab_to_page(self, idx=None):
         """ Keep the scroll content as tall as the CURRENT settings page only.
