@@ -411,9 +411,10 @@ class PresetMiniEditor(SteempegDialog):
         )
 
         hint = QLabel(
-            "Applies at render time: FPS cannot exceed the clip · "
-            "missing GPU encoder falls back to CPU · "
-            "quality taller than the source uses “If unavailable”, then Original."
+            "FPS is limited to the source frame rate. If the selected GPU encoder "
+            "is unavailable, CPU encoding is used.\n"
+            "If the selected resolution exceeds the source, “If unavailable” is "
+            "tried first, then Original."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(_HINT)
