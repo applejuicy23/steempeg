@@ -3433,8 +3433,7 @@ class LibraryMixin:
         for delay in (0, 2000, 8000, 20000):
             QTimer.singleShot(delay, lambda path=clip_path: self._trace_new_clip_ui(path))
         self._last_new_clip_path = clip_path
-        if not self._notify_new_clip_while_away(clip_path):
-            self.show_new_clip_popup(clip_path)
+        self._notify_new_clip(clip_path)
         self._append_new_clip_to_library()
 
     def _trace_new_clip_ui(self, clip_path: str) -> None:
@@ -3471,13 +3470,11 @@ class LibraryMixin:
             # The app may close before the last diagnostic timer runs.
             return
 
-    def _notify_new_clip_while_away(self, clip_path: str) -> bool:
-        """OS toast instead of the corner card when the window is off screen.
-
-        Returns True when the toast replaced the card.
-        """
-        from steempeg.infra.os_notify import main_window_is_off_screen, notify_new_clip
+    def _notify_new_clip(self, clip_path: str) -> None:
+        """Show the app's independent clip window, including while in the tray."""
+        from steempeg.infra.os_notify import main_window_is_off_screen
         from steempeg.ui.settings_dialog import KEY_NOTIFY_ON_NEW_CLIP
+        from steempeg.services.new_clip_trace import trace
 
         enabled = True
         if hasattr(self, "load_user_settings"):
@@ -3486,24 +3483,16 @@ class LibraryMixin:
             except Exception:
                 enabled = True
         if not enabled:
-            return False
+            trace(clip_path, "notification-disabled")
+            return
         parent = getattr(self, "ui", None)
-        if not main_window_is_off_screen(parent):
-            return False
-        from steempeg.services.new_clip_watcher import describe_new_clip
-        from steempeg.ui.new_clip_popup import format_clip_duration
+        away = main_window_is_off_screen(parent)
+        self.show_new_clip_popup(clip_path)
+        trace(clip_path, "notification-popup-shown", main_window_hidden=away)
+        if away:
+            from steempeg.infra.system_sound import play_system_sound
 
-        info = describe_new_clip(
-            clip_path,
-            getattr(self, "game_names_cache", None),
-            getattr(self, "cache_dir", ""),
-        )
-        body = info.game_name
-        length = format_clip_duration(info.duration_sec)
-        if length:
-            body = f"{info.game_name} · {length}"
-        notify_new_clip("New clip", body, clip_path, parent=parent)
-        return True
+            play_system_sound()
 
     def open_clip_from_os_toast(self, clip_path: str) -> None:
         """Opens the Express player for a clip chosen from an OS notification."""
