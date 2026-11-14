@@ -36,6 +36,9 @@ class FullscreenEventFilter(QObject):
 
         # GLOBAL KEYBOARD INTERCEPTION (WORKS EVERYWHERE)
         if kind in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
+            active = QApplication.activeWindow()
+            if active is not None and active.property("steempeg_independent_player"):
+                return False  # Its own Space / Escape shortcuts control only that player.
             # Alt+F4: close the main shell. Needed when Windows does not map the
             # combo to SC_CLOSE (custom chrome / focus on a Qt child without a
             # system menu). Win32 native filter covers embedded mpv HWNDs.
