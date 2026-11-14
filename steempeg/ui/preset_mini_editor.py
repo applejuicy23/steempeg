@@ -84,16 +84,6 @@ _NAME_LABEL_QSS = (
     f" background: transparent; font-family: {tok.FONT_APP};"
 )
 
-_BTN_PRIMARY = """
-    QPushButton {
-        background-color: #4a3d66; color: #f0ecff; border: 2px solid #6b5a8e;
-        border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: bold;
-        font-family: <<FONT>>;
-    }
-    QPushButton:hover { background-color: #5a4d76; border-color: #b29ae7; }
-    QPushButton:pressed { background-color: #3a324a; }
-""".replace("<<FONT>>", tok.FONT_APP)
-
 _HINT = f"color: {tok.TEXT_MUTED}; background: transparent; font-size: 11px;"
 
 
@@ -425,11 +415,11 @@ class PresetMiniEditor(SteempegDialog):
         actions.addStretch(1)
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_cancel.setStyleSheet(ut.settings_dialog_secondary_button_stylesheet())
+        btn_cancel.setStyleSheet(ut.about_secondary_button_stylesheet())
         btn_cancel.clicked.connect(self.reject)
         btn_save = QPushButton("Save")
         btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setStyleSheet(_BTN_PRIMARY)
+        btn_save.setStyleSheet(ut.about_accent_button_stylesheet())
         btn_save.clicked.connect(self._on_save)
         actions.addWidget(btn_cancel)
         actions.addWidget(btn_save)

@@ -2158,64 +2158,65 @@ def presets_list_widget_stylesheet() -> str:
 
 def presets_apply_solo_stylesheet() -> str:
     """Standalone Apply pill (Standard ladder rows — no ▾ half)."""
-    p = _active
+    c = _frameless_card_dialog_colors()
     return f"""
     QPushButton#PresetApplySolo {{
         font-family: {tok.FONT_APP};
-        font-size: 11px;
+        font-size: 12px;
         font-weight: bold;
-        background-color: {p.button_secondary_bg};
+        background-color: {c["btn_bg"]};
         color: #ffffff;
-        border: 2px solid {p.button_secondary_border};
+        border: 1px solid {c["btn_border"]};
         border-radius: 12px;
         padding: 0px 12px;
-        min-height: 22px;
+        min-height: 30px;
     }}
     QPushButton#PresetApplySolo:hover {{
-        background-color: {p.button_secondary_hover_bg};
-        border: 2px solid #6b5a8e;
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid #6b5a8e;
     }}
     QPushButton#PresetApplySolo:pressed {{
-        background-color: {p.button_secondary_pressed_bg};
-        border: 2px solid #b29ae7;
+        background-color: {c["btn_pressed_bg"]};
+        border: 1px solid #b29ae7;
     }}
     """
 
 
 def presets_apply_split_stylesheet() -> str:
-    """Preset row Apply ▾ split — matches RefreshButton secondary family."""
+    """Compact Apply split using the shared dialog secondary colors."""
     p = _active
+    c = _frameless_card_dialog_colors()
     side_border = p.border_default if p.name != UI_THEME_DEFAULT else "#555555"
     return f"""
     QPushButton#PresetApplyMain {{
         font-family: {tok.FONT_APP};
-        font-size: 11px;
+        font-size: 12px;
         font-weight: bold;
-        background-color: {p.button_secondary_bg};
+        background-color: {c["btn_bg"]};
         color: #ffffff;
-        border: 2px solid {p.button_secondary_border};
+        border: 1px solid {c["btn_border"]};
         border-right: none;
         border-top-left-radius: 12px;
         border-bottom-left-radius: 12px;
         border-top-right-radius: 0px;
         border-bottom-right-radius: 0px;
         padding: 0px 10px;
-        min-height: 22px;
+        min-height: 30px;
     }}
     QPushButton#PresetApplyMain:hover {{
-        background-color: {p.button_secondary_hover_bg};
-        border: 2px solid #6b5a8e;
+        background-color: {c["btn_hover_bg"]};
+        border: 1px solid #6b5a8e;
         border-right: none;
     }}
     QPushButton#PresetApplyMain:pressed {{
-        background-color: {p.button_secondary_pressed_bg};
-        border: 2px solid #b29ae7;
+        background-color: {c["btn_pressed_bg"]};
+        border: 1px solid #b29ae7;
         border-right: none;
     }}
     QPushButton#PresetApplyMenu {{
-        background-color: {p.button_secondary_bg};
+        background-color: {c["btn_bg"]};
         color: #ffffff;
-        border: 2px solid {p.button_secondary_border};
+        border: 1px solid {c["btn_border"]};
         border-left: 1px solid {side_border};
         border-top-left-radius: 0px;
         border-bottom-left-radius: 0px;
@@ -2227,18 +2228,18 @@ def presets_apply_split_stylesheet() -> str:
         min-width: 22px;
         max-width: 26px;
         padding: 0px;
-        min-height: 22px;
-        max-height: 22px;
+        min-height: 30px;
+        max-height: 30px;
     }}
     QPushButton#PresetApplyMenu:hover {{
-        background-color: {p.button_secondary_hover_bg};
+        background-color: {c["btn_hover_bg"]};
         color: #d4c4ff;
-        border: 2px solid #6b5a8e;
+        border: 1px solid #6b5a8e;
         border-left: 1px solid #6b5a8e;
     }}
     QPushButton#PresetApplyMenu:pressed {{
-        background-color: {p.button_secondary_pressed_bg};
-        border: 2px solid #b29ae7;
+        background-color: {c["btn_pressed_bg"]};
+        border: 1px solid #b29ae7;
         border-left: 1px solid #b29ae7;
     }}
     """

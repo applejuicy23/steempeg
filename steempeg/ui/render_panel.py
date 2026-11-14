@@ -1617,7 +1617,7 @@ class PresetListRow(QWidget):
 
         # Refresh-style Apply ▾ split (see RefreshButton + library_menu_stylesheet).
         apply_split = QWidget()
-        apply_split.setFixedHeight(26)
+        apply_split.setFixedHeight(34)
         apply_split.setStyleSheet(ut.presets_apply_split_stylesheet())
         apply_lay = QHBoxLayout(apply_split)
         apply_lay.setContentsMargins(0, 0, 0, 0)
@@ -1748,7 +1748,7 @@ class StandardPresetRow(QWidget):
         apply_btn.setObjectName("PresetApplySolo")
         apply_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         apply_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        apply_btn.setFixedHeight(26)
+        apply_btn.setFixedHeight(34)
         apply_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         apply_btn.setStyleSheet(ut.presets_apply_solo_stylesheet())
         apply_btn.setToolTip("Apply this standard quality to Video Settings")
@@ -1826,59 +1826,17 @@ def restyle_presets_page(ui, app) -> None:
     name_edit.setStyleSheet(ut.presets_line_edit_stylesheet())
     ui.preset_name_edit = name_edit
 
-    def _save_as_like_btn(
-        label: str,
-        *,
-        bg: str,
-        fg: str,
-        border: str,
-        hover_bg: str,
-        hover_border: str,
-        pressed_bg: str,
-    ) -> QPushButton:
-        btn = QPushButton(label)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setFixedHeight(34)
-        btn.setStyleSheet(
-            f"QPushButton {{ background-color: {bg}; color: {fg};"
-            f" border: 2px solid {border}; border-radius: 12px;"
-            f" font-family: {tok.FONT_APP};"
-            f" font-weight: bold; font-size: 12px; padding: 0px 10px; }}"
-            f" QPushButton:hover {{ background-color: {hover_bg}; border: 2px solid {hover_border}; }}"
-            f" QPushButton:pressed {{ background-color: {pressed_bg}; border: 2px solid {hover_border}; }}"
-            f" QPushButton:disabled {{ color: #777777; border-color: #3a3a3a;"
-            f" background-color: #2a2a2a; }}"
-        )
-        fnt = btn.font()
-        fnt = tok.pin_ui_font(fnt)
-        fnt.setBold(True)
-        fnt.setPixelSize(12)
-        btn.setFont(fnt)
-        return btn
-
-    btn_save = _save_as_like_btn(
-        "Save as new",
-        bg="#4a3d66",
-        fg="#f0ecff",
-        border="#6b5a8e",
-        hover_bg="#5a4d76",
-        hover_border="#b29ae7",
-        pressed_bg="#3a324a",
-    )
+    btn_save = QPushButton("Save as new")
+    btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn_save.setStyleSheet(ut.about_accent_button_stylesheet())
     btn_save.setToolTip(
         "Snapshot the current Video / Audio / Export panel as a named preset."
     )
     ui.btn_preset_save = btn_save
 
-    btn_create = _save_as_like_btn(
-        "Create…",
-        bg="#303030",
-        fg="#f0f0f0",
-        border="#4a4a4a",
-        hover_bg="#3a3a3a",
-        hover_border="#6b5a8e",
-        pressed_bg="#262626",
-    )
+    btn_create = QPushButton("Create…")
+    btn_create.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn_create.setStyleSheet(ut.about_secondary_button_stylesheet())
     btn_create.setToolTip(
         "Open the preset mini-editor — build a recipe without changing the live panel."
     )
