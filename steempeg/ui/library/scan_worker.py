@@ -54,6 +54,11 @@ class LibraryScanWorker(QThread):
                 self.discovering.emit(total)
 
             def on_clip(row: ScannedClip, index: int, total: int) -> None:
+                from steempeg.services.new_clip_trace import trace
+
+                trace(row.full_path, "scanner-output", fast=self._fast,
+                      from_cache=self._from_cache, new_only=self._known_paths is not None,
+                      row=vars(row), index=index, total=total)
                 self.clip_ready.emit(row, index, total)
 
             self._stats = run_library_scan(

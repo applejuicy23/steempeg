@@ -3426,10 +3426,50 @@ class LibraryMixin:
 
     def _on_new_clip_ready(self, clip_path: str) -> None:
         """Remembers the clip, notifies, and quietly adds it to the library."""
+        from steempeg.services.new_clip_trace import start_file_snapshots, trace
+
+        start_file_snapshots(clip_path)
+        trace(clip_path, "ui-received", scan_active=getattr(self, "_clips_scan_active", False))
+        for delay in (0, 2000, 8000, 20000):
+            QTimer.singleShot(delay, lambda path=clip_path: self._trace_new_clip_ui(path))
         self._last_new_clip_path = clip_path
         if not self._notify_new_clip_while_away(clip_path):
             self.show_new_clip_popup(clip_path)
         self._append_new_clip_to_library()
+
+    def _trace_new_clip_ui(self, clip_path: str) -> None:
+        """Temporary read-only comparison of the table and actual card label."""
+        from steempeg.services.new_clip_trace import trace
+
+        try:
+            key = self._clip_key(clip_path)
+            table = self.ui.table_clips
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is None or self._clip_key(item.data(Qt.UserRole)) != key:
+                    continue
+                values = [table.item(row, col).text() if table.item(row, col) else None
+                          for col in range(4)]
+                cards = []
+                grid = getattr(self, "grid_clips", None)
+                for index in range(grid.count() if grid is not None else 0):
+                    gitem = grid.item(index)
+                    if self._clip_key(gitem.data(Qt.UserRole + 1)) != key:
+                        continue
+                    card = grid.itemWidget(gitem)
+                    label = getattr(card, "date_lbl", None)
+                    cards.append(dict(materialized=card is not None,
+                                      visible=card.isVisible() if card else False,
+                                      footer=label.text() if label is not None else None,
+                                      tooltip=label.toolTip() if label is not None else None))
+                trace(clip_path, "ui-snapshot", listed=True, table_values=values, cards=cards,
+                      scan_active=getattr(self, "_clips_scan_active", False))
+                return
+            trace(clip_path, "ui-snapshot", listed=False,
+                  scan_active=getattr(self, "_clips_scan_active", False))
+        except RuntimeError:
+            # The app may close before the last diagnostic timer runs.
+            return
 
     def _notify_new_clip_while_away(self, clip_path: str) -> bool:
         """OS toast instead of the corner card when the window is off screen.
@@ -3589,6 +3629,11 @@ class LibraryMixin:
 
     def _append_new_clip_to_library(self) -> None:
         """Runs the quiet new-clips-only scan, waiting for a running scan to finish first."""
+        from steempeg.services.new_clip_trace import trace
+
+        path = getattr(self, "_last_new_clip_path", "")
+        if path:
+            trace(path, "append-request", scan_active=getattr(self, "_clips_scan_active", False))
         scan = getattr(self, "_library_scan_worker", None)
         if getattr(self, "_clips_scan_active", False) or (scan is not None and scan.isRunning()):
             QTimer.singleShot(1500, self._append_new_clip_to_library)
@@ -4670,6 +4715,10 @@ class LibraryMixin:
         table.setItem(row_position, 3, item_duration)
 
         self._append_grid_card_for_row(row_position)
+        from steempeg.services.new_clip_trace import trace
+
+        trace(row.full_path, "table-inserted", date=row.date_display,
+              duration=row.duration_str, title=row.game_name)
         return row_position
 
     def _remove_library_clip_paths_from_ui(self, paths) -> int:
@@ -4935,6 +4984,10 @@ class LibraryMixin:
             card_size=getattr(self, "_clips_card_size", None),
             info_tip=f"{title.strip()}\n{footer_right}".strip(),
         )
+        from steempeg.services.new_clip_trace import trace
+
+        trace(str(clip_path or ""), "card-created", date=date_raw, duration=dur_str,
+              footer_input=footer_right, footer_label=card.date_lbl.text())
         if queue_membership:
             card.set_queue_badge(membership=queue_membership)
         is_dead = False
@@ -6608,6 +6661,9 @@ class LibraryMixin:
         worker.start()
 
     def _on_clip_duration_ready(self, clip_path: str, duration_str: str) -> None:
+        from steempeg.services.new_clip_trace import trace
+
+        trace(clip_path, "duration-backfill-received", duration=duration_str)
         if not hasattr(self, "ui") or not hasattr(self.ui, "table_clips"):
             return
         norm = os.path.normpath(clip_path)
@@ -6645,6 +6701,9 @@ class LibraryMixin:
                     card = self.grid_clips.itemWidget(gitem)
                     if card is not None and hasattr(card, "set_date_footer"):
                         card.set_date_footer(footer)
+                        trace(clip_path, "duration-card-updated", date=date_raw,
+                              duration=duration_str, footer_input=footer,
+                              footer_label=card.date_lbl.text())
                     break
             break
 

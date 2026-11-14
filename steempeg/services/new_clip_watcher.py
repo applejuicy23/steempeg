@@ -141,7 +141,7 @@ def describe_new_clip(
             icon_path = cached_icon
         else:
             icon_path = find_local_steam_icon(app_id) or ""
-    return NewClipInfo(
+    info = NewClipInfo(
         path=clip_path,
         app_id=app_id,
         game_name=game_name or (f"App {app_id}" if app_id else "Steam clip"),
@@ -149,6 +149,10 @@ def describe_new_clip(
         thumbnail_path=find_clip_thumbnail(clip_path),
         duration_sec=read_clip_duration_sec(clip_path),
     )
+    from steempeg.services.new_clip_trace import trace
+
+    trace(clip_path, "popup-metadata", info=vars(info))
+    return info
 
 
 class NewClipWatcher(QObject):
@@ -217,6 +221,10 @@ class NewClipWatcher(QObject):
             if self._paused:
                 continue
             self._pending[path] = {"since": now, "print": None, "stable_at": now}
+            from steempeg.services.new_clip_trace import track, trace
+
+            track(path)
+            trace(path, "watcher-discovered", container=container)
             _log.info("New-clip watcher: saw %s, waiting for Steam to finish", path)
         if self._pending and not self._poll.isActive():
             self._poll.start()
@@ -229,6 +237,10 @@ class NewClipWatcher(QObject):
                 self._pending.pop(clip, None)
                 continue
             if now - state["since"] > GIVE_UP_SEC:
+                from steempeg.services.new_clip_trace import trace
+
+                trace(clip, "watcher-timeout", fingerprint=state["print"],
+                      age_sec=now - state["since"])
                 _log.warning("New-clip watcher: %s never settled, skipping", clip)
                 self._pending.pop(clip, None)
                 continue
@@ -243,6 +255,11 @@ class NewClipWatcher(QObject):
                 continue
             self._pending.pop(clip, None)
             _log.info("New-clip watcher: %s is ready", clip)
+            from steempeg.services.new_clip_trace import start_file_snapshots, trace
+
+            trace(clip, "watcher-ready", fingerprint=fingerprint,
+                  settle_sec=now - state["stable_at"], age_sec=now - state["since"])
+            start_file_snapshots(clip)
             self.new_clip_ready.emit(clip)
         if not self._pending:
             self._poll.stop()
