@@ -64,13 +64,28 @@ _DWMSBT_NONE = 1
 _BRACE_GRIP_W = 5.0
 
 
+def _host_clip_rect(widget: QWidget, host: QWidget) -> QRect:
+    """Host client bounds in tool-local coordinates, including during a slide."""
+    return QRect(widget.mapFromGlobal(host.mapToGlobal(host.rect().topLeft())), host.size())
+
+
+def _confined_mask(region: QRegion, clip: QRect) -> QRegion:
+    """Keep tool pixels and mouse input inside the host window."""
+    clipped = region.intersected(QRegion(clip))
+    # An empty QWidget mask removes clipping entirely. Use a nonempty region
+    # outside the widget instead, so a fully concealed tool stays invisible.
+    return clipped if not clipped.isEmpty() else QRegion(QRect(-2, -2, 1, 1))
+
+
 def _contains_global(widget: QWidget | None, pos) -> bool:
     if widget is None:
         return False
     try:
         if not widget.isVisible():
             return False
-        return widget.rect().contains(widget.mapFromGlobal(pos))
+        local = widget.mapFromGlobal(pos)
+        mask = widget.mask()
+        return widget.rect().contains(local) and (mask.isEmpty() or mask.contains(local))
     except RuntimeError:
         return False
 
@@ -324,12 +339,11 @@ class _Grip(QWidget):
         body = _brace_body_path(QRectF(self.rect()), open_left=open_left)
         try:
             region = _path_region(body) if not body.isEmpty() else QRegion()
-            if region.isEmpty():
-                self.clearMask()
-            else:
-                self.setMask(region)
+            host = self._overlay._controller._host
+            self.setMask(_confined_mask(region, _host_clip_rect(self, host)))
         except RuntimeError:
-            self.clearMask()
+            self.hide()
+            return
         if sys.platform == "win32":
             try:
                 from steempeg.infra.window_focus import detach_tool_ownership
@@ -630,19 +644,17 @@ class QueueHoverOverlay(QWidget):
         else:
             grip_global = QRect(card_x - _BULGE_OUT, overlay_y + grip_y, _BULGE_OUT, grip_h)
         self._bulge = QRect(0, 0, grip_global.width(), grip_global.height())
-        # Same rounded plate for the whole slide — reshaping every tick forces
-        # a full X11 expose of the queue (the Windows path can afford it).
-        mask_key = (int(card_w), int(card_h), int(_RADIUS))
-        if sys.platform == "win32" or mask_key != self._mask_key:
+        # This remains a Tool above native mpv, but must never draw or receive
+        # clicks outside the app. The snapshot avoids live queue repaints on X11.
+        clip = _host_clip_rect(self, host) if self._slide > 0.0 else QRect()
+        mask_key = (int(card_w), int(card_h), int(_RADIUS), clip.getRect())
+        if mask_key != self._mask_key:
             try:
                 region = _round_region(self._card, float(_RADIUS))
-                if region.isEmpty():
-                    self.clearMask()
-                else:
-                    self.setMask(region)
+                self.setMask(_confined_mask(region, clip))
                 self._mask_key = mask_key
             except RuntimeError:
-                self.clearMask()
+                self.setMask(QRegion(QRect(-2, -2, 1, 1)))
                 self._mask_key = None
         if (
             self._slide > 0.001
@@ -1188,8 +1200,7 @@ class QueueHoverController(QObject):
         if overlay is not None:
             try:
                 if overlay.isVisible() and float(overlay._slide) > 0.01:
-                    local = overlay.mapFromGlobal(pos)
-                    if overlay._card.contains(local):
+                    if _contains_global(overlay, pos):
                         return True
             except RuntimeError:
                 pass
