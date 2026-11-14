@@ -6731,6 +6731,27 @@ class RenderedLibraryMixin:
             action_source = None
             if clip_path and self._is_valid_clip_path(clip_path):
                 action_source = menu.addAction("🎮 Open source clip")
+        else:
+            sources = menu.addMenu("🎮 Open source clip")
+            sources.setStyleSheet(menu.styleSheet())
+            available = False
+            for path in file_paths:
+                meta = self._lookup_rendered_source_meta(path, os.path.basename(path))
+                clip_path = (meta.get("clip_path") or "").strip()
+                game = str(meta.get("game_name") or "").strip()
+                name = os.path.basename(path)
+                label = f"{game} — {name}" if game else name
+                action = sources.addAction(label.replace("&", "&&"))
+                enabled = bool(clip_path and self._is_valid_clip_path(clip_path))
+                action.setEnabled(enabled)
+                action.setToolTip(
+                    f"{path}\n{clip_path}" if enabled else f"{path}\nSource clip unavailable"
+                )
+                available = available or enabled
+                action.triggered.connect(
+                    lambda _checked=False, p=clip_path: self.open_source_clip(p)
+                )
+            sources.menuAction().setEnabled(available)
         action_delete = menu.addAction(
             "🗑️ Delete file" if count == 1 else f"🗑️ Delete files ({count})"
         )
