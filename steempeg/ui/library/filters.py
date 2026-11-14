@@ -8,7 +8,7 @@ import os
 import re
 import tempfile
 
-from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize, QTimer
+from PySide6.QtCore import Qt, QDate, QDateTime, QPoint, QTime, QSize, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -92,6 +92,26 @@ def _folder_pill_label(path: str) -> str:
 
 
 class FilterMenu(PillPaintDragMixin, QWidget):
+    closed = Signal()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.closed.emit()
+
+    def draft_signature(self):
+        """Small control snapshot used to discard un-applied edits on reopening."""
+        pills = tuple(
+            tuple((layout.itemAt(i).widget().property("raw_name"),
+                   layout.itemAt(i).widget().property("health_level"),
+                   layout.itemAt(i).widget().isChecked())
+                  for i in range(layout.count()) if layout.itemAt(i).widget() is not None)
+            for layout in (self.games_layout, self.types_layout, self.folders_layout, self.health_layout)
+        )
+        return pills, tuple(w.dateTime().toString(Qt.ISODate) for w in (
+            self.input_min_date, self.input_max_date, self.input_min_time,
+            self.input_max_time, self.input_min_dur, self.input_max_dur,
+        ))
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)

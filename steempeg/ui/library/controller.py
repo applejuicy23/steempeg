@@ -5301,6 +5301,8 @@ class LibraryMixin:
                 pill.setToolTip("Filters" if enabled else wait_tip)
             except RuntimeError:
                 pass
+        if not busy:
+            self._schedule_filter_menu_prepare()
         if busy:
             for attr in ("filter_menu", "rendered_filter_menu"):
                 menu = getattr(self, attr, None)
@@ -7038,30 +7040,98 @@ class LibraryMixin:
 
         menu.move(menu_x, menu_y)
 
+    def _filter_menu_data_key(self):
+        """Read cheap row metadata; never parse dates or rebuild widgets here."""
+        from steempeg.ui.ui_theme import get_ui_theme
+
+        table = self.ui.table_clips
+        rows = []
+        for row in range(table.rowCount()):
+            cells = [table.item(row, col) for col in range(4)]
+            game = cells[0]
+            rows.append((
+                tuple(cell.text() if cell is not None else "" for cell in cells),
+                (game.data(Qt.UserRole), game.data(Qt.UserRole + 2),
+                 game.data(Qt.UserRole + 4), game.icon().cacheKey()) if game is not None else None,
+            ))
+        return (rows, tuple(getattr(self, "clips_folders", None) or []),
+                repr(getattr(self, "saved_filter_state", None)),
+                get_ui_theme(), tok.FONT_FAMILY_CSS, self._filter_menu_density())
+
+    def _schedule_filter_menu_prepare(self, *_args):
+        """Warm the hidden Qt popup after scanning or closing, on the GUI loop."""
+        if getattr(self, "_is_closing", False) or getattr(self, "_clips_scan_active", False):
+            return
+        table = getattr(self.ui, "table_clips", None)
+        try:
+            model = table.model() if table is not None else None
+        except RuntimeError:
+            return  # Model teardown may emit rowsRemoved after its table is gone.
+        if model is not None and getattr(self, "_filter_prepare_model", None) is not model:
+            previous = getattr(self, "_filter_prepare_model", None)
+            for name in ("dataChanged", "rowsInserted", "rowsRemoved", "modelReset", "layoutChanged"):
+                if previous is not None:
+                    try:
+                        getattr(previous, name).disconnect(self._schedule_filter_menu_prepare)
+                    except (RuntimeError, TypeError):
+                        pass
+                getattr(model, name).connect(self._schedule_filter_menu_prepare)
+            self._filter_prepare_model = model
+        timer = getattr(self, "_filter_prepare_timer", None)
+        if timer is None:
+            timer = QTimer(self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._warm_filter_menu)
+            self._filter_prepare_timer = timer
+        timer.start(250)
+
+    def _warm_filter_menu(self):
+        if getattr(self, "_is_closing", False) or getattr(self, "_clips_scan_active", False):
+            return
+        menu = getattr(self, "filter_menu", None)
+        if menu is not None and menu.isVisible():
+            return
+        if hasattr(self.ui, "table_clips"):
+            self._prepare_filter_menu()
+
+    def _prepare_filter_menu(self):
+        """Keep a prepared popup until library data, theme or saved filters change."""
+        key = self._filter_menu_data_key()
+        menu = getattr(self, "filter_menu", None)
+        if (menu is not None and getattr(menu, "_prepared_data_key", None) == key
+                and menu.draft_signature() == getattr(menu, "_prepared_draft", None)):
+            return menu
+        if menu is not None:
+            menu.deleteLater()
+        menu = FilterMenu(self.ui)
+        self.filter_menu = menu
+        menu.gather_statistics(self)
+        dense = self._filter_menu_density()
+        if dense is not None:
+            menu.apply_density(dense)
+        menu._prepared_data_key = key
+        menu._prepared_draft = menu.draft_signature()
+        menu.closed.connect(self._schedule_filter_menu_prepare)
+        return menu
+
     def show_filter_menu(self):
-        """ Calculates the coordinates and passes the ENTIRE PROGRAM (self) to the menu. """
+        """Toggle a prepared popup without rebuilding the library on each click."""
         if not hasattr(self, 'btn_filter_pill'): return
         if getattr(self, "_clips_scan_active", False):
             return
-
-        # 1. Forcefully destroy the old window to reset the Qt focus bug.
-        if hasattr(self, 'filter_menu') and self.filter_menu:
-            self.filter_menu.deleteLater()
-            
-        # 2. Creating a brand-new menu from scratch
-        # Heal view↔memory desync before rebuilding pills (ghost hidden cards).
-        if hasattr(self, "sync_library_filter_view"):
+        menu = getattr(self, "filter_menu", None)
+        if menu is not None and menu.isVisible():
+            menu.hide()
+            return
+        if (menu is None or getattr(menu, "_prepared_data_key", None) != self._filter_menu_data_key()):
             self.sync_library_filter_view()
-        self.filter_menu = FilterMenu(self.ui)
-        self.filter_menu.gather_statistics(self)
-        dense = self._filter_menu_density()
-        if dense is not None and hasattr(self.filter_menu, "apply_density"):
-            self.filter_menu.apply_density(dense)
+        menu = self._prepare_filter_menu()
 
         # Size + place while hidden, then show once — avoids stack↔3-col flash.
-        self.filter_menu.setVisible(False)
         self._position_filter_menu(relayout=True)
-        self.filter_menu.show()
+        menu.show()
+        menu.raise_()
+        menu.activateWindow()
         # Geometry settle: move/ceiling only, do not switch column mode.
         QTimer.singleShot(0, lambda: self._position_filter_menu(relayout=False))
 
