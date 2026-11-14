@@ -244,11 +244,12 @@ class PresetMiniEditor(SteempegDialog):
         name_lbl.setStyleSheet(_NAME_LABEL_QSS)
         self._name = QLineEdit()
         self._name.setPlaceholderText("Enter preset name…")
-        self._name.setFixedHeight(_settings_combo_line_h())
         self._name.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         self._name.setStyleSheet(ut.presets_line_edit_stylesheet())
+        self._name.ensurePolished()
+        self._name.setFixedHeight(max(_settings_combo_line_h(), self._name.sizeHint().height()))
         if self._edit_name:
             self._name.setText(self._edit_name)
         name_col.addWidget(name_lbl, alignment=Qt.AlignmentFlag.AlignLeft)
