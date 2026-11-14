@@ -2511,11 +2511,13 @@ class RenderedLibraryMixin:
         table = getattr(self, "table_screenshots", None)
         if table is None:
             return
-        # Reuse grid menu path logic via selected table rows → paths.
+        hit = table.itemAt(pos)
+        selected = {idx.row() for idx in table.selectionModel().selectedRows()}
+        rows = sorted(selected) if hit is None or hit.row() in selected else [hit.row()]
         paths: list[str] = []
         seen: set[str] = set()
-        for idx in table.selectionModel().selectedRows():
-            cell = table.item(idx.row(), 0)
+        for row in rows:
+            cell = table.item(row, 0)
             path = cell.data(Qt.ItemDataRole.UserRole) if cell else None
             if not path:
                 continue
@@ -2537,25 +2539,7 @@ class RenderedLibraryMixin:
 
         menu = QMenu(table)
         menu.setStyleSheet(ut.library_menu_stylesheet())
-        action_open = menu.addAction("📂 Open")
-        action_folder = menu.addAction("📁 Open folder")
-        action_related = menu.addAction("🎬 Open related clip")
-        if len(paths) == 1:
-            path = paths[0]
-            action_open.triggered.connect(
-                lambda _checked=False, p=path: self._on_screenshot_open(p)
-            )
-            action_folder.triggered.connect(
-                lambda _checked=False, p=path: self._on_screenshot_open_folder(p)
-            )
-            action_related.setEnabled(self._screenshot_related_clip_action_enabled(path))
-            action_related.triggered.connect(
-                lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
-            )
-        else:
-            action_open.setEnabled(False)
-            action_folder.setEnabled(False)
-            action_related.setEnabled(False)
+        self._populate_screenshot_context_menu(menu, paths)
         self._run_media_context_menu(menu, table.viewport().mapToGlobal(pos), paths, screenshots=True)
 
     def _attach_screenshot_photo(
@@ -3732,26 +3716,30 @@ class RenderedLibraryMixin:
 
         menu = QMenu(self.grid_screenshots)
         menu.setStyleSheet(ut.library_menu_stylesheet())
-        action_open = menu.addAction("📂 Open")
+        self._populate_screenshot_context_menu(menu, paths)
+        self._run_media_context_menu(menu, self.grid_screenshots.viewport().mapToGlobal(pos), paths, screenshots=True)
+
+    def _populate_screenshot_context_menu(self, menu, paths: list[str]) -> None:
+        if not paths:
+            return
+        action_open = menu.addAction("📂 Open" if len(paths) == 1 else f"📂 Open files ({len(paths)})")
         action_folder = menu.addAction("📁 Open folder")
-        action_related = menu.addAction("🎬 Open related clip")
+        action_open.triggered.connect(
+            lambda _checked=False, selected=tuple(paths): self._open_selected_library_files(selected, screenshots=True)
+        )
+        action_folder.triggered.connect(
+            lambda _checked=False, selected=tuple(paths): self._open_selected_library_folders(selected)
+        )
         if len(paths) == 1:
             path = paths[0]
-            action_open.triggered.connect(
-                lambda _checked=False, p=path: self._on_screenshot_open(p)
-            )
-            action_folder.triggered.connect(
-                lambda _checked=False, p=path: self._on_screenshot_open_folder(p)
-            )
+            action_related = menu.addAction("🎬 Open related clip")
             action_related.setEnabled(self._screenshot_related_clip_action_enabled(path))
             action_related.triggered.connect(
                 lambda _checked=False, p=path: self._on_screenshot_open_related_clip(p)
             )
         else:
-            action_open.setEnabled(False)
-            action_folder.setEnabled(False)
+            action_related = menu.addAction("🎬 Open related clip")
             action_related.setEnabled(False)
-        self._run_media_context_menu(menu, self.grid_screenshots.viewport().mapToGlobal(pos), paths, screenshots=True)
 
     def _library_clip_refs_for_screenshot_link(self) -> list:
         """Clips Manager rows as ``LibraryClipRef`` for screenshot → clip matching."""
@@ -6717,6 +6705,10 @@ class RenderedLibraryMixin:
         count = len(file_paths)
         if count == 0:
             return
+        action_files = menu.addAction("▶ Open" if count == 1 else f"▶ Open files ({count})")
+        action_files.triggered.connect(
+            lambda _checked=False, paths=tuple(file_paths): self._open_selected_library_files(paths)
+        )
         action_open = menu.addAction("📂 Open in folder")
         if count == 1:
             path = file_paths[0]
@@ -6793,9 +6785,75 @@ class RenderedLibraryMixin:
 
     def _open_rendered_folders(self, paths) -> None:
         """Reveal all selected exports together in their containing folder."""
+        self._open_selected_library_folders(paths)
+
+    def _open_selected_library_folders(self, paths) -> None:
+        """Reveal the entire context-menu selection, grouped by containing folder."""
         from steempeg.infra.paths import reveal_many_in_file_manager
 
         reveal_many_in_file_manager(paths)
+
+    def _open_selected_library_files(self, paths, *, screenshots: bool = False) -> None:
+        """Open selected files, using independent players for multiple exports."""
+        pending = []
+        seen = set()
+        for path in paths:
+            if not path:
+                continue
+            path = os.path.abspath(os.path.normpath(str(path)))
+            key = os.path.normcase(path)
+            if key not in seen and os.path.isfile(path):
+                seen.add(key)
+                pending.append(path)
+        files = iter(pending)
+        independent_players = not screenshots and len(pending) > 1
+
+        def open_next():
+            if getattr(self, "_is_closing", False):
+                return
+            path = next(files, None)
+            if path is None:
+                return
+            try:
+                if screenshots:
+                    self._on_screenshot_open(path)
+                elif independent_players:
+                    self._open_rendered_player_window(path)
+                else:
+                    from steempeg.infra.paths import open_path_with_default_app
+
+                    open_path_with_default_app(path)
+            except Exception as exc:
+                logging.warning("Could not open selected file %s: %s", path, exc)
+            QTimer.singleShot(0, open_next)
+
+        QTimer.singleShot(0, open_next)
+
+    def _open_rendered_player_window(self, path: str) -> None:
+        """Keep one independently closable mini player for each selected file."""
+        from steempeg.ui.rendered_player import RenderedMediaPlayerWindow
+
+        if not os.path.isfile(path):
+            return
+        players = getattr(self, "_express_players", None)
+        if players is None:
+            players = self._express_players = {}
+        window = RenderedMediaPlayerWindow(self, path)
+        key = f"rendered:{id(window)}"
+        offset = 24 * (len(players) % 8)
+        screen = window.screen()
+        if screen is not None:
+            area = screen.availableGeometry()
+            window.move(
+                max(area.left(), min(window.x() + offset, area.right() - window.width() + 1)),
+                max(area.top(), min(window.y() + offset, area.bottom() - window.height() + 1)),
+            )
+        players[key] = window
+        window.destroyed.connect(lambda _obj=None, k=key: players.pop(k, None))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        QTimer.singleShot(0, window.open_clip)
 
     def _handle_rendered_grid_card_context_menu(self, item, event) -> None:
         # RMB only opens the menu (multi-select is Ctrl/Alt/Shift+LMB).
