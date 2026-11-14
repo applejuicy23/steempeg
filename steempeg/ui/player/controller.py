@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QPropertyAnimation, QTimer, Signal
@@ -1033,6 +1034,9 @@ class PlayerMixin:
     def _preview_switch_watchdog_fire(self, switch_gen: int) -> None:
         if switch_gen != getattr(self, "_media_switch_gen", 0):
             return
+        if self._first_frame_probe_pending(switch_gen):
+            QTimer.singleShot(250, lambda g=switch_gen: self._preview_switch_watchdog_fire(g))
+            return
         stuck_switch = bool(getattr(self, "_is_switching", False))
         stuck_await = bool(getattr(self, "_awaiting_first_frame", False))
         if not stuck_switch and not stuck_await:
@@ -1069,13 +1073,46 @@ class PlayerMixin:
             if clip and hasattr(self, "_maybe_start_thumbs_after_quality"):
                 self._maybe_start_thumbs_after_quality(clip)
 
+    def _first_frame_probe_pending(self, gen) -> bool:
+        result = getattr(self, "_first_frame_probe_result", None)
+        return bool(result and result[0] == gen and not result[3]
+                    and getattr(self, "_first_frame_probe_player", None) is getattr(self, "player", None))
+
+    def _start_first_frame_probe(self, gen: int) -> None:
+        """Read potentially blocking MPV properties away from the GUI thread."""
+        player = getattr(self, "player", None)
+        self._first_frame_probe_player = player
+        self._first_frame_probe_result = (gen, False, False, False)
+
+        def current():
+            return gen == getattr(self, "_media_switch_gen", 0) and player is getattr(self, "player", None)
+
+        def probe():
+            deadline = time.monotonic() + 0.65
+            ready = alive = False
+            try:
+                while current():
+                    width = player.width if player is not None else None
+                    if not current():
+                        return
+                    pos = player.time_pos if player is not None else None
+                    alive = pos is not None and float(pos) >= 0
+                    ready = bool(width) and alive
+                    if ready or alive or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.016)
+            except Exception:
+                logging.debug("First-frame readiness query failed", exc_info=True)
+            if current():
+                self._first_frame_probe_result = (gen, ready, alive, True)
+
+        threading.Thread(target=probe, name="mpv-first-frame", daemon=True).start()
+
     def _reveal_video_when_ready(self):
         """Swap the placeholder for the live mpv surface once the first frame exists.
 
-        Polls mpv's decoded frame width (preferred) or an advancing time_pos
-        (audio often starts first). Hard deadline so a hidden/idle surface can
-        never leave us stuck on the placeholder — or a ClipCard ~70% spinner —
-        forever while the UI thread is busy.
+        The worker publishes readiness; this GUI callback never queries a busy
+        decoder. A newer selection invalidates its result without waiting.
         """
         if not getattr(self, '_awaiting_first_frame', False):
             return
@@ -1083,53 +1120,26 @@ class PlayerMixin:
         if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
             return
 
-        # "width" is set once mpv has decoded a video frame — safest reveal.
-        # time_pos advancing means demux/decode is alive (often audio-first on
-        # DASH); drop the card overlay then so we never sit on a stuck 70% while
-        # sound already plays behind a blank stack page.
-        ready = False
-        playback_alive = False
-        try:
-            if self.player and self.player.width:
-                ready = True
-        except Exception:
-            ready = True  # never get wedged on a transient property error
-
-        if not ready:
-            try:
-                pos = self.player.time_pos if self.player else None
-                if pos is not None and float(pos) >= 0.0:
-                    playback_alive = True
-            except Exception:
-                playback_alive = False
-
-        # Linux: if demux already reports a path and play is underway, treat as
-        # alive even when width/time_pos lag — unblocks chrome after remux cache hits.
-        if not ready and not playback_alive and sys.platform != "win32":
-            try:
-                if self._mpv_has_media() and not getattr(self.player, "pause", True):
-                    playback_alive = True
-            except Exception:
-                pass
+        result = getattr(self, "_first_frame_probe_result", None)
+        if result is None or result[0] != switch_gen:
+            self._start_first_frame_probe(switch_gen)
+            result = self._first_frame_probe_result
+        _, ready, playback_alive, done = result
 
         if ready or playback_alive:
             self._complete_clip_open_loading()
 
-        if not ready and time.time() < getattr(self, '_first_frame_deadline', 0):
+        if not ready and (not done or time.time() < getattr(self, '_first_frame_deadline', 0)):
             if (
                 hasattr(self, "update_clip_open_loading_progress")
                 and getattr(self, "_clip_open_loading_hosts", None)
             ):
-                buf = self._clip_open_mpv_buffer_percent()
-                if buf is not None:
-                    pct = 70 + int(buf * 0.25)
+                t0 = getattr(self, "_clip_open_play_t0", None)
+                if t0:
+                    elapsed = max(0.0, time.time() - float(t0))
+                    pct = min(92, 70 + int(elapsed * 40))
                 else:
-                    t0 = getattr(self, "_clip_open_play_t0", None)
-                    if t0:
-                        elapsed = max(0.0, time.time() - float(t0))
-                        pct = min(92, 70 + int(elapsed * 40))
-                    else:
-                        pct = 70
+                    pct = 70
                 self.update_clip_open_loading_progress(pct)
             QTimer.singleShot(16, self._reveal_video_when_ready)
             return
@@ -3906,6 +3916,8 @@ class PlayerMixin:
         """Clear the switching gate and apply deferred trim once duration is ready."""
         if switch_gen is not None and switch_gen != getattr(self, "_media_switch_gen", 0):
             return
+        if self._first_frame_probe_pending(getattr(self, "_media_switch_gen", 0)):
+            return  # The 800ms safety callback must not restart synchronous polling.
         was_awaiting = bool(getattr(self, "_awaiting_first_frame", False))
         # Soft 800ms finish (and watchdog) must clear BOTH gates — awaiting alone
         # still blocks seeks, same-clip spam guards, and related-clip open.
@@ -4411,6 +4423,7 @@ class PlayerMixin:
         if hasattr(self, "_nudge_clip_open_loading"):
             self._nudge_clip_open_loading(70)
         self._first_frame_deadline = time.time() + 0.6
+        self._start_first_frame_probe(switch_gen)
         QTimer.singleShot(30, self._reveal_video_when_ready)
         # Soft finish + hard watchdog — rendered path previously lacked both, so a
         # stale _preview_switch_gen from a prior Steam open could leave awaiting stuck.
@@ -5715,6 +5728,7 @@ class PlayerMixin:
 
         # Reveal the live video only once the first frame is ready (see step 3).
         self._first_frame_deadline = time.time() + 0.6
+        self._start_first_frame_probe(switch_gen)
         QTimer.singleShot(30, self._reveal_video_when_ready)
 
         # Timeline thumbs after first paint — never wait on ffmpeg batch stop here.
