@@ -1256,8 +1256,8 @@ class PlayerMixin:
         """LMB on the picture → same as footer Play/Pause, with pulse feedback.
 
         Rapid clicks are allowed: each one toggles playback and **interrupts** the
-        pulse so the new play/pause glyph restarts immediately. A tiny debounce
-        only collapses Win32 duplicate MSG deliveries for the *same* physical click.
+        pulse so the new play/pause glyph restarts immediately. Pointer handlers
+        pair press/release events; no time-based gate discards subsequent clicks.
         Skip when a zoom-pan drag just finished (drag ≠ click).
         """
         if getattr(self, "_is_closing", False):
@@ -1265,15 +1265,6 @@ class PlayerMixin:
         if getattr(self, "_preview_zoom_suppress_click", False):
             self._preview_zoom_suppress_click = False
             return
-        now = time.monotonic()
-        ignore_until = float(getattr(self, "_video_surface_ignore_until", 0.0) or 0.0)
-        if now < ignore_until:
-            return
-        last = float(getattr(self, "_video_surface_click_at", 0.0) or 0.0)
-        # ~3ms: same-tick double MSG only — not a human-perceptible delay.
-        if now - last < 0.003:
-            return
-        self._video_surface_click_at = now
         # Don't steal clicks while a modal / popup is up.
         try:
             if QApplication.activeModalWidget() is not None:
@@ -1478,6 +1469,9 @@ class PlayerMixin:
             post(self.wake_up_fullscreen_controls)
 
         try:
+            # Each physical click belongs to our transport, including rapid
+            # pairs; do not let mpv turn the second press into MBTN_LEFT_DBL.
+            player.input_doubleclick_time = 0
             player.register_key_binding("MBTN_LEFT", on_left, "force")
             player.register_key_binding("MBTN_RIGHT", on_right, "force")
             player.register_key_binding("WHEEL_UP", on_wheel(1), "force")
@@ -1571,7 +1565,7 @@ class PlayerMixin:
                     except Exception:
                         pass
                     return False
-                if et == QEvent.Type.MouseButtonPress:
+                if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
                     btn = event.button()
                     if btn not in (
                         Qt.MouseButton.LeftButton,
@@ -1637,6 +1631,7 @@ class PlayerMixin:
         from steempeg.ui.window_chrome import _MSG, _native_event_type_bytes
 
         _WM_LBUTTONDOWN = 0x0201
+        _WM_LBUTTONDBLCLK = 0x0203
         _WM_LBUTTONUP = 0x0202
         _WM_RBUTTONDOWN = 0x0204
         _WM_RBUTTONUP = 0x0205
@@ -1772,7 +1767,7 @@ class PlayerMixin:
                         pass
                     return False
 
-                if msg.message == _WM_LBUTTONDOWN:
+                if msg.message in (_WM_LBUTTONDOWN, _WM_LBUTTONDBLCLK):
                     self._armed = self._is_surface_click_hwnd(hwnd)
                     self._armed_button = "left"
                     if self._armed:
