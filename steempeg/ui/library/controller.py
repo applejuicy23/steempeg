@@ -1103,6 +1103,8 @@ class LibraryMixin:
         if hasattr(self, "update_status_indicator") and not chain:
             self.update_status_indicator("Ready", "ready")
     def _stop_library_scan(self):
+        self._clips_eager_cards_pending = False
+        self._scan_eager_card_cursor = None
         worker = getattr(self, "_library_scan_worker", None)
         if worker is not None:
             if worker.isRunning():
@@ -4628,22 +4630,8 @@ class LibraryMixin:
 
         # 4. Rescan folders. Progressive is launch-only — Refresh runs Full.
         self._stop_clip_poster_backfill()
-        from steempeg.ui.settings_prefs import SCAN_PROGRESSIVE, load_startup_library_scan
-
-        settings = {}
-        if hasattr(self, "load_user_settings"):
-            try:
-                settings = self.load_user_settings() or {}
-            except Exception:
-                settings = {}
-        # lazy_cards: ClipCards only for the viewport (Progressive-style) — a full
-        # Refresh with Clips visible used to relayout/paint every card per batch.
-        if load_startup_library_scan(settings) == SCAN_PROGRESSIVE:
-            # Same companion as On launch → Full: Steam icons/names after paint.
-            self._startup_refresh_steam_meta = True
-            self.scan_clips(fast=False, lazy_cards=True)
-        else:
-            self.scan_clips(fast=True, lazy_cards=True)
+        self._startup_refresh_steam_meta = True
+        self.scan_clips(fast=False, lazy_cards=False)
 
     def _insert_scanned_clip_row(self, row: ScannedClip) -> int:
         """Append one scanned clip to the hidden table (+ grid card). Returns row index."""
@@ -5639,8 +5627,48 @@ class LibraryMixin:
 
         self._finalize_scan_finished(stats, generation, announce_duplicates)
 
+    def _prepare_all_scan_cards(self, stats, generation: int, announce_duplicates: bool) -> None:
+        """Finish eager scans in GUI-sized slices before unlocking the library."""
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+        if not getattr(self, "_clips_eager_cards_pending", False):
+            return
+        grid = getattr(self, "grid_clips", None)
+        cursor = getattr(self, "_scan_eager_card_cursor", None)
+        if cursor is None:
+            # Keep the first screen stable throughout scanning. Publish all
+            # remaining slots once, then populate them without viewport gating.
+            self._publish_deferred_scan_grid_rows()
+            self._stop_clips_idle_fill()
+            self._clips_progressive_active = False
+            cursor = 0
+        built = 0
+        total = grid.count() if grid is not None else 0
+        while cursor < total and built < 4:
+            item = grid.item(cursor)
+            if grid.itemWidget(item) is None:
+                self._attach_clip_card_to_grid_item(item)
+                built += 1
+            cursor += 1
+        self._scan_eager_card_cursor = cursor
+        if cursor < total:
+            if hasattr(self, "update_status_indicator"):
+                self.update_status_indicator(
+                    f"Preparing cards {cursor}/{total}", "busy", scan_phase="loading"
+                )
+            QTimer.singleShot(16, lambda: self._prepare_all_scan_cards(stats, generation, announce_duplicates))
+            return
+        self._clips_eager_cards_pending = False
+        self._scan_eager_card_cursor = None
+        self._finalize_scan_finished(stats, generation, announce_duplicates)
+
     def _finalize_scan_finished(self, stats, generation: int, announce_duplicates: bool) -> None:
         """Run the original scan-finished logic once both worker + UI insert are done."""
+        if generation != getattr(self, "_scan_generation", 0):
+            return
+        if getattr(self, "_clips_eager_cards_pending", False):
+            self._prepare_all_scan_cards(stats, generation, announce_duplicates)
+            return
         self._release_clips_grid_updates()
         # Once the first screen is populated, keep its item model stable while
         # the worker scans off-screen clips. Publish the remaining placeholders
@@ -5789,6 +5817,8 @@ class LibraryMixin:
     def _on_scan_error(self, message: str, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
+        self._clips_eager_cards_pending = False
+        self._scan_eager_card_cursor = None
         self._library_scan_worker = None
         self._startup_refresh_steam_meta = False
         logging.error("Library scan failed: %s", message)
@@ -6791,8 +6821,8 @@ class LibraryMixin:
         session snapshot exists yet). Prefer ``restore_clips_from_session_cache``
         for Settings → Skip.
 
-        lazy_cards=True plants grid placeholders and materializes ClipCards only
-        for the viewport (same session state as a Progressive launch).
+        Full/Quick scans prepare every ClipCard in small GUI batches before
+        finishing. lazy_cards=True keeps viewport-only cards after discovery.
         """
         if not hasattr(self.ui, "table_clips"):
             return
@@ -6811,12 +6841,16 @@ class LibraryMixin:
         self._scan_append_new_only = False
         self._scan_snapshot_restore = False
         self._release_clips_grid_updates()
-        self._clips_progressive_active = bool(lazy_cards)
-        self._clips_refresh_lazy = bool(lazy_cards)
-        if lazy_cards:
-            self._ensure_clips_viewport_lazy_hooks()
-            self._clips_scroll_active = False
-            self._clip_duration_did_full_pass = False
+        self._clips_eager_cards_pending = not lazy_cards
+        self._scan_eager_card_cursor = None
+        # All scans keep only the first screen active while rows arrive. Eager
+        # Full/Quick then populate every slot before Ready; only lazy scans keep
+        # their viewport policy afterwards.
+        self._clips_progressive_active = True
+        self._clips_refresh_lazy = True
+        self._ensure_clips_viewport_lazy_hooks()
+        self._clips_scroll_active = False
+        self._clip_duration_did_full_pass = False
         self._clip_live_paths = set()
         self._library_clip_rows = []
         self._saved_clips_selection_path = ""
