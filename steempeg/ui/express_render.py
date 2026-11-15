@@ -186,7 +186,11 @@ class ExpressRender(QObject):
             self.finished.emit(False, "ffmpeg not found", "")
             return False
 
-        params = resolve_render_params(job, ffmpeg_exe)
+        from dataclasses import replace
+        from steempeg.ui.preset_compat import preset_settings_for_plan
+
+        effective_settings = preset_settings_for_plan(self._app, job.settings, self.recipe_label)
+        params = resolve_render_params(replace(job, settings=effective_settings), ffmpeg_exe)
         if params is None:
             self.finished.emit(False, "No playable session.mpd found for this clip.", "")
             return False

@@ -7726,7 +7726,13 @@ class RenderMixin:
                 self._stop_queue_batch()
             return
 
-        params = resolve_render_params(job, ffmpeg_exe)
+        from dataclasses import replace
+        from steempeg.ui.preset_compat import preset_settings_for_plan
+
+        effective_settings = preset_settings_for_plan(
+            self, job.settings, (job.settings.output_preset or "").removeprefix("User: ") or job.game_name
+        )
+        params = resolve_render_params(replace(job, settings=effective_settings), ffmpeg_exe)
         if params is None:
             self._fail_queue_job(
                 job,
