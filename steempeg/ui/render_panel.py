@@ -1295,9 +1295,11 @@ def apply_presets_tab_theme_chrome(ui) -> None:
     name = getattr(ui, "preset_name_edit", None)
     if name is not None:
         name.setStyleSheet(ut.presets_line_edit_stylesheet())
+        name.setTextMargins(0, 0, 0, 0)
     search = getattr(ui, "preset_search_edit", None)
     if search is not None:
         search.setStyleSheet(ut.presets_line_edit_stylesheet(compact=True))
+        search.setTextMargins(0, 0, 0, 0)
     lst = getattr(ui, "preset_list", None)
     if lst is not None:
         lst.setStyleSheet(ut.presets_list_widget_stylesheet())
@@ -1824,6 +1826,7 @@ def restyle_presets_page(ui, app) -> None:
     name_edit.setObjectName("preset_name_edit")
     name_edit.setPlaceholderText("Enter preset name…")
     name_edit.setStyleSheet(ut.presets_line_edit_stylesheet())
+    name_edit.setTextMargins(0, 0, 0, 0)
     ui.preset_name_edit = name_edit
 
     btn_save = QPushButton("Save as new")
@@ -1865,6 +1868,7 @@ def restyle_presets_page(ui, app) -> None:
     search_edit.setPlaceholderText("Search…")
     search_edit.setClearButtonEnabled(True)
     search_edit.setStyleSheet(ut.presets_line_edit_stylesheet(compact=True))
+    search_edit.setTextMargins(0, 0, 0, 0)
     ui.preset_search_edit = search_edit
     root.addWidget(_content_width_wrap(search_edit))
 

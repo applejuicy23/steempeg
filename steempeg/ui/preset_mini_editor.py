@@ -238,8 +238,12 @@ class PresetMiniEditor(SteempegDialog):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         self._name.setStyleSheet(ut.presets_line_edit_stylesheet())
+        self._name.setTextMargins(0, 0, 0, 0)
         self._name.ensurePolished()
-        self._name.setFixedHeight(max(_settings_combo_line_h(), self._name.sizeHint().height()))
+        self._name.setFixedHeight(max(
+            _settings_combo_line_h(), self._name.sizeHint().height(),
+            self._name.fontMetrics().height() + 12,
+        ))
         if self._edit_name:
             self._name.setText(self._edit_name)
         name_col.addWidget(name_lbl, alignment=Qt.AlignmentFlag.AlignLeft)

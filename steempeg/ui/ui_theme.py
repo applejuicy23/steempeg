@@ -2133,7 +2133,7 @@ def presets_line_edit_stylesheet(*, compact: bool = False) -> str:
     return (
         f"QLineEdit {{ background-color: {c.field_bg}; color: #e8e8e8;"
         f" border: 1px solid {c.field_border}; border-radius: 8px;"
-        f" padding: 0px 10px; min-height: {height}px; font-size: 12px;"
+        f" padding: 0px 10px; min-height: {height}px;"
         f" font-weight: bold; font-family: {tok.FONT_APP}; }}"
         f" QLineEdit:focus {{ border: 1px solid #8e7cc3; }}"
     )
