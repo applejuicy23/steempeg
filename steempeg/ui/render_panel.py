@@ -501,6 +501,17 @@ def _page_title_icon_label(icon_index: int, size: int = 16) -> QLabel:
     return icon_lbl
 
 
+def _advanced_encoding_icon_label() -> QLabel:
+    from steempeg.ui.icon_assets import tinted_pixmap
+
+    label = QLabel()
+    label.setObjectName("advancedEncodingIcon")
+    label.setFixedSize(16, 16)
+    label.setStyleSheet("background: transparent; border: none;")
+    label.setPixmap(tinted_pixmap("settings.png", "#ffffff", 16))
+    return label
+
+
 def _page_title_row(text: str, icon_index: int, *, icon_size: int = 16) -> QWidget:
     """Content panel header: white glyph + bold title (also on neo sidebar tabs)."""
     row = QWidget()
@@ -807,6 +818,7 @@ def _build_pro_encoding_section(ui) -> QWidget:
     head.setSpacing(8)
     title = QLabel("Advanced Encoding")
     title.setStyleSheet(_TITLE_QSS)
+    head.addWidget(_advanced_encoding_icon_label())
     head.addWidget(title)
     head.addWidget(ProBadge(), alignment=Qt.AlignVCenter)
     head.addStretch()

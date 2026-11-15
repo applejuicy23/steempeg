@@ -57,7 +57,7 @@ from steempeg.ui.render_pro_controls import preset_rows, pro_enabled, tune_rows
 from steempeg.ui.ui_density import COMFORT
 from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
-from steempeg.ui.widgets.steempeg_check import SteempegCheckBox
+from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 from steempeg.ui.widgets.vertical_scrollbar import ensure_steempg_vertical_scrollbar
 
 _log = logging.getLogger(__name__)
@@ -108,10 +108,20 @@ def _field_cell(caption: str, combo: QComboBox) -> QVBoxLayout:
     return box
 
 
-def _section_title(text: str) -> QLabel:
+def _section_title(text: str, icon_index: int | None = None) -> QWidget:
+    from steempeg.ui.render_panel import _page_title_icon_label, _advanced_encoding_icon_label
+
+    row = QWidget()
+    row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    layout.addWidget(_page_title_icon_label(icon_index) if icon_index is not None
+                     else _advanced_encoding_icon_label())
     sec = QLabel(text)
     sec.setStyleSheet(_SECTION_QSS)
-    return sec
+    layout.addWidget(sec)
+    return row
 
 
 def _apply_settings_combo_chrome(*combos: QComboBox) -> None:
@@ -251,7 +261,7 @@ class PresetMiniEditor(SteempegDialog):
         root.addLayout(name_col)
 
         # --- Video (2-col grid like Video Settings) ---
-        root.addWidget(_section_title("Video"))
+        root.addWidget(_section_title("Video", 1))
 
         self._quality = QComboBox()
         self._quality.addItem(original_quality_label(None), "original")
@@ -311,10 +321,13 @@ class PresetMiniEditor(SteempegDialog):
         root.addLayout(video)
 
         # --- Audio ---
-        root.addWidget(_section_title("Audio"))
+        root.addWidget(_section_title("Audio", 2))
 
-        self._mute = SteempegCheckBox("Disable audio (video only)")
-        root.addWidget(self._mute)
+        from steempeg.ui.render_panel import _toggle_row
+
+        self._mute = ToggleSwitch()
+        self._mute.setAccessibleName("Disable audio (video only)")
+        root.addLayout(_toggle_row(self._mute, "Disable audio (video only)"))
 
         self._audio_fmt = QComboBox()
         for fmt in AUDIO_FORMATS:
@@ -335,7 +348,7 @@ class PresetMiniEditor(SteempegDialog):
         root.addLayout(audio)
 
         # --- Export ---
-        root.addWidget(_section_title("Export"))
+        root.addWidget(_section_title("Export", 3))
 
         self._container = QComboBox()
         for c in CONTAINERS:
@@ -361,7 +374,8 @@ class PresetMiniEditor(SteempegDialog):
         self._pro_keyint = QComboBox()
         for sec, label in pro.KEYINT_CHOICES:
             self._pro_keyint.addItem(label, sec)
-        self._pro_ten_bit = SteempegCheckBox("10-bit color")
+        self._pro_ten_bit = ToggleSwitch()
+        self._pro_ten_bit.setAccessibleName("10-bit color")
         self._pro_family = ""
         if self._pro_on:
             from steempeg.ui.widgets.pro_badge import ProBadge
@@ -384,7 +398,7 @@ class PresetMiniEditor(SteempegDialog):
             adv.setColumnStretch(0, 1)
             adv.setColumnStretch(1, 1)
             root.addLayout(adv)
-            root.addWidget(self._pro_ten_bit)
+            root.addLayout(_toggle_row(self._pro_ten_bit, "10-bit color"))
 
         _apply_settings_combo_chrome(
             self._quality,
@@ -404,15 +418,6 @@ class PresetMiniEditor(SteempegDialog):
             self._pro_keyint,
         )
 
-        hint = QLabel(
-            "FPS is limited to the source frame rate. If the selected GPU encoder "
-            "is unavailable, CPU encoding is used.\n"
-            "If the selected resolution exceeds the source, “If unavailable” is "
-            "tried first, then Original."
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet(_HINT)
-        root.addWidget(hint)
         root.addStretch(1)
 
         actions = QHBoxLayout()
