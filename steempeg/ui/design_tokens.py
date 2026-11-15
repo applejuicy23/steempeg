@@ -575,11 +575,16 @@ def apply_app_tooltip_style(app=None) -> None:
     except Exception:
         tip_qss = STYLE_TOOLTIP
     block = f"/* steempeg-tooltip */\n{tip_qss}"
-    target.setStyleSheet(f"{cleaned}\n{block}" if cleaned else block)
+    updated = f"{cleaned}\n{block}" if cleaned else block
+    # QApplication.setStyleSheet repolishes the entire widget tree, even when
+    # the text is identical. Theme application may request this more than once.
+    if updated != current:
+        target.setStyleSheet(updated)
 
     tip_bg = QColor(TOOLTIP_BG)
     tip_fg = QColor(TOOLTIP_FG)
-    palette = target.palette()
+    original_palette = target.palette()
+    palette = QPalette(original_palette)
     for group in (
         QPalette.ColorGroup.Active,
         QPalette.ColorGroup.Inactive,
@@ -587,10 +592,20 @@ def apply_app_tooltip_style(app=None) -> None:
     ):
         palette.setColor(group, QPalette.ColorRole.ToolTipBase, tip_bg)
         palette.setColor(group, QPalette.ColorRole.ToolTipText, tip_fg)
-    target.setPalette(palette)
+    if palette != original_palette:
+        target.setPalette(palette)
+
+    tip_palette = QPalette(QToolTip.palette())
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+        tip_palette.setColor(group, QPalette.ColorRole.ToolTipBase, tip_bg)
+        tip_palette.setColor(group, QPalette.ColorRole.ToolTipText, tip_fg)
+        tip_palette.setColor(group, QPalette.ColorRole.Mid, QColor(TOOLTIP_BORDER))
+    if tip_palette != QToolTip.palette():
+        QToolTip.setPalette(tip_palette)
 
     tip_font = ui_qfont(12, weight=QFont.Weight.Bold)
-    QToolTip.setFont(tip_font)
+    if QToolTip.font() != tip_font:
+        QToolTip.setFont(tip_font)
 
 
 # Legacy aliases (prefer STYLE_PANEL_* in new UI).
