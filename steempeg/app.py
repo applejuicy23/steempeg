@@ -1,3 +1,6 @@
+from time import perf_counter as _startup_perf_counter
+_STARTUP_ENTRY = _startup_perf_counter()
+
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui import design_tokens as tok
 from steempeg.ui.main_window import MainWindow
@@ -442,6 +445,9 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         _launch_splash_progress(8, "Building window…")
 
         self.ui = MainWindow(app_host=self)
+        from steempeg.ui.startup_metrics import StartupMeasurement
+
+        self._startup_measurement = StartupMeasurement(self, _STARTUP_ENTRY)
         # Splash is already on screen. winId() / mpv / frame changes must not
         # map this shell beside it — the caption would be «Steempeg» again.
         self.ui.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
@@ -4735,6 +4741,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             mode = SCAN_FULL
             self._force_full_startup_scan = False
 
+        self._startup_scan_mode = mode
+
         def _restore_session_side_libraries(*, restored_clips: bool) -> None:
             """Paint Rendered + Screenshots from session JSON (Skip / Smart)."""
             def _spin_lib():
@@ -7119,6 +7127,7 @@ def main():
 
             schedule_hidden_handle_pane_restore(window)
             startup_trace("main_window_shown")
+            window._startup_measurement.window_shown()
             try:
                 from steempeg.services.kofi_remote import refresh_kofi_url_async
 

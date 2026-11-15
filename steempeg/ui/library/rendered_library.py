@@ -5514,6 +5514,8 @@ class RenderedLibraryMixin:
     def _on_rendered_scan_error(self, message: str, generation: int) -> None:
         if generation != getattr(self, "_rendered_scan_generation", 0):
             return
+        if getattr(getattr(self, "_startup_measurement", None), "result", True) is None:
+            self._startup_metrics_failed = True
         self._rendered_scan_worker = None
         logging.error("Rendered scan failed: %s", message)
         self._finish_startup_library_scan_status(text="Scan error", state="error")

@@ -5817,6 +5817,8 @@ class LibraryMixin:
     def _on_scan_error(self, message: str, generation: int) -> None:
         if generation != getattr(self, "_scan_generation", 0):
             return
+        if getattr(getattr(self, "_startup_measurement", None), "result", True) is None:
+            self._startup_metrics_failed = True
         self._clips_eager_cards_pending = False
         self._scan_eager_card_cursor = None
         self._library_scan_worker = None
@@ -6117,6 +6119,8 @@ class LibraryMixin:
         startup_trace("progressive_post_settle:scheduled")
 
     def _on_progressive_clips_failed(self, message: str) -> None:
+        if getattr(getattr(self, "_startup_measurement", None), "result", True) is None:
+            self._startup_metrics_failed = True
         self._progressive_clips_worker = None
         picker = getattr(self, "folder_picker", None)
         if picker is not None and hasattr(picker, "set_busy"):
