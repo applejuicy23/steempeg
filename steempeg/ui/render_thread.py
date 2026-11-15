@@ -26,25 +26,25 @@ from steempeg.render.gpu_decode import (
 from steempeg.core.dash.mpd import estimate_render_duration_sec
 
 
-def _popen_cmdline(cmd: str, *, cwd: str | None, creation_flags: int, **kwargs):
+def _popen_cmdline(cmd: str, *, cwd: str | None, creation_flags: int, priority: str = "normal", **kwargs):
     """Run a Windows-style quoted command line on any OS.
 
     On Windows, ``Popen(string, shell=False)`` is a command line. On POSIX the
     same call treats the entire string as argv[0] and fails with ENOENT.
     """
-    if sys.platform == "win32":
-        return subprocess.Popen(
-            cmd, shell=False, cwd=cwd, creationflags=creation_flags, **kwargs
-        )
-    return subprocess.Popen(cmd, shell=True, cwd=cwd, **kwargs)
+    from steempeg.infra.render_priority import popen_render_command
+
+    return popen_render_command(cmd, cwd=cwd, creation_flags=creation_flags,
+                                priority=priority, **kwargs)
 
 
 class RenderThread(QThread):
     progress_signal = Signal(str)  
     finished_signal = Signal(bool, str, str) 
 
-    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False, preset="", tune="", keyint_frames=0, gpu_decode=False):
+    def __init__(self, mpd_paths, quality_text, output_file, ffmpeg_exe, save_dir, selected_encoder, video_bitrate, fps_text, audio_only, mute_audio, audio_format, audio_bitrate_kbps, target_scale_h=-1, trim_start_sec=-1.0, trim_duration_sec=-1.0, encode_speed="balanced", *, rate_control=pro.RATE_BITRATE, quality_value=-1, two_pass=False, ten_bit=False, preset="", tune="", keyint_frames=0, gpu_decode=False, process_priority="normal"):
         super().__init__()
+        self.process_priority = process_priority
         self._gpu_decode_enabled = bool(gpu_decode)
         self._nvdec_probed = False
         self._nvdec_color_suffix = ""
@@ -137,6 +137,7 @@ class RenderThread(QThread):
             cmd,
             cwd=cwd,
             creation_flags=creation_flags,
+            priority=self.process_priority,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
@@ -543,6 +544,7 @@ class RenderThread(QThread):
                         remux_cmd,
                         cwd=self.save_dir,
                         creation_flags=creation_flags,
+                        priority=self.process_priority,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         universal_newlines=True,
@@ -595,6 +597,7 @@ class RenderThread(QThread):
                     f'"{self.ffmpeg_exe}" -f concat -safe 0 -i "{concat_file}" -c copy -y "{self.output_file}"',
                     cwd=self.save_dir,
                     creation_flags=creation_flags,
+                    priority=self.process_priority,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     universal_newlines=True,
