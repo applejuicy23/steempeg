@@ -1719,7 +1719,9 @@ class SettingsDialog(SteempegDialog):
         btn_cancel = QPushButton("Cancel")
         btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_cancel.clicked.connect(self.reject)
-        btn_apply = QPushButton("Apply")
+        from steempeg.ui.widgets.apply_button import ApplyButton
+
+        btn_apply = ApplyButton()
         btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_apply.clicked.connect(self._apply)
         btn_save = QPushButton("Save")
@@ -2359,7 +2361,9 @@ class SettingsDialog(SteempegDialog):
         self._update_apply_state()
 
     def _update_apply_state(self, *_args) -> None:
-        self._btn_apply.setEnabled(self._form_has_unsaved_changes())
+        self._btn_apply.setEnabled(
+            not getattr(self, "_apply_in_progress", False) and self._form_has_unsaved_changes()
+        )
 
     def _form_has_unsaved_changes(self) -> bool:
         """True only while at least one field differs from the last saved form."""
@@ -3827,9 +3831,17 @@ class SettingsDialog(SteempegDialog):
 
     def _apply(self) -> None:
         """Save a new Cancel baseline while keeping Settings open."""
-        if not self._form_has_unsaved_changes():
+        if getattr(self, "_apply_in_progress", False) or not self._form_has_unsaved_changes():
             return
-        self._commit_settings(close=False)
+        self._apply_in_progress = True
+        self._update_apply_state()
+        self._btn_apply.set_busy(True)
+        try:
+            self._commit_settings(close=False)
+        finally:
+            self._apply_in_progress = False
+            self._btn_apply.set_busy(False)
+            self._update_apply_state()
 
     def _commit_settings(self, *, close: bool) -> None:
         import logging
