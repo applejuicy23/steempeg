@@ -1,10 +1,11 @@
 """Two-column Quality Preset popup — same chrome as Bitrate combo, two columns."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -77,8 +78,12 @@ class QualityPresetDualPopup(QFrame):
     """Frameless popup: left = Standard ladder, right = Target + Custom recipes."""
 
     def __init__(self, combo: QComboBox):
-        super().__init__(None, Qt.WindowType.Popup)
+        super().__init__(combo, Qt.WindowType.Popup)
         self._combo = combo
+        self._owner = combo.window()
+        combo.installEventFilter(self)
+        self._owner.installEventFilter(self)
+        QApplication.instance().applicationStateChanged.connect(self._application_state_changed)
         self.setObjectName("QualityPresetDualPopup")
         c = _combo_colors()
         self.setStyleSheet(
@@ -104,6 +109,36 @@ class QualityPresetDualPopup(QFrame):
         self._left["list"].itemClicked.connect(self._on_pick)
         self._right["list"].itemClicked.connect(self._on_pick)
         self._deck_column = "left"
+
+    def _application_state_changed(self, state) -> None:
+        if state != Qt.ApplicationState.ApplicationActive:
+            self.hide()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj in (self._combo, self._owner):
+            if event.type() in (QEvent.Type.Hide, QEvent.Type.Close):
+                self.hide()
+            elif event.type() == QEvent.Type.WindowStateChange and self._owner.isMinimized():
+                self.hide()
+        return False
+
+    def event(self, event):
+        if event.type() == QEvent.Type.WindowDeactivate:
+            self.hide()
+        return super().event(event)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if not self.rect().contains(event.position().toPoint()):
+            # A Qt.Popup receives the outside press. Suppress its replay onto
+            # the opener, otherwise that same press immediately opens it again.
+            on_combo = self._combo.rect().contains(
+                self._combo.mapFromGlobal(event.globalPosition().toPoint())
+            )
+            self.setAttribute(Qt.WidgetAttribute.WA_NoMouseReplay, on_combo)
+            self.hide()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def _make_column(self, title: str) -> dict:
         host = QWidget()
@@ -191,6 +226,18 @@ class QualityPresetDualPopup(QFrame):
             self._deck_column = "left"
 
     def present(self) -> None:
+        # Render Settings can borrow this same combo into a floating dialog.
+        owner = self._combo.window()
+        if owner is not self._owner:
+            try:
+                self._owner.removeEventFilter(self)
+            except RuntimeError:
+                pass
+            self._owner = owner
+            owner.installEventFilter(self)
+            handle = self.windowHandle()
+            if handle is not None and owner.windowHandle() is not None:
+                handle.setTransientParent(owner.windowHandle())
         # Refresh QSS in case theme tokens changed since construct.
         sheet = _dual_list_stylesheet()
         self._left["list"].setStyleSheet(sheet)
@@ -244,6 +291,7 @@ class QualityPresetDualPopup(QFrame):
         else:
             self.move(below)
         self.show()
+        self._steempeg_popup_opener = combo
         self.raise_()
         self.activateWindow()
 
@@ -349,6 +397,9 @@ class DualColumnQualityCombo(QComboBox):
 
     def showPopup(self) -> None:
         popup = getattr(self, "_steempeg_dual_popup", None)
+        if popup is not None and popup.isVisible():
+            popup.hide()
+            return
         if popup is None:
             popup = QualityPresetDualPopup(self)
             self._steempeg_dual_popup = popup
