@@ -8,10 +8,11 @@ from __future__ import annotations
 import logging
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -59,6 +60,7 @@ from steempeg.ui.widgets.combo_chrome import apply_dark_combo_popup
 from steempeg.ui.widgets.dialog_chrome import SteempegDialog
 from steempeg.ui.widgets.toggle_switch import ToggleSwitch
 from steempeg.ui.widgets.vertical_scrollbar import ensure_steempg_vertical_scrollbar
+from steempeg.ui.widgets.no_wheel_filter import install_no_wheel_value_filter
 
 _log = logging.getLogger(__name__)
 
@@ -84,7 +86,66 @@ _NAME_LABEL_QSS = (
     f" background: transparent; font-family: {tok.FONT_APP};"
 )
 
-_HINT = f"color: {tok.TEXT_MUTED}; background: transparent; font-size: 11px;"
+class _PresetPopupGuard(QObject):
+    """Dismiss open combo lists when the editor loses the foreground."""
+
+    def __init__(self, editor):
+        super().__init__(editor)
+        self._editor = editor
+        self._closing = False
+        editor.installEventFilter(self)
+        for combo in editor.findChildren(QComboBox):
+            combo.view().window().installEventFilter(self)
+        QApplication.instance().applicationStateChanged.connect(self._application_state_changed)
+
+    def _application_state_changed(self, state):
+        if state != Qt.ApplicationState.ApplicationActive:
+            self._close_popups()
+
+    def _close_popups(self):
+        editor = getattr(self, "_editor", None)
+        if editor is None or getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            for combo in editor.findChildren(QComboBox):
+                if combo.view().isVisible():
+                    combo.hidePopup()
+        finally:
+            self._closing = False
+
+    def _close_if_away(self):
+        if getattr(self, "_editor", None) is None:
+            return
+        app = QApplication.instance()
+        if app.applicationState() != Qt.ApplicationState.ApplicationActive:
+            self._close_popups()
+            return
+        popup = app.activePopupWidget()
+        if popup is not None and any(
+            combo.view().window() is popup for combo in self._editor.findChildren(QComboBox)
+        ):
+            return
+        if app.activeWindow() is not self._editor:
+            self._close_popups()
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if getattr(self, "_editor", None) is None:
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.ApplicationDeactivate:
+            self._close_popups()
+        elif obj is self._editor and kind in (QEvent.Type.Hide, QEvent.Type.Close):
+            self._close_popups()
+        elif kind == QEvent.Type.WindowDeactivate:
+            if obj is self._editor:
+                # Opening a Qt.Popup can itself deactivate its dialog. Wait for
+                # the new active window before deciding whether it left the app.
+                QTimer.singleShot(0, self._close_if_away)
+            elif any(combo.view().isVisible() and obj is combo.view().window()
+                     for combo in self._editor.findChildren(QComboBox)):
+                self._close_popups()
+        return False
 
 
 def _settings_combo_line_h(dense=COMFORT) -> int:
@@ -468,6 +529,8 @@ class PresetMiniEditor(SteempegDialog):
 
         self._sync_original_locks()
         self._sync_audio_enabled()
+        install_no_wheel_value_filter(self)
+        self._popup_guard = _PresetPopupGuard(self)
 
     def _sync_original_locks(self) -> None:
         is_orig = self._quality.currentData() == "original"
