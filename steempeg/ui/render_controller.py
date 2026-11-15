@@ -6058,6 +6058,10 @@ class RenderMixin:
             return
         self._select_export_preset_by_name(preset_name)
 
+        from steempeg.ui.preset_compat import preset_settings_for_plan
+
+        settings = preset_settings_for_plan(self, settings, preset_name)
+
         src_h = int(getattr(self, "current_orig_height", 0) or 0)
         src_fps = int(getattr(self, "current_orig_fps", 0) or 0)
         orig_q = settings.quality_text or ""
@@ -6200,6 +6204,9 @@ class RenderMixin:
                 f"No saved preset named “{preset_name}”.",
             )
             return
+        from steempeg.ui.preset_compat import preset_settings_for_plan
+
+        settings = preset_settings_for_plan(self, settings, preset_name)
         apply_preset_to_job(job, settings, preset_name=preset_name)
         if job_id == getattr(self, "_selected_queue_job_id", None):
             from steempeg.ui.render_job_builder import apply_job_settings_to_ui

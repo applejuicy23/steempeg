@@ -123,6 +123,9 @@ def build_express_job(
     if name:
         preset = get_preset_settings(name, app.load_user_settings)
         if preset is not None:
+            from steempeg.ui.preset_compat import preset_settings_for_plan
+
+            preset = preset_settings_for_plan(app, preset, name)
             apply_preset_to_job(job, preset, preset_name=name)
             return ExpressJob(job, name)
         logging.warning("Express: preset %r is gone, using the automatic recipe", name)
