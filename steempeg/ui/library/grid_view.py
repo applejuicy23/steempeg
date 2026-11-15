@@ -532,6 +532,13 @@ class ClipCard(qtw.QWidget):
         tw = getattr(self, "_tw", 254)
         th = getattr(self, "_th", 144)
         raw = getattr(self, "_thumb_raw", None)
+        key = (raw.cacheKey() if raw is not None and not raw.isNull() else None,
+               tw, th, ttl, ttr, tbr, tbl)
+        if key[0] is None:
+            key += (_clip_plate_color(),)
+        if getattr(self, "_clipped_thumb_key", None) == key:
+            return
+        self._clipped_thumb_key = key
         if raw is None or raw.isNull():
             # Empty well still needs a dark plate matching the style.
             plate = qtg.QPixmap(tw, th)
