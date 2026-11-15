@@ -3,6 +3,7 @@ _STARTUP_ENTRY = _startup_perf_counter()
 
 from steempeg.version import APP_VERSION_STR
 from steempeg.ui import design_tokens as tok
+from steempeg.ui.ui_theme import set_stylesheet_if_changed as _theme_style
 from steempeg.ui.main_window import MainWindow
 from steempeg.infra.logging import global_exception_handler, setup_logging, session_timestamp, mpv_log_path, prune_old_logs
 from steempeg.infra import paths
@@ -4033,7 +4034,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         ):
             widget = getattr(self.ui, attr, None)
             if widget is not None:
-                widget.setStyleSheet(f"QWidget#{obj_name} {{ background-color: {app_bg}; }}")
+                _theme_style(widget, f"QWidget#{obj_name} {{ background-color: {app_bg}; }}")
 
         title_bar = getattr(self.ui, "title_bar", None)
         if title_bar is not None and hasattr(title_bar, "set_bar_color"):
@@ -4066,7 +4067,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         palette = self.ui.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor(app_bg))
         self.ui.setPalette(palette)
-        self.ui.setStyleSheet(self._shell_stylesheet(app_bg))
+        _theme_style(self.ui, self._shell_stylesheet(app_bg))
         try:
             apply_app_tooltip_style()
         except Exception:
@@ -4097,13 +4098,15 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             btn_logs.setMinimumSize(0, 0)
             btn_logs.setFixedHeight(dense.dash_btn_h)
             if ut.get_ui_theme() != ut.UI_THEME_DEFAULT:
-                btn_logs.setStyleSheet(
+                _theme_style(
+                    btn_logs,
                     ut.dash_secondary_button_stylesheet(font=font, radius=radius, pad=pad)
                 )
             else:
                 template = getattr(self, "_dash_btn_style_logs", None)
                 if template:
-                    btn_logs.setStyleSheet(
+                    _theme_style(
+                        btn_logs,
                         self._fmt_dash_btn(template, font=font, radius=radius, pad=pad)
                     )
 
@@ -4132,12 +4135,12 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         for attr in ("grid_clips", "grid_rendered"):
             view = getattr(self, attr, None)
             if view is not None:
-                view.setStyleSheet(grid_qss)
+                _theme_style(view, grid_qss)
         ui = getattr(self, "ui", None)
         if ui is not None and hasattr(ui, "table_clips"):
-            ui.table_clips.setStyleSheet(table_qss)
+            _theme_style(ui.table_clips, table_qss)
         if hasattr(self, "table_rendered"):
-            self.table_rendered.setStyleSheet(table_qss)
+            _theme_style(self.table_rendered, table_qss)
 
     def _refresh_open_settings_dialogs(self) -> None:
         """Live-tint open Settings and other themeable dialogs during theme preview / Save."""
@@ -4175,11 +4178,11 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         neo = getattr(self, "neo_wrapper", None)
         if neo is not None:
-            neo.setStyleSheet(ut.neo_wrapper_stylesheet())
+            _theme_style(neo, ut.neo_wrapper_stylesheet())
 
         scroll = getattr(self, "right_scroll", None)
         if scroll is not None:
-            scroll.setStyleSheet(ut.neo_settings_scroll_stylesheet())
+            _theme_style(scroll, ut.neo_settings_scroll_stylesheet())
             from steempeg.ui.widgets.vertical_scrollbar import (
                 ensure_steempg_vertical_scrollbar,
                 settings_scrollbar_chrome,
@@ -4203,7 +4206,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 vp.setPalette(pal)
 
         if hasattr(self.ui, "settings_tabs"):
-            self.ui.settings_tabs.setStyleSheet(
+            _theme_style(
+                self.ui.settings_tabs,
                 ut.neo_settings_tabs_stylesheet(settings_panel_stylesheet())
             )
             for i in range(self.ui.settings_tabs.count()):
@@ -4212,21 +4216,23 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                     continue
                 obj = page.objectName()
                 if obj:
-                    page.setStyleSheet(ut.neo_tab_page_stylesheet(obj))
+                    _theme_style(page, ut.neo_tab_page_stylesheet(obj))
                 else:
-                    page.setStyleSheet(
+                    _theme_style(
+                        page,
                         f"background-color: {p.bg_settings_panel}; border: none;"
                     )
 
         for btn in getattr(self, "neo_nav_buttons", []) or []:
-            btn.setStyleSheet(ut.neo_nav_pill_stylesheet())
+            _theme_style(btn, ut.neo_nav_pill_stylesheet())
 
         header = getattr(self, "player_header_frame", None)
         if header is not None:
             from steempeg.ui.player_outline import player_outline_immersive
 
             immersive = player_outline_immersive(self)
-            header.setStyleSheet(
+            _theme_style(
+                header,
                 ut.player_header_stylesheet(
                     force_outline=False if immersive else None
                 )
@@ -4246,41 +4252,44 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 and not getattr(self, "_portable_shell", False)
             )
             if immersive:
-                vw.setStyleSheet(
+                _theme_style(
+                    vw,
                     ut.player_video_wrapper_stylesheet(
                         background="black",
                         chrome_outline=False,
                     )
                 )
             elif portable_theatre or desktop_theatre:
-                vw.setStyleSheet(
+                _theme_style(
+                    vw,
                     ut.player_video_wrapper_stylesheet(background="black")
                 )
             else:
-                vw.setStyleSheet(ut.player_video_wrapper_stylesheet())
+                _theme_style(vw, ut.player_video_wrapper_stylesheet())
 
         placeholder = getattr(self, "placeholder_frame", None)
         if placeholder is not None:
-            placeholder.setStyleSheet(ut.player_placeholder_canvas_stylesheet())
+            _theme_style(placeholder, ut.player_placeholder_canvas_stylesheet())
 
         place_card = getattr(self, "place_card", None)
         if place_card is not None:
-            place_card.setStyleSheet(ut.player_placeholder_card_stylesheet())
+            _theme_style(place_card, ut.player_placeholder_card_stylesheet())
 
         lib = getattr(self, "library_views_container", None)
         if lib is not None:
-            lib.setStyleSheet(ut.elevated_panel_stylesheet())
+            _theme_style(lib, ut.elevated_panel_stylesheet())
 
         dash = getattr(self, "render_dashboard", None)
         if dash is not None:
-            dash.setStyleSheet(
+            _theme_style(
+                dash,
                 ut.elevated_panel_stylesheet(object_name="renderDashboard")
                 + " QFrame#renderDashboard QLabel { border: none; background: transparent; }"
             )
 
         footer = getattr(self, "_footer_mega_pill", None)
         if footer is not None:
-            footer.setStyleSheet(ut.footer_pill_stylesheet())
+            _theme_style(footer, ut.footer_pill_stylesheet())
 
         dense = getattr(self, "_ui_density", None)
         from steempeg.ui.ui_density import COMFORT, toolbar_mega_pill_style
@@ -4292,7 +4301,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         lib_pill = getattr(self, "library_toolbar_pill", None)
         if lib_pill is not None:
-            lib_pill.setStyleSheet(
+            _theme_style(
+                lib_pill,
                 toolbar_mega_pill_style(dense, object_name="libraryToolbarPill")
             )
 
@@ -4339,7 +4349,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
         combo = getattr(self, "combo_sort", None)
         if combo is not None:
-            combo.setStyleSheet(compact_combo_stylesheet(settings_popup=True, dense=dense))
+            _theme_style(combo, compact_combo_stylesheet(settings_popup=True, dense=dense))
             apply_dark_combo_popup(combo, dense=dense)
             fit_combo_popup_to_contents(combo)
 
@@ -4394,7 +4404,8 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
 
             immersive = player_outline_immersive(self)
             hud.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            hud.setStyleSheet(
+            _theme_style(
+                hud,
                 with_tooltip_style(
                     ut.player_footer_stylesheet(
                         force_outline=False if immersive else None
@@ -4558,7 +4569,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
             if panel is not None:
                 panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
                 panel.setAutoFillBackground(True)
-                panel.setStyleSheet(shell)
+                _theme_style(panel, shell)
         # Theme-aware visible handles first; Like a Portable may hide them after.
         try:
             from steempeg.ui.portable_splitter_reveal import (
@@ -4578,7 +4589,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
                 )
                 if splitter is not None:
                     splitter.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-                    splitter.setStyleSheet(splitter_qss)
+                    _theme_style(splitter, splitter_qss)
 
     def _sync_startup_layout(self):
         """Density / library restore / startup scans — call while shell is still hidden.
@@ -5934,7 +5945,7 @@ class SteempegApp(RenderedLibraryMixin, LifecycleMixin, SplitterRulesMixin, Play
         """About / Check for updates / Settings — no QDialog default/focus ring."""
         from PySide6.QtWidgets import QSizePolicy
 
-        btn.setStyleSheet(style)
+        _theme_style(btn, style)
         btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setAutoDefault(False)

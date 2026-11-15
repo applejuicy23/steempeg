@@ -507,13 +507,13 @@ class ClipCard(qtw.QWidget):
         ttl, ttr, tbr, tbl = plan["thumb"]
         ftl, ftr, fbr, fbl = plan["footer"]
         # Stylesheet radius does NOT clip QLabel pixmaps — bake corners below.
-        self.thumb_label.setStyleSheet(
+        _ut.set_stylesheet_if_changed(self.thumb_label,
             "background-color: transparent; border: none;"
         )
         footer = getattr(self, "_footer_widget", None)
         footer_bg = _clip_footer_color()
         if footer is not None:
-            footer.setStyleSheet(
+            _ut.set_stylesheet_if_changed(footer,
                 f"QWidget {{"
                 f"background-color: {footer_bg}; border: none;"
                 f"border-top-left-radius: {ftl}px; border-top-right-radius: {ftr}px;"
@@ -1012,7 +1012,7 @@ class ClipCard(qtw.QWidget):
         else:
             border = f"2px solid {idle_border}"
         tl, tr, br, bl = self._corner_radii()
-        self._border_overlay.setStyleSheet(f"""
+        _ut.set_stylesheet_if_changed(self._border_overlay, f"""
             QFrame {{
                 background: transparent;
                 border: {border};

@@ -253,6 +253,12 @@ def apply_palette(name: str) -> UiThemePalette:
     return palette
 
 
+def set_stylesheet_if_changed(widget, stylesheet: str) -> None:
+    """Avoid Qt's subtree-wide repolish for an identical stylesheet."""
+    if widget.styleSheet() != stylesheet:
+        widget.setStyleSheet(stylesheet)
+
+
 def chrome_colors_for_active() -> dict[str, str]:
     p = _active
     return {"title_bar": p.chrome_title_bar, "app_bg": p.chrome_app_bg}
