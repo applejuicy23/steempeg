@@ -382,6 +382,13 @@ class RenderMixin:
             return
         if kbps == int(getattr(self, "current_orig_audio_bitrate", 0) or 0):
             return
+        combo = getattr(self.ui, "combo_audio_bitrate", None)
+        if combo is not None and combo.view().isVisible():
+            # clear()/repopulate resets the popup model. Let the user finish
+            # choosing before applying a late measurement; the generation check
+            # also discards this retry if another clip is selected meanwhile.
+            QTimer.singleShot(80, lambda: self._apply_real_audio_bitrate(gen, kbps))
+            return
         self.current_orig_audio_bitrate = kbps
         self._rebuild_audio_bitrate_combo(keep_choice=True)
         if hasattr(self.ui, "label_abitrate"):
