@@ -1000,10 +1000,10 @@ SCAN_CACHE = "cache"
 DEFAULT_STARTUP_LIBRARY_SCAN = SCAN_PROGRESSIVE
 
 STARTUP_SCAN_LABELS: tuple[tuple[str, str], ...] = (
-    (SCAN_PROGRESSIVE, "Progressive, load as you scroll"),
-    (SCAN_QUICK, "Quick, folders + cached health"),
-    (SCAN_FULL, "Full, first launch / new folder"),
-    (SCAN_CACHE, "Skip, last session list"),
+    (SCAN_PROGRESSIVE, "Progressive"),
+    (SCAN_QUICK, "Quick"),
+    (SCAN_FULL, "Full"),
+    (SCAN_CACHE, "Skip"),
 )
 
 

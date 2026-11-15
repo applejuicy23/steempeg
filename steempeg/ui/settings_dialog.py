@@ -1444,7 +1444,10 @@ class SettingsDialog(SteempegDialog):
         scan_row.setSpacing(8)
         scan_lbl = QLabel("On launch")
         scan_lbl.setStyleSheet(_HINT.replace(tok.TEXT_MUTED, tok.TEXT_PRIMARY))
-        self._combo_startup_scan = QComboBox()
+        from steempeg.ui.widgets.startup_mode_guide import StartupModeCombo, STARTUP_HELP
+        from steempeg.ui.startup_metrics import StartupTimeLabel
+
+        self._combo_startup_scan = StartupModeCombo()
         for value, label in STARTUP_SCAN_LABELS:
             self._combo_startup_scan.addItem(label, value)
         cur_scan = load_startup_library_scan(settings)
@@ -1453,14 +1456,14 @@ class SettingsDialog(SteempegDialog):
         scan_row.addWidget(scan_lbl)
         scan_row.addWidget(self._combo_startup_scan, 1)
         p.addLayout(scan_row)
-        p.addWidget(
-            self._hint(
-                "A card stays once it has loaded. A new stretch of the grid may hitch. "
-                "The first launch after Steam folders are found runs Full once. "
-                "Refresh and adding a clips folder always run Full, even when "
-                "Progressive is selected. Skip can feel as slow as a full scan."
-            )
-        )
+        startup_hint = self._hint(STARTUP_HELP)
+        self._startup_mode_hint = startup_hint
+        p.addWidget(startup_hint)
+        startup_hint.set_help_diagram("startup_mode", lambda: self._combo_startup_scan.currentData())
+        self._combo_startup_scan.currentIndexChanged.connect(lambda: startup_hint.refresh_diagram())
+        self._startup_time_label = StartupTimeLabel(app)
+        self._startup_time_label.setStyleSheet(_HINT)
+        p.addWidget(self._startup_time_label)
 
         p.addWidget(self._section("Media cache"))
         cache_row = QHBoxLayout()

@@ -82,6 +82,8 @@ class _SettingHelpSplash(QWidget):
         self._show_timeline = False
         self._show_control = False
         self._show_chosen = False
+        self._startup_details = None
+        self._show_startup = False
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -167,6 +169,16 @@ class _SettingHelpSplash(QWidget):
         player = kind in ("player_layout", "player_outline") and callable(style_of)
         timeline = kind in ("timeline_strip", "markers_on_strip") and callable(style_of)
         control = kind == "player_ceiling" and callable(style_of)
+        self._show_startup = kind == "startup_mode" and callable(style_of)
+        if self._show_startup:
+            if self._startup_details is None:
+                from steempeg.ui.widgets.startup_mode_guide import StartupModeDetails
+
+                self._startup_details = StartupModeDetails(self)
+                self._text_col.addWidget(self._startup_details)
+            self._startup_details.set_style(str(style_of() or "progressive"))
+        if self._startup_details is not None:
+            self._startup_details.setVisible(self._show_startup)
         # isVisible() is false until the card itself is on screen, so the
         # width has to follow these flags, not the widget's visible bit.
         self._show_diagram = card
@@ -302,7 +314,9 @@ class _SettingHelpSplash(QWidget):
                 + 8,
                 self._TEXT_MAX_W,
             )
-        if self._show_header:
+        if self._show_startup:
+            text_w_floor = 300
+        elif self._show_header:
             text_w_floor = self._header.width()
         elif self._show_player:
             text_w_floor = self._player.width()
@@ -315,6 +329,8 @@ class _SettingHelpSplash(QWidget):
         text_w = max(title_w, chosen_w, desc_w, text_w_floor, 1)
         self._title.setFixedWidth(text_w)
         self._desc.setFixedWidth(text_w)
+        if self._show_startup:
+            self._startup_details.setFixedWidth(text_w)
         lead = self._chosen_mark.width() + 6
         self._chosen.setFixedWidth(max(1, text_w - lead))
         margins = self.layout().contentsMargins()
@@ -435,6 +451,13 @@ class SettingHelpButton(QWidget):
         self._diagram_kind = kind
         self._diagram_style = style_of
         self._text_of = text_of
+        if kind == "startup_mode" and not getattr(self, "_startup_state_connected", False):
+            QGuiApplication.instance().applicationStateChanged.connect(self._startup_application_state_changed)
+            self._startup_state_connected = True
+
+    def _startup_application_state_changed(self, state):
+        if state != Qt.ApplicationState.ApplicationActive:
+            self.dismiss()
 
     def refresh_diagram(self) -> None:
         """Redraws an open card from the list's current choice."""
