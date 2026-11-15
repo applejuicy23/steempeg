@@ -395,8 +395,13 @@ class PresetMiniEditor(SteempegDialog):
             self._audio_fmt.addItem(fmt)
 
         self._audio_br = QComboBox()
-        for kbps in (96, 128, 160, 192, 256, 320):
+        for kbps in (96, 128, 160, 192):
             self._audio_br.addItem(f"{kbps} kbps", kbps)
+        self._audio_br.setToolTip(
+            "Target bitrate of the exported audio. A higher bitrate does not restore "
+            "detail missing from the source. Choose Copy to keep the original audio "
+            "without re-encoding."
+        )
 
         audio = QGridLayout()
         audio.setContentsMargins(0, 0, 0, 0)
@@ -690,7 +695,12 @@ class PresetMiniEditor(SteempegDialog):
             _set_combo_text(self._audio_fmt, settings.audio_format)
         m = re.search(r"(\d+)", settings.audio_bitrate_text or "")
         if m:
-            _set_combo_data(self._audio_br, int(m.group(1)))
+            kbps = int(m.group(1))
+            if kbps > 0 and self._audio_br.findData(kbps) < 0:
+                # Preserve an existing recipe rather than silently rewriting it
+                # when its bitrate is outside today's standard Steam choices.
+                self._audio_br.addItem(f"{kbps} kbps (saved)", kbps)
+            _set_combo_data(self._audio_br, kbps)
         if settings.container_format:
             _set_combo_text(self._container, settings.container_format)
         self._load_pro(settings)
